@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 // kaola-gitea-workflow-adaptive-handoff.js (issue #255, updated #272)
 //
-// Aggregator: collapses the contractor classify/freeze/orient steps into
+// Aggregator: collapses the classify/freeze/orient steps into
 // ONE mechanical transition. The workflow-planner RUNS this (never judges);
 // the orchestrator drives the bounded repair loop on plan_invalid.
 // After #272, /kaola-workflow-plan-run owns the entire node lifecycle (incl. the
@@ -290,6 +290,233 @@ function splicePlanningEvidence(content, fields, stateMtime) {
 }
 
 // ---------------------------------------------------------------------------
+// The `## Acceptance` repair fence (the bounded plan_invalid repair loop's one hard boundary).
+//
+// The repair loop exists to make an out-of-grammar DRAFT in-grammar: it may fix `## Meta`, `## Nodes`,
+// `## Node Briefs`, and ledger scaffolding freely. It may NOT alter `## Acceptance`. That section is
+// the human-values artifact of the run — transcribed once from the issue body plus explicit user
+// statements — and quietly rewriting it while "fixing the grammar" would let the run redefine what
+// done means with nobody deciding it. A genuine acceptance change is a values decision and routes
+// through the consent valve, never through repair.
+//
+// Mechanism: the FIRST submission that carries a transcribed acceptance surface records its BYTES (and
+// their digest) in `.cache/acceptance-anchor.json`; every later submission must present the same
+// digest. The anchor is a `.cache` audit artifact — it never touches the plan or workflow-state.md, so
+// the no-mutation-on-refuse contract for those two files is unchanged.
+//
+// THE ANCHOR CARRIES THE SURFACE, NOT MERELY ITS DIGEST, and the refusal HANDS THE SURFACE BACK. That
+// is what keeps the fence satisfiable rather than terminal: by the time the fence trips, the repairing
+// planner has already overwritten the file that held the previous surface, and each repair iteration
+// dispatches a FRESH planner with no memory of the prior draft — so "restore what you had" is an
+// instruction nobody in the loop can follow unless the refusal itself supplies the bytes. A digest
+// cannot be inverted; a gate whose repair instruction is uncomputable is a dead end, not a gate.
+// The realistic trigger is not malice but a fresh planner re-transcribing the SAME criteria in
+// slightly different words, which makes an actionable refusal the ordinary case, not the exotic one.
+//
+// Two transitions are deliberately NOT fenced, because fencing them would wedge the loop shut:
+//   * absent -> transcribed. The acceptance_missing refusal's own repair IS authoring the section, so
+//     the first transcription can never be "a change"; only an already-anchored surface is held.
+//   * an already-frozen plan with no anchor (a plan frozen before this fence existed). Nothing is
+//     recorded for it, so nothing is ever enforced against it.
+// Whitespace churn is not a change: acceptanceDigest normalizes exactly like the plan hash body.
+//
+// ABSENT and UNREADABLE are different states, and only the first is a transition. An anchor that is
+// PRESENT but cannot be read back as a well-formed record refuses `acceptance_anchor_unreadable`; it
+// never degrades to first-submission, because that branch re-anchors on the surface currently on disk
+// and would move the fence at exactly the moment its record is damaged. This is not an anti-tamper
+// measure — an interrupted write (crash, full disk) leaves a truncated file all by itself, and a
+// default that silently disarms on damage is fail-open regardless of intent.
+//
+// The anchor is EPOCH-KEYED. A re-plan child epoch owns its own acceptance surface (preserved or
+// re-transcribed under attestation, and changed only under consent — the re-plan transaction enforces
+// that on its own seam), so an anchor recorded against the parent epoch says nothing about the child.
+// Keying on plan_epoch makes a superseded anchor inert instead of a spurious refusal.
+//
+// NO IN-EPOCH FLAG OPENS THIS FENCE. Restoring the anchored surface is the repair loop's only route
+// past it. A genuine change of what "done" means is a values decision, and the workflow has exactly ONE
+// mechanism that authorizes one: a consent-ledger entry recorded against a named human turn,
+// digest-chained to its predecessor, and BOUND to the new surface by an `acceptance_change_digest` that
+// the re-plan child epoch cites in its `## Meta` as `acceptance_change_consent`. A second valve here
+// would be a token the fenced party mints for itself — the process that types this command IS the
+// process the fence binds — and a token the gated party is handed is not a valve. So the recovery route
+// is NAMED here, not implemented a second time: carry the change into a re-plan CHILD EPOCH under that
+// bound consent entry, or discard and restart the run. Neither is reachable by writing a free-text
+// string on this command line, and neither is reachable by editing or deleting the anchor by hand.
+// ---------------------------------------------------------------------------
+const ACCEPTANCE_ANCHOR_NAME = 'acceptance-anchor.json';
+const ACCEPTANCE_ANCHOR_SCHEMA_VERSION = 2;
+function acceptanceAnchorPath(planPath) {
+  return path.join(path.dirname(planPath), '.cache', ACCEPTANCE_ANCHOR_NAME);
+}
+function writeAcceptanceAnchor(opts, anchorPath, record) {
+  try {
+    if (typeof opts.mkdirp === 'function') opts.mkdirp(path.dirname(anchorPath));
+    opts.writeFile(anchorPath, JSON.stringify(record) + '\n');
+    return true;
+  } catch (_) { return false; }   // best-effort: an unrecordable anchor never blocks the freeze
+}
+// The well-formedness contract of a RECORDED anchor. Returns null when the record is usable, or a
+// one-phrase defect. Absent is not a defect and never reaches here — absent means genuinely-first, the
+// load-bearing transition. `plan_epoch` and `acceptance_surface` are optional (a schema-1 anchor
+// carries neither) but must be well-typed WHEN PRESENT: a garbled epoch must not coerce to 1 and
+// silently re-target the anchor at a different epoch.
+function acceptanceAnchorDefect(record) {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+    return 'does not contain a JSON object';
+  }
+  if (typeof record.acceptance_digest !== 'string' || record.acceptance_digest.trim() === '') {
+    return 'carries no usable string `acceptance_digest` (found '
+      + (record.acceptance_digest === undefined ? 'no such field' : typeof record.acceptance_digest) + ')';
+  }
+  if (record.plan_epoch !== undefined && record.plan_epoch !== null) {
+    const epoch = Number(record.plan_epoch);
+    if (!Number.isInteger(epoch) || epoch < 1) return 'carries a `plan_epoch` that is not a positive integer';
+  }
+  if (record.acceptance_surface !== undefined && record.acceptance_surface !== null
+    && typeof record.acceptance_surface !== 'string') {
+    return 'carries an `acceptance_surface` that is present but is not a string';
+  }
+  return null;
+}
+function acceptanceAnchorUnreadableRefusal(anchorPath, detail) {
+  return {
+    handoff_status: 'plan_invalid',
+    result: 'refuse',
+    reason: 'acceptance_anchor_unreadable',
+    errors: ['acceptance_anchor_unreadable: the acceptance anchor `' + anchorPath + '` EXISTS but '
+      + detail + ', so the acceptance surface recorded at first submission cannot be read back. A '
+      + 'PRESENT-but-unreadable anchor refuses; it must never degrade to the "no anchor yet" branch, '
+      + 'because that branch re-anchors on whatever surface THIS submission carries — disarming the '
+      + 'fence at exactly the moment its record is damaged. The ordinary cause is an interrupted write '
+      + '(a crash or a full disk mid-write leaves a truncated file), not tampering. Recover the anchor '
+      + 'and restore it byte-for-byte — a `.cache` copy, an epoch snapshot under `.cache/epochs/`, or '
+      + 'version control. If it genuinely cannot be recovered, this epoch has no recorded acceptance '
+      + 'baseline: discard and restart the run, or carry the work into a re-plan CHILD EPOCH citing a '
+      + 'consent entry bound to the surface. Do NOT delete the anchor to clear this refusal — deleting '
+      + 'it is the disarm this refusal exists to prevent.'],
+    anchor_path: anchorPath,
+    anchor_defect: detail,
+    validator_verdict: null,
+  };
+}
+// Returns { ok:true } or { ok:false, refusal } — pure over the injected seams. The plan read happens
+// INSIDE the cacheExists guard on purpose: a legacy pure-core caller (no cacheExists seam) must issue
+// byte-identically the same sequence of readFile calls it issued before this fence existed.
+function acceptanceRepairFence(opts, stateContent) {
+  const { planPath } = opts;
+  if (typeof opts.cacheExists !== 'function') return { ok: true };   // legacy pure-core caller
+  let planContent;
+  try { planContent = opts.readFile(planPath); } catch (_) { return { ok: true }; }
+  let digest = null;
+  let surface = null;
+  let readItems = null;
+  try {
+    const validatorMod = require(validatorPath);
+    digest = validatorMod.acceptanceDigest(planContent);
+    const section = validatorMod.acceptanceSection(planContent);
+    surface = section && section.status === 'present' ? section.body : null;
+    // The ONE item reader, applied to a bare surface. Fence-aware, so an `A1:` inside a code block in
+    // the surface is body text and never reads as an item that "changed".
+    readItems = body => validatorMod.parseAcceptanceItems('## Acceptance\n\n' + String(body || '') + '\n');
+  } catch (_) { return { ok: true }; }                                // fail-open: the validator gates the plan
+  const planEpoch = Number(adaptiveSchema.parseStateFields(stateContent || '').plan_epoch || 1) || 1;
+  const anchorPath = acceptanceAnchorPath(planPath);
+  let anchored = null;
+  if (opts.cacheExists(anchorPath)) {
+    // FAIL CLOSED on a present-but-unreadable anchor. Swallowing the read/parse failure into
+    // `anchored = null` put an existing-but-damaged anchor on the SAME branch as no anchor at all, and
+    // that branch RE-ANCHORS on the submitted surface — so a truncated file silently moved the fence
+    // to whatever this submission said done meant, with no signal. This needs no adversary: an
+    // interrupted write is enough, and "unreadable" must never read as "unanchored".
+    let raw = null;
+    let detail = null;
+    try { raw = opts.readFile(anchorPath); }
+    catch (e) { detail = 'cannot be read (' + ((e && (e.code || e.message)) || 'read failed') + ')'; }
+    if (detail === null) {
+      try { anchored = JSON.parse(raw); }
+      catch (e) { detail = 'is not parseable as JSON (' + ((e && e.message) || 'parse failed') + ')'; }
+    }
+    if (detail === null) detail = acceptanceAnchorDefect(anchored);
+    if (detail !== null) return { ok: false, refusal: acceptanceAnchorUnreadableRefusal(anchorPath, detail) };
+  }
+  const anchoredEpoch = anchored ? Number(anchored.plan_epoch || 1) || 1 : 1;
+  const sameEpoch = !!anchored && anchoredEpoch === planEpoch;
+  const anchoredDigest = anchored && typeof anchored.acceptance_digest === 'string'
+    && sameEpoch ? anchored.acceptance_digest : null;
+  // A schema-1 anchor (digest only) is still ENFORCED; it simply cannot hand the bytes back. Every
+  // anchor this build records carries them, so the surface-less refusal is a legacy tail, not the path.
+  const anchoredSurface = anchoredDigest && typeof anchored.acceptance_surface === 'string'
+    ? anchored.acceptance_surface : null;
+  if (anchoredDigest) {
+    if (digest === anchoredDigest) return { ok: true };
+    const errors = ['acceptance_repair_fenced: this submission changes `## Acceptance`, which the bounded '
+      + 'plan_invalid repair loop must not touch. Repair may fix `## Meta` / `## Nodes` / '
+      + '`## Node Briefs` / ledger scaffolding; the acceptance surface is a human-values artifact '
+      + 'and changing it routes through the consent valve, never through repair. Restore the '
+      + 'acceptance surface recorded at first submission (anchored digest '
+      + anchoredDigest.slice(0, 12) + '…, submitted ' + (digest ? digest.slice(0, 12) + '…' : 'absent')
+      + ') VERBATIM from `anchored_acceptance_surface` below and re-run the repair. No flag on this '
+      + 'command authorizes a different surface: if the user genuinely restated what done means, carry '
+      + 'the change into a re-plan CHILD EPOCH citing a consent entry bound to the new surface '
+      + '(replan extend-consent --user-turn-reference <turn> --consent-reason <why> '
+      + '--acceptance-change-file <path>, then cite that entry_digest in the child `## Meta` as '
+      + '`acceptance_change_consent`), or discard and restart the run.'];
+    errors.push(anchoredSurface === null
+      ? 'anchored `## Acceptance` surface: UNAVAILABLE (this anchor predates surface capture) — recover '
+        + 'the surface from the run\'s authoring history, or route the change through a re-plan child '
+        + 'epoch or a discard+restart.'
+      : 'anchored `## Acceptance` surface (restore these bytes verbatim under a `## Acceptance` '
+        + 'heading):\n' + anchoredSurface);
+    // WHICH items moved. Two surfaces side by side answer "did it change"; only the per-item delta
+    // answers the question the operator actually has — was this a re-wording of the same criteria, or a
+    // redefinition of done? Computed through the fence-aware item reader over both sets of real bytes.
+    let delta = null;
+    if (anchoredSurface !== null) {
+      const before = new Map(readItems(anchoredSurface).map(i => [i.id, i.text]));
+      const after  = new Map(readItems(surface).map(i => [i.id, i.text]));
+      delta = {
+        changed: [...before.keys()].filter(id => after.has(id) && after.get(id) !== before.get(id)),
+        added:   [...after.keys()].filter(id => !before.has(id)),
+        removed: [...before.keys()].filter(id => !after.has(id)),
+      };
+      const parts = [];
+      if (delta.changed.length) parts.push('reworded/redefined: ' + delta.changed.join(', '));
+      if (delta.added.length)   parts.push('added: ' + delta.added.join(', '));
+      if (delta.removed.length) parts.push('removed: ' + delta.removed.join(', '));
+      errors.push('acceptance item delta — ' + (parts.length ? parts.join('; ')
+        : 'no item line moved (the change is in the section\'s non-item prose)') + '.');
+    }
+    return { ok: false, refusal: {
+      handoff_status: 'plan_invalid',
+      result: 'refuse',
+      reason: 'acceptance_repair_fenced',
+      errors,
+      anchored_acceptance_digest: anchoredDigest,
+      anchored_acceptance_surface: anchoredSurface,
+      submitted_acceptance_digest: digest,
+      submitted_acceptance_surface: surface,
+      acceptance_item_delta: delta,
+      // Populated by the caller: the fence runs BEFORE the validator so the refusal is named for what
+      // it is, but the repair loop was iterating on GRAMMAR errors and must not lose them here.
+      validator_verdict: null,
+    } };
+  }
+  // No anchor yet. Record the first TRANSCRIBED surface (absent stays unanchored so the
+  // acceptance_missing repair can author it), and never anchor against an already-frozen plan.
+  const alreadyFrozen = /<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(planContent || '');
+  if (digest && !alreadyFrozen) {
+    writeAcceptanceAnchor(opts, anchorPath, {
+      schema_version: ACCEPTANCE_ANCHOR_SCHEMA_VERSION,
+      plan_epoch: planEpoch,
+      acceptance_digest: digest,
+      acceptance_surface: surface,
+      recorded_at: opts.stateMtime || null,
+    });
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // runHandoff — pure core with injected seams (no direct fs/process I/O).
 //
 // @param {object} opts
@@ -446,6 +673,78 @@ function runHandoff(opts) {
         'complete envelope.'],
       validator_verdict: null,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 0.85: the post-freeze integrity gate. A frozen plan's stamped `plan_hash` IS its identity, and
+  // the only legal way for a hash-covered section to change afterwards is a re-plan child epoch. But
+  // Step 2 below calls `--freeze` unconditionally (idempotent by design), and `--freeze` re-stamps
+  // whatever it is handed — so without this gate a plan edited after freeze comes back through the
+  // repair loop, gets RE-STAMPED to a hash matching the edit, and `--resume-check` goes green: the
+  // tamper laundered by the transaction whose whole job is to make it evident. Refuse instead, with the
+  // same typed reason `--resume-check` gives, and mutate nothing. Scope is exact: an UNFROZEN draft
+  // carries no stored hash and is untouched (the repair loop is unaffected), and an untampered frozen
+  // plan still passes, because stored still equals computed — idempotent re-run and resume are
+  // unchanged. Fail-open only if the validator module cannot be loaded at all, in which case nothing
+  // downstream could freeze either.
+  // -------------------------------------------------------------------------
+  {
+    let planForHash = null;
+    try { planForHash = readFile(planPath); } catch (_) { planForHash = null; }
+    const storedHash = planForHash
+      ? ((planForHash.match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/) || [])[1] || null)
+      : null;
+    if (storedHash) {
+      let computedHash = null;
+      try { computedHash = require(validatorPath).computePlanHash(planForHash); } catch (_) { computedHash = null; }
+      if (computedHash && computedHash !== storedHash) {
+        return {
+          handoff_status: 'plan_invalid',
+          result: 'refuse',
+          reason: 'plan_hash_mismatch',
+          errors: ['plan_hash_mismatch: workflow-plan.md was modified after freeze (stored '
+            + storedHash.slice(0, 12) + '…, computed ' + computedHash.slice(0, 12) + '…). A frozen plan '
+            + 'is immutable and NOTHING in the repair loop re-stamps it — re-stamping would make the '
+            + 'edit indistinguishable from the plan the run agreed to. Restore the frozen bytes, or '
+            + 'change the plan the only way a frozen plan changes: a re-plan child epoch, or a '
+            + 'discard+restart.'],
+          stored_plan_hash: storedHash,
+          computed_plan_hash: computedHash,
+          validator_verdict: null,
+        };
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 0.9: the `## Acceptance` repair fence. Runs BEFORE the validator so a repair that rewrote the
+  // acceptance surface is named for what it is rather than surfacing as whatever grammar error came
+  // with it. Reads/writes only `.cache/acceptance-anchor.json`; the plan and workflow-state.md are
+  // never touched here, on either branch.
+  //
+  // On a fence refusal the validator still RUNS (--freeze-checked never writes) and its verdict is
+  // carried on the refusal. The fence takes precedence in `reason`, but the repair loop was mid-
+  // iteration on GRAMMAR errors: dropping them would make the fenced iteration lose the very verdict it
+  // was iterating on, so the operator would be restoring the acceptance surface blind to what still
+  // has to be fixed. Name the fence; keep the verdict.
+  // -------------------------------------------------------------------------
+  {
+    const fence = acceptanceRepairFence(opts, stateContent);
+    if (!fence.ok) {
+      const refusal = fence.refusal;
+      if (refusal.reason === 'acceptance_repair_fenced') {
+        let verdict = null;
+        try { verdict = shell(validatorPath, [planPath, '--freeze-checked', '--json']); }
+        catch (_) { verdict = null; }
+        refusal.validator_verdict = verdict || null;
+        if (verdict && verdict.result !== 'in-grammar' && Array.isArray(verdict.errors) && verdict.errors.length) {
+          refusal.errors = refusal.errors.concat(
+            ['validator errors still outstanding on this submission (fix these too, on the RESTORED '
+              + 'acceptance surface):'], verdict.errors);
+        }
+      }
+      return refusal;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -951,6 +1250,9 @@ function main() {
     // atomic replace (tmp + fsync + rename). #354 claimed "no torn workflow-state.md" after
     // routing repair-state/sink-pr, but this handoff writer was never routed.
     writeFile: (fpath, content) => require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(fpath, content),
+    // The acceptance anchor lives under `.cache/`, which does not exist on a project folder that has
+    // never cached anything. Best-effort create; acceptanceRepairFence swallows a failed write.
+    mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
     stateMtime,
     findDecisionIdHits,
     verifyEpochAuthority: projectDir =>
@@ -967,4 +1269,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS };
+module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };

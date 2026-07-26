@@ -220,11 +220,14 @@ assert(read('.opencode/agent/workflow-planner.md').includes('mapTier'),
   'A13: workflow-planner opencode body carries the mapTier effort-tier guidance');
 assert(/effort[- ]tier/i.test(read('.opencode/agent/workflow-planner.md')),
   'A13: workflow-planner opencode body names the effort tiers');
-assert(!read('.opencode/agent/contractor.md').includes('mapTier'),
+assert(!read('.opencode/agent/implementer.md').includes('mapTier'),
   'A13: non-planner agents stay verbatim (no mapTier guidance)');
 assert(sync.opencodeAgentSuffix('workflow-planner').includes('mapTier')
-  && sync.opencodeAgentSuffix('contractor') === '',
+  && sync.opencodeAgentSuffix('implementer') === '',
   'A13: opencodeAgentSuffix is non-empty only for workflow-planner');
+// #816: the retired bookkeeping role must not be regenerated onto this runtime.
+assert(!fs.existsSync(path.join(REPO, '.opencode', 'agent', 'contractor.md')),
+  'A13: the retired bookkeeping role must not ship on the opencode edition');
 for (const file of canonCommands) {
   const expected = sync.renderCommand(read('commands/' + file));
   assert(read('.opencode/command/' + file) === expected,
@@ -232,12 +235,14 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A24 (#572): the generated opencode workflow-init carries the re-grounded adaptive
-// ## Kaola-Workflow template — phase-free (no retired numbered-phase model, no
-// "phase file/artifact" framing) AND in parity with the canonical GitHub template
-// MODULO the runtime-noun transform (Claude Code agents → subagents). .opencode/ is
-// fully gitignored, so the four-chain contract validators must not read it — this is
-// the opencode-edition home for the #572 ban + parity (regenerate via --write).
+// A24 (#572, tightened by #812): the generated opencode workflow-init carries the
+// re-grounded adaptive ## Kaola-Workflow template — phase-free (no retired
+// numbered-phase model, no "phase file/artifact" framing) AND BYTE-IDENTICAL to the
+// canonical GitHub template. The template is runtime-neutral AT THE SOURCE, so there is
+// no longer any template-region rewrite to except: parity is exact, not modulo.
+// .opencode/ is fully gitignored, so the four-chain contract validators must not read
+// it — this is the opencode-edition home for the #572 ban + parity (regenerate via
+// --write).
 // ---------------------------------------------------------------------------
 {
   const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
@@ -255,13 +260,15 @@ for (const file of canonCommands) {
     'A24 (#572): opencode workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
   assert(!/phase file|phase artifact/i.test(ocTpl),
     'A24 (#572): opencode workflow-init template must not use "phase file/artifact" durable-state framing');
-  // Parity modulo the runtime-noun transform: the opencode template equals the canonical
-  // GitHub template with "Claude Code agent(s)" rewritten to "subagent(s)" (the sole template-
-  // region rewrite transformCommandBody applies; see sync-opencode-edition.js).
+  // EXACT parity: transformCommandBody applies zero template-region rewrites (#812).
   const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
-  const canonTplRuntime = canonTpl.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
-  assert(ocTpl === canonTplRuntime,
-    'A24 (#572): opencode workflow-init template is in parity with the canonical GitHub template modulo the runtime-noun transform (Claude Code agents → subagents)');
+  assert(ocTpl === canonTpl,
+    'A24 (#812): opencode workflow-init template is BYTE-IDENTICAL to the canonical GitHub template (no template-region rewrite exists)');
+  // Vendor/runtime leak ban at the injected-template level: the block is written into a
+  // CONSUMER repo and read by every runtime, so it names no vendor, no model, and no
+  // command that does not resolve on the reader's runtime.
+  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(canonTpl),
+    'A24 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 
 // ---------------------------------------------------------------------------
@@ -365,19 +372,26 @@ for (const role of reasoning) {
 // A12: adaptive effort tiers (the locked-in install default). With an explicit
 // inherited model whose provider resolves under a CONTRACT_EFFORT_TABLE contract,
 // renderOpencodeJson emits the two-tier EFFORT-VARIANT config: top-tier roles
-// (canonical opus ∪ the Claude Code "higher" profile roles) get the provider's
-// TOP variant; standard roles get its SECOND variant. The per-tier variant names
-// are provider-relative (mapTier). Unknown provider → safe DEFAULT contract (NO
-// de-tier). NODE_MODEL_TIERS {opus,sonnet} stays the portable plan vocabulary;
-// this only resolves a tier.
+// (exactly the canonical reasoning-tier roles — there is no second, install-time
+// model axis) get the provider's TOP variant; standard roles get its SECOND
+// variant. The per-tier variant names are provider-relative (mapTier). Unknown
+// provider → safe DEFAULT contract (NO de-tier). NODE_MODEL_TIERS {opus,sonnet}
+// stays the portable plan vocabulary; this only resolves a tier.
 // ---------------------------------------------------------------------------
 const topRoles = sync.topTierRoles();
 const stdRoles = sync.standardTierRoles();
-assert(topRoles.length > reasoning.length,
-  'A12: topTierRoles() adds the higher-profile roles on top of the opus roles');
+assert(JSON.stringify(topRoles) === JSON.stringify(reasoning),
+  'A12: topTierRoles() is EXACTLY the canonical reasoning-tier role set (one source, no install-time axis); got ['
+    + topRoles.join(', ') + '] vs [' + reasoning.join(', ') + ']');
 for (const role of ['code-architect', 'code-reviewer', 'security-reviewer']) {
-  assert(topRoles.includes(role), 'A12: higher-profile role ' + role + ' is on the top tier');
+  assert(topRoles.includes(role), 'A12: reasoning-tier role ' + role + ' is on the top tier');
 }
+// Retiring the install-time model axis must not re-tier a role. These stay OFF the top tier:
+// `adversarial-verifier` never had a `higher` variant, so its shipped tier is standard, and
+// `build-error-resolver` is hot repair work. Both are raisable per node by the frozen plan.
+assert(!topRoles.includes('implementer')
+  && !topRoles.includes('adversarial-verifier') && !topRoles.includes('build-error-resolver'),
+  'A12: standard-tier roles stay off the top tier');
 
 // GLM-5.2 (zhipu): top=max, second=high.
 const glm = parseRendered({ inheritModel: 'zhipuai-coding-plan/glm-5.2' });
@@ -446,7 +460,7 @@ for (const role of stdRoles) {
 const oai = parseRendered({ inheritModel: 'openai/gpt-5' });
 assert(Object.keys(oai.provider.openai.models['gpt-5'].variants).sort().join('/') === 'high/xhigh',
   'A12: openai maps top=xhigh, second=high');
-assert(oai.agent.planner.variant === 'xhigh' && oai.agent.contractor.variant === 'high',
+assert(oai.agent.planner.variant === 'xhigh' && oai.agent.implementer.variant === 'high',
   'A12: openai top-tier → xhigh, standard-tier → high');
 
 // A12 (FLIPPED #544): unknown provider NO LONGER degrades — it gets the safe-DEFAULT
@@ -457,8 +471,8 @@ assert(unk.provider !== undefined && unk.agent !== undefined,
 assert(unk.provider.acme.models['unknown-model'].variants.high
   && unk.provider.acme.models['unknown-model'].variants.medium,
   'A12: unknown provider gets default-contract high/medium variants');
-assert(unk.agent.planner.variant === 'high' && unk.agent.contractor.variant === 'medium',
-  'A12: unknown provider → default contract (planner=high, contractor=medium)');
+assert(unk.agent.planner.variant === 'high' && unk.agent.implementer.variant === 'medium',
+  'A12: unknown provider → default contract (planner=high, implementer=medium)');
 
 // ---------------------------------------------------------------------------
 // A9: route-reachability — every receipt-emitted command target resolves to an
@@ -1163,7 +1177,7 @@ if (exists(pluginRel)) {
   // A (folded #544) — ZERO Claude path leaks across the ENTIRE deployed .opencode/
   // tree. Today kaola_script()'s search path ships the Claude env var
   // ($CLAUDE_PLUGIN_ROOT) + the Claude home dir ($HOME/.claude/kaola-workflow)
-  // verbatim in EVERY command AND in the contractor + workflow-planner agents.
+  // verbatim in EVERY command AND in the workflow-planner agent.
   // The opencode edition must resolve scripts via an opencode-native path (no
   // Claude env vars, no .claude/ dir). This greps command/*.md + agent/*.md +
   // plugins/*.js + hooks/*.sh on a FRESHLY-installed hermetic tree (the same
@@ -1191,6 +1205,353 @@ if (exists(pluginRel)) {
     assert(leaks === 0,
       'A (#544): ZERO Claude path leaks (CLAUDE_PLUGIN_ROOT / .claude/kaola-workflow) across the deployed .opencode/ tree — found ' + leaks + ' match(es) in: ' + leakFiles.slice(0, 6).join(', ') + (leakFiles.length > 6 ? ', …' : ''));
     clean(r);
+  }
+
+  // -------------------------------------------------------------------------
+  // R1–R3 (#795) — manifest-driven retired-agent sweep.
+  //
+  // Commands live in a reserved `kaola-workflow-*` / `workflow-*` namespace, so the
+  // command prune above is namespace-complete and a retired command self-heals.
+  // Agent files are NOT namespaced (bare `code-explorer.md`) and the deployed agent
+  // dir is SHARED with user-authored agents, so a blind prune is unavailable — the
+  // install records a `<filename>\t<sha256>` manifest and the next install removes
+  // exactly what it proves this installer wrote and the user has not touched.
+  // Before this, a role retired from the tree stayed deployed and dispatchable
+  // forever, and survived --uninstall too (which iterated the CURRENT source tree).
+  // -------------------------------------------------------------------------
+  {
+    const crypto = require('crypto');
+    const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'R1: seed install exits 0 (got ' + r1.status + ')');
+    const agentDir = path.join(r1.dest, '.opencode', 'agent');
+    const manifestPath = path.join(agentDir, AGENT_MANIFEST);
+    assert(existsSync(manifestPath), 'R1 (#795): the install records an agent deploy manifest');
+
+    // The manifest describes EXACTLY the canonical agent set, at the deployed bytes.
+    const lines = readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean);
+    const manifestNames = lines.map(l => l.split('\t')[0]).sort();
+    const canonNames = sync.listCanonAgents().map(n => n + '.md').sort();
+    assert(JSON.stringify(manifestNames) === JSON.stringify(canonNames),
+      'R1 (#795): manifest lists exactly the canonical agents — got ' + JSON.stringify(manifestNames));
+    const hashDrift = [];
+    for (const line of lines) {
+      const [n, h] = line.split('\t');
+      if (sha256(readFileSync(path.join(agentDir, n))) !== h) hashDrift.push(n);
+    }
+    assert(hashDrift.length === 0,
+      'R1 (#795): every recorded hash matches the deployed bytes — drifted: ' + hashDrift.join(', '));
+
+    // Plant the three classes the sweep must tell apart.
+    const retiredBody = '---\nname: issue-scout\n---\n\nRetired role.\n';          // ours, retired
+    const editedRecorded = '---\nname: legacy-role\n---\n\nOriginal.\n';           // ours, then user-edited
+    const userAuthored = '---\nname: my-own-helper\n---\n\nMy own agent.\n';       // never ours
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+    fs.writeFileSync(path.join(agentDir, 'legacy-role.md'), editedRecorded + '\nUser edit.\n');
+    fs.writeFileSync(path.join(agentDir, 'my-own-helper.md'), userAuthored);
+    fs.appendFileSync(manifestPath,
+      'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n' +
+      'legacy-role.md\t' + sha256(Buffer.from(editedRecorded)) + '\n');
+
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'R2: reinstall exits 0 (got ' + r2.status + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R2 (#795): a retired agent recorded in the previous manifest is removed on reinstall');
+    assert(/Removed retired agent: .*issue-scout\.md/.test(r2.stdout),
+      'R2 (#795): the sweep names each removal — stdout: ' + r2.stdout.split('\n').slice(-6).join(' | '));
+    assert(existsSync(path.join(agentDir, 'legacy-role.md')),
+      'R2 (#795): a retired agent the user edited after install is left untouched');
+    assert(readFileSync(path.join(agentDir, 'my-own-helper.md'), 'utf8') === userAuthored,
+      'R2 (#795): a user-authored agent absent from the manifest is never swept');
+    for (const a of sync.listCanonAgents()) {
+      assert(existsSync(path.join(agentDir, a + '.md')),
+        'R2 (#795): canonical agent ' + a + ' still deployed after the sweep');
+    }
+    const afterNames = readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean)
+      .map(l => l.split('\t')[0]).sort();
+    assert(JSON.stringify(afterNames) === JSON.stringify(canonNames),
+      'R2 (#795): the rewritten manifest owns only what the tree ships — got ' + JSON.stringify(afterNames));
+
+    // Idempotent: nothing left to sweep on a converged reinstall.
+    const r3 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r3.ok && !/Removed retired agent:/.test(r3.stdout),
+      'R2 (#795): a converged reinstall sweeps nothing');
+
+    // R3 — --uninstall removes what the manifest claims, INCLUDING an agent retired
+    // since the last install (the old uninstall iterated the current source tree, so
+    // an orphan survived it). A never-recorded user agent still survives.
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+    fs.appendFileSync(manifestPath, 'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(ru.status === 0, 'R3: --uninstall exits 0 (got ' + ru.status + ')');
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R3 (#795): --uninstall removes an agent retired since the last install (manifest-driven)');
+    for (const a of sync.listCanonAgents()) {
+      assert(!existsSync(path.join(agentDir, a + '.md')),
+        'R3: --uninstall still removes canonical agent ' + a);
+    }
+    assert(existsSync(path.join(agentDir, 'my-own-helper.md')),
+      'R3 (#795): --uninstall never touches a user-authored agent absent from the manifest');
+    assert(!existsSync(manifestPath), 'R3 (#795): --uninstall removes its own manifest');
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // R4 (#795) — PATH TRAVERSAL: a manifest name is never a path.
+  //
+  // The deploy manifest lives INSIDE the deployed agent dir and records BASENAMES.
+  // A row carrying `../` (corruption, or a tampered manifest) must never reach a
+  // delete outside that dir. Both destructive halves — the reinstall sweep and
+  // `--uninstall` — therefore ENUMERATE the agent directory and intersect against
+  // the manifest instead of building `$layout_root/agent/<manifest name>`.
+  //
+  // Without the guard: the sweep row clears every fail-closed check it applies
+  // (absent from the source tree, present on disk, sha256 matches) and deletes the
+  // outside file; and `--uninstall` deleted `$layout_root/agent/<name>` with NO
+  // validation at all, so a bare `../../../x` removed a file three dirs above.
+  // -------------------------------------------------------------------------
+  {
+    const crypto = require('crypto');
+    const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+    // A deleted victim must not ABORT the block — every later assertion (notably
+    // the --uninstall half) still has to run and report.
+    const safeRead = p => { try { return readFileSync(p, 'utf8'); } catch (_) { return null; } };
+
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'R4: seed install exits 0 (got ' + r1.status + ')');
+    const agentDir = path.join(r1.dest, '.opencode', 'agent');
+    const manifestPath = path.join(agentDir, AGENT_MANIFEST);
+
+    // Victims OUTSIDE the agent dir. `.opencode/VICTIM.txt` is one level up;
+    // `<dest>/DEEP-VICTIM.txt` is two — the shape the verifier reproduced.
+    const upOne = path.join(r1.dest, '.opencode', 'VICTIM.txt');
+    const upTwo = path.join(r1.dest, 'DEEP-VICTIM.txt');
+    const upOneBody = 'one level up\n';
+    const upTwoBody = 'two levels up\n';
+    fs.writeFileSync(upOne, upOneBody);
+    fs.writeFileSync(upTwo, upTwoBody);
+
+    // A legitimate retired agent rides along: the guard must reject the hostile
+    // rows WITHOUT disarming the sweep for real ones.
+    const retiredBody = '---\nname: issue-scout\n---\n\nRetired role.\n';
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+
+    fs.appendFileSync(manifestPath,
+      '../VICTIM.txt\t' + sha256(Buffer.from(upOneBody)) + '\n' +
+      '../../DEEP-VICTIM.txt\t' + sha256(Buffer.from(upTwoBody)) + '\n' +
+      upTwo + '\t' + sha256(Buffer.from(upTwoBody)) + '\n' +
+      'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
+
+    // (a) REINSTALL sweep.
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'R4: reinstall over a traversal-bearing manifest exits 0 (got ' + r2.status + ')');
+    assert(existsSync(upOne),
+      'R4 (#795): a `../`-bearing manifest entry must never let the SWEEP delete outside the agent dir');
+    assert(existsSync(upTwo),
+      'R4 (#795): a `../../`-bearing manifest entry must never let the SWEEP delete two dirs up');
+    assert(safeRead(upTwo) === upTwoBody,
+      'R4 (#795): the outside file is byte-identical after the sweep');
+    assert(/not a plain file name/.test(r2.stdout + r2.stderr),
+      'R4 (#795): the sweep names the rejected manifest entries loudly — got: '
+        + (r2.stderr || r2.stdout).split('\n').slice(-4).join(' | '));
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R4 (#795): the traversal guard does not disarm the sweep for a legitimate retired agent');
+
+    // (b) --uninstall. Re-plant both victims and a manifest naming them; the
+    //     uninstall half had NO validation at all before this guard.
+    fs.writeFileSync(upOne, upOneBody);
+    fs.writeFileSync(upTwo, upTwoBody);
+    const userAuthored = '---\nname: my-own-helper\n---\n\nMy own agent.\n';
+    fs.writeFileSync(path.join(agentDir, 'my-own-helper.md'), userAuthored);
+    fs.appendFileSync(manifestPath,
+      '../VICTIM.txt\tignored\n' +
+      '../../DEEP-VICTIM.txt\tignored\n');
+
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(ru.status === 0, 'R4: --uninstall exits 0 (got ' + ru.status + ')');
+    assert(existsSync(upOne),
+      'R4 (#795): --uninstall must never delete a file one dir above the agent dir');
+    assert(existsSync(upTwo),
+      'R4 (#795): --uninstall must never delete a file two dirs above the agent dir');
+    assert(safeRead(upTwo) === upTwoBody,
+      'R4 (#795): the outside file survives --uninstall byte-identical');
+    assert(existsSync(path.join(agentDir, 'my-own-helper.md')),
+      'R4 (#795): --uninstall still never touches a user-authored agent absent from the manifest');
+    for (const a of sync.listCanonAgents()) {
+      assert(!existsSync(path.join(agentDir, a + '.md')),
+        'R4: --uninstall still removes canonical agent ' + a);
+    }
+    clean(r1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FA — FORGE AXIS. The runtime is not a forge, but the workflow PROSE is
+// forge-shaped, so this block proves each forge renders its OWN surface and
+// nothing of any other. Three properties make it a guard rather than a
+// smoke test:
+//   (1) the forge set is DERIVED from the routing registry, so a new forge is
+//       covered the moment it exists — there is no opt-in list to forget;
+//   (2) the identity check is BIDIRECTIONAL (own marker present AND every
+//       other forge's marker absent), so both "gitlab tree is github-shaped"
+//       and "github tree leaked a gitlab token" fail;
+//   (3) the markers are DERIVED from the install manifest, so they cannot
+//       drift from the basenames the installer actually deploys.
+// ---------------------------------------------------------------------------
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const routing = require('./generate-routing-surfaces.js');
+  const { spawnSync } = require('child_process');
+  const SYNC = path.join(REPO, 'scripts', 'sync-opencode-edition.js');
+
+  // F1: ONE forge axis. The edition must not carry a second list that can drift
+  // from the registry that renders the surfaces it consumes.
+  assert(Array.isArray(routing.FORGES) && routing.FORGES.length >= 3,
+    'FA1: the routing registry exposes a forge axis of at least 3 forges');
+  assert(JSON.stringify(forgeLayout.FORGES) === JSON.stringify(routing.FORGES),
+    'FA1: runtime-edition-forge FORGES is the routing registry axis, not a copy '
+    + '(got ' + JSON.stringify(forgeLayout.FORGES) + ' vs ' + JSON.stringify(routing.FORGES) + ')');
+  assert(JSON.stringify(sync.FORGES) === JSON.stringify(routing.FORGES),
+    'FA1: sync-opencode-edition re-exports the same forge axis');
+
+  // Marker per forge: the claim-script basename the INSTALL MANIFEST resolves for
+  // that forge. Derived, so it tracks any future rename automatically.
+  const marker = f => forgeLayout.scriptName('kaola-workflow-claim.js', f);
+  const markers = forgeLayout.FORGES.map(marker);
+  assert(new Set(markers).size === markers.length,
+    'FA2: the per-forge markers are distinct (' + markers.join(', ') + ') — a shared marker '
+    + 'would make the bidirectional check below vacuous');
+
+  const walk = dir => {
+    const out = [];
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) out.push(...walk(p));
+      else out.push(p);
+    }
+    return out;
+  };
+
+  for (const forge of forgeLayout.FORGES) {
+    const tree = sync.treeLabel(forge);
+
+    // F3: every forge renders, and re-renders to byte-parity.
+    const w = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--write'], { encoding: 'utf8' });
+    assert(w.status === 0, 'FA3[' + forge + ']: sync --write exits 0 (got ' + w.status + ': '
+      + String(w.stderr || '').slice(0, 200) + ')');
+    const c = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--check'], { encoding: 'utf8' });
+    assert(c.status === 0, 'FA3[' + forge + ']: sync --check is green after --write (got ' + c.status + ': '
+      + String(c.stderr || '').slice(0, 300) + ')');
+
+    const files = walk(path.join(REPO, tree));
+    assert(files.length > 0, 'FA3[' + forge + ']: ' + tree + ' is non-empty after --write');
+    const bodies = files.map(f => fs.readFileSync(f, 'utf8'));
+
+    // F4: the ZERO-Claude-path-leak invariant holds on EVERY forge tree, not just
+    // github. A forge-blind rewrite would leak $CLAUDE_PLUGIN_ROOT here.
+    let leaks = 0;
+    const leakFiles = [];
+    for (let i = 0; i < files.length; i++) {
+      const n = (bodies[i].match(/CLAUDE_PLUGIN_ROOT/g) || []).length
+        + (bodies[i].match(/\.claude\/kaola-workflow/g) || []).length;
+      if (n > 0) { leaks += n; leakFiles.push(path.relative(REPO, files[i]) + ' (' + n + ')'); }
+    }
+    assert(leaks === 0, 'FA4[' + forge + ']: ZERO Claude path leaks across ' + tree
+      + ' — found ' + leaks + ' in: ' + leakFiles.slice(0, 6).join(', '));
+
+    // F5: forge identity, BIDIRECTIONAL.
+    const joined = bodies.join('\n');
+    assert(joined.includes(marker(forge)),
+      'FA5[' + forge + ']: ' + tree + ' carries its OWN forge marker ' + marker(forge));
+    for (const other of forgeLayout.FORGES) {
+      if (other === forge) continue;
+      assert(!joined.includes(marker(other)),
+        'FA5[' + forge + ']: ' + tree + ' must NOT carry the ' + other + ' marker '
+        + marker(other) + ' — cross-forge prose leaked into this tree');
+    }
+
+    // F6: the rendered command set IS the routing registry's command set for this
+    // forge (generated, not a hand-maintained list).
+    const expected = routing.commandSurfacesForForge(forge)
+      .map(r => path.basename(r.path)).sort();
+    const actual = fs.readdirSync(path.join(REPO, tree, 'command')).filter(f => f.endsWith('.md')).sort();
+    assert(JSON.stringify(actual) === JSON.stringify(expected),
+      'FA6[' + forge + ']: ' + tree + '/command is exactly the routing registry command set for '
+      + forge + ' (expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(actual) + ')');
+  }
+
+  // F7: an unknown forge is REFUSED, not silently defaulted to github.
+  const bad = spawnSync(process.execPath, [SYNC, '--forge=svn', '--check'], { encoding: 'utf8' });
+  assert(bad.status === 2,
+    'FA7: sync --forge=svn refuses with exit 2 rather than defaulting to github (got ' + bad.status + ')');
+}
+
+// ---------------------------------------------------------------------------
+// FA9 — the forge axis reaches the INSTALLED tree, not just the generated one.
+// This is the mechanical form of "installing against gitlab/gitea deploys
+// forge-correct scripts": for every forge, a REAL hermetic install (own temp
+// HOME + own --target + own config dir) must deploy exactly the support-script
+// basenames that forge's install manifest names, and no other forge's. It is
+// bidirectional and derived, so a hardcoded --forge=github anywhere in the
+// installer fails here.
+// ---------------------------------------------------------------------------
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, existsSync, readdirSync, rmSync } = require('fs');
+  const os = require('os');
+  const INSTALLER = path.join(REPO, 'install-opencode.sh');
+
+  for (const forge of forgeLayout.FORGES) {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-forge-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-forge-dest-'));
+    const ocCfg = path.join(home, '.config', 'opencode');
+    try {
+      const r = spawnSync('bash', [INSTALLER, '--forge=' + forge, '--target', dest, '--yes'], {
+        env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: ocCfg }),
+        encoding: 'utf8',
+      });
+      assert(r.status === 0, 'FA9[' + forge + ']: install-opencode.sh --forge=' + forge
+        + ' exits 0 (got ' + r.status + ': ' + String(r.stderr || '').split('\n')[0] + ')');
+
+      const scriptsDir = path.join(ocCfg, 'kaola-workflow', 'scripts');
+      assert(existsSync(scriptsDir), 'FA9[' + forge + ']: support scripts land in the opencode-native dir');
+      const deployed = readdirSync(scriptsDir).sort();
+      const expected = manifest.supportScripts(forge).slice().sort();
+      assert(JSON.stringify(deployed) === JSON.stringify(expected),
+        'FA9[' + forge + ']: the installed support set is EXACTLY the ' + forge
+        + ' manifest set (missing: ' + expected.filter(n => !deployed.includes(n)).join(',')
+        + ' | unexpected: ' + deployed.filter(n => !expected.includes(n)).join(',') + ')');
+
+      // Bidirectional: no OTHER forge's uniquely-named script may be present.
+      for (const other of forgeLayout.FORGES) {
+        if (other === forge) continue;
+        const ownSet = new Set(expected);
+        const strangers = manifest.supportScripts(other).filter(n => !ownSet.has(n) && deployed.includes(n));
+        assert(strangers.length === 0,
+          'FA9[' + forge + ']: the ' + forge + ' install must not deploy ' + other
+          + '-only scripts — found ' + strangers.join(', '));
+      }
+
+      // The deployed COMMANDS must resolve a claim script that was actually installed.
+      const cmd = fs.readFileSync(path.join(dest, '.opencode', 'command', 'workflow-next.md'), 'utf8');
+      const claim = forgeLayout.scriptName('kaola-workflow-claim.js', forge);
+      assert(cmd.includes(claim),
+        'FA9[' + forge + ']: the deployed workflow-next resolves ' + claim);
+      assert(deployed.includes(claim),
+        'FA9[' + forge + ']: ' + claim + ' is among the installed support scripts — the command '
+        + 'would otherwise resolve a script this install never wrote');
+    } finally {
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
   }
 }
 

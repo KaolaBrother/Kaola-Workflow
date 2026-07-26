@@ -65,7 +65,8 @@ try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user
 
 // #445 (D-445-01): per-aggregator operator hint registry. One entry per typed reason this
 // script can emit; generated at emit time (never stored). Forge-neutral: refer only to the forge CLI.
-// Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow (the laundering anti-pattern is excluded);
+// Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow, plus amend-surface where the
+// out-of-set files may be preservable companion work (the laundering anti-pattern is excluded);
 // crash-repair → repair-node; no forge CLI tokens in any hint.
 const OPERATOR_HINT_REGISTRY = {
   nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
@@ -81,7 +82,9 @@ const OPERATOR_HINT_REGISTRY = {
   too_few_nodes: () => '--parallel-safe needs >= 2 node IDs.',
   drop_base_window_open: (ctx) => `Cannot drop baseline for in_progress node "${ctx.nodeId || '(unknown)'}". Reset the node to pending first (ledger-reset → pending → drop → fresh open).`,
   root_mismatch: () => 'Run the barrier from the repo root so write-set paths and the baseline diff measure against one root.',
-  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set. Run: node scripts/kaola-gitlab-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
+  // NAMED, not routed: both primitives are listed with one line on when each fits, and nothing selects
+  // between them — the caller owns that judgment; this only stops hiding the preserve option.
+  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: node scripts/kaola-gitlab-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: node scripts/kaola-gitlab-workflow-adaptive-node.js amend-surface --project <project> --node-id <expansion-point> --files "<paths>" --json`,
   write_set_granularity: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set (granularity). Run: node scripts/kaola-gitlab-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
   lockfile_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a lockfile outside its declared write set. Add the lockfile to the write set or run revert-overflow.`,
   mirror_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a mirror file outside its declared write set. Add the mirror to the write set or run revert-overflow.`,
@@ -132,7 +135,12 @@ const OPERATOR_HINT_REGISTRY = {
   // #556: package.json present but unreadable/unparseable — repo kind (self-host npm vs consumer) is INDETERMINATE.
   repo_kind_undetermined: () => 'package.json is present but UNREADABLE/unparseable, so the repo kind (self-host npm vs consumer) cannot be determined. The finalize gate refuses rather than silently using the weaker consumer gate. Fix the file permissions or the malformed JSON, or remove package.json if this is genuinely a non-npm consumer repo, then re-run.',
   plan_not_frozen: () => 'plan_hash missing — the plan is not frozen. Run --freeze to stamp the hash.',
-  plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md was modified after freeze. Re-run --freeze to re-stamp.',
+  // The hint MUST NOT advise re-stamping as the default. --freeze re-stamps whatever it is handed, so
+  // "re-run --freeze" on an unexplained mismatch makes the changed bytes self-consistent and destroys
+  // the only evidence they changed — an honest operator following the hint would launder the very
+  // change this refusal detected. Naming BOTH cases is the fix: re-freezing an intended pre-execution
+  // edit stays legitimate; an unexplained mismatch on a run in flight is investigated, never re-stamped.
+  plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md no longer hashes to the plan_hash stamped inside it, so the frozen bytes changed after freeze. Do NOT reflexively re-run --freeze: it re-stamps whatever it is handed, which would make the changed bytes self-consistent and destroy the only evidence that they changed. Decide which case this is first. (a) The edit was INTENDED and the run has not started (no node opened, no evidence recorded): re-freezing is the legitimate way to re-issue the plan — review the diff, then re-run --freeze deliberately. (b) The run is IN FLIGHT, or the change was not intended: this is an unexplained edit to the frozen authority. Restore the plan to the bytes that hash to the stored plan_hash (from version control, or from .cache/epochs/<ordinal>/ for a parent epoch) and re-run; if the change cannot be accounted for, stop and escalate rather than re-stamping. A genuine mid-run change of the plan is an epoch transition (a re-plan child), never an in-place re-stamp.',
   unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
   dangling_depends_on: (ctx) => `Node ${ctx.nodeId || '(unknown)'} depends_on a node that does not exist. Fix the depends_on reference and re-freeze.`,
   brief_unknown_node: (ctx) => `## Node Briefs names unknown node id "${ctx.nodeId || '(unknown)'}" — every brief's ### <node-id> header must match a node in the ## Nodes table. Fix the id (or add the node) and re-freeze.`,
@@ -140,6 +148,10 @@ const OPERATOR_HINT_REGISTRY = {
   briefs_section_ambiguous: () => '## Node Briefs identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
   design_missing: () => 'A frozen plan requires a non-empty ## Design section — the plan-level WHY: the decomposition rationale, the named serializer-evidence line for every `sequence` edge, why co-opened write legs are disjoint, and what "done" means beyond validation_command. Author ## Design (prose — no grammar inside it) and re-freeze. FREEZE-ONLY: a plan frozen before this section existed resumes unchanged.',
   design_section_ambiguous: () => '## Design identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
+  acceptance_missing: () => 'A code-producing plan requires a non-empty ## Acceptance section — the human-values artifact of the run: what "done" means, transcribed at freeze from the issue body plus explicit user statements, one item per line (A1:, A2:, …) as prose. It is a SIBLING of ## Design, not part of it, and carries no sub-grammar (no types, no priorities, no verification bindings) — how an item is satisfied is judged, never matched. Author ## Acceptance and re-freeze. FREEZE-ONLY: a plan frozen before this section existed resumes unchanged.',
+  acceptance_section_ambiguous: () => '## Acceptance identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
+  acceptance_anchor_unreadable: () => 'The acceptance anchor under .cache/ EXISTS but cannot be read back as a well-formed record, so the acceptance surface recorded at first submission is unavailable. A present-but-unreadable anchor refuses instead of degrading to "no anchor yet" — that branch re-anchors on whatever surface the current submission carries, which would disarm the fence exactly when its record is damaged. The ordinary cause is an interrupted write (crash, full disk), not tampering. Restore the anchor byte-for-byte from a copy, an epoch snapshot, or version control; if it cannot be recovered, discard and restart the run or carry the work into a re-plan child epoch under a surface-bound consent entry. Deleting the anchor is not a repair — it is the disarm this refusal prevents.',
+  acceptance_repair_fenced: () => 'The bounded plan_invalid repair loop may fix ## Meta / ## Nodes / ## Node Briefs / ledger scaffolding, but it MUST NOT alter ## Acceptance — the acceptance surface is a human-values artifact, and changing it is a values decision that routes through the consent valve, never through repair. Restore the acceptance surface recorded at first submission and re-run the repair, or stop and escalate the acceptance change.',
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -217,6 +229,12 @@ const CANONICAL_ROLES = [
   'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
   'adversarial-verifier', 'implementer',
+  // The investigator executes read-only investigations that must RUN to be known — builds, test
+  // matrices, reproductions, measurements, bisects, A/B legs. It closes the gap between the pure
+  // readers (which cannot execute) and the write roles (which mutate tracked files): a brief whose
+  // deliverable is MEASUREMENTS has a home that is neither a blueprint role improvising as a lab
+  // tech nor a gate producing the evidence it is supposed to judge.
+  'investigator',
   // #634: metric-optimizer runs a bounded metric-ratchet loop for direction-not-destination work (make
   // it faster / smaller / less flaky). It is a WRITE + IMPLEMENT role (its per-iteration accepted commits
   // ARE code), so G1/G3 post-dominance is inherited for free; its optimize(<id>) Meta contract + OPT-1..6
@@ -244,7 +262,7 @@ const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implement
 // that depends_on a producer must prove it actually read that producer's evidence (the close-time
 // consumed-proof). Distinct from IMPLEMENT_ROLES (the consumer side). Exported via module.exports so
 // the per-node lifecycle aggregator imports the SAME set and the producer/consumer split never drifts.
-const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'synthesizer']);
+const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'synthesizer', 'investigator']);
 // #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
 // cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)
 // so the freeze-time sanitize-collision check sees the SAME collisions the barrier keys do
@@ -260,6 +278,52 @@ function sanitizeNodeId(id) {
 // G-SEL-2 (a gate can never be a select arm) for free.
 const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE]);
 
+// TEST CUSTODY. The role(s) that may declare a test-like path in `declared_write_set` — the test
+// AUTHOR, which writes tests from the acceptance surface and never writes production code. Custody
+// replaces order: the wall is not "who runs first" but "who OWNS the test artifact", so the
+// implementing context can read and run the tests it is judged by but can never write them. Any
+// other role reaching a test path needs a DECLARED, hash-covered exemption in `## Meta` (the
+// divergence-must-be-declared pattern: a named entry with a one-line reason) — see
+// parseTestCustodyExemptions. The runtime attribution floor already catches an UNDECLARED test
+// write at the barrier; this wall role-checks the DECLARED side at freeze.
+const TEST_CUSTODY_ROLES = new Set(['tdd-guide']);
+
+// The `## Meta` custody-exemption channel: `test_custody_exemption: <node-id> <path> — <reason>`.
+// One line per (node, path) pair; the reason is REQUIRED (an unreasoned exemption is a rubber stamp,
+// not a declaration). Hash-covered for free — computePlanHash normalizes the WHOLE `## Meta` body —
+// so a post-freeze edit surfaces as plan_hash_mismatch. Read is SCOPED to `## Meta` via the same
+// classifier.sectionBody reader parseLabels/parseGoal use, so a decoy line elsewhere in the plan
+// cannot admit a write. Returns { entries: [{ nodeId, file, reason, raw }], malformed: [raw, …] }.
+// Normalized through the SAME parser the declared write set is built with (classifier
+// .parseWriteSetCell), never a private second normalizer. The exemption's whole job is to name a
+// path that IS in some node's write set, so if the two sides normalized differently the wall would
+// either admit a write it should refuse or reject an exemption naming a genuinely declared path.
+// The path token cannot contain whitespace (parseTestCustodyExemptions already split the head on
+// it), so feeding one token through the cell parser yields exactly one entry.
+function normalizeExemptPath(raw) {
+  const [only] = classifier.parseWriteSetCell(String(raw || ''));
+  return only || '';
+}
+function parseTestCustodyExemptions(content) {
+  const body = classifier.sectionBody(content, 'Meta');
+  const entries = [];
+  const malformed = [];
+  for (const line of String(body || '').split(/\r?\n/)) {
+    const m = /^test_custody_exemption:[ \t]*(.*)$/.exec(line);
+    if (!m) continue;
+    const raw = m[1].trim();
+    // `<node-id> <path>` then the reason, separated by an em dash or a spaced hyphen (the same two
+    // delimiters the finding grammar accepts). Both halves must be non-empty.
+    const split = raw.split(/\s+—\s+|\s+-\s+/);
+    const head = (split[0] || '').trim();
+    const reason = split.slice(1).join(' — ').trim();
+    const parts = head.split(/\s+/).filter(Boolean);
+    if (parts.length !== 2 || !reason) { malformed.push(raw); continue; }
+    entries.push({ nodeId: parts[0], file: normalizeExemptPath(parts[1]), reason, raw });
+  }
+  return { entries, malformed };
+}
+
 // #433 (D-433-01): the SINGLE-SOURCE role-token registry. Maps each role to its required evidence
 // token CLASSES. A class containing `|` is an ALTERNATION — ANY one of the alternatives satisfies it
 // (the implementer's `regression-green|build-green|smoke-integration` is the #359 verification-tier
@@ -267,8 +331,22 @@ const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adver
 // and the open-time evidence SEED (adaptive-node.js's writer) — no second copy. Exported via
 // module.exports so adaptive-node.js imports the SAME object and the two never drift.
 const ROLE_TOKEN_REGISTRY = {
-  'tdd-guide':             ['evidence-binding', 'RED', 'GREEN'],
-  'implementer':          ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+  // Custody, not order, decides these two rows. The test-author OWNS the test artifact and never
+  // writes production code, so it keeps `RED` and LOSES `GREEN`: a passing suite is a verdict about
+  // the implementation, and a writer that grades its own output is no grader. GREEN authority moves
+  // to the gate side (validation-vector receipts / the post-dominating review wall). `RED` gains its
+  // receipt — `red_baseline`, the baseline the failing test was captured on — so fail-on-baseline
+  // stops being a self-description the agent asserts and becomes a value the runtime can check
+  // against the recorded barrier baseline. A RED signature therefore cannot survive a reopen.
+  'tdd-guide':             ['evidence-binding', 'RED', 'red_baseline'],
+  // The implementer is the UNIVERSAL implementing role: it takes over behavioral logic and has full
+  // read+execute access to the tests (the iterate-to-green reward signal is preserved — custody
+  // governs WRITE, never read or run) and zero write access to test paths. `non_tdd_reason` retires
+  // with the test-first/no-test dichotomy that justified it. The verification-tier alternation
+  // survives and now leads with `tests-green` (the behavioral tier: the authored suite green as
+  // LOCAL working evidence, never the authoritative verdict), followed by the three non-behavioral
+  // tiers for refactors, scaffolding/config, and glue.
+  'implementer':          ['evidence-binding', 'tests-green|regression-green|build-green|smoke-integration'],
   'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
   'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
   'adversarial-verifier': ['evidence-binding', 'verdict'],
@@ -281,6 +359,7 @@ const ROLE_TOKEN_REGISTRY = {
   // (the future-agent wall's floor — no presence-only exception needed).
   'code-architect':       ['evidence-binding', 'files_to_create|files_to_modify', 'build_sequence'],
   'code-explorer':        ['evidence-binding', 'findings'],
+  'investigator':         ['evidence-binding', 'findings'],
   'knowledge-lookup':     ['evidence-binding', 'findings', 'sources'],
   'planner':              ['evidence-binding', 'recommendation'],
   'build-error-resolver': ['evidence-binding', 'build-green'],
@@ -467,7 +546,12 @@ function scratchObservableWriteSet(writeSet, opts) {
 // must reuse the allowband, not a hand-rolled copy, or it ships inert tripping on every plan/ledger
 // churn). foreignArchivePath: a write to ANOTHER project's archive band (not exempt — it must block).
 // isWorkflowArtifactPath: the whole `kaola-workflow/` band EXCEPT a foreign archive. isTestLikePath:
-// tests/spec (never need the code/security gate). barrierExemptPath unions them with isBarrierInvisible.
+// tests/spec — the SENSITIVITY shield ONLY (#813: a declared test write never demands a security-
+// reviewer by pattern match, but it IS attributable; barrierCheck applies isTestLikePath to arm (a)
+// and NOT to the allowlist arms). barrierExemptPath unions them with isBarrierInvisible; it backs the
+// --parent-clean-check dirty fence (an ORDERING check over the parent worktree, not an attribution
+// check over a node's diff), which keeps the full union deliberately — plan/ledger/.cache/test churn
+// must not false-trip the pre-merge fence. Attribution teeth live in barrierCheck.
 function foreignArchivePath(p, project) {
   const m = /^kaola-workflow\/archive\/([^/]+)\//.exec(String(p || ''));
   if (!m) return false;
@@ -478,6 +562,14 @@ function foreignArchivePath(p, project) {
 function isWorkflowArtifactPath(p, project) {
   return /^kaola-workflow\//.test(String(p || '')) && !foreignArchivePath(p, project);
 }
+// SCOPE, decided rather than incidental: this predicate matches ZERO files in Kaola-Workflow's own
+// tree, because this repo names its tests `scripts/test-*.js` and `scripts/simulate-*.js`. So test
+// attribution and the custody wall are live for consumer repos with conventional layouts — the target —
+// and inert here. Widening the pattern to catch our own 59 test files was considered and REJECTED: it
+// buys little where independent adversarial verification already runs, and costs a declaration
+// obligation on every node that touches a test file plus a custody exemption whenever an implementer
+// edits one. Do not "fix" this by widening without first establishing that the verification mitigation
+// has gone away.
 function isTestLikePath(p) {
   const s = String(p || '');
   return /(^|\/)(tests?|__tests__|spec)\//i.test(s) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(s);
@@ -526,6 +618,55 @@ function installedRoles(root) {
     }
   } catch (_) { /* no agents dir (e.g. test fixture) => baseline only */ }
   return roles;
+}
+
+// The role-capability table SERVED to the planner before it authors `## Nodes`. This validator
+// already owns installedRoles(), so it is the natural server: the declared manifest is the
+// authority, unioned with any maintainer-added `agents/*.md` the declared table cannot know about
+// (those rows are front-matter-parsed and marked `declared: false`, so a reader can tell a
+// vendored guarantee from a local discovery). Read-only, plan-independent, no mutation.
+//
+// `source` per row:
+//   declared  — a vendored ROLE_CAPABILITY_MANIFEST row, drift-walled against its profile
+//   local     — a maintainer-added agents/*.md, parsed from its own front matter
+function rolesManifest(root) {
+  const declared = schema.ROLE_CAPABILITY_MANIFEST;
+  const rows = {};
+  for (const role of Object.keys(declared)) {
+    const r = declared[role];
+    rows[role] = {
+      tools: r.tools.slice(),
+      bash_capable: r.bash_capable,
+      write_capable: r.write_capable,
+      kind: r.kind,
+      source: 'declared',
+    };
+  }
+  let localNames = [];
+  try {
+    localNames = fs.readdirSync(path.join(root, 'agents')).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3));
+  } catch (_) { localNames = []; }
+  for (const role of localNames) {
+    if (Object.prototype.hasOwnProperty.call(rows, role)) continue;
+    let tools = [];
+    try {
+      const content = fs.readFileSync(path.join(root, 'agents', `${role}.md`), 'utf8');
+      const fmEnd = content.indexOf('\n---\n', 4);
+      const fm = fmEnd > 0 ? content.slice(0, fmEnd) : '';
+      const m = /^tools:\s*\[(.*)\]\s*$/m.exec(fm);
+      tools = m ? m[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean) : [];
+    } catch (_) { tools = []; }
+    rows[role] = {
+      tools,
+      bash_capable: tools.includes('Bash'),
+      write_capable: tools.includes('Write'),
+      // A local agent's slot in the library is not declared anywhere, and guessing it would be the
+      // same name-over-manifest error this table exists to prevent. `unknown` is the honest value.
+      kind: 'unknown',
+      source: 'local',
+    };
+  }
+  return { result: 'ok', roles: rows, role_kinds: schema.ROLE_KINDS.slice() };
 }
 
 // --- parsing ----------------------------------------------------------------
@@ -3271,8 +3412,9 @@ function classifyOverflowSubtype(outOfAllow) {
 //   (a) a SENSITIVITY hit — an actual write matches a Phase-5 SENSITIVE_PATTERN — when the frozen
 //       plan has NO security-reviewer node at all (H1: a `labels: refactor` plan that auto-ran with
 //       no security gate must not silently merge a write into src/auth/session.js); and
-//   (b) an out-of-ALLOWLIST production write — an actual non-docs, non-test, non-workflow-artifact
-//       write not in the union of the frozen declared write sets (H3 overflow).
+//   (b) an out-of-ALLOWLIST write — an actual non-docs, non-workflow-artifact write not in the union
+//       of the frozen declared write sets (H3 overflow). TEST-LIKE PATHS ARE INCLUDED HERE (#813):
+//       they are exempt from (a) only, so an undeclared test write is an ordinary overflow.
 // declared is the UNION over ALL nodes (prefer-fewer-false-refusals; the sensitivity scan is the
 // teeth). Toggle-agnostic; never reads the install switch.
 function barrierCheck(content, actualPaths, opts) {
@@ -3366,8 +3508,29 @@ function barrierCheck(content, actualPaths, opts) {
   // The GROUP/union barrier (opts.groupMembers) and the WHOLE-PLAN barrier (no legScoped) are unchanged:
   // docs stay exempt there (they back every serial close + finalize check).
   const legScoped = !!opts.legScoped;
-  const isExempt = p => isWorkflowArtifact(p) || (isBarrierInvisible(p, archiveProj) && !(legScoped && isAllowbandDocsSurface(p))) || isTestPath(p);
+  // #813: the test exemption SPLITS. isTestPath keeps its SENSITIVITY reach (arm (a) below: a declared
+  // `test/login.test.js` must never demand a security-reviewer by pattern match — the v3.20.1 motive,
+  // preserved verbatim) and LOSES its ATTRIBUTION reach (arms (b) and (c): the allowlist and the
+  // unattributed floor). A test-like path is therefore a first-class attributable write in EVERY scope
+  // — per-node (ownNode), lane-group (opts.groupMembers), whole-plan (neither), and leg (opts.legScoped)
+  // — so an undeclared test write lands in the EXISTING write_set_overflow / unattributed_write families
+  // and is NAMED in the returned outOfAllow / unattributed arrays. No fifth refusal family; the
+  // precedence contract below is unchanged. Rationale: tests are the artifact the rest of the machinery
+  // treats as ground truth (validation vectors, gate verdicts, RED/GREEN evidence), so a class the
+  // barrier cannot see is a verification oracle outside attribution. Recovery is the existing
+  // choreography — overflow ⇒ revert-overflow — with no new subcommand.
+  // KAOLA_TEST_ATTRIBUTION=0 (schema.testAttributionDefaultOn, DEFAULT ON) collapses the two predicates
+  // back into one, so the toggle-off barrier is BYTE-IDENTICAL to the pre-split behavior — the bridge
+  // for plans frozen before this rule and for runs already in flight. The escape hatch is an env toggle
+  // and NOT a tolerance band inside the barrier: a hidden allowband would recreate the hole by another name.
+  const attributeTests = schema.testAttributionDefaultOn(process.env);
+  const isExemptBand = p => isWorkflowArtifact(p) || (isBarrierInvisible(p, archiveProj) && !(legScoped && isAllowbandDocsSurface(p)));
+  const isExempt = p => isExemptBand(p) || isTestPath(p);
+  const isAttributionExempt = p => isExemptBand(p) || (!attributeTests && isTestPath(p));
   const production = real.filter(p => !isExempt(p) && !foreignArchive(p));
+  // The ATTRIBUTION scope: `production` plus every test-like write (identical to `production` when the
+  // toggle is off — same source array, same filter order, so the derived arrays compare byte-for-byte).
+  const attributable = real.filter(p => !isAttributionExempt(p) && !foreignArchive(p));
   // (AC3) foreign-archive refusal: a write to another project's archive band must be blocked.
   const foreignArchiveHits = real.filter(foreignArchive);
   if (foreignArchiveHits.length) {
@@ -3379,8 +3542,8 @@ function barrierCheck(content, actualPaths, opts) {
   if (sensitiveHits.length && !hasSecReviewer) {
     errors.push(`actual writes touch a Phase-5 sensitive area (${sensitiveHits.join(', ')}) but the plan has no security-reviewer node — revoke and escalate (G2)`);
   }
-  // (b) allowlist (H3): a production write not in the union of declared write sets.
-  const outOfAllow = production.filter(p => !declared.has(p));
+  // (b) allowlist (H3): an attributable write not in the union of declared write sets.
+  const outOfAllow = attributable.filter(p => !declared.has(p));
   if (outOfAllow.length) {
     errors.push(`actual writes outside the declared allowlist (${outOfAllow.join(', ')}) — overflow beyond the frozen write set`);
   }
@@ -3419,7 +3582,7 @@ function barrierCheck(content, actualPaths, opts) {
         if (lp.ledger && lp.ledger.get(n.id) === 'complete') anyCompleteOwner.set(p, true);
       }
     }
-    unattributed = production.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
+    unattributed = attributable.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
     if (unattributed.length) {
       errors.push(`actual writes (${unattributed.join(', ')}) are declared only by non-complete (n/a/pending) node(s) — the producing node claims it did not run, so the write is unreviewed`);
     }
@@ -3483,6 +3646,43 @@ function nodeBriefsPresent(content) { return nodeBriefsSection(content).status =
 // freeze wall when absent/empty (design_missing) or ambiguous (design_section_ambiguous). FREEZE-ONLY:
 // revalidateForResume never reads it, so a plan frozen before this channel existed resumes green.
 function designSection(content) { return classifier.sectionBodyState(content, 'Design'); }
+// `## Acceptance` — the human-VALUES channel: what "done" means, transcribed once at freeze from the
+// issue body plus explicit user statements. A SIBLING of `## Design`, never folded into it (design is
+// the WHY of the decomposition; acceptance is the WHAT of done), with the same hash coverage and the
+// same freeze-only wall. Grammar is DELIBERATELY MINIMAL — item lines (`A1:`, `A2:`, …) carrying prose,
+// and nothing else: no types, no priorities, no verification bindings. HOW an item is satisfied is
+// agent-judged (a covering test, a gate receipt, or prose evidence, judged in context), never a
+// mechanical check or a string match, so the wall proves only that the section EXISTS and is non-empty
+// on a code-producing plan. A plan whose items merely look untestable is NOT refused.
+function acceptanceSection(content) { return classifier.sectionBodyState(content, 'Acceptance'); }
+// parseAcceptanceItems: the ONE reader of the item lines. Fence-aware (an `A1:` inside a fenced block
+// is body text, not an item). Returns [{ id, text }] in document order; [] when the section is absent,
+// empty, ambiguous, or carries only prose. Consumers (the finalize acceptance walk, a test author's
+// falsification objective, an adversarial coverage claim) REASON over this list — nothing downstream
+// may diff it mechanically or bind an item to a named artifact.
+function parseAcceptanceItems(content) {
+  const section = acceptanceSection(content);
+  if (section.status !== 'present' || !section.body) return [];
+  let fence = { family: '', length: 0 };
+  const out = [];
+  for (const line of section.body.split('\n')) {
+    fence = classifier.markdownFenceTransition(fence, line);
+    if (fence.family) continue;
+    const m = line.match(/^\s*(A\d+):\s*(.+?)\s*$/);
+    if (m) out.push({ id: m[1], text: m[2] });
+  }
+  return out;
+}
+// acceptanceDigest: the stable identity of the acceptance surface, normalized exactly like the hash
+// body (trim each line, drop blanks) so pure whitespace churn is not a change. `null` when the section
+// is ABSENT — the two fences that consume this (the bounded-repair anchor and the re-plan
+// acceptance-preservation wall) must distinguish "never transcribed" from "transcribed as empty".
+function acceptanceDigest(content) {
+  const section = acceptanceSection(content);
+  if (section.status !== 'present') return null;
+  const norm = section.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  return crypto.createHash('sha256').update(norm).digest('hex');
+}
 // parseNodeBriefs: parse the `## Node Briefs` section into [{ nodeId, brief }]. The section body is
 // sliced via the fence-aware classifier.sectionBody (an h3 does NOT close the h2 section); the
 // `### <node-id>` headers are scanned fence-aware (mirroring sectionBody's fenceRe) so a fenced
@@ -3533,6 +3733,17 @@ function computePlanHash(content) {
     body += '\n---DESIGN---\n' + design.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
   } else if (design.status === 'ambiguous') {
     body += '\n---DESIGN-AMBIGUOUS---';
+  }
+  // The `## Acceptance` section is hash-covered ONLY when present — an acceptance-less plan appends
+  // NOTHING and therefore produces a BYTE-IDENTICAL hash body to the pre-Acceptance formula, so every
+  // existing frozen / in-flight plan resume-checks unchanged. Same conditional-append pattern as
+  // `## Node Briefs` and `## Design`; coverage is what makes a post-freeze acceptance edit
+  // tamper-evident (plan_hash_mismatch), which is the whole point of transcribing values ONCE.
+  const acceptance = acceptanceSection(content);
+  if (acceptance.status === 'present') {
+    body += '\n---ACCEPTANCE---\n' + acceptance.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  } else if (acceptance.status === 'ambiguous') {
+    body += '\n---ACCEPTANCE-AMBIGUOUS---';
   }
   return crypto.createHash('sha256').update(body).digest('hex');
 }
@@ -3728,6 +3939,13 @@ function validatePlan(content, opts) {
   if (designSectionState.status === 'ambiguous') {
     return { result: 'refuse', reason: 'design_section_ambiguous', operator_hint: getOperatorHint('design_section_ambiguous'), errors: ['## Design section identity is ambiguous'], planHash: computePlanHash(content) };
   }
+  // `## Acceptance` mirrors its `## Design` sibling exactly: the section-IDENTITY probe is structural
+  // and short-circuits here, while the completeness wall (acceptance_missing) waits until the END of
+  // the freeze wall so an otherwise-broken plan surfaces its own reason first. Both are FREEZE-ONLY.
+  const acceptanceSectionState = acceptanceSection(content);
+  if (acceptanceSectionState.status === 'ambiguous') {
+    return { result: 'refuse', reason: 'acceptance_section_ambiguous', operator_hint: getOperatorHint('acceptance_section_ambiguous'), errors: ['## Acceptance section identity is ambiguous'], planHash: computePlanHash(content) };
+  }
   const nodes = parseNodes(content);
   const schemaVersionValues = metaFieldValues(content, 'plan_schema_version');
   if (schemaVersionValues.length > 1) {
@@ -3842,6 +4060,13 @@ function validatePlan(content, opts) {
   // OPT-1..OPT-4/OPT-6 field rules below and the OPT-5 gate rule in the gates block. plan_hash-covered.
   const optimizeContracts = parseOptimizeContracts(content);
 
+  // The "this plan produces code" predicate, computed ONCE and shared by the two walls that range over
+  // it: the schema-2 validation-policy wall below and the `## Acceptance` completeness wall at the end
+  // of the freeze wall. ONE definition on purpose — two copies would let a plan owe a verdict-of-done
+  // (validation_command) without owing a statement of done (## Acceptance), or the reverse.
+  const planProducesCode = nodes.some(producesCode)
+    || (isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE));
+
   if (planSchemaVersion === 2) {
     const validationPolicy = parseValidationPolicy(content, {
       contract: { ok: true, plan_schema_version: 2, contract_version: 2 },
@@ -3864,8 +4089,7 @@ function validatePlan(content, opts) {
     // that it will not. This deliberately does NOT read `expected_surfaces`: that contract is declared
     // advisory, and letting a coarse hint decide a gate would re-import the freeze-time commitment the
     // spine exists to defer (and would let an author dodge the rule by omitting a hint).
-    const hasCodeProducer = nodes.some(producesCode)
-      || (isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE));
+    const hasCodeProducer = planProducesCode;
     if (hasCodeProducer && (!validationPolicy.command || !validationPolicy.timeout_minutes)) {
       return { result: 'refuse', reason: 'validation_policy_required', operator_hint: getOperatorHint('plan_invalid'),
         errors: ['schema-2 code-producing plans require validation_command and validation_timeout_minutes'],
@@ -4067,6 +4291,53 @@ function validatePlan(content, opts) {
       // Refuse it at freeze for wall symmetry. Freeze-only (revalidateForResume untouched).
       if (n.role === TERMINAL_ROLE) {
         errors.push(`node ${n.id} is the finalize sink and must not declare a model (it is never dispatched as a subagent)`);
+      }
+    }
+  }
+
+  // TEST CUSTODY at freeze (FREEZE-ONLY). A test-like path may appear only in a TEST-AUTHOR node's
+  // declared write set. Any other role needs a declared, hash-covered `## Meta` exemption naming the
+  // node, the path, and a one-line reason. Rationale: the implementing context must not be able to
+  // author, weaken, or delete the tests it will be graded by — the same principle the gate-side
+  // already enforces (a verifier never provisions its own fixtures; an inline gate never reviews its
+  // own writer-context), applied to the writer side. Custody governs WRITE only: every role keeps
+  // full read+execute access to the suite, so the iterate-to-green signal is untouched.
+  //
+  // Deliberately absent from revalidateForResume — a plan frozen before this rule existed still
+  // resumes byte-for-byte (a frozen plan that stops resuming is a silent break), exactly like the
+  // sibling write-set shape walls. The runtime attribution floor still catches an UNDECLARED test
+  // write in-flight, so the resume path is not left without teeth.
+  //
+  // The SYNTHESIZER is exempt for a path at least one of its `depends_on` legs also declares: by
+  // contract it declares the UNION of the legs' write sets, so a leg's test path in that union is
+  // reconciliation, not authorship. A test path NO upstream leg declares is authorship and refuses —
+  // the carve-out is derived, never a blanket pass.
+  {
+    const custody = parseTestCustodyExemptions(content);
+    for (const raw of custody.malformed) {
+      errors.push(`## Meta test_custody_exemption "${raw}" is malformed (test_custody_exemption_malformed) — declare exactly \`test_custody_exemption: <node-id> <path> — <one-line reason>\`; an exemption without a named reason is a rubber stamp, not a declaration`);
+    }
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    const exemptFor = new Map(); // nodeId -> Set(paths)
+    for (const e of custody.entries) {
+      const owner = byId.get(e.nodeId);
+      if (!owner || !owner.writeSet || !owner.writeSet.has(e.file)) {
+        errors.push(`## Meta test_custody_exemption names node "${e.nodeId}" and path "${e.file}" but that node does not declare that path (test_custody_exemption_unmatched) — an exemption is a declaration about a real declared write, never a wildcard; remove it or declare the path`);
+        continue;
+      }
+      if (!exemptFor.has(e.nodeId)) exemptFor.set(e.nodeId, new Set());
+      exemptFor.get(e.nodeId).add(e.file);
+    }
+    for (const n of nodes) {
+      if (TEST_CUSTODY_ROLES.has(n.role)) continue;
+      for (const p of (n.writeSet || [])) {
+        if (!isTestLikePath(p)) continue;
+        if ((exemptFor.get(n.id) || new Set()).has(p)) continue;
+        if (n.role === 'synthesizer'
+            && (n.dependsOn || []).some(up => { const u = byId.get(up); return !!(u && u.writeSet && u.writeSet.has(p)); })) {
+          continue; // union-of-legs reconciliation, not authorship
+        }
+        errors.push(`node ${n.id} (role ${n.role}) declares the test path "${p}" (test_custody_violation) — test custody belongs to the test author (${[...TEST_CUSTODY_ROLES].join(', ')}); move the path to a test-author node, or declare a hash-covered \`## Meta\` exemption: \`test_custody_exemption: ${n.id} ${p} — <one-line reason>\``);
       }
     }
   }
@@ -4737,6 +5008,23 @@ function validatePlan(content, opts) {
       ...(isSpine ? { plan_form: 'spine' } : {}) };
   }
 
+  // `## Acceptance` completeness gate (FREEZE-ONLY), the sibling of the `## Design` gate above and
+  // scoped exactly like the schema-2 validation-policy wall: a CODE-PRODUCING schema-2 plan owes a
+  // statement of done, a read-only / non-code plan does not. Absent OR empty both refuse — the section
+  // is the durable landing site for the human-values artifact, so freezing without it leaves every
+  // downstream consumer (test authorship, adversarial coverage claims, the finalize acceptance walk)
+  // reasoning against air. The check is EXISTENCE ONLY: no item-shape sub-grammar, no testability
+  // judgement, no binding of an item to an artifact — a plan whose items merely look untestable
+  // freezes, because testability is a reasoning call for the planner and the gates, not a pattern here.
+  // Deliberately absent from revalidateForResume: a plan frozen before this section existed resumes.
+  if (planSchemaVersion === 2 && planProducesCode
+      && (acceptanceSectionState.status !== 'present' || acceptanceSectionState.body.trim() === '')) {
+    return { result: 'refuse', reason: 'acceptance_missing', operator_hint: getOperatorHint('acceptance_missing'),
+      errors: ['## Acceptance is absent or empty — a code-producing plan must transcribe what "done" means (A1:, A2:, … prose items) from the issue body plus explicit user statements, then re-freeze'],
+      planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...(isSpine ? { plan_form: 'spine' } : {}) };
+  }
+
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
   const reasons = [];
   let sensitivity = false, blastRadius = false, uncertain = false;
@@ -5105,11 +5393,25 @@ function computeCodeTreeHash(root, project, testConsumedExtra, opts) {
 }
 
 const STALE_PATHS_LIMIT = 20;
-function computeChainsStaleDiagnostics(root, project, receipt) {
-  if (!receipt || typeof receipt !== 'object') return null;
-  const stampedHead = String(receipt.headSha || '').trim();
-  if (!stampedHead || receipt.workTreeHash !== 'clean') return null;
-  const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+// ONE visibility filter behind both readers below, so the stale-culprit diagnostics and the
+// bookkeeping-advance predicate can never disagree about which paths a verdict depends on.
+// Drops everything isValidationInvisible() classifies as inert; returns a sorted, de-duped array.
+function filterVisiblePaths(rawLines, project, extra) {
+  const seen = new Set();
+  const paths = [];
+  for (const raw of rawLines) {
+    const rel = String(raw || '').trim().replace(/^\.\//, '');
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    if (!isValidationInvisible(rel, project, extra)) paths.push(rel);
+  }
+  paths.sort();
+  return paths;
+}
+
+// Culprit hints: the stamped COMMIT vs the TREE IN FRONT OF US (uncommitted edits + untracked
+// files included) — a diagnostic, so it casts the widest net. null on ANY git failure.
+function visibleChangedPathsSince(root, project, stampedHead, extra) {
   let diffOut = '';
   let untrackedOut = '';
   try {
@@ -5118,16 +5420,44 @@ function computeChainsStaleDiagnostics(root, project, receipt) {
   } catch (_) {
     return null;
   }
-  const seen = new Set();
-  const paths = [];
-  for (const raw of (diffOut + '\n' + untrackedOut).split('\n')) {
-    const rel = String(raw || '').trim().replace(/^\.\//, '');
-    if (!rel || seen.has(rel)) continue;
-    seen.add(rel);
-    if (!isValidationInvisible(rel, project, extra)) paths.push(rel);
-  }
-  if (!paths.length) return null;
-  paths.sort();
+  return filterVisiblePaths((diffOut + '\n' + untrackedOut).split('\n'), project, extra);
+}
+
+// A LEGACY (headSha-only) receipt pins the gate to an exact COMMIT, so ANY new commit reads as
+// stale — including the finalize transaction's OWN `chore: archive` bookkeeping commit, which the
+// transaction authors BEFORE this gate re-runs on a crash-resumed re-entry. That dead-ends the
+// resume behind a receipt only a hand re-run could refresh: a blocker the workflow itself created,
+// which is a repair obligation, never evidence. Resolve it with the SAME visibility predicate the
+// codeTreeHash arm already uses: the advance is inert iff every path differing between the two
+// COMMITS is validation-invisible.
+//
+// Deliberately commit-to-commit, NOT tree-to-commit. This arm is a statement about the receipt's
+// binding to a commit and has never considered working-tree dirt (a sha match passes today no
+// matter how dirty the tree is), so widening it to the worktree here would make a RESUME stricter
+// than the first-pass run it resumes — the Step 8a residue mirror alone would trip it.
+//
+// Not a loosening for genuine drift: one visible path (code, or test-consumed prose) still
+// refuses, and any git failure or unresolvable sha reads false. Modern receipts never reach here.
+function headAdvanceIsValidationInvisible(root, project, receipt, currentHead) {
+  const stampedHead = String((receipt && receipt.headSha) || '').trim();
+  const head = String(currentHead || '').trim();
+  if (!stampedHead || !head) return false;
+  const extra = Array.isArray(receipt && receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  let diffOut = '';
+  try {
+    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, head, '--name-only'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+  } catch (_) { return false; }
+  return filterVisiblePaths(diffOut.split('\n'), project, extra).length === 0;
+}
+
+function computeChainsStaleDiagnostics(root, project, receipt) {
+  if (!receipt || typeof receipt !== 'object') return null;
+  const stampedHead = String(receipt.headSha || '').trim();
+  if (!stampedHead || receipt.workTreeHash !== 'clean') return null;
+  const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  const paths = visibleChangedPathsSince(root, project, stampedHead, extra);
+  if (!paths || !paths.length) return null;
   const proseCount = paths.filter(p => testConsumes(p, extra)).length;
   const staleKind = proseCount === paths.length ? 'prose-only' : (proseCount === 0 ? 'code' : 'mixed');
   const out = { stale_paths: paths.slice(0, STALE_PATHS_LIMIT), stale_kind: staleKind };
@@ -5310,6 +5640,10 @@ function printHelp() {
     '                 chains_stale (with stale_paths/stale_kind culprit hints) > chains_empty > repo_kind_undetermined\n' +
     '                 (unresolvable chain set) > chains_incomplete > chains_red > chains_waived.\n' +
     '                 [--candidate SHA (default HEAD)] [--receipt PATH] [--json]\n' +
+    '  --roles-manifest  the ROLE-CAPABILITY table (check-only, PLAN-INDEPENDENT — no plan path). Emits every role\'s\n' +
+    '                 tools / bash_capable / write_capable / kind, so a node brief is matched to a role by what it CAN\n' +
+    '                 DO rather than by what its name suggests. Vendored rows are source:declared; a maintainer-added\n' +
+    '                 agents/*.md is source:local with kind:unknown. Read-only, no mutation. [--json]\n' +
     '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
     '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
@@ -5334,6 +5668,24 @@ function main() {
   // #651: --release-check is PLAN-INDEPENDENT (at release time the run is archived — there is no
   // active workflow-plan.md), so intercept BEFORE the plan read; no plan path is required.
   if (args.includes('--release-check')) { releaseCheck(args); return; }
+  // --roles-manifest is PLAN-INDEPENDENT: the planner asks for the capability table BEFORE it has
+  // authored a plan at all, so intercept before the plan read and require no plan path.
+  if (args.includes('--roles-manifest')) {
+    const out = rolesManifest(findRepoRoot(process.cwd()));
+    if (args.includes('--json')) {
+      process.stdout.write(JSON.stringify(out) + '\n');
+    } else {
+      for (const role of Object.keys(out.roles).sort()) {
+        const r = out.roles[role];
+        process.stdout.write(
+          role.padEnd(22) + ' kind=' + String(r.kind).padEnd(13) +
+          ' bash=' + (r.bash_capable ? 'yes' : 'no ') +
+          ' write=' + (r.write_capable ? 'yes' : 'no ') +
+          ' tools=[' + r.tools.join(', ') + ']\n');
+      }
+    }
+    return;
+  }
   const planPath = args[0];
   const json = args.includes('--json');
   const root = findRepoRoot(path.dirname(path.resolve(planPath)));
@@ -6182,9 +6534,14 @@ function main() {
         try { headRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { headRoot = root; }
         const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', headRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
         if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
-          const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }, headRoot, projTag, receipt);
-          process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
-          process.exitCode = 1; return;
+          // A sha mismatch alone cannot tell "the code advanced" from "the workflow advanced HEAD
+          // past its own receipt with a bookkeeping commit". Ask which paths actually moved before
+          // refusing; an inert advance is not staleness.
+          if (!headAdvanceIsValidationInvisible(headRoot, projTag, receipt, currentHead)) {
+            const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }, headRoot, projTag, receipt);
+            process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+            process.exitCode = 1; return;
+          }
         }
       }
       chains = Array.isArray(receipt.chains) ? receipt.chains : [];
@@ -6504,11 +6861,21 @@ module.exports = {
   namedGateUncovered,
   resolveNamedCertifier,
   readFinalizeReplanFence,
+  // #802: the ONE epoch-lineage resolver, exported so the scheduler's seam-checkpoint attribution
+  // unions the CLOSED write-capable rows across a child epoch's sealed ancestors through the SAME
+  // verified walker the whole-plan barrier uses — never a second, unverified lineage reader.
+  resolveEpochLineagePlans,
   // `## Node Briefs` channel: the parser + presence probe (fence-aware; hash-covered when present).
   parseNodeBriefs,
   nodeBriefsPresent,
   // `## Design` channel: fence-aware section-identity probe (hash-covered when present; freeze-only wall).
   designSection,
+  // `## Acceptance` channel: the section-identity probe, the ONE item reader, and the normalized
+  // digest the repair fence + the re-plan preservation wall both compare. Exported so no consumer
+  // re-parses the acceptance surface on its own terms.
+  acceptanceSection,
+  parseAcceptanceItems,
+  acceptanceDigest,
   parseNodes,
   resolvePlanContract,
   buildPlanView,
@@ -6573,6 +6940,12 @@ module.exports = {
   barrierCheck,
   installedRoles,
   ROLE_TOKEN_REGISTRY,
+  // Test custody: the custody-holding role set + the `## Meta` exemption reader. Exported so every
+  // consumer (the freeze wall, the routing inference, unit coverage) reads ONE definition of who
+  // owns the test artifact — a second copy is a place custody could silently diverge.
+  TEST_CUSTODY_ROLES,
+  parseTestCustodyExemptions,
+  isTestLikePath,
   // Producer/consumer role classification for the node-to-node channel's consumed-proof (the lifecycle
   // aggregator imports the SAME sets so the split never drifts).
   PRODUCER_ROLES,

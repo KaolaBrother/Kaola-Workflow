@@ -149,8 +149,8 @@ function ensureMergeRequest(args, opts) {
 
   // #336: keep-open is merge-sink-only — the MR body 'Closes #N' would auto-close the
   // kept-open issue, and watch-mr's archive-on-merge would delete the preserved roadmap source.
-  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the contractor
-  // finalize archives the project BEFORE the sink runs, so the live state file is already gone);
+  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the finalize
+  // transaction archives the project BEFORE the sink runs, so the live state file is already gone);
   // the LIVE path covers a sink: mr project that gained issue_action by mistake. Guard sits
   // BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
   {

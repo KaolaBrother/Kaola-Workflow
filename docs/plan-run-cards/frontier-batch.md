@@ -116,10 +116,60 @@ forces the hold), no live `lane_group`, a clean parent, and validator `--paralle
 plus a typed `serialDegradeReason` naming the cause (`parallel_writes_off` / `lane_group_live` /
 `parent_dirty` / `overlaps_live_writer` / `parallel_safe_indeterminate`). The group's last-member
 merge is still held by `merge_awaits_read_drain` while any read is live (§4), so the reads observe an
-untouched parent tree. A consent-tier `observes: scratch` `## Nodes` annotation (freeze-legal only on
-an `adversarial-verifier`) additionally permits a *legless* writer whose declared set is
-validation-invisible (allowband docs minus test-consumed prose, plus its own evidence) to co-open
-behind that scratch-only gate over a dirty parent. See `docs/decisions/D-641-01.md`.
+untouched parent tree.
+
+**A serializer must be one the scheduler cannot remove.** A precondition the workflow itself created
+is a *repair obligation*, not evidence for serial. Uncommitted production work left in the parent
+worktree by already-CLOSED serial siblings is exactly that: it is the guaranteed product of the
+finalize-owned-commit policy, not a property of the task, and it is none of the three named
+serializers. So when a write frontier could co-open but the parent carries production dirt,
+`open-ready` **repairs the seam instead of degrading** — it re-runs the parent-clean fence, proves
+every dirty path falls inside the declared write set of a CLOSED write-capable node (each already
+passed its own barrier at close, and under a child epoch the sealed ancestor epochs' closed rows
+count too), commits exactly those paths as a `kaola-checkpoint(<project>)` commit, re-runs the fence,
+and only a `pass` proceeds. The commit lands **before** the group baseline, so the serial work sits
+outside the group diff and the legs branch off it and see the serial context — for every path the
+fence classifies as dirty. The fence's barrier-EXEMPT band (`docs/**`, `README.md`, `CHANGELOG.md`,
+`kaola-workflow/**`, test-like paths) never enters `dirty`, so those bytes are never checkpointed and
+never cross into the legs; a parent carrying only exempt-band changes re-fences `pass` and the
+checkpoint is a no-op (`committed: []`). That residual is by design — those are the paths a node may
+write *without* declaring, so they are unattributable at the seam — and the post-dominating
+synthesizer plus the finalize sweep reconcile them.
+
+Two outcomes, never a retry loop and never a silent serial:
+
+- **`seam_checkpoint_unattributable`** — a dirty production path no closed node declared. Foreign
+  bytes in the parent are an integrity signal, so this is a loud stop naming the paths: identify who
+  wrote them, move them into a declared lane or revert them, then re-run `open-ready`.
+- **`seam_checkpoint_failed`** — the repair could not positively prove success (the fence could not
+  enumerate the dirt, a git failure, the post-commit fence not `pass`, or an unresolvable epoch
+  lineage). Nothing is opened and nothing is serialized in its place.
+
+At the `write_awaits_drain` seam the repair is attempted **only** when every live member is an
+`observes: scratch` `adversarial-verifier` **read** — such a gate renders its verdict from `.cache`
+evidence and scratch, never the tree or refs, and a commit is tree-content-neutral. Any other live
+member — a non-scratch reader, a live gate, a live writer — keeps the `parent_dirty` hold.
+
+`KAOLA_SEAM_CHECKPOINT=0` restores the `parent_dirty` **serial degrade** (the single serial write at
+the normal co-open site, the `write_awaits_drain` hold at the drain site) — and nothing else. It does
+not resurrect the legless single-writer co-open that used to fire over a dirty parent behind a
+scratch-observation gate: that path is retired unconditionally, so a seam that once legless-co-opened
+now holds under the opt-out. The toggle is never *less* strict than the repair it replaces.
+
+A successful repair is surfaced as `seamCheckpoint:{committed,nodes,commit}` on the open envelope. A
+`seam_checkpoint_failed` raised by the **post-commit** re-fence carries `commit` and `committed`: the
+checkpoint already landed and HEAD advanced before the repair gave up. It is deliberately not rolled
+back — the committed paths were attributed to closed write-capable nodes, and the likeliest cause is a
+concurrent writer whose bytes a reset would destroy. Resolve the new change the re-check tripped on and
+re-run `open-ready`; the landed checkpoint is idempotent and is not re-made. Every other halt shape
+omits `commit` and leaves HEAD unmoved.
+
+**An unproven disjointness verdict is not a proven overlap.** When the `--parallel-safe` prover
+returns a non-ok result *carrying* an overlap report, that is a real serializer
+(`overlapping_write_sets`). When it returns a non-ok result with **no** report — a crash, unparseable
+output — nothing was proven: the scheduler re-runs the read-only probe **exactly once**, and a second
+indeterminate result fails closed labeled `parallel_safe_indeterminate`. A proven overlap is never
+re-probed. Both write sites share one classifier, so the two can never disagree.
 
 `open-ready` returns
 `{result:'ok', kind:'read'|'write', opened:[{id,role,model,declared_write_set,nonce,evidence_file,required_tokens,dispatch}], runningSet:[ids], laneGroup?:{group_id,members,write_union,legs?}}`

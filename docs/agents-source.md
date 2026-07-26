@@ -44,10 +44,9 @@ re-fetched by the ECC refresh procedure.
   reference, and evidence transport. It cannot contain arbitrary prompt prose. Codex uses
   `codex-inherit-by-omission`, so generated TOMLs contain neither `model` nor
   `model_reasoning_effort`.
-- `scripts/generate-reviewer-profiles.js` is the sole writer for the five Claude Markdown outputs:
-  `agents/code-reviewer.md`, `agents/profiles/higher/code-reviewer.md`,
-  `agents/adversarial-verifier.md`, `agents/security-reviewer.md`,
-  `agents/profiles/higher/security-reviewer.md`; and the nine matching Codex TOML outputs across
+- `scripts/generate-reviewer-profiles.js` is the sole writer for the three Claude Markdown outputs:
+  `agents/code-reviewer.md`, `agents/adversarial-verifier.md`, `agents/security-reviewer.md`;
+  and the nine matching Codex TOML outputs across
   GitHub, GitLab, and Gitea. Do not hand-edit those outputs; edit the canonical JSON or generator,
   then run `--write` and `--check`.
 - OpenCode is a downstream transform of the generated Claude root. Its normalized reviewer core,

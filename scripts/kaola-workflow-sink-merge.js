@@ -1287,7 +1287,7 @@ function deriveSinkKeepOpen(mainRoot, args, receipt) {
 // --sink that is the SOLE archiver (no prior cmdFinalize --keep-worktree already wrote them).
 // Without this, the sink's own archiveProjectDir archives a folder with NO terminal metadata (a
 // latent gap that bites exactly when the sink is the only archiver). Attestation reflects
-// the REAL dispatch-log probe (checkDispatchAttestations) — never a fabricated contractor attestation
+// the REAL dispatch-log probe (checkDispatchAttestations) of the claim/author seam — no fabrication
 // for inline execution. All three writers are presence-guarded / idempotent (a dest already carrying
 // the blocks is a no-op), and the disposition/label/invariant fields are honestly PENDING here: the
 // sink's own closure + verify steps (later) perform the real close and record the authoritative verdict.
@@ -1319,8 +1319,7 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
       claimLabelRemoved: 'close-pending',
       worktreeRemoved: 'removed',
       closureInvariants: 'pending',
-      claimPlannerAttested: closureReceipt.claim_planner_attested,
-      finalizeContractorAttested: closureReceipt.finalize_contractor_attested
+      claimPlannerAttested: closureReceipt.claim_planner_attested
     });
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;

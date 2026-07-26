@@ -98,7 +98,7 @@ try {
     '| cert | code-reviewer | docs | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
     '| id | status |', '|---|---|',
     '| writer | pending |', '| probe | pending |', '| docs | pending |',
     '| cert | pending |', '| finalize | pending |', '',
@@ -117,7 +117,7 @@ try {
   git(tmp, ['commit', '-m', 'freeze']);
 
   const writerEvidence = (id, nonce, tag) => 'evidence-binding: ' + id + ' ' + nonce
-    + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+    + '\nRED: ' + tag + ' reproduced\nred_baseline: ' + nonce + '\n';
   const gateEvidence = (id, nonce, dispatch, outcome, extraRows) => [
     'evidence-binding: ' + id + ' ' + nonce,
     'contract_version: 2',
@@ -192,7 +192,7 @@ try {
 
 // ---- shared evidence writers (blocks 3-5) ----
 const writerEvidence = (id, nonce, tag) => 'evidence-binding: ' + id + ' ' + nonce
-  + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+  + '\nRED: ' + tag + ' reproduced\nred_baseline: ' + nonce + '\n';
 const gateEvidence = (id, nonce, dispatch, outcome, extraRows) => [
   'evidence-binding: ' + id + ' ' + nonce,
   'contract_version: 2',
@@ -249,7 +249,7 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
       '| cert | code-reviewer | docs | — | 1 | sequence | review-change | code-tree | sequence | — |',
       '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| probe | pending |', '| docs | pending |',
       '| cert | pending |', '| finalize | pending |', '',
@@ -425,7 +425,7 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
       '| cert | code-reviewer | docs | — | 1 | sequence | review-change | code-tree | sequence | — |',
       '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writerA | pending |', '| writerB | pending |', '| probe | pending |',
       '| docs | pending |', '| cert | pending |', '| finalize | pending |', '',
@@ -557,7 +557,7 @@ for (const probeRole of ['adversarial-verifier', 'code-reviewer']) {
         '| cert | code-reviewer | docs | — | 1 | sequence | review-change | code-tree | sequence | — |',
         '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
         '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
         '| id | status |', '|---|---|',
         '| writer | pending |', '| probe | pending |', '| docs | pending |',
         '| cert | pending |', '| finalize | pending |', '',
@@ -735,7 +735,7 @@ for (const certKind of ['group', 'single']) {
       ...certRows,
       '| finalize | finalize | ' + certIds.join(',') + ' | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| probe | pending |', '| docs | pending |',
       ...certIds.map(id => '| ' + id + ' | pending |'),
@@ -867,7 +867,7 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
       '| cert | code-reviewer | docs | — | 1 | sequence | review-change | code-tree | sequence | — |',
       '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| probe | pending |', '| docs | pending |',
       '| cert | pending |', '| finalize | pending |', '',

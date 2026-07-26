@@ -153,28 +153,38 @@ The workflow is built from a small, shared set of **roles**. All four runtimes p
 
 Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
-| Agent | Role kind | Model | Higher profile |
-|-------|-----------|-------|----------------|
-| `code-explorer` | Read — code-fact discovery | Sonnet | |
-| `knowledge-lookup` | Read — external docs (when needed) | Sonnet | |
-| `planner` | Planning — plan authoring | Opus | |
-| `code-architect` | Planning — design | Sonnet | yes |
-| `tdd-guide` | Write — per-task TDD executor | Sonnet | |
-| `implementer` | Write — implementation without test-first ceremony; refactors, scaffolding, config, UI, migrations | Sonnet | |
-| `build-error-resolver` | Write — validation repair when needed | Sonnet | |
-| `code-reviewer` | Gate — review | Sonnet | yes |
-| `security-reviewer` | Gate — review (conditional) | Sonnet | yes |
-| `doc-updater` | Finalization — docs | Sonnet | |
-| `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | Sonnet | |
-| `contractor` | Mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
-| `workflow-planner` | Front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically; in no-target mode also runs the backlog survey + selection) | Opus | no |
-| `synthesizer` | Parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | Opus | no |
-| `metric-optimizer` | Bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | Sonnet | |
+| Agent | Role kind | Tier |
+|-------|-----------|------|
+| `code-explorer` | Read — code-fact discovery | standard |
+| `investigator` | Read — investigations that must RUN: builds, tests, reproductions, measurements, bisects, A/B legs (executes, never edits tracked files) | standard |
+| `knowledge-lookup` | Read — external docs (when needed) | standard |
+| `planner` | Planning — plan authoring | reasoning |
+| `code-architect` | Planning — design | reasoning |
+| `tdd-guide` | Write — per-task TDD executor | standard |
+| `implementer` | Write — implementation without test-first ceremony; refactors, scaffolding, config, UI, migrations | standard |
+| `build-error-resolver` | Write — validation repair when needed | standard |
+| `code-reviewer` | Gate — review | reasoning |
+| `security-reviewer` | Gate — review (conditional) | reasoning |
+| `doc-updater` | Finalization — docs | standard |
+| `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | standard |
+| `workflow-planner` | Front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically; in no-target mode also runs the backlog survey + selection) | reasoning |
+| `synthesizer` | Parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | reasoning |
+| `metric-optimizer` | Bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | standard |
 
-The **Model** column is the `common` profile. The **default** install profile is
-`higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
-`security-reviewer`) install on **Opus** unless you pass
-`--profile=common`.
+The **Tier** column is each role's *static default* — the `DEFAULT_AGENT_MODELS`
+fallback the runtime resolver uses when a node carries no tier. There is **no
+install-time model axis**: every install ships the same assignment, and the
+frozen plan's per-node `{reasoning|standard}` column overrides it wherever a plan
+says so.
+
+For an **installed** agent the tier above is the only thing that decides: install
+rewrites each installed agent's frontmatter to `model: inherit`, so the resolver's
+frontmatter step never fires and the chain is `plan column → DEFAULT_AGENT_MODELS
+→ inherit`. Each role's *source* frontmatter carries the identical value and
+governs exactly one case — an ad-hoc dispatch pointed at this repository's
+`agents/` directory rather than the installed one. The two are kept byte-equal by
+`test-agent-model-resolver.js`, so a role runs at the same tier whichever
+directory it was dispatched from.
 
 On the current Codex runtime, every named Kaola role profile omits top-level `model` and
 `model_reasoning_effort`, so the child inherits both effective values from the parent session. The
@@ -190,12 +200,13 @@ repository files). The graph, not role prose, decides its mode: a verifier downs
 producer and able to reach the sink is a `change_gate`; otherwise it is an analytical
 `investigation`. It installs on every edition.
 
-`contractor` is locally authored for the lean-orchestrator (issue #242): a mechanical Sonnet
-bookkeeper that runs the workflow scripts and writes the durable bookkeeping (ledger rows, phase
-files, `workflow-state.md`, roadmap, archive) at every seam, returning a compact summary. The main
-Opus session keeps all judgment, dispatch, synthesis, and the sink/close. It never dispatches a
-role, judges, gates, or asks the user, and stays Sonnet even under `--profile=higher` (there is no
-`profiles/higher/contractor.md`).
+There is no mechanical-bookkeeper role. Judgment-adjacent seams ride the orchestrator and
+mechanical floors ride scripts, with no judgment-forbidden agent in between: the finalize seam's
+whole residue — artifact mirror (with its ledger-regression guard), archive + status close, roadmap
+staging, and the `chore: finalize <project>` commit gate — is ONE resumable `cmdFinalize`
+transaction the orchestrator runs directly and reasons over. `workflow-planner` stays: the
+claim/author/freeze seam at run start is a genuine reasoning delegation, where orchestrator context
+economy is at its maximum.
 
 `workflow-planner` is locally authored for the [adaptive workflow](#adaptive-workflow) front end: a
 fixed-Opus agent the main session dispatches **once** at the start of the adaptive path. It runs the
@@ -212,8 +223,8 @@ complete node lifecycle including the first node, opening and dispatching every 
 `kaola-workflow-adaptive-node.js`. It never **judges** risk and never asks the user —
 `decision:auto-run` vs `ask` is audit metadata recorded by the handoff; the run proceeds either way
 with no approval gate. It never dispatches a subagent (a subagent cannot dispatch a subagent — it
-returns control to main), and stays Opus regardless of profile (there is no
-`profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored read-only `planner`, which
+returns control to main), and is pinned to the reasoning tier on every install. It is
+DISTINCT from the vendored read-only `planner`, which
 stays a read-only in-plan node role.
 
 The standalone `issue-scout` agent (issue #328/#646) is retired: in no-target mode (no issue
@@ -222,7 +233,7 @@ backlog survey itself — reading forge issues, the local roadmap, and active fo
 same-scope bundle (or a single issue) jointly with how it decomposes the work, then claims +
 authors + freezes in ONE dispatch. There is no separate pre-claim survey hop.
 
-`synthesizer` is locally authored for the adaptive parallel-write path (issue #463): a reasoning-class (Opus) write-convergence specialist. When planner-proven-disjoint write legs co-open as isolated worktrees, the last member's close octopus-merges them mechanically; the `synthesizer` is dispatched **only** when that mechanical merge hits a real conflict, and reconciles the legs into the feature branch by *intent* rather than by textual hunks. It is never invoked for cleanly-disjoint legs and stays Opus regardless of profile (there is no `profiles/higher/synthesizer.md`).
+`synthesizer` is locally authored for the adaptive parallel-write path (issue #463): a reasoning-class write-convergence specialist. When planner-proven-disjoint write legs co-open as isolated worktrees, the last member's close octopus-merges them mechanically; the `synthesizer` is dispatched **only** when that mechanical merge hits a real conflict, and reconciles the legs into the feature branch by *intent* rather than by textual hunks. It is never invoked for cleanly-disjoint legs and is pinned to the reasoning tier by the reasoning floor.
 
 `metric-optimizer` is locally authored for optimize-shaped work (issue #634) — *direction-not-destination* deliverables ("make it faster / smaller / less flaky") where no acceptance threshold is knowable at freeze. Each iteration of its bounded, budget-capped ratchet loop proposes a change, applies it, runs the regression gate, measures the metric (median-of-K), and accepts or reverts against the running baseline, until a stop condition fires. It is an ordinary `sequence`-shaped implement role — `code-reviewer` still post-dominates it, its contract lives in the plan's `## Meta` `optimize(<node-id>)` block, and a change-gate `adversarial-verifier` reproduces the final metric before finalize.
 
@@ -237,10 +248,9 @@ differs from the agent's frontmatter). **After installing or re-running
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
 >   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `knowledge-lookup`,
->   `doc-updater`, `adversarial-verifier`, `contractor`, `metric-optimizer`) run silently.
->   Opus-dispatched agents (`planner`, `workflow-planner`, `synthesizer`, plus
->   `code-architect`, `code-reviewer`, and `security-reviewer` on the
->   default `higher` profile) badge as expected.
+>   `doc-updater`, `adversarial-verifier`, `metric-optimizer`) run silently.
+>   Opus-dispatched agents (`planner`, `workflow-planner`, `synthesizer`,
+>   `code-architect`, `code-reviewer`, and `security-reviewer`) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
 >
 > The badge is a model-switch indicator: it renders when the subagent's model
@@ -259,10 +269,10 @@ Kaola-Workflow installs along two independent axes:
 |---|---|---|
 | **Claude Code** | `./install.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Codex** | `codex plugin marketplace add` + the matching plugin entry | per-plugin entry (`kaola-workflow`, `-gitlab`, `-gitea`) |
-| **opencode** | `./install-opencode.sh` | — (runtime-only; no forge axis) |
-| **Kimi Code** | `./install-kimi.sh` | — (runtime-only; no forge axis) |
+| **opencode** | `./install-opencode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **Kimi Code** | `./install-kimi.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 
-**Install/refresh every runtime at once — `./install-all.sh`.** To reinstall all four runtimes from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--profile=higher`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
+**Install/refresh every runtime at once — `./install-all.sh`.** To reinstall all four runtimes from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
 
 Forge editions:
 
@@ -270,9 +280,11 @@ Forge editions:
 - **GitLab**: opt-in. GitLab issues, merge requests, `glab`.
 - **Gitea**: opt-in. Gitea issues, pull requests, `tea` ≥ 0.9.2, Gitea server ≥ 1.17. **Forgejo** ≥ 1.18 is expected to work via the shared API surface but is not explicitly tested.
 
-Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): it has no separate forge editions, `./install-opencode.sh` touches none of the existing edition machinery, and it is fully **standalone** — it resolves its support scripts under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts` and never touches `~/.claude/`, so it runs on a machine with no Claude Code installed. See [docs/opencode-edition.md](docs/opencode-edition.md).
+Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): `./install-opencode.sh` touches none of the existing edition machinery, and it is fully **standalone** — it resolves its support scripts under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts` and never touches `~/.claude/`, so it runs on a machine with no Claude Code installed. Its `--forge` flag selects which forge's workflow prose and support scripts to deploy; the forge variants are **generated** from the same routing surfaces the Claude/Codex editions ship, so there is no hand-ported per-forge tree. See [docs/opencode-edition.md](docs/opencode-edition.md).
 
-**Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. See [docs/kimi-edition.md](docs/kimi-edition.md).
+**Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. It takes the same generated `--forge` axis. See [docs/kimi-edition.md](docs/kimi-edition.md).
+
+Being additive is about *edition machinery*, not about forge support: both runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`).
 
 **Adaptive planning runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only. Adaptive is the only workflow path; there is nothing to select. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
 
@@ -324,23 +336,17 @@ cd Kaola-Workflow
 ./install.sh --forge=gitea   # Gitea edition
 ```
 
-#### Agent profiles
+#### Agent model tiers
 
-The default profile is `higher`: `code-architect`, `code-reviewer`, and
-`security-reviewer` install on Opus (deeper threat modeling and architecture
-analysis; roughly 3× cost for those three agents). All other agents are
-unaffected. The `common` profile (those three on Sonnet) must be requested
-explicitly with `--profile=common`.
-
-```bash
-./install.sh                              # GitHub edition, higher profile (Opus reviewers) by default
-./install.sh --forge=gitlab               # GitLab edition, higher profile by default
-```
-
-To install the four profile-governed agents on Sonnet, request the `common` profile:
+There is **no install-time model axis**. Every install ships one model assignment
+per role (the **Tier** column under [Workflow roles](#workflow-roles)), and the
+frozen plan's per-node `{reasoning|standard}` column is the sanctioned way to
+right-size any single node up or down. The retired install-time model-profile flag
+is now an unknown argument and fails loudly at the terminal — by design.
 
 ```bash
-./install.sh --profile=common             # Sonnet assignments for the four profile-governed agents
+./install.sh                              # GitHub edition
+./install.sh --forge=gitlab               # GitLab edition
 ```
 
 #### Adaptive workflow path
@@ -399,11 +405,11 @@ opencode is an additive runtime — installed by its own script, not `--forge`. 
 ./install-opencode.sh --regenerate    # refresh the in-repo .opencode/ tree from canonical
 ```
 
-The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
+The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical reasoning-tier roles, per the **Tier** column under [Workflow roles](#workflow-roles)) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
 
 ### kimi
 
-Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the 11 commands become directory-form Skills (so `/workflow-next` works as-is) and the 16 roles ship as `kaola-role-*` contract Skills, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no two-tier effort mapping; the planner's per-node tier is recorded as ledger metadata only. From a local clone:
+Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the 11 commands become directory-form Skills (so `/workflow-next` works as-is) and the 15 roles ship as `kaola-role-*` contract Skills, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no two-tier effort mapping; the planner's per-node tier is recorded as ledger metadata only. From a local clone:
 
 ```bash
 ./install-kimi.sh --global --yes   # deploy skills into ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
@@ -806,6 +812,7 @@ mirror the Claude workflow roles:
 
 ```text
 code-explorer
+investigator
 knowledge-lookup
 planner
 code-architect
@@ -816,18 +823,17 @@ code-reviewer
 security-reviewer
 doc-updater
 adversarial-verifier
-contractor
 workflow-planner
 synthesizer
 metric-optimizer
 ```
 
 (`adversarial-verifier` is the read-only falsifier for the adaptive path; its mode is derived from
-the frozen graph as either an analytical investigation or a change gate. `contractor` and
-`workflow-planner` are the adaptive lean-orchestrator roles — bookkeeper and DAG front end (the
-front end also runs the backlog survey + bundle-lane selection itself in no-target mode).
+the frozen graph as either an analytical investigation or a change gate. `workflow-planner` is the
+adaptive DAG front end (it also runs the backlog survey + bundle-lane selection itself in no-target
+mode).
 `synthesizer` is the
-adaptive parallel-write convergence role (#463) — reasoning-class (Opus), dispatched only
+adaptive parallel-write convergence role (#463) — reasoning-class, dispatched only
 to reconcile concurrent write legs by intent on a real merge conflict. `metric-optimizer`
 is the adaptive bounded metric-ratchet role — each iteration it proposes a change,
 applies it, runs the regression gate, measures the metric, and accepts or rejects it
@@ -867,10 +873,10 @@ Dependent nodes consume the full cache artifact through `dispatch.upstream_evide
 advance the DAG. If the parent summary transport disconnects, a terminal child plus a green verified
 cache artifact may continue as `returned_partial`; without that artifact the node stays open.
 
-`workflow-planner` and `contractor` run outside the Node Ledger. Their complete workflow-state,
-plan, phase, and finalization artifacts are the authoritative durable full result; they return a
-compact summary to the orchestrator and also mirror the full packet into `dispatch.evidence_file`
-when their dispatch supplies a seeded cache file.
+`workflow-planner` runs outside the Node Ledger. Its complete workflow-state and plan artifacts are
+the authoritative durable full result; it returns a compact summary to the orchestrator and also
+mirrors the full packet into `dispatch.evidence_file` when its dispatch supplies a seeded cache
+file.
 
 Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
 is the only mode — there is no v1/thread-id fallback. Once `[agents].enabled = true`
@@ -911,7 +917,7 @@ Beyond the vendored set, the adaptive path adds locally-authored roles: `adversa
 read-only, refute-by-default falsifier whose investigation/change-gate mode comes from graph
 reachability), `synthesizer` (parallel-write convergence on a real merge conflict), and
 `metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the
-`workflow-planner`/`contractor` orchestration roles described in
+`workflow-planner` orchestration role described in
 [Workflow roles](#workflow-roles).
 
 **Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `workflow-planner`'s no-target selection, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
@@ -1001,7 +1007,7 @@ The four shapes (`sequence`, `fanout`, `loop`, `select`) are a *grammar*, not a 
 | **Bounded loop (review-fix)** | Re-run one role until a mechanical verdict passes. | A `loop(<cap>)` node (e.g. a `code-reviewer` or `build-error-resolver` cycle) re-invoked up to a static cap (`LOOP_CAP` = 5); a #251 `verdict: pass` exits early. The cap is the halting guarantee — the loop can only end sooner, never run longer. | `ask` (loop present) |
 | **Generate-and-filter** | Generate several candidate approaches, filter to the best, then build it. | Read-only `fanout(gen)` of angled `planner` attempts → a `planner` reduce node (the rubric/filter that picks one) → a single `tdd-guide` implements the winner → `code-reviewer` gate → `finalize`. The "discard" is the reduce node's choice, not a grammar feature. | `auto-run` (read-only generators + one sequential implement) |
 | **Tournament** | Competing candidate plans reduced to a winner by pairwise judges. | Read-only `fanout(attempt)` of `planner` nodes → hand-wired pairwise `code-reviewer` judges (each `depends_on` two attempts) → a final judge → `finalize`. There is no native bracket shape — the bracket is ordinary `depends_on` wiring; feed the winner to a downstream `tdd-guide` to build it. | `auto-run` (read-only) |
-| **Classify-And-Act** | Routing to exactly one of several mutually-exclusive arms based on what a read-only classifier finds (e.g. "fix the CSV exporter **or** the HTML renderer, whichever is at fault"). | A read-only `code-explorer` classifier node writes `selector: <arm-id>` to its `.cache/<id>.md` evidence; each arm carries `shape: select(<group>)` and a `selector_source` pointing to the classifier. On the classifier's commit, `plan-validator --selector-check` reads the selector and **fail-closes (exit 1, blocking the commit) on a missing or foreign value** — the script-mechanical guarantee that neither "run all" nor "run none" can occur. It returns `armsToNa`; the contractor marks unselected arms `n/a` in the ledger, and `next-action.js` treats `n/a` arms as terminal so only the one selected arm becomes ready. Risk is assessed over the union of all arms; the selector is read-only (zero blast radius); `n/a` arms cannot smuggle unreviewed writes because they never execute. | `auto-run` (selector is read-only; write-role arms are mutually exclusive, not concurrent) |
+| **Classify-And-Act** | Routing to exactly one of several mutually-exclusive arms based on what a read-only classifier finds (e.g. "fix the CSV exporter **or** the HTML renderer, whichever is at fault"). | A read-only `code-explorer` classifier node writes `selector: <arm-id>` to its `.cache/<id>.md` evidence; each arm carries `shape: select(<group>)` and a `selector_source` pointing to the classifier. On the classifier's commit, `plan-validator --selector-check` reads the selector and **fail-closes (exit 1, blocking the commit) on a missing or foreign value** — the script-mechanical guarantee that neither "run all" nor "run none" can occur. It returns `armsToNa`; the close-node transaction marks unselected arms `n/a` in the ledger, and `next-action.js` treats `n/a` arms as terminal so only the one selected arm becomes ready. Risk is assessed over the union of all arms; the selector is read-only (zero blast radius); `n/a` arms cannot smuggle unreviewed writes because they never execute. | `auto-run` (selector is read-only; write-role arms are mutually exclusive, not concurrent) |
 | **Non-delegable acceptance gate** (`main-session-gate`, #334) | A required acceptance check no subagent can perform — a GPU/visual confirmation, a device-in-hand verification, an explicit human sign-off. | A built-in `main-session-gate` node (no agent profile; the main session itself runs the check and records `verdict: pass\|fail` into `.cache/<id>.md`) placed **after** `code-reviewer` so it post-dominates every code-producing node (**G3**). It is read-only, shape `sequence` only, never a fan-out/select arm, and never a frontier fan-out member. `--gate-verify`/`--verdict-check` block finalization until it is complete with a passing verdict — there is no legal `n/a` skip, so a numerical-green implement path can never reach the sink without crossing the manual decision. | `auto-run` (read-only gate) |
 | **Composed (multi-pattern)** | The realistic case — several patterns stacked in one DAG. The planner *composes*, it does not pick one. | e.g. a read-only multi-modal sweep (`fanout(sweep)` of `code-explorer` → `planner`) **then** a parallel implement (`fanout(impl)` of `tdd-guide` → `code-reviewer` gate) **then** an adversarial-verify skeptic fan-out → `finalize`: one 10-node plan in which `code-reviewer` still post-dominates **both** implement legs. Locked as a fixture in `testAdaptivePatternLibrary`. | `ask` (write-role fan-out present) |
 
@@ -1060,7 +1066,7 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Finalization merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Finalization |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
-| `kaola-workflow-run-chains.js` | Runs all four edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, workTreeHash, startedAt, chains:[{name, exit}]}`). Used by the contractor at Finalization (Step 8c) and gated by `--finalize-check` (`chains_unverified`, `chains_stale`, `chains_red`). `--accept-known-red name:issue` registers a waiver for a known-red chain. | Finalization |
+| `kaola-workflow-run-chains.js` | Runs all four edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, workTreeHash, startedAt, chains:[{name, exit}]}`). Used by the orchestrator at Finalization (Step 8c) and gated by `--finalize-check` (`chains_unverified`, `chains_stale`, `chains_red`). `--accept-known-red name:issue` registers a waiver for a known-red chain. | Finalization |
 
 ### Validation and test scripts
 
@@ -1594,7 +1600,7 @@ To converge all three runtimes from one synchronized checkout, reinstall each ru
 git pull --ff-only
 
 # Claude Code — choose the forge actually used on this machine.
-./install.sh --yes --forge=github --profile=higher
+./install.sh --yes --forge=github
 
 # Codex — refresh the marketplace, replace the selected cached plugin, then copy
 # its validated role profiles/hooks into the global runtime authority. Remove+re-add

@@ -27,6 +27,22 @@ const git = (root, args, opts = {}) => execFileSync('git', ['-C', root, ...args]
 }).trim();
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 let passed = 0;
+
+// Scenario registry. Each top-level block below owns its own fixture root and shares
+// nothing with its neighbours, so the list is partitionable: `--shard i/N` runs a
+// disjoint stride of it in a worker process. WITHOUT --shard every scenario runs, in
+// file order — a bare `node scripts/test-replan.js` is unchanged.
+const shardLib = require('./test-shard-lib');
+const SHARD = shardLib.selector(process.argv);
+let scenarioCount = 0;
+let scenariosRun = 0;
+function scenario(fn) {
+  const ordinal = scenarioCount++;
+  if (!SHARD.owns(ordinal)) return;
+  scenariosRun++;
+  fn();
+}
+
 function ok(value, message) { assert.ok(value, message); passed++; }
 function equal(actual, expected, message) { assert.strictEqual(actual, expected, message); passed++; }
 function deepEqual(actual, expected, message) { assert.deepStrictEqual(actual, expected, message); passed++; }
@@ -70,6 +86,10 @@ function frozenPlan(project, meta, nodes, ledger) {
       ? '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
       : '| --- | --- | --- | --- | --- | --- | --- |', rows,
     '', '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.',
+    // A code-producing plan must carry the transcribed acceptance surface. The child epoch inherits
+    // these exact bytes, which is what the claim-preserving == acceptance-preserving wall checks.
+    '', '## Acceptance', '', 'A1: the declared write set lands the change the issue asked for.',
+    'A2: the recorded validation_command passes over the candidate.',
     '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows,
     '', '## Required Agent Compliance', '',
     '| Requirement | Status | Evidence | Skip Reason |',
@@ -783,7 +803,7 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
 // #699 epoch-2 RED contract surface. Keep this grouped so a pre-implementation
 // run reports the complete missing authority surface instead of stopping at the
 // first absent helper.
-{
+scenario(() => {
   const missing = [];
   if (typeof replan.buildSnapshotAuthorityProjection !== 'function') missing.push('snapshot-authority-projection');
   if (typeof replan.verifyActivePlanningEvidence !== 'function') missing.push('planning-evidence-consistency');
@@ -792,7 +812,7 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
   if (!schema.REPLAN_DURABLE_WRITE_LABELS_DYNAMIC) missing.push('dynamic-write-label-contract');
   if (schema.REPLAN_TRANSACTION_SCHEMA_VERSION !== 2) missing.push('versioned-transaction-writer');
   deepEqual(missing, [], 'epoch-2 lineage authority surface is present before behavioral execution');
-}
+});
 
 // The only planless authority is the canonical epoch-1 zero-snapshot shape.
 // A plan, task mirror, stale first-node evidence, or epoch drift is a hybrid.
@@ -802,7 +822,7 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
 // is classified `legacy` (not `planless`, a specific schema-2 shape): the strict
 // schema-2 active/planless split never applied to it, so a legacy project — with
 // or without a real plan — stays archivable exactly as it was before this gate.
-{
+scenario(() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-replan-legacy-planless-'));
   const projectDir = path.join(root, 'issue-legacy');
   try {
@@ -814,7 +834,7 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
     ok(replan.verifyAllEpochSnapshots(projectDir).ok,
       'envelope-absent legacy history remains readable for archive compatibility');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-}
+});
 
 // Backward-compat regression: a pre-#699 state carrying a real (old-format)
 // Planning Evidence plan_hash and a real workflow-plan.md must still be accepted.
@@ -823,7 +843,7 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
 // refusing state_planless_authority_invalid and blocking finalize/archive of every
 // pre-#699 planned project. Both shared verifiers must accept it so destructive
 // callers can proceed.
-{
+scenario(() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-replan-legacy-planned-'));
   const projectDir = path.join(root, 'issue-legacy-planned');
   try {
@@ -842,9 +862,9 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
     ok(replan.verifyAllEpochSnapshots(projectDir).ok,
       'legacy planned snapshot authority stays readable for archive compatibility');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const statePath = path.join(fx.projectDir, 'workflow-state.md');
@@ -897,13 +917,13 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
     equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, 'state_planless_authority_invalid',
       'planless authority refuses a task-mirror hybrid');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // A schema-2 plan freezes and resumes only when Required Agent Compliance is
 // the exact one-row-per-node requirement set, including the finalize sink.
 // Runtime status/evidence advancement remains mutable and is intentionally not
 // rewritten by this validation wall.
-{
+scenario(() => {
   const livePlanPath = path.resolve(__dirname, '..', 'kaola-workflow', 'issue-699', 'workflow-plan.md');
   if (fs.existsSync(livePlanPath)) {
     const exact = fs.readFileSync(livePlanPath, 'utf8');
@@ -927,7 +947,7 @@ rejects(() => schema.canonicalJson(cyclic), 'canonical_json_cycle', 'cycles are 
         'required_agent_compliance_invalid', 'schema-2 resume refuses ' + name);
     }
   }
-}
+});
 
 // Schema-2 repair outcomes are exact envelopes. A substituted journal,
 // attempt, candidate, plan, lineage, root, identity, or outcome digest cannot
@@ -948,7 +968,7 @@ for (const field of [
       'schema-2 repair outcome substitution refuses at ' + field + ': ' + JSON.stringify(result));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
-{
+scenario(() => {
   const fx = initFixture();
   try {
     fs.writeFileSync(path.join(fx.cacheDir, 'replan-source.json'), JSON.stringify({
@@ -959,14 +979,14 @@ for (const field of [
       sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).reason,
     'replan_source_schema_invalid', 'new schema-1 operator bootstrap is refused');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #699 review outcome transport: begin with a real frozen parent and settled
 // failed-review journal, drive the real repair-node result, crash immediately
 // after its source-envelope write, retry idempotently, then let prepare consume
 // that mechanically persisted authority and reach planner_pending. This fixture
 // never writes replan-source.json itself.
-{
+scenario(() => {
   const fx = initFixture({ seedSource: false, sourceAttemptId: 'review:1' });
   try {
     const identity = schema.buildClaimIdentity({
@@ -1044,11 +1064,11 @@ for (const field of [
     equal(pending.reason, 'replan_planner_dispatch_required',
       'real failed review -> repair outcome -> prepare reaches planner_pending without operator JSON');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Schema-2 code/security fanouts reduce under the exact plan-owned contract.
 // Legacy metadata-absent fanouts retain the historical strict-majority rule.
-{
+scenario(() => {
   const dissent = { 'review-c': { verdict: 'fail' } };
   const partitioned = fanoutJournalFixture({ aggregation: 'partitioned_all', receipts: dissent,
     outcome: 'fail', reason: 'fanout_refuted' });
@@ -1128,11 +1148,11 @@ for (const field of [
   equal(schema.validateReviewJournal(emptyJournal, emptyJournal.plan_hash,
     { schema2_review_gates: [{ ...majority.contract, aggregation: 'sequence' }] }).reason,
   'review_journal_schema2_contract_invalid', 'schema-2 contract aggregation mismatch is rejected');
-}
+});
 
 // The n2 transaction wrapper refuses substituted child paths and cannot call
 // the n4 handoff without one durable, matching pre-freeze CAS receipt.
-{
+scenario(() => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-replan-handoff-')));
   try {
     const projectDir = path.join(root, 'issue-699');
@@ -1171,12 +1191,12 @@ for (const field of [
     'replan_pre_freeze_cas_mismatch', 'mismatched durable pre-freeze CAS refuses before delegation');
     equal(fs.readFileSync(exactPath, 'utf8'), 'exact-child\n', 'CAS authority refusals perform zero child writes');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-}
+});
 
 // A transaction is recovery authority only after its identity, lineage, CAS,
 // and ordered activation prefix revalidate. Shallow fake committed JSON never
 // opens the mutation fence beside stale state.
-{
+scenario(() => {
   const fake = {
     schema_version: 1, transaction_id: '1'.repeat(64), epoch_lineage_id: '2'.repeat(64),
     planner_attempt: 1, phase: 'committed', outcome: 'committed', transition_reason: 'review_repair_requires_replan',
@@ -1187,10 +1207,10 @@ for (const field of [
   ok(!schema.validateReplanTransaction(fake).ok, 'shallow fake committed transaction is invalid');
   const fence = schema.readReplanFence('# stale parent state\nstatus: active\n', fake);
   ok(fence.fenced && !fence.ok, 'invalid committed transaction plus legacy state stays fenced');
-}
+});
 
 // Claim/root lineage excludes plan/gate metadata and validates immutable Git objects.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const identity = schema.buildClaimIdentity({ repository_id: 'local:test', issue_numbers: [699, 699], primary_issue: 699,
@@ -1209,10 +1229,10 @@ for (const field of [
     const bad = replan.verifyClaimRootBase(fx.root, Object.assign({}, root, { tree: '0'.repeat(40) }));
     equal(bad.reason, 'claim_root_tree_mismatch', 'root-object drift fails closed');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Legacy import accepts one corroborated frontier root and rejects ambiguity.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const good = replan.deriveLegacyClaimRoot({ repoRoot: fx.root, branch: 'workflow/issue-699', barrier_open_commits: [fx.commit, fx.commit] });
@@ -1221,7 +1241,7 @@ for (const field of [
     const bad = replan.deriveLegacyClaimRoot({ repoRoot: fx.root, branch: 'workflow/issue-699', barrier_open_commits: [fx.commit, later === fx.commit ? '0'.repeat(40) : later] });
     equal(bad.reason, 'legacy_claim_root_unprovable', 'ambiguous legacy roots fail closed');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // The live fixture is a byte-derived v1 shape, not a hard-coded runtime root oracle.
 equal(liveFixture.source.parent_plan_hash, 'd2f4efb603e4952a861c2387d979a2df2d2f317de3e48d273a80aeba5ce40f05', 'fixture pins the verified live parent hash');
@@ -1231,7 +1251,7 @@ deepEqual(liveFixture.source.rebind, [], 'fixture preserves the explicit empty r
 // Optional local conformance proof: copy the immutable live evidence quartet,
 // reconstruct the dirty live candidate in an isolated clone, then execute the
 // complete legacy-root -> schema-2 transaction without touching the source.
-{
+scenario(() => {
   const externalRoot = path.resolve(__dirname, '..', '..', 'bundle-693-696-697-698');
   const externalProject = path.join(externalRoot, 'kaola-workflow', liveFixture.source.project);
   if (fs.existsSync(externalProject)) {
@@ -1330,11 +1350,11 @@ deepEqual(liveFixture.source.rebind, [], 'fixture preserves the explicit empty r
       equal(fs.statSync(file).mtimeMs, before[key].mtimeMs, 'live source mtime unchanged after conformance copy: ' + key);
     }
   }
-}
+});
 
 // End-to-end v1 -> schema-2 transaction: parent authority, genuine attestation, snapshot,
 // deterministic mirror, exactly-once counters, and idempotent second resume.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const parentBytes = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'));
@@ -1381,12 +1401,12 @@ deepEqual(liveFixture.source.rebind, [], 'fixture preserves the explicit empty r
     equal(repaired.result, 'committed', 'replan resume repairs the committed-state split brain');
     equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), before[1], 'split-brain repair restores the exact recorded child state');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Schema-2 children bind the non-circular parent snapshot projection before
 // freeze, while the later full manifest seals exact child and attestation
 // bytes. Every substituted authority is rejected by recursive verification.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -1474,13 +1494,13 @@ deepEqual(liveFixture.source.rebind, [], 'fixture preserves the explicit empty r
       }
     } finally { fs.rmSync(baseCopy, { recursive: true, force: true }); }
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Snapshot integrity is CONTENT-addressed: a sealed epoch that round-trips through a
 // mode-lossy transport (git stores only 100644/100755, so the 0600 replan stages some
 // staged files with comes back 0644) still verifies, while any content substitution —
 // even one that preserves the exact byte length — still fails closed.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -1519,10 +1539,11 @@ deepEqual(liveFixture.source.rebind, [], 'fixture preserves the explicit empty r
       'a same-size content substitution in a round-tripped snapshot still fails closed: '
       + JSON.stringify(tampered));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // A child changed after freeze is not replaced from transaction memory and an
 // arbitrary correct-width projection digest cannot advance to snapshot.
+scenario(() => {
 for (const variant of ['pending', 'arbitrary', 'live-substitution']) {
   const fx = initFixture();
   try {
@@ -1550,11 +1571,12 @@ for (const variant of ['pending', 'arbitrary', 'live-substitution']) {
     equal(authorityCardinalities(fx).epoch, 1, variant + ' child advances no epoch');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
+});
 
 // The already-frozen schema-1 self-host transition is admitted only through
 // its exact committed receipt after successor rotation. Removing any one seal
 // turns `pending` into a typed refusal; the issue number is never authority.
-{
+scenario(() => {
   const liveProject = path.resolve(__dirname, '..', 'kaola-workflow', 'issue-699');
   if (fs.existsSync(path.join(liveProject, '.cache', 'epochs', '1', 'manifest.json'))) {
     equal(schema.REPLAN_TRANSACTION_SCHEMA_VERSION, liveFixture.versioned_epoch_history.writer_schema_version,
@@ -1613,12 +1635,12 @@ for (const variant of ['pending', 'arbitrary', 'live-substitution']) {
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
-}
+});
 
 // Two successive review-driven transitions rotate only a fully committed
 // predecessor, preserve prior snapshot authority while fenced, and the third
 // transition consent-halts at claim-lineage scope.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -1716,10 +1738,11 @@ for (const variant of ['pending', 'arbitrary', 'live-substitution']) {
     equal(haltedState.active_snapshot_manifest_digest, secondState.active_snapshot_manifest_digest,
       'consent-halt fence preserves the active epoch-2 snapshot pointer');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // A crash after either exclusive history write leaves the committed predecessor
 // active; retry reuses the exact receipt and installs one v2 successor.
+scenario(() => {
 for (const target of ['after_predecessor_history', 'after_source_history']) {
   const fx = initFixture();
   try {
@@ -1754,6 +1777,7 @@ for (const target of ['after_predecessor_history', 'after_source_history']) {
       target + ' successor cites the unchanged predecessor receipt');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
+});
 
 // #732: a sanctioned scratch reset removes the live `.cache/replan-transaction.json`
 // (plus the planner packet/attestation) but never the durable
@@ -1763,7 +1787,7 @@ for (const target of ['after_predecessor_history', 'after_source_history']) {
 // `source.rotated_from: null`) epoch >= 3 successor under the SAME transaction id —
 // a false success that silently overwrote the durable record and wedged the next
 // read on `replan_transaction_predecessor_invalid`.
-{
+scenario(() => {
   const scratchReset = () => {
     const fx = initFixture();
     driveReplanToCommit(fx);
@@ -1857,10 +1881,10 @@ for (const target of ['after_predecessor_history', 'after_source_history']) {
         'the many-match refusal writes no transaction');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
-}
+});
 
 // CAS mismatch before freeze advances no epoch/counter and preserves the parent.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const parent = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'));
@@ -1892,11 +1916,12 @@ for (const target of ['after_predecessor_history', 'after_source_history']) {
     const finalState = replan.parseStateFields(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'));
     equal(Number(finalState.automatic_review_replans), 1, 'only the committed replacement costs one transition');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Four independent CAS seams × candidate/root/frontier axes. The mismatch
 // receipt is the only durable effect: no epoch/count/dispatch/snapshot/task or
 // activation side effect is permitted at any cell in the matrix.
+scenario(() => {
 for (const seam of ['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation']) {
   for (const axis of ['candidate_digest', 'claim_root_base_digest', 'inherited_frontier_digest']) {
     const fx = initFixture();
@@ -1942,10 +1967,11 @@ for (const seam of ['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation']) 
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 }
+});
 
 // Child freeze is delegated only after the matching CAS receipt is durable.
 // A crash in the narrow handoff-to-journal gap reuses the same child identity.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -1981,7 +2007,7 @@ for (const seam of ['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation']) 
     equal(replay.result, 'already_committed', 'committed handoff replay is idempotent');
     equal(replay.plan_hash, frozenPlanHash, 'committed replay returns the same child identity');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Candidate reauthoring itself is a crash-resumable durable prefix. A crash
 // after the replacement transaction, stale-child quarantine, or fence rebound
@@ -2024,7 +2050,7 @@ for (const target of [
 // If a candidate oscillates back to an earlier tuple, the architecture's
 // tuple-derived transaction id repeats by design. Planner attempt identity and
 // dispatch nonce must still be fresh so an old dispatch cannot replay.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const initial = advanceToAttestedChild(fx);
@@ -2052,7 +2078,7 @@ for (const target of [
       '#730 AC-9: reauthorCandidate carries writer_briefs forward unchanged across a '
       + 'candidate-changed re-author, never re-derived from the narrower transaction.source');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Every durable activation/cleanup prefix rolls forward exactly once. In
 // particular, once the child plan is visible no recovery path may restore or
@@ -2095,7 +2121,7 @@ ok(persistenceSource.includes("fireFailpoint(opts, deterministicPathLabel('after
 // Discover every concrete main-path label (including every staged file and
 // cleanup ordinal), then crash once at each write, resume once to the exact
 // uninterrupted bytes, and require a byte-stable `already_committed` replay.
-{
+scenario(() => {
   const discovery = initFixture();
   const trace = [];
   try { driveReplanToCommit(discovery, { failpoint: name => trace.push(name) }); }
@@ -2138,7 +2164,7 @@ ok(persistenceSource.includes("fireFailpoint(opts, deterministicPathLabel('after
       fs.rmSync(backup, { recursive: true, force: true });
     }
   }
-}
+});
 
 for (const target of [
   'after_plan_child_promoted', 'after_state_child_promoted_fenced',
@@ -2168,7 +2194,7 @@ for (const target of [
 
 // Completed activation outputs are authority receipts, not skip flags. A
 // tampered mirror after its durable journal entry must block and stay fenced.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2182,10 +2208,10 @@ for (const target of [
     equal(result.step, 'task_mirror_promoted', 'mirror integrity refusal identifies the completed prefix');
     ok(replan.readStatus({ repoRoot: fx.root, project: fx.project }).fenced, 'mirror integrity failure remains transaction-fenced');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Cleanup accepts disappearance only behind a durable delete-intent receipt.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2198,11 +2224,11 @@ for (const target of [
     equal(result.reason, 'replan_cache_cleanup_failed', 'unsanctioned missing cleanup input is refused');
     ok(String(result.detail).includes('cleanup_missing_without_receipt'), 'cleanup refusal names the missing-receipt invariant');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Snapshot construction refuses symlinks without touching parent authority;
 // removal of the unsafe path permits the same frozen child to resume.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2220,11 +2246,11 @@ for (const target of [
     fs.unlinkSync(badLink);
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed', 'safe retry resumes the frozen child');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Authority paths reject intermediate symlink substitution before lock or
 // transaction creation; lstat of only the final JSON file is insufficient.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const realCache = path.join(fx.projectDir, '.cache-real');
@@ -2235,11 +2261,11 @@ for (const target of [
     equal(refused.reason, 'replan_authority_path_invalid', 'symlinked .cache authority is refused before locking');
     ok(!fs.existsSync(path.join(realCache, 'replan-transaction.json')), 'symlinked authority refusal creates no transaction');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Snapshot creation never follows an epochs-directory symlink to an external
 // destination, even after the child has already frozen.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2255,11 +2281,11 @@ for (const target of [
     ok(String(refused.detail).includes('snapshot_directory_invalid'), 'symlinked epochs refusal preserves the path-integrity reason');
     deepEqual(fs.readdirSync(outsideEpochs), [], 'symlinked external epochs destination remains untouched');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Recovery verification independently lstats the epoch component chain; it
 // never follows a symlink to an otherwise self-consistent manifest.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2273,11 +2299,11 @@ for (const target of [
     fs.unlinkSync(epochDir);
     fs.renameSync(realDir, epochDir);
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // The state, not directory existence, determines whether epoch snapshots are
 // required. Deleting the complete snapshot tree after epoch 2 must fail closed.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2287,10 +2313,10 @@ for (const target of [
     const checked = replan.verifyAllEpochSnapshots(fx.projectDir);
     equal(checked.reason, 'snapshot_epoch_sequence_invalid', 'schema-2 epoch 2 refuses a missing snapshot tree');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Scope lineage is part of every frontier read; it must not disappear after prepare.
-{
+scenario(() => {
   const fx = initFixture({ scopeLineageId: '1'.repeat(64) });
   try {
     advanceToAttestedChild(fx);
@@ -2300,10 +2326,10 @@ for (const target of [
     deepEqual(tx.cas.pre_freeze.inherited_frontier_view.scope_lineage_ids, ['1'.repeat(64)], 'pre-freeze frontier retains scope lineage');
     deepEqual(tx.cas.pre_activation.inherited_frontier_view.scope_lineage_ids, ['1'.repeat(64)], 'pre-activation frontier retains scope lineage');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Parent source and planner packet bytes are immutable after prepare/pending.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
@@ -2312,8 +2338,8 @@ for (const target of [
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
       'replan_source_changed', 'journal byte drift after prepare is refused');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
-{
+});
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2326,10 +2352,10 @@ for (const target of [
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
       'replan_planner_attestation_invalid', 'attestation over a rewritten packet cannot replace the transaction-bound packet digest');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // The scheduler lock is exclusive and never auto-taken over.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     fs.writeFileSync(path.join(fx.cacheDir, schema.SCHEDULER_LOCK_NAME), JSON.stringify({
@@ -2340,11 +2366,11 @@ for (const target of [
     equal(blocked.reason, 'scheduler_lock_held', 'concurrent prepare refuses the live scheduler lock');
     ok(fs.existsSync(path.join(fx.cacheDir, schema.SCHEDULER_LOCK_NAME)), 'lock refusal never unlinks another holder');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Consent is an exactly-once digest chain. A retry of the same user turn repairs
 // at most the state cache and never adds a second ceiling slot.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     let state = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
@@ -2373,10 +2399,10 @@ for (const target of [
     const resumed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
     equal(resumed.reason, 'replan_planner_dispatch_required', 'verified consent releases only the newly prepared transaction to planner_pending: ' + JSON.stringify(resumed));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Review liveness and the one-shot diagnosis-to-build exemption are claim-scoped.
-{
+scenario(() => {
   const lineage = '1'.repeat(64);
   const halted = replan.evaluateTransitionBudget({ epoch_lineage_id: lineage, automatic_review_replans: 2, authorized_epoch_ceiling: 2, case_b_exemption_consumed: false }, { transition_reason: 'review_repair_requires_replan' });
   equal(halted.reason, 'replan_consent_required', 'third automatic review transition consent-halts');
@@ -2405,12 +2431,12 @@ for (const target of [
   }, { ceiling: 2, consent_ledger_digest: null, case_b_verified: true,
     case_b_proof: { proof_digest: '6'.repeat(64) } });
   equal(second.reason, 'replan_consent_required', 'the Case-B exemption cannot be consumed twice');
-}
+});
 
 // Genuine Case B starts with no review journal and no source-outcome file. The
 // typed terminal diagnosis is resolved directly from the completed parent,
 // cited by the child, costs zero exactly once, and disallows writer laundering.
-{
+scenario(() => {
   const fx = initFixture({ seedSource: false });
   try {
     const installed = installTypedCaseBParent(fx);
@@ -2441,8 +2467,9 @@ for (const target of [
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result,
       'already_committed', 'Case-B activation is idempotent on second resume');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
+scenario(() => {
 for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
   const fx = initFixture({ seedSource: false });
   try {
@@ -2466,10 +2493,11 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     'Case-B ' + variant + ' variant refuses: ' + JSON.stringify(result));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
+});
 
 // #699 G4: inherited code is a virtual producer. Even a child with zero local
 // writers must carry a named, reachable, executable code certifier.
-{
+scenario(() => {
   const baseMeta = {
     plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
     epoch_lineage_id: '1'.repeat(64), plan_epoch: 2,
@@ -2798,11 +2826,11 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
   ok(validator.validatePlan(unreachableCertifies.text, {}).errors.some(error =>
     error.includes('certifies') && error.includes('unreachable') && error.includes('source')),
   'every schema-2 adversarial certified producer must reach the verifier, and the verifier must reach the sink');
-}
+});
 
 // #699 valid-transaction fence integration: all runtime entry points consume
 // the same n2 transaction and refuse before any filesystem mutation.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
@@ -2845,11 +2873,11 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     deepEqual(snapshot(fx.projectDir), before,
       'valid transaction runtime refusals are zero-mutation (no lock/task-mirror/envelope writes)');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #699 cross-epoch journal import: an activated child consumes the immutable
 // parent journal through lineage provenance instead of failing plan-hash mismatch.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     advanceToAttestedChild(fx);
@@ -2890,12 +2918,12 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     equal(rejected.reason, 'review_journal_legacy_import_mismatch',
       'tampered/traversal legacy import pointer fails closed against transaction and snapshot');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #699 sequence reviewer identity is claim-scoped across epoch topology changes.
 // Reusing a reviewer id with a different producer origin must continue at :2,
 // not collide with the imported parent review:1 or restart a gate-local ordinal.
-{
+scenario(() => {
   const fx = initFixture({ sameGateChild: true, changedOriginChild: true, sourceAttemptId: 'review:1' });
   try {
     advanceToAttestedChild(fx);
@@ -2956,11 +2984,11 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     'changed-origin sequence attempt persists and rereads with distinct gate identities and continuous ids: '
       + JSON.stringify(reread));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #699 multi-epoch journal continuity: local ordinals continue the imported logical-gate sequence,
 // survive persistence/reread, and a second committed re-plan retains the full immutable history chain.
-{
+scenario(() => {
   const fx = initFixture({ sameGateChild: true });
   try {
     advanceToAttestedChild(fx);
@@ -3027,7 +3055,7 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     equal(nestedTamper.reason, 'review_journal_legacy_import_snapshot_invalid',
       'tampering the N-2 archived journal fails the recursive legacy-import chain closed');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #703 replan resume tail: a post-dominating gate that failed on a finding spanning multiple upstream
 // writers (so repair-node refuses repair_requires_replan — no unique maximal routable producer) is
@@ -3037,7 +3065,7 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
 // This is the sanctioned recovery that replaces the hand-edited-journal exit the consumer was forced
 // into. childFor's fresh `child-impl` writer upstream of the `child-review` gate is exactly the
 // "insert a repair-writer upstream of the failed gate" plan shape.
-{
+scenario(() => {
   // The condition that forces repair_requires_replan (a finding spanning multiple upstream writers with
   // no unique maximal routable producer — the real consumer bundle's n2..n7) is the DIAGNOSIS, covered by
   // the #701 ownership tests and the live-conformance block above. This block proves the RESUME the
@@ -3075,14 +3103,14 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     ok(opened.status === 0 && openedOut.result === 'ok' && openedOut.opened && openedOut.opened.id === 'child-impl',
       '#703 open-next resumes the child epoch by opening the inserted repair-writer (child-impl): ' + JSON.stringify(openedOut));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #703 baseline retention: reconcile-running-set must NOT drop the barrier baseline of a COMPLETE
 // producer referenced by an unresolved (consumed_by: null) review attempt's producer_bindings — that
 // baseline is the repair-node non-discard recovery ref, not an orphan. A genuinely-orphaned baseline
 // (no live owner, not referenced by any attempt) still sweeps. Reproduces the issue's aggravator: a
 // mid-diagnosis `no_running_set` reconcile that deleted the exact files the repair needed.
-{
+scenario(() => {
   // sourceAttemptId 'review:1' keeps the journal plan-consistent (attempt id matches the `review` gate),
   // so readReviewJournal returns ok — the live-run state in which a mid-diagnosis reconcile fired.
   const fx = initFixture({ sourceAttemptId: 'review:1' });
@@ -3120,7 +3148,7 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
     ok(!fs.existsSync(path.join(fx.cacheDir, 'barrier-base-ghost')) && (reconciled.orphanBaselinesDropped || []).includes('ghost'),
       '#703 reconcile still sweeps a genuinely-orphaned baseline: ' + JSON.stringify(reconciled.orphanBaselinesDropped));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #706 baseline retention (ledger-complete writers, gate not yet attempted): reconcile-running-set must
 // NOT drop the barrier baseline of a ledger-COMPLETE writer even when NO review attempt references it
@@ -3192,7 +3220,7 @@ function initPendingGateFixture() {
 // #706 shape (i) — the close-crash / hygiene reconcile with a running set PRESENT: a ledger-complete
 // writer still in the 'open' set (its close's running-set removal crashed) is dropped FROM THE SET, but
 // its baseline is RETAINED, and the pending post-dominating gate then closes successfully.
-{
+scenario(() => {
   const h = initPendingGateFixture();
   try {
     fs.writeFileSync(path.join(h.fx.cacheDir, 'running-set.json'), JSON.stringify({
@@ -3223,14 +3251,14 @@ function initPendingGateFixture() {
       '#706(i) the attempt binds the writer ORIGINAL baseline (historical diff attribution intact, '
       + 'not a semantically-weaker current-tree re-record)');
   } finally { fs.rmSync(h.fx.root, { recursive: true, force: true }); }
-}
+});
 
 // #706 shape (ii) — the `no_running_set` path (a crashed serial run: open-next writes no manifest): the
 // reconcile still reports reconciled:false, but its hoisted orphan sweep must not drop ledger-complete
 // writers' baselines. The sweep itself stays (its crash-repair purpose: reclaiming baselines of
 // discarded / never-completed nodes, which would otherwise be silently reused by a later open) — proven
 // by the ghost still sweeping on this same run.
-{
+scenario(() => {
   const h = initPendingGateFixture();
   try {
     ok(!fs.existsSync(path.join(h.fx.cacheDir, 'running-set.json')),
@@ -3256,7 +3284,7 @@ function initPendingGateFixture() {
     equal(closed.result, 'ok', '#706(ii) the post-dominating gate close SUCCEEDS after the manifest-less '
       + 'reconcile: ' + JSON.stringify(closed));
   } finally { fs.rmSync(h.fx.root, { recursive: true, force: true }); }
-}
+});
 
 // Schema-2 replan source authority. `readSource` verifies TWO bindings on the parent review
 // attempt: the sealed candidate identity, and the per-node evidence receipts. Both are shape-
@@ -3265,7 +3293,7 @@ function initPendingGateFixture() {
 //     contract-1 attempt sealed the legacy raw ls-tree digest.
 //   * evidence  — a schema-2 receipt binds its bytes with `raw_evidence_sha256` and embeds no body;
 //     only a schema-1 receipt carries the `body` + `receipt_sha256` pair.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const v2 = installReviewJournalV2Source(fx);
@@ -3278,8 +3306,8 @@ function initPendingGateFixture() {
     equal(prepared.result, 'prepared',
       'a production-shaped schema-2 review source reaches the planner handoff: ' + JSON.stringify(prepared));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
-{
+});
+scenario(() => {
   // Anti-loosening: a genuine change inside the reviewed candidate band still refuses.
   const fx = initFixture();
   try {
@@ -3290,8 +3318,8 @@ function initPendingGateFixture() {
     'replan_source_candidate_changed',
     'a genuine landable-band code change still refuses the schema-2 candidate');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
-{
+});
+scenario(() => {
   // The reviewed candidate band is the landable tree: validation-invisible prose the reviewer never
   // bound must not masquerade as a candidate change.
   const fx = initFixture();
@@ -3303,8 +3331,8 @@ function initPendingGateFixture() {
     'replan_source_candidate_changed',
     'a validation-invisible prose edit does not fake a schema-2 candidate change');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
-{
+});
+scenario(() => {
   // Anti-loosening: one mutated evidence byte still refuses under the schema-2 raw-digest binding.
   const fx = initFixture();
   try {
@@ -3315,12 +3343,12 @@ function initPendingGateFixture() {
     'replan_source_evidence_mismatch',
     'a single mutated evidence byte still refuses under the schema-2 raw-digest binding');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 // LEGACY-LANE REGRESSION PIN. The schema-1 lane is not dead code: it still seals the raw ls-tree
 // candidate digest and legacy body/receipt_sha256 receipts, and its attempts carry NO
 // `contract_version` key. This block exists so a future refactor cannot quietly collapse the two
 // shapes into one — remove it only together with the schema-1 producer.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
@@ -3335,8 +3363,8 @@ function initPendingGateFixture() {
       sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
     'prepared', 'a contract-1 attempt still verifies against the legacy raw candidate digest');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
-{
+});
+scenario(() => {
   const fx = initFixture();
   try {
     fs.writeFileSync(path.join(fx.root, 'product.js'), 'module.exports = 99;\n');
@@ -3345,8 +3373,8 @@ function initPendingGateFixture() {
     'replan_source_candidate_changed',
     'a contract-1 attempt still refuses a genuinely changed raw candidate');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
-{
+});
+scenario(() => {
   const fx = initFixture();
   try {
     fs.appendFileSync(path.join(fx.cacheDir, 'review.md'), 'x');
@@ -3355,7 +3383,7 @@ function initPendingGateFixture() {
     'replan_source_evidence_mismatch',
     'a contract-1 attempt still refuses a mutated legacy receipt body');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #737: the planner attests the image it AUTHORED. `resume` owns the freeze that
@@ -3392,7 +3420,7 @@ function hashPreservingForgery(text) {
 // authored image is invalid; it repairs and RE-ATTESTS without a new transaction.
 // (c) rides on the same fixture: the sealed epoch must stay verifiable after the
 // live worktree is mutated in a way that would fail a freeze-mode revalidation.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const tx = advanceToAttestedChild(fx);
@@ -3445,12 +3473,12 @@ function hashPreservingForgery(text) {
       'a sealed epoch snapshot stays verifiable when the live worktree changes — identity seams '
         + 'are pure digest arithmetic and never re-derive the stamp: ' + JSON.stringify(afterMutation));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // (d) The freeze MOVES bytes on disk before the child_frozen journal is durable.
 // A crash in that gap must roll forward from the recorded authored image, not wedge
 // on an attestation that no longer matches the file.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const tx = advanceToAttestedChild(fx);
@@ -3478,10 +3506,11 @@ function hashPreservingForgery(text) {
     equal(sealed.child_authored.attestation_digest, authored.attestation.attestation_digest,
       'the replay commits under the original planner attestation');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // (b) FORGED AUTHORED IMAGE. The recorded authored bytes are byte-pinned to their own
 // digest and to the attestation. A forgery that only preserves plan_hash is refused.
+scenario(() => {
 for (const variant of ['forged_bytes', 'unbound_digest']) {
   const fx = initFixture();
   try {
@@ -3515,11 +3544,12 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
     equal(authorityCardinalities(fx).epoch, 1, variant + ' forgery advances no epoch');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
+});
 
 // (b, archive seam) The sealed epoch binds the authored attestation through the exact
 // frozen witness digest. A forged witness that only preserves the sealed child's
 // plan_hash is refused — the seam compares digests, never plan hashes.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     const tx = advanceToAttestedChild(fx);
@@ -3563,7 +3593,7 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
         'a forged frozen witness sharing the sealed plan_hash is refused: ' + JSON.stringify(result));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // A settled failed review folds ledger rows back to `pending` and returns without
 // regenerating the derived task mirror. The mirror is a pure projection of the plan
@@ -3572,7 +3602,7 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
 // never a divergent authority — current-epoch authority must survive it. The guard
 // below proves the assertion is not vacuous: the SAME lagging-mirror state, mutated
 // into a genuinely illegal ledger progression, still refuses.
-{
+scenario(() => {
   const fx = initFixture();
   try {
     driveReplanToCommit(fx);
@@ -3619,7 +3649,7 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
       'the lagging mirror does not launder an illegal ledger progression — a `complete` row above a '
       + '`pending` dependency still refuses, so the authority function is not merely gutted');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #722 — cross-epoch schema-2 journal rotation. Activation deliberately PRESERVES
@@ -3639,7 +3669,7 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
 //   * schema-2 parent -> schema-2 child journal -> the child's gates stay on the V2
 //     candidate/context-bound lane their own plan contract requires.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const io = {
     readFile: p => fs.readFileSync(p, 'utf8'),
     writeFile: (p, value) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, value); },
@@ -3805,7 +3835,7 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
         + 'rotation is gated on proven provenance, never on bare key presence');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #729 — REPLAN-SIDE FRONTIER INVARIANT (defence in depth over the #728 settlement
@@ -3853,7 +3883,7 @@ function installEmptyFrontierSource(fx) {
   return { journal, attempt, body };
 }
 
-{
+scenario(() => {
   // Frontier 1 — prepare. The malformed source never opens a transaction.
   const fx = initFixture();
   try {
@@ -3875,9 +3905,9 @@ function installEmptyFrontierSource(fx) {
     equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), stateBefore,
       'the empty-frontier refusal writes no state fence');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // Frontier 1 — the schema-2 review lane reaches the same wall. Its canonical finding
   // set is normalized/UID-bearing rather than parsed from flat rows, so the guard must
   // not be accidentally bound to the schema-1 shape.
@@ -3923,9 +3953,9 @@ function installEmptyFrontierSource(fx) {
     ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
       'the schema-2 empty-frontier refusal opens no replan transaction');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // Frontier 2 — the STORED transaction source, at EVERY resume phase. The journal on
   // disk is untouched and re-reads clean, so readSource passes; only the transaction's
   // own copy is empty, and validateReplanTransaction does not recompute it.
@@ -3970,9 +4000,9 @@ function installEmptyFrontierSource(fx) {
       equal(after.child.digest, null, label + ': the refusal freezes no child plan');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
-}
+});
 
-{
+scenario(() => {
   // Frontier 3 — candidate-changed re-author. reauthorCandidate rebuilds the successor
   // transaction from transaction.source WITHOUT re-reading the journal, so a stored
   // empty frontier would otherwise be laundered into a fresh transaction.
@@ -3995,9 +4025,9 @@ function installEmptyFrontierSource(fx) {
     equal(JSON.parse(fs.readFileSync(txPath, 'utf8')).transaction_id, tx.transaction_id,
       'the refused re-author writes no successor transaction');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // OVER-REFUSAL CONTROL. A legitimate replan — real findings on the source, a real
   // write-set-bearing fixer in the child plan — still runs end to end and ACTIVATES.
   // The guard must cost a legal transition nothing.
@@ -4015,7 +4045,7 @@ function installEmptyFrontierSource(fx) {
       fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8')).plan_epoch), 2,
     'the legitimate transition advances the epoch');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 
 // ---------------------------------------------------------------------------
@@ -4095,7 +4125,7 @@ function packetFromSource(fx, source) {
   });
 }
 
-{
+scenario(() => {
   // Lane 1 — schema-1. Six flat findings (R1-R6), each anchored by a `file=` token and
   // routed to the `impl` writer by the reviewer.
   const fx = initFixture();
@@ -4147,9 +4177,9 @@ function packetFromSource(fx, source) {
       ok(!keys.has(forbidden), '#729 AC2: the index introduces no child-DAG key: ' + forbidden);
     }
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // Lane 2 — schema-2 (contract 2). The canonical finding is uid-bearing and anchored by an
   // `evidence_observation` primary anchor, which legally carries NO path. The projection must
   // report that honestly (kind present, empty path list) rather than inventing one, and must
@@ -4176,9 +4206,9 @@ function packetFromSource(fx, source) {
     equal(row.owning_node, 'impl', '#729 AC2: the schema-2 row carries the resolved owner');
     deepEqual(row.ownership_candidates, ['impl'], '#729 AC2: the schema-2 row carries the owner set');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // SECONDARY ANCHORS ARE PART OF THE RECORD. A schema-2 finding may anchor the same defect at
   // several places in the candidate; `anchor_paths` is the primary PLUS the secondaries, so a
   // planner routing by path sees every surface the reviewer named, not just the first one.
@@ -4201,9 +4231,9 @@ function packetFromSource(fx, source) {
     deepEqual(row.primary_anchor, finding.primary_anchor,
       '#729 AC2: the primary anchor object is still carried verbatim alongside the path list');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // A RESOLVED finding is still projected, with its real status. The frontier guard's predicate is
   // deliberately non-empty FINDINGS rather than non-empty OPEN frontier — an attempt that failed
   // only on progress legally carries an all-resolved record — so the projection must neither drop
@@ -4240,9 +4270,9 @@ function packetFromSource(fx, source) {
     equal(findingIndexRow(packet, 'R1').status, 'open',
       '#729 AC2: its still-open siblings are unaffected');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // Absent ownership is reported as ABSENT, never guessed. A route row the reviewer left
   // unresolved (`ownership_candidates: []`) must arrive as an empty candidate set with a
   // null owner — the planner needs to see that the source could not route it.
@@ -4265,9 +4295,9 @@ function packetFromSource(fx, source) {
     equal(findingIndexRow(packet, 'R1').owning_node, 'impl',
       '#729 AC2: its routed siblings keep their owner');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // DUPLICATE ROUTE ROWS ARE MERGED, NOT RACED. A fan-out gate whose members each report the
   // same defect legally produces ONE deduped finding (normalizeFindingSet is uid-keyed) and
   // one route row PER REPORTING MEMBER — the contract-2 validator sizes route_candidates from
@@ -4314,9 +4344,9 @@ function packetFromSource(fx, source) {
     deepEqual(partial.source.finding_index[0].source_nodes, ['review-a', 'review-b'],
       '#729 AC2: the member that could not route is still named');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // A source that carries NO route rows at all. Both journal validators refuse such an attempt
   // outright (route cardinality must equal the canonical finding set), so this cannot be reached
   // through prepare — but buildPlannerPacket is EXPORTED, and validate-kaola-workflow-contracts.js
@@ -4341,9 +4371,9 @@ function packetFromSource(fx, source) {
     deepEqual(row.anchor_paths, ['product.js'],
       '#729 AC2: the finding-borne anchor survives without any route row');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // Idempotent across a crash-prefix retry: the packet is a pure function of the frozen
   // transaction, so a re-entry that rebuilds it produces byte-identical bytes and leaves the
   // recorded packet digest valid.
@@ -4361,9 +4391,9 @@ function packetFromSource(fx, source) {
     equal(sha256(Buffer.from(bytes, 'utf8')), tx.planner.packet_digest,
       '#729 AC2: the transaction still binds the written packet digest');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // DURABLE COMPATIBILITY. source_evidence_digest is INVARIANT under the carried route/ownership
   // rows, so this carriage-only addition leaves the digest of every already-stored transaction
   // untouched. Cover them instead and a transaction prepared by an earlier build recomputes a
@@ -4401,9 +4431,9 @@ function packetFromSource(fx, source) {
     equal(findingIndexRow(packet, 'R1').owning_node, null,
       '#729 AC2: an earlier-build transaction records no ownership, and none is invented for it');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // CANDIDATE-CHANGED RE-AUTHOR. reauthorCandidate rebuilds the successor transaction from the
   // STORED transaction.source without re-reading the journal, so the route rows must survive
   // that copy — otherwise a re-authored epoch silently hands its planner an ownership-free
@@ -4434,9 +4464,9 @@ function packetFromSource(fx, source) {
     equal(findingIndexRow(packet, 'R1').owning_node, 'impl',
       '#729 AC2: the re-authored packet still carries the ownership the source resolved');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // THE INDEX IS A PURE FUNCTION OF AN ATTEMPT-SHAPED BAG — `{ findings, route_candidates }`,
   // which is exactly a review journal attempt as well as the transaction's source projection of
   // one. It reads no fs, no transaction identity and no replan phase, so any consumer holding an
@@ -4490,7 +4520,7 @@ function packetFromSource(fx, source) {
     equal(routed.owning_node, '7',
       '#729 AC2: a route-borne owner is normalized to a string');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #729 case (b) — CHILD CARRY-FORWARD COVERAGE (AC3/AC4/AC5/AC6/AC7).
@@ -4561,7 +4591,7 @@ const COVERED_CHILD_NODES = [
 const SOURCE_UIDS = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'];
 const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
 
-{
+scenario(() => {
   // AC4 — a review-only child cannot activate for an unresolved path-based product finding,
   // and AC3 — the refusal names the exact uncovered uid, its anchor path, and the node
   // mapping that failed. The child here declares NO owners at all: absence must refuse.
@@ -4583,9 +4613,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     equal(after.cardinalities.snapshots, 0, '#729 AC4: no parent snapshot is sealed');
     equal(after.plan, before.plan, '#729 AC4: the parent plan remains authoritative byte for byte');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // #729 — a coverage refusal leaves the authored child UNCORRUPTED, so the planner can repair in
   // place inside the same transaction.
   //
@@ -4618,9 +4648,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
       + 'repair it in place inside the same transaction (see the note above: this does NOT pin '
       + 'which of the two wall placements produced the refusal)');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // AC3/AC4 — the SAME review-only child, now declaring the documentation writer as the
   // owner of every finding. A declaration is not authority: the docs node cannot write
   // `product.js`, so the refusal must name the uid, the anchor path, and the node.
@@ -4638,9 +4668,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     ok(/child-docs/.test(report), '#729 AC3: the refusal names the declared owner node: ' + report);
     equal(authorityCardinalities(fx).epoch, 1, '#729 AC4: the parent epoch is not advanced');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // AC6 — covering N-1 of N refuses, and the report names the ONE uid that was dropped
   // rather than collapsing to "some finding is uncovered".
   const fx = initFixture();
@@ -4656,9 +4686,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     ok(!/R1\b/.test(report), '#729 AC6: the report does not name the five covered uids: ' + report);
     equal(authorityCardinalities(fx).epoch, 1, '#729 AC6: the parent epoch is not advanced');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // AC6 — a declaration naming a uid the source never carried is a source/child mismatch,
   // not a harmless extra: it is how a hand-edited child manufactures apparent coverage.
   const fx = initFixture();
@@ -4670,9 +4700,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     equal(result.reason, 'replan_child_finding_owners_invalid',
       '#729 AC6: a uid the source never carried refuses: ' + JSON.stringify(result));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // A declared owner that is not a node of the child, and a declared owner that is the
   // certifier itself. Neither may pass: the second is the exact "the finding disappears
   // because the child contains a certifier" shape the issue names.
@@ -4688,9 +4718,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
       equal(authorityCardinalities(fx).epoch, 1, '#729 AC4: ' + label + ' advances no epoch');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
-}
+});
 
-{
+scenario(() => {
   // AC5 — a correctly mapped writer -> certifier child activates, and the second resume is
   // idempotent. This is the same canonical child every other suite in this file drives, so
   // its green path is the regression floor for the whole wall.
@@ -4706,9 +4736,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'already_committed',
       '#729 AC5: the activated child resumes idempotently');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // AC5 — the anchorless lane. A schema-2 `evidence_observation` finding legally carries NO
   // path, so anchor containment cannot be computed at all. The TYPED policy is that such a
   // finding must be declared with an EXPLICIT `@anchorless` marker: it may never be absorbed
@@ -4730,9 +4760,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
       '#729 AC5: an anchorless finding explicitly mapped to a real writer activates');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // AC7 — crash prefix + idempotent retry across the new seam. The coverage verdict is a
   // pure function of (child bytes, source frontier): re-running the refusal must change
   // nothing on disk, a crash at the last durable write BEFORE the seam must replay into the
@@ -4767,9 +4797,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
       '#729 AC7: the repaired child activates inside the same transaction');
     equal(authorityCardinalities(fx).epoch, 2, '#729 AC7: exactly one epoch is spent');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
-{
+scenario(() => {
   // The wall is a PURE function over (child content, transaction source) — no fs, no phase.
   // These cases pin the grammar and the fail direction directly.
   equal(typeof replan.childFindingCoverage, 'function',
@@ -4918,13 +4948,13 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     '#729: ...and the freeze wall refuses "' + token + '" outright, so the strict reading is '
       + 'the only reading a real child can ever be judged under');
   }
-}
+});
 
 // #730 AC-9 — direct repair and replan-child repair must use the SAME feedback-delivery contract.
 // `replanWriterBriefs` partitions on `findingOwnershipSummary`'s `blockingFindings`
 // (`repairResponsibleFindings`, fail-CLOSED), never the gate's fail-OPEN `unresolvedInScopeFixes`.
 // Both fail directions are pinned directly against the exported constructor, no fixture required.
-{
+scenario(() => {
   const attempt = {
     attempt_id: 'ac9-brief-fixture:1',
     findings: [
@@ -4969,13 +4999,13 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
   ok(briefs.impl.brief.assigned_uids.length > 0,
     '#730 AC-9: the assigned set must never silently empty out on an omitted scope/action row '
     + '(the unresolvedInScopeFixes regression this predicate replaces)');
-}
+});
 
 // #730 AC-9 — owner discovery is scoped to `findingOwnershipSummary`'s `blockingFindings`, never the
 // wider `openFindings` set: an owner whose ONLY finding is non-blocking (deferred/out-of-scope/
 // non-fix) must receive NO brief entry at all — there is nothing that writer is obliged to fix, so
 // seeding it a brief would be noise, not feedback.
-{
+scenario(() => {
   const attempt = {
     attempt_id: 'ac9-owner-scope-fixture:1',
     findings: [
@@ -4995,7 +5025,7 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     '#730 AC-9: an owner whose ONLY finding is non-blocking (deferred) receives NO brief entry — '
     + 'owner discovery is scoped to blockingFindings, never the wider openFindings set: '
     + JSON.stringify(Object.keys(briefs || {})));
-}
+});
 
 // #730 AC-9 — integration: a replan-child-reopened writer receives the SAME brief BYTES as a
 // direct-repair-reopened writer for the SAME attempt. Drives a real prepare -> planner dispatch ->
@@ -5003,7 +5033,7 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
 // carried `writer_briefs` (also relayed verbatim into the planner packet — the child dispatch) for
 // `impl` against `buildRepairBrief`/`renderRepairBrief` invoked directly — the exact call direct
 // repair itself makes (adaptive-node.js STEP #730).
-{
+scenario(() => {
   const fx = initFixture({ sameGateChild: true });
   try {
     const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
@@ -5037,7 +5067,7 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     equal(packet.source.writer_briefs.impl.rendered, directRendered,
       '#730 AC-9: the planner-packet-relayed brief is ALSO byte-identical to the direct-repair brief');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #779 — verifyCurrentEpochAuthority must read the EXECUTION node view for the run-state
@@ -5084,6 +5114,9 @@ const SPINE_PLAN_779 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '',
+  'A1: the reader seam lands in the core script under scripts/.',
+  'A2: the composed milestone frontier is reviewed before the sink.', '',
   '## Node Ledger', '',
   '| id | status |',
   '| --- | --- |',
@@ -5207,7 +5240,7 @@ function initExpandedSpineFixture() {
   return fx;
 }
 
-{
+scenario(() => {
   const fx = initExpandedSpineFixture();
   try {
     // ---- the fixture is RECORDS-BEARING, and its two node views genuinely disagree. ----
@@ -5317,7 +5350,7 @@ function initExpandedSpineFixture() {
       '#779: finalize of a SUCCESSFUL expanded spine run reaches the `closed` archive instead of '
       + 'refusing state_ledger_authority_invalid: ' + JSON.stringify(archived));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // #783 / #780 — freeze-view vs execution-view family. Post-#765 the planner authors
@@ -5355,6 +5388,8 @@ function initExpandedFamilyFixture(opts) {
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: probe explores; m1 is a milestone composed at open time (surface lib/); wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+    '## Acceptance', '', 'A1: the milestone lands its goal on the lib/ surface.',
+    'A2: the composed frontier is reviewed before the sink.', '',
     '## Node Ledger', '', '| id | status |', '| --- | --- |',
     '| probe | complete |', '| m1 | pending |', '| wall | pending |', '| done | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
@@ -5437,7 +5472,7 @@ function initExpandedFamilyFixture(opts) {
 }
 
 // --- #780 (write side) + :4564 (read side) — the interlocked compliance pair. ---------------------
-{
+scenario(() => {
   const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: '' });
   try {
     const expandedPlan = fx.planText();
@@ -5504,10 +5539,10 @@ function initExpandedFamilyFixture(opts) {
       '#780 non-vacuity: a pending compliance row under a complete unit ledger row still refuses');
     fs.writeFileSync(fx.planPath, closedPlan);
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // --- :6004 — the finalize attribution sweep must attribute a completed expansion unit's write. -----
-{
+scenario(() => {
   const fx = initExpandedFamilyFixture({ epochActive: false, unitWriteSet: 'lib/feature.js', unitRole: 'implementer' });
   try {
     // The unit really wrote lib/feature.js; settle its ledger + compliance (the ledger is not
@@ -5551,10 +5586,10 @@ function initExpandedFamilyFixture(opts) {
       '#783 :6004 non-vacuity: an undeclared branch write still refuses unattributed_change while the '
       + 'unit write stays attributed: ' + JSON.stringify(orphan.json.unattributed));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // --- :3521 cleanupAllowed — a unit evidence file must be cleanup-eligible via the execution view. ---
-{
+scenario(() => {
   const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: '' });
   try {
     const parentBytes = Buffer.from(fx.planText()).toString('base64');
@@ -5567,7 +5602,7 @@ function initExpandedFamilyFixture(opts) {
     equal(replan.cleanupAllowed('.cache/ghost-unit.md', tx), false,
       '#783 :3521 non-vacuity: an id in NEITHER view is still not cleanup-eligible');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
 // --- :3432 (parent lineage nodes) + :977 (Case-B parent) — records-bearing divergence + source pin. -
 // :3432 is reachable only when a SEALED parent epoch expanded (plan_epoch>=2 lineage); :977 is masked
@@ -5576,7 +5611,7 @@ function initExpandedFamilyFixture(opts) {
 // evidence the consumer must attribute) while the FREEZE view does not. Prove that divergence on a REAL
 // records-bearing parent, then pin the fixed call site to the execution view (a mutation reverting the
 // swap reddens the pin).
-{
+scenario(() => {
   const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: 'lib/parent.js', unitRole: 'implementer' });
   try {
     const parentPlan = fx.planText();
@@ -5603,6 +5638,167 @@ function initExpandedFamilyFixture(opts) {
       '#783 :977 pin (MASKED, question/bug-shaped unshipped): verifyCaseBProof ranges the parent '
       + 'completeness gate + writer-surface whitelist over the EXECUTION view');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-}
+});
 
+// Claim-preserving is ACCEPTANCE-preserving. A re-plan repairs HOW the run reaches done; it does not
+// get to redefine what done IS. The child epoch carries the parent's `## Acceptance` surface (the
+// attested child digest covers those bytes, so re-transcription travels under the attestation), and a
+// child whose acceptance surface DIFFERS is refused unless it cites a verified consent entry.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const parentPlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const parentAcceptance = validator.acceptanceDigest(parentPlan);
+    ok(parentAcceptance, 'the parent epoch carries a transcribed acceptance surface');
+
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+
+    // RED — the planner re-authors the acceptance surface while re-planning. Attested, in grammar,
+    // correctly bound on every other seam, and still refused: this is a values change.
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const rewritten = rehashPlan(faithful.text.replace(
+      'A2: the recorded validation_command passes over the candidate.',
+      'A2: shipping something plausible is enough.'));
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), rewritten.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    ok(validator.acceptanceDigest(rewritten.text) !== parentAcceptance,
+      'the rewritten child genuinely changes the acceptance surface');
+    ok(sha256(Buffer.from(rewritten.text)) !== sha256(Buffer.from(faithful.text)),
+      'the attestation path COVERS the acceptance bytes — re-transcription changes the attested child digest');
+    const refused = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refused.reason, 'replan_child_acceptance_changed',
+      'a mid-run acceptance change without consent is refused: ' + JSON.stringify(refused));
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'), parentPlan,
+      'the refused acceptance change leaves the parent plan byte-identical');
+
+    // RED — citing consent that does not exist is not a way through.
+    const forged = rehashPlan(rewritten.text.replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + 'e'.repeat(64)));
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), forged.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason, 'replan_child_acceptance_changed',
+      'a fabricated acceptance_change_consent digest does not authorize the change');
+
+    // GREEN — the child that CARRIES the parent surface (re-transcribed verbatim) activates.
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), faithful.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed', 'the acceptance-preserving child activates: ' + JSON.stringify(committed));
+    equal(validator.acceptanceDigest(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8')),
+      parentAcceptance, 'the activated child epoch CARRIES the parent acceptance surface');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// The consent valve is the ONE way an acceptance surface legitimately changes mid-run — and it is a
+// VALVE only if the gated party cannot open it by itself. RED: the lineage-wide consent-ledger digest
+// is handed to the planner in its own packet and is the same constant on any lineage where a human
+// ever extended the ceiling once, for any unrelated reason; echoing it back must NOT authorize a
+// rewrite of what "done" means.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    let state = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    state += 'automatic_review_replans: 2\nauthorized_epoch_ceiling: 2\ncase_b_exemption_consumed: false\n';
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-state.md'), state);
+    // A PLAIN ceiling extension — recorded for an unrelated reason, binding no acceptance surface.
+    const extended = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-815-ceiling', reason: 'one more automatic re-plan, please',
+      now: () => '2026-07-26T01:00:00.000Z' });
+    equal(extended.acceptance_change_digest, null,
+      'a plain ceiling extension binds no acceptance surface');
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+    const consentDigest = tx.budget.consent_ledger_digest;
+    ok(/^[0-9a-f]{64}$/.test(String(consentDigest || '')), 'the transaction carries the verified consent ledger digest');
+    ok(JSON.stringify(replan.buildPlannerPacket({ project: fx.project }, tx)).includes(consentDigest),
+      'the planner is HANDED that digest in its packet — which is exactly why it cannot be the token');
+
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const changedText = faithful.text
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: the user-restated bar is met instead.')
+      .replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + consentDigest);
+    const echoed = rehashPlan(changedText);
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), echoed.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const refusedEcho = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refusedEcho.reason, 'replan_child_acceptance_changed',
+      'RED: echoing the STALE lineage-wide consent digest does NOT authorize an acceptance rewrite: '
+        + JSON.stringify(refusedEcho));
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'),
+      Buffer.from(tx.parent.plan_bytes_base64, 'base64').toString('utf8'),
+      '...and the refused rewrite leaves the parent plan byte-identical');
+
+    // ...and a consent citation with nothing to authorize is refused, so the field cannot be carried
+    // forward as decoration that silently pre-authorizes a LATER change.
+    const idle = rehashPlan(faithful.text.replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + consentDigest));
+    const idleCheck = replan.validateChildPlan(Buffer.from(idle.text, 'utf8'), tx);
+    equal(idleCheck.reason, 'replan_child_acceptance_changed',
+      'an acceptance_change_consent citation with an UNCHANGED surface is refused, not carried forward');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// GREEN: a consent entry that BINDS the new acceptance surface's digest authorizes exactly that
+// surface. The human turn names what it is consenting to, so consent is per-change rather than
+// lineage-wide, and the entry the planner cites can only ever license the one surface it names.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    let state = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    state += 'automatic_review_replans: 2\nauthorized_epoch_ceiling: 2\ncase_b_exemption_consumed: false\n';
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-state.md'), state);
+
+    // The human decides the NEW acceptance surface first — that is the values decision — then records
+    // consent against it. `--acceptance-change-file` hands over the surface TEXT and normalizes it with
+    // the plan's own digest function, so the operator never computes a hash by hand.
+    const parentPlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const NEW_SURFACE = validator.acceptanceSection(parentPlan).body
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: the user-restated bar is met instead.');
+    const authorizedDigest = validator.acceptanceDigest('## Acceptance\n\n' + NEW_SURFACE.trim() + '\n');
+    const recorded = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-815-acceptance', reason: 'the user restated what done means',
+      acceptanceChangeSurface: NEW_SURFACE, now: () => '2026-07-26T01:00:00.000Z' });
+    equal(recorded.result, 'consent_extended', 'the bound consent entry records: ' + JSON.stringify(recorded));
+    equal(recorded.acceptance_change_digest, authorizedDigest,
+      'the entry binds the NEW surface digest (surface text → the plan\'s own normalization)');
+
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const consented = rehashPlan(faithful.text
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: the user-restated bar is met instead.')
+      .replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + recorded.entry_digest));
+    equal(validator.acceptanceDigest(consented.text), authorizedDigest,
+      'the child transcribes exactly the surface the human authorized');
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), consented.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed',
+      'GREEN: a per-change consent entry activates the acceptance change: ' + JSON.stringify(committed));
+    equal(validator.acceptanceDigest(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8')),
+      authorizedDigest, 'the activated child epoch carries the AUTHORIZED surface');
+
+    // The bound entry licenses ONE surface: a DIFFERENT rewrite citing the same entry is refused.
+    const entries = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.EPOCH_CONSENT_EXTENSIONS_NAME), 'utf8')).entries;
+    equal(entries.length, 1, 'the ledger holds the single bound entry');
+    const drifted = rehashPlan(faithful.text
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: something else entirely is enough.')
+      .replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + recorded.entry_digest));
+    const driftCheck = replan.validateChildPlan(Buffer.from(drifted.text, 'utf8'), tx, entries);
+    equal(driftCheck.reason, 'replan_child_acceptance_changed',
+      'a bound consent entry authorizes the surface it NAMES and no other: ' + JSON.stringify(driftCheck));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
 console.log(`test-replan: PASSED (${passed} assertions)`);

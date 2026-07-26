@@ -5,7 +5,8 @@ FORGE=""
 AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "investigator" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "workflow-planner" "synthesizer" "metric-optimizer")
+RETIRED_AGENTS=("contractor")
 
 usage() {
   echo "Usage: ./uninstall.sh [--forge=github|gitlab|gitea|all]"
@@ -56,7 +57,7 @@ removed=0
 
 shopt -s nullglob
 
-for agent in "${REQUIRED_AGENTS[@]}"; do
+for agent in "${REQUIRED_AGENTS[@]}" "${RETIRED_AGENTS[@]}"; do
   dest="$AGENTS_DIR/$agent.md"
   if [[ -f "$dest" ]] && grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
     rm "$dest"
@@ -309,7 +310,18 @@ if os.path.isdir(agents_dir):
         except (json.JSONDecodeError, OSError):
             managed = []
     # Remove manifest-listed + named stale profile files (never unknown user TOMLs).
+    # The manifest is attacker-influenceable input to a DELETE path, so a name is only
+    # ever a plain basename: anything carrying a separator, a parent ref, or an absolute
+    # root would escape agents_dir via os.path.join and delete outside the managed tree.
+    def is_plain_basename(n):
+        return bool(n) and n not in (".", "..") and os.path.basename(n) == n \
+            and "/" not in n and "\\" not in n and not os.path.isabs(n)
+
     for name in sorted(set(managed) | set(STALE_PROFILE_FILES)):
+        if not is_plain_basename(name):
+            print("kaola-workflow uninstall: skipping unsafe managed-profile entry: %r" % (name,),
+                  file=sys.stderr)
+            continue
         p = os.path.join(agents_dir, name)
         if os.path.isfile(p):
             os.remove(p)

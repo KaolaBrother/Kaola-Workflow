@@ -339,6 +339,38 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
+// T6b: acceptance-walk pin — all 6 finalize-route surfaces must bind their Acceptance Check to the
+// frozen plan's `## Acceptance` items. Before the section existed, "verify the deliverable matches
+// the acceptance criteria" verified against nothing; the check now has an object, and a surface that
+// still says only "the acceptance criteria" is a propagation gap. Fail-closed on all six: the two
+// forms diverge 2:1 (command prose vs SKILL numbered step), so the pin is the two invariant literals
+// both forms must carry — the section name and the item prefix — never a whole-sentence match.
+// ---------------------------------------------------------------------------
+{
+  const finalizeSurfaces = [
+    'commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+  ];
+  for (const f of finalizeSurfaces) {
+    // Hand-wrapped markdown: collapse whitespace before matching, or a re-wrap that changes nothing
+    // semantically would redden the pin (and, worse, invite someone to weaken it).
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8').replace(/\s+/g, ' ');
+    assert(content.includes('`## Acceptance`'),
+      `T6b: ${f} must bind its Acceptance Check to the frozen plan's \`## Acceptance\` section`);
+    assert(/`A1:`, `A2:`/.test(content),
+      `T6b: ${f} must instruct the walk over the \`A1:\`, \`A2:\` … items`);
+    assert(/covering test/.test(content) && /gate receipt/.test(content) && /prose evidence/.test(content),
+      `T6b: ${f} must name the three ways an item is satisfied (covering test / gate receipt / prose evidence)`);
+    assert(/judged in context/.test(content),
+      `T6b: ${f} must state that satisfaction is JUDGED in context — never a mechanical match`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // T7: <!-- PIN: claim-escalate --> comment + the `result: escalate` literal must appear in each of
 // the 12 claim/startup-refusal surfaces: adapt×6 + workflow-next×6.
 // Added by n3-result-routing-prose (#495); unconditional (n3 writes the prose AND this assertion together).
@@ -457,8 +489,8 @@ for (const ed of codexEditions) {
       `T12: ${f} must carry the pre-spawn announcement format (#604)`);
     assert(content.includes('← {node_id} · {role} returned: {verdict or one-line outcome}'),
       `T12: ${f} must carry the on-return announcement format (#604)`);
-    assert(content.includes('→ running {node_id} · {role} inline (…reason token…)'),
-      `T12: ${f} must carry the inline-fallback announcement format (#604)`);
+    assert(content.includes('→ running {node_id} · {role} inline'),
+      `T12: ${f} must carry the inline-run announcement format (#604/#817)`);
     assert(content.includes('{node-id} → complete; opened: {next-id|—}'),
       `T12: ${f} must carry the required close-echo progress line (#605)`);
   }
@@ -555,13 +587,18 @@ for (const ed of codexEditions) {
     'carry it VERBATIM into the role dispatch',
     'record a column-0 `upstream_read: <node-id> <nonce>` line',
     're-derived from the cached `.cache/<op>-envelope.json`',
-    "derived from each role's tool manifest",
+    'One contract, every role, every runtime',
+    'is the FALLBACK channel, never the primary one',
   ];
-  // The stale exclusive-contract enumerations that the manifest-derived sentence replaced. Their
-  // bold-header framing is the signature; reintroducing either list on any surface reds here.
+  // The stale exclusive-contract enumerations that the unbranched self-write contract replaced.
+  // Reintroducing any of them on any surface reds here: the first two are the bold-header role
+  // lists; the third is the manifest BRANCH itself (a role's tool manifest no longer selects a
+  // transport); the fourth is the runtime-scoped framing of what is now the universal contract.
   const stale = [
     '**READ-ONLY roles**',
     '**WRITE-role agents**',
+    "derived from each role's tool manifest",
+    'durable-result override',
   ];
   for (const f of planRunSurfaces) {
     const content = norm(fs.readFileSync(path.join(REPO, f), 'utf8'));
@@ -1287,6 +1324,56 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
 }
 
+// --- NON-VACUITY FLOOR (manifest-wide) — every marker-led block must carry at least ONE
+//     distinctive token that is not a substring of its own marker.
+//
+//     WHY A FLOOR AND NOT A PER-BLOCK RULE: the #637 lesson was, until now, re-applied by hand,
+//     one bespoke assert per block (the three that follow). A block nobody wrote an assert for
+//     was unguarded — and two such blocks had in fact gone vacuous: `pr-frontier-unit` ('frontier
+//     unit' is a substring of `<!-- PIN: frontier unit -->`) and `pr-gate-instrumentation` (marker
+//     ONLY, zero distinctive tokens). Both passed every check while pinning nothing: the marker's
+//     mere presence satisfied the block even if the prose under it were rewritten to say the
+//     opposite. This floor is the general form, so the class cannot return via a new block.
+//
+//     FLOOR, NOT CEILING: it demands >=1 distinctive token, not that EVERY token be distinctive —
+//     a vacuous token may legitimately ride along when a legacy proof still names it (the T5
+//     SUPERSET-PROOF names the 'frontier unit' literal). The three bespoke asserts below are the
+//     stricter no-vacuous-token-at-all rule and are deliberately KEPT: replacing them with this
+//     weaker floor would be a regression, not a simplification.
+//     FAILS CLOSED: a floor that `continue`s past shapes it does not recognize is itself vacuous.
+//     Three degenerate shapes must RED rather than be skipped: an empty/absent content_tokens array
+//     (demands nothing, and checkManifest's per-token loop over [] is a no-op, so nothing else reds
+//     it either), and a comment-shaped first token that is not a PIN/CARD marker — `<!-- pin: x -->`
+//     (isMarker is case-SENSITIVE) or `<!-- NOTE: ... -->` — which would otherwise slip past both
+//     this floor and the reverse orphan-sentinel that keys on recognized markers.
+//     Blocks legitimately led by a plain content token (9 of the 30 today) are NOT marker-led and
+//     need no distinctive sibling: their first token is itself the distinctive one.
+{
+  const violations = [];
+  for (const b of REQUIRED_BLOCKS) {
+    const toks = b.content_tokens;
+    if (!Array.isArray(toks) || toks.length === 0) {
+      violations.push(b.block_id + ' (no content_tokens — the block demands nothing)');
+      continue;
+    }
+    const first = toks[0];
+    if (/^\s*<!--/.test(String(first)) && !isMarker(first)) {
+      violations.push(b.block_id + ' (comment-shaped first token is not a PIN/CARD marker: '
+        + JSON.stringify(String(first)) + ')');
+      continue;
+    }
+    if (!isMarker(first)) continue;             // content-led block: first token is itself distinctive
+    const marker = norm(first);
+    if (!toks.slice(1).some(t => !marker.includes(norm(t)))) {
+      violations.push(b.block_id + ' (marker-only or substring-only — pins nothing)');
+    }
+  }
+  assert(violations.length === 0,
+    'NON-VACUITY FLOOR: every marker-led block needs >=1 token that is not a substring of its own '
+      + 'marker, every block needs >=1 token, and a comment-shaped first token must be a recognized '
+      + 'PIN/CARD marker; offenders: ' + JSON.stringify(violations));
+}
+
 // --- #634: pr-metric-optimizer-card block sanity — the new block exists, obligates all 6
 //     plan-run surfaces (both/both), and its distinctive tokens are not vacuous substrings of
 //     its own marker (the #637 lesson applied PROACTIVELY, before any bug is ever observed). The
@@ -1361,8 +1448,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     // T5b — plan-run skills × 3 (codex-live)
     { token: 'fork_turns: "none"', surfaces: prSkill },
     { token: 'dispatch.codex_profile_mode', surfaces: prSkill },
-    { token: 'Codex 0.144 durable-result override', surfaces: prSkill },
-    { token: 'transport_error: encrypted_return', surfaces: prSkill },
+    { token: 'transport_error: encrypted_return', surfaces: PR6 },
     { token: 'direct `agents` namespace', surfaces: prSkill },
     { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: prSkill },
     // T14 — plan-run commands × 3 (claude-live)

@@ -73,6 +73,16 @@ The `## Expansion Records` channel lives OUTSIDE the `plan_hash` body, so append
 perturbs the frozen spine identity — the review-journal binding is `(spine plan_hash, record id)`,
 which is what lets a later re-expansion never orphan a completed journal.
 
+**Re-shape the presented task list from the returned `taskTransitions`.** Expansion is the one
+lifecycle step that changes the run's SHAPE rather than only a status, so the transition channel
+carries one entry per COMPOSED unit of the record — `in_progress` for the units this open started,
+`pending` for the ones still behind the frontier. A transition naming an id the visible list does not
+hold is an INSERT: add that unit's task, in record order, after the milestone's own task. `pending`
+entries appear on the very first `expand-open` of a multi-unit interior DAG, and the same rule
+applies verbatim to `reexpand-open` (it delegates to this same transaction). Applying only the status
+flips leaves the operator's list showing the frozen spine, which no longer describes the run — the
+durable `workflow-tasks.json` already lists the composed units, and this is what makes the two agree.
+
 ---
 
 ## 3. Re-expansion — a second record on the same point
@@ -80,6 +90,13 @@ which is what lets a later re-expansion never orphan a completed journal.
 A follow-up record on the SAME point is the SAME command, once every prior unit is settled
 (`readyToExpand` stays true after a record fully closes). Records are numbered monotonically per
 point (`m1#1`, `m1#2`, …). A re-expansion over a still-live frontier refuses `expansion_not_settled`.
+
+`reexpand-open` (re-opening an already-DISCHARGED point) additionally un-completes rows the presented
+list is currently showing as done — the owner milestone, any re-verified downstream milestone, their
+review walls, and the sink. Every one of those flips comes back as a `pending` transition alongside the
+composed units' own, and they are applied by the same rule: a named id the list already holds is a
+status move, not an insert. Apply them, or the list keeps asserting "milestone done, review passed"
+about work the run has re-opened.
 
 ---
 
@@ -97,6 +114,11 @@ point's own `.cache/<point>.md`:
 ```
 expansion <point>: width=<total units> mode=<co_open|serial|mixed> serializer=<none|S1|S2|S3> rework=<records-1>
 ```
+
+It is a ledger-mutating subcommand, so it honors the mutation-time task-mirror contract like every
+other one: it returns the point's own `complete` `taskTransitions` entry and a `taskMirror` refresh
+result. Apply the transition so the milestone's task closes at discharge. (The `alreadyDischarged`
+short-circuit returns NEITHER — nothing was mutated, so there is nothing to present.)
 
 The spine then advances to its next node — through the concrete review wall (opened + closed via the
 normal `open-next` / `close-and-open-next` gate lifecycle) to the `finalize` sink. Discharging a
@@ -118,6 +140,12 @@ shapes, and every one reaches the roll-forward:
 
 Run `reconcile-running-set` whenever `openIncomplete` is non-empty, BEFORE any further `expand-open`
 / `expand-close`. A fully-proven, stable plan is a no-op (`reconciled: false, reason: 'not_opening'`).
+
+**Recovery re-shapes the task list too.** A roll-forward RE-OPENS units, so `reconcile-running-set`
+returns the same `taskTransitions` channel §2 describes — `in_progress` for the units it re-opened,
+`pending` for the composed-but-unopened rest — and the same INSERT rule applies. Apply them; a
+recovery that repairs the ledger silently leaves the operator's list describing a run that no longer
+exists. A stable-plan no-op rolls nothing forward and correctly emits nothing.
 
 ---
 

@@ -11,13 +11,24 @@
 // generate-from-canonical twin of edition-sync.js: deterministic, idempotent,
 // and parity-checked by test-opencode-edition.js.
 //
+// FORGE AXIS (--forge=github|gitlab|gitea, default github). The runtime is not a
+// forge, but the workflow PROSE is forge-shaped (`gh` vs `glab` vs `tea`, PR vs
+// MR, per-forge support-script basenames), so a gitlab user must not receive
+// GitHub-shaped commands. The forge variants are GENERATED, never hand-ported:
+// the command sources come from the routing-surface registry via
+// runtime-edition-forge.js, so each forge renders from the same byte-checked
+// surfaces the Claude/Codex editions ship. github writes the historical bare
+// `.opencode/` tree; a forge edition writes the sibling `.opencode-<forge>/`.
+// This changes nothing about the edition's ADDITIVITY: it stays out of
+// `npm test`, `edition-sync.js`, `install.sh`, and the SIX routing surfaces, and
+// keeps its own suite (test-opencode-edition.js).
+//
 // Two model tiers (resolvable from ONE file: opencode.json). The DEFAULT install
 // expresses them as reasoning-EFFORT VARIANTS of the user's inherited model (no
 // model is pinned — both tiers inherit the model opencode is already using):
 //   掐理 (reasoning tier) → the inherited model's TOP effort variant (e.g. max).
 //   普通 (standard tier)  → the inherited model's SECOND effort variant (e.g. high).
-// The reasoning tier = the canonical `model: opus` roles PLUS the Claude Code
-// "higher" profile roles (agents/profiles/higher/*), mirroring --profile=higher;
+// The reasoning tier = the canonical `model: opus` roles;
 // all other roles run standard. Effort levels are provider-relative, so an effort
 // map (PROVIDER_EFFORT) names the top/second variant per provider:
 //   anthropic max/high · openai xhigh/high · google high/low · z.ai·zhipu max/high
@@ -26,6 +37,8 @@
 // overrides for the canonical opus roles). A fresh install never hard-codes a
 // provider; generated agents are MODEL-AGNOSTIC.
 //
+//   --forge=<f>          github (default) | gitlab | gitea — which forge's command
+//                         surfaces to render from, and which tree to write.
 //   --write              regenerate .opencode/agent + .opencode/command from canonical;
 //                         seed opencode.json only if absent (use --write-config to force).
 //   --write-config       (re)write this repo's opencode.json from the template.
@@ -53,18 +66,34 @@ const schema = require('./kaola-workflow-adaptive-schema');
 // the opencode bytes so resolveReviewerProfileIdentity can bind schema-2 review receipts to
 // the exact profile bytes that produced them.
 const reviewerGen = require('./generate-reviewer-profiles');
+const forgeLayout = require('./runtime-edition-forge');
 const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 const REPO = path.resolve(__dirname, '..');
+const DEFAULT_FORGE = 'github';
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
-const CANON_COMMANDS_DIR = path.join(REPO, 'commands');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 const CANON_PLUGINS_DIR = path.join(REPO, 'templates', 'opencode', 'plugins');
-const OUT_AGENT_DIR = path.join(REPO, '.opencode', 'agent');
-const OUT_COMMAND_DIR = path.join(REPO, '.opencode', 'command');
-const OUT_HOOKS_DIR = path.join(REPO, '.opencode', 'hooks');
-const OUT_PLUGINS_DIR = path.join(REPO, '.opencode', 'plugins');
+
+// outDirs — the generated tree for one forge. github keeps the historical bare
+// `.opencode/` path (so its output is unchanged by the forge axis); gitlab/gitea
+// write sibling trees. Agents and hooks are forge-NEUTRAL content but still live
+// per-tree, because a tree is what the installer copies wholesale.
+function outDirs(forge) {
+  const root = path.join(REPO, '.opencode' + forgeLayout.outSuffix(forge));
+  return {
+    root,
+    agent: path.join(root, 'agent'),
+    command: path.join(root, 'command'),
+    hooks: path.join(root, 'hooks'),
+    plugins: path.join(root, 'plugins'),
+  };
+}
+const OUT_AGENT_DIR = outDirs(DEFAULT_FORGE).agent;
+const OUT_COMMAND_DIR = outDirs(DEFAULT_FORGE).command;
+const OUT_HOOKS_DIR = outDirs(DEFAULT_FORGE).hooks;
+const OUT_PLUGINS_DIR = outDirs(DEFAULT_FORGE).plugins;
 const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 
 // Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the
@@ -121,8 +150,20 @@ function listCanonAgents() {
     .map(f => f.slice(0, -3));
 }
 
-function listCanonCommands() {
-  return fs.readdirSync(CANON_COMMANDS_DIR).filter(f => f.endsWith('.md'));
+// The command surfaces this edition renders FROM, for a forge. Sourced from the
+// routing-surface registry rather than a directory listing, so the forge variants
+// are the generated, byte-checked surfaces themselves — the runtime edition holds
+// no command list of its own to drift.
+// Sorted, so the emitted order is the directory order this generator used before
+// the forge axis and does not depend on the registry's topic order.
+function listCanonCommands(forge) {
+  return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
+}
+
+function canonCommandPath(basename, forge) {
+  const src = forgeLayout.commandSources(forge || DEFAULT_FORGE).find(s => s.basename === basename);
+  if (!src) throw new Error(`no command surface "${basename}" for forge ${forge || DEFAULT_FORGE}`);
+  return src.absPath;
 }
 
 // --- renderers (pure; exported for parity test) ---
@@ -151,7 +192,8 @@ function opencodeAgentSuffix(agentName) {
   ].join('\n');
 }
 
-function renderAgent(canonContent, agentName) {
+function renderAgent(canonContent, agentName, forge) {
+  forge = forge || DEFAULT_FORGE;
   const { fm, body } = parseFrontmatter(canonContent);
   const tools = parseTools(fm.tools);
   const toolSet = lowerSet(tools);
@@ -160,7 +202,7 @@ function renderAgent(canonContent, agentName) {
   const isReviewer = REVIEWER_ROLES.has(agentName);
 
   const lines = ['---'];
-  lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
+  lines.push('description: ' + (fm.description || ''));
   lines.push('mode: subagent');
   // No model field: standard tier inherits opencode.json "model"; reasoning tier
   // is resolved by the opencode.json agent.<role>.model override. Keeping generated
@@ -185,13 +227,10 @@ function renderAgent(canonContent, agentName) {
   lines.push('---');
   lines.push('');
   // #544 (folded into #543): apply the Claude→opencode script-path rewrite to the agent body too
-  // (contractor ships 2 `kaola_script()` resolver definitions + the "Re-derive" prose; workflow-
-  // planner ships the "Re-derive" prose only). Other agents are verbatim (rewriteClaudeScriptPaths
+  // (workflow-planner ships the "Re-derive" prose). Other agents are verbatim (rewriteClaudeScriptPaths
   // is a no-op when the patterns are absent). Applied to the RENDERED body so canonical agents/*.md
   // are never touched (additive D-530-02); A6 parity holds because both sides go through renderAgent.
-  // #609: also rewrite B2 Claude model-noun prose ("Opus"/"Sonnet" used as if they were THIS
-  // runtime's models) to neutral tier vocabulary — same additive-generation-only discipline.
-  const bodyText = rewriteClaudeModelNouns(rewriteClaudeScriptPaths(body)).trim().replace(/\s+$/, '');
+  const bodyText = rewriteClaudeScriptPaths(body, forge).trim().replace(/\s+$/, '');
   const suffix = opencodeAgentSuffix(agentName);
   lines.push(suffix ? bodyText + '\n' + suffix.replace(/\s+$/, '') : bodyText);
   let content = lines.join('\n') + '\n';
@@ -226,34 +265,54 @@ const OPENCODE_BADGE_BLOCK = [
 
 // opencode-native `kaola_script()` shell resolver (issue #544, folded into #543). The canonical
 // resolver ships a CLAUDE search path verbatim — `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow`
-// (contractor's copy ALSO adds the gitlab/gitea forge dirs). On the opencode edition that is a
+// (a plugin-resident copy may ALSO add the gitlab/gitea forge dirs). On the opencode edition that is a
 // Claude-path leak: opencode resolves scripts via an opencode-native dir honoring `$OPENCODE_CONFIG_DIR`
 // (default `~/.config/opencode`), which is where install-opencode.sh deploys the support scripts. This
 // constant is the wholesale replacement for every `kaola_script(){ ... return 1; }` definition line
-// (both the 3-path command form and the 5-path contractor form collapse to this single opencode
+// (both the 3-path command form and the 5-path plugin form collapse to this single opencode
 // form — opencode is runtime-only, no forge axis). Single-quoted JS literal: inner `'`→`\'`, the
 // shell `printf '%s\n'` backslash-n is `\\n` so the GENERATED .md carries a literal `\n` (not a JS
 // newline that would split the one-line resolver).
 const OPENCODE_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _oc="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_oc/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_oc/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
+// The forge's resolver. Only the SELF-DEV probe is forge-scoped: inside this
+// repository a gitlab/gitea edition's scripts live in its plugin tree, not in
+// ./scripts. The deployed dir is shared across forges on purpose — the per-forge
+// basenames are distinct, so co-installed editions resolve without collision.
+// Identity for github, which is what keeps the historical tree byte-unchanged.
+function opencodeKaolaScript(forge) {
+  const selfDev = forgeLayout.selfDevScriptsDir(forge);
+  return OPENCODE_KAOLA_SCRIPT.split('"./scripts/$_n"').join(`"${selfDev}/$_n"`);
+}
+
+// reEsc — escape a derived token for literal use inside a RegExp.
+const reEsc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // #544 (folded into #543): rewrite the Claude script-path surface to opencode-native. Applied to
 // BOTH command bodies (via transformCommandBody) and agent bodies (via renderAgent) so the committed
 // .opencode/ tree has ZERO `$CLAUDE_PLUGIN_ROOT` / `$HOME/.claude/kaola-workflow` tokens. Canonical
 // sources are NEVER touched (additive D-530-02) — only the generated outputs. Two leak shapes:
 //   (a) a whole `kaola_script(){ ... return 1; }` definition line (commands: 3-path form ×N;
-//       contractor: 5-path form with gitlab/gitea forge dirs ×2) → wholesale replaced by
+//       plugin-resident: 5-path form with gitlab/gitea forge dirs) → wholesale replaced by
 //       OPENCODE_KAOLA_SCRIPT (whitespace/indent preserved).
-//   (b) the "Re-derive your own script path(s)" prose parenthetical in contractor + workflow-planner
+//   (b) the "Re-derive your own script path(s)" prose parenthetical in workflow-planner
 //       ("prefer `$CLAUDE_PLUGIN_ROOT/scripts`, then `$HOME/.claude/kaola-workflow/scripts`,
 //        then `./scripts`)") → collapsed to the 2-path opencode list.
-function rewriteClaudeScriptPaths(text) {
+function rewriteClaudeScriptPaths(text, forge) {
+  forge = forge || DEFAULT_FORGE;
+  // The forge's replan basename + Claude support-dir name. Both are DERIVED (the
+  // install manifest's rename transform and the plugin dir name), so the (c)
+  // rewrites below match the forge surface they are actually rendering rather
+  // than the github one — without them a gitlab render leaks $CLAUDE_PLUGIN_ROOT.
+  const replanJs = forgeLayout.scriptName('kaola-workflow-replan.js', forge);
+  const claudeDir = forgeLayout.pluginDirName(forge);
   // (a) Whole resolver definition line (indent-preserving). The resolver is always a single line;
   // `.*` does not cross newlines (no `s` flag), so each definition is replaced independently.
-  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + OPENCODE_KAOLA_SCRIPT);
+  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
   // (b) The path-list parenthetical in agent prose (whitespace-flexible across the two agents' line
   // breaks). Scoped to the literal "(prefer `$CLAUDE_PLUGIN_ROOT/scripts`, then … then `./scripts`)"
-  // shape — only contractor + workflow-planner carry it, so no over-strip risk.
+  // shape — only workflow-planner carries it, so no over-strip risk.
   text = text.replace(
     /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
     '(prefer `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts`, then `./scripts`)'
@@ -262,56 +321,25 @@ function rewriteClaudeScriptPaths(text) {
   //   (c1) the two-line fallback pair (adapt + finalize): a $CLAUDE_PLUGIN_ROOT line followed by a
   //        $HOME/.claude line → collapsed to ONE opencode-native fallback line.
   text = text.replace(
-    /^([ \t]*)\[ -f "\$REPLAN_SCRIPT" \] \|\| REPLAN_SCRIPT="\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}"\n[ \t]*\[ -f "\$REPLAN_SCRIPT" \] \|\| REPLAN_SCRIPT="\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"$/gm,
-    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/kaola-workflow-replan.js"'
+    new RegExp(
+      '^([ \\t]*)\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/'
+      + reEsc(replanJs) + '\\}"\\n[ \\t]*\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$HOME/\\.claude/'
+      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"$', 'gm'),
+    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/' + replanJs + '"'
   );
   //   (c2) the for-loop path list (plan-run + workflow-next): the Claude pair inside the candidate
   //        list → the single opencode-native candidate.
   text = text.replace(
-    /"\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}" "\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"/g,
-    '"${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/kaola-workflow-replan.js"'
+    new RegExp(
+      '"\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/' + reEsc(replanJs) + '\\}" "\\$HOME/\\.claude/'
+      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"', 'g'),
+    '"${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/' + replanJs + '"'
   );
   return text;
 }
 
-// Rewrite Claude model-NOUN prose (issue #609, the opencode twin of #537's codex companion).
-// Two vocabularies exist in canonical bodies: B1 — the closed plan `model`-column tier tokens
-// (`{opus, sonnet}`, always lowercase and backtick-wrapped, e.g. the workflow-planner's "Model
-// assignment" guidance and the frozen-plan example row) — the portable cross-edition contract,
-// untouched here. B2 — "Opus"/"Sonnet" used as descriptive prose AS IF they were this runtime's
-// actual models (e.g. "The Opus orchestrator", "a separate Sonnet role") — wrong on opencode,
-// which resolves effort centrally via reasoning-EFFORT VARIANTS (mapTier), never a Claude model
-// name. Each pattern below targets one exact B2 noun-phrase shape (never a blanket `/Opus/`
-// or `/Sonnet/`, so the lowercase B1 tokens are never at risk); replacement text never
-// reintroduces "Opus"/"Sonnet", so repeated application is a no-op (idempotent). Applied to BOTH
-// agent bodies/descriptions (via renderAgent) and command bodies (via transformCommandBody) —
-// canonical sources are NEVER touched (additive D-530-02), only the generated outputs.
-function rewriteClaudeModelNouns(text) {
-  // "Reasoning-class (Opus)" / "reasoning-class (Opus)" — synthesizer's description + floor note
-  // (case-preserving on the leading letter so both the frontmatter and body forms rewrite cleanly).
-  text = text.replace(/\b([Rr])easoning-class \(Opus\)/g, (m, first) => first + 'easoning-tier (top effort variant)');
-  // "reasoning-class **Opus**-floor `synthesizer`" — plan-run's merge-conflict repair prose
-  // (whitespace-flexible \s+ so the mid-sentence line wrap still matches).
-  text = text.replace(/reasoning-class\s+\*\*Opus\*\*-floor/g, 'reasoning-tier-floor');
-  // "Opus orchestrator" — workflow-planner + contractor both use this exact noun phrase
-  // (whitespace-flexible \s+ — canonical prose re-wraps have split it across a line break).
-  text = text.replace(/\bOpus\s+orchestrator\b/g, 'reasoning-tier orchestrator');
-  // "separate Sonnet role" — contractor's hard-boundary heading prose.
-  text = text.replace(/\bseparate Sonnet role\b/g, 'separate standard-tier role');
-  // "stay on **Sonnet** even under" / "never promoted to Opus" — contractor's floor-pin bullet.
-  text = text.replace(/\bstay on \*\*Sonnet\*\* even under\b/g, 'stay on the **standard tier** even under');
-  text = text.replace(/\bnever promoted to Opus\b/g, 'never promoted to the reasoning tier');
-  // "Opus front end" — workflow-next's router-rules prose.
-  text = text.replace(/\bOpus front end\b/g, 'reasoning-tier front end');
-  // "**`workflow-planner`** (Opus)" / "**`workflow-planner`** subagent (Opus)" — adapt's two
-  // Phase-0 mentions (one bare, one via the word "subagent" — both collapse to the same form).
-  text = text.replace(/\*\*`workflow-planner`\*\*( subagent)? \(Opus\)/g, '**`workflow-planner`**$1 (reasoning tier)');
-  // "belongs on Sonnet per CLAUDE.md model rules" — doc-updater's vendor local-override note.
-  text = text.replace(/\bbelongs on Sonnet per\b/g, 'belongs on the standard tier per');
-  return text;
-}
-
-function transformCommandBody(body) {
+function transformCommandBody(body, forge) {
+  forge = forge || DEFAULT_FORGE;
   const lines = body.split(/\r?\n/);
   const out = [];
   let i = 0;
@@ -399,8 +427,6 @@ function transformCommandBody(body) {
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
   // or inline `Agent(...)` code spans.
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
-  // Prose: opencode-neutral wording for subagent references (was "Claude Code agent(s)").
-  text = text.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
   // Parenthesized then bare forms — real placeholders first, then literal ellipsis.
   text = text.replace(/\s*\(\s*model="\{[A-Z_]+_MODEL\}"\s*\)/g, '');
   text = text.replace(/\s*model="\{[A-Z_]+_MODEL\}"/g, '');
@@ -437,14 +463,11 @@ function transformCommandBody(body) {
   // your own script path(s)" prose to the opencode-native path (no $CLAUDE_PLUGIN_ROOT, no
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped above) is
   // rewritten in full; the earlier transforms do not touch it.
-  text = rewriteClaudeScriptPaths(text);
-  // #609: rewrite B2 Claude model-noun prose ("Opus"/"Sonnet" used as if they were THIS runtime's
-  // models) to neutral tier vocabulary — the command-body twin of the renderAgent rewrite above.
-  text = rewriteClaudeModelNouns(text);
+  text = rewriteClaudeScriptPaths(text, forge);
   return text;
 }
 
-function renderCommand(canonContent) {
+function renderCommand(canonContent, forge) {
   const { fm, body } = parseFrontmatter(canonContent);
   const lines = ['---'];
   lines.push('description: ' + (fm.description || ''));
@@ -453,7 +476,7 @@ function renderCommand(canonContent) {
   // .opencode/agent/* subagents via the task tool, so no `agent:` is set.
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -468,25 +491,24 @@ function reasoningRoles() {
     .sort();
 }
 
-// The Claude Code "higher" profile roles (agents/profiles/higher/*). These run on the
-// OPUS tier under --profile=higher; the opencode edition mirrors that by placing them
-// on the TOP effort variant. Derived from the dir so it stays in sync with canonical.
-function higherProfileRoles() {
-  const dir = path.join(CANON_AGENTS_DIR, 'profiles', 'higher');
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-}
-
-// Reasoning-tier roles for the opencode EFFORT design = canonical opus roles ∪ the
-// Claude Code "higher" profile roles (mirror --profile=higher). The narrower
-// reasoningRoles() (canonical opus only) stays for the opt-in MODEL-PIN path.
+// Top-tier roles for the opencode EFFORT design are exactly the canonical reasoning-tier
+// roles — ONE source, shared with the opt-in MODEL-PIN path. There is no second,
+// install-time model axis: the agent tree carries one assignment per role, and the frozen
+// plan's per-node tier column governs every workflow dispatch.
+//
+// SET MEMBERSHIP IS UNCHANGED by collapsing the two sources into one. The effort tier used to be
+// `higherProfileRoles() ∪ canonical-reasoning`; the retired install-time default selected the
+// `higher` variant, so those roles' assignments now live in the canonical agent tree and the union
+// is redundant. Both spellings yield the same six roles: code-architect, code-reviewer, planner,
+// security-reviewer, synthesizer, workflow-planner. A seventh member here means a role's canonical
+// frontmatter tier moved — fix the frontmatter, not this function (test-opencode-edition.js A12).
+//
+// The opt-in MODEL-PIN scaffold in opencode.json does gain three entries, and that is a
+// correction: it was previously derived from canonical frontmatter ALONE, so it omitted the three
+// reviewers that the default install nevertheless ran at the reasoning tier. Pinning the reasoning
+// tier to another model now lists every role that actually runs there.
 function topTierRoles() {
-  const set = new Set(higherProfileRoles());
-  for (const name of listCanonAgents()) {
-    const c = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    if (roleTier(parseFrontmatter(c).fm.model) === 'reasoning') set.add(name);
-  }
-  return [...set].sort();
+  return reasoningRoles();
 }
 
 function standardTierRoles() {
@@ -563,8 +585,8 @@ function renderAdaptiveConfig(parsed, profile) {
   lines.push('  // mapTier(tier, provider). tier → variant:');
   lines.push('  //   推理 (reasoning tier) → TOP effort variant "' + profile.top.variant + '".');
   lines.push('  //   普通 (standard tier)  → SECOND effort variant "' + profile.second.variant + '".');
-  lines.push('  // Reasoning tier = canonical opus roles + the Claude Code "higher" profile roles');
-  lines.push('  // (' + higherProfileRoles().join(', ') + '); all other roles run standard. Variants are');
+  lines.push('  // Reasoning tier = the canonical reasoning-tier roles');
+  lines.push('  // (' + topTierRoles().join(', ') + '); all other roles run standard. Variants are');
   lines.push('  // defined under provider.* and selected per-role via agent.<role>.variant.');
   lines.push('  // ⚠ SWITCHING YOUR OPENCODE MODEL? Variant definitions are model-scoped');
   lines.push('  // (provider.<id>.models.<model>.variants.*) — opencode applies them from this file, with');
@@ -664,32 +686,40 @@ function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function writeAgents() {
-  ensureDir(OUT_AGENT_DIR);
+// treeLabel — the repo-relative tree name for log lines ('.opencode' or
+// '.opencode-gitlab'), so a multi-forge run says which tree it wrote.
+function treeLabel(forge) {
+  return '.opencode' + forgeLayout.outSuffix(forge);
+}
+
+function writeAgents(forge) {
+  const out_dir = outDirs(forge).agent;
+  ensureDir(out_dir);
   let wrote = 0;
   for (const name of listCanonAgents()) {
     const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name);
-    const dest = path.join(OUT_AGENT_DIR, name + '.md');
+    const out = renderAgent(canon, name, forge);
+    const dest = path.join(out_dir, name + '.md');
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       fs.writeFileSync(dest, out);
-      console.log('generated  .opencode/agent/' + name + '.md');
+      console.log('generated  ' + treeLabel(forge) + '/agent/' + name + '.md');
       wrote++;
     }
   }
   return wrote;
 }
 
-function writeCommands() {
-  ensureDir(OUT_COMMAND_DIR);
+function writeCommands(forge) {
+  const out_dir = outDirs(forge).command;
+  ensureDir(out_dir);
   let wrote = 0;
-  for (const file of listCanonCommands()) {
-    const canon = fs.readFileSync(path.join(CANON_COMMANDS_DIR, file), 'utf8');
-    const out = renderCommand(canon);
-    const dest = path.join(OUT_COMMAND_DIR, file);
+  for (const file of listCanonCommands(forge)) {
+    const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
+    const out = renderCommand(canon, forge);
+    const dest = path.join(out_dir, file);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       fs.writeFileSync(dest, out);
-      console.log('generated  .opencode/command/' + file);
+      console.log('generated  ' + treeLabel(forge) + '/command/' + file);
       wrote++;
     }
   }
@@ -720,33 +750,35 @@ function writeConfig(force, adapt) {
   return 1;
 }
 
-function writeHooks() {
-  ensureDir(OUT_HOOKS_DIR);
+function writeHooks(forge) {
+  const out_dir = outDirs(forge).hooks;
+  ensureDir(out_dir);
   let wrote = 0;
   for (const script of HOOK_SCRIPTS) {
     const src = path.join(CANON_HOOKS_DIR, script);
-    const dest = path.join(OUT_HOOKS_DIR, script);
+    const dest = path.join(out_dir, script);
     const content = fs.readFileSync(src, 'utf8');
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== content) {
       fs.writeFileSync(dest, content);
       fs.chmodSync(dest, 0o755);
-      console.log('copied     .opencode/hooks/' + script);
+      console.log('copied     ' + treeLabel(forge) + '/hooks/' + script);
       wrote++;
     }
   }
   return wrote;
 }
 
-function writePlugin() {
-  ensureDir(OUT_PLUGINS_DIR);
+function writePlugin(forge) {
+  const out_dir = outDirs(forge).plugins;
+  ensureDir(out_dir);
   let wrote = 0;
   for (const script of PLUGIN_SCRIPTS) {
     const src = path.join(CANON_PLUGINS_DIR, script);
-    const dest = path.join(OUT_PLUGINS_DIR, script);
+    const dest = path.join(out_dir, script);
     const content = fs.readFileSync(src, 'utf8');
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== content) {
       fs.writeFileSync(dest, content);
-      console.log('copied     .opencode/plugins/' + script);
+      console.log('copied     ' + treeLabel(forge) + '/plugins/' + script);
       wrote++;
     }
   }
@@ -766,32 +798,34 @@ function retiredMdFiles(outDir, expectedBasenames) {
     .sort();
 }
 
-function pruneRetired() {
+function pruneRetired(forge) {
+  const dirs = outDirs(forge);
   let removed = 0;
-  const cmds = retiredMdFiles(OUT_COMMAND_DIR, listCanonCommands().map(f => f.slice(0, -3)));
+  const cmds = retiredMdFiles(dirs.command, listCanonCommands(forge).map(f => f.slice(0, -3)));
   for (const f of cmds) {
-    fs.rmSync(path.join(OUT_COMMAND_DIR, f), { force: true });
-    console.log('pruned     .opencode/command/' + f + ' (retired surface)');
+    fs.rmSync(path.join(dirs.command, f), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/command/' + f + ' (retired surface)');
     removed++;
   }
-  const agents = retiredMdFiles(OUT_AGENT_DIR, listCanonAgents());
+  const agents = retiredMdFiles(dirs.agent, listCanonAgents());
   for (const f of agents) {
-    fs.rmSync(path.join(OUT_AGENT_DIR, f), { force: true });
-    console.log('pruned     .opencode/agent/' + f + ' (retired surface)');
+    fs.rmSync(path.join(dirs.agent, f), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/agent/' + f + ' (retired surface)');
     removed++;
   }
   return removed;
 }
 
-function runWrite(configForce, adapt) {
-  const a = writeAgents();
-  const c = writeCommands();
-  const h = writeHooks();
-  const p = writePlugin();
+function runWrite(configForce, adapt, forge) {
+  forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
+  const a = writeAgents(forge);
+  const c = writeCommands(forge);
+  const h = writeHooks(forge);
+  const p = writePlugin(forge);
   const j = writeConfig(configForce, adapt);
-  const pr = pruneRetired();
+  const pr = pruneRetired(forge);
   const total = a + c + h + p + j + pr;
-  console.log('sync-opencode-edition: write complete (' + total + ' file(s) updated'
+  console.log('sync-opencode-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
 
@@ -806,30 +840,33 @@ function runWriteConfigTo(target, adapt) {
   console.log('seeded     ' + target + tag);
 }
 
-function runCheck() {
+function runCheck(forge) {
+  forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
+  const tree = treeLabel(forge);
+  const dirs = outDirs(forge);
   const mismatches = [];
   for (const name of listCanonAgents()) {
     const canon = read('agents/' + name + '.md');
-    const rel = '.opencode/agent/' + name + '.md';
+    const rel = tree + '/agent/' + name + '.md';
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing generated agent' });
       continue;
     }
-    const expected = renderAgent(canon, name);
+    const expected = renderAgent(canon, name, forge);
     if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
-  for (const file of listCanonCommands()) {
-    const canon = read('commands/' + file);
-    const rel = '.opencode/command/' + file;
+  for (const file of listCanonCommands(forge)) {
+    const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
+    const rel = tree + '/command/' + file;
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing generated command' });
       continue;
     }
-    const expected = renderCommand(canon);
+    const expected = renderCommand(canon, forge);
     if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
   for (const script of HOOK_SCRIPTS) {
-    const rel = '.opencode/hooks/' + script;
+    const rel = tree + '/hooks/' + script;
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing hook script copy' });
       continue;
@@ -837,7 +874,7 @@ function runCheck() {
     if (read(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/' });
   }
   for (const script of PLUGIN_SCRIPTS) {
-    const rel = '.opencode/plugins/' + script;
+    const rel = tree + '/plugins/' + script;
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing generated plugin' });
       continue;
@@ -863,11 +900,11 @@ function runCheck() {
   }
   // Retired-surface guard: a *.md in the deployed command/agent dir whose canonical source
   // was deleted (e.g. the fast/full commands) must be pruned; --write removes it.
-  for (const f of retiredMdFiles(OUT_COMMAND_DIR, listCanonCommands().map(x => x.slice(0, -3)))) {
-    mismatches.push({ rel: '.opencode/command/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+  for (const f of retiredMdFiles(dirs.command, listCanonCommands(forge).map(x => x.slice(0, -3)))) {
+    mismatches.push({ rel: tree + '/command/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
-  for (const f of retiredMdFiles(OUT_AGENT_DIR, listCanonAgents())) {
-    mismatches.push({ rel: '.opencode/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+  for (const f of retiredMdFiles(dirs.agent, listCanonAgents())) {
+    mismatches.push({ rel: tree + '/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
@@ -877,22 +914,25 @@ function runCheck() {
     mismatches.push({ rel: 'opencode.json', reason: 'stale — regenerate via --write-config' });
   }
   if (mismatches.length) {
-    console.error('sync-opencode-edition: PARITY FAILED (' + mismatches.length + ' file(s)):');
+    console.error('sync-opencode-edition[' + forge + ']: PARITY FAILED (' + mismatches.length + ' file(s)):');
     for (const m of mismatches) console.error('  - ' + m.rel + ' — ' + m.reason);
-    console.error('Fix: node scripts/sync-opencode-edition.js --write');
+    console.error('Fix: node scripts/sync-opencode-edition.js --forge=' + forge + ' --write');
     process.exitCode = 1;
     return;
   }
   const na = listCanonAgents().length;
-  const nc = listCanonCommands().length;
+  const nc = listCanonCommands(forge).length;
   const np = PLUGIN_SCRIPTS.length;
-  console.log('sync-opencode-edition: ' + na + ' agent(s) + ' + nc + ' command(s) + ' + np + ' plugin(s) in parity with canonical.');
+  console.log('sync-opencode-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + ' + np + ' plugin(s) in parity with canonical.');
 }
 
 function usage() {
   process.stdout.write(
-    'usage: node scripts/sync-opencode-edition.js (--write | --write-config | --write-config-to PATH | --check) [--adapt]\n'
-    + '  --write              regenerate .opencode/agent + .opencode/command; seed opencode.json if absent\n'
+    'usage: node scripts/sync-opencode-edition.js (--write | --write-config | --write-config-to PATH | --check)'
+    + ' [--forge=github|gitlab|gitea] [--adapt]\n'
+    + '  --forge=<f>          which forge to render (default github). github writes .opencode/;\n'
+    + '                       gitlab/gitea write .opencode-<forge>/\n'
+    + '  --write              regenerate the forge tree agent + command; seed opencode.json if absent\n'
     + '  --write-config       (re)write this repo opencode.json from the template (clobbers edits)\n'
     + '  --write-config-to P  write the template opencode.json to path P (installer use)\n'
     + '  --adapt              modifier: render the two-tier EFFORT-VARIANT config for the inherited\n'
@@ -904,16 +944,25 @@ function usage() {
 function main() {
   const argv = process.argv.slice(2);
   const adapt = argv.includes('--adapt');
-  const positional = argv.filter(a => a !== '--adapt');
+  const forgeArg = argv.find(a => a.startsWith('--forge='));
+  const forge = forgeArg ? forgeArg.slice('--forge='.length) : DEFAULT_FORGE;
+  try {
+    forgeLayout.assertForge(forge);
+  } catch (e) {
+    console.error('sync-opencode-edition: ' + e.message);
+    process.exitCode = 2;
+    return;
+  }
+  const positional = argv.filter(a => a !== '--adapt' && !a.startsWith('--forge='));
   const arg = positional[0];
-  if (arg === '--write') return runWrite(false, adapt);
-  if (arg === '--write-config') return runWrite(true, adapt);
+  if (arg === '--write') return runWrite(false, adapt, forge);
+  if (arg === '--write-config') return runWrite(true, adapt, forge);
   if (arg === '--write-config-to') {
     const target = positional[1];
     if (!target) { console.error('--write-config-to requires a path'); process.exitCode = 2; return; }
     return runWriteConfigTo(target, adapt);
   }
-  if (arg === '--check') return runCheck();
+  if (arg === '--check') return runCheck(forge);
   usage();
 }
 
@@ -921,16 +970,18 @@ if (require.main === module) main();
 
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderAdaptiveConfig, renderNeutralConfig,
-  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, rewriteClaudeModelNouns, OPENCODE_KAOLA_SCRIPT,
+  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
+  opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
+  FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,
-  higherProfileRoles, topTierRoles, standardTierRoles,
+  topTierRoles, standardTierRoles,
   parseModelProvider, detectInheritModel, buildAdaptOpts,
   listCanonAgents, listCanonCommands,
   ENV_STANDARD_MODEL, ENV_REASONING_MODEL,
   // Legacy aliases (env-derived; empty by default now that pins are opt-in).
   DEFAULT_STANDARD_MODEL: ENV_STANDARD_MODEL,
   DEFAULT_REASONING_MODEL: ENV_REASONING_MODEL,
-  CANON_AGENTS_DIR, CANON_COMMANDS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
+  CANON_AGENTS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
   OUT_AGENT_DIR, OUT_COMMAND_DIR, OUT_HOOKS_DIR, OUT_PLUGINS_DIR, OPENCODE_JSON, REPO,
   HOOK_SCRIPTS, PLUGIN_SCRIPTS,
   writePlugin,

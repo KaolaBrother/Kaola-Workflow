@@ -266,7 +266,7 @@ the Step 0b inline startup. The `workflow-planner` subagent — dispatched by
 validates the issue when the user named one (Step 0), or passes NO target on the auto-bundle
 entry, then hands off either way. This keeps the router free of *phase-agent* and *claim*
 dispatch (Router Rules) — there is no router-side dispatch at all, on either branch — while the
-Opus front end owns the backlog survey (when no target was named), the claim, and the DAG
+reasoning-tier front end owns the backlog survey (when no target was named), the claim, and the DAG
 authoring:
 
 1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the

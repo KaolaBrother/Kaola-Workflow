@@ -13,8 +13,8 @@ the Trivial Inline Edit Exception). Read `kaola-workflow/{project}/workflow-stat
 
 <!-- PIN: replan-finalize -->
 
-This fence outranks every Finalization prerequisite and side effect. Before validation, contractor
-dispatch, archive, closure, roadmap, commit, or sink work, read the project state + transaction
+This fence outranks every Finalization prerequisite and side effect. Before validation, the
+finalize transaction, archive, closure, roadmap, commit, or sink work, read the project state + transaction
 status. If either reports `replan_in_progress`, the frozen parent stays authoritative and
 Finalization is forbidden; read-only orientation reports `replan_phase`, `transaction_id`,
 `parent_plan_hash`, `child_plan_hash` (or `none`), and `last_cas_result`. The single legal mutation
@@ -65,8 +65,8 @@ rewrite that plan in place.
 
 Every subagent dispatch below carries an explicit `model=` line — the installer fills each
 `model="{...}"` placeholder from the agent's frontmatter and it is what shows the model badge.
-You MUST pass `model="{CONTRACTOR_MODEL}"` in the contractor Agent call exactly as shown; never omit
-the `model=` line on any dispatch.
+You MUST pass `model="{...}"` in every Agent call exactly as shown; never omit the `model=` line
+on any dispatch.
 
 ## Prerequisite — script-enforced barrier
 
@@ -122,7 +122,7 @@ is always a full re-run, never a hand-patch.
 - **Self-host (npm)** (declares `test:kaola-workflow:*`): machine-gated on a fresh, valid
   `.cache/chain-receipt.json`. The main session runs `kaola-workflow-run-chains.js` after all code +
   test-consumed prose/docs land, as the last pre-Finalization action (do NOT delegate — the
-  contractor only verifies). Precedence-ordered refusals: `chains_unverified` (absent),
+  finalize transaction only VERIFIES the receipt). Precedence-ordered refusals: `chains_unverified` (absent),
   `chains_stale` (`codeTreeHash` ≠ code-relevant tree; inert docs + workflow state do not trigger it),
   `chains_red` (a real failing chain, `accepted_red: false` — fix it or waive
   `--accept-known-red <name>:<open-issue>`).
@@ -165,7 +165,8 @@ and ask.
 - **Delegation:** the main session may run one small focused command (classify a failure, a quick
   post-trivial-edit check, a short smoke). Delegate expensive/noisy validation (full suites, broad
   lint, long logs, repeated repro) to a fresh validation subagent or the fix agent — `tdd-guide` for
-  behavior/regression/coverage, `build-error-resolver` for build/type/lint/tooling. Raw output →
+  behavior/regression/coverage/test-defect (it holds custody of the test artifact; no other role may
+  write a test path), `build-error-resolver` for build/type/lint/tooling. Raw output →
   `kaola-workflow/{project}/.cache/final-validation.md`; record only command, result, summary,
   classification, evidence path, route, and citation boundary.
 - **De-duplication:** run each full relevant command once against the final candidate; cite a prior
@@ -176,8 +177,9 @@ and ask.
   stay fresh; a code or `README`/`CHANGELOG`/`docs/api.md` change invalidates it.
 - **Trivial Inline Edit Exception:** the main session may make a one-line/mechanically-obvious edit
   (no behavior/API/security/design judgment) that fixes finalization friction/formatting/typo/import,
-  stays in scope, is recorded in `finalization-summary.md`, and reruns affected validation. Anything
-  else routes to `tdd-guide`/`build-error-resolver` or back through the review gate.
+  stays in scope, is recorded in `finalization-summary.md`, and reruns affected validation. It is
+  **never** an edit to a test file — test custody belongs to `tdd-guide`. Anything else routes to
+  `tdd-guide`/`build-error-resolver` or back through the review gate.
 
 Routed-fix dispatches (include the `model=` line exactly):
 
@@ -205,14 +207,18 @@ Agent(
 `step: final-validation`, `main_session_role: orchestrator`, `fix_owner: tdd-guide or
 build-error-resolver`), then run the repo-kind validation from the Validation Gate above, saving raw
 output to `kaola-workflow/{project}/.cache/final-validation.md`. On failure route
-(build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage → `tdd-guide`;
-review/security → the review/security gate), write fix output to `.cache/final-validation-fix-{n}.md`, and rerun the
-failed command.
+(build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage/test-defect →
+`tdd-guide`, the role that owns the test artifact; review/security → the review/security gate), write
+fix output to `.cache/final-validation-fix-{n}.md`, and rerun the failed command.
 
-**Step 2 — Acceptance Check.** Verify the deliverable matches the acceptance criteria, all planned nodes
-complete, tests pass (per validation result, not a re-run universal suite), no type/lint errors, no
-CRITICAL/HIGH review findings, no debug statements. Adaptive's `--verdict-check` barrier is the sole
-compliance gate.
+**Step 2 — Acceptance Check.** Walk the frozen plan's `## Acceptance` items (`A1:`, `A2:`, …) one at a
+time and name what satisfies each one — a covering test, a gate receipt, or prose evidence, judged in
+context. That judgement is yours: there is no mechanical match, no string diff, and no per-item
+ledger; an item you cannot satisfy is a blocker, not a footnote. Then verify all planned
+nodes complete, tests pass (per validation result, not a re-run universal suite), no type/lint errors,
+no CRITICAL/HIGH review findings, no debug statements. Adaptive's `--verdict-check` barrier is the sole
+compliance gate. A plan carrying no `## Acceptance` section (a read-only plan, or one frozen before
+the section existed) has no items to walk — verify the deliverable against the issue statement instead.
 
 **Step 3 — Documentation Update.** Read project-root `CLAUDE.md` for the Documentation Update
 Checklist (create/append if missing). This is a required gate: invoke `doc-updater` with changed
@@ -264,27 +270,18 @@ it only after acceptance passes and the Closure Decision Gate clears; keep it op
 partial work / unresolved decisions remain; for `issue_action: comment_keep_open` do NOT close — post
 the substantive partial-close comment (the mechanical keep-open comment is posted by `sink-merge`).
 The actual roadmap closure (rm `.roadmap/issue-N.md` + regenerate `ROADMAP.md`) and archive are done
-once by `cmdFinalize`/`archiveProjectDir` in Step 8b; `agents/contractor.md` (Step 7) only stages the
-result with `git add` — do not rm/generate/`git mv` here. Update `finalization-summary.md` with the
+once by the finalize transaction in Step 8b, which also stages the result — do not rm/generate/`git
+mv` here. Update `finalization-summary.md` with the
 final issue/roadmap/archive/docking/closure state; verify every other Required Agent Compliance row
 is `invoked`/`skipped`/`N/A` with evidence (except `final commit and push` may be `ready`).
 
 ## Staging Guard
 
-Enforce the single-project rule before committing (compare `{project}` as a fixed string, never a
-regex): split the commit if a foreign project's `archive/` band or more than one `kaola-workflow/*/`
-project is staged.
-
-```bash
-FOREIGN_ARCHIVE=$(git diff --cached --name-only | grep '^kaola-workflow/archive/' \
-  | awk -F'/' 'NF>=3 {print $3}' | sort -u \
-  | awk -v p="{project}" '$0 != p && index($0, p ".archived-") != 1' || true)
-[ -n "$FOREIGN_ARCHIVE" ] && { echo "BLOCKED: a foreign project's archive band is staged (${FOREIGN_ARCHIVE})." >&2; exit 1; }
-PROJECT_COUNT=$(git diff --cached --name-only | grep '^kaola-workflow/' \
-  | grep -v '^kaola-workflow/archive/' | grep -v '^kaola-workflow/\.roadmap/' \
-  | grep -v '^kaola-workflow/ROADMAP\.md$' | awk -F'/' 'NF>=3 {print $2}' | sort -u | grep -c . || true)
-[ "${PROJECT_COUNT:-0}" -gt 1 ] && { echo "BLOCKED: split your commit — multiple kaola-workflow projects staged." >&2; exit 1; }
-```
+The single-project rule lives INSIDE the finalize transaction, not in this prose: it compares
+`{project}` as a fixed string (never a regex) and refuses before any side effect with the typed
+`staging_guard_foreign_archive` (a foreign project's `archive/` band is staged) or
+`staging_guard_multi_project` (more than one `kaola-workflow/*/` project is staged). On either,
+unstage the foreign paths — split the commit — and re-run the transaction; it resumes.
 
 ## Keep-Open Terminal Mode (partial-close)
 
@@ -298,13 +295,14 @@ released and worktree/branch removed, and the archive is stamped `last_result: c
 the exit-3 MR/PR auto-pivot under keep-open, and `sink-mr.js`/`sink-pr.js` refuse a project carrying
 `issue_action: comment_keep_open`.
 
-## Sink Metadata Capture (before contractor dispatch)
+## Sink Metadata Capture (before the finalize transaction)
 
-Capture now, while `workflow-state.md` still exists (shell vars do not cross the subagent boundary;
-the contractor re-derives its own copy in Step 8b):
+Capture now, while `workflow-state.md` still exists — the merge path archives it in Step 8b, and the
+transaction re-derives its own copy of every durable field it needs:
 
 ```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"
 SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
 SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
 SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
@@ -321,35 +319,36 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-wo
 [ -n "$_WT_PRE" ] && [ -d "$_WT_PRE" ] && ACTIVE_WORKTREE_PATH="$_WT_PRE"
 ```
 
-## Mechanical Finalization (delegated to the contractor)
+## Mechanical Finalization (one script transaction)
 
 Gate on repo kind first: self-host runs `kaola-workflow-run-chains.js` (main session) as the last
-pre-Finalization action, the contractor only VERIFIES `.cache/chain-receipt.json`; consumer gates on
-`.cache/final-validation.md`. The full procedure body (Step 8a artifact mirror, Step 8b cmdFinalize
-archive + status close, Step 7 roadmap regen + git-add staging, Step 8 commit gate) lives exclusively
-in `agents/contractor.md`. Dispatch it:
+pre-Finalization action and the transaction only VERIFIES `.cache/chain-receipt.json`; consumer gates
+on `.cache/final-validation.md`. The mechanical residue is NOT prose and NOT a delegation — the
+artifact mirror (with its ledger-regression guard), the archive + status close, the roadmap staging,
+and the `chore: finalize {project}` commit gate are ONE resumable script transaction. Run it yourself
+from the linked worktree and reason over the typed emit:
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical finalize {project}",
-  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND, issue action SINK_ISSUE_ACTION). Self-host: the receipt .cache/chain-receipt.json was already generated by the orchestrator; consumer: verify final-validation.md. Execute your contractor profile Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only — add --keep-issue-open when SINK_ISSUE_ACTION is comment_keep_open), Step 7 roadmap regen + git-add staging, Step 8 commit gate (chore: finalize {project}). Step 8c: VERIFY the receipt/final-validation evidence — do NOT run kaola-workflow-run-chains.js. Re-derive kaola_script/CLAIM_JS and re-read SINK_KIND/SINK_ISSUE_ACTION from workflow-state.md. Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
-)
+```bash
+(cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
+  --project {project} --keep-worktree $SINK_KEEP_OPEN_FLAG)
 ```
 
-**Attestation boundary.** The contractor's Step 8b passes `--attest-contractor-spawn` so a delegated
-run back-fills `finalize_contractor_attested: attested`; the main session must NEVER pass the flag on
-an inline run. A genuinely-tooling-unavailable inline run records `local-fallback-tool-unavailable`
-and omits the flag — the resulting `finalize_contractor_attested: missing` + ATTESTATION WARNING is
-truthful and never blocks. `cmdFinalize` appends a `## Attestation` section to the archived summary
-verbatim — never remove it. The adaptive plan's `finalize (<node>)` compliance row is
-`main-session-direct`, a distinct contract from this delegation.
+Judgment stays with you; the transaction owns atomicity. Typed refusals it can return, each with no
+further side effect: `finalize_mirror_refused`/`ledger_regression` (the main copy carries a staler
+ledger than the worktree — sync worktree→main FIRST, never bypass), `implementation_commit_missing`
+(implementation-shaped changes are uncommitted and the branch carries no implementation commit —
+author it yourself and re-run; the machinery authors only the finalize bookkeeping commit),
+`staging_guard_foreign_archive` / `staging_guard_multi_project` (split the commit),
+`finalize_gate_unverified` (resolve the inner reason), and `archive_incomplete`. The emitted
+`finalize_transaction` object reports each step (`mirror`, `ledger_compare`, `impl_commit`,
+`roadmap_staged`, `archive_commit`, `finalize_commit`) so a resumed run is readable from the emit
+alone. `cmdFinalize` also appends a `## Attestation` section to the archived summary — keep it
+verbatim, including a legacy section carrying retired fields; never rewrite one.
 
-**Crash recovery.** If the session crashes after `cmdFinalize` archives but before the Step 8 commit,
+**Crash recovery.** The transaction is idempotent and resumes at whichever step it stopped on.
 `node "$(kaola_script kaola-gitlab-workflow-claim.js)" resume --project {project} --json` reports
-`finalize_incomplete` (archive present, uncommitted) or `already_finalized`. Recover by re-dispatching
-the contractor with the same prompt.
+`finalize_incomplete` (archive present, uncommitted) or `already_finalized` (settled — nothing to
+resume). Recover by re-running the SAME one-call transaction.
 
 ## Step 9 - Sink
 

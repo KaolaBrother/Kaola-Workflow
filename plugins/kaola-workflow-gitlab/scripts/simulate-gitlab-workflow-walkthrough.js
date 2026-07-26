@@ -537,7 +537,47 @@ function testGitlabAdaptive() {
     const naT = mkL(['| imp | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | imp | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |'], ['| imp | n/a |', '| sec | n/a |', '| done | complete |'], 'security');
     assert.strictEqual(fv.barrierCheck(naT, ['src/auth/session.js'], {}).result, 'refuse', 'gitlab v3.20.1 #1: n/a-target sensitive write must refuse');
     const cleanL = mkL(['| imp | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
-    assert.strictEqual(fv.barrierCheck(cleanL, ['test/login.test.js'], {}).result, 'pass', 'gitlab v3.20.1 #2: tests-only sensitive-named path must NOT refuse');
+    // #813 narrowed the test exemption to SENSITIVITY only, so v3.20.1 #2 (no security-reviewer
+    // demanded for a `test/login.test.js` write) is asserted where attribution is satisfied.
+    const cleanT = mkL(['| imp | tdd-guide | — | lib/foo.js test/login.test.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert.strictEqual(fv.barrierCheck(cleanT, ['test/login.test.js'], {}).result, 'pass', 'gitlab v3.20.1 #2: a DECLARED tests-only sensitive-named path must NOT refuse');
+    // #813 on the FORK validator: test-like paths join ALLOWLIST attribution in all three scopes
+    // (per-node, lane-group, whole-plan), landing in the EXISTING write_set_overflow /
+    // unattributed_write families — no fifth family — while the sensitivity arm still skips them.
+    {
+      const t813 = mkL([
+        '| t1 | tdd-guide | — | test/login.test.js | 1 | sequence |',
+        '| t2 | tdd-guide | — | src/app.js | 1 | sequence |',
+        '| t3 | tdd-guide | — | spec/orphan.spec.ts | 1 | sequence |',
+        '| rv | code-reviewer | t1,t2,t3 | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |',
+      ], ['| t1 | complete |', '| t2 | complete |', '| t3 | n/a |', '| rv | complete |', '| done | complete |'], 'refactor');
+      assert.strictEqual(fv.barrierCheck(t813, ['test/login.test.js'], { nodeId: 't1' }).result, 'pass',
+        'gitlab #813: a DECLARED test write passes with no security-reviewer');
+      const perNode813 = fv.barrierCheck(t813, ['test/rogue.test.js'], { nodeId: 't1' });
+      assert.strictEqual(perNode813.reason, 'write_set_overflow', 'gitlab #813: per-node undeclared test write => write_set_overflow');
+      assert.ok(perNode813.outOfAllow.indexOf('test/rogue.test.js') >= 0, 'gitlab #813: per-node outOfAllow NAMES the test path');
+      assert.strictEqual(perNode813.sensitiveHits.length, 0, 'gitlab #813: the sensitivity shield still skips test-like paths');
+      assert.strictEqual(fv.barrierCheck(t813, ['test/login.test.js', 'src/app.js', 'tests/stray.js'], { groupMembers: ['t1', 't2'] }).reason,
+        'write_set_overflow', 'gitlab #813: lane-group undeclared test write => write_set_overflow');
+      assert.strictEqual(fv.barrierCheck(t813, ['__tests__/stray.js'], {}).reason,
+        'write_set_overflow', 'gitlab #813: whole-plan undeclared test write => write_set_overflow');
+      assert.strictEqual(fv.barrierCheck(t813, ['spec/orphan.spec.ts'], {}).reason,
+        'unattributed_write', 'gitlab #813: a test path owned only by an n/a node => unattributed_write');
+      // KAOLA_TEST_ATTRIBUTION=0 restores the pre-change exemption on the fork port too.
+      const prev813 = process.env.KAOLA_TEST_ATTRIBUTION;
+      process.env.KAOLA_TEST_ATTRIBUTION = '0';
+      try {
+        assert.strictEqual(fv.barrierCheck(t813, ['test/rogue.test.js'], { nodeId: 't1' }).result, 'pass',
+          'gitlab #813: KAOLA_TEST_ATTRIBUTION=0 restores the legacy exemption');
+      } finally {
+        if (prev813 === undefined) delete process.env.KAOLA_TEST_ATTRIBUTION;
+        else process.env.KAOLA_TEST_ATTRIBUTION = prev813;
+      }
+      const schema813 = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js'));
+      assert.strictEqual(schema813.testAttributionDefaultOn({}), true, 'gitlab #813: the forge schema copy defaults attribution ON');
+      assert.strictEqual(schema813.testAttributionDefaultOn({ KAOLA_TEST_ATTRIBUTION: '0' }), false, 'gitlab #813: the forge schema copy honours the opt-out');
+    }
 
     // v3.21.0 #238: the FORK classifier carries the curated-root claim-overlap (yellow) + ./ canon.
     const fcl = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-classifier.js'));
@@ -662,7 +702,7 @@ function testGitlabAdaptive() {
     assert.strictEqual(gateVal(['| impl | tdd-guide | — | src/environment.js, lib/Dockerfileutil.js | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |'], 'chore').result, 'in-grammar', 'gitlab #501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2)');
 
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
-    // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
+    // claim_planner_attested; 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
     // #522: init a git repo in tmp so the finalize gate's attribution sweep can resolve
     // `git diff main...HEAD` (empty diff on main → sweep passes vacuously).
@@ -709,18 +749,13 @@ function testGitlabAdaptive() {
       'M2 (#277): gitlab closure_receipt must have claim_planner_attested field'
     );
     assert.ok(
-      m2Result.closure_receipt && 'finalize_contractor_attested' in m2Result.closure_receipt,
-      'M2 (#277): gitlab closure_receipt must have finalize_contractor_attested field'
+      m2Result.closure_receipt && !('finalize_contractor_attested' in m2Result.closure_receipt),
+      '#816: gitlab closure_receipt must NOT carry a retired finalize-seam attestation field'
     );
     assert.ok(
       m2Result.closure_receipt.claim_planner_attested === 'missing' ||
       m2Result.closure_receipt.claim_planner_attested === 'attested',
       'M2 (#277): gitlab claim_planner_attested must be missing or attested, got ' + m2Result.closure_receipt.claim_planner_attested
-    );
-    assert.ok(
-      m2Result.closure_receipt.finalize_contractor_attested === 'missing' ||
-      m2Result.closure_receipt.finalize_contractor_attested === 'attested',
-      'M2 (#277): gitlab finalize_contractor_attested must be missing or attested, got ' + m2Result.closure_receipt.finalize_contractor_attested
     );
     assert.ok(
       m2Result.closure_invariants && m2Result.closure_invariants.ok === true,
@@ -745,8 +780,8 @@ function testGitlabAdaptive() {
     assert.ok(!m2State.includes('plan_hash: ' + STALE_HASH_970), '#333: gitlab archived plan_hash drops the stale claim-time hash');
     assert.ok(!m2State.includes('2020-01-01T00:00:00.000Z'), '#333: gitlab archived ## Last Updated refreshed');
 
-    // #338: contractor self-attest back-fill — finalize --attest-contractor-spawn must make
-    // finalize_contractor_attested:attested even with no hook/dispatch-log present.
+    // #816: --attest-contractor-spawn is a RETIRED warn-and-ignore shim — it must never refuse
+    // and must record NOTHING (no receipt field, no back-filled dispatch marker).
     const csDir = path.join(tmp, 'kaola-workflow', 'issue-9701');
     fs.mkdirSync(csDir, { recursive: true });
     fs.writeFileSync(path.join(csDir, 'workflow-state.md'),
@@ -762,11 +797,13 @@ function testGitlabAdaptive() {
       '#338: gitlab finalize command must exit 0, stdout: ' + csRun.stdout + ' stderr: ' + csRun.stderr);
     const csResult = JSON.parse(csRun.stdout);
     assert.strictEqual(csResult.status, 'closed', '#338: gitlab finalize --attest-contractor-spawn returns status:closed');
-    assert.strictEqual(csResult.closure_receipt.finalize_contractor_attested, 'attested',
-      '#338: gitlab --attest-contractor-spawn must make finalize_contractor_attested attested, got ' + csResult.closure_receipt.finalize_contractor_attested);
+    assert.ok(!('finalize_contractor_attested' in csResult.closure_receipt),
+      '#816: the retired flag must record no attestation field');
     const csArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-9701'));
-    const csLog = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', csArchived[0], '.cache', 'dispatch-log.jsonl'), 'utf8');
-    assert.ok(csLog.includes('finalize-backfill'), '#338: gitlab archived dispatch-log carries the finalize-backfill marker');
+    const csLogPath = path.join(tmp, 'kaola-workflow', 'archive', csArchived[0], '.cache', 'dispatch-log.jsonl');
+    const csLog = fs.existsSync(csLogPath) ? fs.readFileSync(csLogPath, 'utf8') : '';
+    assert.ok(!csLog.includes('finalize-backfill'),
+      '#816: the retired flag must back-fill no dispatch marker');
 
     // #333: --keep-open stamp — last_result: closed_keep_open + issue_disposition: kept-open.
     const koDir = path.join(tmp, 'kaola-workflow', 'issue-971');
@@ -898,7 +935,7 @@ function testGitlabAdaptiveFreezeChecked() {
     '| r | code-reviewer | i | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| d | finalize | r | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: e explores; i builds lib/x.js; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change. Done: review clears and validation passes.', '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '', '| id | status |', '|---|---|',
     '| e | pending |', '| i | pending |', '| r | pending |', '| d | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
     '| code-explorer (e) | pending | | |', '| tdd-guide (i) | pending | | |',
@@ -1121,12 +1158,12 @@ function testGitlabAttestationWarningPersistence() {
     // This fixture jumps directly from claim state to finalize and intentionally
     // does not author an adaptive plan.
     seedAdaptiveFinalizeFixture(tmp, project);
-    // Seed .cache/dispatch-log.jsonl with ONLY a contractor entry (no workflow-planner entry) —
+    // Seed .cache/dispatch-log.jsonl with ONLY a role entry (no workflow-planner entry) —
     // the exact inline-bypass scenario the ATTESTATION WARNING exists to catch.
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'contractor', agent_id: 'test-seed', cwd: tmp }) + '\n');
+      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'tdd-guide', agent_id: 'test-seed', cwd: tmp }) + '\n');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,
@@ -1646,12 +1683,145 @@ testGitlabBundleStateIncoherent();
 // evidence seeding (D-433-01 §2) and doc-updater .md-target barrier (D-424-01 allowband).
 testGitlabBundle424432433NodeSeeding();
 
+// The `## Acceptance` surface: the freeze wall + the bounded-repair fence, driven through the REAL
+// gitlab-edition CLIs.
+testGitlabAcceptanceSurface();
+
 run('test-gitlab-forge-helpers.js');
 run('test-gitlab-workflow-scripts.js');
 run('test-gitlab-sinks.js');
 run('test-gitlab-run-chains.js');  // #550: forge run-chains failing-path (isTransientFetchStderr export must be callable)
 
 console.log('GitLab workflow walkthrough simulation passed');
+
+// ---------------------------------------------------------------------------
+// `## Acceptance` — the frozen human-values surface, exercised behaviorally on the gitlab port.
+//   (a) freeze wall: a code-producing schema-2 plan without the section refuses acceptance_missing;
+//       with it, in-grammar; a read-only plan is not held.
+//   (b) hash coverage: a post-freeze acceptance edit surfaces plan_hash_mismatch.
+//   (c) repair fence: the bounded plan_invalid repair loop may fix ## Meta / ## Nodes / briefs /
+//       ledger scaffolding, but a submission that ALTERS ## Acceptance refuses acceptance_repair_fenced.
+// ---------------------------------------------------------------------------
+function testGitlabAcceptanceSurface() {
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
+  const handoffScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-handoff.js');
+  const pv = require(valScript);
+  const ACCEPT = ['A1: lib/x.js exports the parsed record.', 'A2: the recorded validation passes over the candidate.'];
+  const codePlan = (acceptance, label, brief) => [
+    '# Workflow Plan', '', '## Meta',
+    'plan_form: spine', 'plan_schema_version: 2', 'labels: ' + label,
+    'code_certifier: r', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+    'validation_command: node --check lib/x.js', 'validation_timeout_minutes: 5', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    '| i | tdd-guide | — | lib/x.js | 1 | sequence | — | — | — | — |',
+    '| r | code-reviewer | i | — | 1 | sequence | review-change | code-tree | sequence | — |',
+    '| d | finalize | r | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Briefs', '', '### i', brief, '', '### r', 'Review.', '', '### d', 'Finalize.', '',
+    '## Design', '', 'Decompose: i builds lib/x.js; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change.', '',
+  ].concat(acceptance === null ? [] : ['## Acceptance', ''].concat(acceptance).concat([''])).concat([
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| i | pending |', '| r | pending |', '| d | pending |', '',
+  ]).join('\n') + '\n';
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-acceptance-'));
+  try {
+    // (a) the freeze wall.
+    const absent = pv.validatePlan(codePlan(null, 'enhancement', 'Build lib/x.js.'), { root: tmp });
+    assert.strictEqual(absent.reason, 'acceptance_missing',
+      'gitlab acceptance (a): a code-producing plan without ## Acceptance refuses acceptance_missing, got ' + JSON.stringify(absent.reason));
+    const empty = pv.validatePlan(codePlan([''], 'enhancement', 'Build lib/x.js.'), { root: tmp });
+    assert.strictEqual(empty.reason, 'acceptance_missing',
+      'gitlab acceptance (a): an EMPTY ## Acceptance refuses acceptance_missing, got ' + JSON.stringify(empty.reason));
+    const present = pv.validatePlan(codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.'), { root: tmp });
+    assert.strictEqual(present.result, 'in-grammar',
+      'gitlab acceptance (a): a transcribed ## Acceptance freezes in-grammar, got ' + JSON.stringify(present.errors));
+    assert.strictEqual(pv.parseAcceptanceItems(codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.')).length, 2,
+      'gitlab acceptance (a): the forge port reads the item lines through the same parser');
+    const readOnly = codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.')
+      .replace('| i | tdd-guide | — | lib/x.js | 1 | sequence | — | — | — | — |',
+        '| i | code-explorer | — | — | 1 | sequence | — | — | — | — |')
+      .replace(/^## Acceptance\n\n[\s\S]*?\n\n(?=## Node Ledger)/m, '');
+    assert.strictEqual(pv.validatePlan(readOnly, { root: tmp }).result, 'in-grammar',
+      'gitlab acceptance (a): a READ-ONLY plan is not held for a missing ## Acceptance');
+
+    // (b) hash coverage — a post-freeze acceptance edit is tamper-evident.
+    const planPath = path.join(tmp, 'workflow-plan.md');
+    fs.writeFileSync(planPath, codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.'));
+    const froze = spawnSync(process.execPath, [valScript, planPath, '--freeze', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.strictEqual(froze.status, 0, 'gitlab acceptance (b): the plan freezes: ' + froze.stdout + froze.stderr);
+    fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace(ACCEPT[1], 'A2: good enough.'));
+    const resumed = spawnSync(process.execPath, [valScript, planPath, '--resume-check', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.ok(/plan_hash_mismatch/.test(resumed.stdout + resumed.stderr),
+      'gitlab acceptance (b): a post-freeze ## Acceptance edit surfaces plan_hash_mismatch, got ' + resumed.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // (c) the bounded-repair fence, over the real gitlab handoff CLI in a real repo.
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-acceptfence-')));
+  try {
+    spawnSync('git', ['init', '-b', 'main'], { cwd: repo, encoding: 'utf8' });
+    spawnSync('git', ['config', 'user.email', 't@example.com'], { cwd: repo, encoding: 'utf8' });
+    spawnSync('git', ['config', 'user.name', 'T'], { cwd: repo, encoding: 'utf8' });
+    const project = 'issue-acceptance-gl';
+    const dir = path.join(repo, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), ['## Project', 'name: ' + project, 'status: active', '',
+      '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', ''].join('\n'));
+    const planPath = path.join(dir, 'workflow-plan.md');
+    // A DELIBERATELY out-of-grammar draft (the reviewer gate is missing) — this IS the repair loop.
+    const broken = (acceptance, label) => [
+      '# Workflow Plan', '', '## Meta',
+      'plan_form: spine', 'plan_schema_version: 2', 'labels: ' + label,
+      'code_certifier: none', 'security_certifier: none',
+      'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+      'validation_command: node --check lib/x.js', 'validation_timeout_minutes: 5', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| i | tdd-guide | — | lib/x.js | 1 | sequence | — | — | — | — |',
+      '| d | finalize | i | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose: i builds lib/x.js; d sinks.', '',
+      '## Acceptance', '',
+    ].concat(acceptance).concat(['',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| i | pending |', '| d | pending |', '',
+    ]).join('\n') + '\n';
+    const handoff = () => {
+      const r = spawnSync(process.execPath, [handoffScript, '--project', project, '--json'],
+        { cwd: repo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      try { return JSON.parse(r.stdout); } catch (_) { return { raw: r.stdout + r.stderr }; }
+    };
+
+    fs.writeFileSync(planPath, broken(ACCEPT, 'enhancement'));
+    const first = handoff();
+    assert.strictEqual(first.handoff_status, 'plan_invalid',
+      'gitlab acceptance (c): the first submission refuses on its own grammar error');
+    assert.notStrictEqual(first.reason, 'acceptance_repair_fenced',
+      'gitlab acceptance (c): the FIRST submission is never fenced');
+    assert.ok(fs.existsSync(path.join(dir, '.cache', 'acceptance-anchor.json')),
+      'gitlab acceptance (c): the first submission anchors the acceptance surface');
+
+    // RED — the repair rewrote the acceptance surface.
+    fs.writeFileSync(planPath, broken([ACCEPT[0], 'A2: good enough.'], 'enhancement'));
+    const fenced = handoff();
+    assert.strictEqual(fenced.reason, 'acceptance_repair_fenced',
+      'gitlab acceptance (c) RED: a repair that alters ## Acceptance refuses acceptance_repair_fenced, got ' + JSON.stringify(fenced));
+
+    // GREEN — the same loop, scaffolding-only repair: the fence stands aside.
+    fs.writeFileSync(planPath, broken(ACCEPT, 'enhancement, area:scripts'));
+    const repaired = handoff();
+    assert.notStrictEqual(repaired.reason, 'acceptance_repair_fenced',
+      'gitlab acceptance (c) GREEN: a ## Meta-only repair is NOT fenced, got ' + JSON.stringify(repaired.reason));
+    assert.ok(Array.isArray(repaired.errors) && repaired.errors.join(' ').length > 0,
+      'gitlab acceptance (c) GREEN: the scaffolding repair reaches the validator and returns ITS verdict');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+  console.log('testGitlabAcceptanceSurface: PASSED');
+}
 
 // ---------------------------------------------------------------------------
 // #426: verifyArchiveComplete + copy-then-verify-then-delete ordering.
@@ -2029,17 +2199,24 @@ function testGitlabBundle424432433NodeSeeding() {
       assert.ok(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
         'gitlab #433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
 
-      // (6c) tdd-guide role stubs present.
+      // (6c) tdd-guide role stubs follow CUSTODY: the seed carries BOTH `RED` and its `red_baseline`
+      // receipt, and must NOT carry `GREEN` — GREEN authority is gate-side, and asserting its ABSENCE
+      // is what keeps the seed from quietly re-acquiring the retired self-grading token.
       assert.ok(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
         'gitlab #433 (6c): tdd-guide stub must contain RED token');
-      assert.ok(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
-        'gitlab #433 (6c): tdd-guide stub must contain GREEN token');
+      assert.ok(/^red_baseline: /m.test(evidenceContent) || /^<!-- red_baseline/.test(evidenceContent),
+        'gitlab #433 (6c): tdd-guide stub must contain the red_baseline receipt token');
+      assert.ok(!/^GREEN\b/m.test(evidenceContent) && !/^<!-- GREEN/m.test(evidenceContent),
+        'gitlab #433 (6c): tdd-guide stub must NOT seed a GREEN token');
 
       // (6d) JSON response carries evidence_file + required_tokens.
       assert.strictEqual(onOut.opened.evidence_file, '.cache/n1.md',
         'gitlab #433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
-      assert.ok(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
-        'gitlab #433 (6d): required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+      assert.ok(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED')
+        && onOut.opened.required_tokens.includes('red_baseline')
+        && !onOut.opened.required_tokens.includes('GREEN'),
+        'gitlab #433 (6d): required_tokens must be the custody set for tdd-guide — RED + red_baseline, no GREEN, got '
+          + JSON.stringify(onOut.opened.required_tokens));
 
       // (6e) Crash-resume: a second open-next must not overwrite the evidence file.
       const contentBefore = fs.readFileSync(evidencePath, 'utf8');

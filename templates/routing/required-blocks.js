@@ -68,7 +68,13 @@ const REQUIRED_BLOCKS = [
     topic: 'plan-run',
     runtime_tag: 'both',
     surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: frontier unit -->', 'frontier unit'],
+    // 'frontier unit' alone is a substring of its own marker (self-satisfying — the marker's
+    // continued presence would pass this token even if the pointer paragraph below it were
+    // deleted; kept only because the legacy T5 SUPERSET-PROOF still names it). The pointer path
+    // is the distinctive token: ALL content_tokens are required (AND), so deleting the pointer
+    // paragraph while leaving the marker + legacy literal in place still reds.
+    content_tokens: ['<!-- PIN: frontier unit -->', 'frontier unit',
+      'docs/plan-run-cards/frontier-batch.md'],
   },
   {
     block_id: 'pr-leg-isolation-recipe',
@@ -108,7 +114,11 @@ const REQUIRED_BLOCKS = [
     topic: 'plan-run',
     runtime_tag: 'both',
     surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: gate-instrumentation-provisioning -->'],
+    // The marker alone is not distinctive — the marker's continued presence would pass this
+    // block even if the interior rule were rewritten to say the opposite. Pin the actual rule.
+    content_tokens: ['<!-- PIN: gate-instrumentation-provisioning -->',
+      'never instructs authoring files — it verifies',
+      "provisions it inside that node's own declared write set"],
   },
   {
     block_id: 'pr-dispatch-card-visibility',
@@ -121,7 +131,7 @@ const REQUIRED_BLOCKS = [
       'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.',
       '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})',
       '← {node_id} · {role} returned: {verdict or one-line outcome}',
-      '→ running {node_id} · {role} inline (…reason token…)',
+      '→ running {node_id} · {role} inline',
       '{node-id} → complete; opened: {next-id|—}',
     ],
   },
@@ -164,15 +174,48 @@ const REQUIRED_BLOCKS = [
       'fork_turns: "none"',
       'dispatch.codex_profile_mode',
       'Omit both `model`',
-      'Codex 0.144 durable-result override',
-      'dispatch.evidence_file',
-      'record-evidence',
-      '--verify --json',
-      'delegation_outcome: returned_partial',
-      'transport_error: encrypted_return',
       'direct `agents` namespace',
       'never dispatch through `functions.exec` or Code Mode',
       'agents.spawn_agent',
+    ],
+  },
+  {
+    // The role-substitution channel is only worth having if routed prose REACHES it: a remedy no
+    // surface names is dead weight. Pin the trigger, the command, the claim-preserving guarantee,
+    // and the consent fallback on all six surfaces.
+    block_id: 'pr-role-capability-coverage',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: role-capability-coverage -->',
+      'cannot cover the node brief',
+      'capability_gap',
+      'substitute-role',
+      'BYTE-IDENTICAL',
+      'write-halt --reason consent',
+      'is **NOT evidence**',
+    ],
+  },
+  {
+    // The evidence-persistence contract is RUNTIME-INVARIANT: every role, on every runtime,
+    // self-persists its full deliverable to the seeded evidence file and returns a compact
+    // summary. It used to live inside the codex-only dispatch block because only that runtime
+    // enforced self-write; now that the contract is universal, it is a 6-surface block of its
+    // own — keeping it under a runtime-scoped block would let the two halves silently diverge.
+    block_id: 'pr-evidence-persistence',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'One contract, every role, every runtime',
+      'dispatch.evidence_file',
+      'SOLE write exception',
+      'record-evidence',
+      '--verify --json',
+      'is the FALLBACK channel, never the primary one',
+      'delegation_outcome: returned_partial',
+      'transport_error: encrypted_return',
     ],
   },
   {
@@ -237,6 +280,34 @@ const REQUIRED_BLOCKS = [
       'Apply the returned `taskTransitions` to the visible task list BEFORE',
       'the ledger stays authoritative',
       "the mirror is the operator's only live view",
+    ],
+  },
+  {
+    // The execution-mode judgment grant: dispatch-vs-inline is the orchestrator's
+    // per-unit economic call, and NO justifier, evidence line, or approval attaches
+    // to it. This is a SUBTRACTION made durable — the grant is the only thing standing
+    // between the six plan-run surfaces and a re-introduced spawn mandate, so its
+    // wording is obligated on all six rather than left to survive by habit. Raw
+    // skeleton text (REGION-neutral, no SLOT/SPLICE divergence). The tokens are
+    // distinctive interior prose, never a marker substring.
+    //
+    // SCOPE, decided rather than incidental: this pin catches DELETION and abridgement
+    // of the grant. It does NOT catch a mandate re-ADDED alongside a grant left
+    // nominally intact. A paired absence audit was built for that case and REJECTED —
+    // deciding whether prose binds an obligation needs to know who the obligation
+    // binds, and a keyword filter cannot: the prototype passed five natural dispatch
+    // mandates while convicting seven of nine faithful renditions of the rules it was
+    // required to leave alone. Both errors pointed away from the philosophy it guarded.
+    // Do not "fix" this by adding a vocabulary scan; a real structural check
+    // (subject-of-obligation extraction) or nothing.
+    block_id: 'pr-execution-mode-judgment',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'Everywhere else execution mode is your judgment, per unit — dispatch production, keep decisions.',
+      'Delegating discretionary production is the default;',
+      'and interpretation/adjudication may run inline, closed with `--main-session-direct`.',
     ],
   },
   {

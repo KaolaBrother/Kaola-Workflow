@@ -11,6 +11,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 
 const root = path.resolve(__dirname, '..');
 
@@ -149,25 +150,75 @@ try {
       'AC5: --enable-adaptive must emit a warn-and-ignore note on stderr naming the flag, got stderr: ' + result.stderr);
   }
 
-  // Preserved test: issue #242 — uninstall.sh must remove .kaola-agent-models.json
+  // Retired install-time model manifest: install.sh must never write it, and must DISPOSE of a
+  // pre-existing one on upgrade. uninstall.sh keeps its removal line for older trees.
   {
     const home = freshHome('uninstall-manifest'); homes.push(home);
     runInstall(home, []);
     const manifestPath = path.join(home, '.claude', 'agents', '.kaola-agent-models.json');
-    assert(fs.existsSync(manifestPath), 'manifest must exist after install (prerequisite for uninstall test)');
+    assert(!fs.existsSync(manifestPath), 'install.sh must NOT write the retired .kaola-agent-models.json');
+    // Plant a stale manifest (an older install's residue) and re-run: it must be disposed of.
+    fs.writeFileSync(manifestPath, JSON.stringify({ contractor: 'opus' }));
+    const upgradeOut = String(runInstall(home, []) || '');
+    assert(!fs.existsSync(manifestPath), 'install.sh must DELETE a pre-existing .kaola-agent-models.json on upgrade');
+    assert(upgradeOut.includes('Removed retired agent model manifest'),
+      'install.sh must name the disposed manifest on stdout, got: ' + upgradeOut);
+    // uninstall.sh keeps its disposal line: plant once more, then uninstall.
+    fs.writeFileSync(manifestPath, JSON.stringify({ contractor: 'opus' }));
     execFileSync('bash', ['uninstall.sh', '--forge=github'],
       { cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert(!fs.existsSync(manifestPath), 'uninstall.sh must remove .kaola-agent-models.json');
     assert(!fs.existsSync(path.join(home, '.claude', 'agents', 'contractor.md')), 'uninstall.sh must remove contractor.md');
   }
 
-  // Preserved test: contractor manifest mapping (issue #242 Part B).
-  for (const args of [[], ['--profile=higher']]) {
-    const h = freshHome('contractor-' + (args[0] || 'default').replace(/[^a-z]/gi, '')); homes.push(h);
-    runInstall(h, args);
-    const manifestPath = path.join(h, '.claude', 'agents', '.kaola-agent-models.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    assert(manifest['contractor'] === 'sonnet', 'install ' + JSON.stringify(args) + ' must map contractor->sonnet; got ' + manifest['contractor']);
+  // The retired install-time model axis: --profile is an UNKNOWN argument and fails loudly.
+  for (const flag of ['--profile=higher', '--profile=common']) {
+    const h = freshHome('retired-profile-' + flag.replace(/[^a-z]/gi, '')); homes.push(h);
+    let threw = null;
+    try {
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', flag, '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) { threw = e; }
+    assert(threw && threw.status !== 0, 'install.sh ' + flag + ' must exit non-zero');
+    assert(String(threw.stderr || '').includes('Unknown argument'),
+      'install.sh ' + flag + ' must fail with the generic unknown-argument error, got: ' + (threw.stderr || ''));
+  }
+
+  // A standard-tier role resolves from the static defaults alone (no manifest).
+  {
+    const h = freshHome('implementer-default'); homes.push(h);
+    runInstall(h, []);
+    const resolved = execFileSync('node',
+      [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), 'implementer',
+        '--agent-dir', path.join(h, '.claude', 'agents'), '--raw'],
+      { cwd: root, encoding: 'utf8' }).trim();
+    assert(resolved === 'sonnet', 'implementer must resolve to sonnet from the static defaults; got ' + resolved);
+  }
+
+  // #816: the RETIRED bookkeeping role must be swept from a previously-installed box — by the
+  // installer on upgrade (manifest-driven sweep_retired_agents) AND by uninstall (RETIRED_AGENTS).
+  {
+    const h = freshHome('retired-contractor-sweep'); homes.push(h);
+    runInstall(h, []);
+    const agentsDir = path.join(h, '.claude', 'agents');
+    const stale = path.join(agentsDir, 'contractor.md');
+    const manifest = path.join(agentsDir, '.kaola-workflow-agent-manifest');
+    // Simulate a box that installed the role on a PREVIOUS release: the file plus its manifest row.
+    const staleBody = '---\nname: contractor\nmodel: sonnet\n---\n<!--\nkaola-workflow-managed-agent: true\n-->\nbody\n';
+    fs.writeFileSync(stale, staleBody);
+    const sha = crypto.createHash('sha256').update(fs.readFileSync(stale)).digest('hex');
+    fs.appendFileSync(manifest, 'contractor.md\t' + sha + '\n');
+    const upgradeOut2 = String(runInstall(h, []) || '');
+    assert(!fs.existsSync(stale),
+      '#816: install.sh must sweep a previously-installed contractor.md (retired role)');
+    assert(upgradeOut2.includes('Removed retired agent'),
+      '#816: the sweep must name the removal on stdout, got: ' + upgradeOut2);
+    // uninstall path: plant it again (no manifest row needed — RETIRED_AGENTS removes by name).
+    fs.writeFileSync(stale, staleBody);
+    execFileSync('bash', ['uninstall.sh', '--forge=github'],
+      { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert(!fs.existsSync(stale),
+      '#816: uninstall.sh must remove a previously-installed contractor.md (RETIRED_AGENTS)');
   }
 
   // #2: opencode install-time parity — install-opencode.sh seeds the shared

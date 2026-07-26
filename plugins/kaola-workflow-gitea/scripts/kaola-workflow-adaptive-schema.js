@@ -86,11 +86,11 @@ function dispatchModelCodex(tier) {
 // pair. The historical standard/reasoning classes remain declarative metadata and wait defaults.
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'code-explorer',
+  'investigator',
   'knowledge-lookup',
   'tdd-guide',
   'implementer',
   'doc-updater',
-  'contractor',
   'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
@@ -1476,6 +1476,59 @@ function readDurableConsentHalt(planContent) {
 // freeze-time post-dominance gate (G3) and runtime execution check.
 const MAIN_SESSION_GATE_ROLE = 'main-session-gate';
 
+// The ROLE-CAPABILITY MANIFEST — the declared role -> capability table the planner is served at
+// author time, so the `role` column of a frozen plan is chosen against what a role CAN DO rather
+// than against what its NAME suggests. A role name is not a capability: "code-explorer" reads as
+// exactly right for a forensic investigation whose brief happens to run a build, and the closed-
+// library check only proves the role EXISTS, never that its manifest covers what the brief demands.
+//
+// DECLARED, not parsed. Only the Claude profiles carry a `tools:` front-matter field at all — the
+// Codex/opencode/Kimi profile files have no tools key — so installed-profile parsing cannot be the
+// source of truth on three of the four runtimes. The table is pinned to the canonical profiles by a
+// bidirectional drift wall in validate-vendored-agents.js (a role added to `agents/` without a row,
+// a row without a profile, or any tools/bash/write divergence reds the chain), which is what makes
+// a declared constant safe rather than a second copy that silently rots.
+//
+// Rows:
+//   tools          the exact tool manifest, byte-equal to the profile front matter (as a SET)
+//   bash_capable   Bash ∈ tools — the one capability that separates "can report on" from "can run"
+//   write_capable  Write ∈ tools
+//   kind           the role's slot in the library (see ROLE_KINDS)
+//
+// Evidence transport is deliberately NOT a field: every role self-persists its deliverable to the
+// seeded evidence file, so a per-role evidence mode would be a constant wearing a variable's clothes.
+//
+// Built-in role tokens (finalize / main-session-gate / expansion-point) are declared with an empty
+// tool manifest: they are plan vocabulary the main session performs itself, never dispatched as a
+// subagent and never backed by a profile on disk.
+const ROLE_KINDS = Object.freeze(['producer', 'implement', 'write', 'gate', 'orchestration', 'built-in']);
+const ROLE_CAPABILITY_MANIFEST = Object.freeze({
+  // Read producers — investigate and report; their deliverable is findings, not edits.
+  'code-explorer':        Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob']), bash_capable: false, write_capable: true, kind: 'producer' }),
+  'planner':              Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob']), bash_capable: false, write_capable: true, kind: 'producer' }),
+  'knowledge-lookup':     Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'mcp__context7__resolve-library-id', 'mcp__context7__query-docs', 'WebSearch', 'WebFetch']), bash_capable: false, write_capable: true, kind: 'producer' }),
+  'code-architect':       Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'producer' }),
+  'investigator':         Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'producer' }),
+  // Implement roles — originate code against a declared write set.
+  'tdd-guide':            Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  'implementer':          Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  'build-error-resolver': Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  'metric-optimizer':     Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  // Write roles — mutate tracked files without originating a feature.
+  'doc-updater':          Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']), bash_capable: true, write_capable: true, kind: 'write' }),
+  'synthesizer':          Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'write' }),
+  // Gates — render a verdict on a recorded claim; never originate the evidence they judge.
+  'code-reviewer':        Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'gate' }),
+  'security-reviewer':    Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'gate' }),
+  'adversarial-verifier': Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'gate' }),
+  // Orchestration roles — never authored as plan nodes; they drive the run, not a node in it.
+  'workflow-planner':     Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Bash', 'Grep', 'Glob']), bash_capable: true, write_capable: true, kind: 'orchestration' }),
+  // Built-in plan vocabulary — performed by the main session, never dispatched, no profile on disk.
+  'finalize':             Object.freeze({ tools: Object.freeze([]), bash_capable: false, write_capable: false, kind: 'built-in' }),
+  'main-session-gate':    Object.freeze({ tools: Object.freeze([]), bash_capable: false, write_capable: false, kind: 'built-in' }),
+  'expansion-point':      Object.freeze({ tools: Object.freeze([]), bash_capable: false, write_capable: false, kind: 'built-in' }),
+});
+
 // #251: the mechanical verdict vocabulary a gate/skeptic role emits into its `.cache` evidence file.
 const VERDICT_PASS = 'pass';
 const VERDICT_FAIL = 'fail';
@@ -1732,6 +1785,18 @@ const APPROVAL_OUTCOMES = Object.freeze(['approved', 'changes_requested']);
 const FINDING_ANCHOR_KINDS = Object.freeze([
   'candidate_range', 'deleted_base_range', 'tree_entry_change', 'required_absence', 'evidence_observation',
 ]);
+// findingAnchorCarriesPath — THE single predicate for "does this anchor kind name a repository PATH?".
+// normalizeFindingAnchor branches on it, ROUTABLE_FINDING_ANCHOR_KINDS is DERIVED from it, and the
+// record-time routability gate plus the open-time seeded reviewer stub both read that derived constant.
+// One predicate, so the kinds a reviewer is SHOWN as routable, the kinds a change gate ADMITS as
+// blocking, and the kinds ownership resolution can actually resolve can never drift apart.
+//
+// WHY IT MATTERS: every downstream router keys on the path — the write-set owner lookup
+// (declared_write_set -> owning writer) and the spine milestone lookup (expected_surfaces -> owning
+// expansion point). An anchor with no path resolves to NEITHER, so a blocking finding carrying one has
+// no in-plan repair target at all.
+function findingAnchorCarriesPath(kind) { return String(kind || '') !== 'evidence_observation'; }
+const ROUTABLE_FINDING_ANCHOR_KINDS = Object.freeze(FINDING_ANCHOR_KINDS.filter(findingAnchorCarriesPath));
 const FINDING_FAILURE_CLASSES = Object.freeze([
   'correctness', 'security', 'data_loss', 'concurrency', 'persistence', 'compatibility',
   'contract', 'validation', 'test_coverage', 'scope_regression', 'performance_regression',
@@ -2015,8 +2080,8 @@ function normalizeFindingAnchor(input, options) {
   const kind = String(value.kind || '');
   const opts = isPlainObject(options) ? options : {};
   if (!FINDING_ANCHOR_KINDS.includes(kind)) return { ok: false, reason: 'finding_anchor_kind_invalid' };
-  const path = kind === 'evidence_observation' ? null : normalizeFindingPath(value.path);
-  if (kind !== 'evidence_observation' && !path) return { ok: false, reason: 'finding_anchor_path_invalid' };
+  const path = findingAnchorCarriesPath(kind) ? normalizeFindingPath(value.path) : null;
+  if (findingAnchorCarriesPath(kind) && !path) return { ok: false, reason: 'finding_anchor_path_invalid' };
   let anchor;
   if (kind === 'candidate_range') {
     const oid = normalizeObjectId(value.object_format, value.object_id);
@@ -2097,7 +2162,7 @@ function normalizeFindingAnchor(input, options) {
         || canonicalJson(anchor.candidate) !== canonicalJson(project(candidateExpected))) {
         return { ok: false, reason: 'finding_anchor_tree_change_mismatch' };
       }
-    } else if (kind !== 'evidence_observation' && (!expected
+    } else if (findingAnchorCarriesPath(kind) && (!expected
       || expected.object_format !== anchor.object_format || expected.tree_mode !== anchor.tree_mode
       || expected.object_id !== anchor.object_id
       || (Number.isInteger(expected.blob_length) && anchor.end > expected.blob_length))) {
@@ -3559,6 +3624,11 @@ const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // running-set scheduler (#377). See docs/decisions/0008-excise-write-role-batch-isolation.md.
 // #542: the env name for the parallel-writes DEFAULT-ON opt-OUT. See parallelWritesDefaultOn.
 const PARALLEL_WRITES_ENV = 'KAOLA_PARALLEL_WRITES';
+// #802: the env name for the serial→parallel SEAM-CHECKPOINT DEFAULT-ON opt-OUT. See seamCheckpointDefaultOn.
+const SEAM_CHECKPOINT_ENV = 'KAOLA_SEAM_CHECKPOINT';
+
+// #813: the env name for the test-attribution DEFAULT-ON opt-OUT. See testAttributionDefaultOn.
+const TEST_ATTRIBUTION_ENV = 'KAOLA_TEST_ATTRIBUTION';
 
 // Resolve the fan-out cap (env override, else default), clamped to a sane minimum.
 function resolveFanoutCap(env) {
@@ -3591,6 +3661,45 @@ function resolveFanoutCapReadonly(env) {
 // is vestigial for every relaxable class.
 function parallelWritesDefaultOn(env) {
   const raw = (env || {})[PARALLEL_WRITES_ENV];
+  if (raw === '0' || raw === 'false' || raw === 'no') return false;
+  return true;
+}
+
+// #802: seam-checkpoint-default-ON — the scheduler's REPAIR of a REMOVABLE blocker at the
+// serial→parallel seam. Uncommitted production work left in the parent worktree by already-CLOSED
+// serial siblings is the guaranteed product of the workflow's OWN finalize-owned-commit policy, not a
+// property of the task: it is none of the three named serializers (S1 data dependency, S2 shared
+// irreversible effect, S3 failed environment probe), so it must be REPAIRED before dispatch rather
+// than impersonate evidence for serial. This predicate drives that repair. Default TRUE; an operator
+// restores the `parent_dirty` SERIAL DEGRADE with KAOLA_SEAM_CHECKPOINT=0|false|no — the single serial
+// write at the normal co-open site and the `write_awaits_drain` hold at the drain site — mirroring the
+// KAOLA_PARALLEL_WRITES=0 recovery posture. The repair itself is two-outcome (commit the attributed
+// dirt, or halt on unattributable dirt / a git failure) — never a retry loop, never a silent serial.
+// SCOPE OF THE OPT-OUT (stated exactly, because "restores the prior behavior" would not be true): it
+// restores the serial degrade ONLY. It does NOT resurrect the legless single-writer co-open that used
+// to fire over a dirty parent behind a scratch-observation gate — that path is retired
+// UNCONDITIONALLY, as a separate and deliberate tightening, and no toggle brings it back. So a state
+// that once legless-co-opened now HOLDS under the opt-out. Both changes point the same way: the toggle
+// is never LESS strict than the repair it replaces. It is a fail-closed escape hatch, not a time machine.
+function seamCheckpointDefaultOn(env) {
+  const raw = (env || {})[SEAM_CHECKPOINT_ENV];
+  if (raw === '0' || raw === 'false' || raw === 'no') return false;
+  return true;
+}
+
+// #813: test-attribution-default-ON — the barrier's ALLOWLIST ranges over test-like paths exactly as
+// it ranges over production paths, so a test file a node creates/edits/deletes must be DECLARED in
+// that node's write set or it lands in the existing write_set_overflow / unattributed_write families.
+// A verification oracle outside attribution is not an oracle: tests are what the rest of the machinery
+// treats as ground truth, so they are the class whose integrity the barrier must guard hardest.
+// This governs ATTRIBUTION only — test-like paths remain excluded from SENSITIVITY classification, so
+// a declared `test/login.test.js` never demands a security-reviewer by pattern match.
+// Default TRUE; an operator restores the pre-attribution exemption BYTE-IDENTICALLY with
+// KAOLA_TEST_ATTRIBUTION=0|false|no — the bridge for plans frozen before this rule and for runs
+// already in flight. The escape hatch is deliberately an ENV TOGGLE, not a tolerance band inside the
+// barrier: a hidden allowband would recreate the same hole under a different name.
+function testAttributionDefaultOn(env) {
+  const raw = (env || {})[TEST_ATTRIBUTION_ENV];
   if (raw === '0' || raw === 'false' || raw === 'no') return false;
   return true;
 }
@@ -4110,6 +4219,8 @@ module.exports = {
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
   MAIN_SESSION_GATE_ROLE,
+  ROLE_KINDS,
+  ROLE_CAPABILITY_MANIFEST,
   VERDICT_PASS,
   VERDICT_FAIL,
   VERDICT_VOCABULARY,
@@ -4146,6 +4257,8 @@ module.exports = {
   ADVERSARIAL_OUTCOMES,
   APPROVAL_OUTCOMES,
   FINDING_ANCHOR_KINDS,
+  ROUTABLE_FINDING_ANCHOR_KINDS,
+  findingAnchorCarriesPath,
   FINDING_FAILURE_CLASSES,
   canonicalJson,
   sha256Hex,
@@ -4187,9 +4300,13 @@ module.exports = {
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
   PARALLEL_WRITES_ENV,
+  SEAM_CHECKPOINT_ENV,
+  TEST_ATTRIBUTION_ENV,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   parallelWritesDefaultOn,
+  seamCheckpointDefaultOn,
+  testAttributionDefaultOn,
   writeFileAtomicReplace,
   locateSection,
   spliceComplianceSection,

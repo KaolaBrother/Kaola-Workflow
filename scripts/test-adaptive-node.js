@@ -136,6 +136,23 @@ function assert(condition, message) {
   }
 }
 
+// Scenario registry. Every top-level block below is a self-contained scenario: it owns
+// its own fixtures and shares nothing with its neighbours but the pure helpers and these
+// counters. Registering them through scenario() makes the list partitionable, so
+// `--shard i/N` runs a disjoint stride of it in a worker process. WITHOUT --shard every
+// scenario runs, in file order — a bare `node scripts/test-adaptive-node.js` is unchanged.
+const shardLib = require('./test-shard-lib');
+const SHARD = shardLib.selector(process.argv);
+let scenarioCount = 0;
+let scenariosRun = 0;
+
+function scenario(fn) {
+  const ordinal = scenarioCount++;
+  if (!SHARD.owns(ordinal)) return;
+  scenariosRun++;
+  shardLib.runScenario(ordinal, fn);
+}
+
 // Existing lifecycle fixtures exercise the byte-preserved legacy-v1 engine.
 // Schema 2 deliberately refuses a newly authored field-absent draft, so these
 // fixtures first materialize the historical verified-frozen state they mean to
@@ -205,7 +222,7 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
 }
 
 // Repair attempt n5-core-review:1 RED matrix (R1/R2/R4/R5).
-{
+scenario(() => {
   const src = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
   const guardedSet = (src.match(/const SPLIT_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
   assert(guardedSet.includes("'record-evidence'"),
@@ -563,12 +580,12 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
       && statuses.finalize === 'pending' && !fs.existsSync(path.join(cacheDir, 'running-set.json')),
       'R7-SIMULTANEOUS-RED: both gates return pending, running set drains, and successor stays hidden');
   } finally { fs.rmSync(simultaneousTmp, { recursive: true, force: true }); }
-}
+});
 
 // #699 schema-2 code/security fanouts are one runtime review transaction, not
 // independent sequence attempts. A replicated majority may carry one
 // non-blocking dissent; blocker/fix veto and partitioned-all stay fail-closed.
-{
+scenario(() => {
   assert(typeof reduceLogicalReviewAttempt === 'function',
     '#699 logical review reducer is exported for exact aggregation regression coverage');
   if (typeof reduceLogicalReviewAttempt === 'function') {
@@ -797,14 +814,14 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
       && ['review-a', 'review-b', 'review-c'].every(id => statuses[id] === 'complete'),
     '#699 legal replicated-majority dissent rereads without repair blocker and leaves all members complete');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // A schema-1 review journal that merely CARRIES a legacy_import key — with NO committed replan-transaction
 // backing it — is a FORGED cross-epoch child. Bare key presence is not provenance: it must never route a
 // schema-2 review close onto the schema-1 (V2-binding-free) path. readReviewJournal fails closed with the
 // typed transaction-invalid reason, and the close refuses instead of dropping the V2 review_context/
 // candidate_digest/profile binding.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-forged-legacy-import-'));
   try {
     const project = 'issue-forged';
@@ -856,10 +873,10 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
       && forgedClose.reason === 'review_context_mismatch',
     'a forged legacy_import journal cannot route a schema-2 review close onto the schema-1 path');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // REPAIR-DIGEST-DRIFT: exclude only this run's control tree and .kw bookkeeping.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-digest-'));
   try {
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-682'), { recursive: true });
@@ -898,10 +915,10 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
     assert(cand683().residue_digest !== baseResidue,
       'REPAIR-TRIPLE: an undeclared-path edit moves candidate_residue_digest (the rogue-edit detector)');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // FANOUT-PROVISIONAL-LAST: non-last votes stay provisional; only the last member settles the group.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-fanout-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-682');
@@ -1001,13 +1018,14 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
     assert(late.reason === 'evidence_generation_stale',
       'FANOUT-PROVISIONAL-LAST: late evidence for a non-current generation is refused');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // R16: a fan-out failure is already committed when settled_written is durable. Both public close
 // commands must replay that terminal result after the group has returned to pending, without writes.
 // R25: a non-last fan-out member closes provisionally, but it is still a completed node and must
 // receive the same compliance, timing, and provenance bookkeeping as an ordinary close. The
 // bookkeeping is replay-safe when a process crashes immediately after the plan/compliance write.
+scenario(() => {
 for (const closeKind of ['close-node', 'close-and-open-next']) {
 for (const crashAfterPlanWrite of [false, true]) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-provisional-bookkeeping-'));
@@ -1088,7 +1106,9 @@ for (const crashAfterPlanWrite of [false, true]) {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 }
+});
 
+scenario(() => {
 for (const closeKind of ['close-node', 'close-and-open-next']) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-fanout-settled-replay-'));
   try {
@@ -1167,9 +1187,11 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
       'R16-SETTLED-REPLAY-RED: ' + closeKind + ' replay preserves journal/ledger/running/evidence and opens no successor');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+});
 
 // R18: a passing verdict-role selector must durably fold losing arms before running-set removal and
 // lifecycle settlement. Crash at that boundary for both close paths and prove only one arm is ready.
+scenario(() => {
 for (const closeKind of ['close-node', 'close-and-open-next']) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-selector-order-'));
   try {
@@ -1237,9 +1259,11 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
       'R18-SELECTOR-ORDER-RED: ' + closeKind + ' exposes at most the selected arm and remains journal-fenced');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+});
 
 // R19: downstream reviews bind only the completed select lineage. Close and repair both possible
 // arm choices, preserving journal validity after the selected producer is reopened in_progress.
+scenario(() => {
 for (const selected of ['arm-a', 'arm-b']) {
   const skipped = selected === 'arm-a' ? 'arm-b' : 'arm-a';
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-select-producer-'));
@@ -1302,10 +1326,11 @@ for (const selected of ['arm-a', 'arm-b']) {
       'R19-SELECT-PRODUCER-RED: repaired ' + selected + ' remains plan-bound while skipped arm stays n/a');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+});
 
 // R20: immutable producer bindings belong to their attempt-time proof. A later review gate may
 // legitimately reopen the same producer without invalidating an earlier settled pass attempt.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-historical-producer-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r20');
@@ -1372,7 +1397,7 @@ for (const selected of ['arm-a', 'arm-b']) {
       'R20-HISTORICAL-BINDING-RED: earlier pass attempt remains valid after later gate reopens writer, got '
         + JSON.stringify(journalCheck));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // #701 (D-701-01) — SEMANTIC-OWNER vs graph-maximal repair admissibility bridge.
@@ -1383,7 +1408,7 @@ for (const selected of ['arm-a', 'arm-b']) {
 // none, dependent_producer_replay_required when the operator names the non-maximal semantic owner.
 // The #683 simultaneous-failed-gates block is the structural precedent.
 // ===========================================================================
-{
+scenario(() => {
   // #701-L1: Layer-1 ownership derivation regression (schema-2, pure).
   const routeNodes = [
     { id: 'W', role: 'tdd-guide', declared_write_set: 'scripts/impl.js' },
@@ -1403,9 +1428,9 @@ for (const selected of ['arm-a', 'arm-b']) {
     routeNodes, 'review');
   assert(JSON.stringify(unroutable[0].ownership_candidates) === JSON.stringify([]),
     '#701-L1: a finding whose path no node owns resolves to empty ownership (the #701 live symptom)');
-}
+});
 
-{
+scenario(() => {
   // #701-L2H: Layer-2 ownership/descendant helpers (pure).
   const attempt = { route_candidates: [
     { finding_id: 'f1', status: 'open', ownership_candidates: ['W'] },
@@ -1428,9 +1453,9 @@ for (const selected of ['arm-a', 'arm-b']) {
   ], { W: 'complete', W2: 'complete', rev: 'in_progress', docs: 'pending' }, 'W');
   assert(JSON.stringify(desc) === JSON.stringify(['W2']),
     '#701-L2H: completed non-gate writer descendants excludes gates + incomplete + the start node, got ' + JSON.stringify(desc));
-}
+});
 
-{
+scenario(() => {
   // #739-U: in-plan descendant-replay pure helpers — structural cone bound, cone safety, and the
   // anti-laundering journal replay-record validation (the security surface of the exemption).
   const chain = [
@@ -1477,12 +1502,12 @@ for (const selected of ['arm-a', 'arm-b']) {
   assert(validatedReplayExempt({ route_candidates: [] }, chain).ok === true
     && validatedReplayExempt({ route_candidates: [] }, chain).replayExempt === null,
     '#739-U: an attempt with no replay record returns {ok:true, replayExempt:null}');
-}
+});
 
 // #701-INT: Layer-2 integration through runRepairNode over a real close-produced journal. Chain
 // impl(owner) -> tail(graph-maximal writer) -> review(code-reviewer). A finding anchored to impl's file
 // makes tail the maximal producer that owns NOTHING.
-{
+scenario(() => {
   const makeRepairFixture = (findingLine) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-701-'));
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-701');
@@ -1650,7 +1675,7 @@ for (const selected of ['arm-a', 'arm-b']) {
         '#701-F: an unroutable-file (empty-ownership) journal degrades to a generic replan, got ' + JSON.stringify(rImpl));
     } finally { f.cleanup(); }
   }
-}
+});
 
 // ===========================================================================
 // #730 — the reopened fixer's CANONICAL, DIGEST-BOUND repair brief, and the ownership rule that
@@ -1683,7 +1708,7 @@ for (const selected of ['arm-a', 'arm-b']) {
 //      ordered fixed (an instruction the contract does not require). Non-blocking rows ride along in a
 //      SEPARATE, explicitly non-obligatory context section.
 // ===========================================================================
-{
+scenario(() => {
   // #730-U1: pure — ownership summary partitions the BLOCKING frontier and names the offending uids.
   const blocking = extra => Object.assign({ status: 'open', scope: 'in_scope', action: 'fix' }, extra);
   const rows = [
@@ -1751,9 +1776,9 @@ for (const selected of ['arm-a', 'arm-b']) {
     && allNonBlocking.blockingFindings.length === 0
     && allNonBlocking.ownsWholeBlockingFrontier === false,
     '#730-U1b: an all-non-blocking frontier spans nothing, got ' + JSON.stringify(allNonBlocking));
-}
+});
 
-{
+scenario(() => {
   // #730-U2: pure — buildRepairBrief content over an ownership-ABSENT attempt. The assigned set is the
   // WHOLE blocking frontier (never empty while the writer is authorized), and the canonical fields are joined.
   const attempt = {
@@ -1820,9 +1845,9 @@ for (const selected of ['arm-a', 'arm-b']) {
   // The digest is a function of the payload: a changed finding set changes it.
   const mutated = buildRepairBrief({ ...attempt, route_candidates: attempt.route_candidates.slice(0, 1) }, 'impl');
   assert(mutated.digest !== brief.digest, '#730-U2: the digest binds the payload (a narrowed set changes it)');
-}
+});
 
-{
+scenario(() => {
   // #730-U3: THE PARTITION. `assigned_uids` is the MUST-FIX set only. An open-but-non-blocking row
   // (deferred / out-of-scope / pre_existing / follow_up / document / none) is not something the contract
   // obliges anyone to repair, so ordering a fixer to repair it would be an instruction the workflow does
@@ -1882,9 +1907,9 @@ for (const selected of ['arm-a', 'arm-b']) {
     && noneRendered.includes('repair_brief_scope: no_blocking_findings')
     && !/fix EVERY assigned uid/.test(noneRendered),
     '#730-U3: no empty assigned-uid line and no fix-every directive without a blocking finding, got:\n' + noneRendered);
-}
+});
 
-{
+scenario(() => {
   // #730-U4: the CONSTRUCTOR is not welded to repair-dispatch. buildRepairBrief must stay a pure total
   // function of (attempt, nodeId) — no fs, no ownership decision, no repair-node control flow — so a
   // future caller that re-expands a single finding outside repair-dispatch can reuse it verbatim.
@@ -1919,10 +1944,10 @@ for (const selected of ['arm-a', 'arm-b']) {
   const again = buildRepairBrief(attempt, 'unrelated-node');
   assert(JSON.stringify(again) === JSON.stringify(stranger) && JSON.stringify(attempt) === before,
     '#730-U4: buildRepairBrief is deterministic and non-mutating');
-}
+});
 
 // #730-INT: integration through the real repair-node transaction over close-produced journals.
-{
+scenario(() => {
   const makeBriefFixture = (nodeRows, ledgerRows, reviewerEvidenceLines, ids) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-730-'));
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-730');
@@ -2216,7 +2241,7 @@ for (const selected of ['arm-a', 'arm-b']) {
         '#730-H: no assigned-uid line and no fix-every directive without a blocking finding, got:\n' + ev);
     } finally { f.cleanup(); }
   }
-}
+});
 
 // #748-MIXED: a MIXED direct-repair-then-replay history at ONE gate. #739's in-plan descendant replay
 // performs a journal-GLOBAL, plan-GLOBAL mutation (reopen the owner, reset its completed writer cone to
@@ -2228,7 +2253,7 @@ for (const selected of ['arm-a', 'arm-b']) {
 // merely SUSPENDS the relief for that one read (any later un-healing re-arms it), so SUPERSESSION — a
 // strictly higher ordinal at the same logical gate — is the bound that retires a record for good; and the
 // relief never waives another attempt's graph-maximal writer-binding proof.
-{
+scenario(() => {
   const makeMixedFixture = () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-748-'));
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-748');
@@ -2439,7 +2464,7 @@ for (const selected of ['arm-a', 'arm-b']) {
     try {
       driveMixed(f);
       const nonce = readNonce(f.planPath, 'impl', f.common.readFile);
-      const stdinContent = 'evidence-binding: impl ' + nonce + '\nRED: reproduced\nGREEN: passes\n';
+      const stdinContent = 'evidence-binding: impl ' + nonce + '\nRED: reproduced\nred_baseline: ' + nonce + '\n';
       const recorded = runRecordEvidence({ ...f.common, nodeId: 'impl', stdinContent });
       assert(recorded.result === 'ok',
         '#748: the reopened replay owner can RECORD the evidence it was reopened to produce, got '
@@ -2540,12 +2565,12 @@ for (const selected of ['arm-a', 'arm-b']) {
         + 'for replays), got ' + JSON.stringify(over.repaired));
     } finally { f.cleanup(); }
   }
-}
+});
 
 // #748-DECLINE: the three in-plan-replay decline reasons, pinned through the REAL runRepairNode surface
 // (only `nonpostdominating_gate_in_cone` was pinned there before; the other three were pure-helper or
 // wholly untested). Each must route to the existing claim-preserving replan path with ZERO mutation.
-{
+scenario(() => {
   const makeDeclineFixture = (nodeRows, ledgerRows, findingLines, ids) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-748-decline-'));
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-748');
@@ -2653,7 +2678,7 @@ for (const selected of ['arm-a', 'arm-b']) {
         '#748-DECLINE: the synthesis-boundary decline is ZERO-mutation, got ' + JSON.stringify(statuses));
     } finally { f.cleanup(); }
   }
-}
+});
 
 // #748-ESCAPE: the replan escape hatch driven THROUGH the actual wedge shape. The three DECLINE cases
 // above use FRESH single-attempt journals and non-schema-2 states, so persistRepairReplanSource returns
@@ -2665,7 +2690,7 @@ for (const selected of ['arm-a', 'arm-b']) {
 // (settled direct repair on tailA + active replay of implA, cone un-healed). Chain B is intact and its
 // gate is the one being repaired, with a synthesizer in the owner's cone so the replay declines. So the
 // escape runs while chain A's relief is genuinely load-bearing — not after it has healed away.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-748-escape-'));
   try {
     const project = 'issue-748';
@@ -2789,14 +2814,14 @@ for (const selected of ['arm-a', 'arm-b']) {
       && afterStatuses.synB === 'complete',
       '#748-ESCAPE: the escape is ZERO-mutation on chain B, got ' + JSON.stringify(afterStatuses));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // #748-UNIT: DIRECT unit coverage of activeReplayRelief — the one function every relief defect has been in.
 // Every prior defect was the same shape: relief sourced from an over-broad population. The end-to-end
 // fixtures above exercise it only through readReviewJournal, which cannot isolate WHICH bound admitted a
 // record, so a widened population reads as "still passes". These call the function itself and pin each
 // bound independently. Every case below is RED against a mutant that removes exactly its own bound.
-{
+scenario(() => {
   const NODES748U = [
     '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
     '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
@@ -2925,14 +2950,14 @@ for (const selected of ['arm-a', 'arm-b']) {
       '#748-UNIT(e): the SAME set passed as the attempt-local replayExempt does waive maximality — which is '
       + 'exactly why the journal-global set must never be routed there, got ' + JSON.stringify(asReplayExempt));
   }
-}
+});
 
 // FIX(read-only predicate unification): isReadOnlyNode and the writer predicate nodeWriteSetNonempty encoded
 // the same concept ~5,000 lines apart with two different token lists, and disagreed on the literal cells
 // `none` / `n/a`: the writer predicate called them empty, isReadOnlyNode (via parseWriteSetCell) called them
 // a one-path write set. A node declaring `none` was therefore NOT recognized as read-only and over-refused
 // instead of folding. They are now ONE predicate — read-only is the exact negation of "declares writes".
-{
+scenario(() => {
   for (const cell of ['', ' ', '-', '—', 'none', 'None', 'NONE', 'n/a', 'N/A']) {
     assert(isReadOnlyNode({ id: 'x', declared_write_set: cell }) === true
       && isReadOnlyNode({ id: 'x', writeSetRaw: cell }) === true,
@@ -2964,13 +2989,13 @@ for (const selected of ['arm-a', 'arm-b']) {
       'read-only unification: a complete descendant whose write set cell is "' + cell + '" FOLDS instead of '
       + 'refusing, got ' + JSON.stringify({ result: res.result, reason: res.reason, readOnlyReset: res.readOnlyReset }));
   }
-}
+});
 
 // FIX(finished ⇒ complete): runIsFinished decides whether the strand hint may tell the operator the work
 // SHIPPED. It used to accept the strand-SATISFIED set, which includes `n/a` — but an `n/a` sink means the
 // sink was marked not-applicable and nothing shipped at all, so that advice was false AND foreclosed the
 // in-plan mid-run continuation. Only a genuinely `complete` sink may claim the run finished.
-{
+scenario(() => {
   for (const [status, finished] of [['complete', true], ['n/a', false], ['n.a', false], ['na', false],
     ['pending', false], ['in_progress', false], [undefined, false]]) {
     assert(runIsFinished('sink', { sink: status }) === finished,
@@ -3005,14 +3030,14 @@ for (const selected of ['arm-a', 'arm-b']) {
     + 'got: ' + repairHint);
   assert(/do NOT hand-edit a ledger row here/.test(reopenHint) && /do NOT hand-edit a ledger row here/.test(repairHint),
     'strand hint: both arms keep the do-not-hand-edit advice');
-}
+});
 
 // FIX(twin fold parity): repair-node's adversarial-verifier fan-out receipt purge iterated gatesReset — the
 // STRUCTURAL gate set — while reopen-node's iterates rowsReset, the FULL fold set (structural gates PLUS the
 // read-only rows folded with them). A verifier declares no writes, so a NON-post-dominating fan-out gate
 // enters the fold through the read-only path, and repair-node was leaving its stale skeptic receipts on disk
 // where a later --verdict-check could still consume them. The twins must fold identically.
-{
+scenario(() => {
   const tmpAV = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fold-twin-'));
   try {
     const projectDir = path.join(tmpAV, 'kaola-workflow', 'fold-twin');
@@ -3071,12 +3096,12 @@ for (const selected of ['arm-a', 'arm-b']) {
     assert(!(repaired.evidenceRemoved || []).includes('unrelated.md'),
       'fold twin: unrelated .cache receipts are untouched, got ' + JSON.stringify(repaired.evidenceRemoved));
   } finally { fs.rmSync(tmpAV, { recursive: true, force: true }); }
-}
+});
 
 // #748-V2: the schema-2 identity twin. For a DERIVED gate (certified_producers empty) the expected
 // producer bindings are recomputed the same way, so the same mixed history wedged reviewJournalV2MatchesPlan
 // with review_journal_repair_identity_mismatch. Driven by direct call over a hand-built schema-2 journal.
-{
+scenario(() => {
   const NODE_ROWS = [
     '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
     '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
@@ -3150,14 +3175,14 @@ for (const selected of ['arm-a', 'arm-b']) {
   assert(liveRelief.ok === true,
     '#748-V2-SUPERSESSION control: an UNsuperseded replay still relieves its own reset cone, got '
     + JSON.stringify(liveRelief));
-}
+});
 
 // #739-DIAMOND: the write-diamond liveness guard (surfaced by adversarial verification of #739). A finding
 // owned by the shared owner of two parallel disjoint writer branches, each with its own COMPLETE interior
 // gate, plus a common certifier that failed. Neither interior gate post-dominates the owner, so a replay
 // that resets both branches would strand ga+gb stale-and-unfolded and wedge finalize. repair-node must
 // DECLINE the in-plan replay and route to the existing replan path (tighten-only, zero mutation).
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-739-diamond-'));
   const projectDir = path.join(tmp, 'kaola-workflow', 'issue-739d');
   const cacheDir = path.join(projectDir, '.cache');
@@ -3207,10 +3232,11 @@ for (const selected of ['arm-a', 'arm-b']) {
     assert(fs.readFileSync(planPath, 'utf8') === planAfterClose && readLedgerStatuses(planAfterClose).owner === 'complete',
       '#739-DIAMOND: the replay decline is byte-for-byte ZERO-mutation (owner never reopened)');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // R21: sibling gates over one candidate form one repair invalidation set even though neither
 // sequence reviewer individually post-dominates the writer. A separate failed attempt stays live.
+scenario(() => {
 for (const firstPass of [true, false]) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-sibling-repair-'));
   try {
@@ -3286,10 +3312,12 @@ for (const firstPass of [true, false]) {
     }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+});
 
 // R22: every durable repair seam after the plan fold resumes from the immutable selected
 // attempt. Current ledger history has already changed at these seams, so it must not be used to
 // re-select the writer; cleanup, settlement, and consumption instead continue exactly once.
+scenario(() => {
 for (const repairFailpoint of ['repair_plan_written', 'repair_artifacts_removed', 'repair_settled_written']) {
   for (const firstPass of [true, false]) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-sibling-repair-retry-'));
@@ -3405,9 +3433,11 @@ for (const repairFailpoint of ['repair_plan_written', 'repair_artifacts_removed'
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 }
+});
 
 // R23: cleanup classification is per member's latest matching attempt/generation, not a monotonic
 // history of every pass. A newer unresolved failure receipt must survive sibling repair and retries.
+scenario(() => {
 for (const reorderHistory of [false, true]) {
 for (const repairFailpoint of [null, 'repair_plan_written', 'repair_artifacts_removed', 'repair_settled_written']) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-latest-sibling-attempt-'));
@@ -3530,10 +3560,11 @@ for (const repairFailpoint of [null, 'repair_plan_written', 'repair_artifacts_re
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 }
+});
 
 // R14 pass outcome: the exact quorum and aggregate decision become immutable together at
 // outcome_written; unchanged retry still rolls the pass forward normally.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-fanout-pass-immutable-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r14');
@@ -3603,10 +3634,11 @@ for (const repairFailpoint of [null, 'repair_plan_written', 'repair_artifacts_re
       && journal.attempts[0].lifecycle_settled === true && validateReviewJournal(journal, hash).ok === true,
       'R14-UNCHANGED-CONTROL-RED: unchanged post-outcome pass retry settles normally');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // R9: sequence receipt replacement after the durable attempt-written crash seam must recompute the
 // authoritative transition in both directions, for both public close commands.
+scenario(() => {
 for (const closeKind of ['close-node', 'close-and-open-next']) {
   for (const replacementPass of [false, true]) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-sequence-retry-'));
@@ -3670,9 +3702,10 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 }
+});
 
 // REPAIR-UNIQUE-MAXIMAL / BREAKER-SIX integration over the durable journal.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-repair-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-682');
@@ -3771,10 +3804,10 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
     assert(fs.readFileSync(journalPath, 'utf8') === before,
       'BREAKER-SIX: limit refusal performs zero journal mutation');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // Issue 682 runtime RED: opener fences, attempt ordinals, and agent-selected repair proof.
-{
+scenario(() => {
   assert(typeof reviewJournalBlocker === 'function' && typeof uniqueMaximalReviewProducer === 'function'
     && typeof nextReviewAttemptOrdinal === 'function',
   'REV-OPEN-FENCE/REPAIR-UNIQUE-MAXIMAL: review runtime policy helpers are exported');
@@ -3811,10 +3844,10 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
   assert(consumedReviewRepairs(independentBudgets, 'gate-a') === 5
     && consumedReviewRepairs(independentBudgets, 'gate-b') === 1,
     'BREAKER-INDEPENDENT: consumed repair budgets are counted per canonical logical-gate key');
-}
+});
 
 // Issue 682 RED: canonical routing preserves fields and never guesses among overlapping owners.
-{
+scenario(() => {
   const routeNodes = [
     { id: 'writer-a', declared_write_set: 'scripts/a.js, scripts/shared.js' },
     { id: 'writer-b', declared_write_set: 'scripts/shared.js' },
@@ -3833,11 +3866,11 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
     assert(routed[0].fix_role === 'tdd-guide' && routed[0].severity === 'high' && routed[0].scope === 'in_scope',
       'ROUTE-CANONICAL-0-1-N: canonical fields and explicit fix_role are preserved');
   }
-}
+});
 
 // Issue 682 RED: the review transaction's pure policy must be shared by every close path.
 // These tests intentionally precede runtime integration so a missing helper is a genuine pre-impl RED.
-{
+scenario(() => {
   assert(typeof evaluateEffectiveVerdict === 'function',
     'REV-PREDICATE-PARITY: schema exports the canonical effective-verdict helper');
   if (typeof evaluateEffectiveVerdict === 'function') {
@@ -3879,12 +3912,12 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
         'STATE-BOUNDARY: malformed/version/hash/duplicate journal fails closed: ' + JSON.stringify(journal));
     }
   }
-}
+});
 
 // #658: explicit cardinality-1 adversarial fan-outs use their frozen node ids as the
 // authoritative receipt identities.  Membership is scoped to (fanout label, origin),
 // never to a role-prefix glob shared by the whole project.
-{
+scenario(() => {
   const verdictPlan = makePlan([
     '| impl | complete | |', '| review | complete | |',
     '| skeptic-a | complete | |', '| skeptic-b | complete | |',
@@ -3976,7 +4009,7 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
   r = planValidator.verifyVerdictBlock(ambiguousLegacyPlan, ambiguousOpts);
   assert(r.ok === false && r.failures && r.failures.some(f => /legacy.*ambiguous|multiple legacy/i.test(f.reason || '')),
     'R1 whole-plan legacy multi-group receipts must fail closed before global pooling, got ' + JSON.stringify(r));
-}
+});
 
 // #649: write populated fixture evidence to the same authoritative cache path the runtime resolves.
 // A live isolated write member owns its leg-local copy; every other node owns the parent cache copy.
@@ -3991,6 +4024,9 @@ function writeLegAwareEvidence(cacheDir, id, role, extraLines) {
   for (const tokenClass of (ROLE_TOKEN_REGISTRY[role] || []).filter(t => t !== 'evidence-binding')) {
     const token = tokenClass.split('|')[0];
     if (token === 'RED') lines.push('RED: fixture fails before implementation');
+    // The test author's fail-on-baseline RECEIPT: it must name THIS open's recorded baseline, so
+    // the fixture echoes the nonce (its 12-char prefix) rather than a constant.
+    else if (token === 'red_baseline') lines.push('red_baseline: ' + nonce);
     else if (token === 'GREEN') lines.push('GREEN: fixture passes after implementation');
     else if (token === 'verdict') lines.push('verdict: pass');
     else if (token === 'findings_blocking') lines.push('findings_blocking: 0');
@@ -4131,7 +4167,7 @@ function makeState(opts) {
 // ---------------------------------------------------------------------------
 // T1: spliceLedgerNode — pending → in_progress (basic open path)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | pending | |',
     '| impl-other | pending | |',
@@ -4143,12 +4179,12 @@ function makeState(opts) {
   assert(r.alreadyAtTarget === false, 'T1: alreadyAtTarget===false (not already in_progress)');
   assert(r.content.includes('| impl-core | in_progress | |'), 'T1: ledger row updated to in_progress');
   assert(r.content.includes('| impl-other | pending | |'), 'T1: sibling row unmodified');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T2: spliceLedgerNode — idempotent (already at target status)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -4159,12 +4195,12 @@ function makeState(opts) {
   assert(r.alreadyAtTarget === true, 'T2: alreadyAtTarget===true when already in_progress');
   assert(r.changed === false, 'T2: changed===false on idempotent');
   assert(r.content === plan, 'T2: content byte-identical on no-op');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T3: spliceLedgerNode — refuse out-of-allowFrom (node is complete, only pending allowed)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | complete | |',
     '| impl-other | pending | |',
@@ -4175,12 +4211,12 @@ function makeState(opts) {
   assert(r.changed === false, 'T3: changed===false — complete ∉ allowFrom(pending)');
   assert(r.alreadyAtTarget === false, 'T3: alreadyAtTarget===false (target is in_progress, not complete)');
   assert(r.content === plan, 'T3: content unmodified — refuse to touch out-of-allowFrom');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T4: spliceLedgerNode — in_progress → complete (close path)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -4191,12 +4227,12 @@ function makeState(opts) {
   assert(r.changed === true, 'T4: changed===true on close path');
   assert(r.content.includes('| impl-core | complete | |'), 'T4: row updated to complete');
   assert(r.content.includes('| impl-other | pending | |'), 'T4: sibling unmodified');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T5: spliceLedgerNode — node not found
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | pending | |',
   ]);
@@ -4204,7 +4240,7 @@ function makeState(opts) {
   const r = spliceLedgerNode(plan, 'nonexistent-node', 'in_progress', { allowFrom: ['pending'] });
   assert(r.found === false, 'T5: found===false for absent node');
   assert(r.changed === false, 'T5: changed===false when not found');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T6 (#354): UPSTREAM-FENCED `## Node Ledger` decoy — the single fence-aware locateSection makes
@@ -4212,7 +4248,7 @@ function makeState(opts) {
 // file (strengthens beyond the existing decoy-outside / fenced-inside walkthrough scenarios, which
 // did not cover an upstream-fenced HEADING). Mutation-style: a fence-blind indexOf would target the
 // decoy and either mis-flip nothing or corrupt the fenced block.
-{
+scenario(() => {
   // A plan whose ## Nodes section contains a FENCED markdown example that itself has a
   // `## Node Ledger` heading + `consent_halt: pending` line — upstream of the REAL ledger.
   const decoyPlan = [
@@ -4274,7 +4310,7 @@ function makeState(opts) {
   // exactly one real compliance heading (the fenced decoy has none here); row lands after the real ledger.
   assert(withRow.indexOf('| code-reviewer | subagent-invoked | ok | |') > withRow.lastIndexOf('```'),
     'T6: the compliance row lands in the REAL section (after the fenced decoy)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T6c (#665): locateSection's fence closer was FAMILY-ONLY (no run-length / empty-suffix check), so
@@ -4283,7 +4319,7 @@ function makeState(opts) {
 // single stray 3-backtick line, then a fenced `## Node Ledger` DECOY — driven END-TO-END through
 // open -> splice -> close -> resume, proving there is no hash-mismatch wedge.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Direct unit check: locateSection must agree with classifier.sectionBody (ground truth) on
   // which `## Node Ledger` is genuine, once the run-length-aware closer is applied.
   const classifier = require('./kaola-workflow-classifier');
@@ -4371,10 +4407,11 @@ function makeState(opts) {
   assert(r665.exit === 0 && r665.out.ok === true,
     'T6c: after open, --resume-check still passes — no plan_hash_mismatch wedge from a mis-targeted splice, got ' + JSON.stringify(r665.out));
 
-  // close: record RED/GREEN evidence for impl-core, then close-and-open-next opens review.
+  // close: record the test author's baseline-bound RED evidence for impl-core, then
+  // close-and-open-next opens review.
   const rec665 = spawn665(process.execPath, [NODE_CLI_665, 'record-evidence', '--project', project665, '--node-id', 'impl-core', '--stdin', '--json'], {
     cwd: repoRoot665, encoding: 'utf8', input: 'evidence-binding: impl-core ' + implCoreNonce665
-      + '\nRED: impl-core failed before implementation\nGREEN: impl-core passes after implementation\n',
+      + '\nRED: impl-core failed before implementation\nred_baseline: ' + implCoreNonce665 + '\n',
   });
   assert(rec665.status === 0, 'T6c: impl-core evidence records: ' + rec665.stderr + rec665.stdout);
   r665 = run665([NODE_CLI_665, 'close-and-open-next', '--project', project665, '--node-id', 'impl-core', '--json']);
@@ -4393,7 +4430,7 @@ function makeState(opts) {
     'T6c: the genuine ledger shows impl-core complete / review in_progress, got ' + JSON.stringify(finalLedger665));
 
   try { fs.rmSync(repoRoot665, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // T6d (#670): CommonMark fence-detection PARITY — locateSection's fence regex/closer check ran on
@@ -4406,7 +4443,7 @@ function makeState(opts) {
 // (truly unfenced) `## Node Ledger`. Driven END-TO-END through open -> resume, proving no
 // plan_hash_mismatch wedge.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Direct unit check: locateSection must agree with classifier.sectionBodyState (ground truth) on
   // which `## Node Ledger` is genuine, once the RAW-LINE fence anchor is applied.
   const classifier = require('./kaola-workflow-classifier');
@@ -4507,7 +4544,7 @@ function makeState(opts) {
     'T6d: the fenced ## Node Briefs decoy block is left byte-intact (still shows pending), got ' + JSON.stringify(finalContent670));
 
   try { fs.rmSync(repoRoot670, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // T6e (#673): HEADING-MATCH parity (the #670 sibling channel) — locateSection's heading match was a
@@ -4523,7 +4560,7 @@ function makeState(opts) {
 //                           match style, so it is NOT reconcilable without breaking the offset
 //                           contract every caller depends on (see the T6e-d comment below).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const classifier673 = require('./kaola-workflow-classifier');
 
   // (a) forward-suffix decoy: an UNFENCED '## Node Ledger Extra' line precedes the genuine
@@ -4708,14 +4745,14 @@ function makeState(opts) {
     'T6e (#673): the forward-suffix decoy prose is left byte-intact, got ' + JSON.stringify(finalContent673));
 
   try { fs.rmSync(repoRoot673, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // T6b (#354, AC3): `## Nodes` row-walk PARITY — validator.parseNodes(content) and
 // classifier.readPlanNodes(path) must extract the same id/role/depends_on set (both delegate
 // section-slicing to the fence-aware classifier.sectionBody; this pins the row-walk against drift).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const validator = require('./kaola-workflow-plan-validator');
   const classifier = require('./kaola-workflow-classifier');
   // #382: the fixture carries the optional `model` column (opus / sonnet / absent) so the parity
@@ -4743,92 +4780,107 @@ function makeState(opts) {
   assert(vSig === cSig,
     'T6b (AC3 / #382): validator.parseNodes and classifier.readPlanNodes agree on id/role/deps/model (parity), v=' + vSig + ' c=' + cSig);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
-// T6: checkEvidenceShape — tdd-guide needs BOTH RED and GREEN
+// T6: checkEvidenceShape — the TEST AUTHOR proves RED on the recorded baseline.
+// Custody, not order: this role OWNS the test artifact and never writes production code, so it
+// no longer carries GREEN (a passing suite is a verdict about the implementation, and the writer
+// of the tests is not the grader of the code). In exchange RED gains its receipt — `red_baseline`,
+// the baseline the failing test was captured on, checked against THIS open's recorded baseline.
 // ---------------------------------------------------------------------------
-{
-  // Missing GREEN
-  const evidenceWithOnlyRed = 'RED: test failed as expected\nSome notes about the implementation';
-  const r1 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceWithOnlyRed);
-  assert(r1.ok === false, 'T6a: tdd-guide missing GREEN → not ok');
-  assert(r1.reason && r1.reason.includes('GREEN'), 'T6a: reason mentions GREEN');
-  assert(r1.kind === 'shape' && r1.missingTokenClass === 'GREEN', 'T6a (#319): kind shape + missingTokenClass GREEN');
+scenario(() => {
+  const NONCE = 'abc123def456';
+  const bound = (body) => 'evidence-binding: impl-core ' + NONCE + '\n' + body;
+  const opts = { expectedNonce: NONCE, expectedNodeId: 'impl-core' };
 
-  // Has both
-  const evidenceWithBoth = 'RED: test failed\nGREEN: test passed\n';
-  const r2 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceWithBoth);
-  assert(r2.ok === true, 'T6b: tdd-guide with both RED+GREEN → ok');
+  // RED alone, with NO GREEN, closes: GREEN authority moved to the gate side.
+  const r1 = checkEvidenceShape('tdd-guide', 'impl-core',
+    bound('RED: test failed as expected\nred_baseline: ' + NONCE + '\n'), opts);
+  assert(r1.ok === true, 'T6a: tdd-guide RED + red_baseline with no GREEN → ok (GREEN authority is gate-side), got ' + JSON.stringify(r1));
 
-  // Seed-only scaffolding names both tokens in comments and leaves both values empty.
-  const hollowSeed = 'evidence-binding: impl-core abc123\n<!-- RED: paste RED here -->\nRED: \n<!-- GREEN: paste GREEN here -->\nGREEN: \n';
+  // A missing red_baseline refuses — fail-on-baseline is a receipt, not a self-description.
+  const r1b = checkEvidenceShape('tdd-guide', 'impl-core', bound('RED: test failed as expected\n'), opts);
+  assert(r1b.ok === false && r1b.kind === 'shape' && r1b.missingTokenClass === 'red_baseline',
+    'T6a2: tdd-guide missing red_baseline → shape/red_baseline, got ' + JSON.stringify(r1b));
+
+  // A red_baseline naming ANOTHER baseline refuses — a RED signature cannot survive a reopen.
+  const r1c = checkEvidenceShape('tdd-guide', 'impl-core',
+    bound('RED: test failed\nred_baseline: 999999999999\n'), opts);
+  assert(r1c.ok === false && r1c.missingTokenClass === 'red_baseline',
+    'T6a3: tdd-guide red_baseline bound to another baseline → refused, got ' + JSON.stringify(r1c));
+
+  // A legacy artifact read with NO expected nonce (offline / pre-rule) is tolerated, GREEN and all.
+  const r2 = checkEvidenceShape('tdd-guide', 'impl-core', 'RED: test failed\nGREEN: test passed\n');
+  assert(r2.ok === true, 'T6b: a legacy tdd-guide artifact read without a nonce is tolerated');
+
+  // Seed-only scaffolding names every token in comments and leaves the values empty.
+  const hollowSeed = 'evidence-binding: impl-core abc123\n<!-- RED: paste RED here -->\nRED: \n<!-- red_baseline: paste red_baseline here -->\nred_baseline: \n';
   const rHollow = checkEvidenceShape('tdd-guide', 'impl-core', hollowSeed);
   assert(rHollow.ok === false && rHollow.missingTokenClass === 'RED',
     'T6b-seed: tdd-guide hollow seed cannot satisfy evidence verification');
 
-  // Bare colon-less RED/GREEN token-name-only lines (#652 Gap 1): the matcher's column-0 regex
-  // requires `<TOKEN>:` PLUS a non-empty value — a body carrying the BARE token name with no colon
-  // at all must still refuse. Guards against a future weakening that accepts a bare token while
-  // still refusing an empty `TOKEN: ` value (the T6b-seed case above) — the "partial-weakening hole".
-  const bareRed = 'RED\nGREEN: test passed\n';
+  // Bare colon-less token-name-only lines (#652 Gap 1): the matcher's column-0 regex requires
+  // `<TOKEN>:` PLUS a non-empty value — a body carrying the BARE token name with no colon at all
+  // must still refuse. Guards against a future weakening that accepts a bare token while still
+  // refusing an empty `TOKEN: ` value (the T6b-seed case above) — the "partial-weakening hole".
+  const bareRed = 'RED\nred_baseline: ' + NONCE + '\n';
   const rBareRed = checkEvidenceShape('tdd-guide', 'impl-core', bareRed);
   assert(rBareRed.ok === false && rBareRed.missingTokenClass === 'RED',
     'T6b-bare: tdd-guide with bare colon-less RED (no colon) → refused, missingTokenClass RED');
 
-  const bareGreen = 'RED: test failed\nGREEN\n';
-  const rBareGreen = checkEvidenceShape('tdd-guide', 'impl-core', bareGreen);
-  assert(rBareGreen.ok === false && rBareGreen.missingTokenClass === 'GREEN',
-    'T6b-bare2: tdd-guide with bare colon-less GREEN (no colon) → refused, missingTokenClass GREEN');
+  const bareBaseline = checkEvidenceShape('tdd-guide', 'impl-core', bound('RED: test failed\nred_baseline\n'), opts);
+  assert(bareBaseline.ok === false && bareBaseline.missingTokenClass === 'red_baseline',
+    'T6b-bare2: tdd-guide with bare colon-less red_baseline (no colon) → refused, missingTokenClass red_baseline');
 
   // n/a skip reason
   const evidenceNa = 'n/a: no new code paths added, only documentation changes';
   const r3 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceNa);
   assert(r3.ok === true, 'T6c: tdd-guide with n/a reason → ok');
-}
+});
 
 // ---------------------------------------------------------------------------
-// T7: checkEvidenceShape — implementer needs non_tdd_reason + change-type token
+// T7: checkEvidenceShape — the UNIVERSAL implementing role records a verification tier.
+// `non_tdd_reason` retires with the test-first/no-test dichotomy that justified it: the implementer
+// now takes over ALL behavioral logic, so there is no longer a category to justify. What survives is
+// the tier it actually reached — `tests-green` for behavioral work (LOCAL working evidence; the
+// authoritative verdict is gate-side) or one of the three non-behavioral tiers.
 // ---------------------------------------------------------------------------
-{
-  // Missing non_tdd_reason
-  const evidenceMissingReason = 'regression-green: npm test passed';
-  const r1 = checkEvidenceShape('implementer', 'impl-other', evidenceMissingReason);
-  assert(r1.ok === false, 'T7a: implementer missing non_tdd_reason → not ok');
-  assert(r1.kind === 'shape' && r1.missingTokenClass === 'non_tdd_reason', 'T7a (#319): kind shape + missingTokenClass non_tdd_reason');
+scenario(() => {
+  // The tier ALONE closes — no non_tdd_reason required.
+  const r1 = checkEvidenceShape('implementer', 'impl-other', 'regression-green: npm test passed');
+  assert(r1.ok === true, 'T7a: implementer with a tier and no non_tdd_reason → ok (non_tdd_reason retired), got ' + JSON.stringify(r1));
 
-  // Has non_tdd_reason but missing change-type token
-  const evidenceMissingToken = 'non_tdd_reason: config-only change, no logic paths';
-  const r2 = checkEvidenceShape('implementer', 'impl-other', evidenceMissingToken);
-  assert(r2.ok === false, 'T7b: implementer missing change-type token → not ok');
-  assert(r2.kind === 'shape' && r2.missingTokenClass === 'change-type', 'T7b (#319): kind shape + missingTokenClass change-type');
+  // The behavioral tier is first-class for the universal implementing role.
+  const r1b = checkEvidenceShape('implementer', 'impl-other', 'tests-green: 12/12 assertions green against the authored suite');
+  assert(r1b.ok === true, 'T7a2: implementer with tests-green → ok (the behavioral tier), got ' + JSON.stringify(r1b));
 
-  // Has both: non_tdd_reason + regression-green
-  const evidenceComplete = 'non_tdd_reason: config-only\nregression-green: tests pass';
-  const r3 = checkEvidenceShape('implementer', 'impl-other', evidenceComplete);
-  assert(r3.ok === true, 'T7c: implementer with non_tdd_reason + regression-green → ok');
+  // A legacy artifact still carrying the retired non_tdd_reason closes unchanged (tolerated on read).
+  const r2 = checkEvidenceShape('implementer', 'impl-other', 'non_tdd_reason: config-only\nbuild-green: builds pass');
+  assert(r2.ok === true, 'T7b: a legacy implementer artifact (non_tdd_reason + tier) is tolerated on read');
 
-  // Has both: non_tdd_reason + build-green
-  const evidenceBuildGreen = 'non_tdd_reason: scaffolding\nbuild-green: builds pass';
-  const r4 = checkEvidenceShape('implementer', 'impl-other', evidenceBuildGreen);
-  assert(r4.ok === true, 'T7d: implementer with non_tdd_reason + build-green → ok');
+  // No tier at all still refuses — the tier is not optional.
+  const r2b = checkEvidenceShape('implementer', 'impl-other', 'non_tdd_reason: config-only change, no logic paths');
+  assert(r2b.ok === false && r2b.kind === 'shape' && r2b.missingTokenClass === 'change-type',
+    'T7b2 (#319): implementer missing the verification tier → shape/change-type, got ' + JSON.stringify(r2b));
 
-  // Has both: non_tdd_reason + smoke-integration
-  const evidenceSmoke = 'non_tdd_reason: wiring\nsmoke-integration: smoke passed';
-  const r5 = checkEvidenceShape('implementer', 'impl-other', evidenceSmoke);
-  assert(r5.ok === true, 'T7e: implementer with non_tdd_reason + smoke-integration → ok');
+  // Every surviving alternative satisfies the tier on its own.
+  for (const tier of ['tests-green', 'regression-green', 'build-green', 'smoke-integration']) {
+    const rt = checkEvidenceShape('implementer', 'impl-other', tier + ': verified');
+    assert(rt.ok === true, 'T7c: implementer with ' + tier + ' → ok');
+  }
 
-  // Seed-only scaffolding carries empty keys plus a comment naming every change-type alternative.
-  const hollowSeed = 'evidence-binding: impl-other abc123\n<!-- non_tdd_reason: paste non_tdd_reason here -->\nnon_tdd_reason: \n<!-- regression-green|build-green|smoke-integration -->\nregression-green: \n';
+  // Seed-only scaffolding carries empty keys plus a comment naming every alternative.
+  const hollowSeed = 'evidence-binding: impl-other abc123\n<!-- tests-green|regression-green|build-green|smoke-integration -->\ntests-green: \n';
   const rHollow = checkEvidenceShape('implementer', 'impl-other', hollowSeed);
-  assert(rHollow.ok === false && rHollow.missingTokenClass === 'non_tdd_reason',
+  assert(rHollow.ok === false && rHollow.missingTokenClass === 'change-type',
     'T7e-seed: implementer hollow seed cannot satisfy evidence verification');
 
   // Bare colon-less change-type token (#652 Gap 1): the alternation regex requires `<token>:` PLUS
   // a non-empty value — a body carrying the BARE token name (e.g. "build-green") with no colon at
   // all must still refuse. Guards against a future weakening that accepts a bare token while still
   // refusing an empty `<token>: ` value (the T7e-seed case above) — the "partial-weakening hole".
-  const bareChangeType = 'non_tdd_reason: config-only\nbuild-green\n';
+  const bareChangeType = 'build-green\n';
   const rBareChangeType = checkEvidenceShape('implementer', 'impl-other', bareChangeType);
   assert(rBareChangeType.ok === false && rBareChangeType.missingTokenClass === 'change-type',
     'T7e-bare: implementer with bare colon-less change-type token (no colon) → refused, missingTokenClass change-type');
@@ -4837,14 +4889,14 @@ function makeState(opts) {
   const evidenceNa = 'n/a: no functional change';
   const r6 = checkEvidenceShape('implementer', 'impl-other', evidenceNa);
   assert(r6.ok === true, 'T7f: implementer with n/a → ok');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T7g: a current nonce-bound generic role must satisfy its full registry row.
 // Compact/free-form prose cannot replace the seeded body; legacy calls without a nonce retain the
 // absent-key exemption for old in-flight artifacts.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const compact = 'evidence-binding: explore abc123def456\nexplore code-explorer: done; evidence=.cache/explore.md\n';
   const strict = checkEvidenceShape('code-explorer', 'explore', compact,
     { expectedNonce: 'abc123def456', expectedNodeId: 'explore' });
@@ -4856,7 +4908,7 @@ function makeState(opts) {
   assert(checkEvidenceShape('code-explorer', 'explore', complete,
     { expectedNonce: 'abc123def456', expectedNodeId: 'explore' }).ok === true,
   'T7g: nonce-bound generic evidence passes with its non-empty registry token');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T7m (#634): checkEvidenceShape — metric-optimizer needs NON-EMPTY D6 tokens.
@@ -4864,7 +4916,7 @@ function makeState(opts) {
 // the generic file-present-and-non-empty tail would wrongly accept it, so a
 // metric node could close COMPLETE on a hollow stub with zero ratchet log.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Hollow seeded stub exactly as seedEvidenceFile emits it: every D6 token key
   // present (as a comment + a column-0 line) but with an EMPTY value.
   const hollowStub = [
@@ -4910,12 +4962,12 @@ function makeState(opts) {
   const rAbsent = checkEvidenceShape('metric-optimizer', 'n2-opt', null);
   assert(rAbsent.ok === false && rAbsent.kind === 'absent',
     'T7m-d: metric-optimizer with null evidence → not ok (absent)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T8: checkEvidenceShape — other roles: file present is sufficient
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const evidencePresent = 'Reviewed the changes. LGTM.';
   const r1 = checkEvidenceShape('code-reviewer', 'review', evidencePresent);
   assert(r1.ok === true, 'T8a: code-reviewer with file present → ok');
@@ -4931,13 +4983,13 @@ function makeState(opts) {
   const r4 = checkEvidenceShape('code-reviewer', 'review', '');
   assert(r4.ok === false, 'T8d: code-reviewer with empty evidence → not ok');
   assert(r4.kind === 'absent', 'T8d (#319): empty evidence → kind absent');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T8g (#334): checkEvidenceShape — main-session-gate requires a column-0 verdict and
 // REFUSES the universal 'n/a' self-skip (the inversion vs every other role).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // absent evidence → kind absent, missingTokenClass non-empty
   const rAbsent = checkEvidenceShape('main-session-gate', 'vgate', null);
   assert(rAbsent.ok === false, 'T8g-a: main-session-gate absent evidence → not ok');
@@ -4970,13 +5022,13 @@ function makeState(opts) {
   // last-match-wins + case-insensitive
   const rLast = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\ninstrumentation: none\nre-checked\nverdict: PASS\n');
   assert(rLast.ok === true, 'T8g-g: last-match-wins + case-insensitive verdict → ok');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T9: runOrient — read-only w.r.t. plan/ledger/state; #763 the ONE legal write is the
 // regenerable .cache/context-packet.md side artifact.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const writeFilePaths = [];
 
   const plan = makePlan([
@@ -5027,12 +5079,12 @@ function makeState(opts) {
   assert(result.inProgressNode === 'impl-core', 'T9: inProgressNode detected');
   assert(result.consentHalt === false, 'T9: consentHalt===false when no consent_halt marker');
   assert(result.escalatedToFull === null || result.escalatedToFull === undefined, 'T9: escalatedToFull null/undefined without marker');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T10: runOpenNext — first open: in_progress + baseline recorded
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
   let shellCalls = [];
 
@@ -5099,12 +5151,12 @@ function makeState(opts) {
   // commit-node --start was called
   const commitStartCall = shellCalls.find(c => c.base === 'kaola-workflow-commit-node.js' && c.args.includes('--start'));
   assert(commitStartCall !== undefined, 'T10: commit-node --start was called for baseline');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T11: runOpenNext — allDone short-circuit
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let shellCalls = [];
   let writeFileCalled = false;
 
@@ -5149,12 +5201,12 @@ function makeState(opts) {
   assert(result.allDone === true, 'T11: allDone===true short-circuit');
   assert(result.opened === null, 'T11: opened===null when allDone');
   assert(writeFileCalled === false, 'T11: writeFile not called on allDone');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T12: runOpenNext — --node-id not in ready set → refuse
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
 
   const shellStub = function(scriptPath, args) {
@@ -5196,7 +5248,7 @@ function makeState(opts) {
   assert(result.result === 'refuse', 'T12: node-id not-in-ready → refuse');
   assert(result.reason === 'node_not_ready', 'T12: reason===node_not_ready');
   assert(writeFileCalled === false, 'T12: writeFile not called on refuse');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T13: runRecordEvidence — stdin → .cache, re-injecting the evidence-binding header
@@ -5204,7 +5256,7 @@ function makeState(opts) {
 // so record-evidence re-injects `evidence-binding: <nodeId> <nonce>` when the stdin lacks
 // one. With no on-disk barrier-base (the /fake planPath), the nonce reads empty.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
   const evidenceContent = 'RED: test failed\nGREEN: test passed\n5 assertions\n';
   const expectedWritten = 'evidence-binding: impl-core \n' + evidenceContent;
@@ -5226,14 +5278,14 @@ function makeState(opts) {
   const cacheKey = Object.keys(writtenFiles).find(k => k.includes('.cache/impl-core.md'));
   assert(cacheKey !== undefined, 'T13: .cache/impl-core.md was written');
   assert(writtenFiles[cacheKey] === expectedWritten, 'T13: binding header re-injected ahead of verbatim evidence body');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T13c (#546 G3): when the stdin ALREADY carries an evidence-binding line (even a
 // foreign / copied one), record-evidence writes it UNTOUCHED so checkEvidenceShape can
 // still catch a stale / foreign nonce (anti-replay #392 preserved).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
   const boundContent = 'evidence-binding: other-node deadbeef1234\nRED: x\nGREEN: y\n';
 
@@ -5283,10 +5335,10 @@ function makeState(opts) {
   // (3) Control: the SAME-node binding carrying the MATCHING nonce passes — proves the refusals
   //     above are the nonce/node binding firing, not a blanket reject of every bound evidence.
   const matchOk = checkEvidenceShape('tdd-guide', thisNode,
-    'evidence-binding: ' + thisNode + ' ' + thisNonce + '\nRED: x\nGREEN: y\n',
+    'evidence-binding: ' + thisNode + ' ' + thisNonce + '\nRED: x\nred_baseline: ' + thisNonce + '\n',
     { expectedNonce: thisNonce, expectedNodeId: thisNode });
   assert(matchOk.ok === true, 'T13d: matching node+nonce binding → ok (control: binding check, not blanket reject)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T13b (#318): runRecordEvidence + validateProjectName refuse a reserved/illegal project
@@ -5295,7 +5347,7 @@ function makeState(opts) {
 // path substring — this repo's own toplevel IS kaola-workflow, so a legit issue-N project
 // resolves to .../kaola-workflow/kaola-workflow/issue-N and a substring check would false-positive.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // validateProjectName: reserved literal + escaping segments rejected; legit issue-N accepted.
   assert(validateProjectName('kaola-workflow').ok === false, 'T13b: reserved literal kaola-workflow rejected');
   assert(validateProjectName('issue-249').ok === true, 'T13b: legit issue-249 accepted (no substring false-positive)');
@@ -5332,12 +5384,12 @@ function makeState(opts) {
   });
   assert(ok.result === 'ok', 'T13b: legit project record-evidence still succeeds');
   assert(Object.keys(okFiles).some(k => k.includes('issue-249/.cache/n7.md')), 'T13b: legit evidence written to canonical issue-249/.cache path');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T14: runCloseAndOpenNext — barrier exit0 + evidence → close + compliance row (bare role) + fused advance
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
   let shellCalls = [];
 
@@ -5428,12 +5480,12 @@ function makeState(opts) {
   // commit-node barrier was called (without --start)
   const barrierCall = shellCalls.find(c => c.base === 'kaola-workflow-commit-node.js' && !c.args.includes('--start') && !c.args.includes('--json') === false);
   assert(barrierCall !== undefined || shellCalls.some(c => c.base === 'kaola-workflow-commit-node.js' && !c.args.includes('--start')), 'T14: commit-node barrier called');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T14b: runCloseAndOpenNext — code-reviewer node → compliance row uses BARE role string
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
 
   const nodes = [
@@ -5514,7 +5566,7 @@ function makeState(opts) {
     'T14b (#714): appended compliance row uses the canonical role (node-id) cell');
   const legacyBareFormat = complianceSection.includes('| code-reviewer |');
   assert(legacyBareFormat === false, 'T14b (#714): appended compliance row is NEVER a bare role cell');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T14c (#338): runCloseAndOpenNext — finalize SINK node → compliance row is
@@ -5522,7 +5574,7 @@ function makeState(opts) {
 // finalize sink bookkeeping main-session-direct (no Agent dispatch), so certifying it
 // as subagent-invoked would falsely claim a delegation that never happened.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
 
   const nodes = [
@@ -5590,12 +5642,255 @@ function makeState(opts) {
     'T14c: finalize sink row is main-session-direct');
   assert(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
     'T14c: finalize sink row is NOT falsely certified subagent-invoked');
-}
+});
+
+// ---------------------------------------------------------------------------
+// T14d (#817): execution mode is the orchestrator's per-unit judgment, so the
+// compliance row must be able to record `main-session-direct` for ANY node the
+// orchestrator ran inline — not only the finalize sink. Bidirectional by
+// construction: the SAME close runs twice, once with the flag and once without,
+// and the two runs must disagree. Without the second half the assertion would
+// still pass if the producer hardcoded main-session-direct for every node.
+// The flag is a RECORD, never a gate: both runs close ok, and neither refuses.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const nodes = [
+    '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+  const basePlan = makePlan([
+    '| impl-core | in_progress | |',
+    '| review | pending | |',
+    '| done | pending | |',
+  ], nodes);
+
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing test\nGREEN: test passes\n',
+  };
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core',
+        overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const closeOnce = (mainSessionDirect) => {
+    let planContent = basePlan;
+    const written = {};
+    const result = runCloseAndOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      nodeId: 'impl-core',
+      mainSessionDirect,
+      shell: shellStub,
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return makeState();
+        if (cacheFiles[fpath]) return cacheFiles[fpath];
+        throw new Error('ENOENT: ' + fpath);
+      },
+      writeFile: (fpath, content) => {
+        written[fpath] = content;
+        if (fpath.endsWith('workflow-plan.md')) planContent = content;
+      },
+      cacheExists: (fpath) => !!cacheFiles[fpath],
+    });
+    return { result, plan: written['/fake/kaola-workflow/test-project/workflow-plan.md'] };
+  };
+
+  const inline = closeOnce(true);
+  assert(inline.result.result === 'ok', 'T14d: an inline-run node closes ok (a record, not a gate)');
+  assert(inline.plan.includes('| tdd-guide (impl-core) | main-session-direct |'),
+    'T14d: a non-finalize node the orchestrator ran inline records main-session-direct');
+  assert(!inline.plan.includes('| tdd-guide (impl-core) | subagent-invoked'),
+    'T14d: the inline close does NOT falsely certify a delegation that never happened');
+
+  const dispatched = closeOnce(false);
+  assert(dispatched.result.result === 'ok', 'T14d: the dispatched close still closes ok');
+  assert(dispatched.plan.includes('| tdd-guide (impl-core) | subagent-invoked |'),
+    'T14d (mutation proof): without the flag the SAME node still records subagent-invoked');
+});
+
+// ---------------------------------------------------------------------------
+// T14e (#817 repair): the two NON-DELEGABLE roles record `main-session-direct`
+// UNCONDITIONALLY — with NO `--main-session-direct` flag anywhere in the call.
+// `finalize` already did. `main-session-gate` did NOT, so a gate node defaulted to
+// `subagent-invoked` — a false delegation claim on a role the plan-validator refuses
+// to let carry a model precisely because "it is never dispatched as a subagent", and
+// which the plan-run surfaces call non-delegable. Both roles are pinned in ONE loop
+// so neither can silently regress alone.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const cases = [
+    {
+      id: 'done', role: 'finalize',
+      nodes: [
+        '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+        '| review | code-reviewer | impl-core | — | 1 | sequence |',
+        '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+      ],
+      ledger: ['| impl-core | complete | |', '| review | complete | |', '| done | in_progress | |'],
+      evidence: 'finalize bookkeeping: docs + state recorded.',
+    },
+    {
+      id: 'gate', role: 'main-session-gate',
+      nodes: [
+        '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+        '| gate | main-session-gate | impl-core | — | 1 | sequence |',
+        '| done | finalize | gate | CHANGELOG.md | 1 | sequence |',
+      ],
+      ledger: ['| impl-core | complete | |', '| gate | in_progress | |', '| done | pending | |'],
+      evidence: 'verdict: pass\nfindings_blocking: 0\ninstrumentation: none\n',
+    },
+  ];
+
+  for (const c of cases) {
+    let planContent = makePlan(c.ledger, c.nodes);
+    const written = {};
+    const evidencePath = '/fake/kaola-workflow/test-project/.cache/' + c.id + '.md';
+
+    const result = runCloseAndOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      nodeId: c.id,
+      // DELIBERATELY no mainSessionDirect — these two roles must not need the flag.
+      shell: (scriptPath, args) => {
+        const base = path.basename(scriptPath);
+        const argsArr = args || [];
+        if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+          return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: c.id,
+            overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+        }
+        if (base === 'kaola-workflow-next-action.js') {
+          return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+        }
+        return { exitCode: 1 };
+      },
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return makeState();
+        if (fpath === evidencePath) return c.evidence;
+        throw new Error('ENOENT: ' + fpath);
+      },
+      writeFile: (fpath, content) => {
+        written[fpath] = content;
+        if (fpath.endsWith('workflow-plan.md')) planContent = content;
+      },
+      cacheExists: (fpath) => fpath === evidencePath,
+    });
+
+    assert(result.result === 'ok',
+      'T14e: the non-delegable ' + c.role + ' node closes ok, got ' + JSON.stringify(result));
+    const plan = written['/fake/kaola-workflow/test-project/workflow-plan.md'];
+    assert(plan !== undefined, 'T14e: ' + c.role + ' close writes the plan');
+    assert(plan.includes('| ' + c.role + ' (' + c.id + ') | main-session-direct |'),
+      'T14e: ' + c.role + ' is non-delegable — it records main-session-direct with NO flag passed');
+    assert(!plan.includes('| ' + c.role + ' (' + c.id + ') | subagent-invoked'),
+      'T14e: ' + c.role + ' never falsely certifies a delegation that cannot happen');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T14f (#817 repair): pin the `--main-session-direct` ARGV SURFACE. T14d drives the
+// close functions in-process, so the literal flag string never crossed the CLI parse
+// — replacing `args.includes('--main-session-direct')` with `false` in either
+// subcommand branch broke the flag with the whole suite still green. This drives the
+// REAL subprocess for BOTH close subcommands, twice each on fresh fixtures (with and
+// without the flag), and asserts the RECORDED compliance differs. Bidirectional: a
+// parse forced to false reds the with-flag half; one forced to true reds the other.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const { execFileSync: exec817 } = require('child_process');
+  const NODE_CLI_817 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_817 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  // Build a fresh frozen fixture, open `impl` through the real CLI, record its bound
+  // evidence, then close it through the real CLI with `extraCloseArgs`. Returns the
+  // compliance status the close actually WROTE to the plan.
+  const closeViaCli = (closeSub, openSub, extraCloseArgs) => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-817-argv-'));
+    try {
+      const project = 'test-project';
+      const projDir = path.join(repoRoot, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| impl     | tdd-guide     | —      | scripts/a.js | 1 | sequence |',
+        '| review   | code-reviewer | impl   | —            | 1 | sequence |',
+        '| finalize | finalize      | review | —            | 1 | sequence |', '',
+        '## Design', '',
+        'Decompose: impl builds scripts/a.js; review gates; finalize sinks. sequence impl→review: '
+          + 'S1 — review consumes impl\'s change. Done: validation passes and review clears.', '',
+        '## Node Ledger', '', '| id | status |', '| --- | --- |',
+        '| impl | pending |', '| review | pending |', '| finalize | pending |', '',
+      ].join('\n') + '\n');
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (a) => exec817('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      freezeLegacyFixture(exec817, 'node', VALIDATOR_817, planPath, { cwd: repoRoot, stdio: 'pipe' });
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']); g(['commit', '-m', 'seed']);
+
+      const run = (args) => {
+        let out = {}; let exit = 0;
+        try { out = JSON.parse(exec817('node', [NODE_CLI_817, ...args], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); }
+        catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+        return { out, exit };
+      };
+
+      const opened = run([openSub, '--project', project, '--json']);
+      const openedList = Array.isArray(opened.out.opened) ? opened.out.opened
+        : (opened.out.opened ? [Object.assign({ nonce: opened.out.nonce }, opened.out.opened)] : []);
+      const impl = openedList.find(n => n && n.id === 'impl');
+      assert(impl, 'T14f: ' + openSub + ' opens impl, got ' + JSON.stringify(opened.out));
+      fs.writeFileSync(path.join(projDir, '.cache', 'impl.md'),
+        'evidence-binding: impl ' + impl.nonce
+        + '\nRED: impl failed before implementation\nred_baseline: ' + impl.nonce
+        + '\nGREEN: impl passes after implementation\n');
+
+      const closed = run([closeSub, '--project', project, '--node-id', 'impl', '--json', ...extraCloseArgs]);
+      const finalPlan = fs.readFileSync(planPath, 'utf8');
+      const row = finalPlan.match(/^\|\s*tdd-guide \(impl\)\s*\|\s*([a-z-]+)\s*\|/m);
+      return { closed, status: row ? row[1] : null };
+    } finally { try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch (_) {} }
+  };
+
+  for (const [closeSub, openSub] of [['close-node', 'open-ready'], ['close-and-open-next', 'open-next']]) {
+    const withFlag = closeViaCli(closeSub, openSub, ['--main-session-direct']);
+    const without = closeViaCli(closeSub, openSub, []);
+
+    assert(withFlag.closed.out.result === 'ok',
+      'T14f: real `' + closeSub + ' --main-session-direct` closes ok, got ' + JSON.stringify(withFlag.closed.out));
+    assert(without.closed.out.result === 'ok',
+      'T14f: real `' + closeSub + '` closes ok, got ' + JSON.stringify(without.closed.out));
+    assert(withFlag.status === 'main-session-direct',
+      'T14f: `' + closeSub + '` ARGV parse honours --main-session-direct, recorded ' + withFlag.status);
+    assert(without.status === 'subagent-invoked',
+      'T14f: `' + closeSub + '` without the flag still records subagent-invoked, recorded ' + without.status);
+    assert(withFlag.status !== without.status,
+      'T14f (mutation proof): the flag CHANGES the recorded compliance across the `' + closeSub + '` CLI boundary');
+  }
+});
 
 // ---------------------------------------------------------------------------
 // T15: runCloseAndOpenNext — barrier exit1 → refuse, NO close/advance
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
   let shellCalls = [];
 
@@ -5646,12 +5941,12 @@ function makeState(opts) {
   // next-action should NOT be called
   const nextActionCalled = shellCalls.some(c => c.base === 'kaola-workflow-next-action.js');
   assert(nextActionCalled === false, 'T15: next-action NOT called on barrier failure');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T16: runCloseAndOpenNext — present-but-malformed evidence → refuse evidence_shape_failed, NO mutation
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
 
   const plan = makePlan([
@@ -5661,8 +5956,11 @@ function makeState(opts) {
     '| finalize | pending | |',
   ]);
 
-  // tdd-guide evidence is missing GREEN token
-  const badEvidence = 'RED: test failed as expected\nNo green yet.';
+  // tdd-guide evidence is present but carries no RED signature at all. (Deliberately a token the
+  // contract requires UNCONDITIONALLY: this harness has no barrier-base file, so readNonce yields
+  // null and the nonce-gated `red_baseline` binding check is skipped by design — a fixture resting
+  // on it would assert nothing here.)
+  const badEvidence = 'Some notes about the work.\nNo failing-test signature was captured.';
   const cacheFiles = {
     '/fake/kaola-workflow/test-project/.cache/impl-core.md': badEvidence,
   };
@@ -5686,17 +5984,17 @@ function makeState(opts) {
   });
 
   assert(result.result === 'refuse', 'T16: malformed evidence → refuse');
-  assert(result.reason === 'evidence_shape_failed', 'T16 (#319): present-but-malformed (tdd-guide RED without GREEN) → reason evidence_shape_failed, got ' + JSON.stringify(result.reason));
-  assert(result.missingTokenClass === 'GREEN', 'T16 (#319): missing token class GREEN surfaced, got ' + JSON.stringify(result.missingTokenClass));
+  assert(result.reason === 'evidence_shape_failed', 'T16 (#319): present-but-malformed (tdd-guide evidence with no RED) → reason evidence_shape_failed, got ' + JSON.stringify(result.reason));
+  assert(result.missingTokenClass === 'RED', 'T16 (#319): missing token class RED surfaced, got ' + JSON.stringify(result.missingTokenClass));
   assert(writeFileCalled === false, 'T16: writeFile NOT called on shape failure');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T16-348a (#348): runCloseAndOpenNext — node id absent from the ledger →
 // refuse close_node_not_in_ledger, NO mutation (no compliance row, no plan write).
 // Evidence + barrier pass; only the ledger splice is a found:false no-op.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
 
   // impl-core IS in ## Nodes (role resolves) but ABSENT from the ## Node Ledger rows.
@@ -5731,14 +6029,14 @@ function makeState(opts) {
   assert(result.result === 'refuse', 'T16-348a: missing ledger row → refuse');
   assert(result.reason === 'close_node_not_in_ledger', 'T16-348a: reason close_node_not_in_ledger, got ' + JSON.stringify(result.reason));
   assert(writeFileCalled === false, 'T16-348a: NO mutation — writeFile not called (no compliance row over an unclosed node)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T16-348b (#348): runCloseAndOpenNext — ledger row still PENDING (the #305-class
 // crash interleaving: baseline recorded before the in_progress flip) → refuse
 // close_transition_disallowed, NO mutation.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
 
   const plan = makePlan([
@@ -5772,14 +6070,14 @@ function makeState(opts) {
   assert(result.result === 'refuse', 'T16-348b: pending row → refuse');
   assert(result.reason === 'close_transition_disallowed', 'T16-348b: reason close_transition_disallowed, got ' + JSON.stringify(result.reason));
   assert(writeFileCalled === false, 'T16-348b: NO mutation — writeFile not called over a still-pending node');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T16-348c (#348): runCloseAndOpenNext — ledger row is n/a (skipped) → refuse
 // close_transition_disallowed (n/a dropped from allowFrom; a skipped node must NOT
 // be flipped to complete).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
 
   const plan = makePlan([
@@ -5813,12 +6111,12 @@ function makeState(opts) {
   assert(result.result === 'refuse', 'T16-348c: n/a row → refuse');
   assert(result.reason === 'close_transition_disallowed', 'T16-348c: n/a not flipped to complete, got ' + JSON.stringify(result.reason));
   assert(writeFileCalled === false, 'T16-348c: NO mutation over an n/a node');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T17: runCloseAndOpenNext — selector arms → n/a written BEFORE fused advance
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
   let shellCalls = [];
 
@@ -5911,14 +6209,14 @@ function makeState(opts) {
 
   // next-action was called (for fused advance in step d)
   assert(nextActionCallCount >= 1, 'T17: next-action called for fused advance');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T18: runWriteHalt — consent writes ONE cause marker; idempotent
 // (#743) A consent halt is an in-place stop-and-ask; it records only its cause
 // (escalated_to_full: consent). The vestigial `escalated_to_full: security` half is gone.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writtenFiles = {};
 
   const plan = makePlan([
@@ -5996,12 +6294,12 @@ function makeState(opts) {
   const securityCount = (stateAfterRun2.match(/escalated_to_full: security/g) || []).length;
   assert(consentCount === 1, 'T18: escalated_to_full:consent appears exactly once after idempotent run, got ' + consentCount);
   assert(securityCount === 0, 'T18: escalated_to_full:security never appears, got ' + securityCount);
-}
+});
 
 // ---------------------------------------------------------------------------
 // T19: shellNode seam — stub script exiting 1 with canned JSON → {exitCode:1,...parsed}
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-adaptive-node-T19-'));
   try {
     const stubPath = path.join(tmpDir, 'stub-script.js');
@@ -6019,13 +6317,13 @@ function makeState(opts) {
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true }); } catch (_) {}
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T20a: runOrient — single in_progress, NO manifest → legacy single-node path
 //       (back-compat proof: inProgressNode set, inProgressNodes.length===1, batch:null)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const writeFilePaths = [];
 
   const plan = makePlan([
@@ -6079,13 +6377,13 @@ function makeState(opts) {
   assert(result.inProgressNodes.length === 1, 'T20a: inProgressNodes lists exactly the one in_progress row');
   assert(result.inProgressNodes[0] === 'impl-core', 'T20a: inProgressNodes[0]===impl-core');
   assert(result.batch === null, 'T20a: batch===null on legacy single-node path');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T20b: runOrient — TWO in_progress rows WITH a matching active-batch.json manifest
 //       → valid active batch (result ok, batch.state set, batch.members lists both, NO refusal)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | in_progress | |',
@@ -6139,13 +6437,13 @@ function makeState(opts) {
   assert(result.batch.members.length === 2, 'T20b: batch.members lists both members');
   const memberIds = result.batch.members.map(m => m.id).sort();
   assert(memberIds[0] === 'impl-core' && memberIds[1] === 'impl-other', 'T20b: batch.members ids match the two in_progress rows');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T20c: runOrient — TWO in_progress rows WITHOUT a manifest → typed refusal
 //       (result refuse, reason orphan_multi_in_progress, inProgressNodes lists both)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let writeFileCalled = false;
 
   const plan = makePlan([
@@ -6187,13 +6485,13 @@ function makeState(opts) {
   assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'T20c: inProgressNodes lists both orphaned rows');
   const ids = result.inProgressNodes.slice().sort();
   assert(ids[0] === 'impl-core' && ids[1] === 'impl-other', 'T20c: inProgressNodes are the two in_progress ids');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T20d: runOrient — TWO in_progress rows WITH a MISMATCHED manifest member set
 //       → typed refusal orphan_multi_in_progress (member set must EQUAL in_progress set)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | in_progress | |',
@@ -6242,13 +6540,13 @@ function makeState(opts) {
   assert(result.result === 'refuse', 'T20d: multi in_progress + mismatched manifest → refuse');
   assert(result.reason === 'orphan_multi_in_progress', 'T20d: reason===orphan_multi_in_progress on member-set mismatch');
   assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'T20d: inProgressNodes lists both in_progress rows');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T20e: runOrient — consentHalt / escalatedToFull / allDone paths unchanged
 //       (multi-in_progress legality gate must not disturb these existing fields)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | complete | |',
     '| impl-other | complete | |',
@@ -6288,7 +6586,7 @@ function makeState(opts) {
   assert(result.inProgressNode === null, 'T20e: inProgressNode null when none in_progress (unchanged)');
   assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 0, 'T20e: inProgressNodes empty array when none in_progress');
   assert(result.batch === null, 'T20e: batch null when no in_progress / no manifest');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R4 site (b): runOrient PARTIAL-SEAL — plan ledger has 'a' complete, 'b'+'c'
@@ -6297,7 +6595,7 @@ function makeState(opts) {
 //     UNSEALED manifest members (b,c), NOT all members (a,b,c), and return ok
 //     with batch != null.  (TDD RED before the unsealed-filter is applied.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Plan: 'a' complete, 'b' and 'c' in_progress (partial-seal crash-resume).
   const partialSealNodes = [
     '| a | tdd-guide        | —   | — | 1 | fanout(verify) |',
@@ -6354,7 +6652,7 @@ function makeState(opts) {
   assert(result.result === 'ok', 'R4b: partial-seal (a=sealed, b+c in_progress) → result ok (NOT orphan_multi_in_progress)');
   assert(result.batch !== null, 'R4b: batch object present (valid partial-seal batch)');
   assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'R4b: inProgressNodes lists b and c');
-}
+});
 
 // ---------------------------------------------------------------------------
 // #293 characterization-lock: runOrient with manifest=[{id:'a',sealed:true}]
@@ -6363,7 +6661,7 @@ function makeState(opts) {
 //     locks the behavior in place so future edits cannot regress it.
 //     Uses the shared fixture from fixtures-orphan-legality.js (anti-drift).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
@@ -6419,7 +6717,7 @@ function makeState(opts) {
     '#293 orient-lock: single in_progress + all-sealed manifest → result:ok (legacy single-node path)');
   assert(result.batch === RUN_ORIENT_EXPECTED.batch,
     '#293 orient-lock: single in_progress + all-sealed manifest → batch:null (NOT a batch path)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // #305: runOrient on a member.opening:true interrupted top-up (manifest state
@@ -6430,7 +6728,7 @@ function makeState(opts) {
 //     (after). Mirrors the crossCheckStatus site via the shared fixture.
 //     (TDD RED before the member-opening short-circuit; GREEN after.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const memberIds = TOPUP_INCOMPLETE_MANIFEST.members.map(m => m.id); // ['a','b','c']
   const planNodes = memberIds
     .map(id => `| ${id} | code-explorer | — | — | 1 | fanout(scan) |`)
@@ -6470,13 +6768,13 @@ function makeState(opts) {
   const after = orientFor(TOPUP_INCOMPLETE_IN_PROGRESS_AFTER);
   assert(after.result === 'refuse' && after.reason === TOPUP_INCOMPLETE_REASON,
     '#305 orient: interrupted top-up AFTER flip → refuse batch_topup_incomplete (NOT accepted as a valid batch), got ' + JSON.stringify({ result: after.result, reason: after.reason, batch: after.batch }));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T21 (#303 gap #2): runCloseAndOpenNext — closing a node that exposes a >=2 own-pending
 // ready frontier returns enterBatch:true and does NOT single-open a node (no serialization).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| prep | complete | |',
     '| a | pending | |',
@@ -6544,13 +6842,13 @@ function makeState(opts) {
   assert(writtenPlan.includes('| prep | complete | |'), 'T21: prep marked complete');
   assert(writtenPlan.includes('| a | pending | |') && writtenPlan.includes('| b | pending | |') && writtenPlan.includes('| c | pending | |'),
     'T21: no sibling single-opened by fused advance (all still pending for the batch opener)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T22 (#303 sub-gap C): runOrient — a fresh frontier (nothing in_progress) with >=2 own-pending
 // ready siblings signals enterBatch:true so a plan that STARTS with a fan-out is batched.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| a | pending | |',
     '| b | pending | |',
@@ -6589,14 +6887,14 @@ function makeState(opts) {
   assert(result.enterBatch === true, 'T22: enterBatch===true at a fresh >=2 frontier');
   assert(Array.isArray(result.frontier) && result.frontier.length === 2, 'T22: frontier carries both start siblings');
   assert(result.inProgressNodes.length === 0, 'T22: nothing in_progress at the start frontier');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T23a (#334): runOrient enterBatch EXCLUDES a main-session-gate. Frontier [gate, x]
 // (delegable count 1) → enterBatch:false. Frontier [gate, x, y] (delegable count 2) →
 // enterBatch:true with the gate filtered OUT of the frontier.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| vgate | pending | |', '| x | pending | |', '| review | pending | |',
   ], [
@@ -6624,8 +6922,8 @@ function makeState(opts) {
   assert(res.result === 'ok', 'T23a: orient [gate, x] result ok');
   assert(res.enterBatch === false, 'T23a: [gate, x] → enterBatch false (delegable count 1, the gate is excluded)');
   assert(Array.isArray(res.frontier) && res.frontier.length === 0, 'T23a: enterBatch false → empty frontier');
-}
-{
+});
+scenario(() => {
   const plan = makePlan([
     '| vgate | pending | |', '| x | pending | |', '| y | pending | |', '| review | pending | |',
   ], [
@@ -6655,13 +6953,13 @@ function makeState(opts) {
   assert(res.enterBatch === true, 'T23b: [gate, x, y] → enterBatch true (2 delegable)');
   assert(Array.isArray(res.frontier) && res.frontier.length === 2, 'T23b: frontier carries 2 siblings (gate excluded)');
   assert(!res.frontier.some(n => n.id === 'vgate'), 'T23b: the gate is NOT in the batch frontier');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T23c (#334): runCloseAndOpenNext enterBatch EXCLUDES a main-session-gate from the
 // post-close frontier. Closing `prep` exposes [vgate, a, b]; only [a, b] are batched.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| prep | in_progress | |', '| vgate | pending | |', '| a | pending | |', '| b | pending | |', '| review | pending | |',
   ], [
@@ -6704,7 +7002,7 @@ function makeState(opts) {
   assert(result.enterBatch === true, 'T23c: [vgate, a, b] → enterBatch true (2 delegable a,b)');
   assert(Array.isArray(result.frontier) && result.frontier.length === 2 && !result.frontier.some(n => n.id === 'vgate'),
     'T23c: frontier batches [a, b], the gate excluded');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T23d (#334): runReopenNode resets a downstream COMPLETE main-session-gate and removes its
@@ -6712,7 +7010,7 @@ function makeState(opts) {
 // a→impl→review(code-reviewer)→vgate(main-session-gate)→finalize, everything the reopen
 // touches complete; the sink stays pending (a complete sink is a separate typed refusal).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -6738,7 +7036,7 @@ function makeState(opts) {
   assert(result.gatesReset && result.gatesReset.includes('vgate') && result.gatesReset.includes('review'),
     'T23d: gatesReset names the visual gate + reviewer, got ' + JSON.stringify(result.gatesReset));
   assert(removed.includes('barrier-base-vgate'), 'T23d: stale visual-gate baseline removed, got ' + JSON.stringify(removed));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #308: runReopenNode — first-class plan-repair transaction. Reopens a COMPLETE
@@ -6746,7 +7044,7 @@ function makeState(opts) {
 // barrier-base baselines, reopens N to in_progress, and re-records a fresh
 // baseline. Plan a→impl→review(code-reviewer)→finalize, all complete.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // The sink is `pending` — the mid-run repair this narrow reset was designed for. (It formerly read
   // `complete` while asserting that transitive readiness "withholds" it, which is false for a completed
   // sink: a complete row is not withheld, it is stranded above the gate this reopen just reset; that case
@@ -6810,7 +7108,7 @@ function makeState(opts) {
     + JSON.stringify(removed));
   assert(shelled.includes('kaola-workflow-commit-node.js'), '#308 reopen: fresh baseline (commit-node --start) recorded for impl');
   assert(shelled.includes('kaola-workflow-plan-validator.js'), '#368 reopen: validator --drop-base shelled to delete the anchored baseline ref(s) (no dangling ref)');
-}
+});
 
 // #748-SINK: reopen/repair behind a COMPLETED sink is refused at MUTATION time. runReopenNode folds only
 // gate roles, and its orphan guard inspects only in_progress rows — so a `complete` non-gate descendant was
@@ -6821,7 +7119,7 @@ function makeState(opts) {
 // SYMMETRY (must not over-refuse): pending sink -> still ADMISSIBLE (the designed mid-run repair);
 // in_progress sink -> the pre-existing would_orphan_in_progress; complete sink -> the new refusal;
 // reopening the completed sink ITSELF -> ADMISSIBLE (a node is not its own descendant).
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -6936,7 +7234,7 @@ function makeState(opts) {
     assert(/\|\s*impl\s*\|\s*complete\s*\|/.test(planContent) && removed.length === 0,
       '#748-SINK: the repair-node refusal is ZERO-mutation, got ' + JSON.stringify(removed));
   }
-}
+});
 
 // #748-STRAND: the invariant the guard protects is ROLE-AGNOSTIC. verifyCurrentEpochAuthority refuses
 // `state_ledger_progress_invalid` for ANY node at complete/in_progress/n/a whose dependency is neither
@@ -6945,7 +7243,7 @@ function makeState(opts) {
 // pending) with zero warning at mutation time. Plan a -> impl -> review(gate) -> docs -> finalize, with
 // docs COMPLETE and the sink still pending: reopening impl folds `review` to pending and would strand the
 // complete `docs` row above it.
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -6990,7 +7288,7 @@ function makeState(opts) {
     && /NOT finished/.test(result.operator_hint),
     '#748-STRAND: from the MID-RUN trigger (sink still pending) the hint must NOT claim the run is '
     + 'finished / the work is shipped, got ' + JSON.stringify(result.operator_hint));
-}
+});
 
 // #748-R5-DISJOINT: the stranded-dependent guard must refuse only what THIS mutation NEWLY strands.
 // Computing the stranded set from the POST-mutation ledger alone and refusing on any hit conflates a
@@ -7002,7 +7300,7 @@ function makeState(opts) {
 // set would retire the repair-node arm of the guard entirely, since repair-node's safe point runs with a
 // downstream gate at in_progress and every settled descendant above it already reads as stranded-before.
 // That case is pinned above, at #748-SINK.)
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7032,7 +7330,7 @@ function makeState(opts) {
     && /\|\s*u1\s*\|\s*pending\s*\|/.test(planContent) && /\|\s*u2\s*\|\s*n\/a\s*\|/.test(planContent),
     '#748-R5-DISJOINT: the disjoint leg is left EXACTLY as it was — the guard neither refuses nor repairs '
     + 'a violation it did not create, got ' + planContent);
-}
+});
 
 // #748-R5-READONLY: a COMPLETE descendant with an EMPTY declared write set produced no repo bytes, so
 // there is nothing about it to undo — folding it back to pending is safe and cheap, exactly like the
@@ -7044,7 +7342,7 @@ function makeState(opts) {
 // nor a sink-receipt journal, so no in-band marker can distinguish a pristine sink from one that already
 // committed/pushed/merged — folding it could double-apply irreversible work. A settled sink therefore
 // still refuses, and the replan exit named in the hint is the sanctioned recovery for that state.
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7117,13 +7415,13 @@ function makeState(opts) {
       '#748-R5-READONLY: repair-node clears the folded read-only row\'s stale baseline + evidence, got '
       + JSON.stringify(repairRemoved));
   }
-}
+});
 
 // #748-R5-SPELLING: the ledger-status sets this guard compares against must accept the SAME defensive
 // spellings the rest of this file accepts (TERMINAL_LEDGER: 'n/a', 'n.a', 'na'). A sink row spelled `na`
 // is settled exactly like `n/a`; reading it as unsatisfied instead yields a spurious refusal naming the
 // SINK as stranded above its own complete gate.
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7150,12 +7448,12 @@ function makeState(opts) {
       '#748-R5-SPELLING: a sink spelled "' + spelling + '" is settled exactly like n/a, got '
       + JSON.stringify(result));
   }
-}
+});
 
 // #349: reopen-node purges stale GATE verdict evidence (.cache/<gate-id>.md) for each reset gate,
 // so a later close-without-fresh-dispatch cannot pass Finalization's --verdict-check on a STALE
 // `verdict: pass`. The reopened node's OWN evidence is left (it will be re-recorded on re-impl).
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7184,11 +7482,11 @@ function makeState(opts) {
     '#349: result.evidenceRemoved names review.md, got ' + JSON.stringify(result.evidenceRemoved));
   assert(!removed.includes('impl.md'),
     "#349: the reopened node's OWN evidence (impl.md) is NOT purged — only reset GATES, got " + JSON.stringify(removed));
-}
+});
 
 // #349: a reset FANOUT adversarial-verifier gate → purge the per-instance
 // .cache/adversarial-verifier-*.md siblings the fanout verdict-check globs (not keyed by node id).
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7216,12 +7514,12 @@ function makeState(opts) {
     '#349 fanout: per-instance adversarial-verifier-*.md siblings purged, got ' + JSON.stringify(removed));
   assert(!removed.includes('unrelated.md'),
     '#349 fanout: unrelated .cache files left untouched, got ' + JSON.stringify(removed));
-}
+});
 
 // #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).
 // #658: repair reset treats an explicit skeptic group as one collective gate and
 // removes only that group's node-id receipts (not a same-role independent group).
-{
+scenario(() => {
   const planNodes = [
     '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -7246,10 +7544,10 @@ function makeState(opts) {
     '#658 reopen resets the exact collective explicit skeptic group, got ' + JSON.stringify(r));
   assert(removed.includes('av-a.md') && removed.includes('av-b.md') && !removed.includes('foreign-av.md'),
     '#658 reopen cleanup is exact-group only, got ' + JSON.stringify(removed));
-}
+});
 
 // #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7268,12 +7566,12 @@ function makeState(opts) {
   });
   assert(result.result === 'refuse' && result.reason === 'node_not_complete',
     '#308 reopen: refuses a non-complete node, got ' + JSON.stringify(result));
-}
+});
 
 // #308/#383: runReopenNode refuses over a live #377 running-set fan-out (scheduler_active). (#594: the
 // former sibling arm — refuse active_batch_exists over a live active-batch.json — was removed; the
 // batch manifest has no producer left. The running-set arm is the surviving live-coordination guard.)
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7293,7 +7591,7 @@ function makeState(opts) {
   });
   assert(result.result === 'refuse' && result.reason === 'scheduler_active',
     '#308 reopen: refuses over a live running-set fan-out, got ' + JSON.stringify(result));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #308 INTEGRATION (reopen-node × transitive readiness): the COMPOSITION the
@@ -7303,7 +7601,7 @@ function makeState(opts) {
 // readiness (no premature [N, sink] frontier). Only commit-node (the git baseline)
 // is stubbed; spliceLedgerNode + parseNodes + computeNextAction run for real.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { computeNextAction } = require('./kaola-workflow-next-action');
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
@@ -7328,7 +7626,7 @@ function makeState(opts) {
     '#308 integ: after reopen-node, next-action offers ONLY [impl] — gate + sink withheld, got ' + JSON.stringify(ready));
   assert(!na.readySet.some(n => n.id === 'finalize'),
     '#308 integ: finalize sink is NOT prematurely ready after the gate reset');
-}
+});
 
 // ---------------------------------------------------------------------------
 // #343: runReopenNode MID-GATE fold — a post-dominating gate that is still
@@ -7340,7 +7638,7 @@ function makeState(opts) {
 // an already-pending downstream gate). Exactly ONE in_progress row remains.
 // Plan a→impl→review(code-reviewer)→averify(adversarial-verifier)→finalize.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
@@ -7394,7 +7692,7 @@ function makeState(opts) {
   const commitCall = shelled.find(s => s.base === 'kaola-workflow-commit-node.js');
   assert(commitCall && commitCall.args.includes('--start') && commitCall.args.includes('impl'),
     '#343 fold: fresh baseline (commit-node --start) recorded for impl, got ' + JSON.stringify(shelled));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #343: runReopenNode fail-closed orphan guard — an in_progress row that is
@@ -7402,7 +7700,7 @@ function makeState(opts) {
 // refuses typed would_orphan_in_progress BEFORE any real side effect: zero
 // unlinks, zero writes (the stub throws if called), no baseline shelled.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | fanout(work) |',
@@ -7436,7 +7734,7 @@ function makeState(opts) {
   assert(removed.length === 0, '#343 guard: zero unlinks on refusal (pure no-op), got ' + JSON.stringify(removed));
   assert(!shelled.includes('kaola-workflow-commit-node.js'),
     '#343 guard: no commit-node baseline shelled on refusal, got ' + JSON.stringify(shelled));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #343 INTEGRATION (mid-gate fold × transitive readiness): the COMPOSITION the
@@ -7445,7 +7743,7 @@ function makeState(opts) {
 // next-action to offer ONLY the reopened node — the folded gate, the downstream
 // pending gate, and the sink all stay withheld by transitive readiness.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { computeNextAction } = require('./kaola-workflow-next-action');
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
@@ -7473,14 +7771,14 @@ function makeState(opts) {
   const ready = na.readySet.map(n => n.id).sort();
   assert(JSON.stringify(ready) === JSON.stringify(['impl']),
     '#343 integ: after the mid-gate fold, next-action offers ONLY [impl] — folded gate + downstream gate + sink withheld, got ' + JSON.stringify(ready));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #282 (AC-2): orient reconciles the durable task mirror on every resume by
 // SHELLING the task-mirror CLI — while staying read-only (the injected writeFile
 // throws, proving orient never writes the plan/ledger/state itself).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
@@ -7505,7 +7803,7 @@ function makeState(opts) {
   assert(result.result === 'ok', '#282 AC-2: orient still returns ok');
   assert(shelled.includes('kaola-workflow-task-mirror.js'),
     '#282 AC-2: orient shells the task-mirror CLI to reconcile workflow-tasks.json, got ' + JSON.stringify(shelled));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #317: ledger-mutating commands refresh the durable task mirror + return explicit
@@ -7513,7 +7811,7 @@ function makeState(opts) {
 // ---------------------------------------------------------------------------
 
 // #317-open-next: opened node → in_progress transition + task-mirror shelled.
-{
+scenario(() => {
   const shelled = [];
   const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   let planContent = plan;
@@ -7543,10 +7841,10 @@ function makeState(opts) {
     '#317 open-next: [impl-core→in_progress], got ' + JSON.stringify(result.taskTransitions));
   assert(result.taskMirror && result.taskMirror.status === 'updated', '#317 open-next: taskMirror updated');
   assert(shelled.includes('kaola-workflow-task-mirror.js'), '#317 open-next: task-mirror shelled after the mutation');
-}
+});
 
 // #317-close-and-open-next (fused): closed → completed AND next → in_progress (two transitions).
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | in_progress | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   let planContent = plan;
   const cacheFiles = { '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing\nGREEN: passing\n' };
@@ -7573,11 +7871,11 @@ function makeState(opts) {
     { id: 'impl-other', status: 'in_progress', ledger_status: 'in_progress', reason: 'close-and-open-next' },
   ]), '#317 close+open: [closed→completed, next→in_progress], got ' + JSON.stringify(result.taskTransitions));
   assert(result.taskMirror && result.taskMirror.status === 'updated', '#317 close+open: taskMirror updated');
-}
+});
 
 // #317-enterBatch: a >=2 frontier closes the node and signals enterBatch — taskTransitions carry
 // ONLY the closed node (open-batch owns the member in_progress flips).
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | in_progress | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   let planContent = plan;
   const cacheFiles = { '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing\nGREEN: passing\n' };
@@ -7600,7 +7898,7 @@ function makeState(opts) {
   assert(JSON.stringify(result.taskTransitions) === JSON.stringify([
     { id: 'impl-core', status: 'completed', ledger_status: 'complete', reason: 'close-and-open-next' },
   ]), '#317 enterBatch: ONLY [closed→completed] (open-batch owns member flips), got ' + JSON.stringify(result.taskTransitions));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #328 bundle-display: runOrient surfaces bundle identity fields.
@@ -7639,7 +7937,7 @@ function makeBundleState(opts) {
 }
 
 // T-bundle-1: runOrient on a bundle project populates bundleId/issueNumbers/closurePolicy/primaryIssue.
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -7684,11 +7982,11 @@ function makeBundleState(opts) {
   assert(issNums[0] === 42 && issNums[1] === 47 && issNums[2] === 53, 'T-bundle-1: issueNumbers values correct, got ' + JSON.stringify(issNums));
   assert(result.closurePolicy === 'all_or_nothing', 'T-bundle-1: closurePolicy populated, got ' + result.closurePolicy);
   assert(result.primaryIssue === 42, 'T-bundle-1: primaryIssue===42 (primary from issue_number), got ' + result.primaryIssue);
-}
+});
 
 // T-bundle-2: runOrient on a single-issue project leaves bundle fields null/empty (AC#1 regression).
 // Single-issue state is UNCHANGED — no issue_numbers/bundle_id/closure_policy in the file.
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -7735,11 +8033,11 @@ function makeBundleState(opts) {
   assert(result.inProgressNode === 'impl-core', 'T-bundle-2 AC#1: inProgressNode still correct');
   assert(result.consentHalt === false, 'T-bundle-2 AC#1: consentHalt still works');
   assert(result.escalatedToFull === null || result.escalatedToFull === undefined, 'T-bundle-2 AC#1: escalatedToFull null/undefined unchanged');
-}
+});
 
 // T-bundle-3: runOrient refuse paths (orphan + topup) also carry bundle identity fields.
 // Verifies all three return points carry bundleId/issueNumbers/closurePolicy/primaryIssue.
-{
+scenario(() => {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| b | tdd-guide | — | scripts/b.js | 1 | sequence |',
@@ -7781,7 +8079,7 @@ function makeBundleState(opts) {
   assert(Array.isArray(resultOrphan.issueNumbers) && resultOrphan.issueNumbers.length === 2, 'T-bundle-3: orphan refuse carries issueNumbers, got ' + JSON.stringify(resultOrphan.issueNumbers));
   assert(resultOrphan.closurePolicy === 'all_or_nothing', 'T-bundle-3: orphan refuse carries closurePolicy, got ' + resultOrphan.closurePolicy);
   assert(resultOrphan.primaryIssue === 10, 'T-bundle-3: orphan refuse carries primaryIssue, got ' + resultOrphan.primaryIssue);
-}
+});
 
 // ---------------------------------------------------------------------------
 // #335 — runMirrorProject (M1–M6) + orient plan-probe refusals (O1–O3).
@@ -7814,26 +8112,26 @@ const STATE_WITH_WT = '## Sink\nworktree_path: ' + WT + '\n';
 const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 
 // M1: no worktree_path → ok/skipped(no_worktree); copyTree NEVER called.
-{
+scenario(() => {
   const calls = [];
   const { io } = makeMirrorIo([path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md')], calls, STATE_NO_WT);
   const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('shell must not run'); }, io });
   assert(r.result === 'ok' && r.status === 'skipped' && r.reason === 'no_worktree', 'M1: ok/skipped/no_worktree, got ' + JSON.stringify(r));
   assert(!calls.some(c => c[0] === 'copyTree'), 'M1: copyTree never called on no_worktree');
-}
+});
 
 // M1b: worktree_path recorded but dir missing → ok/skipped(worktree_dir_missing).
-{
+scenario(() => {
   const calls = [];
   const { io } = makeMirrorIo([path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md')], calls, STATE_WITH_WT);
   const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
   assert(r.result === 'ok' && r.status === 'skipped' && r.reason === 'worktree_dir_missing', 'M1b: skipped/worktree_dir_missing, got ' + JSON.stringify(r));
   assert(r.worktreePath === WT, 'M1b: worktreePath echoed');
   assert(!calls.some(c => c[0] === 'copyTree'), 'M1b: no copyTree');
-}
+});
 
 // M2: dest plan already present → ok/exists; no copy/rename.
-{
+scenario(() => {
   const calls = [];
   const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
   const destPlan = path.join(WT, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
@@ -7842,10 +8140,10 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(r.result === 'ok' && r.status === 'exists', 'M2: ok/exists, got ' + JSON.stringify(r));
   assert(!calls.some(c => c[0] === 'copyTree'), 'M2: no copyTree when dest exists');
   assert(!calls.some(c => c[0] === 'renameSync'), 'M2: no renameSync when dest exists');
-}
+});
 
 // M3: happy path — call order copyTree → shell(validator --resume-check) → renameSync.
-{
+scenario(() => {
   const calls = [];
   const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
   const sourcePlan = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
@@ -7861,10 +8159,10 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   // resume-check ran on the TMP copy, BEFORE the promote.
   const tmpPlan = path.join(WT, 'kaola-workflow', '.mirror-tmp-issue-335', 'workflow-plan.md');
   assert(shellCalls[0][1][0] === tmpPlan, 'M3: resume-check targets the tmp copy plan, got ' + shellCalls[0][1][0]);
-}
+});
 
 // M4: verify-fail — resume-check ok:false → refuse mirror_verify_failed, tmp rmSync'd, NO renameSync.
-{
+scenario(() => {
   const calls = [];
   const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
   const sourcePlan = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
@@ -7876,30 +8174,30 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(!calls.some(c => c[0] === 'renameSync'), 'M4: renameSync NEVER called on verify-fail');
   const tmp = path.join(WT, 'kaola-workflow', '.mirror-tmp-issue-335');
   assert(calls.some(c => c[0] === 'rmSync' && c[1] === tmp), 'M4: tmp rmSync cleaned up');
-}
+});
 
 // M5: source plan missing → refuse source_plan_missing.
-{
+scenario(() => {
   const calls = [];
   const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
   const { io } = makeMirrorIo([stateMain, WT], calls, STATE_WITH_WT);  // no source plan, WT exists, no dest plan
   const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
   assert(r.result === 'refuse' && r.reason === 'source_plan_missing', 'M5: refuse/source_plan_missing, got ' + JSON.stringify(r));
   assert(/kaola-workflow-adapt/.test(r.repair), 'M5: repair routes to /kaola-workflow-adapt');
-}
+});
 
 // M6: state missing → refuse state_missing (read-only, no copy).
-{
+scenario(() => {
   const calls = [];
   const { io } = makeMirrorIo([], calls, '');  // nothing exists
   const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
   assert(r.result === 'refuse' && r.reason === 'state_missing', 'M6: refuse/state_missing, got ' + JSON.stringify(r));
   assert(!calls.some(c => c[0] === 'copyTree'), 'M6: no copyTree on state_missing');
-}
+});
 
 // O1: orient probe — unmirrored worktree → refuse plan_not_mirrored, repair names mirror-project,
 //     and NO shell calls (read-only short-circuit before the resume-check shell).
-{
+scenario(() => {
   let shellCalled = false;
   const r = runOrient({
     planPath: '/wt/kaola-workflow/issue-335/workflow-plan.md',
@@ -7914,10 +8212,10 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(/mirror-project/.test(r.repair), 'O1: repair names mirror-project');
   assert(r.mainPlanPath === '/main/kaola-workflow/issue-335/workflow-plan.md', 'O1: mainPlanPath surfaced');
   assert(shellCalled === false, 'O1: NO shell calls (read-only short-circuit)');
-}
+});
 
 // O2: orient probe — main plan also absent (truly unauthored) → refuse plan_missing.
-{
+scenario(() => {
   const r = runOrient({
     planPath: '/wt/kaola-workflow/issue-335/workflow-plan.md',
     statePath: '/wt/kaola-workflow/issue-335/workflow-state.md',
@@ -7930,12 +8228,12 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(r.result === 'refuse' && r.reason === 'plan_missing', 'O2: refuse/plan_missing, got ' + JSON.stringify(r));
   assert(r.mainPlanPath === null, 'O2: mainPlanPath null when not unmirrored');
   assert(/kaola-workflow-adapt/.test(r.repair), 'O2: repair routes to author/freeze');
-}
+});
 
 // O3 (regression): NO planProbe injected → legacy tolerant behavior unchanged (returns ok,
 //    shells the validator/next-action as before — proven by the existing orient tests staying
 //    green; here assert the absent-probe path does NOT short-circuit to a refuse).
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |']);
   const r = runOrient({
     planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
@@ -7953,7 +8251,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
     // planProbe deliberately omitted
   });
   assert(r.result === 'ok', 'O3: absent probe preserves the old tolerant ok-result, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-373 (#373 / D1): node-timings.jsonl — close-and-open-next appends a 'closed'
@@ -7961,7 +8259,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 // a REAL temp dir so the best-effort fs.appendFileSync actually fires. Append-only,
 // parseable line-by-line; never alters the lifecycle result.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-timings-'));
   const projDir = path.join(tmpRoot, 'kaola-workflow', 'test-project');
   const cacheDir = path.join(projDir, '.cache');
@@ -8009,7 +8307,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(lines.some(l => l.node === 'impl-core' && l.event === 'closed'), 'T-373: closed event for impl-core, got ' + JSON.stringify(lines));
   assert(lines.some(l => l.node === 'impl-other' && l.event === 'opened'), 'T-373: opened event for impl-other (fused advance), got ' + JSON.stringify(lines));
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-360 (#360): clear-halt — the script-owned inverse of write-halt.
@@ -8021,7 +8319,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 //   (d) #743 legacy tolerance: a state file written by an OLDER runtime carries BOTH
 //       escalated_to_full: consent and escalated_to_full: security; clear-halt still removes both.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // (a) round-trip
   const files = {
     '/p/workflow-plan.md': makePlan(['| impl-core | in_progress | |', '| finalize | pending | |']),
@@ -8042,8 +8340,8 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === false, 'T-360a: durable consent_halt GONE after clear-halt');
   assert(!/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360a: escalated_to_full: consent removed');
   assert(!/^escalated_to_full:/m.test(files['/p/workflow-state.md']), 'T-360a: NO escalation marker lingers after a cleared consent halt');
-}
-{
+});
+scenario(() => {
   // (b) no halt present → typed refuse, zero mutation
   let wrote = false;
   const plan = makePlan(['| impl-core | in_progress | |', '| finalize | pending | |']);
@@ -8055,8 +8353,8 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   });
   assert(r.result === 'refuse' && r.reason === 'no_halt_present', 'T-360b: clear-halt with no halt → refuse no_halt_present, got ' + JSON.stringify(r.reason));
   assert(wrote === false, 'T-360b: NO mutation when there is no halt to clear');
-}
-{
+});
+scenario(() => {
   // (c) decoy consent_halt OUTSIDE the ledger → not a real halt; clear-halt refuses + leaves it.
   let wrote = false;
   // Put a decoy line in the ## Meta section (before ## Node Ledger).
@@ -8071,8 +8369,8 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   });
   assert(r.result === 'refuse' && r.reason === 'no_halt_present', 'T-360c: decoy line → refuse no_halt_present');
   assert(wrote === false, 'T-360c: decoy line left untouched (no mutation)');
-}
-{
+});
+scenario(() => {
   // (d) #743 LEGACY TOLERANCE — a halt written by a PRE-#743 runtime carries the dual marker
   // (escalated_to_full: consent AND escalated_to_full: security) on disk. Seed that file directly
   // (NOT via write-halt, which no longer produces it) and prove clear-halt still clears it fully.
@@ -8096,7 +8394,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(!/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360d: legacy escalated_to_full: consent removed');
   assert(!/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360d: legacy escalated_to_full: security half STILL stripped (tolerate-legacy-on-read)');
   assert(!/^escalated_to_full:/m.test(files['/p/workflow-state.md']), 'T-360d: no escalation marker lingers from the legacy file');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-MC (#463 step 2): write-halt --reason merge_conflict — a RESUMABLE consent-style halt.
@@ -8108,7 +8406,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 //       a one-way full escalation whose marker is deliberately left in place.
 //   (c) merge_conflict is in the write-halt validReasons allowlist; an unknown reason still refuses.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // (a) write-halt(merge_conflict) → resumable consent-style halt
   const files = {
     '/p/workflow-plan.md': makePlan(['| impl-a | in_progress | |', '| finalize | pending | |']),
@@ -8132,8 +8430,8 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === false, 'T-MC-b: durable consent_halt GONE after clear-halt');
   assert(!/escalated_to_full:\s*merge_conflict/.test(files['/p/workflow-state.md']), 'T-MC-b: escalated_to_full: merge_conflict GONE — run resumes adaptively with clean state');
   assert(!/^escalated_to_full:/m.test(files['/p/workflow-state.md']), 'T-MC-b: NO escalation marker lingers after a resolved merge_conflict halt');
-}
-{
+});
+scenario(() => {
   // (c) merge_conflict is an accepted write-halt reason; an unknown reason still refuses.
   const files = {
     '/p/workflow-plan.md': makePlan(['| impl-a | in_progress | |']),
@@ -8143,7 +8441,7 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   const bad = runWriteHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-a', reason: 'banana', shell: () => ({ status: 'skipped' }), readFile: rf, writeFile: (f, c) => { files[f] = c; } });
   assert(bad.result === 'refuse' && bad.reason === 'invalid_reason', 'T-MC-c: an unknown write-halt reason still refuses invalid_reason');
   assert(Array.isArray(bad.validReasons) && bad.validReasons.includes('merge_conflict'), 'T-MC-c: validReasons includes merge_conflict');
-}
+});
 
 // Summary
 // ---------------------------------------------------------------------------
@@ -8192,17 +8490,17 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
 // ---------------------------------------------------------------------------
 // R-isReadOnly: classification matches the canonical classifier (— / - / empty).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   assert(isReadOnlyNode({ declared_write_set: '—' }) === true, 'R0: em-dash → read-only');
   assert(isReadOnlyNode({ declared_write_set: '-' }) === true, 'R0: hyphen → read-only');
   assert(isReadOnlyNode({ declared_write_set: '' }) === true, 'R0: empty → read-only');
   assert(isReadOnlyNode({ declared_write_set: 'scripts/x.js' }) === false, 'R0: path → write');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R1: open-ready — READ-ONLY fan-out: two ready read-only nodes open concurrently.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| rev-a | pending | |',
     '| rev-b | pending | |',
@@ -8230,7 +8528,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   assert(set.nodes.length === 2 && set.nodes.every(n => !n.opening), 'R1: 2 nodes, opening flags cleared');
   assert(h.files[RS_PLAN_PATH].includes('| rev-a | in_progress | |') && h.files[RS_PLAN_PATH].includes('| rev-b | in_progress | |'), 'R1: both ledger rows in_progress');
   assert(h.shellCalls.filter(c => c.base === 'kaola-workflow-commit-node.js' && c.args.includes('--start')).length === 2, 'R1: two baselines recorded');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R2: open-ready — a WRITE node opens ALONE only on the explicit serial path
@@ -8238,7 +8536,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
 //   the mock shell here returns no group descriptor so the co-open branch can't form,
 //   so this asserts the serial single-open shape under the forced-serial env).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| w1 | pending | |',
     '| w2 | pending | |',
@@ -8263,12 +8561,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   assert(r.result === 'ok' && r.kind === 'write', 'R2: ok + kind=write');
   assert(r.opened.length === 1 && r.opened[0].id === 'w1', 'R2: exactly ONE write node opened (serial, KAOLA_PARALLEL_WRITES=0), got ' + JSON.stringify(r.opened.map(o=>o.id)));
   assert(h.files[RS_PLAN_PATH].includes('| w1 | in_progress | |') && h.files[RS_PLAN_PATH].includes('| w2 | pending | |'), 'R2: w2 stays pending');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R3: open-ready — write-node exclusivity: a live write node blocks new opens.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| w1 | in_progress | |', '| rev | pending | |'], [
     '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
     '| rev | code-reviewer | w1 | — | 1 | sequence |',
@@ -8280,7 +8578,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   });
   const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
   assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_node_exclusive', 'R3: live write node → opened:[] write_node_exclusive, got ' + JSON.stringify({o:r.opened,reason:r.reason}));
-}
+});
 
 // ---------------------------------------------------------------------------
 // R3b (#622): open-ready — write-node exclusivity RELAXED for a LEG-CONTAINED write: a live
@@ -8290,7 +8588,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
 // members there via the SAME `!liveHasWrite`-class gate, never re-asserted for a leg-contained
 // writer). The live lane_group must survive UNTOUCHED in the rewritten running-set.json.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| w1 | in_progress | |', '| w2 | in_progress | |', '| rev | pending | |'], [
     '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
     '| w2 | implementer | — | scripts/b.js | 1 | sequence |',
@@ -8318,23 +8616,23 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   assert(set.max_concurrent === 2, 'R3b (#622): the group\'s recorded max_concurrent (the WRITE cap) is preserved verbatim, not recomputed to the READ cap, got ' + set.max_concurrent);
   assert(set.nodes.some(n => n.id === 'rev' && n.kind === 'read'), 'R3b (#622): running-set now carries rev alongside the live write lane group, got ' + JSON.stringify(set.nodes));
   assert(set.nodes.filter(n => n.id === 'w1' || n.id === 'w2').length === 2, 'R3b (#622): the live write lane group members are still present (untouched)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R4: open-ready — a crashed 'opening' running set refuses reconcile_first.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | pending | |']);
   const crashed = JSON.stringify({ state: 'opening', nodes: [{ id: 'a', role: 'code-reviewer', kind: 'read', opening: true }] });
   const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: crashed }, () => ({ exitCode: 0, result: 'ok' }));
   const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
   assert(r.result === 'refuse' && r.detail === 'running_set_opening_incomplete', 'R4: opening set → refuse reconcile_first, got ' + JSON.stringify(r));
-}
+});
 
 // ---------------------------------------------------------------------------
 // R5: close-node — evidence + barrier → complete + compliance + removed from set.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev-a | in_progress | |', '| rev-b | in_progress | |', '| finalize | pending | |'], [
     '| rev-a | code-reviewer | — | — | 1 | sequence |',
     '| rev-b | security-reviewer | — | — | 1 | sequence |',
@@ -8356,12 +8654,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   const set = JSON.parse(h.files[RS_SET_PATH]);
   assert(set.nodes.length === 1 && set.nodes[0].id === 'rev-b', 'R5: rev-a removed from running set, rev-b remains');
   assert(Array.isArray(r.newlyReady) && r.newlyReady.some(n => n.id === 'rev-b'), 'R5: newlyReady surfaced');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R6: close-node — last node closes → running-set file unlinked.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
   const startSet = JSON.stringify({ state: 'open', nodes: [{ id: 'rev', role: 'code-reviewer', kind: 'read', baseline: 'recorded' }] });
   const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: startSet, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' }, (base) => {
@@ -8372,12 +8670,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(r.result === 'ok' && r.allDone === true, 'R6: ok + allDone');
   assert(!(RS_SET_PATH in h.files), 'R6: running-set file unlinked when last node closes');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R7: close-node — barrier failure → refuse, ledger row NOT closed.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
   const h = rsHarness({ [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' }, (base) => {
     if (base === 'kaola-workflow-commit-node.js') return { exitCode: 1, result: 'refuse', reason: 'barrier_out_of_lane' };
@@ -8386,12 +8684,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(r.result === 'refuse' && r.reason === 'barrier_failed', 'R7: barrier fail → refuse');
   assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'R7: ledger row unchanged (no close)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R8: reconcile-running-set — opening: flipped row kept, pending row dropped.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
     '| a | code-reviewer | — | — | 1 | sequence |',
     '| b | security-reviewer | — | — | 1 | sequence |',
@@ -8407,12 +8705,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   assert(r.rolledBack.length === 1 && r.rolledBack[0] === 'b', 'R8: b rolled back (still pending)');
   const set = JSON.parse(h.files[RS_SET_PATH]);
   assert(set.state === 'open' && set.nodes.length === 1 && set.nodes[0].id === 'a', 'R8: promoted to open with survivor a only');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R9: orient legality — running-set matches multi-in_progress → OK, not orphan.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |', '| finalize | pending | |'], [
     '| a | code-reviewer | — | — | 1 | sequence |',
     '| b | security-reviewer | — | — | 1 | sequence |',
@@ -8433,12 +8731,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   assert(r.result === 'ok', 'R9: multi-in_progress matching running-set is LEGAL (not orphan), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
   assert(r.batch === null, 'R9: batch stays null (running-set fan-out is not the batch machine)');
   assert(r.runningSet && r.runningSet.nodes.length === 2, 'R9: runningSet surfaced');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R10: orient legality — a crashed 'opening' running set → reconcilable refusal.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
     '| a | code-reviewer | — | — | 1 | sequence |',
     '| b | security-reviewer | — | — | 1 | sequence |',
@@ -8453,13 +8751,13 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
     cacheExists: (fp) => fp in files,
   });
   assert(r.result === 'refuse' && r.reason === 'running_set_opening_incomplete', 'R10: opening running-set → reconcilable refusal, got ' + JSON.stringify(r.reason));
-}
+});
 
 // ---------------------------------------------------------------------------
 // R11: serial fallback unchanged — open-next still works with a running-set absent.
 // (Guards that the additive scheduler did not perturb the legacy single-node path.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   let planContent = plan;
   const r = runOpenNext({
@@ -8469,14 +8767,14 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
     writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
   });
   assert(r.result === 'ok' && r.opened && r.opened.id === 'impl-core', 'R11: legacy open-next path intact (serial fallback)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // R12 (#382): open-ready persists the per-node model tier — `opened` carries it (was
 // hardcoded model:undefined) and running-set.json members store it so a reconcile /
 // crash re-dispatch keeps the planner's tier.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| rev-a | pending | |',
     '| rev-b | pending | |',
@@ -8516,7 +8814,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
     'R12: open-ready absent proof remains explicit and fail-closed, got ' + JSON.stringify(dispatchById['rev-b']));
   assert(!('codex_session_proof' in set.nodes[0]) && !('codex_session_proof' in set.nodes[1]),
     'R12: transient session proof is not persisted in running-set.json');
-}
+});
 
 // ===========================================================================
 // S-RT (#392 ROUND-TRIP, the false-green catcher): the per-open nonce that
@@ -8586,7 +8884,7 @@ function rtHarness(initialFiles, opts) {
 // RETURNED nonce closes SUCCESSFULLY (the binding-passes AC #392 claims). This is RED
 // against the pre-fix top-level read (returned nonce null → header nonce mismatches the
 // on-disk SHA → evidence_stale/missing refusal).
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | pending | |',
     '| impl-other | pending | |',
@@ -8605,7 +8903,7 @@ function rtHarness(initialFiles, opts) {
   assert(open.nonce === readNonce('/p/workflow-plan.md', 'impl-core', h.readFile), 'S-RT1: returned nonce EQUALS the on-disk readNonce value (open prefix == close prefix)');
 
   // Build evidence carrying EXACTLY the returned binding header.
-  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n3 assertions';
+  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nred_baseline: ' + open.nonce + '\n3 assertions';
   h.files['/p/.cache/impl-core.md'] = evidence;
   // next-action for the close-side fused advance (impl-core complete → impl-other ready).
   const hClose = h; // reuse files
@@ -8616,11 +8914,11 @@ function rtHarness(initialFiles, opts) {
   };
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: closeShell, readFile: hClose.readFile, writeFile: hClose.writeFile, cacheExists: hClose.cacheExists });
   assert(close.result === 'ok' && close.closed === 'impl-core', 'S-RT1: close SUCCEEDS with the RETURNED nonce (round-trip closes), got ' + JSON.stringify({ result: close.result, reason: close.reason, mtc: close.missingTokenClass }));
-}
+});
 
 // S-RT2 (negative — no binding header → refuse): close with evidence lacking the
 // evidence-binding header refuses (binding enforced once a nonce is on disk).
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
     nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
@@ -8630,11 +8928,11 @@ function rtHarness(initialFiles, opts) {
   h.files['/p/.cache/impl-core.md'] = 'RED then GREEN\nno binding header here\n';
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
   assert(close.result === 'refuse' && close.missingTokenClass === 'evidence-binding', 'S-RT2: missing binding header → refuse (missingTokenClass evidence-binding), got ' + JSON.stringify({ result: close.result, mtc: close.missingTokenClass }));
-}
+});
 
 // S-RT3 (negative — WRONG nonce → evidence_stale): close with a binding header that
 // carries a DIFFERENT (stale/prior-open) nonce.
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
     nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
@@ -8644,11 +8942,11 @@ function rtHarness(initialFiles, opts) {
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
   assert(close.result === 'refuse' && close.reason === 'evidence_stale', 'S-RT3: wrong nonce → evidence_stale, got ' + JSON.stringify({ result: close.result, reason: close.reason }));
   assert(open.nonce !== '000000000000', 'S-RT3: (guard) the real nonce is not the decoy');
-}
+});
 
 // S-RT4 (negative — WRONG node id → evidence_unbound): binding header names a
 // different node (evidence copied from elsewhere).
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
     nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
@@ -8657,12 +8955,12 @@ function rtHarness(initialFiles, opts) {
   h.files['/p/.cache/impl-core.md'] = 'evidence-binding: some-other-node ' + open.nonce + '\nRED then GREEN\n';
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
   assert(close.result === 'refuse' && close.reason === 'evidence_unbound', 'S-RT4: wrong node id → evidence_unbound, got ' + JSON.stringify({ result: close.result, reason: close.reason }));
-}
+});
 
 // S-RT5 (baselineReused surfaced on a genuine re-open): commit-node --start returns
 // recordBase.reused:true on a re-open → open-next surfaces baselineReused:true. RED if
 // the reused line still reads the top-level baselineResult.reused (undefined → false).
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | in_progress | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
   const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
     reusedFor: () => true,
@@ -8671,11 +8969,11 @@ function rtHarness(initialFiles, opts) {
   const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
   assert(open.result === 'ok', 'S-RT5: re-open ok');
   assert(open.baselineReused === true, 'S-RT5: baselineReused surfaced TRUE on a genuine re-open (recordBase.reused), got ' + JSON.stringify(open.baselineReused));
-}
+});
 
 // S-RT6 (open-ready → returned per-node nonce → close-node round-trip): the SET case.
 // Each opened node carries its own RETURNED nonce; evidence bound with it closes.
-{
+scenario(() => {
   const plan = makePlan([
     '| rev-a | pending | |',
     '| rev-b | pending | |',
@@ -8712,7 +9010,7 @@ function rtHarness(initialFiles, opts) {
   h.files['/p/.cache/rev-b.md'] = 'evidence-binding: rev-a ' + byId['rev-b'] + '\nsecurity-reviewer\nverdict: pass\nfindings_blocking: 0';
   const closeBad = runCloseNode({ planPath: '/p/workflow-plan.md', project: 'p', nodeId: 'rev-b', shell: closeShell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(closeBad.result === 'refuse' && closeBad.reason === 'evidence_unbound', 'S-RT6: close-node wrong-node binding → evidence_unbound, got ' + JSON.stringify({ result: closeBad.result, reason: closeBad.reason }));
-}
+});
 
 // S-RT7 (#411 BUG A — fused-advance nonce round-trip, the serial-chain wedge):
 // the FULL two-close serial chain. open-next opens n1; close-and-open-next closes n1
@@ -8722,7 +9020,7 @@ function rtHarness(initialFiles, opts) {
 // `undefined` and the SECOND close refuses evidence_stale on every serial chain ≥2 nodes
 // with a dependent. RED on current code (opened.nonce undefined → second close refuses);
 // GREEN after the Bug A fix.
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | pending | |',
     '| impl-other | pending | |',
@@ -8737,7 +9035,7 @@ function rtHarness(initialFiles, opts) {
   // (1) open n1.
   const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
   assert(open.result === 'ok' && open.nonce && open.nonce.length === 12, 'S-RT7: open-next opens n1 with a real nonce');
-  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n3 assertions';
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nred_baseline: ' + open.nonce + '\n3 assertions';
 
   // (2) close n1 → fused advance opens n2 (impl-other). next-action now surfaces impl-other.
   const closeShell = (scriptPath, args) => {
@@ -8767,13 +9065,13 @@ function rtHarness(initialFiles, opts) {
   const close2 = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-other', shell: close2Shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(close2.result === 'ok' && close2.closed === 'impl-other',
     'S-RT7: SECOND close SUCCEEDS with the fused-advance RETURNED nonce (not evidence_stale), got ' + JSON.stringify({ result: close2.result, reason: close2.reason, mtc: close2.missingTokenClass }));
-}
+});
 
 // S-RT8 (#411 BUG B — running-set removal on the serial close path): close-and-open-next
 // must remove the closing node from running-set.json (mirror close-node step (e)) so the
 // next orient does not see an orphan multi-in_progress mismatch (the reconcile no-op wedge).
 // RED on current code (close-and-open-next is running-set-blind → impl-core stays in the set).
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -8791,13 +9089,13 @@ function rtHarness(initialFiles, opts) {
   }, {
     nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' } },
   });
-  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n';
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED: failing assertion before implementation\nred_baseline: ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\n';
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(close.result === 'ok' && close.closed === 'impl-core', 'S-RT8: close ok');
   const setAfter = readRunningSet(RS, h.cacheExists, h.readFile);
   const stillThere = !!(setAfter && (setAfter.nodes || []).some(n => n.id === 'impl-core'));
   assert(!stillThere, 'S-RT8: closed node REMOVED from running-set.json by close-and-open-next (BUG B), running set after = ' + JSON.stringify(setAfter));
-}
+});
 
 // S-RT9 RETIRED (#594): the excl-batch fence on the serial close path (close-and-open-next refusing an
 // unsealed parallel-batch member) is gone — active-batch.json has no producer left, so the guarded
@@ -8816,7 +9114,7 @@ function rtHarness(initialFiles, opts) {
 // to bare ok, no repair). Revert the reconcile stale-drop → S-293b goes RED
 // (reconcile back to not_opening no-op, B never dropped).
 // ===========================================================================
-{
+scenario(() => {
   const plan = makePlan(['| node-a | in_progress | |', '| node-b | pending | |', '| finalize | pending | |'], [
     '| node-a | implementer | — | scripts/a.js | 1 | sequence |',
     '| node-b | code-reviewer | — | — | 1 | sequence |',
@@ -8856,13 +9154,13 @@ function rtHarness(initialFiles, opts) {
     // And node-a (the real in_progress serial node) is untouched.
     assert(h.files[RS_PLAN_PATH].includes('| node-a | in_progress | |'), 'S-293b: node-a (real serial in_progress) untouched');
   }
-}
+});
 
 // ===========================================================================
 // #355 unified refusal/emit protocol — shared emit/refuse + task-mirror reason
 // now visible to adaptive-node callers (was lost on stderr).
 // ===========================================================================
-{
+scenario(() => {
   const { emit, refuse } = require('./kaola-workflow-adaptive-schema');
 
   // S1: refuse() builds the canonical envelope; extra fields are additive.
@@ -8889,7 +9187,7 @@ function rtHarness(initialFiles, opts) {
   assert(badProj.exitCode === 1 && badProj.reason === 'plan_not_found',
     'S3: task-mirror plan_not_found reason recovered via shellNode, got ' + JSON.stringify(badProj.reason));
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ===========================================================================
 // CLUSTER S — mutual-exclusion spine (#383/#384/#385/#387/#391/#392/#403).
@@ -8900,7 +9198,7 @@ function rtHarness(initialFiles, opts) {
 // S-CO1: readCoordinationState — serial fallback. One in_progress row, NO running set →
 // serialLive=true, all scheduler arms false (vacuous-pass guards). (#594: no batch surface.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | in_progress | |', '| review | pending | |']);
   const co = readCoordinationState(plan, { runningSet: null });
   assert(co.serialLive === true, 'S-CO1: single in_progress + no running set → serialLive');
@@ -8908,39 +9206,39 @@ function rtHarness(initialFiles, opts) {
   assert(!('batchLive' in co) && !('batchOpening' in co), 'S-CO1: no batch fields surfaced (#594 batch surface retired)');
   assert(co.inProgressIds.length === 1 && co.inProgressIds[0] === 'impl-core', 'S-CO1: inProgressIds=[impl-core]');
   assert(co.collisions.length === 0, 'S-CO1: no collisions in the serial case');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-CO2: readCoordinationState — zero in_progress → NOT serialLive (idle, all arms false).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| impl-core | pending | |']);
   const co = readCoordinationState(plan, {});
   assert(co.serialLive === false && co.inProgressIds.length === 0, 'S-CO2: idle ledger → not serialLive');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-CO3: readCoordinationState — a live running set → runningSetLive, serialLive false
 // even with one matching in_progress row (the running set OWNS that node).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
   const runningSet = { state: 'open', nodes: [{ id: 'a', kind: 'read' }, { id: 'b', kind: 'read' }] };
   const co = readCoordinationState(plan, { runningSet, manifest: null });
   assert(co.runningSetLive === true && co.runningSetOpening === false, 'S-CO3: open running set → runningSetLive');
   assert(co.serialLive === false, 'S-CO3: serialLive false when a running set is live');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-CO4: readCoordinationState — a crashed 'opening' running set → runningSetOpening,
 // not runningSetLive.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | pending | |']);
   const runningSet = { state: 'opening', nodes: [{ id: 'a', kind: 'read', opening: true }] };
   const co = readCoordinationState(plan, { runningSet });
   assert(co.runningSetOpening === true && co.runningSetLive === false, 'S-CO4: opening set → runningSetOpening, not live');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-CO5 / S-CO6 RETIRED (#594): the parallel-batch coordination surface (active-batch.json →
@@ -8955,7 +9253,7 @@ function rtHarness(initialFiles, opts) {
 // (#594: the batch manifest is no longer a coordination surface — probeCoordination no longer reads
 // active-batch.json and no longer returns a `manifest` field.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
   const files = {
     [RS_PLAN_PATH]: plan,
@@ -8968,12 +9266,12 @@ function rtHarness(initialFiles, opts) {
   });
   assert(probe.runningSetLive === true && probe.runningSet && probe.runningSet.nodes.length === 2, 'S-PC: probe reads running set');
   assert(!('manifest' in probe), 'S-PC: probe no longer surfaces a batch manifest field (#594 batch surface retired)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-CR (#384/#391c): complianceRowExists — true only when the section already has a row for the cell.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const base = makePlan(['| a | complete | |']);
   assert(complianceRowExists(base, 'code-reviewer', 'a') === false, 'S-CR: absent compliance row → false');
   const withRow = spliceComplianceRow(base, '| code-reviewer | subagent-invoked | ok | |');
@@ -8981,12 +9279,12 @@ function rtHarness(initialFiles, opts) {
   assert(complianceRowExists(withRow, 'implementer (a)', 'a') === false, 'S-CR: different cell → false');
   const withNode = spliceComplianceRow(base, '| implementer (impl-x) | subagent-invoked | ok | |');
   assert(complianceRowExists(withNode, 'implementer (impl-x)', 'impl-x') === true, 'S-CR: present row (role (id)) → true');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-VU (#403.4): checkVerdictParse — near-miss verdict for a verdict-bearing role.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Clean column-0 lowercase `verdict:` (what finalize --verdict-check accepts) → no warning, even
   // when the VALUE case varies (parseNodeVerdict lowercases the value).
   assert(checkVerdictParse('code-reviewer', 'verdict: pass\nfindings_blocking: 0') === null, 'S-VU: clean lowercase pass → no warning');
@@ -9001,13 +9299,13 @@ function rtHarness(initialFiles, opts) {
   assert(w2 && w2.verdict_unparsed === true, 'S-VU: typo value → verdict_unparsed warning');
   assert(checkVerdictParse('implementer', 'Verdict: Pass') === null, 'S-VU: non-verdict role → null (not verdict-bearing)');
   assert(checkVerdictParse('code-reviewer', 'no verdict line here') === null, 'S-VU: no verdict line → null');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S383d: runCloseAndOpenNext NEVER reports `opened` for an already-in_progress node.
 // (next-action.readySet includes in_progress; the consumer must not re-announce it.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Ledger: closing 'rev' exposes nextNode 'next' which is ALREADY in_progress (a #383 wedge).
   const plan = makePlan(['| rev | in_progress | |', '| next | in_progress | |', '| finalize | pending | |'], [
     '| rev | code-reviewer | — | — | 1 | sequence |',
@@ -9031,12 +9329,12 @@ function rtHarness(initialFiles, opts) {
   });
   assert(r.result === 'ok' && r.closed === 'rev', 'S383d: rev closed');
   assert(r.opened === null, 'S383d: opened is null (the next node was already in_progress — no double dispatch), got ' + JSON.stringify(r.opened));
-}
+});
 
 // ---------------------------------------------------------------------------
 // S383d-control: a NORMAL linear chain (next node PENDING) still opens it — byte-shape preserved.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev | in_progress | |', '| next | pending | |', '| finalize | pending | |'], [
     '| rev | code-reviewer | — | — | 1 | sequence |',
     '| next | code-explorer | rev | — | 1 | sequence |',
@@ -9058,13 +9356,13 @@ function rtHarness(initialFiles, opts) {
     cacheExists: (fp) => fp in files,
   });
   assert(r.result === 'ok' && r.opened && r.opened.id === 'next', 'S383d-control: pending next node IS opened (linear chain unchanged)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S387a (#387): open-ready refuses plan_integrity_failed on a tampered plan (validator
 // --resume-check fails) BEFORE opening any node — mirrors open-batch/top-up.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev-a | pending | |', '| rev-b | pending | |']);
   const h = rsHarness(
     { [RS_PLAN_PATH]: plan },
@@ -9080,7 +9378,7 @@ function rtHarness(initialFiles, opts) {
   assert(r.result === 'refuse' && r.reason === 'plan_integrity_failed', 'S387a: open-ready refuses plan_integrity_failed on tampered plan, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
   assert(!(RS_SET_PATH in h.files), 'S387a: zero mutation — no running-set written');
   assert(h.files[RS_PLAN_PATH].includes('| rev-a | pending | |'), 'S387a: ledger unchanged');
-}
+});
 
 // ---------------------------------------------------------------------------
 // #499a (wiring): open-next refuses plan_integrity_failed on a tampered plan (validator
@@ -9088,7 +9386,7 @@ function rtHarness(initialFiles, opts) {
 // the SAME integrity gate the fused/batch (open-ready/open-batch/top-up) paths already carry.
 // Mirrors S387a (open-ready). Mock-shell proves the WIRING; #499b proves it bites the REAL path.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   let planContent = makePlan(['| impl-core | pending | |']);
   const shellCalls = [];
   const r = runOpenNext({
@@ -9109,7 +9407,7 @@ function rtHarness(initialFiles, opts) {
   // The integrity layer ran BEFORE next-action (fail-closed precedence): no node was opened.
   assert(shellCalls.some(c => c.b === 'kaola-workflow-plan-validator.js' && c.args.includes('--resume-check')), '#499a: open-next shelled validator --resume-check (integrity layer wired)');
   assert(!shellCalls.some(c => c.b === 'kaola-workflow-commit-node.js' && c.args.includes('--start')), '#499a: no baseline recorded — integrity refused before open');
-}
+});
 
 // ---------------------------------------------------------------------------
 // #499b (REAL validator, false-green proof): freeze a plan in a REAL git repo, then TAMPER it with a
@@ -9119,7 +9417,7 @@ function rtHarness(initialFiles, opts) {
 // mutation. Driving the real subprocess (not an injected ok:false stub) is the #292 anti-false-green
 // discipline: a stubbed integrity test passes even if the wiring is wrong; this bites only the real path.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -9177,7 +9475,7 @@ function rtHarness(initialFiles, opts) {
   const ledgerBody = ledgerStart >= 0 ? after.slice(ledgerStart) : after;
   assert(/^\|\s*a\s*\|\s*pending\s*\|/m.test(ledgerBody), '#499b: zero mutation — a stays pending (open-next did NOT open it through the tamper)');
   try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // #725a (WS2 dedup): the guard-prologue Layer-1 integrity check takes the in-process plan-hash FAST
@@ -9186,7 +9484,7 @@ function rtHarness(initialFiles, opts) {
 // dedup), while the open still succeeds. Proves the resume-check shell is no longer spawned when the
 // in-process recompute already proves the plan untampered.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const body = makePlan(['| impl-core | pending | |']);
   const frozen = '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body;
   // Sanity: recompute over the full frozen content matches the stamped marker (fast path WILL fire).
@@ -9213,7 +9511,7 @@ function rtHarness(initialFiles, opts) {
     '#725a: open-next still opens the ready node on the untampered frozen plan, got ' + JSON.stringify({ result: r.result, opened: r.opened && r.opened.id, reason: r.reason }));
   assert(!shellCalls.some(c => c.b === 'kaola-workflow-plan-validator.js' && c.args.includes('--resume-check')),
     '#725a: L1 integrity DEDUP — the in-process hash match SKIPS the --resume-check subprocess (no validator resume-check shell), got ' + JSON.stringify(shellCalls.map(c => c.b + ' ' + c.args.join(' '))));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #725b (WS2 AC-C tamper): open-next still REFUSES plan_integrity_failed on a POST-FREEZE tamper. The
@@ -9223,7 +9521,7 @@ function rtHarness(initialFiles, opts) {
 // which refuses with zero mutation. A naive fast-path that trusted the still-present stale marker would
 // wrongly skip the check and open the tampered node — this pins the recompute.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const body = makePlan(['| impl-core | pending | |']);
   const frozen = '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body;
   // POST-FREEZE TAMPER: widen impl-core's declared_write_set (hash-defeating, marker left stale).
@@ -9253,12 +9551,12 @@ function rtHarness(initialFiles, opts) {
   assert(planContent.includes('| impl-core | pending | |'), '#725b: zero mutation — tampered node NOT opened');
   assert(shellCalls.some(c => c.b === 'kaola-workflow-plan-validator.js' && c.args.includes('--resume-check')),
     '#725b: the hash MISMATCH fell back to the authoritative --resume-check subprocess (true recompute, not marker-trust)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S387b (#387): close-node refuses plan_integrity_failed on a tampered plan BEFORE close.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
   const h = rsHarness(
     { [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' },
@@ -9268,13 +9566,13 @@ function rtHarness(initialFiles, opts) {
   const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(r.result === 'refuse' && r.reason === 'plan_integrity_failed', 'S387b: close-node refuses plan_integrity_failed on tampered plan, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
   assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'S387b: ledger row NOT closed');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S391b (#391b): the consent-halt fence — a durable consent_halt: pending in the ledger refuses
 // open-next / open-ready / close-and-open-next / close-node with halt_pending (zero mutation).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Inject a durable consent_halt: pending into the ## Node Ledger (mirrors write-halt).
   function haltPlan(rows, extra) {
     const p = makePlan(rows, extra);
@@ -9312,14 +9610,14 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'refuse' && r.reason === 'halt_pending', 'S391b: close-node refuses halt_pending, got ' + JSON.stringify(r.reason));
     assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'S391b: close-node made zero mutation under halt');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // S383-excl (#383): open-ready refuses serial_node_live over a live serial node. (#594: the batch_active
 // sub-case — open-ready refusing over a live active-batch.json manifest — was removed; that manifest has
 // no producer left, so the guarded state is unproducible.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // serial_node_live: one in_progress row, NO running-set file (serial node live).
   {
     const plan = makePlan(['| impl-core | in_progress | |', '| rev | pending | |'], [
@@ -9363,7 +9661,7 @@ function rtHarness(initialFiles, opts) {
     assert(gateStill && gateStill.kind === 'gate', 'S383-excl SIBLING: the live gate survives untouched in the running set');
     assert(docsEntry && docsEntry.speculative === true, 'S383-excl SIBLING: docs is recorded speculative:true alongside the live gate');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // S-BYTE (HARD INVARIANT): serial-fallback byte-identity. With no running-set, no active-batch,
@@ -9371,7 +9669,7 @@ function rtHarness(initialFiles, opts) {
 // close-and-open-next produce the SAME result shape as the legacy serial path. This pins that the
 // added layers never perturb a normal linear chain.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // open-next on a clean linear chain: no manifests, no halt, 0 in_progress.
   let planContent = makePlan(['| impl-core | pending | |', '| review | pending | |', '| finalize | pending | |'], [
     '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
@@ -9412,13 +9710,13 @@ function rtHarness(initialFiles, opts) {
     assert(r.opened && r.opened.id === 'review', 'S-BYTE: close-and-open-next opens the PENDING next node review (linear chain unchanged)');
     assert(!('verdict_unparsed' in r), 'S-BYTE: no spurious verdict_unparsed on a tdd-guide close with no verdict line');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // S384 (#384): reconcile-running-set CLOSE direction — a ledger-TERMINAL member still in an 'open'
 // running set is DROPPED (close-crash recovery), and orient ROUTES the wedge there.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // A close-crash: rev-a is ledger-complete but still in an 'open' running set (the removal step
   // crashed). No opening transaction. Today this was a not_opening dead-end; now it reconciles.
   const plan = makePlan(['| rev-a | complete | |', '| rev-b | in_progress | |', '| finalize | pending | |'], [
@@ -9461,13 +9759,13 @@ function rtHarness(initialFiles, opts) {
     assert(ro.result === 'refuse' && ro.reason === 'running_set_close_incomplete' && ro.repair === 'reconcile-running-set',
       'S384: orient routes the close-crash wedge to reconcile-running-set, got ' + JSON.stringify({ reason: ro.reason, repair: ro.repair }));
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // S385-rollback (#385): reconcile-running-set OPEN-direction rollback drops the baseline of each
 // rolled-back member (the stale-baseline trap), mirroring runReopenNode.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
     '| a | code-reviewer | — | — | 1 | sequence |',
     '| b | security-reviewer | — | — | 1 | sequence |',
@@ -9486,13 +9784,13 @@ function rtHarness(initialFiles, opts) {
   assert(r.rolledBack.includes('b') && !r.rolledBack.includes('a'), 'S385-rollback: b rolled back (still pending), a kept');
   assert(dropCalls.includes('b'), 'S385-rollback: --drop-base shelled for the rolled-back member b, got ' + JSON.stringify(dropCalls));
   assert(!dropCalls.includes('a'), 'S385-rollback: the kept (roll-forward) member a keeps its fresh baseline (NOT dropped)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S391c (#391c/#384): idempotent compliance append — re-closing the SAME node (alreadyAtTarget
 // path) does NOT append a DUPLICATE Required Agent Compliance row.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   function closeOnce(planContent, files) {
     return runCloseAndOpenNext({
       planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: 'rev',
@@ -9521,7 +9819,7 @@ function rtHarness(initialFiles, opts) {
   assert(r2.result === 'ok', 'S391c: re-close still ok (idempotent)');
   const count2 = (files[RS_PLAN_PATH].match(/\|\s*code-reviewer \(rev\)\s*\|\s*subagent-invoked\s*\|/g) || []).length;
   assert(count2 === 1, 'S391c: STILL exactly ONE compliance row after re-close (idempotent append), got ' + count2);
-}
+});
 
 // ---------------------------------------------------------------------------
 // E3-699: schema-2 plans freeze the exact one-row-per-node compliance set up
@@ -9530,7 +9828,7 @@ function rtHarness(initialFiles, opts) {
 // as completion and never append a duplicate. The finalize sink remains the
 // non-delegated main-session-direct row required by finalize compatibility.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const nodes = [
     '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -9609,7 +9907,7 @@ function rtHarness(initialFiles, opts) {
     'E3-699 compliance: finalize pending row advances to main-session-direct with its evidence binding');
   assert(!/\| (?:code-reviewer \(review\)|finalize \(done\)) \| pending \|/.test(finalPlan),
     'E3-699 compliance: no closed node retains a pending compliance row');
-}
+});
 
 // ---------------------------------------------------------------------------
 // E3-SINK-COMPLIANCE: the pre-seeded finalize/sink row auto-advances at its own
@@ -9618,7 +9916,7 @@ function rtHarness(initialFiles, opts) {
 // pending rows — otherwise the follow-on epoch-authority check would see a
 // `complete` finalize ledger status against a `pending` compliance row and trip.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| seed | complete | |', '| rev | complete | |', '| finalize | in_progress | |'], [
     '| seed | code-explorer | — | — | 1 | sequence |',
     '| rev | code-reviewer | seed | — | 1 | sequence |',
@@ -9658,7 +9956,7 @@ function rtHarness(initialFiles, opts) {
       + JSON.stringify(sinkCompliance));
   assert((closedPlan.match(/\| finalize \(finalize\) \|/g) || []).length === 1,
     'E3-SINK-COMPLIANCE: the sink advance is in-place — never a duplicate appended row');
-}
+});
 
 // ---------------------------------------------------------------------------
 // S392 (#392): evidence-binding nonce.
@@ -9668,28 +9966,28 @@ function rtHarness(initialFiles, opts) {
 //   - stale/replayed nonce → evidence_stale.
 //   - missing header (under expectedNonce) → shape failure naming evidence-binding.
 // ---------------------------------------------------------------------------
-{
-  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\nthe test ran for real';
+scenario(() => {
+  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED: failing assertion before implementation\nred_baseline: abc123def456\nthe test ran for real';
   // 3-arg call (no opts) — binding NOT checked (backward-compat).
-  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass').ok === true, 'S392: 3-arg call ignores binding and passes non-empty RED/GREEN');
+  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass').ok === true, 'S392: 3-arg call ignores binding and passes a legacy non-empty RED body');
   assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass', {}).ok === true, 'S392: empty opts (no expectedNonce) skips binding');
 
   // Correct nonce + node → passes (still must satisfy the role shape).
   const ok = checkEvidenceShape('tdd-guide', 'impl-x', goodTdd, { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
-  assert(ok.ok === true, 'S392: correct evidence-binding header + RED/GREEN → ok, got ' + JSON.stringify(ok));
+  assert(ok.ok === true, 'S392: correct evidence-binding header + RED/red_baseline → ok, got ' + JSON.stringify(ok));
 
   // Copied from another node → evidence_unbound.
-  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED: fail\nred_baseline: abc123def456', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(copiedNode.ok === false && copiedNode.evidenceUnbound === true && copiedNode.missingTokenClass === 'evidence_unbound', 'S392: wrong node id → evidence_unbound, got ' + JSON.stringify(copiedNode));
 
   // Stale / replayed nonce (e.g. "this was copied from another node") → evidence_stale.
-  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED: fail\nred_baseline: OLDNONCE0000', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(stale.ok === false && stale.evidenceStale === true && stale.missingTokenClass === 'evidence_stale', 'S392: wrong nonce → evidence_stale, got ' + JSON.stringify(stale));
 
   // Missing header under expectedNonce → shape failure naming evidence-binding.
   const noHeader = checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(noHeader.ok === false && noHeader.missingTokenClass === 'evidence-binding', 'S392: missing header under expectedNonce → evidence-binding shape failure, got ' + JSON.stringify(noHeader));
-}
+});
 
 // ---------------------------------------------------------------------------
 // S392-close (#392): close-node reads the nonce from .cache/barrier-base-<id> and enforces it.
@@ -9697,7 +9995,7 @@ function rtHarness(initialFiles, opts) {
 //   - correctly-bound evidence → close proceeds.
 //   - NO barrier-base file (no nonce on disk) → binding skipped, legacy evidence passes (back-compat).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // SHA on disk; nonce = first 12 chars.
   const sha = 'abc123def4567890abcdef1234567890abcdef12';
   const nonce = sha.slice(0, 12); // 'abc123def456'
@@ -9735,14 +10033,14 @@ function rtHarness(initialFiles, opts) {
     const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
     assert(r.result === 'ok' && r.closed === 'rev', 'S392-close: no nonce on disk → binding skipped, legacy evidence passes (back-compat), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // D419-INV2: [INV-2] open-next MUST NOT write running-set.json.
 // The serial open-next path is the legacy single-node path: it NEVER begins writing
 // a running-set.json. After a successful open-next, no running-set.json file must exist.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | pending | |',
     '| impl-other | pending | |',
@@ -9784,7 +10082,7 @@ function rtHarness(initialFiles, opts) {
   // The hard invariant: running-set.json must NOT have been written.
   const rsWritten = Object.keys(writtenFiles).some(f => f.endsWith(RUNNING_SET_NAME));
   assert(rsWritten === false, 'D419-INV2: open-next must NOT write running-set.json (serial fallback byte-identity)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // D419-INV7: [INV-7] reconcile-running-set honors max_concurrent ceiling.
@@ -9795,7 +10093,7 @@ function rtHarness(initialFiles, opts) {
 // The cap means only ONE of b/c should be rolled forward (priority: ledger order).
 // Without the cap, both b AND c roll forward → total=3 > ceiling=2 (the bug).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Plan: a + b + c all in_progress, d pending. running-set: state:opening, max_concurrent:2,
   // nodes: [{id:'a',stable}, {id:'b',opening}, {id:'c',opening}].
   // 'a' is stable live; 'b' and 'c' both have opening:true AND ledger in_progress.
@@ -9829,7 +10127,7 @@ function rtHarness(initialFiles, opts) {
   assert(finalSet.max_concurrent === 2, 'D419-INV7: max_concurrent=2 survives reconcile rewrite');
   // The ceiling cap: live nodes must NOT exceed max_concurrent=2.
   assert(finalSet.nodes.length <= 2, 'D419-INV7: live node count (' + finalSet.nodes.length + ') must not exceed max_concurrent=2 (budget=ceiling-live=2-1=1)');
-}
+});
 
 // ---------------------------------------------------------------------------
 // D419-CLOSE-FIELDSURVIVAL: runCloseNode empty-set fallback preserves unknown fields.
@@ -9837,7 +10135,7 @@ function rtHarness(initialFiles, opts) {
 // SPREAD the existing top-level fields (including max_concurrent and other unknowns)
 // rather than creating a bare { state:'open', nodes:[] } that drops them.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
   const startSet = JSON.stringify({
     state: 'open',
@@ -9862,7 +10160,7 @@ function rtHarness(initialFiles, opts) {
   assert(finalSet.nodes.length === 0, 'D419-CLOSE-FIELDSURVIVAL: empty running-set has no nodes');
   assert(finalSet.max_concurrent === 3, 'D419-CLOSE-FIELDSURVIVAL: max_concurrent=3 preserved in empty-set fallback');
   assert(finalSet.extra_field === 'preserved', 'D419-CLOSE-FIELDSURVIVAL: extra_field preserved in empty-set fallback');
-}
+});
 
 // ---------------------------------------------------------------------------
 // D444-DISPATCH-PARITY: buildDispatch is exported and produces the required dispatch shape
@@ -9870,7 +10168,7 @@ function rtHarness(initialFiles, opts) {
 
 // #655 reviewer repair: authored plans must carry the validated override through
 // next-action and the real lifecycle entry points (never direct builder injection).
-{
+scenario(() => {
   for (const [cell, reason] of [['1', 'wait_budget_below_floor'], ['721', 'wait_budget_above_cap']]) {
     const frozen = legacyFreezeUnknownWait(cell);
     assert(planValidator.revalidateForResume(frozen).ok === true, '#655-COMPAT: old frozen ' + cell + ' is hash/structure-resumable');
@@ -9886,9 +10184,9 @@ function rtHarness(initialFiles, opts) {
   const optMeta = ['optimize(work):', '  metric_command: node bench.js', '  metric_paths: bench.js', '  direction: min',
     '  budget_iterations: 2', '  budget_wallclock_minutes: 60', '  regression_gate: npm test', '  metric_repeats: 1', '  min_delta: 0', '  patience: 1'];
   assert(authoredNext(legacyFreezeUnknownWait('60', 'metric-optimizer', 'standard', optMeta)).reason === 'wait_budget_conflict', '#655-COMPAT: optimizer dual budget refuses at point of use');
-}
+});
 
-{
+scenario(() => {
   const serialPlan = makeWaitPlan([
     '| impl | pending | |', '| done | pending | |',
   ], [
@@ -9907,9 +10205,9 @@ function rtHarness(initialFiles, opts) {
     shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
   assert(opened.opened.dispatch.wait_budget_minutes === 180 && opened.opened.dispatch.wait_budget_source === 'planner_override',
     '#655-R1: serial open-next dispatches authored override/source');
-}
+});
 
-{
+scenario(() => {
   const speculativePlan = makeWaitPlan([
     '| gate | in_progress | |', '| probe | pending | |', '| done | pending | |',
   ], [
@@ -9919,9 +10217,9 @@ function rtHarness(initialFiles, opts) {
   ]).replace('labels: area:scripts', 'labels: area:scripts\nspeculative_open_policy: auto');
   const projected = authoredNext(speculativePlan);
   assert(projected.speculativePending[0].wait_budget_minutes === 200, '#655-R1: authored speculative descriptor retains override');
-}
+});
 
-{
+scenario(() => {
   const fanoutPlan = makeWaitPlan([
     '| read-a | pending | |', '| read-b | pending | |', '| done | pending | |',
   ], [
@@ -9951,9 +10249,9 @@ function rtHarness(initialFiles, opts) {
   assert(rec.result === 'ok' && after.nodes.length === 1 && after.nodes[0].id === 'read-a'
     && after.nodes[0].wait_budget_minutes === 180 && after.nodes[0].wait_budget_source === 'planner_override',
     '#655-R1: crash reconcile retains exact override/source on survivor');
-}
+});
 
-{
+scenario(() => {
   const fusedPlan = makeWaitPlan([
     '| first | in_progress | |', '| second | pending | |', '| done | pending | |',
   ], [
@@ -9963,16 +10261,16 @@ function rtHarness(initialFiles, opts) {
   ]);
   const h = rtHarness({ '/p/workflow-plan.md': fusedPlan, '/p/workflow-state.md': makeState(),
     '/p/.cache/barrier-base-first': 'deadbeeffirstcafef00d1234\n',
-    '/p/.cache/first.md': 'evidence-binding: first deadbeeffirs\nRED: red\nGREEN: green\n' });
+    '/p/.cache/first.md': 'evidence-binding: first deadbeeffirs\nRED: red\nred_baseline: deadbeeffirs\n' });
   const shell = (scriptPath, args) => path.basename(scriptPath) === 'kaola-workflow-next-action.js'
     ? authoredNext(h.files['/p/workflow-plan.md']) : h.shell(scriptPath, args);
   const fused = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'first',
     shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(fused.result === 'ok' && fused.opened.dispatch.wait_budget_minutes === 300
     && fused.opened.dispatch.wait_budget_source === 'planner_override', '#655-R1: fused authored advance keeps override/source');
-}
+});
 
-{
+scenario(() => {
   assert(typeof buildDispatch === 'function', 'D444-DISPATCH-PARITY: buildDispatch exported as function');
 
   const nodeInfo = { id: 'n1-impl', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/foo.js' };
@@ -10039,11 +10337,11 @@ function rtHarness(initialFiles, opts) {
       : (caught && caught.reason === 'wait_budget_below_floor'),
     '#655-R6 direct builder floor: role=' + role + ' model=' + model + ' value=' + value + ' pass=' + shouldPass);
   }
-}
+});
 
 // #634 (metric-optimizer): buildDispatch threads the optimize contract + wait-budget override onto a
 // metric-optimizer card, and leaves every other card byte-identical to pre-#634.
-{
+scenario(() => {
   const optNode = { id: 'n2-opt', role: 'metric-optimizer', model: 'sonnet', declared_write_set: 'src/hot.js' };
   const optContract = {
     nodeId: 'n2-opt', metric_command: 'node bench.js --emit-metric', metric_paths: ['bench/suite.js'],
@@ -10072,15 +10370,15 @@ function rtHarness(initialFiles, opts) {
     { nonce: 'plain1234567', evidence_file: '.cache/n1-impl.md', required_tokens: [], working_dir: '/fake/worktree', forge_rider: null });
   assert(dPlain.optimize === undefined, '#634: a non-optimize card carries no optimize field');
   assert(dPlain.wait_budget_source === 'planner_model', '#634: a non-optimize card keeps its tier-derived wait-budget source');
-}
+});
 
 // D444-DISPATCH-PARITY: serial open and fused advance produce field-identical dispatch for same node
-{
+scenario(() => {
   const nodeSpec = { id: 'n2-target', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
   const ctx = {
     nonce: 'abc123456789',
     evidence_file: '.cache/n2-target.md',
-    required_tokens: ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+    required_tokens: ['evidence-binding', 'tests-green|regression-green|build-green|smoke-integration'],
     working_dir: '/fake/worktree',
     forge_rider: null,
   };
@@ -10095,10 +10393,10 @@ function rtHarness(initialFiles, opts) {
   assert(JSON.stringify(d_serial.required_tokens) === JSON.stringify(d_fused.required_tokens), 'D444-DISPATCH-PARITY: serial/fused required_tokens match');
   assert(d_serial.forge_rider === d_fused.forge_rider, 'D444-DISPATCH-PARITY: serial/fused forge_rider match');
   assert(JSON.stringify(d_serial.guards) === JSON.stringify(d_fused.guards), 'D444-DISPATCH-PARITY: serial/fused guards match');
-}
+});
 
 // D444-DISPATCH-PARITY: runOpenNext opened payload has dispatch sub-object
-{
+scenario(() => {
   const nodeInfo = { id: 'n1-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/foo.js', dependsOn: [] };
   const shellStub = (scriptPath, args) => {
     const base = path.basename(scriptPath);
@@ -10146,12 +10444,12 @@ function rtHarness(initialFiles, opts) {
   assert(Array.isArray(d444.required_tokens), 'D444-DISPATCH-PARITY: dispatch.required_tokens is array');
   assert(d444.forge_rider === null, 'D444-DISPATCH-PARITY: dispatch.forge_rider is null');
   assert(Array.isArray(d444.guards), 'D444-DISPATCH-PARITY: dispatch.guards is array');
-}
+});
 
 // ---------------------------------------------------------------------------
 // D444-DISPATCH-OPENREADY: runOpenReady opened elements have dispatch with same shape
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const readyNodes = [
     { id: 'rv1', role: 'code-reviewer', model: 'sonnet', declared_write_set: '—', dependsOn: [] },
     { id: 'rv2', role: 'security-reviewer', model: null, declared_write_set: '—', dependsOn: [] },
@@ -10225,7 +10523,7 @@ function rtHarness(initialFiles, opts) {
     assert(d.forge_rider === null, 'D444-DISPATCH-OPENREADY: dispatch.forge_rider is null');
     assert(Array.isArray(d.guards), 'D444-DISPATCH-OPENREADY: dispatch.guards is array');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #516-QUALIFIED-EVIDENCE-PATH: the open-next / open-ready DISPATCH packet emits a PROJECT-QUALIFIED
@@ -10238,7 +10536,7 @@ function rtHarness(initialFiles, opts) {
 //   (it joins dirname(planPath)+'.cache'); only the dispatch HINT string is qualified. (RED against the
 //   unpatched code: dispatch.evidence_file === '.cache/<id>.md' → these blocks fail.)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // (a) open-next serial dispatch.
   {
     const nodeInfo = { id: 'n1-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/foo.js', dependsOn: [] };
@@ -10310,12 +10608,12 @@ function rtHarness(initialFiles, opts) {
       assert(elem.evidence_file === '.cache/' + elem.id + '.md', '#516-QUALIFIED-EVIDENCE-PATH (open-ready): ' + elem.id + ' top-level mirror stays bare (vestige), got ' + JSON.stringify(elem.evidence_file));
     }
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // D444-VERIFY-ACCEPT: runVerifyEvidence on well-formed on-disk evidence → {result:'ok'}
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   assert(typeof runVerifyEvidence === 'function', 'D444-VERIFY-ACCEPT: runVerifyEvidence exported');
 
   const tmpVA = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-va-'));
@@ -10325,8 +10623,8 @@ function rtHarness(initialFiles, opts) {
   const nonceVA = 'abcdef123456';
   // Write barrier base file so readNonce returns the nonce
   fs.writeFileSync(path.join(cacheDirVA, 'barrier-base-n1-impl'), nonceVA + 'extra');
-  // Well-formed tdd-guide evidence with correct binding + RED + GREEN
-  const goodEvidence = 'evidence-binding: ' + nodeIdVA + ' ' + nonceVA + '\nRED: test failed\nGREEN: test passed\n';
+  // Well-formed tdd-guide evidence with correct binding + RED + the baseline receipt
+  const goodEvidence = 'evidence-binding: ' + nodeIdVA + ' ' + nonceVA + '\nRED: test failed\nred_baseline: ' + nonceVA + '\n';
   fs.writeFileSync(path.join(cacheDirVA, nodeIdVA + '.md'), goodEvidence);
   const planPathVA = path.join(tmpVA, 'workflow-plan.md');
   fs.writeFileSync(planPathVA, [
@@ -10346,10 +10644,10 @@ function rtHarness(initialFiles, opts) {
   assert(rVA.nodeId === nodeIdVA, 'D444-VERIFY-ACCEPT: result.nodeId matches');
   assert(rVA.role === 'tdd-guide', 'D444-VERIFY-ACCEPT: result.role is tdd-guide');
   try { fs.rmSync(tmpVA, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // D444-VERIFY-SEED-ONLY: an untouched seeded file must never unlock encrypted-return recovery.
-{
+scenario(() => {
   const tmpSeedOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-seed-only-'));
   const cacheDir = path.join(tmpSeedOnly, '.cache');
   fs.mkdirSync(cacheDir, { recursive: true });
@@ -10372,11 +10670,11 @@ function rtHarness(initialFiles, opts) {
   assert(verified.result === 'refuse' && verified.reason === 'evidence_shape_failed',
     'D444-VERIFY-SEED-ONLY: untouched seed refuses verification, got ' + JSON.stringify(verified));
   try { fs.rmSync(tmpSeedOnly, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // D444-VERIFY-SEED-ONLY-GENERIC: the same wall applies to a generic registry-driven role, not only
 // the dedicated tdd-guide/implementer branches.
-{
+scenario(() => {
   const tmpSeedOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-seed-only-generic-'));
   const cacheDir = path.join(tmpSeedOnly, '.cache');
   fs.mkdirSync(cacheDir, { recursive: true });
@@ -10400,13 +10698,13 @@ function rtHarness(initialFiles, opts) {
     && verified.missingTokenClass === 'findings',
   'D444-VERIFY-SEED-ONLY-GENERIC: untouched generic seed refuses verification, got ' + JSON.stringify(verified));
   try { fs.rmSync(tmpSeedOnly, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // #699 G4-CERTIFIER-SEED: opening a schema-2 certifier must materialize the exact logical-gate,
 // epoch-frontier, and current-candidate bindings the final barrier verifies. Read-only reviewer
 // returns are persisted through record-evidence, so that path must preserve the OPEN-TIME binding;
 // recomputing after a later writer mutation would certify bytes the reviewer never saw.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-g4-certifier-seed-'));
   try {
     const project = 'issue-699';
@@ -10484,19 +10782,19 @@ function rtHarness(initialFiles, opts) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // D444-VERIFY-REFUSE-TOKEN: missing required token → {result:'refuse', reason:'evidence_shape_failed'}
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const tmpVRT = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vrt-'));
   const cacheDirVRT = path.join(tmpVRT, '.cache');
   fs.mkdirSync(cacheDirVRT, { recursive: true });
   const nodeIdVRT = 'n1-impl';
   const nonceVRT = 'abcdef123456';
   fs.writeFileSync(path.join(cacheDirVRT, 'barrier-base-n1-impl'), nonceVRT + 'extra');
-  // Missing GREEN token (only binding + RED)
+  // Missing the red_baseline receipt (only binding + RED)
   const badEvidence = 'evidence-binding: ' + nodeIdVRT + ' ' + nonceVRT + '\nRED: test failed\n';
   fs.writeFileSync(path.join(cacheDirVRT, nodeIdVRT + '.md'), badEvidence);
   const planPathVRT = path.join(tmpVRT, 'workflow-plan.md');
@@ -10513,22 +10811,23 @@ function rtHarness(initialFiles, opts) {
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     cacheExists: (p) => fs.existsSync(p),
   });
-  assert(rVRT.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: missing GREEN → refuse');
+  assert(rVRT.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: missing red_baseline → refuse');
   assert(rVRT.reason === 'evidence_shape_failed', 'D444-VERIFY-REFUSE-TOKEN: reason is evidence_shape_failed, got ' + rVRT.reason);
-  assert(rVRT.missingTokenClass === 'GREEN', 'D444-VERIFY-REFUSE-TOKEN: missingTokenClass is GREEN, got ' + rVRT.missingTokenClass);
+  assert(rVRT.missingTokenClass === 'red_baseline', 'D444-VERIFY-REFUSE-TOKEN: missingTokenClass is red_baseline, got ' + rVRT.missingTokenClass);
   try { fs.rmSync(tmpVRT, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
-// D444-VERIFY-REFUSE-TOKEN: implementer missing non_tdd_reason → evidence_shape_failed
-{
+// D444-VERIFY-REFUSE-TOKEN: implementer missing its verification tier → evidence_shape_failed
+scenario(() => {
   const tmpVIM = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vim-'));
   const cacheDirVIM = path.join(tmpVIM, '.cache');
   fs.mkdirSync(cacheDirVIM, { recursive: true });
   const nodeIdVIM = 'impl-n1';
   const nonceVIM = 'deadbeef1234';
   fs.writeFileSync(path.join(cacheDirVIM, 'barrier-base-impl-n1'), nonceVIM + 'extra');
-  // Missing non_tdd_reason
-  const badEv = 'evidence-binding: ' + nodeIdVIM + ' ' + nonceVIM + '\nregression-green: tests pass\n';
+  // Missing the verification tier (`non_tdd_reason` retired with the dichotomy that justified it —
+  // the tier is what survives, and it is not optional).
+  const badEv = 'evidence-binding: ' + nodeIdVIM + ' ' + nonceVIM + '\ntask: refactored the exporter\n';
   fs.writeFileSync(path.join(cacheDirVIM, nodeIdVIM + '.md'), badEv);
   const planPathVIM = path.join(tmpVIM, 'workflow-plan.md');
   fs.writeFileSync(planPathVIM, [
@@ -10544,14 +10843,14 @@ function rtHarness(initialFiles, opts) {
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     cacheExists: (p) => fs.existsSync(p),
   });
-  assert(rVIM.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: implementer missing non_tdd_reason → refuse');
+  assert(rVIM.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: implementer missing the verification tier → refuse');
   assert(rVIM.reason === 'evidence_shape_failed', 'D444-VERIFY-REFUSE-TOKEN: implementer reason evidence_shape_failed, got ' + rVIM.reason);
-  assert(rVIM.missingTokenClass === 'non_tdd_reason', 'D444-VERIFY-REFUSE-TOKEN: implementer missingTokenClass non_tdd_reason, got ' + rVIM.missingTokenClass);
+  assert(rVIM.missingTokenClass === 'change-type', 'D444-VERIFY-REFUSE-TOKEN: implementer missingTokenClass change-type, got ' + rVIM.missingTokenClass);
   try { fs.rmSync(tmpVIM, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // D444-VERIFY-REFUSE-TOKEN: absent evidence file → evidence_absent
-{
+scenario(() => {
   const tmpVABS = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vabs-'));
   const planPathVABS = path.join(tmpVABS, 'workflow-plan.md');
   fs.writeFileSync(planPathVABS, [
@@ -10570,10 +10869,10 @@ function rtHarness(initialFiles, opts) {
   assert(rVABS.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: absent evidence file → refuse');
   assert(rVABS.reason === 'evidence_absent', 'D444-VERIFY-REFUSE-TOKEN: absent evidence reason is evidence_absent, got ' + rVABS.reason);
   try { fs.rmSync(tmpVABS, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // D444-VERIFY-REFUSE-TOKEN: stale nonce → evidence_stale
-{
+scenario(() => {
   const tmpVST = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vst-'));
   const cacheDirVST = path.join(tmpVST, '.cache');
   fs.mkdirSync(cacheDirVST, { recursive: true });
@@ -10599,12 +10898,12 @@ function rtHarness(initialFiles, opts) {
   assert(rVST.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: stale nonce → refuse');
   assert(rVST.reason === 'evidence_stale', 'D444-VERIFY-REFUSE-TOKEN: stale nonce reason evidence_stale, got ' + rVST.reason);
   try { fs.rmSync(tmpVST, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // D444-RECEIPT-PASSES-CLOSE: full on-disk evidence → runVerifyEvidence ok (close reads from disk)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const tmpRPC = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-rpc-'));
   const cacheDirRPC = path.join(tmpRPC, '.cache');
   fs.mkdirSync(cacheDirRPC, { recursive: true });
@@ -10630,12 +10929,12 @@ function rtHarness(initialFiles, opts) {
   assert(rRPC.result === 'ok', 'D444-RECEIPT-PASSES-CLOSE: full on-disk implementer evidence → ok (close reads from disk), got ' + JSON.stringify(rRPC));
   // Verify it is read-only (no side effects needed — the test just checks the result)
   try { fs.rmSync(tmpRPC, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // D444-GUARDS: deriveGuards exported and computes correct guards
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   assert(typeof deriveGuards === 'function', 'D444-GUARDS: deriveGuards exported as function');
 
   // Gate roles → read-only
@@ -10660,7 +10959,7 @@ function rtHarness(initialFiles, opts) {
     declared_write_set: 'scripts/kaola-workflow-adaptive-node.js, plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js',
   });
   assert(gGen.includes('sync:editions'), 'D444-GUARDS: node with generated-port write set gets sync:editions guard');
-}
+});
 
 // ===========================================================================
 // #437-LANE-GROUP (D-419 Part 2) — open-ready co-open + close-node group barrier.
@@ -10793,7 +11092,7 @@ function rtHarness(initialFiles, opts) {
 
   // R4: real open-ready → dispatch evidence paths → close both skeptics → real whole-plan verdict.
   // No role-prefix bridge is authored anywhere in this project.
-  {
+  scenario(() => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-r4-skeptic-e2e-'));
     const project = 'skeptic-e2e';
     const projDir = path.join(repoRoot, 'kaola-workflow', project);
@@ -10838,7 +11137,7 @@ function rtHarness(initialFiles, opts) {
       const verdict = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--verdict-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim());
       assert(verdict.ok === true || verdict.result === 'pass', 'R4 real whole-plan verdict-check passes canonical receipts, got ' + JSON.stringify(verdict));
     } finally { cleanup(repoRoot); }
-  }
+  });
 
   // -------------------------------------------------------------------------
   // RETIRED for #498: D437-OPEN-READY-GROUP asserted ON-alone (KAOLA_LANE_CONTAINMENT only) FORMS a lane
@@ -10851,7 +11150,7 @@ function rtHarness(initialFiles, opts) {
   // D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: flag ON, two OVERLAPPING write nodes → serial degrade
   //   (one write opened, NO lane_group). (Overlapping plan cannot freeze; open-ready still degrades.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo({ aSet: 'ax.js', bSet: 'ax.js' });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
     // The overlapping fixture fails to freeze, so open-ready's integrity gate may refuse; if it opens,
@@ -10860,11 +11159,11 @@ function rtHarness(initialFiles, opts) {
     const rs = readRS(cacheDir);
     assert(!rs || !rs.lane_group, 'D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: running-set has no lane_group');
     cleanup(repoRoot);
-  }
+  });
 
   // Exact read-top-up image from the adversarial probe: stable r2 plus newly
   // opening r3, both ledger-in-progress at cap 2.
-  {
+  scenario(() => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-655-read-topup-'));
     const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
     const cacheDir = path.join(projDir, '.cache');
@@ -10903,7 +11202,7 @@ function rtHarness(initialFiles, opts) {
     const orient = runNode(repoRoot, ['orient', '--project', 'test-project', '--json'], ON);
     assert(again.reconciled === false && again.reason === 'not_opening' && orient.result === 'ok', '#655-MIXED-READ: repeat reconcile idempotent and orient healthy');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // D437-OPEN-READY-SERIAL (#542 kill-switch): KAOLA_PARALLEL_WRITES=0 forces the single-serial
@@ -10911,7 +11210,7 @@ function rtHarness(initialFiles, opts) {
   //   other stays pending. (This was the OLD default-OFF behavior; after #542 it is reachable ONLY by
   //   the explicit kill-switch, since co-open is default-on.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(r.result === 'ok', 'D437-OPEN-READY-SERIAL: open-ready ok, got ' + JSON.stringify(r));
@@ -10923,7 +11222,7 @@ function rtHarness(initialFiles, opts) {
     const openedId = r.opened[0].id;
     assert(ledgerStatus(planPath, openedId) === 'in_progress', 'D437-OPEN-READY-SERIAL: the one opened write is in_progress');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // D437-OPEN-READY-DEFAULT-COOPEN (#542 default-on): with NO env (bare default), a ≥2 disjoint write
@@ -10931,7 +11230,7 @@ function rtHarness(initialFiles, opts) {
   //   inversion of the old default-OFF assertion above. Disjoint declared sets (ax.js / by.js) need NO
   //   --write-overlap-consent (the validator short-circuits green before the overlap-relax check).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
     assert(r.result === 'ok', 'D437-OPEN-READY-DEFAULT-COOPEN: open-ready ok, got ' + JSON.stringify(r));
@@ -10945,7 +11244,7 @@ function rtHarness(initialFiles, opts) {
       'D437-OPEN-READY-DEFAULT-COOPEN: co-open ⟹ legs provisioned for every member (the safe close path), got ' + JSON.stringify(rs && rs.lane_group));
     assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress', 'D437-OPEN-READY-DEFAULT-COOPEN: both A and B in_progress (co-opened)');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN (DECISION B, accuracy-first): a ≥2 write frontier
@@ -10959,7 +11258,7 @@ function rtHarness(initialFiles, opts) {
   //   validator T546G2-* GREEN-NEW scenario. RED-provable against pre-#546-G2 (serial degrade → no
   //   lane_group → this block fails).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ aSet: 'scripts/sa.js', bSet: 'scripts/sb.js' });
     // DEFAULT env (no toggle), NO --write-overlap-consent, NO write_overlap_policy in the plan.
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
@@ -10975,7 +11274,7 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress',
       '#546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN: both A and B in_progress (co-opened)');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #498-COOPEN-REQUIRES-LEGS (regression guard, open-side — #542 inverted premise): the #498
@@ -10989,7 +11288,7 @@ function rtHarness(initialFiles, opts) {
   //   the #498 regression guard, now expressed as "co-open ⟹ legs, default-on". (RED-provable against a
   //   regressed gate that set groupForm with legs=null → the legless union barrier → this block fails.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const coopenEnvs = [
       { label: 'bare default (no toggle, no consent)', env: DEFAULT, args: ['open-ready', '--project', 'test-project', '--json'] },
       { label: 'legacy containment toggle (now a no-op for co-open)', env: ON, args: ['open-ready', '--project', 'test-project', '--json'] },
@@ -11012,7 +11311,7 @@ function rtHarness(initialFiles, opts) {
       assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: both A and B in_progress (co-opened)');
       cleanup(repoRoot);
     }
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #498-COOPEN-FULL-CONJUNCTION (positive — unchanged): with the FULL explicit toggles (containment +
@@ -11022,7 +11321,7 @@ function rtHarness(initialFiles, opts) {
   //   that still co-opens. The positive co-open ⟺ legs invariant is asserted directly here. (The
   //   detailed leg manifest assertions live in LEG-PROVISION-ON below.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const LEG_ON_LOCAL = { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' };
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON_LOCAL);
@@ -11035,7 +11334,7 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress',
       '#498-COOPEN-FULL-CONJUNCTION: both A and B in_progress (co-opened)');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // RETIRED for #498: the legless (containment-only co-open) group close tests — D437-CLOSE-NODE-DEFERRED,
@@ -11055,7 +11354,7 @@ function rtHarness(initialFiles, opts) {
   //   so close-node runs the normal per-node barrier path (no deferred/group). Closing the one node
   //   returns the serial shape (no `barrier` field set to deferred/group).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     const openedId = open.opened[0].id;
@@ -11068,15 +11367,16 @@ function rtHarness(initialFiles, opts) {
     assert(r.closed === openedId, 'D437-CLOSE-NODE-SERIAL: serial close returns closed id');
     assert(ledgerStatus(planPath, openedId) === 'complete', 'D437-CLOSE-NODE-SERIAL: node complete via serial per-node barrier');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #674a (D-674-01 a): a consumer repo that gitignores `.cache/` (a common convention) must NOT abort
   //   the lane-group co-open. The seeded member evidence stubs are explicitly enumerated paths (never a
-  //   glob), so `git add -f` on them is safe and required — an unforced add refuses on a gitignored path
-  //   (stub_commit_failed), silently serial-degrading the authored parallel-write antichain.
+  //   glob), so `git add -f` on them is safe and required — an unforced add refuses on a gitignored
+  //   path, which since #802 D7 serial-degrades the authored parallel-write antichain
+  //   (`seam_checkpoint_declined`) rather than refusing outright. Either way the antichain is lost.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ gitignoreCache: true });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
     assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 2,
@@ -11089,7 +11389,7 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress',
       '#674a: both A and B in_progress (co-opened, not serial-degraded)');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #674b (D-674-01 b): a group-form abort AFTER the member-baseline loop has recorded a baseline for
@@ -11104,7 +11404,7 @@ function rtHarness(initialFiles, opts) {
   //   Land B's declared file (a sibling diff) into the shared tree, THEN open A serially (doc-index
   //   tie-break picks A first — see makeLaneRepo's A-before-B declaration order), THEN close A.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, project, cacheDir, g } = makeLaneRepo();
     const legBranchB = 'kw/legs/' + project + '/B';
     // Decoy worktree lives OUTSIDE repoRoot (a sibling tmpdir) so it never shows up as untracked dirt in
@@ -11136,7 +11436,7 @@ function rtHarness(initialFiles, opts) {
       '#674b: A\'s close must NOT false-positive write_set_overflow on the sibling\'s (B\'s) landed diff — the reused stale baseline must not misattribute it, got ' + JSON.stringify(closed));
     cleanup(repoRoot);
     try { fs.rmSync(decoyPath, { recursive: true, force: true }); } catch (_) {}
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #678 R1 (the #674 symmetric gap): a group-form abort AFTER the SHARED GROUP baseline was recorded
@@ -11161,7 +11461,7 @@ function rtHarness(initialFiles, opts) {
       return true;
     } catch (_) { return false; }
   }
-  {
+  scenario(() => {
     const { repoRoot, project, planPath, cacheDir, g } = makeLaneRepo();
     const groupId = 'lg-A-B';
     const legBranchB = 'kw/legs/' + project + '/B';
@@ -11189,7 +11489,7 @@ function rtHarness(initialFiles, opts) {
 
     cleanup(repoRoot);
     try { fs.rmSync(decoyPath, { recursive: true, force: true }); } catch (_) {}
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #680 Part A (the Phase-2 non-drop): a group co-open that ABORTS in Phase 2 (the ledger-seeding/
@@ -11205,7 +11505,7 @@ function rtHarness(initialFiles, opts) {
   //   node --start for member A to fail → baseline_failed. Phase 1's group + member baselines are recorded
   //   by passthrough to the real shellNode FIRST, so all three baselines exist on disk at the abort point.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const lane = makeLaneRepo();
     const project = lane.project;
     const groupId = 'lg-A-B';
@@ -11262,7 +11562,7 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending',
       '#680-A: the durable ledger rows stay pending on the aborted Phase-2 open (ledger + lane_group untouched), got ' + JSON.stringify({ A: ledgerStatus(planPath, 'A'), B: ledgerStatus(planPath, 'B') }));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #680 Part B positive (the pre-journal SIGKILL window): a baseline recorded with NO 'opening' journal
@@ -11271,7 +11571,7 @@ function rtHarness(initialFiles, opts) {
   //   return path. reconcile-running-set's additive orphan-baseline sweep (hoisted above the no_running_set
   //   early-return) must detect and drop it (file + ref). Pre-fix (no sweep) the orphan survives forever.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
     // Record a REAL orphan baseline (file + ref) for an id in NO ledger row and NO running set.
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'orphan', '--json'], { cwd: repoRoot, encoding: 'utf8' });
@@ -11288,7 +11588,7 @@ function rtHarness(initialFiles, opts) {
     assert(!groupBaselineRefExists678(repoRoot, project, 'orphan'),
       '#680-B: the pre-journal orphan baseline REF is dropped by the sweep (survived pre-fix)');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #680 Part B negative (the false-positive guard): the sweep must NOT drop a LIVE baseline. A baseline
@@ -11297,7 +11597,7 @@ function rtHarness(initialFiles, opts) {
   //   sweep is proven active and discriminating — a buggy over-reaping sweep would drop the live baselines
   //   and fail the survives-checks.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
     const groupId = 'lg-A-B';
     // A is a genuinely-live in_progress member; stand up a live 'open' lane_group with A as a live node.
@@ -11326,7 +11626,7 @@ function rtHarness(initialFiles, opts) {
     assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-orphan')),
       '#680-B-neg: the co-present orphan baseline is dropped while the live baselines are kept');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #680 Part B REPAIR (adversary R1 — the torn-Phase-3 LIVE-group-baseline drop): the orphan-baseline
@@ -11344,7 +11644,7 @@ function rtHarness(initialFiles, opts) {
   //   is null AND ≥1 in_progress row exists, its group_id (`lg-<memberIds…>`) is unrecoverable (member ids
   //   contain hyphens), so the group baseline is KEPT (fail-safe under-reap).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
     const groupId = 'lg-A-B';
     // Phase-2 already flipped A,B → in_progress and persisted the ledger before the crash.
@@ -11376,7 +11676,7 @@ function rtHarness(initialFiles, opts) {
     assert(groupBaselineRefExists678(repoRoot, project, 'A') && groupBaselineRefExists678(repoRoot, project, 'B'),
       '#680-B-repair: the in_progress member baseline REFS (A, B) are KEPT');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // D437-MUTATION-GUARD-NOT-VACUOUS (#542 kill-switch): the kill-switch is NOT vacuous —
@@ -11384,7 +11684,7 @@ function rtHarness(initialFiles, opts) {
   //   open (one write, no group), so the second write never enters a group. Without an effective
   //   kill-switch this would co-open (default-on); asserting exactly-one-open proves the switch bites.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(!open.laneGroup, 'D437-MUTATION-GUARD-NOT-VACUOUS: KAOLA_PARALLEL_WRITES=0 does NOT co-open a group');
@@ -11392,7 +11692,7 @@ function rtHarness(initialFiles, opts) {
     const rs = readRS(cacheDir);
     assert(!rs || !rs.lane_group, 'D437-MUTATION-GUARD-NOT-VACUOUS: no lane_group under the kill-switch — co-open is suppressed, not vacuous');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #666-ENOBUFS-TREE-HASH: computeCodeTreeHash (the finalize-check freshness key) walks
@@ -11405,7 +11705,7 @@ function rtHarness(initialFiles, opts) {
   //   empty files under long-ish names, no commit needed — computeCodeTreeHash only needs a git
   //   repo + a working tree) and assert a stable 64-hex sha256 comes back, not null.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-666-enobufs-'));
     execFileSync('git', ['-C', repoRoot, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
     execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'kw@test']);
@@ -11426,7 +11726,7 @@ function rtHarness(initialFiles, opts) {
     const hash2 = planValidator.computeCodeTreeHash(repoRoot, 'test-project');
     assert(hash1 === hash2, '#666-ENOBUFS-TREE-HASH: repeated computeCodeTreeHash calls over the same big tree agree, got ' + JSON.stringify([hash1, hash2]));
     cleanup(repoRoot);
-  }
+  });
 
   // =========================================================================
   // #463-LEG-PROVISION (Slice 2) — DORMANT per-leg `.kw` worktree provisioning for the write-lane
@@ -11464,7 +11764,7 @@ function rtHarness(initialFiles, opts) {
   //   branch per member, a running-set lane_group.legs manifest with {legPath,legBranch,baseline}, and
   //   a `leg_opened` timing for each.  (RED-provable: drop the provisioning block ⇒ this block fails.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok', 'LEG-PROVISION-ON: open-ready ok, got ' + JSON.stringify(r));
@@ -11510,7 +11810,7 @@ function rtHarness(initialFiles, opts) {
       assert(n.dispatch.leg_branch === 'kw/legs/test-project/' + n.id, '#591: ' + n.id + ' dispatch.leg_branch canonical form');
     }
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #591-SERIAL-READ-NO-LEG-FIELDS (byte-identity guard): on the serial/read path (no lane group) an
@@ -11518,7 +11818,7 @@ function rtHarness(initialFiles, opts) {
   //   laneGroup, so serial/read open-ready output stays byte-identical to pre-#591. Raw-string probe on the
   //   opened array (no leg field ANYWHERE) plus a key-presence check on the dispatch object.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 1, '#591-SERIAL-READ-NO-LEG-FIELDS: serial open ok (single write), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
@@ -11528,7 +11828,7 @@ function rtHarness(initialFiles, opts) {
     assert(JSON.stringify(r.opened).indexOf('"leg_path"') === -1 && JSON.stringify(r.opened).indexOf('"leg_branch"') === -1,
       '#591-SERIAL-READ-NO-LEG-FIELDS: no leg_path/leg_branch anywhere in the serial opened payload');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #692-LEG-UPSTREAM-EVIDENCE-ABSOLUTE: a co-opened WRITE member provisioned INTO an isolated leg
@@ -11542,7 +11842,7 @@ function rtHarness(initialFiles, opts) {
   //   which covers a LIVE-leg upstream (evidenceSource='leg'); this is the parent-merged upstream on the
   //   leg-OPEN side — the exact default co-open-with-upstream shape the field bug hit.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     // seed is a COMPLETE producer — its evidence lives in the PARENT worktree .cache by construction.
     // makeLaneRepo does not seed it; write it so the "file exists at that path" assertion is real.
@@ -11571,7 +11871,7 @@ function rtHarness(initialFiles, opts) {
       assert(fs.existsSync(up.path), '#692: ' + n.id + ' upstream_evidence file EXISTS at the parent path, got ' + JSON.stringify(up.path));
     }
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // ★ LEG-SERIAL-NO-LEGS-BYTE-IDENTITY (#542 kill-switch, non-negotiable): the serial path provisions
@@ -11581,7 +11881,7 @@ function rtHarness(initialFiles, opts) {
   //   worktree, no lane_group.legs key (raw-string probe), no leg_opened timing. (The legacy toggles are
   //   no-ops for co-open now; only the kill-switch suppresses it.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const cases = [
       { label: 'kill-switch, no toggle, no consent', env: SERIAL, args: ['open-ready', '--project', 'test-project', '--json'] },
       { label: 'kill-switch + legacy leg-isolation toggle (no-op), NO consent', env: { KAOLA_PARALLEL_WRITES: '0', KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' }, args: ['open-ready', '--project', 'test-project', '--json'] },
@@ -11601,14 +11901,14 @@ function rtHarness(initialFiles, opts) {
       assert(!timingsHas(cacheDir, 'A', 'leg_opened') && !timingsHas(cacheDir, 'B', 'leg_opened'), 'LEG-SERIAL-NO-LEGS [' + c.label + ']: no leg_opened timing');
       cleanup(repoRoot);
     }
-  }
+  });
 
   // -------------------------------------------------------------------------
   // LEG-RECONCILE-TEARDOWN: provision legs (ON), then DROP one member from running-set (so reconcile
   //   rolls it back) and run reconcile-running-set — assert the dropped member's worktree AND branch
   //   are gone (strict-order teardown) and the survivor's leg remains.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok' && r.laneGroup, 'LEG-RECONCILE-TEARDOWN: setup co-open ok');
@@ -11635,7 +11935,7 @@ function rtHarness(initialFiles, opts) {
     assert(rs1 && rs1.lane_group && rs1.lane_group.legs && rs1.lane_group.legs.A && !rs1.lane_group.legs.B,
       'LEG-RECONCILE-TEARDOWN: legs manifest keeps A, drops B, got ' + JSON.stringify(rs1 && rs1.lane_group && rs1.lane_group.legs));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // LEG-ORPHAN-SWEEP: provision legs (ON, healthy set), then manually `git worktree add` an extra
@@ -11643,7 +11943,7 @@ function rtHarness(initialFiles, opts) {
   //   swept (worktree + branch gone) while the live legs A,B remain. (The sweep is HOISTED above the
   //   not_opening early-return so it runs on a healthy set.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok' && r.laneGroup, 'LEG-ORPHAN-SWEEP: setup co-open ok');
@@ -11659,7 +11959,7 @@ function rtHarness(initialFiles, opts) {
     assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-ORPHAN-SWEEP: live leg A retained');
     assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'B'))), 'LEG-ORPHAN-SWEEP: live leg B retained');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // LEG-DANGLING-BRANCH-REUSE: provisionLeg must REUSE a dangling leg branch (worktree gone, branch
@@ -11667,7 +11967,7 @@ function rtHarness(initialFiles, opts) {
   //   no-wedge guarantee. Simulate: provision A's branch + worktree, remove ONLY the worktree (leave
   //   the branch), then re-provision the SAME leg via the exported provisionLeg seam.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo();
     const node = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
     const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
@@ -11682,7 +11982,7 @@ function rtHarness(initialFiles, opts) {
     assert(second.ok && second.reusedBranch, 'LEG-DANGLING-BRANCH-REUSE: re-provision REUSES the dangling branch (no wedge), got ' + JSON.stringify(second));
     assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-DANGLING-BRANCH-REUSE: worktree re-attached to the reused branch');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // ★ LEG-CLEAN-COMPLETION-NO-LEAK (FIX-1a, RED-provable): provision legs (ON), close A (deferred) then
@@ -11691,7 +11991,7 @@ function rtHarness(initialFiles, opts) {
   //   Assert NO leg worktree AND NO kw/legs branch survives after the group completes. (RED-provable:
   //   drop the close-node teardown ⇒ the leg worktrees/branches leak ⇒ this block fails.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(open.result === 'ok' && open.laneGroup, 'LEG-CLEAN-COMPLETION-NO-LEAK: setup co-open ok');
@@ -11713,7 +12013,7 @@ function rtHarness(initialFiles, opts) {
     assert(!branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CLEAN-COMPLETION-NO-LEAK: A leg branch torn down on completion');
     assert(!branchExists(repoRoot, 'kw/legs/test-project/B'), 'LEG-CLEAN-COMPLETION-NO-LEAK: B leg branch torn down on completion');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #593-AC1 (RED→GREEN, real-git co-open lifecycle): a two-node write antichain whose sets are
@@ -11725,7 +12025,7 @@ function rtHarness(initialFiles, opts) {
   //   (deferred) → close B (last ⇒ octopus-merge union barrier / group_passed) → BOTH legs on HEAD.
   //   RED-provable: on pre-#593 code the setup co-open assert fails (open.laneGroup is falsy).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const COARSE_A = 'plugins/kaola-workflow-gitlab/scripts/pa.js';
     const COARSE_B = 'plugins/kaola-workflow-gitea/scripts/pb.js';
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ aSet: COARSE_A, bSet: COARSE_B });
@@ -11755,14 +12055,14 @@ function rtHarness(initialFiles, opts) {
       '#593-AC1: BOTH legs\' files reach HEAD after the union barrier merge, got ' + JSON.stringify(head.split('\n').filter(Boolean)));
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', '#593-AC1: both members complete');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #593-AC6 (serial byte-identity): the SAME coarse frontier under KAOLA_PARALLEL_WRITES=0 forces the
   //   serial single-write path — NO lane_group, exactly ONE write opened, the other stays pending. The
   //   #593 default-relax is fully suppressed by the explicit kill-switch (byte-identical serial shape).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ aSet: 'plugins/kaola-workflow-gitlab/scripts/qa.js', bSet: 'plugins/kaola-workflow-gitea/scripts/qb.js' });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(r.result === 'ok', '#593-AC6: open-ready ok under KAOLA_PARALLEL_WRITES=0, got ' + JSON.stringify(r));
@@ -11772,14 +12072,14 @@ function rtHarness(initialFiles, opts) {
     assert(!rs || !rs.lane_group, '#593-AC6: running-set has no lane_group key (serial byte-identity)');
     assert(ledgerStatus(planPath, r.opened[0].id) === 'in_progress', '#593-AC6: the one opened write is in_progress');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #593-AC2-NET2 (runtime net): a coarse frontier with a PROTECTED concrete file in one set does NOT
   //   co-open even BY DEFAULT — NET-2 blocks at every tier — so open-ready SERIAL-DEGRADES (no
   //   lane_group, exactly one write opened). PROTECTED stays blocking; no default-relax bypasses it.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo({ aSet: 'plugins/kaola-workflow-gitlab/package-lock.json', bSet: 'plugins/kaola-workflow-gitea/scripts/rb.js' });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
     assert(r.result === 'ok', '#593-AC2-NET2: open-ready ok (serial-degrade), got ' + JSON.stringify(r));
@@ -11788,7 +12088,7 @@ function rtHarness(initialFiles, opts) {
     const rs = readRS(cacheDir);
     assert(!rs || !rs.lane_group, '#593-AC2-NET2: running-set has no lane_group (serial-degrade)');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // ★ #552-CRASH-WINDOW-LEDGER-ISLAST (RED-provable on the ledger-derived isLast fix): closeGroupMember
@@ -11801,7 +12101,7 @@ function rtHarness(initialFiles, opts) {
   //   WITHOUT reconcile (the ledger is the only consistent signal) and asserts B still synthesizes.
   //   RED-provable: revert the ledger-derived isLast ⇒ rB.barrier === 'deferred_to_group' ⇒ this fails.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(open.result === 'ok' && open.laneGroup, '#552-CRASH-WINDOW-LEDGER-ISLAST: setup co-open ok');
@@ -11835,7 +12135,7 @@ function rtHarness(initialFiles, opts) {
     assert(head1.includes('ax.js') && head1.includes('by.js'),
       '#552-CRASH-WINDOW-LEDGER-ISLAST: BOTH legs\' files on HEAD after synthesis (ax.js from the crash-window member), got ' + JSON.stringify(head1.split('\n').filter(Boolean)));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // ★ #552-CRASH-WINDOW-RECONCILE-HEAL (RED-provable on the reconcile self-heal + leg-retention fix): the
@@ -11846,7 +12146,7 @@ function rtHarness(initialFiles, opts) {
   //   manifest → the synthesizer omits it → committed work permanently lost. RED-provable: re-add `...closed`
   //   to the reconcile `departing` set ⇒ A's leg is torn down ⇒ ax.js missing from HEAD ⇒ this fails.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(open.result === 'ok' && open.laneGroup, '#552-CRASH-WINDOW-RECONCILE-HEAL: setup co-open ok');
@@ -11883,7 +12183,7 @@ function rtHarness(initialFiles, opts) {
       '#552-CRASH-WINDOW-RECONCILE-HEAL: BOTH legs\' files on HEAD (A leg retained through reconcile), got ' + JSON.stringify(head2.split('\n').filter(Boolean)));
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', '#552-CRASH-WINDOW-RECONCILE-HEAL: both complete');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // LEG-CRASH-LOST-MANIFEST-RECLAIM (FIX-1b): provision legs (ON), then UNLINK running-set.json
@@ -11891,7 +12191,7 @@ function rtHarness(initialFiles, opts) {
   //   hoisted sweep — gated on resolveLegIsolation, NOT on a present manifest — reclaims the now-orphan
   //   legs (no keep-paths to protect them). Assert both leg worktrees + branches are gone.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(open.result === 'ok' && open.laneGroup, 'LEG-CRASH-LOST-MANIFEST-RECLAIM: setup co-open ok');
@@ -11905,7 +12205,7 @@ function rtHarness(initialFiles, opts) {
     assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-CRASH-LOST-MANIFEST-RECLAIM: orphan legs reclaimed despite lost manifest, got ' + JSON.stringify(wts));
     assert(!branchExists(repoRoot, 'kw/legs/test-project/A') && !branchExists(repoRoot, 'kw/legs/test-project/B'), 'LEG-CRASH-LOST-MANIFEST-RECLAIM: orphan leg branches reclaimed');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // LEG-CRASH-LOST-MANIFEST-SERIAL (#542 kill-switch byte-identity): the SAME lost-manifest reconcile
@@ -11915,7 +12215,7 @@ function rtHarness(initialFiles, opts) {
   //   untouched. (The DEFAULT/legacy-toggle reclaim path is LEG-CRASH-LOST-MANIFEST-RECLAIM above —
   //   default-on now sweeps.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     // Plant a leg directly (simulating a leftover) without any running set.
     const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
@@ -11926,7 +12226,7 @@ function rtHarness(initialFiles, opts) {
     assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-CRASH-LOST-MANIFEST-SERIAL: planted leg UNTOUCHED under kill-switch (no sweep), still present');
     assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CRASH-LOST-MANIFEST-SERIAL: planted leg branch UNTOUCHED under kill-switch');
     cleanup(repoRoot);
-  }
+  });
 
   // =========================================================================
   // #463-LEG-BARRIER (Slice 3) — the PER-LEG write-isolation barrier. Drives the REAL validator
@@ -12001,36 +12301,36 @@ function rtHarness(initialFiles, opts) {
 
   // LEG-BARRIER-REF-ANCHORED (advisor landmine: producer + consumer ref names must AGREE). The ref the
   // provision side anchored must RESOLVE under the name the validator derives, and equal the manifest base.
-  {
+  scenario(() => {
     const { repoRoot, rs } = provisionedRepo();
     const refA = refResolves(repoRoot, 'A');
     assert(refA && refA.length >= 7, 'LEG-BARRIER-REF-ANCHORED: leg-base ref for A RESOLVES (producer anchored it under the consumer name), got ' + JSON.stringify(refA));
     assert(refA === rs.lane_group.legs.A.baseline, 'LEG-BARRIER-REF-ANCHORED: anchored ref A == manifest baseline (cross-check anchor agrees), got ref ' + refA + ' vs manifest ' + rs.lane_group.legs.A.baseline);
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-IN-LANE (uncommitted): a declared write inside the leg → --leg-barrier passes.
-  {
+  scenario(() => {
     const { repoRoot, legA, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A in-lane leg write\n');
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(r.result === 'pass', 'LEG-BARRIER-IN-LANE: in-lane leg write passes, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-OVERFLOW (uncommitted): an OUT-OF-declared write inside the leg → write_set_overflow.
-  {
+  scenario(() => {
     const { repoRoot, legA, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// in-lane\n');
     fs.writeFileSync(path.join(legA, 'zz.js'), '// OVERFLOW (not in A declared set {ax.js})\n');
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-OVERFLOW: leg overflow refuses write_set_overflow, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-COMMITTED: COMMIT the writes IN the leg (not just uncommitted) — snapshotWorktree's
   // read-tree HEAD path must still attribute them. In-lane commit → pass; an overflow commit → refuse.
-  {
+  scenario(() => {
     const { repoRoot, legA, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// committed in leg\n');
     execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
@@ -12043,25 +12343,25 @@ function rtHarness(initialFiles, opts) {
     const rBad = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(rBad.result === 'refuse' && rBad.reason === 'write_set_overflow', 'LEG-BARRIER-COMMITTED: committed overflow still refuses, got ' + JSON.stringify(rBad));
     cleanup(repoRoot);
-  }
+  });
 
   // #702 LEG-BARRIER-DOCS-DECLARED: a leg that writes its OWN declared docs/** file closes clean. The
   // #702 leg-scope drops the docs allowband from the barrier exemption, but the DECLARED file is in the
   // node's write set, so it is attributed to the leg, not overflow.
-  {
+  scenario(() => {
     const { repoRoot, legA, rs } = provisionedDocsRepo();
     fs.mkdirSync(path.join(legA, 'docs'), { recursive: true });
     fs.writeFileSync(path.join(legA, 'docs', 'a.md'), '# A declared docs write\n');
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(r.result === 'pass', 'LEG-BARRIER-DOCS-DECLARED: an in-lane DECLARED docs write passes the leg barrier, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // ★ #702 LEG-BARRIER-DOCS-OVERFLOW (the leg-visibility fix): a leg writing an UNDECLARED docs/** file —
   // which the per-node barrier used to EXEMPT (docs are barrier-invisible), silently both-applying it at
   // the synthesis merge — now refuses write_set_overflow in LEG scope. This is the runtime half of the
   // file-granular allowband co-open: declared docs are attributed per-leg; a stray docs write is caught.
-  {
+  scenario(() => {
     const { repoRoot, legA, rs } = provisionedDocsRepo();
     fs.mkdirSync(path.join(legA, 'docs'), { recursive: true });
     fs.writeFileSync(path.join(legA, 'docs', 'a.md'), '# in-lane declared\n');
@@ -12070,7 +12370,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-DOCS-OVERFLOW: an UNDECLARED docs write in a leg refuses write_set_overflow (no silent both-apply), got ' + JSON.stringify(r));
     assert((r.outOfAllow || []).some(p => p === 'docs/stray.md'), 'LEG-BARRIER-DOCS-OVERFLOW: the stray docs file is named in outOfAllow, got ' + JSON.stringify(r.outOfAllow));
     cleanup(repoRoot);
-  }
+  });
 
   // #702 LEG-BARRIER-DOCS-MODE-PARITY (the anti-leak guard): the leg-scope docs-visibility change is keyed
   // STRICTLY on opts.legScoped, set ONLY by the --leg-barrier CLI. The GROUP/union barrier
@@ -12079,7 +12379,7 @@ function rtHarness(initialFiles, opts) {
   // check). barrierCheck is a PURE function (no fs, no git — immune to the #292 io-shim trap), so a direct
   // call is the exact mode-parity pin: same content + same stray docs path, docs visible ONLY when
   // legScoped. The kaola-workflow/{project}/** state band stays exempt in leg scope too.
-  {
+  scenario(() => {
     const pv = require('./kaola-workflow-plan-validator');
     const planContent = [
       '# Plan', '', '## Meta', 'labels: area:scripts', '',
@@ -12105,13 +12405,13 @@ function rtHarness(initialFiles, opts) {
     // and the workflow-state band stays exempt EVEN in leg scope (per-leg .cache evidence differs).
     const legState = pv.barrierCheck(planContent, ['kaola-workflow/test-project/.cache/A.md'], { nodeId: 'A', project: 'test-project', legScoped: true });
     assert(legState.result === 'pass', 'LEG-BARRIER-DOCS-MODE-PARITY: leg scope still exempts the kaola-workflow/{project}/** state band, got ' + JSON.stringify(legState));
-  }
+  });
 
   // ★ LEG-BARRIER-VACUOUS-BASE (adversarial, the #368 cross-check): the laundering attack is to claim
   //   base = the leg's POST-WRITE tree so the diff empties. The validator resolves base from the ANCHORED
   //   ref (so the diff can't empty), and the manifest --expect-base cross-check trips the tamper:
   //   --expect-base = a post-write commit != the ref ⇒ barrier_base_mismatch.
-  {
+  scenario(() => {
     const { repoRoot, legA, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'zz.js'), '// overflow a free base would launder\n');
     execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
@@ -12121,21 +12421,21 @@ function rtHarness(initialFiles, opts) {
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', postWrite, '--json']);
     assert(r.result === 'refuse' && r.reason === 'barrier_base_mismatch', 'LEG-BARRIER-VACUOUS-BASE: a tampered (post-write) --expect-base refuses barrier_base_mismatch (the #368 cross-check defeats the laundering base), got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-NO-REF: --leg-barrier with NO anchored leg-base ref → no_leg_base (not a silent pass).
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo();
     const legX = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
     execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legX, 'HEAD'], STDIO_Q);
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legX, '--json']);
     assert(r.result === 'refuse' && r.reason === 'no_leg_base', 'LEG-BARRIER-NO-REF: missing anchored ref refuses no_leg_base (no vacuous pass), got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-ANCESTOR-BACKSTOP: a ref re-pointed FORWARD (not an ancestor of legHEAD) → the diff base
   //   does not sit in the leg's history → leg_base_unreachable (the backstop behind the cross-check).
-  {
+  scenario(() => {
     const { repoRoot, legA } = provisionedRepo();
     fs.writeFileSync(path.join(repoRoot, 'forward.txt'), 'f\n');
     execFileSync('git', ['-C', repoRoot, 'add', '-A'], STDIO_Q);
@@ -12145,10 +12445,10 @@ function rtHarness(initialFiles, opts) {
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', forward, '--json']);
     assert(r.result === 'refuse' && r.reason === 'leg_base_unreachable', 'LEG-BARRIER-ANCESTOR-BACKSTOP: a forward (non-ancestor) base refuses leg_base_unreachable, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-ARG-VALIDATION: missing --node-id / --leg-root / --project → typed refusals.
-  {
+  scenario(() => {
     const { repoRoot, legA } = provisionedRepo();
     const noNode = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--project', 'test-project', '--leg-root', legA, '--json']);
     assert(noNode.result === 'refuse' && noNode.reason === 'missing_node_id', 'LEG-BARRIER-ARG: missing --node-id, got ' + JSON.stringify(noNode));
@@ -12157,23 +12457,23 @@ function rtHarness(initialFiles, opts) {
     const noProj = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--leg-root', legA, '--json']);
     assert(noProj.result === 'refuse' && noProj.reason === 'missing_project', 'LEG-BARRIER-ARG: missing --project, got ' + JSON.stringify(noProj));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-LEG-ROOT-INVALID: --leg-root pointing at a non-worktree dir (its git toplevel != itself).
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo();
     const notWt = path.join(repoRoot, 'not-a-worktree');
     fs.mkdirSync(notWt, { recursive: true });
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', notWt, '--json']);
     assert(r.result === 'refuse' && r.reason === 'leg_root_invalid', 'LEG-BARRIER-LEG-ROOT-INVALID: non-worktree leg-root refuses leg_root_invalid, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // ★ LEG-BARRIER-CLOSE-PATH-GATES (the PRODUCTION wiring GATES): #463 S4 routing is live, so the member's
   //   work lands in its LEG. An in-lane write (ax.js, satisfies the leg-aware vacuity guard) + an OVERFLOW
   //   (zz.js, not declared) both in the leg → close-node REFUSES at the pre-wired per-leg barrier (proves
   //   the wiring is not a vacuous empty-leg pass). Ledger stays in_progress.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA } = provisionedRepo();
     writeEvidence(cacheDir, 'A');
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A in-lane in LEG (vacuity)\n');
@@ -12182,11 +12482,11 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-CLOSE-PATH-GATES: close-node refuses a leg overflow via the pre-wired barrier, got ' + JSON.stringify(r));
     assert(ledgerStatus(planP(repoRoot), 'A') === 'in_progress', 'LEG-BARRIER-CLOSE-PATH-GATES: A ledger stays in_progress on refusal, got ' + ledgerStatus(planP(repoRoot), 'A'));
     cleanup(repoRoot);
-  }
+  });
 
   // LEG-BARRIER-CLOSE-PATH-CLEAN: in-lane to the PARENT (vacuity) + a REAL in-lane write to the LEG →
   //   close-node A passes the leg-barrier (not just the empty-leg trivial pass) and defers to the group.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA } = provisionedRepo();
     writeEvidence(cacheDir, 'A');
     fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// parent in-lane (vacuity)\n');
@@ -12194,7 +12494,7 @@ function rtHarness(initialFiles, opts) {
     const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
     assert(r.result === 'ok' && r.barrier === 'deferred_to_group', 'LEG-BARRIER-CLOSE-PATH-CLEAN: close A passes the leg-barrier on a real in-lane leg write + defers, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // RETIRED for #498: LEG-BARRIER-CLOSE-PATH-FLAG-OFF asserted that ON-alone (containment only) co-opens
   // a group and the legless close returns barrier:'deferred_to_group'. PREMISE NOW UNREACHABLE: after #498
@@ -12207,7 +12507,7 @@ function rtHarness(initialFiles, opts) {
   // LEG-BARRIER-TEARDOWN-DROPS-REF: on clean group completion the leg-base refs are deleted alongside the
   //   worktree + branch (no ref leak). #463 S4: an end-to-end close-path run with REAL in-leg writes that
   //   the synthesizer merges (group_passed via the commit-based union barrier), then teardown.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
     assert(refResolves(repoRoot, 'A') !== '' && refResolves(repoRoot, 'B') !== '', 'LEG-BARRIER-TEARDOWN-DROPS-REF: refs A,B anchored at provision');
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
@@ -12219,7 +12519,7 @@ function rtHarness(initialFiles, opts) {
     assert(rB.result === 'ok' && rB.barrier === 'group_passed', 'LEG-BARRIER-TEARDOWN-DROPS-REF: close B group_passed, got ' + JSON.stringify(rB));
     assert(refResolves(repoRoot, 'A') === '' && refResolves(repoRoot, 'B') === '', 'LEG-BARRIER-TEARDOWN-DROPS-REF: leg-base refs deleted on teardown (no ref leak)');
     cleanup(repoRoot);
-  }
+  });
 
   // =========================================================================
   // #463-SYNTHESIZER (Slice 4) — the SYNTHESIZER execution + COMMIT-based union barrier + parent-clean
@@ -12232,7 +12532,7 @@ function rtHarness(initialFiles, opts) {
   // SYNTH-DISJOINT-END-TO-END (AC6/AC9 core): two legs, disjoint declared files written IN the legs; close
   //   A (deferred) then B (last) → the synthesizer octopus-merges both into the feature branch → M; the
   //   commit-based union barrier passes; HEAD advanced to M; M contains BOTH files; legs torn down.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
     const base = rs.lane_group.legs.A.baseline;
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
@@ -12258,7 +12558,7 @@ function rtHarness(initialFiles, opts) {
     assert((timings.match(/leg_committed/g) || []).length === 2, 'SYNTH-DISJOINT: leg_committed emitted once per leg (AC17), got ' + (timings.match(/leg_committed/g) || []).length);
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, 'SYNTH-DISJOINT: legs torn down after the merge');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // SYNTH-CROSS-PROJECT-LEAK (#652 Gap 2): a stray write under a DIFFERENT project's
@@ -12269,7 +12569,7 @@ function rtHarness(initialFiles, opts) {
   // the ACTIVE project's (test-project) own kaola-workflow/ tree is legitimate churn to ignore, not
   // the whole kaola-workflow/ prefix. A leak into ANOTHER project's tree must still surface in mDiff.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
     const base = rs.lane_group.legs.A.baseline;
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
@@ -12294,12 +12594,12 @@ function rtHarness(initialFiles, opts) {
     assert(!mDiff.some(s => s.startsWith('kaola-workflow/test-project/')),
       'SYNTH-CROSS-PROJECT-LEAK: the active project\'s own kaola-workflow tree stays filtered as churn, got ' + JSON.stringify(mDiff));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-PARENT-DIRTY-FENCE (AC4): a floated own-lane slip — a PRODUCTION file written to the PARENT (not
   //   exempt) — is caught by the parent-clean fence at the last-member close, BEFORE the merge. parent_dirty;
   //   no merge happened (HEAD unchanged); B stays in_progress.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
     const base = rs.lane_group.legs.A.baseline;
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
@@ -12313,11 +12613,11 @@ function rtHarness(initialFiles, opts) {
     assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === base, 'SYNTH-PARENT-DIRTY: HEAD NOT advanced (no merge on a dirty parent)');
     assert(ledgerStatus(planP(repoRoot), 'B') === 'in_progress', 'SYNTH-PARENT-DIRTY: B stays in_progress on refusal');
     cleanup(repoRoot);
-  }
+  });
 
   // PARENT-CLEAN-CHECK-DIRECT: the fence reuses the EXACT barrier allowband — workflow churn (.cache /
   //   running-set / plan) NEVER trips it (the advisor's #1: else it ships inert), only a production path does.
-  {
+  scenario(() => {
     const { repoRoot } = provisionedRepo(); // open-ready left .cache churn dirty in the parent
     const clean = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
     assert(clean.result === 'pass', 'PARENT-CLEAN-DIRECT: workflow churn alone is clean (allowband reused), got ' + JSON.stringify(clean));
@@ -12325,7 +12625,7 @@ function rtHarness(initialFiles, opts) {
     const dirty = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
     assert(dirty.result === 'refuse' && dirty.reason === 'parent_dirty' && (dirty.dirty || []).indexOf('prod.js') !== -1, 'PARENT-CLEAN-DIRECT: a production dirty path trips parent_dirty, got ' + JSON.stringify(dirty));
     cleanup(repoRoot);
-  }
+  });
 
   // ★ PARENT-CLEAN-CHECK-UALL (adversarial review caught): a NON-exempt file inside a WHOLLY-NEW untracked
   //   subdir whose name is exempt-by-prefix is MASKED by `git status --porcelain`'s dir-collapse (`??
@@ -12333,14 +12633,14 @@ function rtHarness(initialFiles, opts) {
   //   uses --untracked-files=all so each file is classified precisely. Concrete vector: a FOREIGN-archive
   //   write into a fresh kaola-workflow/archive/<other>/ subdir (archive/ is new under the tracked
   //   kaola-workflow/, so default porcelain collapses it; the full path is foreignArchive → NOT exempt).
-  {
+  scenario(() => {
     const { repoRoot } = provisionedRepo();
     fs.mkdirSync(path.join(repoRoot, 'kaola-workflow', 'archive', 'OTHER-PROJECT'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'kaola-workflow', 'archive', 'OTHER-PROJECT', 'leak.js'), '// foreign-archive production leak masked by dir-collapse\n');
     const r = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'parent_dirty' && (r.dirty || []).some(p => /archive\/OTHER-PROJECT\/leak\.js/.test(p)), 'PARENT-CLEAN-UALL: a foreign-archive leak in a new collapsed subdir trips parent_dirty (RED without -uall: collapses to kaola-workflow/archive/ → exempt → false pass), got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // ★ PARENT-CLEAN-CHECK-ENOBUFS (#669): the dirty-fence's own `git status --porcelain -uall` probe is
   //   UNBOUNDED in dirty/untracked path COUNT. A huge out-of-allowband PRODUCTION untracked fan-out
@@ -12354,7 +12654,7 @@ function rtHarness(initialFiles, opts) {
   //   outcome: real detection, not just a generic "can't tell" refuse). Either way the invariant under
   //   test — NEVER a bare "pass" on a demonstrably non-clean tree — holds both pre- and post-fix, so
   //   this fixture stays a valid RED->GREEN regression across the fix (RED: false pass; GREEN: refuse).
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo(); // fully-committed baseline (no open-ready — legs not needed here)
     // Long shared path prefix so far fewer files are needed to clear 1 MB (build-time budget: seconds,
     // not the file COUNT). Deeply-nested production dir, NOT under kaola-workflow/ (would be allowband-
@@ -12373,7 +12673,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'refuse' && (r.reason === 'parent_dirty' || r.reason === 'cannot_prove_clean') && r.exitCode !== 0,
       'PARENT-CLEAN-ENOBUFS: fails CLOSED with a typed refuse (exitCode!=0), got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // ★ PARENT-CLEAN-CHECK-CANNOT-PROVE-CLEAN (#669): the fail-closed flip is UNCONDITIONAL — it must
   //   trip on ANY probe failure, not only a size-driven ENOBUFS (an adversary could otherwise construct
@@ -12381,21 +12681,21 @@ function rtHarness(initialFiles, opts) {
   //   status --porcelain` itself fails (a real git error, unrelated to output size) and assert the
   //   fence refuses `cannot_prove_clean` — the DISTINCT reason for "the probe itself is unreadable",
   //   never conflated with `parent_dirty` (which asserts REAL, ENUMERATED dirty paths).
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo();
     fs.writeFileSync(path.join(repoRoot, '.git', 'index'), 'not a valid git index\n');
     const r = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'cannot_prove_clean' && r.exitCode !== 0,
       'PARENT-CLEAN-CANNOT-PROVE-CLEAN: a non-buffer git fault (corrupt index) fails CLOSED with the typed cannot_prove_clean refuse, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // ★ SYNTH-SERIAL-CLOSE-FENCED (adversarial review caught — silent-loss): close-and-open-next (the SERIAL
   //   close path) has NO isMember routing — unlike close-node → closeGroupMember — so closing a live
   //   lane-group member out-of-band here would skip the synthesizer + barriers and ORPHAN the leg's
   //   committed work (the per-node barrier passes vacuously on the empty PARENT diff). The S4 scheduler
   //   fence (excl:['scheduler']) makes it refuse scheduler_active fail-closed; the member stays in_progress.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA } = provisionedRepo();
     writeEvidence(cacheDir, 'A');
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work that a serial close would orphan\n');
@@ -12403,12 +12703,12 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'refuse' && r.reason === 'scheduler_active', 'SYNTH-SERIAL-CLOSE-FENCED: close-and-open-next on a live lane-group member refuses scheduler_active (no out-of-band silent close), got ' + JSON.stringify(r));
     assert(ledgerStatus(planP(repoRoot), 'A') === 'in_progress', 'SYNTH-SERIAL-CLOSE-FENCED: A stays in_progress (not silently closed), got ' + ledgerStatus(planP(repoRoot), 'A'));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-OMISSION (advisor #2, no-silent-loss): commit work in BOTH legs but merge ONLY legA → M. The
   //   commit-based union barrier catches legB's omission via per-leg-head ancestor inclusion (subset alone
   //   would FALSE-PASS — legA's files ⊆ union — and legB's committed work would be lost on teardown).
-  {
+  scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
@@ -12419,11 +12719,11 @@ function rtHarness(initialFiles, opts) {
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'leg_omitted_from_merge', 'SYNTH-OMISSION: a dropped leg (legB not in M) is caught leg_omitted_from_merge, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-UNION-ESCAPE (B1 belt-and-suspenders): a COMMITTED out-of-union path in M is caught by the
   //   commit diff (write_set_overflow) — the union barrier rejects an escape even if it slipped a per-leg gate.
-  {
+  scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     fs.writeFileSync(path.join(legA, 'zz.js'), '// OUT OF UNION committed\n');
@@ -12435,11 +12735,11 @@ function rtHarness(initialFiles, opts) {
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'SYNTH-UNION-ESCAPE: an out-of-union committed path in M refuses write_set_overflow, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-MERGE-COMMIT-ARG-VALIDATION: --merge-commit must resolve to a commit, must descend from base,
   //   and requires --project.
-  {
+  scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
@@ -12457,11 +12757,11 @@ function rtHarness(initialFiles, opts) {
     const noProj = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', legBhead, '--json']);
     assert(noProj.result === 'refuse' && noProj.reason === 'missing_project', 'SYNTH-ARG: --merge-commit without --project refuses missing_project, got ' + JSON.stringify(noProj));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-MERGE-BASE-UNREACHABLE (adversarial review: covers a previously-untested fail-closed guard): an M
   //   that does NOT descend from the legs' shared branch-point (a tamper/corruption M) → merge_base_unreachable.
-  {
+  scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
@@ -12473,12 +12773,12 @@ function rtHarness(initialFiles, opts) {
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', orphan, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'merge_base_unreachable', 'SYNTH-MERGE-BASE-UNREACHABLE: an M not descending from base refuses merge_base_unreachable, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-LEG-BASELINE-SPLIT (adversarial review: covers a previously-untested fail-closed guard): the legs
   //   of one level must share ONE branch-point; if leg B's anchored ref + manifest baseline both diverge from
   //   leg A's, the validator detects the split (legs branched from different HEADs) → leg_baseline_split.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
@@ -12496,11 +12796,11 @@ function rtHarness(initialFiles, opts) {
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'leg_baseline_split', 'SYNTH-LEG-BASELINE-SPLIT: legs disagreeing on branch-point refuse leg_baseline_split, got ' + JSON.stringify(r));
     cleanup(repoRoot);
-  }
+  });
 
   // SYNTH-SINGLETON-FAST-PATH (AC8): a single-write-node frontier forms NO lane group (tryFormLaneGroup
   //   needs ≥2) → NO leg worktree → runs serial in the parent with the normal per-node barrier.
-  {
+  scenario(() => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd463-singleton-'));
     const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
     const cacheDir = path.join(projDir, '.cache');
@@ -12534,7 +12834,7 @@ function rtHarness(initialFiles, opts) {
     const rc = runNode(repoRoot, ['close-node', '--node-id', 'solo', '--project', 'test-project', '--json'], LEG_ON);
     assert(rc.result === 'ok' && !rc.synthesized, 'SYNTH-SINGLETON: close runs the normal per-node barrier in the parent (no synthesizer), got ' + JSON.stringify(rc));
     cleanup(repoRoot);
-  }
+  });
 
   // =========================================================================
   // #463-MERGE-CONFLICT (Slice 5) — the merge_conflict PRODUCERS + the bounded-repair envelope. The
@@ -12547,7 +12847,7 @@ function rtHarness(initialFiles, opts) {
   //   SAME file → synthesizeLevel's octopus BAILS → merge_conflict; the abort is CLEAN (HEAD unchanged, no
   //   MERGE_HEAD, tracked tree clean of conflict markers); the leg branches SURVIVE (capture committed them →
   //   recoverable for the repair). NO bad M lands on HEAD (the abort precedes any advance).
-  {
+  scenario(() => {
     const { repoRoot, legA, legB, rs } = provisionedRepo();
     const base = rs.lane_group.legs.A.baseline;
     fs.writeFileSync(path.join(legA, 'conflict.txt'), 'AAA\nshared-2\nshared-3\n');
@@ -12564,14 +12864,14 @@ function rtHarness(initialFiles, opts) {
     assert(gitOut(repoRoot, ['ls-files', '-u']) === '', 'S5-MERGE-CONFLICT-BAIL: no unmerged index entries after abort (clean, no conflict state)');
     assert(gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']) !== base && gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/B']) !== base, 'S5-MERGE-CONFLICT-BAIL: both leg branches survived past base (work recoverable for repair)');
     cleanup(repoRoot);
-  }
+  });
 
   // S5-NOOP-LEG-VACUITY (AC10 first-detection producer): a leg that produced NO changes is caught by the
   //   leg-aware member_vacuity guard at THAT member's OWN close — BEFORE the last-member synthesis, where the
   //   evidence (and a possible no_op: declaration) is visible. This IS the "a leg that produced no changes"
   //   producer the AC names; merge_conflict is what it escalates TO after K=3 (NOT a new detector — a
   //   synthesizeLevel detector there would false-positive a sanctioned no_op member). B stays in_progress.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA } = provisionedRepo();
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
@@ -12582,12 +12882,12 @@ function rtHarness(initialFiles, opts) {
     assert(rB.result === 'refuse' && rB.reason === 'member_vacuity', 'S5-NOOP-LEG: a no-op leg refuses member_vacuity at the member close (the no-op-leg producer), got ' + JSON.stringify(rB));
     assert(ledgerStatus(planP(repoRoot), 'B') === 'in_progress', 'S5-NOOP-LEG: B stays in_progress on refusal');
     cleanup(repoRoot);
-  }
+  });
 
   // S5-NOOP-LEG-REPAIR-THEN-SUCCESS (the bounded-repair loop CLOSES): after a member_vacuity refuse the
   //   orchestrator re-dispatches legB (writes its declared file); re-running close now defers, and the
   //   last-member close synthesizes + advances. Proves the no-op producer is repairable, not a dead end.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
@@ -12600,12 +12900,12 @@ function rtHarness(initialFiles, opts) {
     const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
     assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true, 'S5-NOOP-REPAIR: after re-dispatch the last-member close synthesizes + advances, got ' + JSON.stringify(rB));
     cleanup(repoRoot);
-  }
+  });
 
   // S5-CAPTURE-UNCOMMITTED (synthesizeLevel robustness): a leg with UNCOMMITTED work (agent forgot to
   //   commit) is CAPTURED (add -A + commit) before the octopus → the merge sees it. Proves the script-owned
   //   capture is robust to an un-committing agent.
-  {
+  scenario(() => {
     const { repoRoot, legA, legB, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A uncommitted\n');
     fs.writeFileSync(path.join(legB, 'by.js'), '// B uncommitted\n');
@@ -12613,12 +12913,12 @@ function rtHarness(initialFiles, opts) {
     assert(synth && synth.ok === true && typeof synth.mergeCommit === 'string', 'S5-CAPTURE-UNCOMMITTED: uncommitted leg work is captured + merged, got ' + JSON.stringify(synth));
     assert(gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':by.js']) !== '', 'S5-CAPTURE-UNCOMMITTED: M contains both captured files');
     cleanup(repoRoot);
-  }
+  });
 
   // S5-IDEMPOTENT-RESUME (codifies the spike; S4 carry-over): re-running synthesizeLevel over the SAME
   //   already-merged disjoint legs (a crash after M committed but before the ledger advanced) is a NO-OP —
   //   it returns the SAME mergeCommit with a STABLE HEAD, never a spurious second merge or merge_conflict.
-  {
+  scenario(() => {
     const { repoRoot, legA, legB, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
@@ -12629,7 +12929,7 @@ function rtHarness(initialFiles, opts) {
     assert(r2 && r2.ok === true && r2.mergeCommit === r1.mergeCommit, 'S5-IDEMPOTENT-RESUME: re-synth returns the SAME mergeCommit, got ' + JSON.stringify(r2) + ' vs ' + JSON.stringify(r1));
     assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === head1, 'S5-IDEMPOTENT-RESUME: HEAD stable across re-synth (no spurious second merge)');
     cleanup(repoRoot);
-  }
+  });
 
   // S5-PROBE-FAILED-REFUSE (#672 fail-closed): the leg-dirty probe (`git status --porcelain` in the
   //   leg) can itself FAIL (a broken git invocation on the leg, a >maxBuffer porcelain, ...). That
@@ -12637,7 +12937,7 @@ function rtHarness(initialFiles, opts) {
   //   silently OMITTED from the octopus merge (never committed, never folded into M). synthesizeLevel
   //   must refuse loudly instead of guessing clean. legA's worktree git-link is corrupted (a broken
   //   invocation, not a genuinely-missing leg) so `git -C legA status --porcelain` throws.
-  {
+  scenario(() => {
     const { repoRoot, legA, legB, rs } = provisionedRepo();
     const base = rs.lane_group.legs.A.baseline;
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A real work that must never be silently dropped\n');
@@ -12649,20 +12949,20 @@ function rtHarness(initialFiles, opts) {
     assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === base,
       'S5-PROBE-FAILED-REFUSE: HEAD unchanged after the refuse (no partial merge landed, dropping A silently), got ' + gitOut(repoRoot, ['rev-parse', 'HEAD']) + ' vs base ' + base);
     cleanup(repoRoot);
-  }
+  });
 
   // S5-REPAIR-LIMIT-CONSTANT (contract): the K=3 cap is a schema constant (×4 byte, route-like-test_thrash)
   //   and the merge_conflict operator_hint interpolates it (so the bound is operator-visible, not buried).
-  {
+  scenario(() => {
     assert(MERGE_CONFLICT_REPAIR_LIMIT === 3, 'S5-REPAIR-LIMIT-CONSTANT: MERGE_CONFLICT_REPAIR_LIMIT === 3, got ' + MERGE_CONFLICT_REPAIR_LIMIT);
     const hint = OPERATOR_HINT_REGISTRY.merge_conflict({ group_id: 'g1', nodeId: 'B' });
     assert(hint.indexOf(String(MERGE_CONFLICT_REPAIR_LIMIT) + ' repair attempts') !== -1 && /write-halt/.test(hint), 'S5-REPAIR-LIMIT-CONSTANT: the merge_conflict hint names the K cap + the write-halt escalation, got ' + JSON.stringify(hint));
-  }
+  });
 
   // S5-MULTI-LEVEL (AC7, S4 carry-over): TWO sequential fan-out levels. Level 1 {A,B} synthesizes → M1 (HEAD
   //   advances); level 2 {C,D} then provisions its legs OFF M1 (their branch-point baseline == M1) and
   //   synthesizes → M2 with M1 in its ancestry. The dependency-level commit chains: M2 descends from M1.
-  {
+  scenario(() => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd463-multilevel-'));
     const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
     const cacheDir = path.join(projDir, '.cache');
@@ -12735,7 +13035,7 @@ function rtHarness(initialFiles, opts) {
     try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, M2], STDIO_Q); m2DescendsM1 = true; } catch (_) { m2DescendsM1 = false; }
     assert(m2DescendsM1, 'S5-MULTI-LEVEL: M2 descends from M1 (the dependency-level commit chain), got is-ancestor=false for M1=' + M1 + ' M2=' + M2);
     cleanup(repoRoot);
-  }
+  });
 
   // =========================================================================
   // #500-SHARED-INFRA-COARSE (leg-couple wire) — shared-infra + coarse co-open under the retained net.
@@ -12750,7 +13050,7 @@ function rtHarness(initialFiles, opts) {
   // (exact / case-collision), a PROTECTED file (NET-2), or a missing gate (NET-1). Tests drive the REAL
   // adaptive-node + plan-validator subprocesses in a REAL git repo.
   // =========================================================================
-  {
+  scenario(() => {
     // SHARED-INFRA FIXTURE: scripts/aa.js + scripts/bb.js → both areaForPath === 'scripts' ∈
     // SHARED_INFRA → disjointWriteSets verdict:yellow/kind:'shared-infra'. Under #546-G2 this relaxes
     // BY DEFAULT (no policy / no consent) once the gate net holds. makeLaneRepo always builds the
@@ -12900,7 +13200,7 @@ function rtHarness(initialFiles, opts) {
       assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-B: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
       cleanup(repoRoot);
     }
-  }
+  });
 
   // =========================================================================
   // #588 — write co-open WIDTH/MIX coverage (the width-2-only gap). Real-git cases at the LEG-*/SYNTH-*
@@ -12912,7 +13212,7 @@ function rtHarness(initialFiles, opts) {
   // #655 adversarial mixed top-up crash: A is an already-stable member and B is
   // the newly appended opening member. Both ledger rows flipped and cap=2, so
   // reconcile must retain both without double-counting A against B's admission.
-  {
+  scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo({ waitBudgets: { A: 240, B: 300 } });
     const opened = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--max', '2', '--json'], LEG_ON);
     assert(opened.result === 'ok' && opened.opened.length === 2, '#655-MIXED-CRASH: initial real-git open admits two');
@@ -12934,14 +13234,14 @@ function rtHarness(initialFiles, opts) {
     const orient = runNode(repoRoot, ['orient', '--project', 'test-project', '--json'], LEG_ON);
     assert(orient.result === 'ok' && orient.reason !== 'orphan_multi_in_progress', '#655-MIXED-CRASH: orient recovers without orphan wedge, got ' + JSON.stringify(orient));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #588-3LEG-OCTOPUS-END-TO-END (case a): a 3-leg DISJOINT write co-open → provision 3 legs → per-leg
   //   barriers (A,B deferred; C last) → octopus merge (feature + 3 legs = EXACTLY 4 parents) → commit-union
   //   barrier → group close. Extends SYNTH-DISJOINT (width 2) to width 3. Behavior PINNED as correct.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const setOf = { A: 'ax.js', B: 'by.js', C: 'cz.js' };
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }] });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
@@ -12979,7 +13279,7 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete' && ledgerStatus(planPath, 'C') === 'complete', '#588-3LEG: all 3 members complete');
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, '#588-3LEG: all legs torn down after the merge');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #588-WIDE-CAP (case b, part 1): a 5-wide DISJOINT write antichain vs the default write FANOUT_CAP (4).
@@ -12987,7 +13287,7 @@ function rtHarness(initialFiles, opts) {
   //   max_concurrent == the write cap (4). Then reconcile of a crashed-open honors that ceiling at width 4
   //   (rolls all 4 forward — ceiling==width admits the full set — and preserves max_concurrent==4).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const waitBudgets = { A: 180, B: 181, C: 182, D: 183, E: 184 };
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }], waitBudgets });
     const allIds = ['A', 'B', 'C', 'D', 'E'];
@@ -13023,14 +13323,14 @@ function rtHarness(initialFiles, opts) {
     assert(rs1.nodes.every(n => n.wait_budget_minutes === waitBudgets[n.id] && n.wait_budget_source === 'planner_override'), '#655-R1: write-leg crash reconcile retains exact authored values/source');
     assert(rs1.lane_group && Object.keys(rs1.lane_group.legs).length === 4, '#588-WIDE-CAP: all 4 legs retained through reconcile, got ' + JSON.stringify(rs1.lane_group && Object.keys(rs1.lane_group.legs)));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #588-WIDE-DRAIN (case b, part 2): after the width-4 group closes (octopus, feature + 4 legs = 5 parents),
   //   a subsequent open-ready DRAINS the queued 5th — a single remaining write opens serially (no group, no
   //   leg). Pins the top-up-drain half of the documented cap behavior.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const setOf = { A: 'ax.js', B: 'by.js', C: 'cz.js', D: 'dz.js', E: 'ez.js' };
     const allIds = ['A', 'B', 'C', 'D', 'E'];
     const waitBudgets = { A: 180, B: 181, C: 182, D: 183, E: 184 };
@@ -13068,7 +13368,7 @@ function rtHarness(initialFiles, opts) {
     assert(!rs2.lane_group, '#588-WIDE-DRAIN: running-set has no lane_group for the serial drain');
     assert(ledgerStatus(planPath, pendingId) === 'in_progress', '#588-WIDE-DRAIN: the drained 5th is in_progress');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #588-MIXED-FRONTIER (case c): a ready frontier with BOTH read members (v1,v2) AND a disjoint write pair
@@ -13078,7 +13378,7 @@ function rtHarness(initialFiles, opts) {
   //   leg-contained lane group behind the live reads (the mirror of #622's read-direction relaxation). The
   //   #588 LEGLESS pin still holds under KAOLA_PARALLEL_WRITES=0 (covered by #641-R1-A).
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'v1', role: 'code-explorer', set: '—' }, { id: 'v2', role: 'knowledge-lookup', set: '—' }] });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok', '#588-MIXED: open-ready ok, got ' + JSON.stringify(r));
@@ -13101,13 +13401,13 @@ function rtHarness(initialFiles, opts) {
     assert(rs2.nodes.some(n => n.id === 'v1' && n.kind === 'read') && rs2.nodes.some(n => n.id === 'A' && n.kind === 'write'),
       '#588-MIXED (post-#641 R1): MIXED running set — the live reads alongside the leg-writes, got ' + JSON.stringify(rs2.nodes.map(n => ({ id: n.id, kind: n.kind }))));
     cleanup(repoRoot);
-  }
+  });
   // #588-MIXED-LEGLESS-PIN (post-#641 R1): the #588 pin is PRESERVED for LEGLESS writers — under
   //   KAOLA_PARALLEL_WRITES=0 the write frontier {A,B} behind the live reads STILL holds (write_awaits_drain),
   //   labeled serialDegradeReason:parallel_writes_off. (A legless writer mutating the shared parent tree
   //   would be observed mid-write by a live read — G3 stays; the operator serial kill-switch is byte-identical.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'v1', role: 'code-explorer', set: '—' }, { id: 'v2', role: 'knowledge-lookup', set: '—' }] });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(r.result === 'ok' && (r.opened || []).map(n => n.id).sort().join(',') === 'v1,v2', '#588-MIXED-LEGLESS-PIN: tick1 opens the reads');
@@ -13118,7 +13418,7 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending', '#588-MIXED-LEGLESS-PIN: ZERO mutation — A,B stay pending');
     assert(!readRS(cacheDir).lane_group, '#588-MIXED-LEGLESS-PIN: no lane_group under the legless hold');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #588-TASKMIRROR-FAILOPEN (case d): the durable task-mirror refresh is FAIL-OPEN on the running-set
@@ -13127,7 +13427,7 @@ function rtHarness(initialFiles, opts) {
   //   mirror write to fail (workflow-tasks.json is a DIRECTORY ⇒ EISDIR ⇒ non-zero task-mirror exit) and
   //   assert the ledger STILL advances with taskMirror.status === 'failed'. Behavior PINNED as correct.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     // OPEN path: co-open with the mirror-write forced to fail.
     const { repoRoot, cacheDir, projDir, planPath } = makeLaneRepo();
     fs.mkdirSync(path.join(projDir, 'workflow-tasks.json'), { recursive: true });
@@ -13138,8 +13438,8 @@ function rtHarness(initialFiles, opts) {
     const rs = readRS(cacheDir);
     assert(rs && rs.lane_group && rs.lane_group.legs.A && rs.lane_group.legs.B, '#588-TASKMIRROR-OPEN: running-set + legs written despite mirror failure');
     cleanup(repoRoot);
-  }
-  {
+  });
+  scenario(() => {
     // CLOSE path: serial open (writes the mirror as a file), then force the mirror to fail at close-node.
     const { repoRoot, cacheDir, projDir, planPath } = makeLaneRepo();
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
@@ -13155,7 +13455,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.taskMirror && r.taskMirror.status === 'failed', '#588-TASKMIRROR-CLOSE: taskMirror reports failed (fail-open), got ' + JSON.stringify(r.taskMirror));
     assert(ledgerStatus(planPath, openedId) === 'complete', '#588-TASKMIRROR-CLOSE: ledger advanced to complete despite mirror failure');
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #671-MIRROR-CRASH-OBSERVABILITY: the durable task-mirror CLI must fail-CLOSED at the SUBPROCESS
@@ -13168,7 +13468,7 @@ function rtHarness(initialFiles, opts) {
   //   multi-line stack trace to stderr and stdout is EMPTY (no envelope) — every assertion below
   //   fails against the current code.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { spawnSync } = require('child_process');
     const taskMirrorPath = path.join(__dirname, 'kaola-workflow-task-mirror.js');
     const { repoRoot, projDir } = makeLaneRepo();
@@ -13189,7 +13489,7 @@ function rtHarness(initialFiles, opts) {
     assert(envelope && typeof envelope.message === 'string' && envelope.message.indexOf('\n') === -1,
       '#671-MIRROR-CRASH-OBSERVABILITY: envelope message is a single line (no embedded stack dump), got ' + JSON.stringify(envelope && envelope.message));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #615-MIXED-SERIAL-LANE-DEGRADE (D-615-01) — the mixed serial-write + lane-group deadlock, dissolved
@@ -13211,11 +13511,33 @@ function rtHarness(initialFiles, opts) {
   //     the group STILL forms (D437-OPEN-READY-DEFAULT-COOPEN above proves that path is unbroken). The
   //     degrade bites ONLY the genuinely-mixed dirty-parent shape.
   // -------------------------------------------------------------------------
-  {
-    // Build a mixed serial-write→parallel-write repo (mirrors makeLaneRepo's git-init + freeze pattern,
-    // but with the serial prefix makeLaneRepo's fixed DAG cannot express). sA,sB are complete; pA,pB are
-    // the ready parallel frontier; review (code-reviewer) post-dominates every write; finalize is the sink.
-    function makeMixedRepo() {
+  // Build a mixed serial-write→parallel-write repo (mirrors makeLaneRepo's git-init + freeze pattern,
+  // but with the serial prefix makeLaneRepo's fixed DAG cannot express). sA,sB are complete; pA,pB are
+  // the ready parallel frontier; review (code-reviewer) post-dominates every write; finalize is the sink.
+  // opts.extraDirty: additional {path, body} written UNCOMMITTED into the parent (the unattributable-dirt
+  // probe). opts.preCommitSeam: commit the serial dirt UP FRONT under the checkpoint's own message (the
+  // crash-between-commit-and-open resume shape).
+  // #802 (D7 repair) — the FOUR independent hostility knobs. Each models one class of consumer-owned
+  // git configuration that a scheduler commit can meet mid-schedule. They are separate because the
+  // correct response differs by class: a CONTENT-INSPECTING hook must be honored (and its veto degraded
+  // around), whereas an ATTRIBUTION config (identity, signing) must simply not be able to stop a run.
+  // opts.hostilePreCommit: a repo-local `pre-commit` hook that vetoes EVERY commit (a consumer lint /
+  //   policy gate). Content-inspecting ⇒ never bypassed; the seam DEGRADES to serial instead.
+  // opts.secretScanner: a repo-local `pre-commit` hook that greps the STAGED diff for an AWS access-key
+  //   shape and vetoes on a hit. The security probe: the checkpoint's bytes must still reach it.
+  // opts.hostilePrepareCommitMsg: a `prepare-commit-msg` hook exiting 1 — the hook class `--no-verify`
+  //   never covered in the first place. Also degrades.
+  // opts.keylessSigning: `commit.gpgsign true` with an unusable `user.signingkey`. Attribution-only ⇒
+  //   overridden by `-c commit.gpgsign=false`, so the checkpoint still lands.
+  // opts.noIdentity: the repo configures NO `user.email`/`user.name` (the fixture's own setup commits
+  //   pass an inline identity instead). Attribution-only ⇒ the scheduler injects its own identity.
+  //   Drive with NO_AMBIENT_GIT_IDENTITY so a host-global identity cannot mask the probe.
+  // opts.postCommitWriter: a `post-commit` hook that drops a foreign file into the worktree — a
+  //   deterministic stand-in for a CONCURRENT writer landing bytes between the checkpoint's two fence
+  //   spawns (git ignores a post-commit hook's exit status, so the commit still lands and only the
+  //   RE-fence fails). This is the only reachable way to drive the post-commit-fence halt end-to-end.
+  function makeMixedRepo(opts) {
+      opts = opts || {};
       const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd615-mixed-'));
       const project = 'test-project';
       const projDir = path.join(repoRoot, 'kaola-workflow', project);
@@ -13245,10 +13567,24 @@ function rtHarness(initialFiles, opts) {
       ].join('\n') + '\n';
       fs.writeFileSync(planPath, plan);
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
-      const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      // The fixture's OWN setup commits always carry an inline identity + signing-off, so `noIdentity`
+      // (which leaves the repo with no configured identity at all) does not break repo construction.
+      const FIXTURE_ID = ['-c', 'user.email=kw@test', '-c', 'user.name=kw', '-c', 'commit.gpgsign=false'];
+      const g = (args) => execFileSync('git',
+        ['-C', repoRoot, ...(args[0] === 'commit' ? FIXTURE_ID : []), ...args],
+        { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
       g(['init']);
-      g(['config', 'user.email', 'kw@test']);
-      g(['config', 'user.name', 'kw']);
+      if (opts.noIdentity) {
+        // `user.useConfigOnly` is git's own switch for "never guess an identity from the environment".
+        // Without it git happily synthesizes `user@host` on many boxes, so a bare missing-identity repo
+        // would not actually refuse anything and the probe would be vacuous. With it, the repo refuses
+        // every commit that does not carry a CONFIGURED identity — which is exactly the state N2 is
+        // about, and which the scheduler's own `-c user.email/-c user.name` satisfies.
+        g(['config', 'user.useConfigOnly', 'true']);
+      } else {
+        g(['config', 'user.email', 'kw@test']);
+        g(['config', 'user.name', 'kw']);
+      }
       g(['config', 'commit.gpgsign', 'false']);
       const froze = freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' });
       // The disjoint mixed plan MUST freeze cleanly (open-ready's integrity --resume-check needs it).
@@ -13259,37 +13595,1057 @@ function rtHarness(initialFiles, opts) {
       // The serial-accumulation state: sA ran and produced its declared file, but serial nodes never
       // commit (finalize-owned-commit contract). Leave it UNCOMMITTED in the parent worktree.
       fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
-      fs.writeFileSync(path.join(repoRoot, 'src', 'serial_a.js'), '// uncommitted serial production from sA\n');
-      return { repoRoot, project, planPath, projDir, cacheDir };
-    }
+      fs.writeFileSync(path.join(repoRoot, 'src', 'serial_a.js'),
+        '// uncommitted serial production from sA\n'
+        // The secret probe plants its payload in the ATTRIBUTED serial path — i.e. in exactly the bytes
+        // the seam checkpoint commits. Assembled from fragments so this source file itself never
+        // contains a scannable key literal.
+        + (opts.secretScanner ? 'const k = "' + 'AKIA' + 'IOSFODNN7EXAMPLE' + '";\n' : ''));
+      for (const extra of (opts.extraDirty || [])) {
+        fs.mkdirSync(path.dirname(path.join(repoRoot, extra.path)), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, extra.path), extra.body);
+      }
+      if (opts.preCommitSeam) {
+        g(['add', '--', 'src/serial_a.js']);
+        g(['commit', '-m', 'kaola-checkpoint(test-project): serial→parallel seam — nodes sA, sB', '--', 'src/serial_a.js']);
+      }
+      // Hooks are installed LAST so the fixture's own init/pre-seam commits above are unaffected.
+      const hooksDir = path.join(repoRoot, '.git', 'hooks');
+      const installHook = (name, body) => {
+        fs.mkdirSync(hooksDir, { recursive: true });
+        const hook = path.join(hooksDir, name);
+        fs.writeFileSync(hook, body);
+        fs.chmodSync(hook, 0o755);
+      };
+      if (opts.hostilePreCommit) {
+        installHook('pre-commit', '#!/bin/sh\necho "hostile repo-local pre-commit hook" >&2\nexit 1\n');
+      }
+      if (opts.secretScanner) {
+        // A minimal stand-in for a consumer's staged-content secret scanner. It reads the STAGED diff —
+        // the only way it can see what a commit is about to record — and leaves a WITNESS naming the
+        // paths it inspected, so a test can prove the scanner actually SAW the checkpoint's bytes
+        // rather than merely inferring it from a failed commit.
+        installHook('pre-commit', [
+          '#!/bin/sh',
+          'git diff --cached --name-only >> "$(git rev-parse --git-dir)/scanner-witness"',
+          'if git diff --cached -U0 | grep -Eq "AKIA[0-9A-Z]{16}"; then',
+          '  echo "secret-scanner: AWS access key id in staged content" >&2',
+          '  exit 1',
+          'fi',
+          'exit 0', '',
+        ].join('\n'));
+      }
+      if (opts.hostilePrepareCommitMsg) {
+        // The hook class `--no-verify` NEVER covered: git skips only `pre-commit` and `commit-msg`
+        // under that flag, so a `prepare-commit-msg` veto halted the seam even with the bypass in place.
+        installHook('prepare-commit-msg', '#!/bin/sh\necho "hostile prepare-commit-msg hook" >&2\nexit 1\n');
+      }
+      if (opts.keylessSigning) {
+        g(['config', 'commit.gpgsign', 'true']);
+        g(['config', 'user.signingkey', 'NOSUCHKEYEXISTS']);
+      }
+      if (opts.postCommitWriter) {
+        fs.mkdirSync(hooksDir, { recursive: true });
+        const hook = path.join(hooksDir, 'post-commit');
+        fs.writeFileSync(hook, '#!/bin/sh\nprintf "// bytes from a concurrent writer\\n" > concurrent.js\n');
+        fs.chmodSync(hook, 0o755);
+      }
+      return { repoRoot, project, planPath, projDir, cacheDir, g };
+  }
+  function headSha(repoRoot) {
+    return execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  }
+  // Commit subjects on HEAD's first-parent history, newest first.
+  function gitSubjects(repoRoot) {
+    try {
+      return execFileSync('git', ['-C', repoRoot, 'log', '--format=%s'], { encoding: 'utf8' })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch (_) { return []; }
+  }
+  function seamCommitCount(repoRoot) {
+    return gitSubjects(repoRoot).filter(s => s.startsWith('kaola-checkpoint(')).length;
+  }
 
-    // GREEN assertion (this is what FAILS pre-fix = the RED signature, and PASSES post-fix).
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-COOPEN (D1/D2 normal co-open site) — the SAME mixed shape, now REPAIRED
+  //   instead of degraded. Attributed serial dirt is a REMOVABLE BLOCKER the orchestrator itself
+  //   created — none of the three named serializers — so open-ready commits it at the seam and the
+  //   frontier co-opens. The commit lands BEFORE the group baseline, so the serial work sits outside
+  //   the group diff (Horn B dissolves) and the legs branch off it (input freshness dissolves).
+  //   RED (pre-#802): open-ready serial-degrades — opened.length===1, no laneGroup,
+  //     serialDegradeReason:'parent_dirty', and NO kaola-checkpoint commit exists.
+  //   GREEN: exactly ONE kaola-checkpoint commit whose content is EXACTLY the closed nodes' dirty
+  //     paths, a formed lane group over {pA,pB}, and a clean parent afterwards.
+  // -------------------------------------------------------------------------
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeMixedRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
-    assert(r.result === 'ok', '#615-MIXED: open-ready ok, got ' + JSON.stringify(r));
-    assert(!r.laneGroup,
-      '#615-MIXED: a parent carrying uncommitted serial production dirt MUST NOT co-open a lane group (it would deadlock at the last-member close) — expected serial-degrade, got laneGroup ' + JSON.stringify(r.laneGroup));
-    assert(Array.isArray(r.opened) && r.opened.length === 1,
-      '#615-MIXED: open-ready must DEGRADE to a single serial write, got opened ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
-    assert(r.opened[0].kind === 'write',
-      '#615-MIXED: the single opened node is a write, got ' + JSON.stringify(r.opened[0] && r.opened[0].kind));
-    assert(!r.opened[0].group_id,
-      '#615-MIXED: the degraded write carries NO group_id, got ' + JSON.stringify(r.opened[0].group_id));
+    assert(r.result === 'ok', '#802-SEAM-COOPEN: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.seamCheckpoint && Array.isArray(r.seamCheckpoint.committed),
+      '#802-SEAM-COOPEN: the envelope surfaces the seam checkpoint it performed, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(JSON.stringify(r.seamCheckpoint.committed.slice().sort()) === JSON.stringify(['src/serial_a.js']),
+      '#802-SEAM-COOPEN: the checkpoint committed EXACTLY the closed nodes\' dirty paths, got ' + JSON.stringify(r.seamCheckpoint.committed));
+    assert((r.seamCheckpoint.nodes || []).includes('sA'),
+      '#802-SEAM-COOPEN: the checkpoint names the closed write-capable nodes it attributed to, got ' + JSON.stringify(r.seamCheckpoint.nodes));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-SEAM-COOPEN: EXACTLY one kaola-checkpoint commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    // The checkpoint commit's content is exactly the dirty paths — nothing else rode along. (Resolve it
+    // by SUBJECT: leg provisioning commits the tracked evidence stubs afterwards, so HEAD has moved on.)
+    const seamSha = execFileSync('git', ['-C', repoRoot, 'log', '--format=%H %s'], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(s => s.indexOf(' kaola-checkpoint(') > 0)[0].split(' ')[0];
+    const touched = execFileSync('git', ['-C', repoRoot, 'show', '--name-only', '--format=', seamSha], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(Boolean).sort();
+    assert(JSON.stringify(touched) === JSON.stringify(['src/serial_a.js']),
+      '#802-SEAM-COOPEN: the checkpoint commit touches ONLY the attributed dirty paths, got ' + JSON.stringify(touched));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.length === 2,
+      '#802-SEAM-COOPEN: the repaired seam co-opens the write frontier as a lane group, got ' + JSON.stringify(r.laneGroup));
+    assert(JSON.stringify((r.opened || []).map(n => n.id).sort()) === JSON.stringify(['pA', 'pB']),
+      '#802-SEAM-COOPEN: BOTH parallel writes opened, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    assert(r.serialDegradeReason === undefined,
+      '#802-SEAM-COOPEN: NO serial degrade label — the blocker was repaired, not cited as evidence, got ' + JSON.stringify(r.serialDegradeReason));
     const rs = readRS(cacheDir);
-    assert(!rs || !rs.lane_group,
-      '#615-MIXED: running-set.json carries NO lane_group key on the degrade path, got ' + JSON.stringify(rs && rs.lane_group));
-    // Exactly one of the parallel writes is in_progress; the other stays pending (serial).
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.pA && rs.lane_group.legs.pB,
+      '#802-SEAM-COOPEN: both legs provisioned, got ' + JSON.stringify(rs && rs.lane_group));
+    assert(ledgerStatus(planPath, 'pA') === 'in_progress' && ledgerStatus(planPath, 'pB') === 'in_progress',
+      '#802-SEAM-COOPEN: both frontier members are in_progress');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-TOGGLE-OFF (AC1/AC3d) — KAOLA_SEAM_CHECKPOINT=0 restores the `parent_dirty`
+  //   SERIAL DEGRADE at this site: one serial write, no lane group, serialDegradeReason 'parent_dirty',
+  //   and NO commit of any kind. This is the operator recovery posture, mirroring KAOLA_PARALLEL_WRITES=0.
+  //   SCOPE (stated exactly, because "restores the prior behavior" would be false): the toggle restores
+  //   the serial degrade ONLY. It does NOT resurrect the legless single-writer co-open that used to fire
+  //   over a dirty parent at the write-awaits-drain seam — that path is retired UNCONDITIONALLY, as a
+  //   separate deliberate tightening. #802-DRAIN-SEAM-OFF (below, the drain site) is the pin for that
+  //   half: under the same opt-out a seam that once legless-co-opened now HOLDS.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], { KAOLA_SEAM_CHECKPOINT: '0' });
+    assert(r.result === 'ok', '#802-TOGGLE-OFF: open-ready ok, got ' + JSON.stringify(r));
+    assert(!r.laneGroup && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].kind === 'write' && !r.opened[0].group_id,
+      '#802-TOGGLE-OFF: the pre-repair single serial write returns, got ' + JSON.stringify({ laneGroup: r.laneGroup, opened: r.opened && r.opened.map(n => n.id) }));
+    assert(r.serialDegradeReason === 'parent_dirty',
+      '#802-TOGGLE-OFF: the pre-repair parent_dirty label returns under the opt-out, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(!r.seamCheckpoint, '#802-TOGGLE-OFF: no seamCheckpoint field under the opt-out, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(gitSubjects(repoRoot).length === before && seamCommitCount(repoRoot) === 0,
+      '#802-TOGGLE-OFF: NOTHING was committed, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, '#802-TOGGLE-OFF: running-set.json carries NO lane_group');
     const openedId = r.opened[0].id;
     assert((openedId === 'pA' || openedId === 'pB') && ledgerStatus(planPath, openedId) === 'in_progress',
-      '#615-MIXED: one parallel write opened serially (in_progress), got ' + openedId + '=' + ledgerStatus(planPath, openedId));
-    // #616 (D-616-01): the successful-open envelope MUST label WHY it degraded to serial — the
-    // parent-dirty fence, not an ordinary single-candidate/overlap serial choice. RED (pre-fix):
-    // serialDegradeReason is absent from a successful degrade-open even though the degrade was
-    // caused by parentCarriesProductionDirt() returning true.
-    assert(r.serialDegradeReason === 'parent_dirty',
-      '#616-SERIAL-DEGRADE-TELEMETRY: a parent-dirty-caused serial degrade must carry serialDegradeReason:"parent_dirty" on the SUCCESSFUL open, got ' + JSON.stringify(r.serialDegradeReason));
+      '#802-TOGGLE-OFF: one parallel write opened serially, got ' + openedId);
     cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-UNATTRIBUTABLE (AC2/AC3b) — a dirty PRODUCTION path that NO closed
+  //   write-capable node declared is FOREIGN (a user edit, an escaped write). The checkpoint refuses to
+  //   vouch for it: a loud typed halt naming the paths — NO commit, NO lane group, and critically NO
+  //   silent serial open (today's behavior buried the integrity signal under serialization).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ extraDirty: [{ path: 'rogue.js', body: '// foreign bytes\n' }] });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_unattributable',
+      '#802-UNATTRIBUTABLE: the halt is typed seam_checkpoint_unattributable, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(Array.isArray(r.unattributed) && r.unattributed.includes('rogue.js') && !r.unattributed.includes('src/serial_a.js'),
+      '#802-UNATTRIBUTABLE: the halt names ONLY the unattributed paths, got ' + JSON.stringify(r.unattributed));
+    assert(typeof r.operator_hint === 'string' && r.operator_hint.length > 0,
+      '#802-UNATTRIBUTABLE: the typed halt carries an operator hint, got ' + JSON.stringify(r.operator_hint));
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-UNATTRIBUTABLE: NO commit was made, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    // The zero-mutation halt shapes carry NO `commit` disclosure — the field's PRESENCE is the signal
+    // that HEAD advanced, so it must be absent exactly when it did not (the negative half of the
+    // post-commit-fence pin below).
+    assert(r.commit === undefined && r.committed === undefined,
+      '#802-UNATTRIBUTABLE: a pre-commit halt discloses NO commit (HEAD never moved), got ' + JSON.stringify({ commit: r.commit, committed: r.committed }));
+    assert(!readRS(cacheDir), '#802-UNATTRIBUTABLE: NO running set was written (zero mutation)');
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-UNATTRIBUTABLE: NO serial open either — both frontier members stay pending');
+    // The index must be left clean (a partially-staged index is reset before halting).
+    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    assert(staged === '', '#802-UNATTRIBUTABLE: the index is left unstaged, got ' + JSON.stringify(staged));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-CRASH-RESUME (AC3c) — a crash AFTER the checkpoint commit but BEFORE the
+  //   group opens leaves a CLEAN parent. The next open-ready re-runs the fence, finds `pass`, forms
+  //   the group, and re-commits NOTHING — idempotent by construction, no journal file needed.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir } = makeMixedRepo({ preCommitSeam: true });
+    assert(seamCommitCount(repoRoot) === 1, '#802-CRASH-RESUME precondition: the crashed run left exactly one checkpoint commit');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.laneGroup && r.laneGroup.members.length === 2,
+      '#802-CRASH-RESUME: the resumed open forms the group over the already-clean parent, got ' + JSON.stringify({ result: r.result, laneGroup: r.laneGroup }));
+    assert(!r.seamCheckpoint,
+      '#802-CRASH-RESUME: NO second checkpoint was performed (the fence already passes), got ' + JSON.stringify(r.seamCheckpoint));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-CRASH-RESUME: still exactly ONE checkpoint commit — nothing re-committed, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.pA && rs.lane_group.legs.pB,
+      '#802-CRASH-RESUME: both legs provisioned on the resume');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-END-TO-END (AC3a) — the repaired group closes GREEN all the way through the
+  //   last-member octopus merge. This is the claim the two-horned deadlock said was impossible: with
+  //   the serial dirt committed BEFORE the group baseline, the last-member parent-clean fence PASSES
+  //   (Horn A gone) and the merge commit's union diff carries only the group's declared files, so the
+  //   commit-based group barrier does NOT see the serial work (Horn B gone).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.laneGroup, '#802-E2E: co-open, got ' + JSON.stringify(r));
+    const rs = readRS(cacheDir);
+    const legPA = rs.lane_group.legs.pA.legPath;
+    const legPB = rs.lane_group.legs.pB.legPath;
+    fs.writeFileSync(path.join(legPA, 'par_a.js'), '// pA leg work\n');
+    fs.writeFileSync(path.join(legPB, 'par_b.js'), '// pB leg work\n');
+    writeEvidence(cacheDir, 'pA'); writeEvidence(cacheDir, 'pB');
+    const cA = runNode(repoRoot, ['close-node', '--node-id', 'pA', '--project', 'test-project', '--json'], DEFAULT);
+    assert(cA.result === 'ok' && cA.barrier === 'deferred_to_group', '#802-E2E: pA defers to the group, got ' + JSON.stringify(cA));
+    const cB = runNode(repoRoot, ['close-node', '--node-id', 'pB', '--project', 'test-project', '--json'], DEFAULT);
+    assert(cB.result === 'ok' && cB.barrier === 'group_passed' && cB.synthesized === true,
+      '#802-E2E: the LAST-member close passes the parent-clean fence AND the commit-based group barrier and merges, got ' + JSON.stringify(cB));
+    assert(ledgerStatus(planPath, 'pA') === 'complete' && ledgerStatus(planPath, 'pB') === 'complete',
+      '#802-E2E: both members closed complete');
+    // The serial work survives on the branch (it was committed at the seam, never reverted) and BOTH
+    // legs' declared files landed in the merge.
+    for (const p of ['src/serial_a.js', 'par_a.js', 'par_b.js']) {
+      let ok = true;
+      try { execFileSync('git', ['-C', repoRoot, 'cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); }
+      catch (_) { ok = false; }
+      assert(ok, '#802-E2E: ' + p + ' is reachable from HEAD after the merge');
+    }
+    cleanup(repoRoot);
+  });
+
+  // ==========================================================================
+  // #802 AC6 — THE TERMINAL AUDITS. The seam checkpoint puts a MID-RUN commit on the feature
+  // branch, which is a new input for two terminal transitions that previously only ever saw
+  // uncommitted production dirt: FINALIZE (which must still attribute what remains on the branch)
+  // and DISCARD (which must still reset the committed work). Both are driven here through their
+  // REAL production entry points over a branch a REAL open-ready checkpointed.
+  // ==========================================================================
+
+  const CLAIM_CLI = path.join(__dirname, 'kaola-workflow-claim.js');
+
+  // Put the mixed fixture on a FEATURE branch so `git diff <base>...HEAD` is a real, non-empty
+  // branch diff (the sweep is vacuous when base === HEAD). Returns the surviving base branch name.
+  function branchOffBase(repoRoot, feature) {
+    const base = execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['-C', repoRoot, 'checkout', '-q', '-b', feature], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    return base;
   }
+  function headBranch(repoRoot) {
+    try { return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return null; }
+  }
+  function reachableFromHead(repoRoot, p) {
+    try { execFileSync('git', ['-C', repoRoot, 'cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    catch (_) { return false; }
+  }
+  function branchNames(repoRoot) {
+    try {
+      return execFileSync('git', ['-C', repoRoot, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8' })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch (_) { return []; }
+  }
+  // Drive the whole repaired group to its last-member merge (the #802-E2E choreography, reused).
+  function driveGroupToMerge(repoRoot, cacheDir) {
+    const rs = readRS(cacheDir);
+    fs.writeFileSync(path.join(rs.lane_group.legs.pA.legPath, 'par_a.js'), '// pA leg work\n');
+    fs.writeFileSync(path.join(rs.lane_group.legs.pB.legPath, 'par_b.js'), '// pB leg work\n');
+    writeEvidence(cacheDir, 'pA'); writeEvidence(cacheDir, 'pB');
+    runNode(repoRoot, ['close-node', '--node-id', 'pA', '--project', 'test-project', '--json'], DEFAULT);
+    return runNode(repoRoot, ['close-node', '--node-id', 'pB', '--project', 'test-project', '--json'], DEFAULT);
+  }
+  // Seed the CONSUMER-mode finalize validation gate (the tmp fixture has no package.json, so
+  // --finalize-check takes the final-validation.md arm). Computed AFTER the tree settles so the
+  // recorded candidate hash binds the tree the sweep will recompute over.
+  function seedFinalValidation(repoRoot, projDir, planPath) {
+    let cand = '';
+    try {
+      cand = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--candidate-hash', '--json'],
+        { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()).validated_candidate_hash || '';
+    } catch (_) { cand = ''; }
+    fs.writeFileSync(path.join(projDir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
+  }
+  // The EXACT subprocess cmdFinalize shells before any irreversible side effect (claim.js:
+  // `[validatorScript, authorityPlanPath, '--finalize-check', '--json']`, plus the forwarded --base).
+  function finalizeCheck(repoRoot, planPath, base) {
+    try {
+      const out = execFileSync('node', [VALIDATOR, planPath, '--finalize-check', '--json', '--base', base],
+        { cwd: repoRoot, encoding: 'utf8' });
+      return JSON.parse(out.trim().split('\n').pop());
+    } catch (e) {
+      try { return JSON.parse(String(e.stdout || '').trim().split('\n').pop()); } catch (_) { return { result: 'crash' }; }
+    }
+  }
+  function setLedger(planPath, id, status) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const start = txt.indexOf('## Node Ledger');
+    const head = txt.slice(0, start), body = txt.slice(start);
+    const re = new RegExp('^(\\|\\s*' + id + '\\s*\\|\\s*)\\S+(\\s*\\|)', 'm');
+    fs.writeFileSync(planPath, head + body.replace(re, '$1' + status + '$2'));
+  }
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-FINALIZE-SWEEP-OVER-CHECKPOINT — FINALIZE MUST SWEEP WHAT REMAINS. A mid-run
+  //   checkpoint commit changes WHERE the serial work lives: before #802 it sat UNCOMMITTED and was
+  //   therefore INVISIBLE to the finalize attribution sweep (which enumerates `git diff <base>...HEAD`);
+  //   after #802 it is a real commit ON the branch and the sweep DOES range over it. That is the whole
+  //   audit: the checkpoint must not smuggle bytes past the sweep, and must not trip it either.
+  //   Driven through the EXACT `--finalize-check` subprocess cmdFinalize shells (the gate that runs
+  //   BEFORE any irreversible finalize side effect), over a branch a REAL open-ready checkpointed and a
+  //   REAL lane group merged.
+  //   GREEN: the sweep enumerates src/serial_a.js (proved directly against the branch diff) and PASSES,
+  //     because sA — the node that declared it — is `complete`. The checkpoint is attributed by exactly
+  //     the same rule that vouched for it at the seam; no new exemption, no allowband widening.
+  //   RED (the same tree, one mutation): flip sA's ledger row back to `pending` and the identical sweep
+  //     REFUSES `unattributed_change` naming src/serial_a.js. So the pass above is NOT vacuous, and a
+  //     checkpoint commit is NOT self-authorizing — had the checkpoint ever committed a path no closed
+  //     node declared, finalize would catch it here. Zero-mutation transition: nothing the sweep does
+  //     touches the tree, so the RED and GREEN runs differ only in the ledger byte.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, projDir, cacheDir, planPath } = makeMixedRepo();
+    const base = branchOffBase(repoRoot, 'workflow/seam-finalize');
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open.result === 'ok' && open.laneGroup && open.seamCheckpoint,
+      '#802-AC6-FINALIZE precondition: open-ready checkpointed and co-opened, got ' + JSON.stringify({ result: open.result, seamCheckpoint: open.seamCheckpoint }));
+    const close = driveGroupToMerge(repoRoot, cacheDir);
+    assert(close.result === 'ok' && close.barrier === 'group_passed',
+      '#802-AC6-FINALIZE precondition: the group merged green, got ' + JSON.stringify(close));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-AC6-FINALIZE precondition: the branch carries exactly one mid-run checkpoint commit');
+    // The sweep's own input: the checkpointed path IS in the branch diff (pre-#802 it was uncommitted
+    // and absent from it). Without this the pass below would prove nothing.
+    const branchDiff = execFileSync('git', ['-C', repoRoot, 'diff', base + '...HEAD', '--name-only'], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(Boolean);
+    assert(branchDiff.includes('src/serial_a.js'),
+      '#802-AC6-FINALIZE: the checkpointed serial path is IN the finalize sweep\'s branch diff, got ' + JSON.stringify(branchDiff));
+    seedFinalValidation(repoRoot, projDir, planPath);
+    const green = finalizeCheck(repoRoot, planPath, base);
+    assert(green.result === 'pass',
+      '#802-AC6-FINALIZE (GREEN): the finalize gate passes over the checkpoint-carrying branch, got ' + JSON.stringify(green));
+    // RED: the checkpoint commit is NOT self-authorizing — remove the attributing node's `complete`
+    // status and the identical sweep refuses on exactly that path.
+    setLedger(planPath, 'sA', 'pending');
+    seedFinalValidation(repoRoot, projDir, planPath);
+    const red = finalizeCheck(repoRoot, planPath, base);
+    assert(red.result === 'refuse' && red.reason === 'unattributed_change',
+      '#802-AC6-FINALIZE (RED): with sA no longer complete the sweep refuses unattributed_change, got ' + JSON.stringify(red));
+    assert(Array.isArray(red.unattributed) && red.unattributed.includes('src/serial_a.js'),
+      '#802-AC6-FINALIZE (RED): the refusal names the checkpointed path, got ' + JSON.stringify(red.unattributed));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-DISCARD-RESETS-CHECKPOINT — DISCARD MUST RESET THE COMMITTED WORK. A discard is a
+  //   user-consented abandon: nothing the run produced may survive on the surviving base branch. The
+  //   seam checkpoint is the first mechanism that COMMITS production bytes mid-run, so this is the
+  //   audit that the abandon still reverses everything — the checkpoint must ride the feature branch
+  //   to deletion, not leak onto the base. Driven through the REAL `kaola-workflow-claim.js release`
+  //   subprocess (KAOLA_WORKFLOW_OFFLINE=1 so the advisory claim-label clearing is a local no-op).
+  //   RED-then-GREEN in ONE run: the pre-discard assertions establish that the committed serial work
+  //     really IS reachable from the feature-branch HEAD (the state a broken discard would strand on
+  //     the base branch); the post-discard assertions prove the base branch carries neither the
+  //     checkpoint commit nor the file. Falsification: if release merely archived the folder and left
+  //     the branch, `src/serial_a.js` would still be reachable from HEAD after the call.
+  //   The checkpoint here is the REAL `runSeamCheckpoint` transaction (the same function open-ready
+  //   calls), driven directly rather than through `open-ready`, so the branch carries the checkpoint
+  //   commit WITHOUT a live lane group: group formation force-adds tracked evidence stubs INSIDE the
+  //   project folder, and archiving that folder then leaves tracked deletions that trip release's own
+  //   tree-dirty gate — a pre-existing property of discarding mid-group, unrelated to the checkpoint
+  //   under audit and one that would mask it.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const { repoRoot, projDir, planPath, g } = makeMixedRepo();
+    // Model an in-place run the way discard actually meets one: the run's own `kaola-workflow/`
+    // state is NOT tracked on the branch (it is committed only at finalize), so the archive move
+    // leaves no tracked deletion behind. Without this the release's own tree-dirty gate would skip
+    // the base restore for a reason that has nothing to do with the checkpoint under audit.
+    g(['rm', '-r', '-q', '--cached', 'kaola-workflow']);
+    fs.appendFileSync(path.join(repoRoot, '.gitignore'), 'kaola-workflow/\n');
+    g(['add', '.gitignore']);
+    g(['commit', '-m', 'chore: untrack run state']);
+    const base = branchOffBase(repoRoot, 'workflow/seam-discard');
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: test-project', 'status: active', '',
+      '## Sink', 'branch: workflow/seam-discard', 'base_branch: ' + base,
+      'issue_number: 802', 'sink: merge', 'run_posture: in-place', ''
+    ].join('\n'));
+    // The real repair transaction, run against this repo (it resolves its git root from cwd).
+    const prevCwd = process.cwd();
+    let cp;
+    try {
+      process.chdir(repoRoot);
+      cp = nodeMod.runSeamCheckpoint(planPath, 'test-project', nodeMod.shellNode, (p) => fs.readFileSync(p, 'utf8'));
+    } finally { process.chdir(prevCwd); }
+    assert(cp && cp.ok === true && JSON.stringify(cp.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-AC6-DISCARD precondition: the real seam checkpoint committed the attributed serial path, got ' + JSON.stringify(cp));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-AC6-DISCARD precondition: the branch carries exactly one mid-run checkpoint commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    // PRE: the committed serial work is genuinely on the branch — this is what discard must undo.
+    assert(reachableFromHead(repoRoot, 'src/serial_a.js'),
+      '#802-AC6-DISCARD (pre): the checkpointed serial file IS reachable from the feature-branch HEAD');
+    assert(headBranch(repoRoot) === 'workflow/seam-discard',
+      '#802-AC6-DISCARD (pre): the run is on its feature branch');
+    const rel = (() => {
+      const env = Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' });
+      try {
+        return JSON.parse(execFileSync('node', [CLAIM_CLI, 'release', '--project', 'test-project'],
+          { cwd: repoRoot, encoding: 'utf8', env }).trim().split('\n').pop());
+      } catch (e) {
+        try { return JSON.parse(String(e.stdout || '').trim().split('\n').pop()); } catch (_) { return { released: false, crash: String(e && e.message) }; }
+      }
+    })();
+    assert(rel.released === true,
+      '#802-AC6-DISCARD: release succeeded over the checkpoint-carrying branch, got ' + JSON.stringify(rel));
+    // POST: the base branch survives, the feature branch (and its checkpoint commit) is gone.
+    assert(headBranch(repoRoot) === base,
+      '#802-AC6-DISCARD: the base branch was restored, got ' + JSON.stringify(headBranch(repoRoot)));
+    assert(!branchNames(repoRoot).includes('workflow/seam-discard'),
+      '#802-AC6-DISCARD: the feature branch was deleted, got ' + JSON.stringify(branchNames(repoRoot)));
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-AC6-DISCARD: NO kaola-checkpoint commit survives on the base branch, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    assert(!reachableFromHead(repoRoot, 'src/serial_a.js'),
+      '#802-AC6-DISCARD: the committed serial work is NOT reachable from the surviving base branch');
+    assert(!fs.existsSync(planPath),
+      '#802-AC6-DISCARD: the live project folder was archived away');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-EPOCH-LINEAGE-FAIL-CLOSED — EPOCH-LINEAGE ATTRIBUTION UNDER A LIVE CHILD EPOCH. A
+  //   re-plan is claim-preserving: under a schema-2 CHILD epoch the parent epochs' uncommitted
+  //   production work is still in THIS worktree, so attribution must union the SEALED ancestors'
+  //   closed rows. The safety-critical half is the failure mode: when the lineage cannot be resolved,
+  //   the checkpoint must FAIL CLOSED — never fall back to the child-only union, because that would
+  //   silently narrow the attributed set (a parent-epoch path reading as foreign) or, worse, vouch
+  //   for bytes on a lineage nothing proved.
+  //   This fixture is the SHARPEST form of that: the ONLY dirty path (src/serial_a.js) IS attributable
+  //   by the CHILD ledger alone, so a fail-OPEN implementation — one that shrugged off an unresolvable
+  //   lineage and used the child union — would happily checkpoint and co-open. It must not.
+  //   RED (fail-open): result 'ok', a kaola-checkpoint commit, a formed lane group.
+  //   GREEN: typed `seam_checkpoint_failed` whose detail names the epoch-lineage cause, zero commits,
+  //     zero mutation, and NO silent serial substitute either.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    // Promote the frozen plan to a schema-2 CHILD epoch (plan_epoch >= 2 + a parent_plan_hash makes
+    // resolveEpochLineagePlans APPLICABLE) while leaving .cache/epochs/ absent — the lineage is
+    // applicable but unresolvable, exactly the state a half-completed / tampered replan leaves behind.
+    // Re-stamp plan_hash over the edited body — the integrity prologue runs BEFORE the seam repair,
+    // so a tampered hash would refuse plan_integrity_failed and never reach the lineage at all.
+    const raw = fs.readFileSync(planPath, 'utf8');
+    const body = raw.replace(/^<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->\n\n?/, '')
+      .replace(/^## Meta$/m, '## Meta\nepoch_schema_version: 2\nplan_epoch: 2\nparent_plan_hash: ' + 'a'.repeat(64));
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n\n' + body);
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-AC6-EPOCH-FAILCLOSED: an unresolvable lineage is a typed seam_checkpoint_failed halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(typeof r.detail === 'string' && /epoch_lineage|snapshot|state_epoch/.test(r.detail),
+      '#802-AC6-EPOCH-FAILCLOSED: the halt names the LINEAGE cause (never a generic git failure), got ' + JSON.stringify(r.detail));
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-AC6-EPOCH-FAILCLOSED: NOTHING was committed — the child-only union was NOT used as a fallback, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    assert(!readRS(cacheDir), '#802-AC6-EPOCH-FAILCLOSED: no running set was written (zero mutation)');
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-AC6-EPOCH-FAILCLOSED: NO serial open either — the frontier stays pending');
+    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    assert(staged === '', '#802-AC6-EPOCH-FAILCLOSED: the index is left unstaged, got ' + JSON.stringify(staged));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-EPOCH-LINEAGE-UNION — the POSITIVE half of the same audit, pinned directly on the
+  //   exported attribution proof. The lineage WALKER itself (seals, projection, contiguity) is the
+  //   validator's own verified machinery with its own suite; what must be pinned HERE is that
+  //   seamCheckpointAttribution CONSUMES it correctly. The resolver is stubbed on the shared validator
+  //   exports (the same module object the function resolves at call time) so the three consumption
+  //   rules are isolated from snapshot-fixture mechanics:
+  //     (a) a sealed ancestor's COMPLETE write-capable row widens the union (its declared path becomes
+  //         attributable, and its id is named on the checkpoint);
+  //     (b) an ancestor row that is NOT complete does NOT widen it — unioning DECLARATIONS without
+  //         ATTRIBUTION would be a laundering primitive (a parent node that never ran carrying its
+  //         file through unreviewed);
+  //     (c) an applicable-but-unverified lineage returns ok:false, so the caller halts instead of
+  //         falling back to the child-only union.
+  //   RED for (a): without the lineage branch the parent path is absent from the union (asserted
+  //     directly by the not-applicable control below, which is the same call with the resolver off).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const pv = require('./kaola-workflow-plan-validator.js');
+    const childPlan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| c1 | tdd-guide | — | child_only.js | 1 | sequence |',
+      '| c2 | tdd-guide | c1 | later.js | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| c1 | complete |', '| c2 | pending |', '',
+    ].join('\n') + '\n';
+    const mkLineage = (ledgerRows) => ({
+      applicable: true, ok: true,
+      lineagePlans: [{
+        epoch: 1,
+        // Same shape the validator's own walker yields (parseNodes rows carry role + writeSetRaw).
+        // p3 is the WRITE-CAPABILITY probe: a CLOSED ancestor row whose role may not legally declare a
+        // write set at all, so its declaration must not widen the union either (case (d)).
+        nodes: [
+          { id: 'p1', role: 'implementer', writeSetRaw: 'parent_epoch.js' },
+          { id: 'p2', role: 'implementer', writeSetRaw: 'parent_never_ran.js' },
+          { id: 'p3', role: 'code-reviewer', writeSetRaw: 'parent_readonly_row.js' },
+        ],
+        ledger: new Map(ledgerRows),
+      }],
+    });
+    const original = pv.resolveEpochLineagePlans;
+    try {
+      // Control: lineage NOT applicable ⇒ child-only union (the pre-lineage behavior, and the RED
+      // baseline for (a) — the parent path is simply not there).
+      pv.resolveEpochLineagePlans = () => ({ applicable: false });
+      const childOnly = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(childOnly.ok && childOnly.union.has('child_only.js') && !childOnly.union.has('parent_epoch.js'),
+        '#802-AC6-EPOCH-UNION (control): a non-child plan attributes child rows ONLY, got ' + JSON.stringify([...(childOnly.union || [])]));
+      // (a) + (b): a COMPLETE ancestor row widens the union; a non-complete one never does.
+      pv.resolveEpochLineagePlans = () => mkLineage([['p1', 'complete'], ['p2', 'pending'], ['p3', 'complete']]);
+      const unioned = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(unioned.ok && unioned.union.has('parent_epoch.js'),
+        '#802-AC6-EPOCH-UNION (a): a sealed ancestor\'s COMPLETE row widens the attributed set, got ' + JSON.stringify([...(unioned.union || [])]));
+      assert(unioned.union.has('child_only.js'),
+        '#802-AC6-EPOCH-UNION (a): the child rows are still attributed alongside the lineage');
+      assert(!unioned.union.has('parent_never_ran.js'),
+        '#802-AC6-EPOCH-UNION (b): an ancestor row that is NOT complete never widens the set — declarations without attribution would be a laundering primitive');
+      assert(unioned.nodeIds.includes('p1') && !unioned.nodeIds.includes('p2'),
+        '#802-AC6-EPOCH-UNION (b): the checkpoint names only the ancestors it actually attributed to, got ' + JSON.stringify(unioned.nodeIds));
+      assert(!unioned.union.has('parent_readonly_row.js') && !unioned.nodeIds.includes('p3'),
+        '#802-AC6-EPOCH-UNION (d): a CLOSED ancestor row whose ROLE may not declare a write set widens nothing either — the write-capability wall applies across the lineage, not just to the child, got ' + JSON.stringify({ union: [...(unioned.union || [])], nodeIds: unioned.nodeIds }));
+      // (c) applicable but UNVERIFIED ⇒ ok:false, so the caller halts rather than misattributes.
+      pv.resolveEpochLineagePlans = () => ({ applicable: true, ok: false, reason: 'snapshot_manifest_invalid' });
+      const unverified = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(unverified.ok === false && /^epoch_lineage_/.test(String(unverified.reason)),
+        '#802-AC6-EPOCH-UNION (c): an unverified lineage returns a typed ok:false — never the child-only fallback, got ' + JSON.stringify(unverified));
+      // (c') a THROWING resolver is also fail-closed, not a swallowed pass.
+      pv.resolveEpochLineagePlans = () => { throw new Error('boom'); };
+      const threw = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(threw.ok === false && threw.reason === 'epoch_lineage_unreadable',
+        '#802-AC6-EPOCH-UNION (c\'): a crashing lineage resolver fails closed, got ' + JSON.stringify(threw));
+    } finally {
+      pv.resolveEpochLineagePlans = original;
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-QUOTED-PATH-NO-PARTIAL-CHECKPOINT — the git-quoted (non-ASCII) dirty path. The parent-clean
+  //   fence's porcelain parser strips a path's SURROUNDING double quotes but does NOT decode git's
+  //   C-style escapes, so `src/café.js` arrives as the literal `src/caf\303\251.js`. Two things must
+  //   hold, and only the second was ever obvious:
+  //     1. NO SILENT PARTIAL CHECKPOINT. The frontier here carries BOTH an ordinary attributable path
+  //        (src/serial_a.js) and a quoted one. A partial repair — committing the attributable half and
+  //        proceeding, or committing it and then failing — would leave the run's own bytes half-landed
+  //        with no journal saying so. Nothing may be committed and nothing may be staged.
+  //     2. NO MISATTRIBUTION. See the unit pin below for the sharp case; here the quoted path must not
+  //        be silently dropped from the dirty set either (dropping it is "assume clean" by omission).
+  //   The outcome is a LOUD typed halt naming the quoted path — acceptable per the fail-closed rule —
+  //   and emphatically NOT a serial degrade.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ extraDirty: [{ path: 'src/café.js', body: '// non-ASCII production path\n' }] });
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-QUOTED-PATH: a git-quoted dirty path is a typed seam_checkpoint_failed halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(typeof r.detail === 'string' && r.detail.indexOf('quoted_path_unsupported') === 0,
+      '#802-QUOTED-PATH: the halt says WHY in its own vocabulary (not a raw git pathspec error), got ' + JSON.stringify(r.detail));
+    assert(r.detail.indexOf('caf') !== -1,
+      '#802-QUOTED-PATH: the halt names the offending path, got ' + JSON.stringify(r.detail));
+    // 1. NO PARTIAL CHECKPOINT: the attributable sibling was NOT committed on its own.
+    assert(seamCommitCount(repoRoot) === 0 && gitSubjects(repoRoot).length === before,
+      '#802-QUOTED-PATH: NOTHING was committed — no partial checkpoint of the attributable half, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    assert(staged === '', '#802-QUOTED-PATH: the index is left unstaged, got ' + JSON.stringify(staged));
+    assert(!reachableFromHead(repoRoot, 'src/serial_a.js'),
+      '#802-QUOTED-PATH: the attributable serial path is still UNCOMMITTED (it was not half-landed)');
+    // and NOT a silent serial degrade.
+    assert(!readRS(cacheDir), '#802-QUOTED-PATH: no running set was written (zero mutation)');
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-QUOTED-PATH: NO serial open either — the frontier stays pending');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-QUOTED-PATH-NO-MISATTRIBUTION — the sharp case, pinned on the exported repair directly.
+  //   A real file named `src/a<TAB>b.js` is reported by the fence as the literal `src/a\tb.js`. The
+  //   attribution comparison normalizes every backslash to `/`, so that string COMPARES EQUAL to a
+  //   declared `src/a/tb.js` — i.e. a FOREIGN file would be vouched for by a node that never wrote it.
+  //   Before the guard, that misattribution was real and was only prevented from landing because the
+  //   same undecoded string matched no file when `git add` ran — fail-closed by coincidence, one step
+  //   downstream, with a raw git error as the operator's only signal.
+  //   RED (asserted here, not merely narrated): the normalized form IS in the attributed union, so the
+  //     attribution step alone WOULD have vouched for it.
+  //   GREEN: runSeamCheckpoint refuses at the quoted-path guard BEFORE attribution runs — a typed
+  //     `quoted_path_unsupported`, so the misattribution never enters the attributed set at all.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const planText = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| sA | tdd-guide | — | src/a/tb.js | 1 | sequence |',
+      '| pA | tdd-guide | sA | par_a.js | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| sA | complete |', '| pA | pending |', '',
+    ].join('\n') + '\n';
+    // RED: the normalization really does fold the escaped tab onto the declared path.
+    const attributed = nodeMod.seamCheckpointAttribution(planText, '/p/workflow-plan.md');
+    assert(attributed.ok && attributed.union.has('src/a/tb.js'),
+      '#802-QUOTED-MISATTR (RED): the declared path IS in the attributed union, so the escaped form would normalize onto it');
+    // GREEN: the guard refuses the whole checkpoint before attribution can vouch for it.
+    const fenceShell = () => ({ exitCode: 1, result: 'refuse', reason: 'parent_dirty', dirty: ['src/a\\tb.js'] });
+    const out = nodeMod.runSeamCheckpoint('/p/workflow-plan.md', 'test-project', fenceShell, () => planText);
+    assert(out.ok === false && out.reason === 'seam_checkpoint_failed',
+      '#802-QUOTED-MISATTR (GREEN): the repair refuses rather than vouching for a quoted path, got ' + JSON.stringify(out));
+    assert(String(out.detail).indexOf('quoted_path_unsupported') === 0,
+      '#802-QUOTED-MISATTR (GREEN): the refusal is the quoted-path guard, NOT a downstream git failure, got ' + JSON.stringify(out.detail));
+    assert(out.unattributed === undefined,
+      '#802-QUOTED-MISATTR (GREEN): the guard preempts attribution entirely — no unattributable verdict is rendered on an undecodable path, got ' + JSON.stringify(out.unattributed));
+  });
+
+  // -------------------------------------------------------------------------
+  // #802 D7 — THE SEAM MUST NOT HALT ON A CONSUMER'S GIT CONFIG, AND MUST NOT BYPASS IT EITHER.
+  //
+  // The checkpoint fires MID-SCHEDULE (unlike every finalize-time commit), so a repo-local hook or a
+  // key-less `commit.gpgsign true` could convert a routine seam repair into a hard
+  // `seam_checkpoint_failed` — a state that merely serial-degraded before the repair existed, i.e. a
+  // regression introduced by the repair itself. The FIRST attempt at this fix added `--no-verify`, on
+  // the reasoning "this is internal scheduler bookkeeping". That reasoning does not hold: the seam
+  // checkpoint is the ONLY scheduler commit that lands USER PRODUCTION SOURCE (`kw-stub` is an empty
+  // `.cache` stub commit; `kw-leg`/`kw-synth` are in-lane/merge commits), so bypassing `pre-commit`
+  // disarmed the consumer's CONTENT INSPECTION on exactly the bytes it exists to see — permanently,
+  // since nothing re-examines them once they are in history.
+  //
+  // The corrected design splits the two config classes by what they actually assert:
+  //   ATTRIBUTION (identity, signing) — overridden. `-c user.email/user.name` inject the scheduler's own
+  //     identity; `-c commit.gpgsign=false` disables signing. Neither says anything about the BYTES, so
+  //     neither may halt a run.
+  //   CONTENT INSPECTION (`pre-commit`, `commit-msg`, `prepare-commit-msg`) — honored, never bypassed.
+  //     A veto DEGRADES the seam to the pre-#802 serial path under the typed, visible label
+  //     `serialDegradeReason: 'seam_checkpoint_declined'`. A labeled degrade to a known-good path is
+  //     the fail-safe the doctrine wants; wedging a run that would otherwise complete is strictly worse.
+  //
+  // Every scenario below PROVES ITS OWN HOSTILITY FIRST (an ordinary `git commit` is shown to fail, or
+  // the absence of an identity is shown to fail a commit) before asserting how the seam behaves —
+  // without that the greens would prove nothing.
+  // -------------------------------------------------------------------------
+
+  // Strip any ambient (global/system) git identity from a driven run, so `noIdentity` is a real probe
+  // on a developer box that has one configured. GIT_CONFIG_GLOBAL=/dev/null + GIT_CONFIG_NOSYSTEM=1 is
+  // git's own supported way to say "repo config only".
+  const NO_AMBIENT_GIT_IDENTITY = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  // PROVE a fixture bites: an ordinary commit in this repo is vetoed. `--allow-empty` so the probe
+  // leaves nothing behind whichever guard trips.
+  function ordinaryCommitRefused(repoRoot, extraEnv) {
+    try {
+      execFileSync('git', ['-C', repoRoot, 'commit', '--allow-empty', '-m', 'hostility probe'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: Object.assign({}, process.env, extraEnv || {}) });
+      return false;
+    } catch (_) { return true; }
+  }
+
+  // -------------------------------------------------------------------------
+  // #802-D7-PRE-COMMIT-DEGRADES (demonstration (a); closes regression N1) — A HOSTILE `pre-commit` HOOK
+  //   DEGRADES THE SEAM, IT DOES NOT WEDGE THE RUN. Pre-#802 this mixed dirty-parent shape serial-
+  //   degraded and closed green. The `--no-verify` fix made it CO-OPEN instead, and the very next
+  //   scheduler commit inside the group (`kw-leg`, which carries no bypass) then hard-failed at the
+  //   last-member close with `leg_capture_failed` — a live lane group that can never merge. The fix had
+  //   moved the halt from the open seam to the close seam, where it is strictly worse.
+  //   RED (the `--no-verify` tree): result ok + laneGroup formed; driving the group to its last-member
+  //     close returns `leg_capture_failed` and the run is wedged.
+  //   GREEN: NO group forms at all — the checkpoint is refused by the hook, the open degrades to a
+  //     single serial write labeled `seam_checkpoint_declined`, nothing is committed, and the run
+  //     CONTINUES (the serial member closes green). `leg_capture_failed` is structurally unreachable
+  //     because no leg is ever provisioned.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ hostilePreCommit: true });
+    assert(ordinaryCommitRefused(repoRoot),
+      '#802-D7-PRE-COMMIT precondition: the fixture\'s pre-commit hook really does veto an ordinary commit');
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok',
+      '#802-D7-PRE-COMMIT: the hook veto is a DEGRADE, not a halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(r.serialDegradeReason === 'seam_checkpoint_declined',
+      '#802-D7-PRE-COMMIT: the degrade is LABELED with its own typed cause (never silent, never the bare parent_dirty), got ' + JSON.stringify(r.serialDegradeReason));
+    assert(r.seamCheckpointDeclined && typeof r.seamCheckpointDeclined.detail === 'string' && r.seamCheckpointDeclined.detail.indexOf('git:') === 0,
+      '#802-D7-PRE-COMMIT: the response names WHICH refusal produced the degrade, got ' + JSON.stringify(r.seamCheckpointDeclined));
+    assert(!r.laneGroup && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].kind === 'write' && !r.opened[0].group_id,
+      '#802-D7-PRE-COMMIT: the known-good single serial write is what we degraded ONTO, got ' + JSON.stringify({ laneGroup: r.laneGroup, opened: r.opened && r.opened.map(n => n.id) }));
+    assert(!r.seamCheckpoint,
+      '#802-D7-PRE-COMMIT: no checkpoint is claimed, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(gitSubjects(repoRoot).length === before && seamCommitCount(repoRoot) === 0,
+      '#802-D7-PRE-COMMIT: the vetoed commit did NOT land — git never advances the ref on a failed commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const rs = readRS(cacheDir);
+    assert(rs && !rs.lane_group,
+      '#802-D7-PRE-COMMIT: no lane_group ⇒ no leg ⇒ `leg_capture_failed` is structurally unreachable, got ' + JSON.stringify(rs && rs.lane_group));
+    // THE PIN THE REGRESSION IS ABOUT: the run keeps going. Close the serial member the degrade opened.
+    const openedId = r.opened[0].id;
+    fs.writeFileSync(path.join(repoRoot, openedId === 'pA' ? 'par_a.js' : 'par_b.js'), '// ' + openedId + ' serial work\n');
+    writeEvidence(cacheDir, openedId);
+    const close = runNode(repoRoot, ['close-node', '--node-id', openedId, '--project', 'test-project', '--json'], DEFAULT);
+    assert(close.result === 'ok' && close.reason !== 'leg_capture_failed',
+      '#802-D7-PRE-COMMIT: the degraded run CONTINUES — the serial member closes green, got ' + JSON.stringify({ result: close.result, reason: close.reason }));
+    assert(ledgerStatus(planPath, openedId) === 'complete',
+      '#802-D7-PRE-COMMIT: the closed member is complete, got ' + ledgerStatus(planPath, openedId));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-NO-IDENTITY-PROCEEDS (demonstration (b); closes regression N2) — A REPO WITH NO
+  //   `user.email`/`user.name` PROCEEDS. Identity is ATTRIBUTION, not content: the scheduler's commits
+  //   are the scheduler's, so it names itself (`kaola-workflow <kaola-workflow@local>`) exactly as every
+  //   other scheduler commit already did, instead of inheriting nothing and hard-refusing at a seam
+  //   where pre-#802 the run simply proceeded.
+  //   RED (pre-fix): the checkpoint commit inherited no identity → git's "Please tell me who you are"
+  //     → seam_checkpoint_failed, a hard halt on a repo that used to run.
+  //   GREEN: the checkpoint lands, authored/committed by the scheduler identity, and the frontier
+  //     co-opens. NON-VACUOUS: an ordinary identity-less commit in this same repo is proved to fail.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ noIdentity: true });
+    assert(ordinaryCommitRefused(repoRoot, NO_AMBIENT_GIT_IDENTITY),
+      '#802-D7-NO-IDENTITY precondition: with no repo identity and no ambient one, an ordinary commit really does fail');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'],
+      Object.assign({}, DEFAULT, NO_AMBIENT_GIT_IDENTITY));
+    assert(r.result === 'ok',
+      '#802-D7-NO-IDENTITY: a repo with no configured identity does NOT halt at the seam, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(r.seamCheckpoint && JSON.stringify(r.seamCheckpoint.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-D7-NO-IDENTITY: the checkpoint committed the attributed serial path, got ' + JSON.stringify(r.seamCheckpoint));
+    const who = execFileSync('git', ['-C', repoRoot, 'log', '-1', '--format=%an <%ae>|%cn <%ce>', r.seamCheckpoint.commit],
+      { encoding: 'utf8' }).trim();
+    assert(who === 'kaola-workflow <kaola-workflow@local>|kaola-workflow <kaola-workflow@local>',
+      '#802-D7-NO-IDENTITY: the checkpoint is attributed to the INJECTED scheduler identity, got ' + JSON.stringify(who));
+    assert(r.laneGroup && r.laneGroup.members.length === 2 && !r.serialDegradeReason,
+      '#802-D7-NO-IDENTITY: the frontier co-opens (kw-stub carries the same injected identity), got ' + JSON.stringify({ laneGroup: r.laneGroup, serialDegradeReason: r.serialDegradeReason }));
+    assert(ledgerStatus(planPath, 'pA') === 'in_progress' && ledgerStatus(planPath, 'pB') === 'in_progress',
+      '#802-D7-NO-IDENTITY: both frontier members opened');
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.pA && rs.lane_group.legs.pB,
+      '#802-D7-NO-IDENTITY: both legs provisioned');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-SECRET-SCANNER-STILL-INSPECTS (demonstration (c); closes regression N3, SECURITY) —
+  //   A CONSUMER'S `pre-commit` SECRET SCANNER STILL SEES THE CHECKPOINT'S BYTES. The seam checkpoint is
+  //   the only scheduler commit that lands user production source, so `--no-verify` there did not DEFER
+  //   the scanner, it DEFEATED it: an ordinary commit of those bytes was blocked, the checkpoint
+  //   committed the very same bytes anyway, and the key was then in `git log -p --all` forever —
+  //   `kaola-workflow-claim.js` uses no `--no-verify`, so finalize would otherwise have surfaced it.
+  //   RED (the `--no-verify` tree): result ok, the checkpoint lands, and the AKIA key is reachable from
+  //     the branch — `git log -p --branches` contains it, permanently.
+  //   GREEN: the scanner is HANDED the checkpoint's staged content (proved directly, via a witness the
+  //     hook writes naming the paths it inspected — not merely inferred from a failed commit), it
+  //     vetoes, the seam degrades to serial, and the key never reaches the branch. NON-VACUOUS on both
+  //     sides — the scanner is proved to block an ordinary commit of the same bytes first, and the key
+  //     is proved present in the WORKING TREE afterwards, so the branch assertion is about the commit
+  //     and not about a missing file.
+  //   SCOPE, stated honestly: the assertion is over BRANCH history (`--branches`), not `--all`. The
+  //     per-node barrier baseline anchors a full-worktree snapshot commit under
+  //     `refs/kaola-workflow/barrier/**` at EVERY node open — pre-#802, on the serial path, identically
+  //     — so `--all` reaches uncommitted worktree bytes by construction, for reasons that have nothing
+  //     to do with this seam and that this fix neither creates nor changes. What the checkpoint could
+  //     newly do, and must not, is put them on the BRANCH, which is what gets pushed and finalized.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir } = makeMixedRepo({ secretScanner: true });
+    const SECRET = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const witnessPath = path.join(repoRoot, '.git', 'scanner-witness');
+    // PROVE hostility on the EXACT bytes under audit: stage the attributed serial path and try to commit.
+    let scannerBlockedOrdinaryCommit = false;
+    execFileSync('git', ['-C', repoRoot, 'add', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    try {
+      execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'ordinary commit of the same bytes', '--', 'src/serial_a.js'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { scannerBlockedOrdinaryCommit = true; }
+    // Restore the untracked/uncommitted state the seam is supposed to meet, and clear the witness so
+    // whatever it records next is unambiguously the SCHEDULER's commit.
+    execFileSync('git', ['-C', repoRoot, 'reset', '-q', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    assert(scannerBlockedOrdinaryCommit,
+      '#802-D7-SECRET-SCANNER precondition: the scanner really does block an ordinary commit of these bytes');
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-D7-SECRET-SCANNER precondition: the probe committed nothing');
+    fs.writeFileSync(witnessPath, '');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    // THE PIN THE ISSUE ASKS FOR: the content-inspecting hook SAW the checkpoint's bytes.
+    const witness = fs.readFileSync(witnessPath, 'utf8').split('\n').map(s => s.trim()).filter(Boolean);
+    assert(witness.includes('src/serial_a.js'),
+      '#802-D7-SECRET-SCANNER: the repo-local pre-commit scanner was HANDED the checkpoint\'s staged content, got ' + JSON.stringify(witness));
+    assert(r.result === 'ok' && r.serialDegradeReason === 'seam_checkpoint_declined',
+      '#802-D7-SECRET-SCANNER: the scanner vetoed the checkpoint and the seam DEGRADED, got ' + JSON.stringify({ result: r.result, reason: r.reason, serialDegradeReason: r.serialDegradeReason }));
+    assert(!r.laneGroup && !r.seamCheckpoint,
+      '#802-D7-SECRET-SCANNER: nothing was checkpointed and no group formed, got ' + JSON.stringify({ laneGroup: r.laneGroup, seamCheckpoint: r.seamCheckpoint }));
+    // THE SECURITY PIN: the key is in the working tree (so the check below is not vacuous) and on NO
+    // branch — no commit, no branch tip, no leg branch.
+    assert(fs.readFileSync(path.join(repoRoot, 'src', 'serial_a.js'), 'utf8').indexOf(SECRET) !== -1,
+      '#802-D7-SECRET-SCANNER: the payload really is in the working tree');
+    const branchHistory = execFileSync('git', ['-C', repoRoot, 'log', '-p', '--branches'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    assert(branchHistory.indexOf(SECRET) === -1,
+      '#802-D7-SECRET-SCANNER: the scanner was NOT defeated — the key never reached the branch');
+    assert(!readRS(cacheDir) || !readRS(cacheDir).lane_group,
+      '#802-D7-SECRET-SCANNER: no lane group, so no leg branch carries it either');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-PREPARE-COMMIT-MSG-DEGRADES (demonstration (d); closes regression N4) — THE HOOK CLASS
+  //   `--no-verify` NEVER COVERED. `--no-verify` skips only `pre-commit` and `commit-msg`; a
+  //   `prepare-commit-msg` hook exiting 1 still halted the seam. So the in-code comment that enumerated
+  //   what was "already inert" was an OVERCLAIM, and the audit it supported was wrong. With the bypass
+  //   removed the claim is moot for bypass purposes — but the behavior still has to be right, and the
+  //   answer is the same one every environment refusal gets: DEGRADE, LABELED.
+  //   RED (the `--no-verify` tree): result refuse / seam_checkpoint_failed — the run halts even though
+  //     the bypass was supposed to have covered "the hooks".
+  //   GREEN: result ok, `serialDegradeReason: 'seam_checkpoint_declined'`, nothing committed.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, planPath } = makeMixedRepo({ hostilePrepareCommitMsg: true });
+    assert(ordinaryCommitRefused(repoRoot),
+      '#802-D7-PREPARE-MSG precondition: the prepare-commit-msg hook really does veto an ordinary commit');
+    // And it is genuinely the class `--no-verify` does not cover — prove it against git itself.
+    let survivesNoVerify = false;
+    try {
+      execFileSync('git', ['-C', repoRoot, 'commit', '--no-verify', '--allow-empty', '-m', 'bypass probe'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { survivesNoVerify = true; }
+    assert(survivesNoVerify,
+      '#802-D7-PREPARE-MSG precondition: `--no-verify` does NOT disable prepare-commit-msg (the N4 overclaim)');
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.serialDegradeReason === 'seam_checkpoint_declined',
+      '#802-D7-PREPARE-MSG: a prepare-commit-msg veto degrades, it does not halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, serialDegradeReason: r.serialDegradeReason }));
+    assert(!r.laneGroup && r.opened.length === 1,
+      '#802-D7-PREPARE-MSG: degraded onto the single serial write, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    assert(gitSubjects(repoRoot).length === before && seamCommitCount(repoRoot) === 0,
+      '#802-D7-PREPARE-MSG: nothing landed, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    assert(ledgerStatus(planPath, r.opened[0].id) === 'in_progress',
+      '#802-D7-PREPARE-MSG: the serial member really opened');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-KEYLESS-SIGNING-STILL-LANDS (demonstration (e); closes the other half of N1) — SIGNING IS
+  //   ATTRIBUTION, SO IT IS OVERRIDDEN AT EVERY SCHEDULER COMMIT SITE. `commit.gpgsign true` with an
+  //   unusable key says nothing about the bytes; letting it halt a run buys no safety at all. This is
+  //   the case that proves the override reaches ALL FOUR sites, because the group runs to completion:
+  //   checkpoint → `kw-stub` → `kw-leg` (×2) → `kw-synth`. `kw-leg`/`kw-synth` carried NO override
+  //   before this fix, so the group co-opened and then died at the last-member close.
+  //   RED (the `--no-verify` tree, which hardened only the first two sites): open ok + group formed,
+  //     then the last-member close returns `leg_capture_failed` — a live group that can never merge.
+  //   GREEN: the checkpoint lands, the group co-opens, and the last-member close merges
+  //     (`barrier: 'group_passed'`). NON-VACUOUS: an ordinary commit in this repo is proved to fail.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ keylessSigning: true });
+    assert(ordinaryCommitRefused(repoRoot),
+      '#802-D7-KEYLESS precondition: key-less `commit.gpgsign true` really does veto an ordinary commit');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && !r.serialDegradeReason,
+      '#802-D7-KEYLESS: signing config never halts NOR degrades the seam, got ' + JSON.stringify({ result: r.result, reason: r.reason, serialDegradeReason: r.serialDegradeReason }));
+    assert(r.seamCheckpoint && JSON.stringify(r.seamCheckpoint.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-D7-KEYLESS: the checkpoint landed, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(seamCommitCount(repoRoot) === 1 && r.laneGroup && r.laneGroup.members.length === 2,
+      '#802-D7-KEYLESS: exactly one checkpoint commit and a formed lane group, got ' + JSON.stringify({ subjects: gitSubjects(repoRoot), laneGroup: r.laneGroup }));
+    // THE N1 PIN: drive the group to its LAST-MEMBER CLOSE. This is the seam the `--no-verify` fix
+    // wedged — `kw-leg` and `kw-synth` had no signing override, so the capture died here.
+    const close = driveGroupToMerge(repoRoot, cacheDir);
+    assert(close.result === 'ok' && close.barrier === 'group_passed',
+      '#802-D7-KEYLESS: the last-member close MERGES over key-less signing, got ' + JSON.stringify(close));
+    assert(close.reason !== 'leg_capture_failed',
+      '#802-D7-KEYLESS: the close is not the leg-capture wedge, got ' + JSON.stringify(close.reason));
+    assert(ledgerStatus(planPath, 'pA') === 'complete' && ledgerStatus(planPath, 'pB') === 'complete',
+      '#802-D7-KEYLESS: both members completed');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-POST-COMMIT-FENCE-DISCLOSES-HEAD — THE ONE HALT THAT IS NOT ZERO-MUTATION. Steps 1-3 of
+  //   the repair halt before or without a landed commit; the step-4 RE-FENCE halts AFTER the checkpoint
+  //   commit is already in history. Reporting that as a bare `seam_checkpoint_failed` told the caller
+  //   "the operation refused" over a tree whose HEAD had moved — contradicting the design, the in-code
+  //   contract, the ADR and the operator hint, all of which claimed zero mutation.
+  //   Driven end-to-end through the REAL open-ready over a REAL repo. The concurrent writer is modelled
+  //   by a `post-commit` hook (git ignores its exit status, so the checkpoint commit lands normally and
+  //   only the RE-fence sees the new bytes) — the same shape as a real writer landing a file between
+  //   the two fence spawns.
+  //   RED (pre-fix): result refuse / seam_checkpoint_failed with NO `commit` field, while HEAD advanced
+  //     and a kaola-checkpoint commit exists.
+  //   GREEN: the refusal carries `commit` (= the new HEAD) and `committed` (the paths), and the operator
+  //     hint says HEAD advanced and names the commit. Still a HALT: no lane group, no running set, the
+  //     ledger untouched — and the concurrent writer's bytes are NOT destroyed (no auto-rollback).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ postCommitWriter: true });
+    const before = headSha(repoRoot);
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    const after = headSha(repoRoot);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-POST-FENCE: the re-fence failure is the typed halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(typeof r.detail === 'string' && r.detail.indexOf('post_commit_fence:') === 0,
+      '#802-POST-FENCE: the halt names the POST-COMMIT fence (not a step-3 git failure), got ' + JSON.stringify(r.detail));
+    // The fixture really did advance HEAD — without this the disclosure below would be untested.
+    assert(after !== before && seamCommitCount(repoRoot) === 1,
+      '#802-POST-FENCE precondition: the checkpoint commit LANDED and HEAD advanced, got ' + JSON.stringify({ before, after, subjects: gitSubjects(repoRoot) }));
+    // THE PIN: the refusal discloses the mutation it left behind.
+    assert(r.commit === after,
+      '#802-POST-FENCE: the refusal carries the LANDED commit (the advanced HEAD), got ' + JSON.stringify({ commit: r.commit, head: after }));
+    assert(Array.isArray(r.committed) && JSON.stringify(r.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-POST-FENCE: the refusal names what went into that commit, got ' + JSON.stringify(r.committed));
+    assert(typeof r.operator_hint === 'string' && /HEAD HAS ADVANCED/.test(r.operator_hint) && r.operator_hint.indexOf(after) !== -1,
+      '#802-POST-FENCE: the operator hint says HEAD advanced and names the commit, got ' + JSON.stringify(r.operator_hint));
+    // Still a HALT, and still no rollback: the concurrent writer's bytes survive.
+    assert(!r.laneGroup && !readRS(cacheDir),
+      '#802-POST-FENCE: no lane group and no running set — the frontier did NOT open, got ' + JSON.stringify({ laneGroup: r.laneGroup, rs: readRS(cacheDir) }));
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-POST-FENCE: the ledger is untouched');
+    assert(fs.existsSync(path.join(repoRoot, 'concurrent.js')),
+      '#802-POST-FENCE: the concurrent writer\'s bytes were NOT auto-reset away — disclosure, not silent data loss');
+    assert(execFileSync('git', ['-C', repoRoot, 'cat-file', '-p', after + ':src/serial_a.js'], { encoding: 'utf8' }).length > 0,
+      '#802-POST-FENCE: the attributed serial path really is inside the disclosed commit');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-ATTRIBUTION-WRITE-CAPABLE — ATTRIBUTION IS A GATE ON A PRIMITIVE THAT COMMITS, so it
+  //   enforces its OWN stated contract ("every dirty path must be vouched for by a CLOSED WRITE-CAPABLE
+  //   row") instead of inheriting it from the freeze validator. Accepting any `complete` row with a
+  //   non-empty declared set let a read-only role's stray declaration vouch for production bytes.
+  //   RED (pre-fix): a `complete` code-reviewer row declaring src/reviewer-owned.js put that path in the
+  //     attributed union, and runSeamCheckpoint reported committed:["src/reviewer-owned.js"].
+  //   GREEN: the read-only row contributes nothing (not to the union, not to nodeIds), the write-capable
+  //     sibling still does, and a dirty path vouched for only by the read-only row is a loud
+  //     seam_checkpoint_unattributable halt.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const planText = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| rv   | code-reviewer | —  | src/reviewer-owned.js | 1 | sequence |',
+      '| ex   | code-explorer | —  | src/explorer-owned.js | 1 | sequence |',
+      '| impl | implementer   | rv | src/impl-owned.js     | 1 | sequence |',
+      '| pA   | tdd-guide     | impl | par_a.js            | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| rv | complete |', '| ex | complete |', '| impl | complete |', '| pA | pending |', '',
+    ].join('\n') + '\n';
+    const a = nodeMod.seamCheckpointAttribution(planText, '/p/workflow-plan.md');
+    assert(a.ok === true, '#802-WRITE-CAPABLE: attribution resolves, got ' + JSON.stringify(a));
+    assert(!a.union.has('src/reviewer-owned.js') && !a.nodeIds.includes('rv'),
+      '#802-WRITE-CAPABLE: a COMPLETE read-only (code-reviewer) row vouches for NOTHING, got ' + JSON.stringify({ union: [...a.union], nodeIds: a.nodeIds }));
+    assert(!a.union.has('src/explorer-owned.js') && !a.nodeIds.includes('ex'),
+      '#802-WRITE-CAPABLE: the same holds for a read-PRODUCER role, got ' + JSON.stringify({ union: [...a.union], nodeIds: a.nodeIds }));
+    assert(a.union.has('src/impl-owned.js') && a.nodeIds.includes('impl'),
+      '#802-WRITE-CAPABLE: a write-capable role\'s CLOSED row still attributes normally, got ' + JSON.stringify({ union: [...a.union], nodeIds: a.nodeIds }));
+    // End-to-end: dirt vouched for ONLY by the read-only row is a loud halt, never a commit. The fence is
+    // stubbed (the halt lands at step 2, before any git write) so this needs no repo.
+    const fenceShell = () => ({ exitCode: 1, result: 'refuse', reason: 'parent_dirty', dirty: ['src/reviewer-owned.js'] });
+    const out = nodeMod.runSeamCheckpoint('/p/workflow-plan.md', 'test-project', fenceShell, () => planText);
+    assert(out.ok === false && out.reason === 'seam_checkpoint_unattributable',
+      '#802-WRITE-CAPABLE: the repair refuses to vouch for a read-only row\'s declaration, got ' + JSON.stringify(out));
+    assert(Array.isArray(out.unattributed) && out.unattributed.includes('src/reviewer-owned.js'),
+      '#802-WRITE-CAPABLE: the halt names the path it would have wrongly committed, got ' + JSON.stringify(out.unattributed));
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-WRITE-CAPABLE-ROLES-DRIFT — the write-capability list is a RESTATEMENT of the validator's
+  //   own authoring rule ("a role outside WRITE_ROLES, other than the sink role, may not declare a write
+  //   set"), because the validator does not export WRITE_ROLES. A restatement is only safe while it is
+  //   mutation-proven, so this pin reads the validator's SOURCE and asserts set equality: adding a role
+  //   to WRITE_ROLES without adding it here (or vice versa) turns this RED. It also asserts the anchors
+  //   it reads still exist, so the pin can never pass vacuously by failing to find them.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const src = fs.readFileSync(path.join(__dirname, 'kaola-workflow-plan-validator.js'), 'utf8');
+    const m = src.match(/const WRITE_ROLES = new Set\(\[([^\]]*)\]\);/);
+    assert(m, '#802-ROLES-DRIFT: the validator still declares `const WRITE_ROLES = new Set([...]);` — the anchor this pin reads');
+    const tm = src.match(/const TERMINAL_ROLE = '([^']+)';/);
+    assert(tm, '#802-ROLES-DRIFT: the validator still declares `const TERMINAL_ROLE = \'...\';` — the sink-role anchor');
+    const rule = src.match(/if \(n\.role !== TERMINAL_ROLE && !WRITE_ROLES\.has\(n\.role\) && n\.writeSet\.size\)/);
+    assert(rule, '#802-ROLES-DRIFT: the validator still refuses a write set on a role outside WRITE_ROLES ∪ {TERMINAL_ROLE} — the RULE this list restates');
+    const expected = m[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+      .concat([tm[1]]).sort();
+    const actual = [...nodeMod.SEAM_WRITE_CAPABLE_ROLES].sort();
+    assert(JSON.stringify(actual) === JSON.stringify(expected),
+      '#802-ROLES-DRIFT: SEAM_WRITE_CAPABLE_ROLES equals the validator\'s WRITE_ROLES ∪ {TERMINAL_ROLE}, got ' + JSON.stringify({ actual, expected }));
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-LIVE-SCRATCH-GATES-FAIL-CLOSED — the drain-site READ precondition quantifies over every live
+  //   MEMBER, not over the read subset. Filtering to kind:'read' and separately rejecting kind:'gate'
+  //   made a live kind:'write' member INVISIBLE, so the predicate answered TRUE for a running set
+  //   containing one — i.e. the checkpoint could have swept a LIVE writer's in-flight bytes into a
+  //   commit attributed to CLOSED nodes. Unreachable behind the callers' earlier guards today, so this
+  //   is the defensive floor the docstring promises, pinned on the predicate itself.
+  //   RED (pre-fix): liveReadsAllScratchGates([{id:'g1',kind:'read'},{id:'w9',kind:'write'}], …) === true.
+  //   GREEN: ANY non-read member ⇒ false; the all-scratch-reads control still ⇒ true.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| g1 | adversarial-verifier | — | —          | 1 | sequence | scratch |',
+      '| g2 | adversarial-verifier | — | —          | 1 | sequence | scratch |',
+      '| gx | code-reviewer        | — | —          | 1 | sequence | —       |',
+      '| w9 | doc-updater          | — | docs/x.md  | 1 | sequence | —       |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| g1 | in_progress |', '| g2 | in_progress |', '| gx | pending |', '| w9 | pending |', '',
+    ].join('\n') + '\n';
+    const rf = () => plan;
+    const P = '/p/workflow-plan.md';
+    // Control: every live member IS a scratch-observation read ⇒ the repair may be attempted.
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'g2', kind: 'read' }], P, rf) === true,
+      '#802-SCRATCH-FAIL-CLOSED (control): an all-scratch-read running set still qualifies');
+    // RED→GREEN: a live WRITE member is no longer invisible.
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'w9', kind: 'write' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a live WRITE member fails the precondition closed');
+    // The pre-existing gate rejection still holds, and now so does anything else.
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'gx', kind: 'gate' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a live main-session gate still fails closed');
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'g2' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a member with NO kind fails closed (unrecognized ⇒ not a read)');
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, null], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a malformed member fails closed');
+    // A non-scratch read is still rejected (the role/annotation half of the predicate is untouched).
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'gx', kind: 'read' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: an un-annotated read gate still fails the precondition');
+    assert(nodeMod.liveReadsAllScratchGates([], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: an EMPTY running set is not a qualifying observer set');
+  });
 
   // -------------------------------------------------------------------------
   // #616-PLAIN-SERIAL-DEGRADE (D-616-01) — the ORDINARY single-write serial degrade (unrelated to
@@ -13302,7 +14658,7 @@ function rtHarness(initialFiles, opts) {
   //     which is why it is verified alongside (not instead of) the positive #616 case above.
   //   GREEN (post-fix): serialDegradeReason is present (positive case) XOR absent-or-non-parent_dirty here.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const { repoRoot } = makeLaneRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 1,
@@ -13310,7 +14666,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.serialDegradeReason !== 'parent_dirty',
       '#616-PLAIN-SERIAL-DEGRADE: an ordinary serial-write choice (clean parent, kill-switch forced) must NOT carry serialDegradeReason:"parent_dirty", got ' + JSON.stringify(r.serialDegradeReason));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #622-MIXED-READ-COOPEN-AND-MERGE-FENCE (D-622-01) — a REAL end-to-end proof of BOTH #622 halves:
@@ -13326,7 +14682,7 @@ function rtHarness(initialFiles, opts) {
   // member, is still live) -> review (code-reviewer, depends on A,B,probe — satisfies the G1
   // post-dominance requirement without gating probe's early readiness) -> finalize.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     function make622Repo() {
       const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd622-mixed-'));
       const project = 'test-project';
@@ -13394,7 +14750,10 @@ function rtHarness(initialFiles, opts) {
     const expectedAPath = path.join(legA, 'kaola-workflow', 'test-project', '.cache', 'A.md');
     const upstreamA = open2.opened[0].dispatch && open2.opened[0].dispatch.upstream_evidence
       && open2.opened[0].dispatch.upstream_evidence.find(e => e.node_id === 'A');
-    assert(upstreamA && upstreamA.path === expectedAPath && fs.readFileSync(upstreamA.path, 'utf8').includes('GREEN:'),
+    // The needle proves the read sees A's FULL written body, not the open-time stub. `red_baseline`
+    // with a NON-EMPTY value is exactly that discriminator under test custody: the seed writes the
+    // key with an empty value, so only the test author's own write can satisfy `\S`.
+    assert(upstreamA && upstreamA.path === expectedAPath && /^red_baseline:[ \t]*\S/m.test(fs.readFileSync(upstreamA.path, 'utf8')),
       '#622-MIXED: dependent read points to A\'s full live leg evidence before group merge, got ' + JSON.stringify(upstreamA));
     assert(ledgerStatus(planPath, 'probe') === 'in_progress', '#622-MIXED: probe ledger flipped in_progress');
     const rsAfterProbeOpen = readRS(cacheDir);
@@ -13430,7 +14789,7 @@ function rtHarness(initialFiles, opts) {
     const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
     assert(headTree.includes('ax622.js') && headTree.includes('by622.js'), '#622-MIXED: both in-lane files reach HEAD after the drained merge, got ' + JSON.stringify(headTree.split('\n').filter(Boolean)));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // #633-SELF-WRITTEN-LEG-EVIDENCE-MERGE (D-622-01) — the lane-group synthesizer octopus-merge
@@ -13444,14 +14803,14 @@ function rtHarness(initialFiles, opts) {
   // TRACKED on the parent BEFORE the legs branch off, and the close-side evidence read prefers each
   // leg's own copy), the last-member close reaches barrier:'group_passed' with NO manual intervention.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     function selfWriteEvidenceInLeg(legPath, cacheDir, id) {
       const legCacheDir = path.join(legPath, 'kaola-workflow', 'test-project', '.cache');
       fs.mkdirSync(legCacheDir, { recursive: true });
       let nonce = '';
       try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
       fs.writeFileSync(path.join(legCacheDir, id + '.md'),
-        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' — AssertionError: expected throw (pre-impl)\nGREEN: test_' + id + ' passes; 1/1 assertions green\n');
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' — AssertionError: expected throw (pre-impl)\nred_baseline: ' + nonce + '\n');
     }
 
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
@@ -13506,7 +14865,7 @@ function rtHarness(initialFiles, opts) {
     const wts = worktreePaths(repoRoot);
     assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), '#633: leg worktrees torn down on clean completion, got ' + JSON.stringify(wts));
     cleanup(repoRoot);
-  }
+  });
 
   // -------------------------------------------------------------------------
   // R4-REGRESSION (adversarial-verifier finding, repair pass on the #622 fix) — the #622 relaxation
@@ -13529,7 +14888,7 @@ function rtHarness(initialFiles, opts) {
   // (verdict: pass) and B's group drains and merges normally, W2 opens through the ordinary (non-
   // speculative) path, proving the fix costs no real parallelism — only the racy overwrite is removed.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     function makeR4Repo() {
       const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd622-r4-'));
       const project = 'test-project';
@@ -13650,14 +15009,14 @@ function rtHarness(initialFiles, opts) {
       'R4-REGRESSION: W2 opens normally (non-speculatively) once gateR is complete, got ' + JSON.stringify(open4));
 
     cleanup(repoRoot);
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
 // #434 Fixture (a) — revert-overflow: runRevertOverflow clears outOfAllow paths.
 // RED: fails because runRevertOverflow is not yet exported.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| impl | implementer | — | scripts/a.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -13717,13 +15076,13 @@ function rtHarness(initialFiles, opts) {
     '#434-a: result.revertedPaths includes scripts/b.js, got ' + JSON.stringify(result));
   assert(result.barrierClearedAfterRevert === true,
     '#434-a: barrierClearedAfterRevert true after revert, got ' + JSON.stringify(result));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #434 Fixture (b) — repair-node: runRepairNode reopens writer with ORIGINAL barrier-base.
 // RED: fails because runRepairNode is not yet exported.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| impl | implementer | — | scripts/a.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -13807,7 +15166,7 @@ function rtHarness(initialFiles, opts) {
   });
   assert(refuseResult && refuseResult.result === 'refuse',
     '#434-b: repair-node refuses on a complete node (no writer+reviewer in_progress pair), got ' + JSON.stringify(refuseResult));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #664: repair-node MIXED-shape group fold — a writer repair downstream of a COMPLETED
@@ -13818,7 +15177,7 @@ function rtHarness(initialFiles, opts) {
 // reviewer's evidence is retained as the repair brief (unchanged non-group behavior, #434-b).
 // This is the repair-path twin of #658 (which fixed only reopen-node's collective fold).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes664 = [
     '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| av-a | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
@@ -13903,7 +15262,7 @@ function rtHarness(initialFiles, opts) {
     '#664: a mid-vote (in_progress) group is NOT collectively folded — would_orphan_in_progress refusal preserved UNCHANGED, got ' + JSON.stringify(resultMidVote));
   assert(resultMidVote.inProgress && resultMidVote.inProgress.includes('av-a'),
     '#664: the mid-vote member (av-a) is reported as the orphan, got ' + JSON.stringify(resultMidVote));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #665 R2: repair-node's (4c) fan-out receipt purge deduped by LABEL ONLY (group.group), but the
@@ -13913,7 +15272,7 @@ function rtHarness(initialFiles, opts) {
 // gated off av-a{1,2}) — both COMPLETE, both post-dominating the writer through the #664 collective
 // fold — must purge BOTH groups' receipts, not just the first one encountered.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes665 = [
     '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| av-a1 | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
@@ -13963,7 +15322,7 @@ function rtHarness(initialFiles, opts) {
     '#665 R2: result.evidenceRemoved names all four member receipts, got ' + JSON.stringify(result665.evidenceRemoved));
   assert(!removed665.includes('review.md'),
     '#665 R2: the singleton reviewer evidence is retained as the repair brief (unchanged non-group behavior), got removed=' + JSON.stringify(removed665));
-}
+});
 
 // ---------------------------------------------------------------------------
 // #665 R1: repair-node's LEGACY (role-prefix, cardinality>1) fan-out receipt purge branch is wired
@@ -13974,7 +15333,7 @@ function rtHarness(initialFiles, opts) {
 // the function body — a direct call with a hand-supplied `readdir` would pass even with the CLI
 // dispatch left broken.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { execFileSync: exec665r1 } = require('child_process');
   const NODE_CLI_665R1 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
 
@@ -14034,14 +15393,14 @@ function rtHarness(initialFiles, opts) {
     '#665 R1 superseded: missing attempt id preserves downstream baseline bytes');
 
   try { fs.rmSync(repoRoot665r1, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // #434 Fixture (c) — requires_redispatch: orient emits requires_redispatch when
 // an in_progress node has absent/incomplete evidence.
 // RED: fails because orient does not yet emit requires_redispatch.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planNodes = [
     '| impl | implementer | — | scripts/a.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -14094,12 +15453,12 @@ function rtHarness(initialFiles, opts) {
   assert(orientPresent.result === 'ok', '#434-c: orient ok with present evidence');
   assert(!orientPresent.requires_redispatch,
     '#434-c: orient does NOT set requires_redispatch when evidence present, got ' + JSON.stringify(orientPresent));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-440-A: write-halt with barrierOut carries triage.class in result (#440)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -14146,13 +15505,13 @@ function rtHarness(initialFiles, opts) {
     'T-440-A: proposed_repair.paths is an array');
   assert(result440a.triage.proposed_repair.kind === 'revert_overflow',
     'T-440-A: proposed_repair.kind === revert_overflow for write_set_overflow, got ' + result440a.triage.proposed_repair.kind);
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-440-B: barrier_failed envelope carries triage (#440)
 // close-and-open-next barrier failure → refuse with triage
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan440b = makePlan(
     [
       '| impl-core | in_progress | |',
@@ -14211,12 +15570,12 @@ function rtHarness(initialFiles, opts) {
     'T-440-B: barrier envelope carries triage, got ' + JSON.stringify(result440b.triage));
   assert(typeof result440b.triage.class === 'string',
     'T-440-B: triage.class is a string, got ' + JSON.stringify(result440b.triage));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-440-C: unknown barrier reason degrades to class: 'unclassified' (#440)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan440c = makePlan([
     '| impl-core | in_progress | |',
     '| impl-other | pending | |',
@@ -14257,12 +15616,12 @@ function rtHarness(initialFiles, opts) {
     'T-440-C: triage present even for unknown reason');
   assert(result440c.triage.class === 'unclassified',
     'T-440-C: triage.class === unclassified for unknown reason, got ' + JSON.stringify(result440c.triage));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-440-D: computeTriage — known subtype labels (#440)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // lockfile_write: barrierOut with that reason
   const triageLock = computeTriage(
     { result: 'refuse', reason: 'lockfile_write', outOfAllow: ['package-lock.json'] },
@@ -14295,7 +15654,7 @@ function rtHarness(initialFiles, opts) {
   // null barrierOut → unclassified without throwing
   const triageNull = computeTriage(null, '/fake/.cache', 'impl-core', () => {});
   assert(triageNull.class === 'unclassified', 'T-440-D: null barrierOut → unclassified');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-445/446 table-driven: operator_hint, route-findings, --summary (#445/#446)
@@ -14306,7 +15665,7 @@ function rtHarness(initialFiles, opts) {
 //   Each entry: { reason, ctx, wantHintSubstring }
 //   The decorated envelope must carry operator_hint that contains wantHintSubstring.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const cases = [
     { reason: 'plan_missing',       ctx: {},                              wantHintSubstring: 'workflow-plan.md' },
     { reason: 'barrier_failed',     ctx: { nodeId: 'impl-x' },           wantHintSubstring: 'impl-x' },
@@ -14328,25 +15687,25 @@ function rtHarness(initialFiles, opts) {
       'T-445-A[' + tc.reason + ']: hint contains "' + tc.wantHintSubstring + '", got: ' + decorated.operator_hint
     );
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-445-B: decorateOperatorHint — must NOT mutate a success envelope (result: ok)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const ok = { result: 'ok', nodeId: 'n1' };
   const out = decorateOperatorHint(ok);
   assert(out.operator_hint === undefined, 'T-445-B: success envelope must NOT gain operator_hint');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-445-C: decorateOperatorHint — idempotent: never overwrites an existing hint
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const env = { result: 'refuse', reason: 'halt_pending', operator_hint: 'custom-hint-do-not-overwrite' };
   const out = decorateOperatorHint(env);
   assert(out.operator_hint === 'custom-hint-do-not-overwrite', 'T-445-C: existing operator_hint must not be overwritten');
-}
+});
 
 // ===========================================================================
 // #593-V: validator --parallel-safe coarse relaxation net — pins writeOverlapRelaxable's coarse arm
@@ -14356,7 +15715,7 @@ function rtHarness(initialFiles, opts) {
 //   policy/consent-vestigial invariant. (The shared-infra + OLD-coarse validator net lives in
 //   test-commit-node.js; #593's coarse-default-relax + resolvability fallback are pinned HERE.)
 // ===========================================================================
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-593-ps-'));
@@ -14472,24 +15831,24 @@ function rtHarness(initialFiles, opts) {
     assert(rConsent.result === 'ok' && (rConsent.relaxed || []).some(x => x.kind === 'coarse'), '#593-V-VESTIGIAL: coarse relaxes identically with policy:coarse + consent, got ' + JSON.stringify(rConsent));
   }
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-445-D: getOperatorHint — unknown reason falls back to a non-empty generic string
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const hint = getOperatorHint('some_completely_unknown_reason_xyz', {});
   assert(typeof hint === 'string' && hint.length > 0, 'T-445-D: unknown reason produces a non-empty fallback hint');
   assert(hint.includes('some_completely_unknown_reason_xyz') || hint.includes('orient'),
     'T-445-D: fallback hint contains reason or "orient": ' + hint);
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-445-E: OPERATOR_HINT_REGISTRY coverage — every reason that adaptive-node
 //   emits (refuse with reason) has a registered template (not the generic fallback).
 //   This is a table of known reasons asserted present in the registry.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const knownReasons = [
     'plan_missing', 'plan_not_mirrored', 'plan_integrity_failed', 'halt_pending',
     'serial_node_live', 'scheduler_active',
@@ -14508,14 +15867,14 @@ function rtHarness(initialFiles, opts) {
       'T-445-E: OPERATOR_HINT_REGISTRY[' + r + '] must be a function (template registered)'
     );
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-446-A: parseFindingLine — table-driven (#446)
 //   Covers em-dash separator, hyphen separator, security keyword, n/a status,
 //   and missing-file (no path-like token) shapes.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const pfCases = [
     {
       line: 'finding: F1 — scripts/foo.js — missing validation',
@@ -14555,12 +15914,12 @@ function rtHarness(initialFiles, opts) {
       assert(r.securityFlag === tc.wantSecurity, 'T-446-A[' + tc.wantId + ']: securityFlag, got ' + r.securityFlag);
     }
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-446-B: resolveOwningNode — table of nodes + file → expected owning id
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const nodes = [
     { id: 'impl-a', declared_write_set: 'scripts/foo.js' },
     { id: 'impl-b', declared_write_set: 'scripts/bar.js scripts/baz.js' },
@@ -14582,14 +15941,14 @@ function rtHarness(initialFiles, opts) {
       'T-446-B[' + tc.file + ']: resolveOwningNode → ' + tc.wantNode + ', got ' + got
     );
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-446-C: runRouteFindings — pure-fn with injected readFile/writeFile (#446)
 //   Exercises the fix_role precedence: security → 'security-reviewer',
 //   owned file → 'implementer', unowned → 'code-reviewer'.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const planContent446c = makePlan([
     '| impl-core | in_progress | |',
     '| review    | pending | |',
@@ -14652,12 +16011,12 @@ function rtHarness(initialFiles, opts) {
     assert(Array.isArray(parsed446c) && parsed446c.length === 3,
       'T-446-C: written JSON is an array of 3, got ' + parsed446c.length);
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-446-D: runRouteFindings — evidence_absent refuse when evidence file is missing
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const r446d = runRouteFindings({
     nodeId: 'review',
     planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
@@ -14669,7 +16028,7 @@ function rtHarness(initialFiles, opts) {
   assert(r446d.result === 'refuse', 'T-446-D: missing evidence → refuse');
   assert(r446d.reason === 'evidence_absent', 'T-446-D: reason=evidence_absent, got ' + r446d.reason);
   assert(r446d.nodeId === 'review', 'T-446-D: nodeId echoed in refusal');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-446-E: --summary mode — subprocess test (real CLI invocation in $TMPDIR)
@@ -14678,7 +16037,7 @@ function rtHarness(initialFiles, opts) {
 //     (a) stdout is exactly ONE line starting with "summary: "
 //     (b) .cache/orient-envelope.json is written (full envelope cache)
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const ADAPTIVE_NODE = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
 
@@ -14721,7 +16080,7 @@ function rtHarness(initialFiles, opts) {
   } finally {
     try { fs.rmSync(tmpRoot446e, { recursive: true, force: true }); } catch (_) {}
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // T-446-F: route-findings subprocess — recognized subcommand (real CLI) (#446)
@@ -14730,7 +16089,7 @@ function rtHarness(initialFiles, opts) {
 //   with the findings array. With no evidence file, it refuses evidence_absent
 //   (NOT unknown subcommand — proving route-findings is a recognized subcommand).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const ADAPTIVE_NODE = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
 
@@ -14798,12 +16157,12 @@ function rtHarness(initialFiles, opts) {
   } finally {
     try { fs.rmSync(tmpRoot446f, { recursive: true, force: true }); } catch (_) {}
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // D451-DISPATCH-EFFORT: buildDispatch includes agent_type and dispatchEffort fields
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // Case 1: opus model → xhigh effort
   const opusNode = { id: 'n1-planner', role: 'code-reviewer', model: 'opus', declared_write_set: 'scripts/foo.js' };
   const opusCtx = {
@@ -14928,14 +16287,14 @@ function rtHarness(initialFiles, opts) {
   } finally {
     if (savedEnv === undefined) delete process.env[ENV_KEY]; else process.env[ENV_KEY] = savedEnv;
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // TIER-RENAME (#610) + ENVELOPE-DISPLAY (#609): buildDispatch carries a runtime-native
 // model_display alongside the raw tier, NEUTRAL tokens dispatch identically to their legacy
 // aliases (back-compat), and an untiered node omits the display while carrying null Codex overrides.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const ctx = { nonce: 'n', evidence_file: '.cache/x.md', required_tokens: ['evidence-binding'], working_dir: '/w', forge_rider: null };
   const mk = model => buildDispatch({ id: 'nX', role: 'code-reviewer', model, declared_write_set: 'scripts/x.js' }, ctx);
 
@@ -14978,7 +16337,7 @@ function rtHarness(initialFiles, opts) {
   assert(!('model_display' in dNone), 'ENVELOPE-DISPLAY: untiered node carries no model_display key');
   assert(dNone.codex_model === null, 'TIER-RENAME: untiered node keeps the unresolved role_default model sentinel');
   assert(dNone.codex_reasoning_effort === null, 'TIER-RENAME: untiered node still role_default effort');
-}
+});
 
 // ===========================================================================
 // #466 — worktree-authority split guard. The adaptive lifecycle resolves the
@@ -14993,7 +16352,7 @@ function rtHarness(initialFiles, opts) {
 // REAL git repo (the guard reads git + fs — a direct-call test would be a
 // false-green per the #292 io-shim trap).
 // ===========================================================================
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const NODE_CLI_466 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR_466 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -15168,7 +16527,7 @@ function rtHarness(initialFiles, opts) {
     }
     rm466(repoRoot);
   }
-}
+});
 
 // ===========================================================================
 // #439 (D-419 Part 4) — speculative-READ kernel runtime. open-ready --speculative-consent opens a
@@ -15176,7 +16535,7 @@ function rtHarness(initialFiles, opts) {
 // discard-speculative rolls it back; a gate closing verdict:fail surfaces speculative_review_required.
 // Driven as REAL subprocesses in a REAL git repo (the lifecycle reads git + fs).
 // ===========================================================================
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const NODE_CLI_439 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR_439 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -15478,7 +16837,7 @@ function rtHarness(initialFiles, opts) {
       'T597-4 (AC5): the discard provenance entry records role + gate, got ' + JSON.stringify(discardEntry));
     rm439(repoRoot);
   }
-}
+});
 
 // ===========================================================================
 // #596 (D-596-01) — speculative-WRITE kernel runtime. Extends the #439 speculative-READ kernel to
@@ -15495,7 +16854,7 @@ function rtHarness(initialFiles, opts) {
 // gate1 (upstream of writerW) does not satisfy that for writerW itself (design: "the gate it speculates
 // past is its ancestor; its own reviewer is downstream and unaffected").
 // ===========================================================================
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const NODE_CLI_596 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR_596 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -16058,7 +17417,7 @@ function rtHarness(initialFiles, opts) {
       'T615-SPEC: writerW ledger row stays pending (waits for gate1 normally), got ' + ledgerStatus596(planPath, 'writerW'));
     rm596(repoRoot);
   }
-}
+});
 
 // ===========================================================================
 // #472 (dispatch fidelity): open-next does NOT silently single-open an INDEPENDENT ≥2 frontier — it
@@ -16066,7 +17425,7 @@ function rtHarness(initialFiles, opts) {
 // stays serial (width is the planner's call — no forced minimum). deriveMaxSimultaneousOpen proves
 // everConcurrent from the durable opened/closed telemetry.
 // ===========================================================================
-{
+scenario(() => {
   // T472-DIVERT: auto-pick open-next at a ≥2 independent read frontier → enterBatch (no single-open).
   {
     let planContent = makePlan(['| a | pending | |', '| b | pending | |', '| review | pending | |', '| finalize | pending | |']);
@@ -16158,7 +17517,7 @@ function rtHarness(initialFiles, opts) {
     ].join('\n') + '\n';
     assert(deriveMaxSimultaneousOpen(wide).maxSimultaneousOpen === 3, 'T472-TELEMETRY: 3 distinct concurrent opens (none closed) → max 3');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #558: runOrient SURFACES dispatchFidelity (everConcurrent / maxSimultaneousOpen) from the durable
@@ -16166,7 +17525,7 @@ function rtHarness(initialFiles, opts) {
 // close-criterion), not only via a hand-run probe. Additive field + fail-closed (absent telemetry →
 // zeroed trace, never a refuse — telemetry must never block a lifecycle transition).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan([
     '| impl-core | complete | |',
     '| impl-other | complete | |',
@@ -16215,7 +17574,7 @@ function rtHarness(initialFiles, opts) {
   const ra = orientWithTimings(null);
   assert(ra.result === 'ok' && ra.dispatchFidelity && ra.dispatchFidelity.everConcurrent === false && ra.dispatchFidelity.maxSimultaneousOpen === 0,
     '#558: absent node-timings → zeroed dispatchFidelity, orient still ok (telemetry never blocks), got ' + JSON.stringify(ra.dispatchFidelity));
-}
+});
 
 // ===========================================================================
 // #590 — serial open-next records the per-node baseline BEFORE flipping the ledger
@@ -16225,7 +17584,7 @@ function rtHarness(initialFiles, opts) {
 // dead-ends baseline_missing). GREEN (baseline-first): a baseline failure leaves the ledger
 // PENDING — a clean idempotent re-open, no in_progress-without-baseline state.
 // ===========================================================================
-{
+scenario(() => {
   // -- T-590-order-fail: baseline FAILS → NO ledger flip write; refuse baseline_failed; row pending. --
   {
     const plan = makePlan([
@@ -16316,7 +17675,7 @@ function rtHarness(initialFiles, opts) {
     assert(sawPlanWrite === true && /\|\s*impl-core\s*\|\s*in_progress\s*\|/.test(planContent),
       'T-590-order-ok: ledger flipped in_progress AFTER the baseline');
   }
-}
+});
 
 // ===========================================================================
 // #621 — the #590 baseline-first ordering was applied to runOpenNext but NOT mirrored in
@@ -16327,7 +17686,7 @@ function rtHarness(initialFiles, opts) {
 // baseline failure leaves that row PENDING — a clean re-open/retry, never an
 // in_progress-without-baseline strand.
 // ===========================================================================
-{
+scenario(() => {
   // -- T-621-fused-fail: fused advance — baseline FAILS for the NEXT node → NO ledger flip
   //    write for it; refuse baseline_failed; the CLOSE half (impl-core→complete) is preserved. --
   {
@@ -16501,7 +17860,7 @@ function rtHarness(initialFiles, opts) {
     assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent),
       'T-621-reopen: retry flips impl in_progress once the baseline succeeds');
   }
-}
+});
 
 // ===========================================================================
 // #585 — scheduler mutual-exclusion lock. A project-scoped O_EXCL lockfile
@@ -16516,7 +17875,7 @@ function rtHarness(initialFiles, opts) {
 
 // -- T-585-stale (unit): isStaleLock — same-host dead pid → stale; same-host live pid → not stale;
 //    cross-host old ts → stale (age fallback); cross-host fresh ts → not stale; corrupt → stale. --
-{
+scenario(() => {
   const DEAD_PID = 2147483646; // above any real pid on this box → process.kill(pid,0) throws ESRCH
   assert(isStaleLock({ pid: DEAD_PID, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }) === true,
     'T-585-stale: same-host DEAD pid → stale');
@@ -16527,14 +17886,14 @@ function rtHarness(initialFiles, opts) {
   assert(isStaleLock({ pid: 1234, host: 'ghost-host-' + Math.random().toString(16).slice(2), ts: Date.now() }) === false,
     'T-585-stale: cross-host FRESH ts → not stale (age fallback)');
   assert(isStaleLock(null) === true, 'T-585-stale: null/corrupt holder → stale');
-}
+});
 
 // -- T-585-acquire / T-585-release (unit): O_EXCL claim, live-holder refuse, idempotent release,
 //    dead-holder typed STALE refusal — driven directly against a real lockfile under $TMPDIR.
 //    NOTE: acquireProjectLock NEVER unlinks another process's lock (an unlink-based takeover
 //    double-acquires under concurrency — two takers holding the same stale decision both claim
 //    after the other's unlink); a dead holder is CLASSIFIED stale:true and refused. --
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lock585-unit-'));
   const lockPath = path.join(tmp, '.cache', SCHEDULER_LOCK_NAME);
   // (a) clean acquire → ok + file present carrying our payload.
@@ -16564,7 +17923,7 @@ function rtHarness(initialFiles, opts) {
   assert(a3.holder && a3.holder.pid === 2147483646, 'T-585-stale-refuse(unit): refusal carries the dead holder payload');
   assert(fs.readFileSync(lockPath, 'utf8') === deadPayload, 'T-585-stale-refuse(unit): the stale lockfile is byte-untouched (never a non-holder unlink)');
   fs.rmSync(tmp, { recursive: true, force: true });
-}
+});
 
 // -- T-595-orphan (unit, fault-injection): a payload write that throws right after the O_EXCL create
 //    must NOT orphan an empty lockfile. Monkey-patches fs.writeFileSync to fail exactly once (after the
@@ -16572,7 +17931,7 @@ function rtHarness(initialFiles, opts) {
 //    non-EEXIST error. No-takeover invariant: the unlink this exercises can only ever run inside the
 //    SAME call that just created the file via 'wx' (the fault is injected on our own write, not a
 //    foreign holder's) — it can never remove another process's lock. --
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lock595-unit-'));
   const lockPath = path.join(tmp, '.cache', SCHEDULER_LOCK_NAME);
   const origWriteFileSync = fs.writeFileSync;
@@ -16602,13 +17961,13 @@ function rtHarness(initialFiles, opts) {
   follow.release();
   assert(!fs.existsSync(lockPath), 'T-595-orphan: follow-up release cleans up');
   fs.rmSync(tmp, { recursive: true, force: true });
-}
+});
 
 // -- Real-subprocess #585 tests: the lock is enforced in main() (the CLI boundary), so these drive the
 //    real adaptive-node CLI in a real $TMPDIR git repo. The read-frontier fixture (ra code-explorer +
 //    rb knowledge-lookup → finalize) co-opens as a read fan-out (no legs), giving two closeable
 //    in_progress members for the close-node race and a clean pending frontier for the open-ready race. --
-{
+scenario(() => {
   const { execFileSync, spawnSync } = require('child_process');
   const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -16882,7 +18241,7 @@ function rtHarness(initialFiles, opts) {
     assert(everRunningSet === false,
       'T-585-stale-race: no running-set.json written in any trial');
   }
-}
+});
 
 // ===========================================================================
 // CLUSTER T607 — main-session-gate runtime write fence (layers 2+3).
@@ -16893,7 +18252,7 @@ function rtHarness(initialFiles, opts) {
 //   Layer 3: gate evidence requires a column-0 `instrumentation: none | <node-id>`
 //            token; a named node must be a ledger WRITER.
 // ===========================================================================
-{
+scenario(() => {
   // -- Layer 3: evidence-token presence ------------------------------------
   // T607-L3a: verdict present but NO instrumentation token → refuse (shape/instrumentation).
   const rNoInstr = checkEvidenceShape('main-session-gate', 'vgate',
@@ -16941,9 +18300,9 @@ function rtHarness(initialFiles, opts) {
   const rNamedNoLedger = checkEvidenceShape('main-session-gate', 'vgate',
     'verdict: pass\ninstrumentation: probe\n');
   assert(rNamedNoLedger.ok === true, 'T607-L3g: named token without ledgerNodes opt → presence-only pass, got ' + JSON.stringify(rNamedNoLedger));
-}
+});
 
-{
+scenario(() => {
   // -- Layer 2: open-next records a main-session-gate as kind:'gate' --------
   // T607-L2a: open-next of a ready main-session-gate writes running-set.json with a kind:'gate' entry.
   const gatePlan = makePlan([
@@ -16990,9 +18349,9 @@ function rtHarness(initialFiles, opts) {
   assert(r2.result === 'ok' && r2.opened && r2.opened.id === 'impl', 'T607-L2b: open-next opens the serial node');
   const set2b = h2.files[RS_SET_PATH] ? JSON.parse(h2.files[RS_SET_PATH]) : null;
   assert(!set2b || !(set2b.nodes || []).some(n => n.kind === 'gate'), 'T607-L2b: a non-gate serial open records NO gate entry');
-}
+});
 
-{
+scenario(() => {
   // -- Layer 2: fused-advance records a gate ------------------------------
   // T607-L2c: close-and-open-next closing a node whose NEXT node is a main-session-gate records the
   // gate as kind:'gate' during the fused advance (the inline open path, not runOpenNext).
@@ -17025,9 +18384,9 @@ function rtHarness(initialFiles, opts) {
   const set2c = h.files[RS_SET_PATH] ? JSON.parse(h.files[RS_SET_PATH]) : null;
   assert(set2c && (set2c.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'),
     'T607-L2c: fused-advance records the gate as kind:gate, got ' + JSON.stringify(set2c));
-}
+});
 
-{
+scenario(() => {
   // -- Layer 2: close removes the gate; reconcile no-ops on a lone live gate --
   // T607-L2d: close-and-open-next closing the gate removes its running-set entry.
   const plan = makePlan([
@@ -17079,9 +18438,9 @@ function rtHarness(initialFiles, opts) {
   const setE = hE.files[RS_SET_PATH] ? JSON.parse(hE.files[RS_SET_PATH]) : null;
   assert(setE && (setE.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'),
     'T607-L2e: the live gate is preserved by reconcile');
-}
+});
 
-{
+scenario(() => {
   // -- Kind-consumer audit: a live gate does not miscount slot math / write-exclusivity ----
   // T607-KC1: open-ready speculative-read fan-out behind a live gate gets the FULL read cap (the gate
   // does NOT consume a read slot) and liveHasWrite stays false (a gate is not a write).
@@ -17122,7 +18481,7 @@ function rtHarness(initialFiles, opts) {
   const setKC = h.files[RS_SET_PATH] ? JSON.parse(h.files[RS_SET_PATH]) : null;
   assert(setKC && (setKC.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'), 'T607-KC1: the live gate survives the open-ready write (concat, not replace)');
   assert(setKC && (setKC.nodes || []).filter(n => n.speculative).length === 2, 'T607-KC1: both speculative reads recorded');
-}
+});
 
 // ---------------------------------------------------------------------------
 // T611-AC2: Codex join protocol — per-node wait budget on every dispatch card.
@@ -17130,7 +18489,7 @@ function rtHarness(initialFiles, opts) {
 // concrete role-default (20m) when no tier resolves — NEVER null, so a running agent's
 // non-interrupt-before-budget rule always has a number. Planner override rides the tier.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const schema = require('./kaola-workflow-adaptive-schema');
   assert(schema.waitBudgetMinutes('reasoning').wait_budget_minutes === 40
     && schema.waitBudgetMinutes('reasoning').wait_budget_source === 'planner_model',
@@ -17153,7 +18512,7 @@ function rtHarness(initialFiles, opts) {
   const dNone = buildDispatch({ id: 'y', role: 'finalize', model: null, declared_write_set: '—' }, { nonce: 'n', evidence_file: '.cache/y.md' });
   assert(dNone.wait_budget_minutes === 20 && dNone.wait_budget_source === 'role_default',
     'T611-AC2: an untiered card still carries a concrete role-default budget, got ' + JSON.stringify({ b: dNone.wait_budget_minutes, s: dNone.wait_budget_source }));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T611-AC5: typed delegation outcomes in the node evidence contract. An OPTIONAL column-0
@@ -17161,7 +18520,7 @@ function rtHarness(initialFiles, opts) {
 // interrupted_unresponsive, interrupted_obsolete}. ABSENT ⇒ completed (back-compat: existing
 // evidence has no such line and must not red). A PRESENT unknown value is a typed refusal.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const schema = require('./kaola-workflow-adaptive-schema');
   // parse helper: absent ⇒ completed default (found=false); present known ⇒ parsed; unknown ⇒ valid:false.
   assert(schema.parseDelegationOutcome('some evidence\nno token').outcome === 'completed'
@@ -17187,7 +18546,7 @@ function rtHarness(initialFiles, opts) {
   const bad = checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: exploded\nRED\nGREEN');
   assert(bad.ok === false && bad.missingTokenClass === 'delegation_outcome',
     'T611-AC5: unknown delegation_outcome → typed refusal (delegation_outcome), got ' + JSON.stringify(bad));
-}
+});
 
 // ---------------------------------------------------------------------------
 // T611-AC3: reconcile writer kill-safety. A departing (rolled-back / capped-out) WRITER member is a
@@ -17196,7 +18555,7 @@ function rtHarness(initialFiles, opts) {
 // per-writer verdict: `adopt` (changes ⊆ set) or `halt` (stray writes OUTSIDE the set) + the offending
 // paths. Non-destructive: reconcile NEVER auto-deletes; it hands the halt to the orchestrator/consent valve.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // A live stable read member 'a' consumes the single ceiling slot; the opening WRITER 'w' is capped out
   // (budget = ceiling(1) - live(1) = 0) → 'w' is a departing writer that gets reconciled.
   const mkWriterReconcilePlan = () => makePlan(['| a | in_progress | |', '| w | in_progress | |'], [
@@ -17294,7 +18653,7 @@ function rtHarness(initialFiles, opts) {
         'T611-AC3(vi): an explicit clean barrier result:' + okResult + ' → adopt, writerHalt false, got ' + JSON.stringify(r.writerReconciliation[0]));
     }
   }
-}
+});
 
 // ===========================================================================
 // #612 — the run-progress mirror must fail CLOSED on an untrusted (heuristic-resolved) mainRoot.
@@ -17304,7 +18663,7 @@ function rtHarness(initialFiles, opts) {
 // never fabricate a foreign kaola-workflow/<project>/ tree (the leak class). Driven as REAL
 // subprocesses in REAL git repos + linked worktrees under $TMPDIR (the resolution reads git + fs).
 // ===========================================================================
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const NODE_CLI_612 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR_612 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -17405,7 +18764,7 @@ function rtHarness(initialFiles, opts) {
     }
     rm612(main);
   }
-}
+});
 
 // ===========================================================================
 // #641 (D-641-01) — RELAX the read∥write scheduler serialization: a WRITE frontier arriving while
@@ -17423,7 +18782,7 @@ function rtHarness(initialFiles, opts) {
 // typed `serialDegradeReason` label naming the cause. These rows return BEFORE any leg provisioning, so
 // no real git is touched. Shape: a live READ `g` in the running set + a ready WRITE `w` frontier.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // A live read `g` (already in_progress + in the running set) with a ready write `w` → the else-branch
   // (write-only frontier + non-empty running set) that R1 relaxes.
   function rwPlan(writeRows) {
@@ -17526,7 +18885,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R1-E: indeterminate holds, got ' + JSON.stringify({ o: r.opened, reason: r.reason }));
     assert(r.serialDegradeReason === 'parallel_safe_indeterminate', '#641-R1-E: hold labeled serialDegradeReason:parallel_safe_indeterminate, got ' + JSON.stringify(r.serialDegradeReason));
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #641-AC5 SERIAL-FALLBACK BYTE-IDENTITY: with KAOLA_PARALLEL_WRITES=0 + NO running set + a single
@@ -17534,7 +18893,7 @@ function rtHarness(initialFiles, opts) {
 // NO `serialDegradeReason` field (byte-identical to pre-#641; the label is only added on the RELAXED
 // else-branch hold, which the no-running-set path never reaches).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const plan = makePlan(['| w | pending | |'], ['| w | implementer | — | scripts/a.js | 1 | sequence |']);
   const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
     if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'w', role: 'implementer', declared_write_set: 'scripts/a.js' }] };
@@ -17545,7 +18904,7 @@ function rtHarness(initialFiles, opts) {
   assert(r.result === 'ok' && r.kind === 'write' && r.opened.length === 1, '#641-AC5: serial single write open, got ' + JSON.stringify({ kind: r.kind, o: r.opened && r.opened.map(n => n.id) }));
   assert(r.serialDegradeReason === undefined, '#641-AC5: NO serialDegradeReason field on the no-running-set serial path (byte-identical), got ' + JSON.stringify(r.serialDegradeReason));
   assert(!r.laneGroup, '#641-AC5: no lane_group under the serial fallback');
-}
+});
 
 // ---------------------------------------------------------------------------
 // #641-R1 CO-RUN + MERGE FENCE + CRASH-RECONCILE — REAL git subprocess (leg provisioning touches real
@@ -17553,7 +18912,7 @@ function rtHarness(initialFiles, opts) {
 // w(write scripts/a.js) → review → finalize. Tick 1 opens g (read-first partition, UNCHANGED). Tick 2
 // co-opens w as a LEG-CONTAINED lane group behind the live read g (R1) — mixed read+leg-write running set.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const { execFileSync } = require('child_process');
   const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -17693,7 +19052,7 @@ function rtHarness(initialFiles, opts) {
       cleanup(repoRoot);
     }
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #641-R2b CONSUMER (consent-tier) — over a DIRTY parent (R1's leg path can't apply: a leg would branch
@@ -17702,7 +19061,7 @@ function rtHarness(initialFiles, opts) {
 // scratch-observable-safe (the R2a predicate). Annotation ABSENT ⇒ serialize (write_awaits_drain,
 // byte-identical). Direct runOpenReady unit calls (a LEGLESS open provisions NO leg ⇒ no real git).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   // A plan WITH the observes column so parseNodes surfaces the gate's annotation. `gate` (live read) +
   // `w` (ready write). role/observes/write-set parameterized.
   function makeObservesPlan(gateRole, gateObserves, writeRole, writeSet) {
@@ -17744,34 +19103,53 @@ function rtHarness(initialFiles, opts) {
     return { r, h };
   }
 
-  // A: observes:scratch adversarial-verifier ∥ docs/decisions/** LEGLESS writer → CO-OPEN (legless, no
-  //    leg group), even though the parent is dirty (the writer sees the uncommitted context; the scratch
-  //    gate never observes its docs-band bytes — verdict from .cache + scratch, by contract).
-  {
-    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', 'docs/decisions/D-641-01.md');
-    assert(r.result === 'ok' && r.kind === 'write' && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].id === 'w',
-      '#641-R2b-A: observes:scratch gate ∥ docs/decisions writer CO-OPENS legless over a dirty parent, got ' + JSON.stringify({ opened: r.opened && r.opened.map(n => n.id), reason: r.reason, degrade: r.serialDegradeReason }));
-    assert(!r.laneGroup, '#641-R2b-A: the co-open is LEGLESS (no lane group — the writer must see the uncommitted parent context)');
-    const set = JSON.parse(h.files[RS_SET_PATH]);
-    assert(!set.lane_group, '#641-R2b-A: running-set has NO lane_group (legless co-open)');
-    assert(set.nodes.some(n => n.id === 'gate' && n.kind === 'read') && set.nodes.some(n => n.id === 'w' && n.kind === 'write'),
-      '#641-R2b-A: MIXED running set — the scratch gate alongside the legless writer, got ' + JSON.stringify(set.nodes.map(n => ({ id: n.id, kind: n.kind }))));
-    assert(h.files[RS_PLAN_PATH].includes('| w | in_progress | |'), '#641-R2b-A: w flipped in_progress');
-    // The gate's dispatch discipline is pinned when it OPENS (a prior tick) — see #641-R2b-CARD below.
+  // A/B/E: an `observes: scratch` adversarial-verifier is live ⇒ the seam-checkpoint REPAIR is
+  //    ATTEMPTED (the READER-side precondition is the whole gate now — the retired legless path's
+  //    writer-side scratch-observable predicate is superseded by leg containment). The stubbed fence
+  //    reports a non-`pass` it cannot ENUMERATE (no `dirty` array), so the repair cannot attribute
+  //    anything and fails CLOSED with the typed `seam_checkpoint_failed` halt — never a legless
+  //    co-open, never a silent serial, and with ZERO mutation. The writer's declared set is
+  //    deliberately varied across the rows to pin that it no longer changes the outcome.
+  for (const writeSet of ['docs/decisions/D-641-01.md', 'docs/api.md', 'CHANGELOG.md', 'scripts/x.js']) {
+    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', writeSet);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-DRAIN-SEAM[' + writeSet + ']: a scratch-gated dirty seam ATTEMPTS the repair and fails closed, got ' + JSON.stringify({ result: r.result, reason: r.reason, degrade: r.serialDegradeReason }));
+    assert(typeof r.detail === 'string' && r.detail.indexOf('parent_clean_fence_unclassified') === 0,
+      '#802-DRAIN-SEAM[' + writeSet + ']: the halt names WHY the repair could not run, got ' + JSON.stringify(r.detail));
+    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#802-DRAIN-SEAM[' + writeSet + ']: ZERO mutation — w stays pending');
+    assert(!h.files[RS_SET_PATH] || JSON.parse(h.files[RS_SET_PATH]).nodes.length === 1,
+      '#802-DRAIN-SEAM[' + writeSet + ']: the running set is untouched');
   }
 
-  // B: observes:scratch gate ∥ a TEST-CONSUMED prose writer (docs/api.md) → HOLD (the writer's set is NOT
-  //    scratch-observable-safe: a chain the gate could run reads it). Byte-identical parent_dirty hold.
-  for (const bad of ['docs/api.md', 'CHANGELOG.md']) {
-    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', bad);
-    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
-      '#641-R2b-B[' + bad + ']: a test-consumed-prose writer HOLDS behind the scratch gate, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
-    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-B[' + bad + ']: labeled parent_dirty (R2b did not apply), got ' + JSON.stringify(r.serialDegradeReason));
-    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#641-R2b-B[' + bad + ']: ZERO mutation — w stays pending');
+  // TOGGLE-OFF: with KAOLA_SEAM_CHECKPOINT=0 the scratch-gated seam returns the `parent_dirty` HOLD.
+  //    WHAT THE OPT-OUT RESTORES, PRECISELY — this is the pin for the scope claim, not a footnote.
+  //    Pre-#802 this exact state (a scratch-observation gate live, a dirty parent, a scratch-observable
+  //    declared set) CO-OPENED a legless single writer. The opt-out does NOT bring that back: the
+  //    legless path is retired UNCONDITIONALLY, as a separate deliberate tightening, so the toggle
+  //    restores the SERIAL DEGRADE and nothing else. Every row below — including the write sets that
+  //    used to qualify for the legless exception — must HOLD, with no writer opened and no lane group.
+  //    Direction check: the opt-out is never LESS strict than the repair it replaces.
+  {
+    const saved = process.env.KAOLA_SEAM_CHECKPOINT;
+    process.env.KAOLA_SEAM_CHECKPOINT = '0';
+    try {
+      for (const writeSet of ['docs/decisions/D-641-01.md', 'docs/api.md', 'CHANGELOG.md', 'scripts/x.js']) {
+        const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', writeSet);
+        assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
+          '#802-DRAIN-SEAM-OFF[' + writeSet + ']: the opt-out holds — it does NOT resurrect the legless co-open, got ' + JSON.stringify({ result: r.result, reason: r.reason, opened: r.opened }));
+        assert(r.serialDegradeReason === 'parent_dirty', '#802-DRAIN-SEAM-OFF[' + writeSet + ']: labeled parent_dirty, got ' + JSON.stringify(r.serialDegradeReason));
+        assert(!r.laneGroup, '#802-DRAIN-SEAM-OFF[' + writeSet + ']: and no lane group either, got ' + JSON.stringify(r.laneGroup));
+        assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#802-DRAIN-SEAM-OFF[' + writeSet + ']: ZERO mutation');
+      }
+    } finally {
+      if (saved === undefined) delete process.env.KAOLA_SEAM_CHECKPOINT;
+      else process.env.KAOLA_SEAM_CHECKPOINT = saved;
+    }
   }
 
   // C: an UN-annotated gate (a plain code-reviewer, no observes:scratch) ∥ a qualifying docs writer → HOLD.
-  //    A full-diff observer is perturbed by a concurrent write; only the planner-declared scratch scope unlocks R2b.
+  //    A full-diff observer is perturbed by a concurrent write AND by the checkpoint's ref motion; only the
+  //    planner-declared scratch scope unlocks the repair. Byte-identical parent_dirty hold.
   {
     const { r } = runR2b('code-reviewer', '—', 'doc-updater', 'docs/decisions/D-641-01.md');
     assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
@@ -17786,15 +19164,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R2b-D: shared-tree writer behind an un-annotated gate HOLDS, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
     assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-D: labeled parent_dirty');
   }
-
-  // E: even an ANNOTATED gate ∥ a SHARED-TREE (production) writer → HOLD (the annotation authorizes only a
-  //    scratch-observable-safe write set; a production path is never observation-invisible).
-  {
-    const { r } = runR2b('adversarial-verifier', 'scratch', 'implementer', 'scripts/x.js');
-    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R2b-E: a production writer HOLDS even behind a scratch gate, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
-    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-E: labeled parent_dirty (writer set not scratch-observable-safe)');
-  }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #641-R2b-CARD — the dispatch card the aggregator composes for an opened `observes: scratch`
@@ -17802,7 +19172,7 @@ function rtHarness(initialFiles, opts) {
 // scratch only; do NOT read the worktree tree or diff). A plain read gate's card is byte-identical
 // (no observation field). Direct runOpenReady unit call (read open ⇒ no leg / no real git).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   function makeGateOnlyPlan(gateObserves) {
     return [
       '# Workflow Plan — test-project', '',
@@ -17839,7 +19209,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'ok' && r.opened.length === 1, '#641-R2b-CARD-neg: the plain gate opens');
     assert(r.opened[0].dispatch.observation === undefined, '#641-R2b-CARD-neg: a plain read gate card has NO observation field (byte-identical), got ' + JSON.stringify(r.opened[0].dispatch.observation));
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // SEED-arch (per-role evidence registry): open-next over a producer-role node (code-architect)
@@ -17851,7 +19221,7 @@ function rtHarness(initialFiles, opts) {
 // NOTE: the CLOSE-time refusal on an empty producer token (checkEvidenceShape) is a separate
 // deliverable — it lives in adaptive-node.js, not this seed half.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-seed-arch-'));
   try {
     const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
@@ -17908,7 +19278,7 @@ function rtHarness(initialFiles, opts) {
     assert(/^files_to_create:\s*$/m.test(seeded), 'SEED-arch: files_to_create stub key seeded (first alternative), got:\n' + seeded);
     assert(/^build_sequence:\s*$/m.test(seeded), 'SEED-arch: build_sequence stub key seeded, got:\n' + seeded);
   } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
-}
+});
 
 // ===========================================================================
 // Durable node channel + per-role close contract + scheduler gate-count residuals.
@@ -17918,7 +19288,7 @@ function rtHarness(initialFiles, opts) {
 // roles, and a live main-session-gate is counted as a live observer at co-open/merge.
 // RED-first: these reference behaviors absent before the channel + gate-count edits.
 // ===========================================================================
-{
+scenario(() => {
   const ADAPT = require('./kaola-workflow-adaptive-node');
   const VAL = require('./kaola-workflow-plan-validator');
 
@@ -18054,7 +19424,9 @@ function rtHarness(initialFiles, opts) {
       // The impl node's open-time nonce = commit-node base slice(0,12).
       const IMPL_NONCE = 'aaaabbbbcccc';
       const implBinding = 'evidence-binding: impl ' + IMPL_NONCE + '\n';
-      const implBody = 'RED: t_x — AssertionError (pre-impl)\nGREEN: t_x passes; 1/1 green\n';
+      // A SHAPE-VALID test-author body, so the close reaches the consumed-proof check under test
+      // instead of short-circuiting on evidence_shape_failed. The baseline receipt echoes IMPL_NONCE.
+      const implBody = 'RED: t_x — AssertionError (pre-impl)\nred_baseline: ' + IMPL_NONCE + '\n';
 
       // ---- checkUpstreamConsumed direct: happy / neg-1 missing / advisory ----
       if (typeof ADAPT.checkUpstreamConsumed !== 'function') {
@@ -18217,7 +19589,7 @@ function rtHarness(initialFiles, opts) {
       { id: 'gate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' },
     ] }, null, 2);
     // w's evidence: RED/GREEN + no_op (empty declared set ⇒ vacuity guard needs a no_op declaration).
-    const wEv = 'evidence-binding: w x\nRED: t (pre)\nGREEN: t passes\nno_op: legless test member\n';
+    const wEv = 'evidence-binding: w x\nRED: t (pre)\nred_baseline: x\nno_op: legless test member\n';
     const h = rsHarness({ [RS_PLAN_PATH]: grpPlan, [RS_SET_PATH]: grpSet, ['/p/.cache/w.md']: wEv }, (base) => {
       if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] };
       if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
@@ -18228,39 +19600,40 @@ function rtHarness(initialFiles, opts) {
       'A1-merge-fence-hold: the last-member merge is held while a gate is live, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
   }
 
-  // ---- #644 A2: validation_test_consumes widens the R2b legless co-open predicate --------
+  // ---- #802 A2: the READER-side scratch-seam predicate (successor to the retired legless co-open) ----
+  //   The seam checkpoint at the write-awaits-drain site is gated on the OBSERVERS, not on the writer's
+  //   declared set (leg containment supersedes the writer-side scratch-observable predicate). Pin both
+  //   directions: every live read a freeze-declared `observes: scratch` adversarial-verifier ⇒ true; a
+  //   single non-scratch / non-adversarial live reader, a live gate, or no live read at all ⇒ false.
   {
-    if (typeof ADAPT.tryR2bLeglessCoopen !== 'function') {
-      assert(false, 'A2: tryR2bLeglessCoopen must be exported for the fork-widening pin');
-    } else {
-      const forkPlan = [
-        '# Workflow Plan — test-project', '',
-        '## Meta', 'labels: area:scripts', 'validation_test_consumes: docs/fork-guide.md', '',
-        '## Nodes', '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
-        '| --- | --- | --- | --- | --- | --- | --- |',
-        '| gate | adversarial-verifier | — | — | 1 | sequence | scratch |',
-        '| forkw | doc-updater | — | docs/fork-guide.md | 1 | sequence | — |', '',
-        '## Node Ledger', '',
-        '| id | status |', '| --- | --- |', '| gate | in_progress |', '| forkw | pending |', '',
-      ].join('\n') + '\n';
-      const files = { '/p/workflow-plan.md': forkPlan };
-      const rf = (p) => { if (p in files) return files[p]; throw new Error('ENOENT ' + p); };
-      const writeNodes = [{ id: 'forkw', role: 'doc-updater', declared_write_set: 'docs/fork-guide.md' }];
-      const liveNodes = [{ id: 'gate', role: 'adversarial-verifier', kind: 'read' }];
-      const chosen = ADAPT.tryR2bLeglessCoopen(writeNodes, liveNodes, '/p/workflow-plan.md', 'test-project', rf);
-      assert(chosen === null,
-        'A2: a validation_test_consumes doc (docs/fork-guide.md) is NOT scratch-observable-safe ⇒ NO legless co-open, got ' + JSON.stringify(chosen && chosen.id));
-      // Control: WITHOUT the widening, the same docs writer IS scratch-observable-safe (co-opens).
-      const noWiden = forkPlan.replace('validation_test_consumes: docs/fork-guide.md\n', '');
-      const files2 = { '/p/workflow-plan.md': noWiden };
-      const rf2 = (p) => { if (p in files2) return files2[p]; throw new Error('ENOENT ' + p); };
-      const chosen2 = ADAPT.tryR2bLeglessCoopen(writeNodes, liveNodes, '/p/workflow-plan.md', 'test-project', rf2);
-      assert(chosen2 && chosen2.id === 'forkw',
-        'A2-control: a plain docs writer behind a scratch gate DOES legless co-open (widening is the only difference), got ' + JSON.stringify(chosen2 && chosen2.id));
-    }
+    assert(typeof ADAPT.liveReadsAllScratchGates === 'function', 'A2: liveReadsAllScratchGates must be exported for the seam-precondition pin');
+    const seamPlan = (gateRole, gateObserves) => [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| gate | ' + gateRole + ' | — | — | 1 | sequence | ' + gateObserves + ' |',
+      '| forkw | doc-updater | — | docs/fork-guide.md | 1 | sequence | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |', '| gate | in_progress |', '| forkw | pending |', '',
+    ].join('\n') + '\n';
+    const rfFor = (content) => (p) => { if (p === '/p/workflow-plan.md') return content; throw new Error('ENOENT ' + p); };
+    const scratchLive = [{ id: 'gate', role: 'adversarial-verifier', kind: 'read' }];
+    assert(ADAPT.liveReadsAllScratchGates(scratchLive, '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', 'scratch'))) === true,
+      'A2: an all-scratch-verifier live read set unlocks the seam repair');
+    assert(ADAPT.liveReadsAllScratchGates(scratchLive, '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', '—'))) === false,
+      'A2: an UN-annotated adversarial-verifier does NOT unlock the seam repair');
+    assert(ADAPT.liveReadsAllScratchGates(scratchLive, '/p/workflow-plan.md', rfFor(seamPlan('code-reviewer', 'scratch'))) === false,
+      'A2: a non-adversarial reader does NOT unlock the seam repair even carrying the annotation');
+    assert(ADAPT.liveReadsAllScratchGates([], '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', 'scratch'))) === false,
+      'A2: NO live read fails closed (the predicate is a positive claim about the observers present)');
+    assert(ADAPT.liveReadsAllScratchGates(
+      scratchLive.concat([{ id: 'mg', role: 'main-session-gate', kind: 'gate' }]),
+      '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', 'scratch'))) === false,
+      'A2: a live main-session-gate fails closed (it is a live observer, not a scratch reader)');
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // Universal n/a skip in the consumed-proof: an IMPLEMENT consumer skipped mid-run records
@@ -18269,7 +19642,7 @@ function rtHarness(initialFiles, opts) {
 // must AGREE (a skipped consumer proves nothing), never hard-refuse upstream_not_consumed.
 // The two close gates must render the same verdict on the same n/a evidence.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const ADAPT = require('./kaola-workflow-adaptive-node');
   const VAL = require('./kaola-workflow-plan-validator');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-na-consumed-'));
@@ -18326,7 +19699,7 @@ function rtHarness(initialFiles, opts) {
     assert(rClose.reason !== 'upstream_not_consumed',
       'NA-skip-close: close does NOT refuse upstream_not_consumed on an n/a-skipped consumer, got ' + JSON.stringify({ result: rClose.result, reason: rClose.reason }));
   } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {} }
-}
+});
 
 // ---------------------------------------------------------------------------
 // Fused-advance gate-window hold: close-and-open-next must NOT open the next node while a
@@ -18337,7 +19710,7 @@ function rtHarness(initialFiles, opts) {
 // (writer-rows-first AND gate-row-first) so the hold is order-INDEPENDENT, plus a no-gate control
 // (the fused advance stays byte-identical when no gate is live).
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   function fusedGatePlan(order) {
     const waRow = '| wa | tdd-guide | — | scripts/a.js | 1 | sequence |';
     const wbRow = '| wb | tdd-guide | wa | scripts/b.js | 1 | sequence |';
@@ -18372,7 +19745,7 @@ function rtHarness(initialFiles, opts) {
       // wa's open-time nonce + shape-valid tdd-guide evidence.
       fs.writeFileSync(path.join(cache, 'barrier-base-wa'), 'aaaabbbbcccc0000\n');
       fs.writeFileSync(path.join(cache, 'wa.md'),
-        'evidence-binding: wa aaaabbbbcccc\nRED: t (pre)\nGREEN: t passes; 1/1 green\n');
+        'evidence-binding: wa aaaabbbbcccc\nRED: t (pre)\nred_baseline: aaaabbbbcccc\n');
       // The live gate window: g1 recorded as kind:'gate' (the open-next door already recorded it).
       if (gateLiveInSet) {
         fs.writeFileSync(path.join(cache, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
@@ -18420,11 +19793,11 @@ function rtHarness(initialFiles, opts) {
       'FUSED-GATE-CONTROL(' + order + '): no live gate ⇒ fused advance opens wb, got ' + JSON.stringify({ opened: r.opened && r.opened.id, reason: r.reason }));
     assert(wbLedger === 'in_progress', 'FUSED-GATE-CONTROL(' + order + '): wb ledger row flipped in_progress, got ' + JSON.stringify(wbLedger));
   }
-}
+});
 
 // #654: normal opens are nonce-aware. Use the real $TMPDIR filesystem because the
 // evidence helper intentionally performs direct fs writes outside the injected harness.
-{
+scenario(() => {
   const tmpRoot = process.env.TMPDIR || os.tmpdir();
   const tmp = fs.mkdtempSync(path.join(tmpRoot, 'kw-evidence-rotation-'));
   try {
@@ -18497,7 +19870,7 @@ function rtHarness(initialFiles, opts) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
-}
+});
 
 // ===========================================================================
 // #683 — THE SIMULTANEOUS-FAILED-GATES REPAIR DEAD-END.
@@ -18652,7 +20025,7 @@ function rtHarness(initialFiles, opts) {
       const legCache = path.join(leg, 'kaola-workflow', PROJECT_683, '.cache');
       fs.mkdirSync(legCache, { recursive: true });
       fs.writeFileSync(path.join(legCache, id + '.md'),
-        'evidence-binding: ' + id + ' ' + nonce + '\nRED: t_' + id + ' threw pre-impl\nGREEN: t_' + id + ' passes\n');
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: t_' + id + ' threw pre-impl\nred_baseline: ' + nonce + '\n');
     }
     const closeWa = R(['close-node', '--node-id', 'wa', ...P]);
     const closeWb = R(['close-node', '--node-id', 'wb', ...P]);
@@ -18695,7 +20068,7 @@ function rtHarness(initialFiles, opts) {
   // -------------------------------------------------------------------------
   // The seven-step scenario: RED-A, RED-B, P0, RED-C, and the full recovery.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     const { R, P, nonceFor, ledger683, attempt683, refSha683 } = w;
 
@@ -18745,7 +20118,7 @@ function rtHarness(initialFiles, opts) {
     // wa fixes its file and closes. Note the gate does NOT reopen yet: gb:1 is still unresolved.
     fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wa.md'),
-      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nGREEN: t_wa passes 4/4\n');
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nred_baseline: ' + nonceFor('wa') + '\n');
     assert(R(['close-node', '--node-id', 'wa', ...P]).result === 'ok' && ledger683('wa') === 'complete',
       '#683 E2E: the repaired writer\'s barrier PASSES against its re-anchored baseline and it closes');
 
@@ -18766,7 +20139,7 @@ function rtHarness(initialFiles, opts) {
     // wb fixes and closes; the fence lifts; both gates re-review the NEW candidate and pass.
     fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// wb v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wb.md'),
-      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nGREEN: t_wb passes 3/3\n');
+      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nred_baseline: ' + nonceFor('wb') + '\n');
     assert(R(['close-node', '--node-id', 'wb', ...P]).result === 'ok' && ledger683('wb') === 'complete',
       '#683 E2E: the second repaired writer closes against its own re-anchored baseline');
     const planBefore683 = fs.readFileSync(w.planPath, 'utf8');
@@ -18788,7 +20161,7 @@ function rtHarness(initialFiles, opts) {
     const planHashRe = /<!-- plan_hash: ([0-9a-f]{64}) -->/;
     assert((planHashRe.exec(planBefore683) || [])[1] === (planHashRe.exec(fs.readFileSync(w.planPath, 'utf8')) || [])[1],
       '#683 E2E: NO re-freeze — the frozen plan_hash is byte-identical through the whole repair');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N11 — P3b TEMPORAL SOUNDNESS. `repair.selected_writer` is set once and never cleared, so a spent
@@ -18801,7 +20174,7 @@ function rtHarness(initialFiles, opts) {
   // co-repair (repair gb:1 while ga is still folded-pending) is exercised on the way in and must still
   // succeed — so the fix is a strict narrowing, not a blanket ban on P3b.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     const { R, P, nonceFor, ledger683, attempt683, refSha683 } = w;
 
@@ -18810,7 +20183,7 @@ function rtHarness(initialFiles, opts) {
       '#683 N11: setup — the first repair (ga:1/wa) succeeds via P3a');
     fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wa.md'),
-      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nGREEN: t_wa passes 4/4\n');
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nred_baseline: ' + nonceFor('wa') + '\n');
     R(['close-node', '--node-id', 'wa', ...P]);
     assert(ledger683('ga') === 'pending',
       '#683 N11: setup — ga stays FOLDED-PENDING while gb:1 is unresolved (its repair is still LIVE)');
@@ -18824,7 +20197,7 @@ function rtHarness(initialFiles, opts) {
       '#683 N11: the LEGITIMATE co-repair (gb:1 while ga folded-pending) STILL absorbs ax.js via a LIVE P3b');
     fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// wb v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wb.md'),
-      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nGREEN: t_wb passes 3/3\n');
+      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nred_baseline: ' + nonceFor('wb') + '\n');
     R(['close-node', '--node-id', 'wb', ...P]);
 
     // Both gates reopen. ga PASSES on ax@v2 and goes COMPLETE (its repair is now DISCHARGED); gb FAILS
@@ -18854,14 +20227,14 @@ function rtHarness(initialFiles, opts) {
       + 'candidate_delta_unattributed naming ax.js, got ' + JSON.stringify(escape));
     assert((attempt683('gb:2').rebind || []).length === 0 && refSha683('wb') === beforeWb,
       '#683 N11: the refused escape leaves ZERO durable mutation — no rebind record, the ref is unmoved');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N1 — an UNDECLARED path (declared by NO node) changed since the attempt. Partition 3 is
   // byte-exact with NO waiver, ever: this is the rogue-edit vector the whole-tree digest caught,
   // and it must still be caught at full strength.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683({ seedFiles: { 'rogue.js': '// rogue v1\n' } });
     fs.writeFileSync(path.join(w.repoRoot, 'rogue.js'), '// rogue v2 (nobody declares this)\n');
     const before = w.refSha683('wa');
@@ -18870,13 +20243,13 @@ function rtHarness(initialFiles, opts) {
       '#683 N1: an edit to a path NO node declares refuses candidate_residue_changed');
     assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before,
       '#683 N1: zero durable mutation — no rebind record appended, the anchored ref is unmoved');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N2 — a path INSIDE the attempt's own producer slice moved. The refutation's SUBJECT changed;
   // the reviewer must re-review it, not the writer blind-fix it. Partition 1, no waiver, ever.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// bx.js edited OUT OF BAND\n');
     const before = w.refSha683('wb');
@@ -18886,14 +20259,14 @@ function rtHarness(initialFiles, opts) {
       '#683 N2: an out-of-band edit to the reviewed slice refuses candidate_slice_changed');
     assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
       '#683 N2: zero durable mutation');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N3 — a sibling's declared path changed, but NO repair was ever recorded on its gate. There is no
   // owner obliged to re-review it, so it cannot be attributed. (P3a fails: it changed. P3b fails:
   // its owner has no recorded repair.)
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// ax.js changed with NO repair recorded on ga\n');
     const before = w.refSha683('wb');
@@ -18903,7 +20276,7 @@ function rtHarness(initialFiles, opts) {
       '#683 N3: a changed sibling path with NO recorded repair on its own gate refuses candidate_delta_unattributed');
     assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
       '#683 N3: zero durable mutation');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N4 — the P3 DISJOINTNESS clause: an owner whose write set OVERLAPS the reviewed slice could have
@@ -18914,7 +20287,7 @@ function rtHarness(initialFiles, opts) {
   // frozen at all. The disjointness clause therefore guards the case the grammar DOES permit — a
   // dependency-ORDERED owner (wc, a descendant of wb) that shares a path with the reviewed slice.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const refusedFreeze = make683Repo({ waSet: 'ax.js shared.js', wbSet: 'bx.js shared.js' });
     assert(refusedFreeze.freeze.result === 'refuse' && refusedFreeze.freeze.frozen === false
       && (refusedFreeze.freeze.errors || []).some(e => /parallel non-fanout write overlap/.test(e)),
@@ -18939,13 +20312,13 @@ function rtHarness(initialFiles, opts) {
       '#683 N4: an owner whose write set OVERLAPS the reviewed slice cannot attribute — candidate_delta_unattributed');
     assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
       '#683 N4: zero durable mutation — a rebind is impossible across a write-set overlap');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N5 — a GENUINE writer overflow (a file owned by nobody). The refusal is PRESERVED at full
   // strength; the rebind never launders an out-of-set write.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     fs.writeFileSync(path.join(w.repoRoot, 'zz.js'), '// wb overflowed into a file nobody declares\n');
     const before = w.refSha683('wb');
@@ -18954,7 +20327,7 @@ function rtHarness(initialFiles, opts) {
       '#683 N5: a genuine overflow into an undeclared file still refuses (the write_set_overflow teeth are intact)');
     assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
       '#683 N5: zero durable mutation');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N6 — P5 RE-ANCHOR SAFETY. A synthetic base that ALTERED a path the writer is allowed to write would
@@ -18967,7 +20340,7 @@ function rtHarness(initialFiles, opts) {
   // P5 is the tripwire for a future refactor of the tree builder, so the fault is injected at the ONE
   // thing under test: the synthetic tree. The assertion itself is untouched production code.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
     const realExec = require('child_process').execFileSync;
@@ -19002,14 +20375,14 @@ function rtHarness(initialFiles, opts) {
       '#683 N6: a declared FILE replaced by a same-named DIRECTORY is caught by P1 (its contents are undeclared paths)');
     assert(w2.attempt683('ga:1').rebind.length === 0,
       '#683 N6: zero durable mutation on the file->directory fault');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N7 — the five-consumed-repairs CIRCUIT BREAKER sits STRICTLY ABOVE every rebind proof and every
   // rebind mutation. A gate at the limit refuses without appending a record and without moving a ref,
   // even where the rebind would otherwise have succeeded. This is what pins the gate ORDER.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     const journalPath = path.join(w.cacheDir, 'review-attempts.json');
     const j = w.journal683();
@@ -19039,7 +20412,7 @@ function rtHarness(initialFiles, opts) {
       '#683 N7: a gate at REVIEW_REPAIR_LIMIT refuses repair_limit_reached with its exact pre-#683 semantics');
     assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
       '#683 N7: the breaker fires ABOVE the rebind — no record appended, the anchored ref is unmoved');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N8 — THE CRASH-RETRY VARIANT (a live bug independent of the sibling-gate scenario). Crash between
@@ -19048,7 +20421,7 @@ function rtHarness(initialFiles, opts) {
   // returned candidate_digest_changed, and the attempt was WEDGED FOREVER (settled, unconsumable,
   // fencing every opener). Only a discard unstuck it.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683();
     const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
     const realExec = require('child_process').execFileSync;
@@ -19092,13 +20465,14 @@ function rtHarness(initialFiles, opts) {
     const recovered = node683.runRepairNode(opts2);
     assert(recovered.result === 'ok' && recovered.resumed === true && recovered.consumed_by === 'wa',
       '#683 N8-variant: the ref-restore recovery completes the consume with NO discard and NO re-freeze');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N9 — the three REBIND crash windows. The durable order is journal-first, ref-second,
   // settle-third, precisely so an interrupted rebind is INERT: a record whose ref never moved binds
   // nothing. Every retry converges idempotently, and the ledger is APPEND-ONLY.
   // -------------------------------------------------------------------------
+  scenario(() => {
   for (const failpoint of ['rebind_recorded', 'rebind_base_written', 'rebind_settled']) {
     const w = drive683();
     const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
@@ -19133,9 +20507,10 @@ function rtHarness(initialFiles, opts) {
     assert(w.refSha683('wa') === recordedAfter,
       '#683 N9[' + failpoint + ']: the anchored ref converges to exactly the recorded base_after');
   }
+  });
 
   // N9-diverged — the ref is neither base_before nor base_after of an unsettled record. Fail closed.
-  {
+  scenario(() => {
     const w = drive683();
     const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
     const realExec = require('child_process').execFileSync;
@@ -19153,7 +20528,7 @@ function rtHarness(initialFiles, opts) {
     const out = node683.runRepairNode(opts);
     assert(out.result === 'repair_requires_replan' && out.reason === 'rebind_replay_diverged',
       '#683 N9-diverged: an anchored ref matching NEITHER recorded base fails closed with rebind_replay_diverged');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N11 — THE SILENT-WAIVER HOLE the review caught: a partition-2 path whose CURRENT content equals the
@@ -19165,7 +20540,7 @@ function rtHarness(initialFiles, opts) {
   // candidate in which a gate-APPROVED file has been destroyed and will never be re-reviewed. Partition 2
   // must be measured against the CANDIDATE, not against the writer's baseline.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     const w = drive683({ gbPass: true });
     assert(w.cgb.result === 'ok' && w.ledger683('gb') === 'complete',
       '#683 N11: gb settles PASS — bx.js@v1 is gate-APPROVED work with no blocker of its own');
@@ -19180,7 +20555,7 @@ function rtHarness(initialFiles, opts) {
       '#683 N11: zero durable mutation — no rebind record appended, the anchored ref is unmoved');
     assert(fs.existsSync(path.join(w.repoRoot, 'bx.js')) === false && w.ledger683('wa') === 'complete',
       '#683 N11: the refusal is fail-CLOSED — the writer is NOT reopened, so the destroyed file cannot land unreviewed');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N12/N13 — THE MEASURING STICK MUST BE EXACTLY AS STRONG AS THE DIGEST. The digest, the residue digest,
@@ -19195,7 +20570,7 @@ function rtHarness(initialFiles, opts) {
   // content is "bx-target.js" and a symlink to bx-target.js are the SAME BLOB SHA and differ ONLY in mode
   // (100644 vs 120000). A sha-only stick cannot tell a file from a symlink even in principle.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     // N12 — wb's ENTIRE approved change is `chmod +x bx.js` (content byte-identical). gb PASSES, so
     // bx.js@100755 is gate-approved work. Then the mode is reverted out-of-band to wa's baseline.
     const w = drive683({
@@ -19222,8 +20597,8 @@ function rtHarness(initialFiles, opts) {
     assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
       && w.ledger683('wa') === 'complete',
       '#683 N12: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
-  }
-  {
+  });
+  scenario(() => {
     // N13 — the same axis, but the sha COLLIDES ACROSS the mode boundary: wb's approved change swaps the
     // regular file bx.js for a SYMLINK whose target bytes are byte-identical to the file's old content.
     // Same blob sha, same ls-tree TYPE (`blob`); ONLY the mode moves (100644 -> 120000). Reverting it
@@ -19258,7 +20633,7 @@ function rtHarness(initialFiles, opts) {
     assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
       && w.ledger683('wa') === 'complete',
       '#683 N13: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
-  }
+  });
 
   // -------------------------------------------------------------------------
   // N14 — THE SAME CLASS ONE LEVEL DOWN: the stick's KEY SPACE, not its values. The declared map is a JS
@@ -19274,7 +20649,7 @@ function rtHarness(initialFiles, opts) {
   // directory-shaped), so this is reachable, not theoretical. A null-prototype map makes the key an ordinary
   // own property that round-trips through JSON and compares like any other path.
   // -------------------------------------------------------------------------
-  {
+  scenario(() => {
     // The trap is sharp enough to disable this very fixture: `{ '__proto__': body }` in an OBJECT LITERAL
     // is the prototype-setter form, and with a string value it is a silent no-op — Object.entries() would
     // hand back NOTHING and the file would never be written. Build the fixture maps null-prototype too,
@@ -19308,7 +20683,7 @@ function rtHarness(initialFiles, opts) {
     assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
       && w.ledger683('wa') === 'complete',
       '#683 N14: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
-  }
+  });
 
   for (const r of repos683) { try { fs.rmSync(r, { recursive: true, force: true }); } catch (_) {} }
 }
@@ -19335,7 +20710,7 @@ function rtHarness(initialFiles, opts) {
 // digest differs from what was recorded at review time — real production digests always carry
 // {digest, declared, residue_digest} and can never engage this branch (see the code comment at
 // proveRebindAdmissible's first guard), so this residual is pinned directly via the seam.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-digest-changed-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684a');
@@ -19371,12 +20746,12 @@ function rtHarness(initialFiles, opts) {
       'N684-1: a repair-time candidate whose seam carries no partition data (bare string, differing from '
       + 'the recorded digest) refuses the fail-closed residual candidate_digest_changed, got ' + JSON.stringify(repaired));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // N684-2 — repair-node's unique-maximal-producer refusal carries NO `reason` key (only `attempt_id` +
 // `producer_slice`): two independent writers with no dependency between them feed one shared gate, so
 // neither is its unique maximal producer and repairing through EITHER alone is refused.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-nonmax-producer-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684b');
@@ -19424,12 +20799,12 @@ function rtHarness(initialFiles, opts) {
       + 'second producer that is not an ancestor of wa, so wa is not the unique maximal producer, got '
       + JSON.stringify(repaired));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // N684-3 — writer_identity_changed: the current writer identity no longer matches the journal's
 // EFFECTIVE producer binding (post-#683: compared via effectiveProducerBinding, not the raw
 // producer_bindings map directly — unchanged in semantics here since no rebind has occurred).
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-writer-identity-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684c');
@@ -19466,14 +20841,14 @@ function rtHarness(initialFiles, opts) {
       'N684-3: a writer identity that no longer matches the journal\'s effective producer binding refuses '
       + 'writer_identity_changed through the real repair-node subcommand, got ' + JSON.stringify(repaired));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // N684-4a — the missing-journal COMPLIANCE witness (readReviewJournal:2286-2288): a "Required Agent
 // Compliance" row names a VERDICT_ROLES role, but no node in the graph carries that role — the
 // SEPARATE per-node VERDICT_ROLES loop below it is empty and cannot independently catch this, so the
 // dedicated witness-detector branch is the ONLY thing that can refuse here. Driven through the real
 // `orient` subcommand with no journal file on disk.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-witness-compliance-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684d');
@@ -19501,13 +20876,13 @@ function rtHarness(initialFiles, opts) {
       'N684-4a: a prior compliance witness with no graph node of that role refuses review_journal_missing '
       + '("prior review compliance witness exists") through orient with no journal on disk, got ' + JSON.stringify(r));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // N684-4b — the missing-journal FAILED-REVIEW witness (the other half of readReviewJournal:2286-2288):
 // some node's evidence carries a `failed_review_attempt:` marker (the EXACT string production
 // repair-node writes into the writer's evidence brief — adaptive-node.js's runRepairNode tail), but the
 // compliance section is ABSENT, so only this half of the same detector can catch it.
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-witness-failed-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684e');
@@ -19523,7 +20898,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
     fs.writeFileSync(statePath, '# State\n');
     fs.writeFileSync(path.join(cacheDir, 'writer.md'),
-      'evidence-binding: writer somenonce123\nRED: t threw pre-impl\nGREEN: t passes\n'
+      'evidence-binding: writer somenonce123\nRED: t threw pre-impl\nred_baseline: somenonce123\n'
       + '\nfailed_review_attempt: review:1\nfailed_review_gate: review\n');
     assert(!fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
       'N684-4b: setup — no review journal on disk (simulates a re-frozen plan whose prior journal was retired)');
@@ -19538,7 +20913,7 @@ function rtHarness(initialFiles, opts) {
       + 'refuses review_journal_missing ("prior failed-review witness exists") through orient with no '
       + 'journal on disk, got ' + JSON.stringify(r));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // N684-5 — the #664 fold END-TO-END through a REAL frozen plan + REAL review journal, not the
@@ -19551,7 +20926,7 @@ function rtHarness(initialFiles, opts) {
 // #664 fold outcome (post-dominating gates folded, receipts purged with dedupe honored, singleton
 // reviewer evidence retained, the attempt durably consumed).
 // ===========================================================================
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-fold-e2e-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684f');
@@ -19651,7 +21026,7 @@ function rtHarness(initialFiles, opts) {
     assert(settledAttempt && settledAttempt.consumed_by === 'impl' && settledAttempt.repair.settled === true,
       '#664 (real journal): the repaired attempt is durably consumed by the selected writer');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // N684-6 — the PAIRED fixture that gives the JOURNAL-DRIVEN fold site (adaptive-node.js ~:5031-5052)
@@ -19669,7 +21044,7 @@ function rtHarness(initialFiles, opts) {
 // completedJournalGates and g_pass.md survives -> the evidenceRemoved assertion goes RED, with the #664
 // fanout fixture and N684-5 untouched (proving the killer is single-site).
 // ===========================================================================
-{
+scenario(() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-6-singleton-'));
   try {
     const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684g');
@@ -19742,7 +21117,7 @@ function rtHarness(initialFiles, opts) {
     assert(!repaired.evidenceRemoved.includes('g_fail.md') && fs.existsSync(path.join(cacheDir, 'g_fail.md')),
       'N684-6: the failed singleton\'s evidence is RETAINED as the repair brief, not purged');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // #688 — fail-closed hardening of proveRebindAdmissible's ledger-status inputs (items 1+2, low,
@@ -19756,7 +21131,7 @@ function rtHarness(initialFiles, opts) {
 // disjoint from the slice) since cand and now disagree on its blob — the ONLY path P3b can ever
 // attribute, and exactly the seam #688.1/2 hardens (repairWriters' ledger-status quantifier).
 // ===========================================================================
-{
+scenario(() => {
   const makeProveCtx = () => ({
     nodes: [
       { id: 'writer', writeSetRaw: 'a.js' },
@@ -19823,7 +21198,7 @@ function rtHarness(initialFiles, opts) {
     assert(outInProgress.ok === true && JSON.stringify(outInProgress.attributed_to) === JSON.stringify(['other']),
       '#688: (control) a genuinely in_progress owner gate still attributes the delta via P3b, got ' + JSON.stringify(outInProgress));
   }
-}
+});
 
 // ===========================================================================
 // #688.4 — isCanonicalBlobMap's enumeration-order check made ORDER-INSENSITIVE. JS forces
@@ -19832,7 +21207,7 @@ function rtHarness(initialFiles, opts) {
 // a repo-root file literally named a canonical integer can fail the pre-fix native-enumeration-vs-
 // lexicographic-sort comparison purely as an artifact of that forced reordering, not a real disorder.
 // ===========================================================================
-{
+scenario(() => {
   const mode = '100644 ';
   // A string key that sorts (lexicographically, character-by-character) BEFORE the canonical-integer
   // key "10" (".env" starts with '.' = 0x2E, less than '1' = 0x31) — the exact shape the issue names:
@@ -19852,7 +21227,7 @@ function rtHarness(initialFiles, opts) {
     '#688.4: (control) a non-canonical value shape is still rejected');
   assert(isCanonicalBlobMap(null) === false && isCanonicalBlobMap([]) === false && isCanonicalBlobMap('x') === false,
     '#688.4: (control) non-object/array/string inputs are still rejected');
-}
+});
 
 // ===========================================================================
 // #688.3 — a reserved node id (a literal Object.prototype key, e.g. `__proto__`) must REFUSE at
@@ -19860,7 +21235,7 @@ function rtHarness(initialFiles, opts) {
 // `out['__proto__'] = status` is a silent setter no-op, never an own property — the row vanishes and
 // the run wedges fail-closed). Direct-call against validatePlan (the freeze-time grammar).
 // ===========================================================================
-{
+scenario(() => {
   const body688c = makePlan(
     ['| impl | pending | |', '| __proto__ | pending | |', '| finalize | pending | |'],
     [
@@ -19886,11 +21261,11 @@ function rtHarness(initialFiles, opts) {
   const vClean688c = planValidator.validatePlan(cleanBody688c, {});
   assert(vClean688c.result === 'in-grammar',
     '#688.3: (control) an ordinary node id set still freezes clean, got ' + JSON.stringify({ result: vClean688c.result, errors: vClean688c.errors }));
-}
+});
 
 // #699: orient is the read-only projection of the active re-plan fence. It must
 // short-circuit before validator/next-action/task-mirror and surface only resume.
-{
+scenario(() => {
   let shells = 0;
   let writes = 0;
   const out = runOrient({
@@ -19916,12 +21291,12 @@ function rtHarness(initialFiles, opts) {
   '#699 orient fence: exact sanitized transaction orientation, got ' + JSON.stringify(out));
   assert(shells === 0 && writes === 0,
     '#699 orient fence: no validator/next-action/task-mirror/cache mutation occurs');
-}
+});
 
 // #699: after commit, scheduler orientation keeps the current next action for
 // execution while separately reporting the immutable epoch's actual first
 // child node. E2 current-authority refusal precedes every shell/cache mutation.
-{
+scenario(() => {
   const plan = makePlan([
     '| child-first | complete | |',
     '| current-node | in_progress | |',
@@ -19972,12 +21347,12 @@ function rtHarness(initialFiles, opts) {
     '#699 committed orient fails closed on E2 current-authority mismatch');
   assert(shellCalls === beforeRefusal,
     '#699 committed orient authority refusal occurs before validator/next-action/task-mirror shells');
-}
+});
 
 // #699: a distinct review outcome may replace a live source only after the
 // committed predecessor source is proven by the epoch authority and archived
 // byte-for-byte. Every crash boundary converges without overwriting history.
-{
+scenario(() => {
   assert(typeof publishRepairReplanSource === 'function',
     '#699 source publication helper is exported for focused transport proof');
   if (typeof publishRepairReplanSource === 'function') {
@@ -20053,13 +21428,13 @@ function rtHarness(initialFiles, opts) {
       '#699 a colliding source-history receipt refuses before unlink/publication');
     } finally { fs.rmSync(collision.root, { recursive: true, force: true }); }
 }
-}
+});
 // ===========================================================================
 // Reviewer contract v2 conformance corpus. This is intentionally data-driven:
 // the JSON is the cross-runtime issue matrix, while these assertions prove that
 // every lifecycle consumer uses the same pure schema functions.
 // ===========================================================================
-{
+scenario(() => {
   const reviewSchema = require('./kaola-workflow-adaptive-schema');
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'reviewer-conformance-fixtures.json'), 'utf8'));
   const requiredCoverage = [
@@ -20444,7 +21819,7 @@ function rtHarness(initialFiles, opts) {
     assert(v1Draft.result === 'refuse' && v1Draft.reason === 'plan_schema_version_legacy_new',
       'review-v2 newly authored explicit v1 draft refuses before spawn');
   }
-}
+});
 
 // #717 + #712: reviewer runtime detection + profile path resolution across install layouts.
 // Every fixture is synthesized under $TMPDIR (never in the repo): the canonical support script
@@ -20452,7 +21827,7 @@ function rtHarness(initialFiles, opts) {
 // runs in a subprocess so the copy's __dirname / env match a real consumer invocation (the K9
 // pattern from test-kimi-edition.js). HOME always points at a hermetic temp dir so the real
 // ~/.claude/agents can never leak into a probe.
-{
+scenario(() => {
   const { spawnSync } = require('child_process');
   const LAYOUT_SIBLINGS = ['kaola-workflow-adaptive-node.js', 'kaola-workflow-adaptive-schema.js',
     'kaola-workflow-codex-preflight.js'];
@@ -20682,7 +22057,7 @@ function rtHarness(initialFiles, opts) {
   } finally {
     fs.rmSync(layoutTmp, { recursive: true, force: true });
   }
-}
+});
 
 // ===========================================================================
 // #713 (option b) — folded-pass repair boundary, UNIT pins. When repair-node
@@ -20693,7 +22068,7 @@ function rtHarness(initialFiles, opts) {
 // marker-less sealed pass (a pre-fix journal) stays a hard refusal — but now
 // names the sanctioned recovery (release-and-adopt or replan) in its detail.
 // ===========================================================================
-{
+scenario(() => {
   const reviewSchema713 = require('./kaola-workflow-adaptive-schema');
   const sealedPassAttempt = {
     attempt_id: 'review2-gatea:1', outcome: 'pass', lifecycle_settled: true,
@@ -20769,14 +22144,14 @@ function rtHarness(initialFiles, opts) {
     previous_consecutive_nonprogress: 0, consumed_repairs: 1, fold_boundary: true });
   assert(failedValidation.progress === false,
     '#713: (control) the fold boundary never laundered a failed validation into progress');
-}
+});
 
 // ===========================================================================
 // #714 — `## Required Agent Compliance` producer drift, UNIT pins. The splice
 // must keep table rows contiguous and leave exactly one blank line before the
 // following heading (the blank-before-heading used to migrate INTO the table).
 // ===========================================================================
-{
+scenario(() => {
   const { spliceComplianceSection: splice714 } = require('./kaola-workflow-adaptive-schema');
   const baseSection714 = [
     '## Node Ledger', '', '| id | status |', '|---|---|', '| a | complete |', '',
@@ -20803,7 +22178,7 @@ function rtHarness(initialFiles, opts) {
   const splicedEof714 = splice714(atEof714, row714);
   assert(splicedEof714.endsWith('| tdd-guide (a) | subagent-invoked | e1 | |\n' + row714 + '\n'),
     '#714: (control) splice at EOF keeps rows contiguous with one trailing newline');
-}
+});
 
 // ===========================================================================
 // #714 — the issue's round-trip over the LEGACY append path: run close-node
@@ -20813,7 +22188,7 @@ function rtHarness(initialFiles, opts) {
 // (1) no blank line inside the table, (2) every row is `role (node-id)`,
 // (3) exactly one blank line before the following heading.
 // ===========================================================================
-{
+scenario(() => {
   const planPath714 = '/fake/kaola-workflow/p714/workflow-plan.md';
   const nodes714 = [
     '| impl | tdd-guide | — | scripts/x.js | 1 | sequence |',
@@ -20824,7 +22199,7 @@ function rtHarness(initialFiles, opts) {
   files714[planPath714] = makePlan(
     ['| impl | in_progress | |', '| rev | pending | |', '| done | pending | |'], nodes714)
     + '## Plan Notes\n\noperator notes\n';
-  files714['/fake/kaola-workflow/p714/.cache/impl.md'] = 'evidence-binding: impl implnonce001\nRED: r\nGREEN: g\n';
+  files714['/fake/kaola-workflow/p714/.cache/impl.md'] = 'evidence-binding: impl implnonce001\nRED: r\nred_baseline: implnonce001\n';
   files714['/fake/kaola-workflow/p714/.cache/rev.md'] = 'evidence-binding: rev revnonce0001\nReviewed the changes. LGTM.\n';
   files714['/fake/kaola-workflow/p714/.cache/done.md'] = 'evidence-binding: done donenonce001\nfinalization bookkeeping complete\n';
   const close714 = nodeId => runCloseAndOpenNext({
@@ -20894,14 +22269,14 @@ function rtHarness(initialFiles, opts) {
 
   // #713's regression check folded in: resume-check purity is unaffected by compliance bytes
   // (the section is outside plan_hash) — the round-trip pins only the table shape above.
-}
+});
 
 // ===========================================================================
 // #714 — legacy bare-cell READ compatibility (regression control, must stay
 // green): an ALREADY-EMITTED bare `code-reviewer` pending row still advances
 // in place (never duplicated, never rewritten) on its close.
 // ===========================================================================
-{
+scenario(() => {
   const planPath714b = '/fake/kaola-workflow/p714b/workflow-plan.md';
   const files714b = {};
   files714b[planPath714b] = makePlan(['| rev | in_progress | |'], [
@@ -20939,7 +22314,7 @@ function rtHarness(initialFiles, opts) {
     + 'got:\n' + files714b[planPath714b].slice(files714b[planPath714b].indexOf('## Required Agent Compliance')));
   assert(!files714b[planPath714b].includes('| code-reviewer (rev) |'),
     '#714: the legacy bare row is matched, not duplicated under the canonical cell');
-}
+});
 
 // ===========================================================================
 // #713 — the issue's six-step reproduction, driven end-to-end over the REAL
@@ -20953,7 +22328,7 @@ function rtHarness(initialFiles, opts) {
 // the cycle includes a gate re-close after repair, and the untouched plan
 // must pass validateRequiredAgentCompliance at the end.
 // ===========================================================================
-{
+scenario(() => {
   const { spawnSync: spawn713 } = require('child_process');
   const reviewSchema713 = require('./kaola-workflow-adaptive-schema');
   const runner713 = require('./kaola-workflow-validation-runner');
@@ -21015,6 +22390,9 @@ function rtHarness(initialFiles, opts) {
       '| finalize | finalize | gateB | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '',
       'Decompose: writer builds lib/impl.js; gateA (security) then gateB (code) post-dominate it; finalize sinks. sequence writer→gateA→gateB: S1 — each gate consumes the prior change. Done: both gates clear and validation passes.', '',
+      '## Acceptance', '',
+      'A1: lib/impl.js is implemented and passes the plan\'s validation command.',
+      'A2: the security gate and the code gate both clear over the produced tree.', '',
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| gateA | pending |', '| gateB | pending |', '| finalize | pending |', '',
@@ -21040,7 +22418,7 @@ function rtHarness(initialFiles, opts) {
     let rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'writer',
       '--stdin', '--json'], tmp713,
       'evidence-binding: writer ' + lastJson713(openWriter713).nonce
-        + '\nRED: base behavior reproduced\nGREEN: base behavior passes\n');
+        + '\nRED: base behavior reproduced\nred_baseline: ' + lastJson713(openWriter713).nonce + '\n');
     assert(rec713.status === 0, '#713: writer evidence records: ' + rec713.stdout + rec713.stderr);
     const closeWriter713 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
       '--node-id', 'writer', '--json'], tmp713);
@@ -21060,15 +22438,25 @@ function rtHarness(initialFiles, opts) {
     const openB1 = lastJson713(closeA1).opened;
 
     // Step 3: gateB FAILS with a legitimate blocking finding.
-    const writerEvidenceDigest713 = reviewSchema713.sha256Hex(
-      fs.readFileSync(path.join(cacheDir713, 'writer.md'), 'utf8'));
+    // #805: a change gate's BLOCKING findings must carry a PATH-BEARING primary anchor — every in-plan
+    // repair route resolves the fixer from that path, so an anchor without one commits an attempt no
+    // route can act on. `candidate_range` over the writer's own declared file is the faithful shape here
+    // (the defect IS in that file), and it is what makes the repair below reach `writer` by ownership
+    // rather than by the ownership-absent inert fallback.
+    const objectFormat713 = String(spawn713('git', ['-C', tmp713, 'rev-parse', '--show-object-format'],
+      { encoding: 'utf8', env: env713 }).stdout).trim();
+    const implObjectId713 = String(spawn713('git', ['-C', tmp713, 'hash-object', 'lib/impl.js'],
+      { encoding: 'utf8', env: env713 }).stdout).trim();
+    const implLength713 = fs.readFileSync(path.join(tmp713, 'lib', 'impl.js')).length;
+    assert(/^[0-9a-f]{40,64}$/.test(implObjectId713),
+      '#713 fixture: the candidate blob id for lib/impl.js resolves, got ' + JSON.stringify(implObjectId713));
     const blockingFinding713 = {
       failure_class: 'correctness',
       trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
         expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
-      primary_anchor: { kind: 'evidence_observation',
-        producer_evidence_digest: writerEvidenceDigest713,
-        observation_key: 'writer:issue-713-regression' },
+      primary_anchor: { kind: 'candidate_range', path: 'lib/impl.js',
+        object_format: objectFormat713, tree_mode: '100644', object_id: implObjectId713,
+        start: 0, end: 1, blob_length: implLength713 },
       secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
       status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
     };
@@ -21123,7 +22511,7 @@ function rtHarness(initialFiles, opts) {
     rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'writer',
       '--stdin', '--json'], tmp713,
       'evidence-binding: writer ' + lastJson713(openWriter713).nonce
-        + '\nRED: gate-B regression reproduced\nGREEN: gate-B regression passes\n');
+        + '\nRED: gate-B regression reproduced\nred_baseline: ' + lastJson713(openWriter713).nonce + '\n');
     assert(rec713.status === 0, '#713: repaired writer evidence records: ' + rec713.stdout + rec713.stderr);
     const closeWriter2 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
       '--node-id', 'writer', '--json'], tmp713);
@@ -21247,7 +22635,7 @@ function rtHarness(initialFiles, opts) {
         '#713/#714: no pending compliance row survives the completed cycle');
     }
   } finally { fs.rmSync(tmp713, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // #728 — a schema-2 change gate must never SETTLE a failed/refuted review
@@ -21267,7 +22655,7 @@ function rtHarness(initialFiles, opts) {
 // reduction absorbs into a PASSING aggregate must still close normally. Block A
 // is that pin.
 // ===========================================================================
-{
+scenario(() => {
   const { spawnSync: spawn728 } = require('child_process');
   const reviewSchema728 = require('./kaola-workflow-adaptive-schema');
   const NODE_CLI_728 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
@@ -21323,6 +22711,9 @@ function rtHarness(initialFiles, opts) {
         '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
         '## Design', '',
         'Decompose: writer builds the impl; adversarial-verifier gate(s) fan out over it; codegate post-dominates; finalize sinks. sequence edges are gate/data dependencies (S1). Done: gates clear and validation passes.', '',
+        '## Acceptance', '',
+        'A1: the implementation file is produced and passes the plan\'s validation command.',
+        'A2: every adversarial-verifier gate and the code gate clear over the produced tree.', '',
         '## Node Ledger', '',
         '| id | status |', '|---|---|',
         '| writer | pending |', ...avIds.map(id => '| ' + id + ' | pending |'),
@@ -21355,7 +22746,7 @@ function rtHarness(initialFiles, opts) {
       fs.writeFileSync(fixture.implPath, body);
       const rec = run728(NODE_CLI_728, ['record-evidence', '--project', fixture.project,
         '--node-id', 'writer', '--stdin', '--json'],
-        'evidence-binding: writer ' + nonce + '\nRED: reproduced\nGREEN: passes\n');
+        'evidence-binding: writer ' + nonce + '\nRED: reproduced\nred_baseline: ' + nonce + '\n');
       assert(rec.status === 0, '#728: writer evidence records: ' + rec.stdout + rec.stderr);
       const closed = run728(NODE_CLI_728, ['close-and-open-next', '--project', fixture.project,
         '--node-id', 'writer', '--json']);
@@ -21479,15 +22870,22 @@ function rtHarness(initialFiles, opts) {
     {
       const fx = setup728('issue-728-canonical', 'sequence');
       const gate = openGate728(fx, 'module.exports = 1;\n');
-      const writerEvidenceDigest = reviewSchema728.sha256Hex(
-        fs.readFileSync(path.join(fx.cacheDir, 'writer.md'), 'utf8'));
+      // The anchor is PATH-BEARING on purpose. A BLOCKING (in_scope / fix / open) finding at a
+      // FAILING change gate must name a repository path or the record seam refuses it
+      // (review_finding_anchor_unroutable) — a path-less blocking finding could commit an attempt no
+      // repair route can place. That gate is orthogonal to what these blocks pin (the frontier must
+      // be non-empty behind a failing aggregate), so the fixture uses an anchor that satisfies both.
+      const objectFormat728 = String(spawn728('git', ['-C', tmp728, 'rev-parse', '--show-object-format'],
+        { encoding: 'utf8', env: env728 }).stdout).trim();
+      const objectId728 = String(spawn728('git', ['-C', tmp728, 'hash-object', fx.implPath],
+        { encoding: 'utf8', env: env728 }).stdout).trim();
       const finding728 = {
         failure_class: 'correctness',
         trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
           expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
-        primary_anchor: { kind: 'evidence_observation',
-          producer_evidence_digest: writerEvidenceDigest,
-          observation_key: 'writer:issue-728-regression' },
+        primary_anchor: { kind: 'candidate_range', path: fx.project + '-impl.js',
+          object_format: objectFormat728, tree_mode: '100644', object_id: objectId728,
+          start: 0, end: 1, blob_length: fs.readFileSync(fx.implPath).length },
         secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
         status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
       };
@@ -21561,7 +22959,7 @@ function rtHarness(initialFiles, opts) {
         + JSON.stringify(attempts.map(a => ({ o: a.outcome, u: a.current_open_uids }))));
     }
   } finally { fs.rmSync(tmp728, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // #733 — a settled FAILED schema-2 review must refresh the derived task mirror.
@@ -21573,7 +22971,7 @@ function rtHarness(initialFiles, opts) {
 // so the refresh is wired at the mutation site and its failure is reported, never
 // raised: a mirror-write fault must not roll back a correct ledger transition.
 // ===========================================================================
-{
+scenario(() => {
   const { spawnSync: spawn733 } = require('child_process');
   const NODE_CLI_733 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
   const VALIDATOR_CLI_733 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
@@ -21615,6 +23013,9 @@ function rtHarness(initialFiles, opts) {
         '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
         '## Design', '',
         'Decompose: writer builds the impl; codegate post-dominates it; finalize sinks. sequence writer→codegate: S1 — codegate consumes the writer change. Done: gate clears and validation passes.', '',
+        '## Acceptance', '',
+        'A1: the implementation file is produced and passes the plan\'s validation command.',
+        'A2: the code gate clears over the produced tree.', '',
         '## Node Ledger', '', '| id | status |', '|---|---|',
         '| writer | pending |', '| codegate | pending |', '| finalize | pending |', '',
         '## Required Agent Compliance', '',
@@ -21640,21 +23041,30 @@ function rtHarness(initialFiles, opts) {
       fs.writeFileSync(path.join(tmp733, fx.implRel), 'module.exports = 1;\n');
       const rec = run733(['record-evidence', '--project', fx.project, '--node-id', 'writer',
         '--stdin', '--json'],
-      'evidence-binding: writer ' + openNonce + '\nRED: reproduced\nGREEN: passes\n');
+      'evidence-binding: writer ' + openNonce + '\nRED: reproduced\nred_baseline: ' + openNonce + '\n');
       assert(rec.status === 0, '#733: writer evidence records: ' + rec.stdout + rec.stderr);
       const closedWriter = run733(['close-and-open-next', '--project', fx.project,
         '--node-id', 'writer', '--json']);
       const gate = (lastJson733(closedWriter) || {}).opened;
       assert(closedWriter.status === 0 && gate && gate.id === 'codegate',
         '#733: the writer closes and the code gate opens: ' + closedWriter.stdout + closedWriter.stderr);
+      // #805: a change gate's BLOCKING findings must carry a PATH-BEARING primary anchor — an anchor
+      // with no path routes to no writer, so the attempt would commit with no reachable repair.
+      // `candidate_range` over the writer's own declared file is the faithful shape (the defect IS
+      // there) and binds to the real candidate blob the anchor index checks.
+      const objectFormat733 = String(spawn733('git', ['-C', tmp733, 'rev-parse', '--show-object-format'],
+        { encoding: 'utf8', env: env733 }).stdout).trim();
+      const implObjectId733 = String(spawn733('git', ['-C', tmp733, 'hash-object', fx.implRel],
+        { encoding: 'utf8', env: env733 }).stdout).trim();
+      assert(/^[0-9a-f]{40,64}$/.test(implObjectId733),
+        '#733 fixture: the candidate blob id for ' + fx.implRel + ' resolves, got ' + JSON.stringify(implObjectId733));
       const finding = {
         failure_class: 'correctness',
         trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
           expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
-        primary_anchor: { kind: 'evidence_observation',
-          producer_evidence_digest: require('crypto').createHash('sha256')
-            .update(fs.readFileSync(path.join(fx.cacheDir, 'writer.md'), 'utf8')).digest('hex'),
-          observation_key: 'writer:issue-733' },
+        primary_anchor: { kind: 'candidate_range', path: fx.implRel,
+          object_format: objectFormat733, tree_mode: '100644', object_id: implObjectId733,
+          start: 0, end: 1, blob_length: fs.readFileSync(path.join(tmp733, fx.implRel)).length },
         secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
         status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
       };
@@ -21717,7 +23127,7 @@ function rtHarness(initialFiles, opts) {
         '#733-B-failopen: the ledger fold still landed');
     }
   } finally { fs.rmSync(tmp733, { recursive: true, force: true }); }
-}
+});
 
 // ---------------------------------------------------------------------------
 // #727: the domain_outcome ENUM is named at BOTH ends — the open-time seeded stub and the
@@ -21727,7 +23137,7 @@ function rtHarness(initialFiles, opts) {
 // review_domain_outcome_invalid refusal made `domain_outcome: pass` (the gate EFFECT vocabulary)
 // a plausible, only-discovered-at-close mistake.
 // ---------------------------------------------------------------------------
-{
+scenario(() => {
   const {
     ADVERSARIAL_OUTCOMES: SCHEMA_ADVERSARIAL_OUTCOMES,
     APPROVAL_OUTCOMES: SCHEMA_APPROVAL_OUTCOMES,
@@ -21786,7 +23196,7 @@ function rtHarness(initialFiles, opts) {
     // A NON-review role is untouched — the generic stub shape is preserved everywhere else.
     seedEvidenceFile(planPath, 'w1', 'nonce727cccc', 'implementer', true);
     const implSeed = fs.readFileSync(path.join(projectDir, '.cache', 'w1.md'), 'utf8');
-    assert(/paste non_tdd_reason here/.test(implSeed),
+    assert(/<!-- tests-green\|regression-green\|build-green\|smoke-integration -->/.test(implSeed),
       '#727-B: a non-review role keeps the generic stub shape, got:\n' + implSeed);
   } finally { fs.rmSync(tmp727, { recursive: true, force: true }); }
 
@@ -21812,7 +23222,7 @@ function rtHarness(initialFiles, opts) {
   assert(SCHEMA_APPROVAL_OUTCOMES.concat(SCHEMA_ADVERSARIAL_OUTCOMES).every(v => hintNoRole.includes(v))
     && !/Run orient to inspect the plan \+ ledger state and the relevant plan-run recovery card\./.test(hintNoRole),
     '#727-C: a role-less context names BOTH enums (never the generic fallback), got: ' + hintNoRole);
-}
+});
 
 // ===========================================================================
 // CLUSTER #759 — THE EXPANSION TRANSACTION.
@@ -21821,7 +23231,7 @@ function rtHarness(initialFiles, opts) {
 // durability story), the writer/parser round trip, the fail-closed gates on expand-open, and the
 // reconcile roll-forward arm.
 // ===========================================================================
-{
+scenario(() => {
   const {
     runExpandOpen, runExpandClose, rollForwardExpansions,
     validateComposition, renderExpansionRecord, appendExpansionBlock, appendLedgerRows,
@@ -22301,7 +23711,7 @@ function rtHarness(initialFiles, opts) {
     assert(wrote === null,
       '#759-F2: skipping must write nothing at all (no second proof block, no ledger touch), got:\n' + String(wrote));
   }
-}
+});
 
 
 // ===========================================================================
@@ -22312,7 +23722,7 @@ function rtHarness(initialFiles, opts) {
 // field. The router's default-local / positive-proof-to-escalate behaviour is the exact shape prior
 // siblings were rejected for getting backwards.
 // ===========================================================================
-{
+scenario(() => {
   const {
     surfaceCoversFile, resolveExpansionOwnership, routeFindingReExpansion,
     assertReExpansionReviewed, buildReExpansionComposition, findingFilesFromIndexRow,
@@ -22514,7 +23924,7 @@ function rtHarness(initialFiles, opts) {
     assert(typeof schema761.EXPANSION_ID_RE.test === 'function' && schema761.EXPANSION_ID_RE.test('a#1'),
       '#761-G: the exported record-id regex accepts a minimal <point>#<ordinal>');
   }
-}
+});
 
 
 // ===========================================================================
@@ -22525,7 +23935,7 @@ function rtHarness(initialFiles, opts) {
 // gates (which return BEFORE the delegated transaction). The happy-path re-open + AC3 selectivity are
 // driven end to end through the production CLI in the walkthrough.
 // ===========================================================================
-{
+scenario(() => {
   const {
     wallsOfMilestone, downstreamMilestones, reExpansionFixFiles, deriveSinkProgress,
     defaultSinkProgressProbe, runReExpandOpen,
@@ -22628,7 +24038,7 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'refuse' && r.reason === 'reexpansion_review_wall_missing',
       '#761b GATE2: re-opening a point with no reachable review wall fails CLOSED, got ' + JSON.stringify(r));
   }
-}
+});
 
 
 // ===========================================================================
@@ -22637,7 +24047,7 @@ function rtHarness(initialFiles, opts) {
 // directive, NOT dependent_producer_replay_required / would_orphan / would_strand / replan), and a
 // genuine spine-shape-change finding (and a legacy DAG plan) returns null so the retained family runs.
 // ===========================================================================
-{
+scenario(() => {
   const { spineReExpansionFirst, findingFilesFromAttempt } = require('./kaola-workflow-adaptive-node');
   const SPINE761c = [
     '# Plan', '', '## Meta', '', 'plan_form: spine', '',
@@ -22677,7 +24087,535 @@ function rtHarness(initialFiles, opts) {
   const wired = spineReExpansionFirst(SPINE761c, wiredFiles);
   assert(wired && wired.result === 'route_local_reexpansion',
     '#761c: an attempt finding under a milestone surface routes local through the SAME precheck the escalation sites call, got ' + JSON.stringify(wired));
-}
+});
+
+// ===========================================================================
+// CLUSTER #805 — A GATE FINDING MUST BE ROUTABLE, AND ITS PATH MUST REACH THE ROUTER.
+//
+// The dead end: a change-gate finding on a `complete` writer with no reachable in-plan repair. Its
+// root cause is the ANCHOR — an `evidence_observation` primary anchor carries NO path, and every
+// in-plan repair route resolves its fixer FROM that path, so such a finding could be COMMITTED and
+// then placed nowhere. The end-to-end proof runs through the production CLIs in the walkthrough
+// (testReviewerContractV2Conformance: the unroutable variant refused before any attempt exists, then
+// the same finding re-anchored on a path resolving to its writer and repairing in place with zero
+// epochs). These are the unit-level pins on the pieces that proof composes.
+//
+// (D) additionally pins `findingFilesFromAttempt` as ROW-ONLY: it deliberately does NOT join the
+// attempt's canonical findings, because making the schema-2 paths reach the spine router produces a
+// `route_local_reexpansion` directive that is not executable while the attempt is unresolved.
+// ===========================================================================
+scenario(() => {
+  const schema805 = require('./kaola-workflow-adaptive-schema');
+  const { findingOwnershipSummary, findingFilesFromAttempt } = require('./kaola-workflow-adaptive-node');
+
+  // --- (A) ROUTABLE_FINDING_ANCHOR_KINDS is DERIVED, never a second hand-kept list. ---
+  {
+    assert(JSON.stringify(schema805.ROUTABLE_FINDING_ANCHOR_KINDS)
+      === JSON.stringify(schema805.FINDING_ANCHOR_KINDS.filter(schema805.findingAnchorCarriesPath)),
+    '#805-A: the routable set must be DERIVED from the anchor-kind vocabulary through the ONE '
+      + 'path-bearing predicate — a second hand-kept list is how the reviewer-facing stub and the '
+      + 'enforcing gate drift, got ' + JSON.stringify(schema805.ROUTABLE_FINDING_ANCHOR_KINDS));
+    assert(!schema805.ROUTABLE_FINDING_ANCHOR_KINDS.includes('evidence_observation')
+      && schema805.ROUTABLE_FINDING_ANCHOR_KINDS.length === schema805.FINDING_ANCHOR_KINDS.length - 1,
+    '#805-A: evidence_observation is the one kind that carries no path, got '
+      + JSON.stringify(schema805.ROUTABLE_FINDING_ANCHOR_KINDS));
+    for (const kind of schema805.FINDING_ANCHOR_KINDS) {
+      assert(schema805.findingAnchorCarriesPath(kind) === (kind !== 'evidence_observation'),
+        '#805-A: the predicate must agree with the vocabulary for "' + kind + '"');
+    }
+  }
+
+  // --- (B) the open-time seeded gate stub STATES the routable kinds (the same way the outcome enum
+  // is already surfaced), so a reviewer learns the rule before spending the review, not at close. ---
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-805-seed-'));
+    try {
+      fs.mkdirSync(path.join(tmp, '.cache'), { recursive: true });
+      const planPath = path.join(tmp, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '## Nodes',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| gate | code-reviewer | — | — | 1 | sequence |',
+        '## Node Ledger', '| id | status |', '| --- | --- |', '| gate | in_progress |',
+      ].join('\n'));
+      // The findings token class only exists on a SCHEMA-2 gate open, so the seed is driven by the
+      // real `requiredReviewTokens` selector — the same one the close-time validator reads — rather
+      // than by the schema-1 role registry (which carries verdict/findings_blocking and no findings
+      // JSON at all). Seeding through the selector is what makes this pin about the live gate stub.
+      const gateTokens = schema805.requiredReviewTokens(
+        { nodes: [{ id: 'gate', role: 'code-reviewer' }] }, { id: 'gate', role: 'code-reviewer' });
+      assert(gateTokens.includes('finding_json|findings_none'),
+        '#805-B PRECONDITION: a schema-2 change gate carries the findings token class, got ' + JSON.stringify(gateTokens));
+      seedEvidenceFile(planPath, 'gate', 'abcdef123456', 'code-reviewer', false,
+        { required_tokens: gateTokens });
+      const seeded = fs.readFileSync(path.join(tmp, '.cache', 'gate.md'), 'utf8');
+      assert(/PATH-BEARING primary_anchor\.kind/.test(seeded),
+        '#805-B: the change-gate stub must state the routability rule, got:\n' + seeded);
+      for (const kind of schema805.ROUTABLE_FINDING_ANCHOR_KINDS) {
+        assert(seeded.includes(kind), '#805-B: the stub must name the routable kind "' + kind + '"');
+      }
+      assert(!seeded.includes('<!-- a BLOCKING finding') || !/^\s*finding_json:.*PATH-BEARING/m.test(seeded),
+        '#805-B: the note must NOT sit on a column-0 token line — the hollow-seed and finding parsers '
+        + 'are fence-blind and match at column 0, got:\n' + seeded);
+      assert(/^finding_json: $/m.test(seeded),
+        '#805-B: the token line itself is still seeded EMPTY (anti-fabrication), got:\n' + seeded);
+      // CONTROL — a DIFFERENT alternative token class must NOT attract the note. Without this the
+      // assertions above are satisfied by an implementation that decorates every alternative class.
+      fs.rmSync(path.join(tmp, '.cache', 'gate.md'));
+      seedEvidenceFile(planPath, 'gate', 'abcdef123456', 'implementer', false,
+        { required_tokens: ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'] });
+      const other = fs.readFileSync(path.join(tmp, '.cache', 'gate.md'), 'utf8');
+      assert(/<!-- regression-green\|build-green\|smoke-integration -->/.test(other),
+        '#805-B CONTROL: the other alternative class still renders its own header, got:\n' + other);
+      assert(!/PATH-BEARING/.test(other),
+        '#805-B CONTROL: the routability note is scoped to the FINDINGS class, not every alternative '
+        + 'token class, got:\n' + other);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // --- (C) the ownership summary names WHY ownership is empty, in the finding's own vocabulary. ---
+  {
+    const anchorless = {
+      findings: [{ uid: 'u1', primary_anchor: { kind: 'evidence_observation' } }],
+      route_candidates: [{ finding_id: 'u1', id: 'u1', status: 'open', ownership_candidates: [] }],
+    };
+    const own1 = findingOwnershipSummary(anchorless, 'writer');
+    assert(JSON.stringify(own1.unroutableAnchorKinds) === JSON.stringify(['evidence_observation']),
+      '#805-C: an unowned finding whose anchor kind carries no path must be reported as such — that is '
+      + 'the difference between "fix the anchor" and "spend an epoch", got ' + JSON.stringify(own1.unroutableAnchorKinds));
+    const pathed = {
+      findings: [{ uid: 'u1', primary_anchor: { kind: 'candidate_range', path: 'scripts/nowhere.js' } }],
+      route_candidates: [{ finding_id: 'u1', id: 'u1', status: 'open', ownership_candidates: [] }],
+    };
+    assert(JSON.stringify(findingOwnershipSummary(pathed, 'writer').unroutableAnchorKinds) === '[]',
+      '#805-C: an unowned finding whose anchor DOES name a path is a genuine scope expansion, not an '
+      + 'anchor defect — it must NOT be reported as an unroutable kind');
+    const owned = {
+      findings: [{ uid: 'u1', primary_anchor: { kind: 'evidence_observation' } }],
+      route_candidates: [{ finding_id: 'u1', id: 'u1', status: 'open', ownership_candidates: ['writer'] }],
+    };
+    assert(JSON.stringify(findingOwnershipSummary(owned, 'writer').unroutableAnchorKinds) === '[]',
+      '#805-C: an OWNED row is not an ownership failure, whatever its anchor kind');
+    assert(JSON.stringify(findingOwnershipSummary(null, 'writer').unroutableAnchorKinds) === '[]',
+      '#805-C: a null attempt is total, never a throw');
+  }
+
+  // --- (D) findingFilesFromAttempt is ROW-ONLY — a DELIBERATE hold, pinned so it stays deliberate. ---
+  {
+    // A REAL schema-2 attempt shape: the route row carries ownership + status and NO anchors; the paths
+    // live only on the canonical finding record. So this returns [] for a schema-2 attempt, the spine
+    // local-re-expansion precheck cannot place the finding, and the request falls through to the replan
+    // family. That LOOKS like an obvious one-line fix (join the canonical findings by uid) and must not
+    // be taken in isolation: with the paths joined in, `repair-node` returns `route_local_reexpansion`,
+    // and the named `reexpand-open` then HALF-COMMITS (it appends its record + unit ledger row) before
+    // the review-journal fence refuses `review_attempt_unresolved` — leaving the plan wedged, which is
+    // strictly worse than the working-if-expensive replan exit. Settling the attempt from the
+    // re-expansion side needs the `repair.selected_writer` / `consumed_by` pair the journal validator
+    // requires and an expansion point cannot supply. This pin exists to make that a decision, not an
+    // oversight: change it only together with the lane that can settle the attempt.
+    const schema2Attempt = {
+      findings: [{ uid: 'u1', primary_anchor: { kind: 'candidate_range', path: 'scripts/impl.js' },
+        secondary_anchors: [{ kind: 'tree_entry_change', path: 'scripts/other.js' }] }],
+      route_candidates: [{ source_node: 'gate', finding_id: 'u1', id: 'u1', status: 'open',
+        scope: 'in_scope', action: 'fix', severity: 'high', fix_role: null,
+        ownership_candidates: [], owning_node: null, raw: 'uid=u1' }],
+    };
+    assert(JSON.stringify(findingFilesFromAttempt(schema2Attempt)) === '[]',
+      '#805-D: a schema-2 route row carries no anchors, so this stays [] BY DESIGN until the local '
+      + 're-expansion route can settle the attempt it repairs, got '
+      + JSON.stringify(findingFilesFromAttempt(schema2Attempt)));
+    // Schema-1 flat rows (files on the row itself) resolve, and that path is what the spine router
+    // actually consumes today — unchanged.
+    assert(JSON.stringify(findingFilesFromAttempt({ route_candidates: [{ status: 'open', file: 'scripts/one.js' }] }))
+      === JSON.stringify(['scripts/one.js']),
+    '#805-D CONTROL: a schema-1 flat row still resolves from the row itself, so the pin above is about '
+      + 'the schema-2 projection specifically and not a dead function');
+    assert(JSON.stringify(findingFilesFromAttempt({ route_candidates: [{ status: 'resolved', file: 'scripts/one.js' }] })) === '[]',
+      '#805-D: only STILL-OPEN rows contribute files');
+  }
+});
+
+// ===========================================================================
+// CLUSTER #807 — EXPANSION RESHAPES THE PRESENTED TASK LIST.
+//
+// Expansion is the one lifecycle step that changes the run's SHAPE, and two channels used to hide it:
+//   D1 expand-open returned transitions ONLY for the units its FIRST frontier happened to open, so a
+//      composed-but-downstream unit was announced to nobody — the operator's list kept showing the
+//      frozen spine.
+//   D2 expand-close MUTATED the ledger (point -> complete) yet returned taskTransitions:[] and never
+//      refreshed the durable mirror — the ONE ledger-mutating subcommand that skipped the
+//      mutation-time task-mirror contract every other one honors.
+//
+// Driven through the REAL runExpandOpen / runExpandClose against a real temp tree, with only
+// next-action's ready set mocked (that is what decides which composed units the frontier opens).
+// ===========================================================================
+scenario(() => {
+  const { runExpandOpen, runExpandClose } = require('./kaola-workflow-adaptive-node');
+
+  const DERIV807 = { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none' };
+  const PLAN807 = (rows, tail) => ['# Plan — 807', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', ...rows, '',
+    ...(tail || [])].join('\n');
+  const READY807 = ['| probe | complete |', '| m1 | pending |', '| wall | pending |', '| done | pending |'];
+
+  // THREE composed units; the frontier opens exactly TWO (u3 is serial behind u1, so next-action does
+  // not offer it). This is the shape the defect hid: u3 exists in the ledger and in the durable mirror,
+  // and used to be announced through NO transition at all.
+  const COMP807 = { derivation: { ...DERIV807 }, units: [
+    { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+    { name: 'u2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+    { name: 'u3', role: 'code-explorer', model: 'standard', write_set: '', mode: 'serial', depends_on: ['u1'] },
+  ] };
+  const OPENED807 = ['m1-r1-u1', 'm1-r1-u2'];
+  const COMPOSED807 = ['m1-r1-u1', 'm1-r1-u2', 'm1-r1-u3'];
+
+  const mk807 = (planText, readyIds) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-807-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-807');
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    const mirrorCalls = [];
+    return {
+      tmp, planPath,
+      mirrorCalls,
+      opts: {
+        planPath, project: 'issue-807',
+        shell: (scriptPath, args) => {
+          const base = path.basename(String(scriptPath));
+          if (base === 'kaola-workflow-next-action.js') {
+            return { exitCode: 0, result: 'ok', allDone: false,
+              readyPending: (readyIds || []).map(id => ({ id, role: 'code-explorer',
+                declared_write_set: '—', model: 'standard', kind: 'read' })) };
+          }
+          if (base === 'kaola-workflow-task-mirror.js') {
+            mirrorCalls.push(args);
+            return { exitCode: 0, result: 'ok' };
+          }
+          return { exitCode: 0, ok: true, result: 'ok', recordBase: { base: 'b'.repeat(40) } };
+        },
+        readFile: p => fs.readFileSync(p, 'utf8'),
+        writeFile: (p, c) => fs.writeFileSync(p, c),
+        cacheExists: p => fs.existsSync(p),
+        mkdirp: d => { try { fs.mkdirSync(d, { recursive: true }); } catch (_) {} },
+        unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+        now: () => 'T',
+      },
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }),
+    };
+  };
+
+  // --- D1: one transition per COMPOSED unit — 2 in_progress (opened) + 1 pending (not yet). ---
+  {
+    const f = mk807(PLAN807(READY807), OPENED807);
+    try {
+      const r = runExpandOpen({ ...f.opts, nodeId: 'm1', composition: COMP807 });
+      assert(r.result === 'ok', '#807-D1: the 3-unit expansion must commit, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+      assert(JSON.stringify((r.opened || []).map(n => n.id)) === JSON.stringify(OPENED807),
+        '#807-D1 PRECONDITION: the frontier must open exactly 2 of the 3 composed units, got '
+        + JSON.stringify((r.opened || []).map(n => n.id)));
+      const t = r.taskTransitions || [];
+      assert(t.length === 3,
+        '#807-D1: expand-open must return one transition per COMPOSED unit (3), not only the opened ones — got '
+        + t.length + ': ' + JSON.stringify(t));
+      assert(JSON.stringify(t.map(x => x.id).slice().sort()) === JSON.stringify(COMPOSED807.slice().sort()),
+        '#807-D1: the transition set must name exactly the composed unit ids, got ' + JSON.stringify(t.map(x => x.id)));
+      const byId = new Map(t.map(x => [x.id, x]));
+      for (const id of OPENED807) {
+        assert(byId.get(id) && byId.get(id).ledger_status === 'in_progress' && byId.get(id).status === 'in_progress',
+          '#807-D1: an OPENED unit must transition in_progress, got ' + JSON.stringify(byId.get(id)));
+      }
+      assert(byId.get('m1-r1-u3') && byId.get('m1-r1-u3').ledger_status === 'pending'
+        && byId.get('m1-r1-u3').status === 'pending',
+      '#807-D1: a COMPOSED-but-unopened unit must transition pending (an id absent from the visible list '
+        + 'is thereby an INSERT), got ' + JSON.stringify(byId.get('m1-r1-u3')));
+      // The transition channel and the durable ledger must name the SAME unit ids.
+      const statuses = readLedgerStatuses(fs.readFileSync(f.planPath, 'utf8'));
+      for (const id of COMPOSED807) {
+        assert(Object.prototype.hasOwnProperty.call(statuses, id),
+          '#807-D1: every announced unit id must exist in the durable ledger, missing ' + id);
+      }
+    } finally { f.cleanup(); }
+  }
+
+  // --- D1b: a WIDER open still emits exactly one transition per unit (no duplicates). ---
+  {
+    const f = mk807(PLAN807(READY807), COMPOSED807);
+    try {
+      const r = runExpandOpen({ ...f.opts, nodeId: 'm1',
+        composition: { derivation: { ...DERIV807 }, units: COMP807.units.map(u => ({ ...u, mode: 'co_open', depends_on: [] })) } });
+      assert(r.result === 'ok', '#807-D1b: the all-open expansion must commit, got ' + JSON.stringify(r.reason));
+      const ids = (r.taskTransitions || []).map(x => x.id);
+      assert(ids.length === 3 && new Set(ids).size === 3,
+        '#807-D1b: a frontier that opens EVERY composed unit must still emit exactly 3 distinct transitions '
+        + '(the pending top-up must not duplicate an already-emitted id), got ' + JSON.stringify(ids));
+      assert((r.taskTransitions || []).every(x => x.ledger_status === 'in_progress'),
+        '#807-D1b: with every unit opened, every transition is in_progress, got ' + JSON.stringify(r.taskTransitions));
+    } finally { f.cleanup(); }
+  }
+
+  // --- D2: expand-close returns the point's own `complete` transition AND refreshes the mirror. ---
+  {
+    const UNIT_ROWS = ['| m1-r1-a | complete |'];
+    const RECORD = ['## Expansion Records', '', 'record(m1#1):', '  point: m1',
+      '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+      '  unit: a | code-explorer | — | — | co_open | —', '', 'open(m1#1):', '  at: T', ''];
+    const f = mk807(PLAN807(READY807.concat(UNIT_ROWS), RECORD), []);
+    try {
+      const r = runExpandClose({ ...f.opts, nodeId: 'm1' });
+      assert(r.result === 'ok' && JSON.stringify(r.discharged) === JSON.stringify(['m1#1']),
+        '#807-D2: a fully-settled point must discharge, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+      assert(JSON.stringify(r.taskTransitions) === JSON.stringify([
+        { id: 'm1', status: 'completed', ledger_status: 'complete', reason: 'expand-close' }]),
+      '#807-D2: expand-close MUTATES the ledger, so it must return the point\'s own complete transition '
+        + '(the mutation-time mirror contract every other ledger-mutating subcommand honors), got '
+        + JSON.stringify(r.taskTransitions));
+      assert(r.taskMirror && r.taskMirror.status === 'updated'
+        && r.taskMirror.path === 'kaola-workflow/issue-807/workflow-tasks.json',
+      '#807-D2: expand-close must refresh the durable task mirror after its plan write, got '
+        + JSON.stringify(r.taskMirror));
+      assert(f.mirrorCalls.length === 1,
+        '#807-D2: exactly ONE mirror refresh per discharge, got ' + f.mirrorCalls.length);
+      assert(/\| m1 \| complete \|/.test(fs.readFileSync(f.planPath, 'utf8')),
+        '#807-D2 CONTROL: the discharge really did move the ledger row');
+    } finally { f.cleanup(); }
+  }
+
+  // --- D2b: the alreadyDischarged EARLY RETURN emits NOTHING — no mutation happened. ---
+  {
+    const DISCHARGED = ['| probe | complete |', '| m1 | complete |', '| wall | pending |', '| done | pending |'];
+    const f = mk807(PLAN807(DISCHARGED), []);
+    try {
+      const before = fs.readFileSync(f.planPath, 'utf8');
+      const r = runExpandClose({ ...f.opts, nodeId: 'm1' });
+      assert(r.result === 'ok' && r.alreadyDischarged === true,
+        '#807-D2b: a point already complete short-circuits, got ' + JSON.stringify(r));
+      assert(JSON.stringify(r.taskTransitions) === '[]',
+        '#807-D2b: the alreadyDischarged branch mutated NOTHING, so it must emit NO transition, got '
+        + JSON.stringify(r.taskTransitions));
+      assert(!Object.prototype.hasOwnProperty.call(r, 'taskMirror') && f.mirrorCalls.length === 0,
+        '#807-D2b: no mutation ⇒ no mirror refresh (the contract is mutation-TIME sync, not call-time), got '
+        + JSON.stringify({ mirror: r.taskMirror, calls: f.mirrorCalls.length }));
+      assert(fs.readFileSync(f.planPath, 'utf8') === before,
+        '#807-D2b: the early return is byte-zero-mutation on the plan');
+    } finally { f.cleanup(); }
+  }
+});
+
+// ===========================================================================
+// CLUSTER #807-F — NO LEDGER ROW MOVES UNANNOUNCED.
+//
+// The #807 shape channel fixed expand-open/expand-close, but three sibling paths still moved rows the
+// presented task list never heard about — and the FIRST of them is a defect the #807 fix itself created:
+//
+//   F1 reexpand-open's `_reactivate` cascade flips the OWNER milestone, its post-dominating review
+//      wall, any re-verified downstream milestone, and the sink from `complete` -> `pending`, and built
+//      a transition for NONE of them. Pre-#807 the milestone was never marked completed in the first
+//      place, so the cascade could not contradict the list; post-#807 the operator marks it completed at
+//      discharge and the re-open silently un-completes it in the LEDGER ONLY. A list reading
+//      "milestone done, review passed" over a run that has re-opened both is worse than a stale list.
+//   F2 the DOCUMENTED crash recovery (reconcile-running-set -> re-orient) announced nothing:
+//      rollForwardExpansions re-opened the frontier through runOpenReady — which builds real
+//      `in_progress` transitions — and every reconcile arm then threw them away with taskTransitions: [].
+//   F4 every plan-run surface says to insert a newly-announced unit "in record order", which no runtime
+//      could follow from a frontier-order-first array.
+//
+// The F1/F2 assertions are written as a LEDGER DIFF, not a hand-listed expectation: read the ledger
+// before and after, and require that every row that MOVED is named in taskTransitions. That is the
+// property, and it cannot rot as the cascade grows new arms.
+// ===========================================================================
+scenario(() => {
+  const { runReExpandOpen, runExpandOpen, runReconcileRunningSet } = require('./kaola-workflow-adaptive-node');
+
+  const DERIV = { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none' };
+  // m1 (owner, discharged) -> m2 (downstream milestone, discharged) -> wall (review, complete) -> done
+  // (sink, complete). Re-opening m1 must move m1, m2, wall and done — four rows, zero of them announced
+  // before this fix.
+  const PLAN807F = (rows, tail) => ['# Plan — 807F', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g1', '  expected_surfaces: scripts/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m2):', '  milestone_goal: g2', '  expected_surfaces: scripts/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |',
+    '| m2 | expansion-point | m1 | — | 1 | sequence |',
+    '| wall | code-reviewer | m1, m2 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', ...rows, '',
+    ...(tail || [])].join('\n');
+
+  const RECORD = (id, point, units) => ['record(' + id + '):', '  point: ' + point,
+    '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    ...units.map(u => '  unit: ' + u + ' | code-explorer | — | — | co_open | —')];
+
+  const mk = (planText, readyIds) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-807f-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-807f');
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), 'project: issue-807f\nbranch: wf/807f\n');
+    return {
+      tmp, planPath, projectDir,
+      opts: {
+        planPath, project: 'issue-807f',
+        shell: (scriptPath, args) => {
+          const base = path.basename(String(scriptPath));
+          if (base === 'kaola-workflow-next-action.js') {
+            return { exitCode: 0, result: 'ok', allDone: false,
+              readyPending: (readyIds || []).map(id => ({ id, role: 'code-explorer',
+                declared_write_set: '—', model: 'standard', kind: 'read' })) };
+          }
+          if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, result: 'ok' };
+          return { exitCode: 0, ok: true, result: 'ok', recordBase: { base: 'b'.repeat(40) } };
+        },
+        readFile: p => fs.readFileSync(p, 'utf8'),
+        writeFile: (p, c) => fs.writeFileSync(p, c),
+        cacheExists: p => fs.existsSync(p),
+        mkdirp: d => { try { fs.mkdirSync(d, { recursive: true }); } catch (_) {} },
+        unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+        now: () => 'T',
+        sinkProgressProbe: () => ({ state: 'pristine', evidence: 'test' }),
+      },
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }),
+    };
+  };
+
+  // movedRows(before, after) — the ids whose ledger status CHANGED. The authority both F1 and F2 are
+  // judged against; a hand-listed expectation would go stale the moment the cascade grows an arm.
+  const movedRows = (before, after) => {
+    const b = readLedgerStatuses(before);
+    const a = readLedgerStatuses(after);
+    return Object.keys(a).filter(id => b[id] !== a[id]).sort();
+  };
+
+  // --- F1: the re-open cascade announces EVERY row it moves. ---
+  {
+    const SETTLED = ['| m1 | complete |', '| m2 | complete |', '| wall | complete |', '| done | complete |',
+      '| m1-r1-a | complete |', '| m2-r1-a | complete |'];
+    const TAIL = ['## Expansion Records', '',
+      ...RECORD('m1#1', 'm1', ['a']), '', 'open(m1#1):', '  at: T', '',
+      ...RECORD('m2#1', 'm2', ['a']), '', 'open(m2#1):', '  at: T', ''];
+    const f = mk(PLAN807F(SETTLED, TAIL), ['m1-r2-fix']);
+    try {
+      const before = fs.readFileSync(f.planPath, 'utf8');
+      const r = runReExpandOpen({ ...f.opts, nodeId: 'm1',
+        composition: { derivation: { ...DERIV }, units: [
+          { name: 'fix', role: 'code-explorer', model: 'standard', write_set: 'scripts/a.js', mode: 'co_open' }] } });
+      assert(r.result === 'ok' && r.reopened === true,
+        '#807-F1 PRECONDITION: the re-open must commit, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+      const after = fs.readFileSync(f.planPath, 'utf8');
+      const moved = movedRows(before, after);
+      // PRECONDITION: the cascade really did un-complete the owner + its wall (the rows the operator's
+      // list is asserting are done). If this ever stops being true the test below proves nothing.
+      for (const id of ['m1', 'wall']) {
+        assert(moved.includes(id),
+          '#807-F1 PRECONDITION: the cascade must move ' + id + ' off complete, moved=' + JSON.stringify(moved));
+      }
+      const announced = new Set((r.taskTransitions || []).map(t => t.id));
+      const silent = moved.filter(id => !announced.has(id));
+      assert(silent.length === 0,
+        '#807-F1: every ledger row the re-open cascade MOVES must be announced through taskTransitions — '
+        + 'moved ' + JSON.stringify(moved) + ' but announced ' + JSON.stringify(Array.from(announced))
+        + ', so ' + JSON.stringify(silent) + ' moved silently');
+      // And the announcement must carry the row's REAL new status, not merely name the id.
+      const st = readLedgerStatuses(after);
+      for (const t of (r.taskTransitions || [])) {
+        if (!Object.prototype.hasOwnProperty.call(st, t.id)) continue;
+        assert(t.ledger_status === st[t.id],
+          '#807-F1: transition for ' + t.id + ' claims ' + t.ledger_status + ' but the ledger says '
+          + st[t.id]);
+      }
+      // The newly composed fixer unit is still announced (the #807 shape channel is intact).
+      assert(announced.has('m1-r2-fix'),
+        '#807-F1 CONTROL: the composed fixer unit is still announced, got ' + JSON.stringify(Array.from(announced)));
+    } finally { f.cleanup(); }
+  }
+
+  // --- F2: crash recovery announces the frontier it rolls forward. ---
+  // A record appended by Phase 1 whose `open()` proof never landed, and NO running set at all — the
+  // `no_running_set` arm, the most common shape of that crash.
+  {
+    const ROWS = ['| m1 | pending |', '| m2 | pending |', '| wall | pending |', '| done | pending |',
+      '| m1-r1-a | pending |', '| m1-r1-b | pending |'];
+    const TAIL = ['## Expansion Records', '', ...RECORD('m1#1', 'm1', ['a', 'b']), ''];
+    const f = mk(PLAN807F(ROWS, TAIL), ['m1-r1-a']);
+    try {
+      const before = fs.readFileSync(f.planPath, 'utf8');
+      const r = runReconcileRunningSet({ ...f.opts });
+      assert(r.result === 'ok' && JSON.stringify(r.expansionsRolledForward) === '["m1#1"]',
+        '#807-F2 PRECONDITION: the unproven record must roll forward, got ' + JSON.stringify({ result: r.result, reason: r.reason, rolled: r.expansionsRolledForward }));
+      const after = fs.readFileSync(f.planPath, 'utf8');
+      const moved = movedRows(before, after);
+      assert(moved.includes('m1-r1-a'),
+        '#807-F2 PRECONDITION: the roll-forward must open a unit, moved=' + JSON.stringify(moved));
+      const announced = new Set((r.taskTransitions || []).map(t => t.id));
+      const silent = moved.filter(id => !announced.has(id));
+      assert(silent.length === 0,
+        '#807-F2: reconcile-running-set is the DOCUMENTED crash recovery, so the units its roll-forward '
+        + 're-opens must be announced — moved ' + JSON.stringify(moved) + ', announced '
+        + JSON.stringify(Array.from(announced)));
+      // The composed-but-unopened sibling is a `pending` INSERT, exactly as a first-try expand-open emits.
+      const byId = new Map((r.taskTransitions || []).map(t => [t.id, t]));
+      assert(byId.get('m1-r1-a') && byId.get('m1-r1-a').ledger_status === 'in_progress',
+        '#807-F2: the re-opened unit is announced in_progress, got ' + JSON.stringify(byId.get('m1-r1-a')));
+      assert(byId.get('m1-r1-b') && byId.get('m1-r1-b').ledger_status === 'pending',
+        '#807-F2: the composed-but-unopened sibling is announced as a pending INSERT (recovery presents '
+        + 'the same SHAPE a first-try expansion does), got ' + JSON.stringify(byId.get('m1-r1-b')));
+    } finally { f.cleanup(); }
+  }
+
+  // --- F2b: a stable plan still emits nothing (the roll-forward is a no-op ⇒ no phantom transitions). ---
+  {
+    const ROWS = ['| m1 | complete |', '| m2 | pending |', '| wall | pending |', '| done | pending |',
+      '| m1-r1-a | complete |'];
+    const TAIL = ['## Expansion Records', '', ...RECORD('m1#1', 'm1', ['a']), '', 'open(m1#1):', '  at: T', ''];
+    const f = mk(PLAN807F(ROWS, TAIL), []);
+    try {
+      const r = runReconcileRunningSet({ ...f.opts });
+      assert(r.result === 'ok' && JSON.stringify(r.taskTransitions) === '[]',
+        '#807-F2b: a fully-proven, stable plan rolls nothing forward, so it must announce NOTHING, got '
+        + JSON.stringify(r.taskTransitions));
+    } finally { f.cleanup(); }
+  }
+
+  // --- F4: the unit transitions arrive IN RECORD ORDER, so "insert in record order" is followable. ---
+  // The frontier opens u2 and u3 while u1 waits behind an unmet edge; frontier order would be
+  // [u2, u3, u1], which no runtime can turn into a record-ordered insert.
+  {
+    const ROWS = ['| m1 | pending |', '| m2 | pending |', '| wall | pending |', '| done | pending |'];
+    const f = mk(PLAN807F(ROWS, ['## Expansion Records', '']), ['m1-r1-u2', 'm1-r1-u3']);
+    try {
+      const r = runExpandOpen({ ...f.opts, nodeId: 'm1', composition: { derivation: { ...DERIV }, units: [
+        { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'serial', depends_on: ['u2'] },
+        { name: 'u2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        { name: 'u3', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+      ] } });
+      assert(r.result === 'ok', '#807-F4 PRECONDITION: the expansion must commit, got ' + JSON.stringify(r.reason));
+      assert(JSON.stringify((r.opened || []).map(n => n.id)) === JSON.stringify(['m1-r1-u2', 'm1-r1-u3']),
+        '#807-F4 PRECONDITION: the frontier opens u2/u3 and leaves u1 behind, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+      assert(JSON.stringify((r.taskTransitions || []).map(t => t.id))
+        === JSON.stringify(['m1-r1-u1', 'm1-r1-u2', 'm1-r1-u3']),
+      '#807-F4: every plan-run surface tells the operator to insert a newly-announced unit "in record '
+        + 'order", so the emitted unit transitions must BE in record order — got '
+        + JSON.stringify((r.taskTransitions || []).map(t => t.id)));
+    } finally { f.cleanup(); }
+  }
+});
 
 // ===========================================================================
 // T-SEED-ATOMIC (#776): seedEvidenceFile's durable writes are crash-atomic AND
@@ -22689,7 +24627,7 @@ function rtHarness(initialFiles, opts) {
 // returns success-shaped metadata — so ANY write failure (ENOSPC/EIO/EROFS) left
 // the stale body byte-intact under a still-valid binding and reported success.
 // ===========================================================================
-{
+scenario(() => {
   const isRoot776 = typeof process.getuid === 'function' && process.getuid() === 0;
   const STALE_BODY = 'evidence-binding: rot-node abcdef123456\nverdict: pass\nfindings_blocking: 0\nRED: stale red\nGREEN: stale green\n';
 
@@ -22774,7 +24712,7 @@ function rtHarness(initialFiles, opts) {
   //     not turn every re-open into a body-destroying re-seed.
   {
     const f = mkSeedFixture('resume-node');
-    const inProgress = 'evidence-binding: resume-node keepnonce123\nRED: real red output\nGREEN: real green\n';
+    const inProgress = 'evidence-binding: resume-node keepnonce123\nRED: real red output\nred_baseline: keepnonce123\n';
     fs.writeFileSync(f.cachePath, inProgress, 'utf8');
     const r776d = seedEvidenceFile(f.planPath, 'resume-node', 'keepnonce123', 'tdd-guide', false);
     assert(r776d && r776d.nonce_rotated === false && fs.readFileSync(f.cachePath, 'utf8') === inProgress,
@@ -22793,7 +24731,7 @@ function rtHarness(initialFiles, opts) {
       'T-SEED-ATOMIC-e: a NON-rotating seed failure stays advisory (success-shaped, no throw), got '
       + JSON.stringify(r776e));
   }
-}
+});
 
 // ===========================================================================
 // T-REPAIR-REPLAY (#776): runRepairNode must REFUSE when the evidence rotation
@@ -22805,7 +24743,7 @@ function rtHarness(initialFiles, opts) {
 // pass body: checkEvidenceShape's expectedNonce passes, the stale verdict passes,
 // and the brief is appended on top — laundering it into "fresh seed + brief".
 // ===========================================================================
-{
+scenario(() => {
   const tmp776r = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair776-'));
   try {
     const projectDir = path.join(tmp776r, 'kaola-workflow', 'issue-776r');
@@ -22884,14 +24822,14 @@ function rtHarness(initialFiles, opts) {
     assert(!/repair brief/i.test(after776) && !/finding/i.test(after776),
       'T-REPAIR-REPLAY: the repair brief is NEVER appended onto a stale body, got ' + JSON.stringify(after776));
   } finally { fs.rmSync(tmp776r, { recursive: true, force: true }); }
-}
+});
 
 // ===========================================================================
 // T-REOPEN-SEEDFAIL (#776): runReopenNode refuses on the same failure signal.
 // Reopen's whole contract is "a NEW nonce over a FRESH body" — handing the node
 // back out over an evidence file we could not rewrite breaks it.
 // ===========================================================================
-{
+scenario(() => {
   const tmp776o = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reopen776-'));
   try {
     const projectDir = path.join(tmp776o, 'kaola-workflow', 'issue-776o');
@@ -22940,7 +24878,7 @@ function rtHarness(initialFiles, opts) {
     assert(!/verdict:\s*pass/.test(afterReopen776),
       'T-REOPEN-SEEDFAIL: the stale body does not survive the failed rotation, got ' + JSON.stringify(afterReopen776));
   } finally { fs.rmSync(tmp776o, { recursive: true, force: true }); }
-}
+});
 
 
 // ===========================================================================
@@ -22962,7 +24900,7 @@ function rtHarness(initialFiles, opts) {
 //         escalation. So :4706 is pinned to STAY parseNodes, a fourth refuted sibling.
 // The build below carries a REAL `## Expansion Records` block (renderExpansionRecord output) so the two
 // node views genuinely disagree — a `## Nodes`-only spine would prove nothing.
-{
+scenario(() => {
   const { renderExpansionRecord } = require('./kaola-workflow-adaptive-node');
   const NODE_ROWS_783 = [
     '| probe | code-explorer | — | — | 1 | sequence |',
@@ -23033,7 +24971,538 @@ function rtHarness(initialFiles, opts) {
     '#783 :4706 pin (VERIFIED NOT A DEFECT): reviewJournalV2MatchesPlan STAYS the FREEZE view '
     + '(validator.parseNodes) — an execution-view swap regresses the shipped #756 re-expansion '
     + 'epoch-transition wedge (testReExpansionEpochTransition756)');
-}
+});
+
+// ===========================================================================
+// #804 — the `--parallel-safe` verdict must never be LAUNDERED. ONE shared classifier for BOTH call
+// sites (tryFormLaneGroup / selectSpeculativeWriteGroup), EXACTLY ONE bounded re-probe on an
+// indeterminate verdict, and a CLASSIFIED serialDegradeReason on the normal site's degrade.
+// Direct unit calls against the injectable shell seam — the probe never reads the plan, so no fixture
+// repo is needed and no real git is touched.
+// ===========================================================================
+scenario(() => {
+  const ADAPT = require('./kaola-workflow-adaptive-node');
+  const P = '/p/workflow-plan.md';
+  const twoWrites = [{ id: 'w1', declared_write_set: 'a.js' }, { id: 'w2', declared_write_set: 'b.js' }];
+  // A counting shell: records every --parallel-safe invocation and replays a scripted verdict list
+  // (the last entry repeats once exhausted).
+  function scriptedShell(verdicts) {
+    const calls = [];
+    const shell = (scriptPath, args) => {
+      if ((args || []).includes('--parallel-safe')) {
+        calls.push((args || []).slice());
+        return verdicts[Math.min(calls.length - 1, verdicts.length - 1)];
+      }
+      return { exitCode: 0, result: 'ok' };
+    };
+    return { shell, calls };
+  }
+  const OK = { exitCode: 0, result: 'ok' };
+  const OVERLAP = { exitCode: 1, result: 'refuse', overlapping: [{ a: 'w1', b: 'w2' }] };
+  const CRASH = { exitCode: 1 };                       // no result, no overlapping array
+  const GARBLED = { exitCode: 0, result: 'refuse' };   // non-ok shape with no overlapping array
+
+  // ---- D1: the classifier is ONE function with three outcomes -------------------------------------
+  assert(ADAPT.classifyParallelSafeVerdict(OK).kind === 'ok', '#804-D1: a clean verdict classifies ok');
+  assert(ADAPT.classifyParallelSafeVerdict(OVERLAP).kind === 'overlap',
+    '#804-D1: a non-ok verdict carrying a well-formed overlapping array is a real overlap REPORT');
+  assert(ADAPT.classifyParallelSafeVerdict({ exitCode: 1, result: 'refuse', overlapping: [] }).kind === 'overlap',
+    '#804-D1: an EMPTY overlapping array is still a delivered report (the field presence is the signal)');
+  assert(ADAPT.classifyParallelSafeVerdict(CRASH).kind === 'indeterminate',
+    '#804-D1: a crashed prover delivered NO verdict — indeterminate, not a proven overlap');
+  assert(ADAPT.classifyParallelSafeVerdict(GARBLED).kind === 'indeterminate',
+    '#804-D1: a garbled non-ok shape without the array is indeterminate too');
+
+  // ---- D2 at tryFormLaneGroup: exactly ONE re-probe, two outcomes, no loop ------------------------
+  {
+    const { shell, calls } = scriptedShell([CRASH]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === false && grp.reason === 'parallel_safe_indeterminate',
+      '#804-D2a: a twice-indeterminate prover fails CLOSED labeled parallel_safe_indeterminate (never laundered into overlapping_write_sets), got ' + JSON.stringify(grp));
+    assert(calls.length === 2 && grp.probes === 2,
+      '#804-D2a: EXACTLY two probe invocations (one re-probe, no retry loop), got ' + calls.length);
+  }
+  {
+    // The repair is OBSERVABLE: a transient first fault + a clean second probe forms the group.
+    const { shell, calls } = scriptedShell([CRASH, OK]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === true && grp.members.join(',') === 'w1,w2',
+      '#804-D2b: a transient first fault repaired by the single re-probe forms the group, got ' + JSON.stringify(grp));
+    assert(calls.length === 2 && grp.probes === 2, '#804-D2b: exactly two probes, got ' + calls.length);
+  }
+  {
+    // A PROVEN overlap never re-probes — the prover delivered a verdict; re-asking is pure waste.
+    const { shell, calls } = scriptedShell([OVERLAP]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === false && grp.reason === 'overlapping_write_sets',
+      '#804-D2c: a proven overlap keeps the legitimate overlapping_write_sets serializer, got ' + JSON.stringify(grp));
+    assert(calls.length === 1 && grp.probes === 1, '#804-D2c: a PROVEN overlap NEVER re-probes, got ' + calls.length);
+  }
+  {
+    const { shell, calls } = scriptedShell([OK]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === true && calls.length === 1 && grp.probes === 1, '#804-D2d: a clean verdict never re-probes, got ' + calls.length);
+  }
+
+  // ---- D2 at selectSpeculativeWriteGroup: the SAME helper, so identical counts --------------------
+  {
+    const { shell, calls } = scriptedShell([CRASH]);
+    const sel = ADAPT.selectSpeculativeWriteGroup(twoWrites, [], P, shell, false, null);
+    assert(sel.excludedReason === 'parallel_safe_indeterminate' && sel.chosen.length === 0,
+      '#804-D2e: the speculative selector fails closed on a twice-indeterminate verdict, got ' + JSON.stringify({ r: sel.excludedReason, chosen: sel.chosen.length }));
+    assert(calls.length === 2 && sel.probes === 2, '#804-D2e: exactly two probes at the speculative site too, got ' + calls.length);
+  }
+  {
+    const { shell, calls } = scriptedShell([CRASH, OK]);
+    const sel = ADAPT.selectSpeculativeWriteGroup(twoWrites, [], P, shell, false, null);
+    assert(sel.chosen.length === 2 && sel.excluded.length === 0,
+      '#804-D2f: a transient fault repaired by the re-probe selects both candidates, got ' + JSON.stringify(sel.chosen.map(n => n.id)));
+    assert(calls.length === 2 && sel.probes === 2, '#804-D2f: exactly two probes, got ' + calls.length);
+  }
+  {
+    const { shell, calls } = scriptedShell([OVERLAP]);
+    const sel = ADAPT.selectSpeculativeWriteGroup(twoWrites, [], P, shell, false, null);
+    assert(sel.excludedReason === 'overlaps_live_writer' && calls.length === 1 && sel.probes === 1,
+      '#804-D2g: a proven overlap at the speculative site keeps its label and NEVER re-probes, got ' + JSON.stringify({ r: sel.excludedReason, calls: calls.length }));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #804-D3 — the NORMAL co-open site's serial degrade carries the CLASSIFIED cause. Before this,
+// "label absent" was shared by four causes and therefore distinguished nothing. Direct runOpenReady
+// unit calls with a CLEAN stubbed parent (so the seam checkpoint never fires) and no running set.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const plan = makePlan(['| w1 | pending | |', '| w2 | pending | |'], [
+    '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
+    '| w2 | implementer | — | scripts/b.js | 1 | sequence |',
+  ]);
+  const nextAction = (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+        { id: 'w1', role: 'implementer', declared_write_set: 'scripts/a.js' },
+        { id: 'w2', role: 'implementer', declared_write_set: 'scripts/b.js' },
+      ] };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse' };
+  };
+  function runWith(parallelSafeVerdicts) {
+    let psCalls = 0;
+    const validatorStub = (base, args) => {
+      if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (args.includes('--parent-clean-check')) return { exitCode: 0, result: 'pass' };
+      if (args.includes('--parallel-safe')) {
+        const v = parallelSafeVerdicts[Math.min(psCalls, parallelSafeVerdicts.length - 1)];
+        psCalls++;
+        return v;
+      }
+      return { exitCode: 0, result: 'ok' };
+    };
+    const h = rsHarness({ [RS_PLAN_PATH]: plan }, nextAction, validatorStub);
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8,
+      shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    return { r, psCalls: () => psCalls };
+  }
+  // A twice-indeterminate prover degrades to serial, LABELED, after exactly two probes.
+  {
+    const { r, psCalls } = runWith([{ exitCode: 1 }]);
+    assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup,
+      '#804-D3a: a twice-indeterminate prover degrades to a single serial write, got ' + JSON.stringify({ opened: r.opened && r.opened.map(n => n.id), laneGroup: r.laneGroup }));
+    assert(r.serialDegradeReason === 'parallel_safe_indeterminate',
+      '#804-D3a: the degrade is labeled parallel_safe_indeterminate, NOT laundered into overlapping_write_sets, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(psCalls() === 2, '#804-D3a: exactly two --parallel-safe invocations, got ' + psCalls());
+  }
+  // A PROVEN overlap degrades to serial with the legitimate serializer label, after ONE probe.
+  {
+    const { r, psCalls } = runWith([{ exitCode: 1, result: 'refuse', overlapping: [{ a: 'w1', b: 'w2' }] }]);
+    assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup, '#804-D3b: a proven overlap degrades to serial');
+    assert(r.serialDegradeReason === 'overlapping_write_sets',
+      '#804-D3b: the degrade is labeled overlapping_write_sets, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(psCalls() === 1, '#804-D3b: a PROVEN overlap NEVER re-probes, got ' + psCalls());
+  }
+  // A transient first fault + a clean second probe yields an OK verdict — the repair is observable at
+  // the scheduler level. Pinned under KAOLA_FANOUT_CAP=1 so the frontier degrades on the OPERATOR cap
+  // instead of forming a real lane group: a formed group provisions REAL leg worktrees, which a
+  // direct-call test must never do (the io-shim trap). That the group attempt SUCCEEDED is proven by
+  // the absence of any prover-caused degrade label alongside the two probe invocations; the co-open
+  // itself is covered by #804-D2b (unit) and the real-git #802 scenarios.
+  {
+    const savedCap = process.env.KAOLA_FANOUT_CAP;
+    process.env.KAOLA_FANOUT_CAP = '1';
+    try {
+      const { r, psCalls } = runWith([{ exitCode: 1 }, { exitCode: 0, result: 'ok' }]);
+      assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup,
+        '#804-D3c: the capped frontier opens serially, got ' + JSON.stringify({ result: r.result, opened: r.opened && r.opened.map(n => n.id) }));
+      assert(r.serialDegradeReason === undefined,
+        '#804-D3c: a REPAIRED transient fault leaves NO prover degrade label — the cap degraded it, not the prover, got ' + JSON.stringify(r.serialDegradeReason));
+      assert(psCalls() === 2, '#804-D3c: exactly two probes (the single re-probe fired), got ' + psCalls());
+    } finally {
+      if (savedCap === undefined) delete process.env.KAOLA_FANOUT_CAP;
+      else process.env.KAOLA_FANOUT_CAP = savedCap;
+    }
+  }
+  // The <2 write-cap ceiling is an OPERATOR cap — ordinary serial, deliberately UNLABELED.
+  {
+    const savedCap = process.env.KAOLA_FANOUT_CAP;
+    process.env.KAOLA_FANOUT_CAP = '1';
+    try {
+      const { r, psCalls } = runWith([{ exitCode: 0, result: 'ok' }]);
+      assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup, '#804-D3d: a cap of 1 degrades to serial');
+      assert(r.serialDegradeReason === undefined,
+        '#804-D3d: the operator cap degrade stays UNLABELED (ordinary serial, not a degrade cause), got ' + JSON.stringify(r.serialDegradeReason));
+      assert(psCalls() === 1, '#804-D3d: a clean verdict never re-probes, got ' + psCalls());
+    } finally {
+      if (savedCap === undefined) delete process.env.KAOLA_FANOUT_CAP;
+      else process.env.KAOLA_FANOUT_CAP = savedCap;
+    }
+  }
+});
+
+// ===========================================================================
+// #805 R1 — THE ROUTABILITY GATE IS KEYED ON GATE FAILURE, NOT ON ONE ROLE'S OUTCOME TOKEN.
+//
+// The shipped guard read `gateMode === 'change_gate' && domainOutcome === 'changes_requested'`.
+// `changes_requested` belongs to APPROVAL_OUTCOMES; an adversarial-verifier speaks
+// ADVERSARIAL_OUTCOMES (refuted | not_refuted | indeterminate), so the second conjunct was
+// UNSATISFIABLE for it and an AV change gate carrying a blocking, path-less finding sailed straight
+// past the guard into the exact dead end #805 exists to close (`ownership_candidates: []`,
+// `owning_node: null`; repair-node → repair_requires_replan, reopen-node → review_attempt_unresolved,
+// re-record → evidence_generation_stale). The guard now reads the DERIVED gate effect, which is the
+// one place (role, mode, outcome) is mapped to pass/fail/none — so it is role-agnostic by
+// construction and an approval gate's behavior is byte-unchanged.
+//
+// These blocks drive the PRODUCTION CLI end to end. Block A must be RED before the fix (the AV close
+// succeeds and commits a receipt + a settled journal attempt) and GREEN after.
+// ===========================================================================
+scenario(() => {
+  const { spawnSync: spawn805 } = require('child_process');
+  const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_CLI = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const schema805r1 = require('./kaola-workflow-adaptive-schema');
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_')));
+  const env805 = { ...baseEnv, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    KAOLA_WORKFLOW_OFFLINE: '1' };
+  const lastJson = result => {
+    const line = String(result.stdout || '').trim().split('\n').filter(row => row.trim().startsWith('{')).pop();
+    return line ? JSON.parse(line) : null;
+  };
+  const tmp805 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-805r1-')));
+  const run805 = (args, input) => spawn805(process.execPath, [NODE_CLI, ...args],
+    { cwd: tmp805, encoding: 'utf8', env: env805, input, timeout: 120000 });
+  try {
+    spawn805('git', ['init', '-b', 'main'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+    spawn805('git', ['config', 'user.email', 'kw@test'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+    spawn805('git', ['config', 'user.name', 'kw'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+
+    // One frozen schema-2 project per scenario, all in one repo: a serial writer certified by a
+    // SEQUENCE adversarial-verifier CHANGE gate (it `certifies` the writer, which is what makes
+    // deriveGateMode resolve change_gate), then the code certifier and the sink.
+    const setup = (project) => {
+      const projectDir = path.join(tmp805, 'kaola-workflow', project);
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const implRel = project + '-impl.js';
+      fs.writeFileSync(path.join(tmp805, implRel), 'module.exports = 0;\n');
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — ' + project, '',
+        '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
+        'code_certifier: codegate', 'security_certifier: none',
+        'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+        'validation_command: node --check ' + implRel, 'validation_timeout_minutes: 5', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '|---|---|---|---|---|---|---|---|---|---|',
+        '| writer | tdd-guide | — | ' + implRel + ' | 1 | sequence | — | — | — | — |',
+        '| av-a | adversarial-verifier | writer | — | 1 | sequence | change is sound | code-tree | sequence | writer |',
+        '| codegate | code-reviewer | av-a | — | 1 | sequence | review-change | code-tree | sequence | — |',
+        '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
+        '## Design', '',
+        'Decompose: writer builds the impl; av-a falsifies it as a change gate; codegate post-dominates; '
+          + 'finalize sinks. sequence edges are gate/data dependencies (S1). Done: gates clear and validation passes.', '',
+        '## Acceptance', '',
+        'A1: the implementation file is produced and passes the recorded validation command.',
+        'A2: the adversarial change gate and the code gate both clear over the produced tree.', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| writer | pending |', '| av-a | pending |', '| codegate | pending |', '| finalize | pending |', '',
+        '## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+        '| tdd-guide (writer) | pending | | |', '| adversarial-verifier (av-a) | pending | | |',
+        '| code-reviewer (codegate) | pending | | |', '| finalize (finalize) | pending | | |', '',
+      ].join('\n'));
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+      const freeze = spawn805(process.execPath, [VALIDATOR_CLI, planPath, '--freeze', '--json'],
+        { cwd: tmp805, encoding: 'utf8', env: env805 });
+      assert(freeze.status === 0 && lastJson(freeze) && lastJson(freeze).frozen === true,
+        '#805-R1 fixture: the AV change-gate plan freezes: ' + freeze.stdout + freeze.stderr);
+      spawn805('git', ['add', '-A'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+      spawn805('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp805, encoding: 'utf8', env: env805 });
+      return { project, projectDir, cacheDir, planPath, implRel };
+    };
+
+    // Drives the writer and returns the opened AV gate payload.
+    const openGate = (fx) => {
+      const opened = run805(['open-next', '--project', fx.project, '--json']);
+      assert(opened.status === 0 && lastJson(opened) && lastJson(opened).nonce,
+        '#805-R1 fixture: the writer opens: ' + opened.stdout + opened.stderr);
+      fs.writeFileSync(path.join(tmp805, fx.implRel), 'module.exports = 1;\n');
+      const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'writer', '--stdin', '--json'],
+        'evidence-binding: writer ' + lastJson(opened).nonce + '\nRED: reproduced\nred_baseline: '
+        + lastJson(opened).nonce + '\nGREEN: passes\n');
+      assert(rec.status === 0, '#805-R1 fixture: writer evidence records: ' + rec.stdout + rec.stderr);
+      const closed = run805(['close-and-open-next', '--project', fx.project, '--node-id', 'writer', '--json']);
+      assert(closed.status === 0 && lastJson(closed) && lastJson(closed).opened
+        && lastJson(closed).opened.id === 'av-a',
+        '#805-R1 fixture: the AV change gate opens off the writer close: ' + closed.stdout + closed.stderr);
+      return lastJson(closed).opened;
+    };
+
+    const gateEvidence = (opened, domainOutcome, extraRows) => [
+      'evidence-binding: av-a ' + opened.nonce,
+      'contract_version: 2',
+      'review_context_hash: ' + opened.dispatch.review_context_hash,
+      'behavior_contract_hash: ' + opened.dispatch.behavior_contract_hash,
+      'resolved_profile_hash: ' + opened.dispatch.resolved_profile_hash,
+      'candidate_digest: ' + opened.dispatch.candidate_digest,
+      'domain_outcome: ' + domainOutcome,
+      'claim_outcome: ' + domainOutcome,
+      'gate_mode: change_gate',
+      'gate_claim: change is sound',
+      'gate_surface: code-tree',
+      'gate_aggregation: sequence',
+      ...(extraRows || []), '',
+    ].join('\n');
+
+    const anchorlessFinding = (cacheDir, key) => ({
+      failure_class: 'correctness',
+      trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+        expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+      primary_anchor: { kind: 'evidence_observation',
+        producer_evidence_digest: schema805r1.sha256Hex(fs.readFileSync(path.join(cacheDir, 'writer.md'), 'utf8')),
+        observation_key: key },
+      secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
+      status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+    });
+
+    const journalOf = fx => {
+      const file = path.join(fx.cacheDir, 'review-attempts.json');
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { attempts: [] };
+    };
+
+    // -- Block A (THE DEFECT) — `refuted` is a gate FAILURE and must be gated ------------------
+    // RED at the old predicate: `refuted` is not `changes_requested`, so the guard never fired, the
+    // close SUCCEEDED (result review_failed), and a receipt + a settled, unrepairable attempt landed.
+    for (const outcome of ['refuted', 'indeterminate']) {
+      const fx = setup('issue-805r1-' + outcome);
+      const opened = openGate(fx);
+      const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence(opened, outcome,
+          ['finding_json: ' + JSON.stringify(anchorlessFinding(fx.cacheDir, 'writer:805r1-' + outcome))]));
+      assert(rec.status === 0,
+        '#805-R1A: record-evidence stays a verbatim transport for the unroutable bytes: ' + rec.stdout + rec.stderr);
+      const close = run805(['close-node', '--project', fx.project, '--node-id', 'av-a', '--json']);
+      const payload = lastJson(close) || {};
+      assert(close.status !== 0 && payload.reason === 'review_finding_anchor_unroutable',
+        '#805-R1A: an adversarial-verifier CHANGE gate settling ' + outcome + ' on a BLOCKING finding '
+        + 'whose primary anchor carries no path must refuse review_finding_anchor_unroutable — keying '
+        + 'the guard on the APPROVAL token made it unsatisfiable for this role, got ' + JSON.stringify(payload));
+      assert(JSON.stringify(payload.anchor_kinds) === JSON.stringify(['evidence_observation'])
+        && Array.isArray(payload.routable_anchor_kinds)
+        && !payload.routable_anchor_kinds.includes('evidence_observation'),
+      '#805-R1A: the refusal names the offending kind and the routable set, got ' + JSON.stringify(payload));
+      assert(typeof payload.operator_hint === 'string' && /re-anchor/i.test(payload.operator_hint)
+        && !/requested changes/i.test(payload.operator_hint),
+      '#805-R1A: the hint is worded off the derived gate FAILURE, not the approval vocabulary this '
+        + 'role does not speak, got ' + JSON.stringify(payload.operator_hint));
+      assert(!fs.existsSync(path.join(fx.cacheDir, 'review-receipts'))
+        && !fs.existsSync(path.join(fx.cacheDir, 'review-attempts.json')),
+      '#805-R1A: refused BEFORE any receipt or journal attempt exists, so the unrepairable-attempt '
+        + 'cycle can never form (' + outcome + ')');
+    }
+
+    // -- Block B — the SAME gate is admitted once the blocking finding names a path ---------------
+    // Also pins the population scoping: a NON-blocking (deferred) row may still anchor on
+    // evidence_observation, exactly as the reviewer contract promises.
+    {
+      const fx = setup('issue-805r1-admitted');
+      const opened = openGate(fx);
+      const objectFormat = String(spawn805('git', ['-C', tmp805, 'rev-parse', '--show-object-format'],
+        { encoding: 'utf8', env: env805 }).stdout).trim();
+      const objectId = String(spawn805('git', ['-C', tmp805, 'hash-object', fx.implRel],
+        { encoding: 'utf8', env: env805 }).stdout).trim();
+      const implBytes = fs.readFileSync(path.join(tmp805, fx.implRel));
+      const routable = { ...anchorlessFinding(fx.cacheDir, 'writer:805r1-unused'),
+        primary_anchor: { kind: 'candidate_range', path: fx.implRel, object_format: objectFormat,
+          tree_mode: '100644', object_id: objectId, start: 0, end: 1, blob_length: implBytes.length } };
+      const deferred = { ...anchorlessFinding(fx.cacheDir, 'writer:805r1-observation'),
+        severity: 'low', status: 'deferred' };
+      const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence(opened, 'refuted', ['finding_json: ' + JSON.stringify(routable),
+          'finding_json: ' + JSON.stringify(deferred)]));
+      assert(rec.status === 0, '#805-R1B: the mixed evidence records: ' + rec.stdout + rec.stderr);
+      const close = run805(['close-node', '--project', fx.project, '--node-id', 'av-a', '--json']);
+      const payload = lastJson(close) || {};
+      assert(payload.result === 'review_failed',
+        '#805-R1B: a refuted AV change gate whose BLOCKING finding names a path settles normally — the '
+        + 'guard must narrow to the repair-responsible population, never to every open row, got '
+        + JSON.stringify(payload));
+      const attempt = journalOf(fx).attempts[0];
+      assert(attempt && attempt.outcome === 'fail' && attempt.current_findings.length === 2,
+        '#805-R1B: both rows persist on the settled attempt, got '
+        + JSON.stringify(attempt && { o: attempt.outcome, n: attempt.current_findings.length }));
+      assert(attempt.current_findings.some(f => f.primary_anchor.kind === 'evidence_observation'),
+        '#805-R1B: evidence_observation stays LEGAL on a non-blocking row at a change gate — nothing '
+        + 'was removed from the reviewer vocabulary, got '
+        + JSON.stringify(attempt.current_findings.map(f => f.primary_anchor.kind)));
+    }
+
+    // -- Block C (R1.3) — the open-time stub states the anchor-kind rule to THIS reviewer too -----
+    // The note used to ride on the `finding_json|findings_none` token class, and requiredReviewTokens
+    // never asks an adversarial-verifier for one — so the single role whose change gate most naturally
+    // anchors on producer evidence was the only role never shown the rule it would be judged by.
+    {
+      const fx = setup('issue-805r1-stub');
+      const opened = openGate(fx);
+      assert(!opened.required_tokens.some(t => String(t).startsWith('finding_json')),
+        '#805-R1C PRECONDITION: an AV gate carries NO findings token class, got '
+        + JSON.stringify(opened.required_tokens));
+      const seeded = fs.readFileSync(path.join(fx.cacheDir, 'av-a.md'), 'utf8');
+      assert(/PATH-BEARING primary_anchor\.kind/.test(seeded),
+        '#805-R1C: the AV change-gate stub must state the routability rule it will be judged by, got:\n' + seeded);
+      for (const kind of schema805r1.ROUTABLE_FINDING_ANCHOR_KINDS) {
+        assert(seeded.includes(kind), '#805-R1C: the AV stub must name the routable kind "' + kind + '"');
+      }
+      assert(!/^finding_json:/m.test(seeded),
+        '#805-R1C: stating the rule must NOT seed a findings token the AV contract does not require '
+        + '(that would change required_tokens and the close-time shape check), got:\n' + seeded);
+      // CONTROL — investigation mode produces no repair obligation, so the rule does not bind there
+      // and printing it would be false guidance.
+      const investigation = path.join(fx.cacheDir, 'investigation-probe.md');
+      fs.rmSync(investigation, { force: true });
+      seedEvidenceFile(fx.planPath, 'investigation-probe', 'abcdef123456', 'adversarial-verifier', false,
+        { required_tokens: opened.required_tokens, review_gate: true, gate_mode: 'investigation' });
+      assert(!/PATH-BEARING/.test(fs.readFileSync(investigation, 'utf8')),
+        '#805-R1C CONTROL: an INVESTIGATION-mode gate carries no repair obligation, so it must not be '
+        + 'told a change-gate routability rule');
+    }
+  } finally { fs.rmSync(tmp805, { recursive: true, force: true }); }
+});
+
+// substitute-role (#798) — the same-kind, superset-proven dispatch swap. Covers the happy path,
+// the plan/plan_hash byte-identity claim (substitution is dispatch metadata, never plan mutation),
+// idempotent replay across a crash between record and dispatch, the dispatch-card fold-in, and each
+// of the five typed refusals.
+scenario(() => {
+  const { runSubstituteRole, activeRoleSubstitution, buildDispatch } = require('./kaola-workflow-adaptive-node');
+
+  const makePlan = (role, status) => [
+    '# Workflow Plan', '',
+    '## Meta', 'plan_form: spine', 'plan_hash: deadbeefdeadbeef', '',
+    '## Nodes', '',
+    '| id | role | model | depends_on | shape | declared_write_set | cardinality |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| n1 | ' + role + ' | standard | — | sequence | — | 1 |',
+    '| n2 | code-reviewer | standard | n1 | sequence | — | 1 |',
+    '| sink | finalize | — | n2 | sequence | — | 1 |', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| n1 | ' + status + ' |', '| n2 | pending |', '| sink | pending |', '',
+  ].join('\n');
+
+  const fixture = (role, status, evidence) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-subrole-'));
+    const proj = path.join(dir, 'kaola-workflow', 'p1');
+    fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, makePlan(role || 'code-explorer', status || 'pending'), 'utf8');
+    if (evidence != null) fs.writeFileSync(path.join(proj, '.cache', 'n1.md'), evidence, 'utf8');
+    return { proj, planPath };
+  };
+
+  // Happy path: code-explorer -> investigator is a proven superset, same kind, same token contract.
+  {
+    const f = fixture();
+    const before = fs.readFileSync(f.planPath, 'utf8');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'ok' && r.from_role === 'code-explorer' && r.to_role === 'investigator',
+      '#798: code-explorer -> investigator must substitute, got ' + JSON.stringify(r));
+    assert(fs.readFileSync(f.planPath, 'utf8') === before,
+      '#798: the frozen plan (and its plan_hash) must stay BYTE-IDENTICAL after a substitution');
+    const store = JSON.parse(fs.readFileSync(path.join(f.proj, '.cache', 'role-substitutions.json'), 'utf8'));
+    assert(store.substitutions.length === 1, '#798: exactly one durable record, got ' + store.substitutions.length);
+    assert(activeRoleSubstitution(path.join(f.proj, '.cache'), p => fs.readFileSync(p, 'utf8'), 'n1').to_role === 'investigator',
+      '#798: the record must read back as the active substitution');
+
+    // Crash between record and dispatch ⇒ re-running the identical command is a no-op.
+    const again = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(again.result === 'ok' && again.idempotent === true, '#798: replay must be idempotent, got ' + JSON.stringify(again));
+    const store2 = JSON.parse(fs.readFileSync(path.join(f.proj, '.cache', 'role-substitutions.json'), 'utf8'));
+    assert(store2.substitutions.length === 1, '#798: replay must not append a second record');
+
+    const d = buildDispatch({ id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' },
+      { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: 'abc123' });
+    assert(d.agent_type === 'investigator', '#798: card agent_type must be the SUBSTITUTE, got ' + d.agent_type);
+    assert(d.agent_type_frozen === 'code-explorer', '#798: card must state the frozen role, got ' + d.agent_type_frozen);
+    assert(d.role_substituted === true, '#798: card must flag the substitution');
+    assert(typeof d.role_substitution_basis === 'string' && d.role_substitution_basis.length > 0,
+      '#798: card must carry the substitution basis');
+  }
+
+  // No record on file ⇒ the dispatch card is byte-identical to a pre-substitution card.
+  {
+    const f = fixture();
+    const d = buildDispatch({ id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' },
+      { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: 'abc123' });
+    assert(d.agent_type === 'code-explorer' && !('agent_type_frozen' in d) && !('role_substituted' in d),
+      '#798: an unsubstituted card must gain NO substitution keys, got ' + JSON.stringify(Object.keys(d)));
+  }
+
+  // The five typed refusals.
+  {
+    const f = fixture();
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'no-such-role' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_unknown_role', '#798: unknown target must refuse, got ' + JSON.stringify(r));
+    assert(!fs.existsSync(path.join(f.proj, '.cache', 'role-substitutions.json')), '#798: a refusal must write NO record');
+  }
+  {
+    const f = fixture();
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-reviewer' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_kind_mismatch',
+      '#798: producer -> gate must refuse kind_mismatch, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture('investigator');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-explorer' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_not_superset' && (r.missing_tools || []).includes('Bash'),
+      '#798: dropping Bash must refuse not_superset naming the tool, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture();
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-architect' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_token_contract_mismatch',
+      '#798: differing evidence contracts must refuse, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture('code-explorer', 'complete');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+      '#798: a complete row must refuse node_closed, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture('code-explorer', 'in_progress', 'evidence-binding: n1 abc123\nfindings: already delivered\n');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+      '#798: a recorded deliverable must refuse node_closed, got ' + JSON.stringify(r));
+  }
+  // A SEEDED-but-valueless evidence file is not a deliverable and must stay substitutable.
+  {
+    const f = fixture('code-explorer', 'in_progress', 'evidence-binding: n1 abc123\nfindings:\n');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'ok', '#798: a seed-only evidence file must remain substitutable, got ' + JSON.stringify(r));
+  }
+});
+
+shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');

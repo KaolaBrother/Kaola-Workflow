@@ -84,8 +84,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 // ---------------------------------------------------------------------------
 // K1: count/structure parity — exactly 5 command Skill dirs + 15 kaola-role-*
 // Skill dirs, set-equal to the canonical commands/*.md + top-level agents/*.md
-// inventories (agents/profiles/higher/ is skipped by the generator's
-// construction — it never matches listCanonAgents). Every SKILL.md carries a
+// inventories (the canonical agent tree is flat — one file per role). Every SKILL.md carries a
 // frontmatter `name` (the dir name, so Kimi registers the canonical slash
 // command) and a non-empty `description` (required by directory-form Skills).
 // ---------------------------------------------------------------------------
@@ -155,6 +154,37 @@ for (const name of ['workflow-next', 'kaola-workflow-adapt']) {
 assert(read(skillDir('kaola-workflow-adapt')).includes(
   'Never pass a per-call model override; sub-agents inherit the session model.'),
   'K2[kaola-workflow-adapt]: carries the inherit-model guidance (the stripped "MUST pass model=" prose replacement)');
+
+// K2-declaration: the model-inheritance divergence must exist as a DECLARED EXEMPTION-TABLE ENTRY,
+// not merely as prose. "One rule, one wording" permits a runtime to diverge only where its
+// capabilities genuinely differ, and only when that divergence is declared as a named entry with a
+// one-line reason. Prose in docs/kimi-edition.md cannot satisfy that: deleting a paragraph is
+// invisible to every suite. Binding the assertion to the table makes removal fail HERE.
+{
+  const { RUNTIME_NATIVE } = require('./test-runtime-lexicon-parity.js');
+  const KEY = 'inherit_session_model';
+  const reason = RUNTIME_NATIVE[KEY];
+  assert(typeof reason === 'string' && reason.trim().length >= 20,
+    'K2-declaration: RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason — the Kimi '
+      + 'model-inheritance divergence is a DECLARED runtime difference, not an undocumented one');
+  assert(/inherit/i.test(reason) && /session model/i.test(reason),
+    'K2-declaration: the "' + KEY + '" reason must state that Kimi subagents inherit the session model');
+
+  // The declaration must describe the tree that actually ships: no generated Skill may carry a
+  // `model:` frontmatter field or a per-call `model=` override.
+  for (const name of [...canonCommandNames.map(n => n), ...roleDirNames]) {
+    const rel = skillDir(name);
+    if (!exists(rel)) continue;
+    const content = read(rel);
+    const fm = content.match(/^---\n([\s\S]*?)\n---/);
+    assert(!fm || !/^\s*model\s*:/m.test(fm[1]),
+      'K2-declaration: ' + rel + ' carries a model: frontmatter field, contradicting the declared '
+        + 'inherit_session_model divergence');
+    assert(!/\bmodel="/.test(content),
+      'K2-declaration: ' + rel + ' carries a per-call model=" override, contradicting the declared '
+        + 'inherit_session_model divergence');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // K3: byte-parity — regenerating from canonical reproduces every committed
@@ -745,6 +775,225 @@ for (const script of sync.HOOK_SCRIPTS) {
       'K10-prune(b): --check exits 0 after the retired skill dir is pruned');
   } finally {
     try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (_) { /* best-effort cleanup */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// K11 (#812, the kimi twin of test-opencode-edition.js's A24): the generated kimi
+// workflow-init Skill carries the re-grounded adaptive ## Kaola-Workflow template —
+// phase-free (no retired numbered-phase model, no "phase file/artifact" framing) AND
+// BYTE-IDENTICAL to the canonical GitHub template. The template is runtime-neutral AT
+// THE SOURCE, so no template-region rewrite exists to except: parity is exact.
+//
+// This is TEMPLATE-CONTENT parity against the canonical source, which K3 structurally
+// cannot prove: this suite self-provisions .kimi/ via `sync --write`, so K3's
+// `sync --check` compares the generated tree against the tree it just wrote — that is
+// sync IDEMPOTENCY, never content parity. A template-mangling transform added to
+// sync-kimi-edition.js keeps K3 green (both sides mangled) and is caught only here.
+// .kimi/ is fully gitignored, so the four-chain contract validators must not read it —
+// this is the kimi-edition home for the template ban + parity (regenerate via --write).
+// ---------------------------------------------------------------------------
+{
+  const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
+  const TPL_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const extractTemplate = (text, label) => {
+    const s = text.indexOf(TPL_START);
+    const e = text.indexOf(TPL_END);
+    assert(s !== -1 && e !== -1 && e > s,
+      'K11[' + label + ']: KW-CLAUDE-TEMPLATE-START/END markers present');
+    return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
+  };
+  const kimiTpl = extractTemplate(read(skillDir('workflow-init')), 'kimi');
+  // Phase-ban (mirror validate-kaola-workflow-contracts.js AC4).
+  assert(!/Phase\s+\d/.test(kimiTpl),
+    'K11: kimi workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
+  assert(!/phase file|phase artifact/i.test(kimiTpl),
+    'K11: kimi workflow-init template must not use "phase file/artifact" durable-state framing');
+  // EXACT parity: transformCommandBody applies zero template-region rewrites (#812).
+  const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
+  assert(kimiTpl === canonTpl,
+    'K11 (#812): kimi workflow-init template is BYTE-IDENTICAL to the canonical GitHub template (no template-region rewrite exists)');
+  // Vendor/runtime leak ban at the injected-template level (the kimi twin of A24's).
+  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(canonTpl),
+    'K11 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
+}
+
+// ---------------------------------------------------------------------------
+// FA — FORGE AXIS (the kimi twin of the opencode suite's F block). The runtime is
+// not a forge, but the workflow PROSE is forge-shaped, so this block proves each
+// forge renders its OWN surface and nothing of any other. Three properties make
+// it a guard rather than a smoke test:
+//   (1) the forge set is DERIVED from the routing registry, so a new forge is
+//       covered the moment it exists — there is no opt-in list to forget;
+//   (2) the identity check is BIDIRECTIONAL (own marker present AND every other
+//       forge's marker absent);
+//   (3) the markers are DERIVED from the install manifest, so they cannot drift
+//       from the basenames the installer actually deploys.
+// ---------------------------------------------------------------------------
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const routing = require('./generate-routing-surfaces.js');
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  const { spawnSync } = require('child_process');
+  const SYNC = path.join(REPO, 'scripts', 'sync-kimi-edition.js');
+
+  // F1: ONE forge axis.
+  assert(Array.isArray(routing.FORGES) && routing.FORGES.length >= 3,
+    'FA1: the routing registry exposes a forge axis of at least 3 forges');
+  assert(JSON.stringify(forgeLayout.FORGES) === JSON.stringify(routing.FORGES),
+    'FA1: runtime-edition-forge FORGES is the routing registry axis, not a copy '
+    + '(got ' + JSON.stringify(forgeLayout.FORGES) + ' vs ' + JSON.stringify(routing.FORGES) + ')');
+  assert(JSON.stringify(sync.FORGES) === JSON.stringify(routing.FORGES),
+    'FA1: sync-kimi-edition re-exports the same forge axis');
+
+  const marker = f => forgeLayout.scriptName('kaola-workflow-claim.js', f);
+  const markers = forgeLayout.FORGES.map(marker);
+  assert(new Set(markers).size === markers.length,
+    'FA2: the per-forge markers are distinct (' + markers.join(', ') + ') — a shared marker '
+    + 'would make the bidirectional check below vacuous');
+
+  const walk = dir => {
+    const out = [];
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) out.push(...walk(p));
+      else out.push(p);
+    }
+    return out;
+  };
+
+  for (const forge of forgeLayout.FORGES) {
+    const tree = sync.treeLabel(forge);
+
+    // F3: every forge renders, and re-renders to byte-parity.
+    const w = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--write'], { encoding: 'utf8' });
+    assert(w.status === 0, 'FA3[' + forge + ']: sync --write exits 0 (got ' + w.status + ': '
+      + String(w.stderr || '').slice(0, 200) + ')');
+    const c = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--check'], { encoding: 'utf8' });
+    assert(c.status === 0, 'FA3[' + forge + ']: sync --check is green after --write (got ' + c.status + ': '
+      + String(c.stderr || '').slice(0, 300) + ')');
+
+    const files = walk(path.join(REPO, tree));
+    assert(files.length > 0, 'FA3[' + forge + ']: ' + tree + ' is non-empty after --write');
+    const bodies = files.map(f => fs.readFileSync(f, 'utf8'));
+
+    // F4: the ZERO-Claude-path-leak invariant holds on EVERY forge tree.
+    let leaks = 0;
+    const leakFiles = [];
+    for (let i = 0; i < files.length; i++) {
+      const n = (bodies[i].match(/CLAUDE_PLUGIN_ROOT/g) || []).length
+        + (bodies[i].match(/\.claude\/kaola-workflow/g) || []).length;
+      if (n > 0) { leaks += n; leakFiles.push(path.relative(REPO, files[i]) + ' (' + n + ')'); }
+    }
+    assert(leaks === 0, 'FA4[' + forge + ']: ZERO Claude path leaks across ' + tree
+      + ' — found ' + leaks + ' in: ' + leakFiles.slice(0, 6).join(', '));
+
+    // F5: forge identity, BIDIRECTIONAL.
+    const joined = bodies.join('\n');
+    assert(joined.includes(marker(forge)),
+      'FA5[' + forge + ']: ' + tree + ' carries its OWN forge marker ' + marker(forge));
+    for (const other of forgeLayout.FORGES) {
+      if (other === forge) continue;
+      assert(!joined.includes(marker(other)),
+        'FA5[' + forge + ']: ' + tree + ' must NOT carry the ' + other + ' marker '
+        + marker(other) + ' — cross-forge prose leaked into this tree');
+    }
+
+    // F6: the rendered command-skill set IS the routing registry's command set for
+    // this forge (generated, not a hand-maintained list).
+    const expected = routing.commandSurfacesForForge(forge)
+      .map(r => path.basename(r.path).slice(0, -3)).sort();
+    const actual = fs.readdirSync(path.join(REPO, tree, 'skills'), { withFileTypes: true })
+      .filter(e => e.isDirectory() && !e.name.startsWith('kaola-role-'))
+      .map(e => e.name).sort();
+    assert(JSON.stringify(actual) === JSON.stringify(expected),
+      'FA6[' + forge + ']: ' + tree + '/skills command set is exactly the routing registry set for '
+      + forge + ' (expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(actual) + ')');
+
+    // F7: the managed hooks fragment names a script this forge's manifest ACTUALLY
+    // installs. A forge-blind fragment would wire the hook to a basename that no
+    // gitlab/gitea install ever writes — a dead hook that no parity check would see.
+    const frag = fs.readFileSync(path.join(REPO, tree, 'hooks', 'kimi-hooks.toml'), 'utf8');
+    const installed = new Set(manifest.supportScripts(forge));
+    const referenced = (frag.match(/kaola-[A-Za-z0-9._-]*\.js/g) || []);
+    assert(referenced.length > 0, 'FA7[' + forge + ']: the hooks fragment references at least one script');
+    for (const ref of referenced) {
+      assert(installed.has(ref),
+        'FA7[' + forge + ']: hooks fragment references "' + ref + '", which the ' + forge
+        + ' install manifest does not deploy — the hook would point at a missing file');
+    }
+  }
+
+  // F8: an unknown forge is REFUSED, not silently defaulted to github.
+  const bad = spawnSync(process.execPath, [SYNC, '--forge=svn', '--check'], { encoding: 'utf8' });
+  assert(bad.status === 2,
+    'FA8: sync --forge=svn refuses with exit 2 rather than defaulting to github (got ' + bad.status + ')');
+}
+
+// ---------------------------------------------------------------------------
+// FA9 — the forge axis reaches the INSTALLED tree, not just the generated one
+// (the kimi twin). For every forge, a REAL hermetic install (own temp HOME +
+// KIMI_CODE_HOME + --target) must deploy exactly the support-script basenames
+// that forge's install manifest names, no other forge's, and a config.toml
+// hooks block whose commands point at files the same install actually wrote.
+// ---------------------------------------------------------------------------
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync } = require('fs');
+  const os = require('os');
+  const INSTALLER = path.join(REPO, 'install-kimi.sh');
+
+  for (const forge of forgeLayout.FORGES) {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'km-forge-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'km-forge-dest-'));
+    const kimiHome = path.join(home, '.kimi-code');
+    try {
+      const r = spawnSync('bash', [INSTALLER, '--forge=' + forge, '--target', dest, '--yes'], {
+        env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
+        encoding: 'utf8',
+      });
+      assert(r.status === 0, 'FA9[' + forge + ']: install-kimi.sh --forge=' + forge
+        + ' exits 0 (got ' + r.status + ': ' + String(r.stderr || '').split('\n')[0] + ')');
+
+      const scriptsDir = path.join(kimiHome, 'kaola-workflow', 'scripts');
+      assert(existsSync(scriptsDir), 'FA9[' + forge + ']: support scripts land under the kimi home');
+      const deployed = readdirSync(scriptsDir).sort();
+      const expected = manifest.supportScripts(forge).slice().sort();
+      assert(JSON.stringify(deployed) === JSON.stringify(expected),
+        'FA9[' + forge + ']: the installed support set is EXACTLY the ' + forge
+        + ' manifest set (missing: ' + expected.filter(n => !deployed.includes(n)).join(',')
+        + ' | unexpected: ' + deployed.filter(n => !expected.includes(n)).join(',') + ')');
+
+      for (const other of forgeLayout.FORGES) {
+        if (other === forge) continue;
+        const ownSet = new Set(expected);
+        const strangers = manifest.supportScripts(other).filter(n => !ownSet.has(n) && deployed.includes(n));
+        assert(strangers.length === 0,
+          'FA9[' + forge + ']: the ' + forge + ' install must not deploy ' + other
+          + '-only scripts — found ' + strangers.join(', '));
+      }
+
+      // The merged hooks block must reference only scripts/hooks this install wrote.
+      const cfg = path.join(kimiHome, 'config.toml');
+      assert(existsSync(cfg), 'FA9[' + forge + ']: the install merges a config.toml hooks block');
+      const toml = readFileSync(cfg, 'utf8');
+      for (const ref of (toml.match(/kaola-[A-Za-z0-9._-]*\.js/g) || [])) {
+        assert(existsSync(path.join(scriptsDir, ref)),
+          'FA9[' + forge + ']: config.toml hook references ' + ref + ', which this install did not write');
+      }
+
+      const skill = readFileSync(path.join(dest, '.kimi-code', 'skills', 'workflow-next', 'SKILL.md'), 'utf8');
+      const claim = forgeLayout.scriptName('kaola-workflow-claim.js', forge);
+      assert(skill.includes(claim), 'FA9[' + forge + ']: the deployed workflow-next skill resolves ' + claim);
+      assert(deployed.includes(claim),
+        'FA9[' + forge + ']: ' + claim + ' is among the installed support scripts');
+    } finally {
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
   }
 }
 

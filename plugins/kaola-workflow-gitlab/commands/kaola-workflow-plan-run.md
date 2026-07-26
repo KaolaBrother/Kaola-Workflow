@@ -130,24 +130,24 @@ source described by the metric-optimizer card.
 ## Gate-Role Degradation Notice
 
 Determine runtime Agent/teammate availability before opening the first node and re-check if it
-changes mid-run. Only a genuinely unavailable agent tool or a runtime mode-refused spawn qualifies.
-When that dispatch capability is unavailable, post a PROMINENT run-start notice — before
-dispatching any node — naming every gate role the plan would otherwise have dispatched:
-`adversarial-verifier`, `code-reviewer`, `security-reviewer`.
+changes mid-run.
+Unavailable means the agent tool is genuinely absent or the runtime mode-refuses the spawn. When that
+dispatch capability is unavailable, post a PROMINENT run-start notice — before dispatching any node —
+naming every gate role the plan would otherwise have dispatched: `adversarial-verifier`,
+`code-reviewer`, `security-reviewer`. `local-fallback-tool-unavailable` records exactly that.
 
-For `adversarial-verifier` and `code-reviewer`, an inline gate reviewing its own writer-context is
-no gate: do NOT dispatch the gate node inline and silently record a self-issued `verdict: pass`.
-Instead route through the consent-halt valve (`write-halt --reason consent`) and await operator
-resolution before the gate node is considered satisfied. Forward roles — `code-explorer`,
-`knowledge-lookup`, `implementer`, `tdd-guide`, `metric-optimizer`, `doc-updater`, and
-`security-reviewer` when it runs as a forward check — may still record the documented local fallback
-(`local-fallback-tool-unavailable`) and proceed inline.
+For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`, an inline gate reviewing its
+own writer-context is no gate: do NOT dispatch the gate node inline and silently record a self-issued
+`verdict: pass`. Instead route through the consent-halt valve (`write-halt --reason consent`) and
+await operator resolution before the gate node is considered satisfied.
 
-When a node runs inline under this degradation notice, announce it instead of the pre-spawn
-format above:
+Everywhere else execution mode is your judgment, per unit — dispatch production, keep decisions.
+Delegating discretionary production is the default; mechanical execution, a fully-specified small
+write, and interpretation/adjudication may run inline, closed with `--main-session-direct`.
+Announce an inline node instead of the pre-spawn format above:
 
 ```text
-→ running {node_id} · {role} inline (…reason token…)
+→ running {node_id} · {role} inline
 ```
 
 ## Loop Skeleton
@@ -213,9 +213,18 @@ step is a no-op — run the normal loop.)
   passing the composition on stdin as `{derivation:{grain,path,join,probe,serializer},
   units:[{name,role,model,write_set,mode}]}`. `expand-open` appends the record and OPENS the
   composed units through the running-set scheduler (a read fan-out, or co-open isolated legs for a
-  disjoint write frontier) — dispatch each unit's role agent and `close-node` it exactly like any
+  disjoint write frontier) — run each unit's role and `close-node` it exactly like any
   frontier member. A re-expansion (a second record on the SAME point) is the SAME command once
   every prior unit is settled.
+
+  **Re-shape the task list from the returned `taskTransitions`.** Expansion changes the run's SHAPE,
+  not just a status: `expand-open` returns one transition per COMPOSED unit — `in_progress` for the
+  units this open started, `pending` for the ones still ahead of the frontier. A transition naming an
+  id the visible list does not hold is an INSERT: add a task for that unit, in record order, after the
+  milestone's own task. Applying only the status flips leaves the operator looking at the frozen
+  spine, which no longer describes the run. A RE-open of a discharged milestone also returns a
+  `pending` transition for every row it un-completes — the milestone, its review wall, the sink — so
+  apply those too, or the list keeps claiming work is done that the run has re-opened.
 - **Never compose a gate role inside an expansion** (`code-reviewer`, `security-reviewer`,
   `adversarial-verifier`, `main-session-gate`): a composed gate unit is refused
   `expansion_unit_role_gate_unsupported` with ZERO mutation. The milestone is reviewed by the
@@ -229,11 +238,14 @@ step is a no-op — run the normal loop.)
     --project {project} --node-id {point-id} --json
   ```
 
-  The spine then advances to its next node — ultimately through the concrete review wall to the
-  `finalize` sink, the same `open-next` / `close-and-open-next` cycle every dag node uses.
+  `expand-close` returns the milestone's own `complete` transition — apply it so the milestone's task
+  closes at discharge instead of staying visibly open for the rest of the run. The spine then advances
+  to its next node — ultimately through the concrete review wall to the `finalize` sink, the same
+  `open-next` / `close-and-open-next` cycle every dag node uses.
 - **`openIncomplete` non-empty** — a record was appended but its frontier open never proved (a
   crash in the expand-open window); run `reconcile-running-set` to roll it forward BEFORE any
-  further `expand-open` / `expand-close`.
+  further `expand-open` / `expand-close`. Its roll-forward RE-OPENS units, so it returns the same
+  `taskTransitions` channel — apply them exactly as above.
 
 <!-- CARD: expansion -->
 On the spine expansion lifecycle: `docs/plan-run-cards/expansion.md`
@@ -264,6 +276,7 @@ when no node is `in_progress` (first node, or orphan from a crash between commit
 
 Apply returned `taskTransitions` to the task list after every ledger-mutating call.
 
+
 **Dispatch fidelity — concurrent dispatch is the DEFAULT, not an option.** `open-next` (and
 `orient` / `close-and-open-next`) return `enterBatch: true` + a `frontier: [...]` whenever the planner
 authored an INDEPENDENT frontier of width ≥2 — that is authored parallelism, and you MUST run it as
@@ -285,6 +298,28 @@ spawning the role agent — the ledger stays authoritative; the mirror is the op
 **Every spawn parameter comes from the dispatch card.** NEVER improvise a task name, omit
 `agent_type`, or drop the effort tier because the card was not in view — go get the card
 first (the summary line's `opened=` segment, or `.cache/<op>-envelope.json`).
+
+<!-- PIN: role-capability-coverage -->
+**If the card's role manifest cannot cover the node brief, or the role returns `capability_gap`,
+run `substitute-role`** — do NOT dispatch a role that cannot perform what the brief mandates, and
+do NOT let it improvise around the gap:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" substitute-role \
+  --project {project} --node-id {node-id} --to-role {role} --json
+```
+
+Same-kind and manifest-superset are checkable facts, so this decides mechanically — no consent stop.
+The frozen plan, its `## Node Ledger`, and `plan_hash` stay BYTE-IDENTICAL: substitution is dispatch
+metadata, recorded durably in `.cache/role-substitutions.json` and folded into the close-time
+compliance row. The re-issued card carries `agent_type` (dispatch this), `agent_type_frozen` (what
+the plan says), and `role_substituted: true`. On any typed refusal — `substitute_unknown_role`,
+`substitute_kind_mismatch`, `substitute_not_superset`, `substitute_token_contract_mismatch`,
+`substitute_node_closed` — there is no in-kind role that covers the brief, so escalate with
+`write-halt --reason consent` rather than dispatching anyway.
+
+A `capability_gap` return is **NOT evidence**: never `record-evidence` it. The node stays open;
+substitute and re-dispatch, or halt.
 
 <!-- PIN: reviewer-contract-v2-execution -->
 #### Reviewer Contract Envelope, Validation, and Convergence
@@ -382,7 +417,6 @@ descriptive). Pass `dispatch.nonce` (evidence-binding token). Instruct the role 
   card never carries it).
 - Fill in token stubs from its work; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.
-  Record compliance as `main-session-direct` for the `finalize` sink node.
 - Gate roles must `post-dominate` every code/sensitive node in the `## Node Ledger`; emit
   `verdict: pass|fail` + `findings_blocking: N`. Run `--forbidden-only` for forge-touching
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.
@@ -457,6 +491,25 @@ a frontier on a feeling: wrongly-parallel work costs one bounded synthesizer rec
 isolated legs, while wrongly-serial work silently costs wall-clock on every frontier — the burden
 of proof sits on serial.
 
+**A blocker the scheduler itself created is REPAIRED, not cited.** A serializer must be one the
+orchestrator CANNOT remove. Uncommitted production work left in the parent worktree by
+already-CLOSED serial write nodes is not a serializer — the workflow's own finalize-owned-commit
+policy created it, so it is a repair obligation discharged BEFORE dispatch. `open-ready` performs
+that repair itself, with no flag and nothing to approve: it commits exactly the dirty paths that
+fall inside a CLOSED write-capable node's declared write set
+(`kaola-checkpoint(<project>): serial→parallel seam — nodes <ids>`), re-verifies the parent-clean
+fence, and then co-opens the frontier as an ordinary lane group. The checkpoint lands BEFORE the
+group baseline, so the serial work sits outside the group diff and the legs branch off it. There
+is no retry loop — either the seam is repaired or the run stops loudly:
+- `seam_checkpoint_unattributable` — a dirty path NO closed write-capable node declared. Foreign
+  bytes in the parent (a stray edit, an escaped write) are an INTEGRITY signal, so this is a LOUD
+  STOP with zero mutation: no commit, no lane group, and no silent serial open either. The halt
+  names the unattributed paths — attribute each to a node or remove it, then re-run `open-ready`.
+- `seam_checkpoint_failed` — the repair could not POSITIVELY prove success: the fence could not
+  enumerate the dirt, `git add`/`git commit` failed (the index is reset for the staged paths), or
+  the post-commit fence is not `pass`. Also a LOUD STOP, tree otherwise as-is. "Cannot prove
+  clean" must never become "assume clean," and it must never become a silent serial either.
+
 <!-- CARD: speculative-open -->
 On `open-next` → `gate_not_complete` with a speculative gate (`speculative_open_policy: auto` — the
 freeze-time default — or `consent`, in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
@@ -483,28 +536,45 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
   `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
   bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.
   Repair each first by its own recovery (re-dispatch the leg · `revert-overflow` · a reasoning-class
-  **Opus**-floor `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
+  reasoning-floor `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
   the K-th failure escalate via `write-halt --reason merge_conflict`. Routed exactly like `test_thrash`
   (a schema constant the orchestrator applies — NO script counter on the adaptive path); the
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
-**Evidence-persistence contract per runtime and role-kind.** The authoritative inter-node handoff is
-always the full nonce-bound `.cache/<node-id>.md` artifact. A self-writing role returns only a compact
-summary after persisting it. On runtimes that enforce a read-only role tool manifest, the role instead
-returns the full body as transport for orchestrator persistence; after that write, the cache artifact is
-again authoritative. The mechanism is derived from each role's tool manifest — no hand-list, no per-agent guesswork:
-- Any node role WITHOUT `Write` in its tool manifest CANNOT self-write `.cache` evidence — it
-  RETURNS its deliverable for orchestrator persistence via `record-evidence --stdin` (below).
-  `record-evidence` re-injects this node's `evidence-binding:` header, so persisting evidence
-  cannot strip the header — the role MUST NOT try to add or modify it. Current roster (EXAMPLES
-  only): read producers `code-explorer`, `knowledge-lookup`, `code-architect`, `planner`;
-  plus the read gates `adversarial-verifier` / `code-reviewer` / `security-reviewer`.
-- Any node role WITH `Write` in its tool manifest SELF-WRITES its `.cache` evidence, INCLUDING
-  the seeded `evidence-binding:` header (read it from the seeded file, never alter it). Current
-  roster (EXAMPLES only): `implementer`, `tdd-guide`, `metric-optimizer`, `build-error-resolver`,
-  `doc-updater`, `synthesizer`.
+**Evidence-persistence contract.** The authoritative inter-node handoff is always the full nonce-bound
+`.cache/<node-id>.md` artifact. EVERY node role — including a logically read-only research or review
+role — SELF-WRITES its FULL structured deliverable directly to the exact `dispatch.evidence_file`
+before sending its final message, then returns ONLY the compact summary
+`<node-id> <role>: <verdict|outcome>; evidence=<dispatch.evidence_file>`. One contract, every role,
+every runtime: there is no manifest branch, no hand-list, and no per-agent guesswork.
+- That one seeded workflow-cache file is the role's SOLE write exception; repository and product files
+  stay forbidden to a read role. Read-only is a CONTRACT property enforced by the per-node commit
+  barrier (a read node declares no write set; only `.cache/*.md` is exempt), never a tool-manifest
+  property — so widening the manifest removes a transport tax without moving the wall.
+- The seeded `evidence-binding: <node-id> <nonce>` header is written by the opener BEFORE dispatch.
+  Read it, preserve it byte-for-byte, and write only below it — never add, alter, or strip it.
+- The cache body must carry every required token, verdict/finding row, source, and upstream-read
+  attestation. Never retransmit the full deliverable as the only durable copy: downstream roles read
+  the cache artifact through `dispatch.upstream_evidence`, never the orchestrator's copy of a return.
 
+`record-evidence --stdin` is the FALLBACK channel, never the primary one. Use it only when a role
+returned transport anyway — a crash between the child stopping and its persist, or a role that died
+before writing. It re-injects this node's `evidence-binding:` header, so the resume path cannot strip it.
+
+After the child stops, validate the on-disk artifact before closing or opening a dependent node:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" record-evidence \
+  --project {project} --node-id {node-id} --verify --json
+```
+
+Only `result: ok` makes that artifact eligible for `dispatch.upstream_evidence`. If the parent-side
+summary is disconnected or cannot be decrypted but the child is terminal and this verification is
+green, read the compact outcome/verdict from the cache, record
+`delegation_outcome: returned_partial` plus `transport_error: encrypted_return`, and continue from the
+durable artifact. If verification is absent or red, leave the node open and route repair; a seed-only
+file never counts as completed work.
 
 <!-- CARD: metric-optimizer -->
 A `metric-optimizer` node's dispatch card carries `dispatch.optimize` (the frozen
@@ -520,15 +590,15 @@ On every return, before evidence/close bookkeeping, announce the compact outcome
 ← {node_id} · {role} returned: {verdict or one-line outcome}
 ```
 
-For a returned full body that still needs parent-side persistence, record it with stdin:
+FALLBACK ONLY — a role that returned a full body instead of persisting it (crash before the write):
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" record-evidence \
   --project {project} --node-id {node-id} --stdin --json
 ```
 
-For a self-written artifact, never overwrite it with the compact summary; use `record-evidence
---verify` as shown above.
+For the normal self-written artifact, never overwrite it with the compact summary; use
+`record-evidence --verify` as shown above.
 
 ### 4. Close and advance
 

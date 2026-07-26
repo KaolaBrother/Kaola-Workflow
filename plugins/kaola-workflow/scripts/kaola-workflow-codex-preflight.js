@@ -71,21 +71,25 @@ const RETIRED_PROFILE_FILES = [
   'code-reviewer-max.toml',
   'security-reviewer-max.toml',
   'adversarial-verifier-max.toml',
+  // The finalize seam is orchestrator-owned: the mechanical residue folded into the finalize
+  // transaction, so the bookkeeping role retired. Pruned on upgrade so a previously-installed
+  // profile cannot linger and shadow.
+  'contractor.toml',
 ];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
-  'code-explorer', 'knowledge-lookup', 'tdd-guide', 'implementer',
-  'doc-updater', 'contractor', 'metric-optimizer',
+  'code-explorer', 'investigator', 'knowledge-lookup', 'tdd-guide', 'implementer',
+  'doc-updater', 'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',
   'security-reviewer', 'adversarial-verifier', 'workflow-planner', 'synthesizer',
 ]);
-// Workflow-planner and contractor are dispatched outside the adaptive Node Ledger. Their
-// workflow/plan/finalization artifacts are the authoritative durable result, with an additional
+// The workflow-planner is dispatched outside the adaptive Node Ledger. Its
+// workflow/plan artifacts are the authoritative durable result, with an additional
 // cache mirror only when a caller supplies a seeded evidence file. All other profiles are DAG node
 // roles and must self-write the exact seeded cache artifact before returning a compact summary.
-const CODEX_ORCHESTRATION_ROLES = Object.freeze(['contractor', 'workflow-planner']);
+const CODEX_ORCHESTRATION_ROLES = Object.freeze(['workflow-planner']);
 const CODEX_STANDARD_MODEL = 'gpt-5.6-sol';
 const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
@@ -1806,14 +1810,24 @@ function readPlanRoles(planPath) {
 }
 
 // ---------------------------------------------------------------------------
-// #716: built-in, intentionally non-delegable workflow roles. A frozen plan's
+// #716/#800: built-in, intentionally non-delegable workflow roles. A frozen plan's
 // ## Nodes table may list them (the gates and the finalize sink run in the main
-// session, never as delegated subagents), so they have no Codex profile and no
-// config/agents.toml entry BY DESIGN. They are exempt from the template/profile
-// availability checks in runPreflight; every other (delegated) plan role stays
-// fail-closed (role_not_in_template / profiles_missing).
+// session, never as delegated subagents; a spine `expansion-point` never dispatches
+// at all — the executor's expansion transaction composes its interior at open time),
+// so they have no Codex profile and no config/agents.toml entry BY DESIGN. They are
+// exempt from the template/profile availability checks in runPreflight; every other
+// (delegated) plan role stays fail-closed (role_not_in_template / profiles_missing).
+//
+// This list MUST equal the kernel's own built-in role set (the adaptive node script's
+// RESERVED_EXPANSION_UNIT_ROLES). This file is deliberately standalone — Node builtins
+// only, no kernel require — so the parity pin lives in the test suite instead
+// (scripts/test-install-model-rendering.js).
 // ---------------------------------------------------------------------------
-const PLAN_BUILTIN_NON_DELEGABLE_ROLES = Object.freeze(['main-session-gate', 'finalize']);
+const PLAN_BUILTIN_NON_DELEGABLE_ROLES = Object.freeze([
+  'main-session-gate',
+  'finalize',
+  'expansion-point',
+]);
 
 // ---------------------------------------------------------------------------
 // Profile check: assert .codex/agents/kaola-workflow/<role>.toml exists for all roles.
@@ -3939,6 +3953,7 @@ module.exports = {
   runDoctor,
   readTemplateRoles,
   readPlanRoles,
+  PLAN_BUILTIN_NON_DELEGABLE_ROLES,
   checkManagedBlock,
   checkProfiles,
   validateProfileText,

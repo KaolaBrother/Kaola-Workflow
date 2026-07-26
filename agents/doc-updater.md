@@ -12,7 +12,7 @@ source-blob-sha: 0da663329128a5a03ff811c39c0c01004cab5ac1
 source-sha256: c2799a9bf64ea18ebffdf70286b1fff21fac3dbb672476106d3a847ddc17a69d
 license: MIT License
 copyright: Copyright (c) 2026 Affaan Mustafa
-local-override: model haiku->sonnet (comprehension-heavy code-to-doc reconciliation belongs on Sonnet per CLAUDE.md model rules; re-apply after any re-vendor)
+local-override: model haiku->sonnet (comprehension-heavy code-to-doc reconciliation belongs on the standard tier per CLAUDE.md model rules; re-apply after any re-vendor)
 -->
 
 ## Prompt Defense Baseline
@@ -127,6 +127,13 @@ Links to other codemaps
 **ALWAYS:** New major features, API route changes, dependencies added/removed, architecture changes, setup process modified.
 
 **OPTIONAL:** Minor bug fixes, cosmetic changes, internal refactoring.
+
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
 
 ## Evidence Contract
 

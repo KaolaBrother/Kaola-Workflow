@@ -57,12 +57,81 @@ here for the full contract.
   `DELEGATION_CONTROLLED_REQUIREMENTS` matcher), with per-instance disambiguation in
   the Evidence column only. The barrier commit order is `.cache` evidence → Node
   Ledger row → `workflow-state.md` pointer LAST, so a crash mid-node is recoverable.
+- **`## Acceptance` (the human-values artifact).** The frozen plan's statement of what "done" means,
+  transcribed ONCE at freeze from the issue body plus explicit user statements: one item per line
+  (`A1:`, `A2:`, …), prose. It is a **sibling** of `## Design`, never folded into it — `## Design`
+  carries the WHY of the decomposition, `## Acceptance` the WHAT of done — and it carries **no
+  sub-grammar**: no types, no priorities, no verification bindings, and no per-item status ledger.
+  Four durable-state facts follow. (1) It is **hash-covered when present** (conditionally appended,
+  exactly like `## Node Briefs` and `## Design`), so an acceptance-less plan hashes byte-identically
+  to the pre-section formula and a post-freeze edit surfaces as `plan_hash_mismatch` — the transcribed
+  values are tamper-evident. (2) The **freeze wall** refuses an absent or empty section on a
+  code-producing schema-2 plan (`acceptance_missing`), scoped exactly like the schema-2
+  validation-policy wall; a read-only plan owes nothing, and the check is EXISTENCE-ONLY — a plan
+  whose items merely look untestable still freezes, because testability is a reasoning call for the
+  planner and the gates. Duplicate/unclosed-fence headings refuse `acceptance_section_ambiguous`.
+  Both are FREEZE-ONLY: `revalidateForResume` never reads the section, so a plan frozen before it
+  existed resumes unchanged. (3) It is **repair-fenced**: the bounded `plan_invalid` repair loop may
+  fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding, but a submission that alters the
+  acceptance surface refuses `acceptance_repair_fenced`. The anchor lives in
+  `.cache/acceptance-anchor.json` (epoch-keyed, whitespace-normalized) and **persists the surface
+  BYTES, not merely its digest** — the refusal returns them in `anchored_acceptance_surface` (and
+  inside `errors`), so the next iteration can restore them verbatim. That is what keeps the fence
+  satisfiable: by the time it trips, the repairing planner has already overwritten the file that held
+  the previous surface and the next iteration is a FRESH planner with no memory of the prior draft, so
+  a digest-only refusal would name a repair nobody in the loop could perform. The refusal also carries
+  the outstanding `validator_verdict`, so the fenced iteration does not lose the grammar errors it was
+  iterating on. Two transitions are additionally never anchored — absent→transcribed, and an
+  already-frozen plan — and the second holds on every branch, because the one branch that writes an
+  anchor is the one guarded by it. **Absent and unreadable are different states.** An anchor that is
+  PRESENT but does not read back as a well-formed record (unparseable, not a JSON object, no string
+  `acceptance_digest`, a non-integer `plan_epoch`, a non-string `acceptance_surface`) refuses
+  `acceptance_anchor_unreadable` and mutates nothing. It must not degrade to "no anchor yet", because
+  that branch re-anchors on the surface the current submission carries — so treating a damaged record
+  as an absent one would silently disarm the fence at exactly the moment its record is damaged. This
+  needs no adversary: an interrupted write (a crash, a full disk) leaves a truncated file on its own.
+  **What the fence guarantees, stated exactly.** No flag on the handoff opens it, and no repair
+  iteration can move the surface by re-wording it — restore-verbatim is the loop's only route past it,
+  so the loop can neither wedge nor self-authorize. That is the case it was built for and the realistic
+  one: a fresh planner re-transcribing the same criteria in different words across repair iterations.
+  **What it does not guarantee.** The anchor is an ordinary `.cache` file and `plan_epoch` is an
+  ordinary `workflow-state.md` field. An agent that DELETES the anchor, or hand-edits `plan_epoch` so
+  the recorded anchor is inert by design, re-anchors on whatever surface it then submits. Those are
+  edits to the run's own state files — the malicious-editor class the architecture explicitly de-scoped
+  when interception was retired, the same boundary recorded for `## Expansion Records` — and closing
+  them here would mean building an adversary-proof seal on this one section while the ledger and the
+  expansion records stay equally open. The residual equals the pre-existing baseline for that class;
+  see the known-limitation list in `docs/api.md`. A genuine change of what "done" means routes through
+  the ONE consent mechanism in (4) — a re-plan child epoch citing a surface-bound consent entry — or
+  through discard+restart. Finally, **the handoff path never launders a post-freeze tamper**:
+  `--freeze` re-stamps whatever it is handed, so the handoff refuses `plan_hash_mismatch` (before the
+  acceptance fence, before the validator, mutating nothing) whenever a plan carrying a stamped
+  `plan_hash` no longer hashes to it. Nothing in the repair loop re-stamps a frozen plan; an unfrozen
+  draft carries no stored hash and is unaffected, and an untampered frozen plan still re-runs
+  idempotently. That is a property of the handoff, not of the tree: `--freeze` is a directly-invokable
+  CLI subcommand, so running it by hand on a tampered frozen plan re-stamps the hash over the tampered
+  bytes and the mismatch stops being detectable. Making `--freeze` itself refuse would break the
+  legitimate freeze/repair loop, so the mitigation is the refusal hint, which no longer advises
+  re-stamping as the default: it separates an INTENDED pre-execution re-freeze (legitimate) from an
+  unexplained mismatch on a run in flight (investigate — re-stamping destroys the evidence).
+  (4) It is **re-plan preserved**: claim-preserving means acceptance-preserving. A child epoch carries
+  the parent's surface (re-transcription travels under the planner attestation, which covers the whole
+  child image); a child whose surface differs refuses `replan_child_acceptance_changed` unless it cites,
+  in `## Meta` as `acceptance_change_consent`, the `entry_digest` of a consent-ledger entry whose
+  `acceptance_change_digest` **equals the child's own acceptance digest**. The lineage-wide consent
+  digest authorizes nothing here: it is handed to the planner in its own packet and is the same constant
+  after any unrelated ceiling extension, so a token the gated party holds is not a valve. Consent is
+  recorded per change (`replan extend-consent --acceptance-change-digest <hex>` or
+  `--acceptance-change-file <path>`), and the entry it produces licenses exactly the one surface it
+  names.
+  How an item is **satisfied** is agent-judged everywhere it is consumed — a covering test, a gate
+  receipt, or prose evidence, judged in context — never a mechanical check or a string match.
 - **`## Expansion Records` (spine plans only).** A plan frozen with `plan_form: spine` freezes a
   coarse milestone spine whose `expansion-point` nodes have no interior at freeze. Each such
   milestone's frontier is composed at OPEN time and recorded, **append-only**, in a
   `## Expansion Records` section of the SAME `workflow-plan.md`. Three durable-state facts follow.
   (1) The section lives **outside** the `plan_hash` body (the hash covers `## Meta` + `## Nodes` +
-  `## Node Briefs` + `## Design` when present), so records never perturb the frozen spine identity
+  `## Node Briefs` + `## Design` + `## Acceptance` when present), so records never perturb the frozen spine identity
   and a plan carrying them
   still `--resume-check`s green. (2) The section is **append-at-tail**: every mutation adds ONE new
   block — `record(<point>#<n>)`, `open(<point>#<n>)`, or `discharge(<point>)` — and no already-written
@@ -260,8 +329,8 @@ here for the full contract.
     - **Outside `plan_hash`.** `lane_group` is a runtime scheduler artifact, not plan structure.
       It is written into `running-set.json` (a non-hashed `.cache/` artifact), not into
       `workflow-plan.md`. The `plan_hash` covers only `## Meta`, the complete `## Nodes` section,
-      the `## Node Briefs`, and `## Design` when present (appended conditionally, so a designless
-      plan hashes byte-identically to pre-#790) —
+      the `## Node Briefs`, and `## Design` / `## Acceptance` when present (each appended
+      conditionally, so a plan lacking one hashes byte-identically to the formula that predates it) —
       including an optional `wait_budget_minutes` header and its cells — `lane_group`
       changes never invalidate the frozen plan hash.
     - **Two-phase crash-safety.** The group open follows the same crash-safe two-phase pattern as
@@ -291,7 +360,11 @@ here for the full contract.
       BEFORE `baseRev` is captured and legs branch off — so every leg inherits the stub as an
       ordinary tracked file rather than an untracked parent-side write, preventing a "untracked
       working tree file … would be overwritten by merge" collision at the last-member merge. A
-      commit failure here refuses the open (`stub_commit_failed`). This precedes, and is unrelated
+      commit failure here no longer refuses the open: it DEGRADES it to a single serial write
+      labeled `serialDegradeReason: 'seam_checkpoint_declined'`, abandoning group formation and
+      dropping every recorded baseline. The retired `stub_commit_failed` refusal was a dead end no
+      retry could clear — a hostile `pre-commit` hook or an unsignable repo wedged a run that would
+      otherwise have completed serially. This precedes, and is unrelated
       to, the per-node barrier commit order described above (it is a scheduler-owned commit at
       OPEN time, never part of a node's own barrier/ledger/pointer sequence).
     - **Leg-authoritative evidence read at close and downstream dispatch (issue #633).** A write-role lane-group member
@@ -372,8 +445,11 @@ here for the full contract.
   remains the backstop for verified legacy state whose hash pointer predates that contract); and the
   `## Last Updated` line refreshed to the archive timestamp. After the rename, a compact `## Closure`
   block is appended recording `archived_at`, `issue_disposition`, `claim_label_removed`,
-  `worktree_removed`, `closure_invariants`, and (issue #653 / D-653-01) `claim_planner_attested` /
-  `finalize_contractor_attested` (presence-guarded / idempotent). `issue_disposition`
+  `worktree_removed`, `closure_invariants`, and (issue #653 / D-653-01) `claim_planner_attested`
+  (presence-guarded / idempotent). Issue #816 retired the finalize-seam attestation field: the
+  finalize seam is orchestrator-owned by design, so inline execution there is no longer suspect.
+  A LEGACY archive that already carries `finalize_contractor_attested` is read and kept verbatim —
+  the presence guard means nothing rewrites it. `issue_disposition`
   enum: `kept-open | close-pending | closed | unknown`. On the `cmdFinalize` lane disposition is
   DECISION-derived — the default merge lane is honestly `close-pending` because the orchestrator
   closes the issue AFTER sink-merge, and `--keep-open` records `kept-open` + `last_result:
@@ -388,11 +464,13 @@ here for the full contract.
   none (archived)` only ever appears under `kaola-workflow/archive/`; `resume`/`status`/`repair-state`
   read active folders only and never see it.
 - **Attestation persistence (issue #653 / D-653-01):** independently of the `## Closure` block's
-  `claim_planner_attested`/`finalize_contractor_attested` fields above, `cmdFinalize` also appends
-  a script-owned, presence-guarded `## Attestation` section to the archived
-  `finalization-summary.md` — the same two status fields plus every non-empty `ATTESTATION
-  WARNING`/`attestation:` warning, verbatim — so a warning that fired during the run survives the
-  archive even if a summary is otherwise read as clean. See `docs/api.md` § Closure Contract.
+  `claim_planner_attested` field above, `cmdFinalize` also appends a script-owned,
+  presence-guarded `## Attestation` section to the archived `finalization-summary.md` — the same
+  status field plus every non-empty `ATTESTATION WARNING`/`attestation:` warning, verbatim — so a
+  warning that fired during the run survives the archive even if a summary is otherwise read as
+  clean. The presence guard is also the legacy-tolerance rule: an archived section carrying the
+  retired `finalize_contractor_attested` field is left byte-identical, never rewritten. See
+  `docs/api.md` § Closure Contract.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),
@@ -591,16 +669,30 @@ ledgers before crossing a phase boundary. Codex role rows must match the policy:
 non-Codex-role workflow gates such as advisor review, final validation,
 documentation docking, roadmap refresh, archive, and final commit.
 
-**Adaptive `finalize` sink row — `main-session-direct` (issue #338).** The adaptive plan's
-mandatory `finalize` DAG sink node is, by the plan-run contract, executed by the main session
-directly (no `Agent()` dispatch). Its Required Agent Compliance row therefore carries the status
-`main-session-direct` — a sink-node-only token that sits OUTSIDE the four-token delegation
-vocabulary above and is NOT delegation-controlled (a `finalize (<node>)` requirement matches none
-of repair-state's `DELEGATION_CONTROLLED_REQUIREMENTS`, so the token never trips a delegation
-check). It is deliberately NOT `local-fallback-*`: inline sink execution is the designed behavior,
-not a fallback. This row is distinct from the Finalization-phase mechanical bookkeeping, which is
-delegated to the `contractor` and attested separately via the closure receipt's
-`finalize_contractor_attested` field.
+**Adaptive inline rows — `main-session-direct` (issues #338, #817).** The adaptive plan's
+mandatory `finalize` DAG sink node and any `main-session-gate` node are, by the plan-run contract,
+NON-DELEGABLE — executed by the main session directly (no `Agent()` dispatch) — so their Required
+Agent Compliance rows always carry the status `main-session-direct`, flag or no flag. Recording
+either as `subagent-invoked` would be a false delegation claim, which is why the plan-validator
+also refuses to let either role declare a model. Execution mode for every OTHER node is the
+orchestrator's per-unit
+judgment, and the same status records it: passing `--main-session-direct` to `close-node` /
+`close-and-open-next` writes `main-session-direct` for that node instead of the default
+`subagent-invoked`. The flag is a **record, never a gate** — nothing validates, justifies, or
+refuses on the choice, and the fail-closed anchors (the seeded `evidence-binding` nonce,
+`record-evidence --verify`, the exact-path write-set barrier) are author-agnostic and bind
+identically either way.
+
+The token sits OUTSIDE the four-token delegation vocabulary above and never trips a delegation
+check: repair-state's `delegationPolicyCompliance` cross-check runs only over the legacy **phase**
+compliance ledgers (it is reached through `unresolvedCompliance`, which the adaptive
+`routeAdaptive` path never calls), and a `finalize (<node>)` requirement additionally matches none
+of its `DELEGATION_CONTROLLED_REQUIREMENTS` patterns. It is
+deliberately NOT `local-fallback-*`: inline execution is a designed mode, not a fallback —
+`local-fallback-tool-unavailable` keeps only its literal meaning, that the dispatch tool was
+genuinely unavailable. The Finalization-phase mechanical bookkeeping is likewise
+main-session-direct: one `cmdFinalize` transaction the orchestrator runs, with no dispatched
+role and no separate attestation.
 
 **Freeze pre-seeds the compliance set (schema 2).** The producer completes this artifact at its
 authoring boundary: freezing a `plan_schema_version: 2` plan that carries no
@@ -609,7 +701,7 @@ authoring boundary: freezing a `plan_schema_version: 2` plan that carries no
 row in place at its node's close — presence of a row is never proof of completion. The pre-seed is
 inject-if-absent (a plan already carrying the section, such as a re-plan child or a mid-run
 re-freeze with advanced rows, is left byte-identical) and never applies to a legacy v1 plan. It is
-`plan_hash`-neutral: the compliance table sits outside the hashed `Meta`/`Nodes`/`Node Briefs`/`Design`
+`plan_hash`-neutral: the compliance table sits outside the hashed `Meta`/`Nodes`/`Node Briefs`/`Design`/`Acceptance`
 surface, so governance-ack and resume-check are unaffected. This is what lets the shared
 epoch-authority check stay strict — it validates the section unconditionally for an epoch-planned
 claim, so any absence it sees is genuine corruption rather than a normal fresh-plan state.
@@ -654,7 +746,7 @@ progress is never mistaken for authoring tamper:
 | Tier | Surface | Check | Typed refusal |
 |---|---|---|---|
 | Epoch envelope | `epoch_schema_version`, `epoch_lineage_id`, and their identity/root-digest basis | Recomputed and compared; a fully absent envelope reads as pre-epoch legacy state | `state_epoch_schema_missing`, `state_epoch_schema_unsupported`, `state_epoch_lineage_missing`, `state_epoch_lineage_invalid`, `state_epoch_lineage_basis_invalid`, `state_epoch_lineage_mismatch` |
-| Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs`, `## Design` (when present) | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
+| Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs`, `## Design` / `## Acceptance` (when present) | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
 | Legal runtime progress | `## Node Ledger`, `## Required Agent Compliance` | Parsed and consistency-checked, not byte-compared; closed-node evidence and dependency-consistent status required | `state_ledger_authority_invalid`, `state_ledger_progress_invalid`, `state_compliance_authority_invalid`, `state_compliance_progress_invalid` |
 
 `workflow-tasks.json` is deliberately **not** an authority tier. It is a pure projection of the same
@@ -903,19 +995,19 @@ See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `l
 ## Script-Owned Mechanical Transitions (issue #272)
 
 Every mechanical transition that mutates `workflow-state.md` is owned by a typed
-transaction script the main session runs directly (ADR 0004) — the `contractor` subagent
-is not in the per-node loop. Each writes in crash-safe order (`.cache` first, the
+transaction script the main session runs directly (ADR 0004, ADR 0006) — there is no
+bookkeeping subagent anywhere in the loop. Each writes in crash-safe order (`.cache` first, the
 `workflow-state.md` pointer last), is idempotent on resume, and preserves any `## Sink`
 block byte-for-byte.
 
 | Path | Script | Owns |
 |------|--------|------|
 | Adaptive per-node | `kaola-workflow-adaptive-node.js` (#272) | the `## Node Ledger` per-node lifecycle |
-| Finalization | `contractor` subagent | the archive, roadmap-mirror regen, `chore: finalize` staging commit (SOLE remaining contractor-owned transition) |
+| Finalization | `cmdFinalize` (`kaola-workflow-claim.js`, #816) | the artifact mirror + ledger-regression guard, archive + status close, roadmap staging, and the `chore: finalize` commit gate — ONE resumable transaction |
 
-Adaptive per-node evidence lives in `.cache/{node-id}.md`. The
-`#459` contract validators forbid a contractor dispatch from returning to any
-migrated surface.
+Adaptive per-node evidence lives in `.cache/{node-id}.md`. The contract validators
+forbid a bookkeeping-role dispatch from returning to any finalize surface, in both
+directions: a re-introduced dispatch reds the chain, and so does a dropped transaction call.
 
 ### Recovering a project ALREADY wedged by a stranded settled row
 
@@ -1006,8 +1098,8 @@ residual limitations (#691).
 - **Single-owner finalize invariant**: during issue finalize, the per-issue source
   removal (`kaola-workflow/.roadmap/issue-N.md`) and `ROADMAP.md` regeneration are
   performed exactly once by `cmdFinalize` / `archiveProjectDir` (Finalization Step 8b).
-  The Mechanical-Finalization Step 7 (in `agents/contractor.md`) only stages
-  the result with `git add`; it does not re-run the rm or the regenerate.
+  The transaction's Step 7 only stages the result with `git add`; it does not re-run
+  the rm or the regenerate.
 - `kaola-workflow-roadmap.js generate` must not replace a generated roadmap that
   still lists active issues with `none` solely because `.roadmap/` is missing.
 - An **optional** project-local file `kaola-workflow/.roadmap/_rules.md` may carry

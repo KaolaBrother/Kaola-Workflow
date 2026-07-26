@@ -5,7 +5,7 @@ argument-hint: [issue number | issue set | task description]
 
 # Kaola-Workflow Adaptive Authoring (adapt)
 
-Phase-0 of the adaptive path: a dedicated **`workflow-planner`** subagent (Opus) settles the starting
+Phase-0 of the adaptive path: a dedicated **`workflow-planner`** subagent (reasoning tier) settles the starting
 contract (claim + `workflow-state.md` at repo-root — the adaptive claim provisions a hidden worktree
 at `<repo-root>/.kw/worktrees/<project>/`; the planner authors + freezes at repo-root, not in the
 worktree) and **freely authors** a task-shaped DAG into `workflow-plan.md`, which the validator proves
@@ -189,14 +189,25 @@ lifecycle including the first). `decision:ask` is audit metadata only — it fre
 
 - **`handoff_status: ready_to_run`** → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even
   when `decision:ask`, no approval gate).
-- **`handoff_status: plan_invalid`** (validator refused; NOTHING written) → bounded **repair loop**:
-  re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite the
-  UNFROZEN plan. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to reach
-  in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) — if in-grammar is
-  unreachable without changing the design, that is not repair. Retry ~2x (counter in the ORCHESTRATOR).
+- **`handoff_status: plan_invalid`** (validator refused; the plan never froze and `workflow-state.md` is
+  untouched — the one write is the `.cache/acceptance-anchor.json` audit record) → bounded **repair
+  loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite
+  the UNFROZEN plan. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to
+  reach in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) or `## Acceptance`
+  (the human-values statement of what done means, which is hard-fenced) — if in-grammar is unreachable
+  without changing either, that is not repair. Retry ~2x (counter in the ORCHESTRATOR).
   After repeated failure → **discard+restart a
   fresh adaptive run** (`kaola-gitlab-workflow-claim.js discard --project {project}`) or **STOP + surface a
   concrete blocker**. Forbidden under `replan_in_progress`.
+- **`reason: acceptance_repair_fenced`** (a repair iteration changed `## Acceptance` — usually a fresh
+  planner re-wording the same criteria, not tampering) → the refusal RETURNS the anchored surface in
+  `anchored_acceptance_surface`, and still carries the outstanding grammar errors in
+  `validator_verdict`. Re-dispatch with BOTH: restore those bytes VERBATIM under the `## Acceptance`
+  heading, and fix the grammar errors on the restored surface — a digest cannot be inverted, so the
+  returned bytes are the only copy the next iteration has. Changing what done means is a values
+  decision, not repair: NO flag on the handoff authorizes it — a genuine restatement lands as a
+  re-plan child epoch citing a consent entry bound to the new surface, or as a discard+restart. Never
+  re-anchor on your own judgement, and never edit or delete the anchor by hand.
 
 ## Establish the task list, then hand off
 
@@ -213,7 +224,8 @@ live mirror of the `## Node Ledger` (the durable source of truth); the executor 
 
 Full shaping lives in `agents/workflow-planner.md`. Author a `knowledge-lookup` node when the task
 depends on external library/API/framework behavior or open-web knowledge that the local codebase
-cannot confirm.
+cannot confirm. A composed unit is a paid dispatch boundary — fold mechanical follow-ons (a rerun,
+a re-verify, an evidence write) into the unit that owns them.
 
 ### Question-shaped & bug-shaped issues
 

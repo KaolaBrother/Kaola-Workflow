@@ -112,19 +112,28 @@ const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
   ]),
 });
 
+// Adapters are named by the TIER they carry, not by an install-time selector: there is no
+// install-time model axis, so the tier a role ships with IS the tier it runs at. A role's adapter
+// therefore states its one shipped reasoning class outright.
+// Tool policy and evidence transport are now RUNTIME-INVARIANT: every reviewer, on every runtime,
+// self-persists its full deliverable to the one seeded evidence file and returns a compact summary.
+// The transport used to fork per runtime — one side returned the whole body for the orchestrator to
+// persist — which taxed the orchestrator's context with two copies of a deliverable nothing read
+// from there (downstream roles are pointed at the cache artifact, never at the returned copy). The
+// remaining declared divergence is the model policy, which is a genuine capability difference.
 const ADAPTER_DEFINITIONS = Object.freeze({
-  'claude-base': Object.freeze({
-    tools: 'claude-read-shell',
+  'claude-standard': Object.freeze({
+    tools: 'read-shell-seeded-write',
     model_policy_ref: 'claude-standard',
-    evidence_transport: 'return-for-recording',
+    evidence_transport: 'write-seeded-cache',
   }),
-  'claude-higher': Object.freeze({
-    tools: 'claude-read-shell',
+  'claude-reasoning': Object.freeze({
+    tools: 'read-shell-seeded-write',
     model_policy_ref: 'claude-reasoning',
-    evidence_transport: 'return-for-recording',
+    evidence_transport: 'write-seeded-cache',
   }),
   codex: Object.freeze({
-    tools: 'codex-read-shell',
+    tools: 'read-shell-seeded-write',
     model_policy_ref: 'codex-inherit-by-omission',
     evidence_transport: 'write-seeded-cache',
   }),
@@ -136,15 +145,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'code-reviewer',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-base',
-    format: 'markdown',
-  }),
-  Object.freeze({
-    path: 'agents/profiles/higher/code-reviewer.md',
-    role: 'code-reviewer',
-    runtime: 'claude',
-    variant: 'higher',
-    adapter: 'claude-higher',
+    adapter: 'claude-reasoning',
     format: 'markdown',
   }),
   Object.freeze({
@@ -152,7 +153,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'adversarial-verifier',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-base',
+    adapter: 'claude-standard',
     format: 'markdown',
   }),
   Object.freeze({
@@ -160,15 +161,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'security-reviewer',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-base',
-    format: 'markdown',
-  }),
-  Object.freeze({
-    path: 'agents/profiles/higher/security-reviewer.md',
-    role: 'security-reviewer',
-    runtime: 'claude',
-    variant: 'higher',
-    adapter: 'claude-higher',
+    adapter: 'claude-reasoning',
     format: 'markdown',
   }),
   ...['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'].flatMap(edition =>
@@ -433,18 +426,15 @@ function renderAdapter(role, adapter) {
     '## Runtime adapter',
     '',
   ];
-  if (adapter.tools === 'claude-read-shell') {
-    lines.push('- Tool policy: use Read, Grep, Glob, and Bash only. Do not use Write or Edit.');
-  } else if (adapter.tools === 'codex-read-shell') {
-    lines.push('- Tool policy: use read-only repository inspection and shell execution tools. Do not edit product files; the exact seeded evidence file is the only write exception.');
+  if (adapter.tools === 'read-shell-seeded-write') {
+    lines.push('- Tool policy: use read-only repository inspection and shell execution tools. Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception.');
+    lines.push('- Capability refusal: if the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.');
   } else {
     throw new Error(`runtime_adapter_tools_unhandled: ${adapter.tools}`);
   }
 
-  if (adapter.evidence_transport === 'return-for-recording') {
-    lines.push('- Evidence transport: RETURN the FULL structured result in the final response. Do not write a workflow cache file; the orchestrator persists it through record-evidence.');
-  } else if (adapter.evidence_transport === 'write-seeded-cache') {
-    lines.push('- Evidence transport: write the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.');
+  if (adapter.evidence_transport === 'write-seeded-cache') {
+    lines.push('- Evidence transport: SELF-WRITE the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.');
     lines.push(`- After the evidence is complete, return only a compact orchestrator summary: <node-id> ${role}: <outcome>; evidence=<dispatch.evidence_file>.`);
   } else {
     throw new Error(`runtime_adapter_evidence_transport_unhandled: ${adapter.evidence_transport}`);
@@ -511,7 +501,7 @@ function renderMarkdown(contract, core, adapter, adapterText, behaviorHash) {
     `name: ${contract.role}`,
     `description: ${contract.description}`,
     `nickname_candidates: ${yamlArray(contract.nickname_candidates)}`,
-    'tools: ["Read", "Grep", "Glob", "Bash"]',
+    'tools: ["Read", "Write", "Grep", "Glob", "Bash"]',
     `model: ${model}`,
     `behavior_contract_version: ${contract.behavior_contract_version}`,
     `behavior_contract_hash: ${behaviorHash}`,

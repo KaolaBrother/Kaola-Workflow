@@ -150,7 +150,33 @@ never assigned to a fixer.
 When ownership is unresolvable — an anchor-less finding (e.g. an `evidence_observation` anchor carries
 no path) or a legacy attempt whose rows still hold `ownership_candidates: []` — the bridge stays inert:
 it never falsely accuses a maximal writer of a mismatch, and a non-maximal request simply degrades to
-the generic `repair_requires_replan`.
+`repair_requires_replan`. That degrade is no longer a bare token: it carries an `ownership_diagnosis`
+plus an `operator_hint` naming the ACTUAL cause, which is the difference between a one-line fix and a
+wasted epoch:
+
+| `ownership_diagnosis.cause` | What it means | The next step |
+| --- | --- | --- |
+| `anchor_kind_carries_no_path` | The finding's primary anchor kind names no path, so nothing can place it. | Re-anchor the blocking finding on a path-bearing kind and re-run the gate — NOT a re-plan. |
+| `no_node_declares_the_anchor_path` | The anchors do name paths, but no node declares them and no milestone surface covers them. | A genuine scope expansion: `amend-surface` if the file belongs to a milestone, else a replacement plan. |
+| `writer_not_graph_maximal` | Ownership resolved, but this node is not the unique graph-maximal producer. | Re-run `repair-node` naming the finding's semantic owner. |
+
+The first row is narrowed, not retired. On a **failing change gate** — every gate role, read from the
+derived gate effect rather than any one role's outcome vocabulary — a path-less primary anchor on a
+finding the repair would be obliged to fix is refused at record time by
+`review_finding_anchor_unroutable`, before an attempt exists (see `docs/api.md` § Findings), so the
+must-fix population can no longer reach this table. Three live paths remain, and the row still means
+what it says on each:
+
+- **legacy journals** — attempts recorded before that gate existed, whose rows still hold
+  `ownership_candidates: []`;
+- **investigation-mode gates** — no repair obligation, so the record-time gate deliberately does not
+  fire and an `evidence_observation` anchor is entirely proper there;
+- **non-blocking rows on a change gate** — a `deferred`, out-of-scope, or non-`fix` finding may
+  legally anchor on `evidence_observation`, and the diagnosis reads the whole still-open set. So a
+  change-gate attempt in which *no* open finding resolved to an owner can still report this cause off
+  a non-blocking row while the actual blocker is `no_node_declares_the_anchor_path`. Read
+  `unowned_findings` before acting: if the uid named there is not the one carrying the path-less
+  anchor, the next step is that second row's, not this one's.
 
 ### The repair brief handed to the reopened writer
 
@@ -252,17 +278,28 @@ node scripts/kaola-workflow-adaptive-node.js revert-overflow \
 **`revert-overflow` DISCARDS the out-of-set writes — read this before running it.** If the
 out-of-surface files are junk (a stray build artifact, a debug edit), that is exactly what you
 want. If they are *real companion work* the node legitimately needed to touch, reverting throws
-that work away and the node will likely reproduce it on the next attempt. In that case the right
-move is to widen the declared write set — re-freeze via plan-repair so the surface legitimately
-covers those paths — and only then re-run the node.
+that work away and the node will likely reproduce it on the next attempt.
 
-> **Dormant alternative — `amend-surface`.** The aggregator also implements an `amend-surface`
-> transaction (append-only surface amendment + attribution + mandatory re-review) intended to
-> preserve companion work instead of discarding it. It is **not wired into any routed recovery
-> path in this release**: no operator hint, selector, or card routes to it, and it has never run
-> in a production loop. Treat it as an advanced, manually-invoked primitive (see
-> `node scripts/kaola-workflow-adaptive-node.js --help`), not a supported recovery step. The
-> fail-closed floor is unaffected either way — an unamended out-of-surface write still refuses.
+> **Preserve alternative — `amend-surface`.** On a `plan_form: spine` plan, out-of-set files that are
+> genuine companion work of a **discharged expansion point** are kept rather than discarded:
+>
+> ```bash
+> node scripts/kaola-workflow-adaptive-node.js amend-surface \
+>   --project {project} --node-id {expansion-point} --files "{exact,paths}" --json
+> ```
+>
+> One atomic transaction: it appends an `amend({point}):` block attributing those EXACT files
+> (append-only, outside the `plan_hash` body, so the frozen spine identity is untouched) and routes the
+> point back through `reexpand-open` — re-opening it, its post-dominating review wall and the sink — so
+> the work is KEPT **and re-reviewed**, never silently widened. Exact file paths only; a directory or
+> glob token refuses `amend_surface_not_exact_file` with no write.
+>
+> The `write_set_overflow` hint names both primitives and neither is routed for you: **stray artifacts
+> you want gone are `revert-overflow`; companion work you want kept is `amend-surface`.** Outside a
+> spine plan (or where the file belongs to no milestone) the answer is still to widen the declared write
+> set — re-freeze via plan-repair — and only then re-run the node. The fail-closed floor is unaffected
+> either way: an unamended out-of-surface write still refuses, and an amended file attributes at the
+> barrier only once its point RE-discharges.
 
 **NEVER use `--drop-base`.** `--drop-base` drops the barrier baseline, laundering the node's
 accumulated work. This is explicitly banned by D-424-01. The `operator_hint` vocabulary
@@ -404,7 +441,7 @@ write-leg level reaches after `MERGE_CONFLICT_REPAIR_LIMIT` (**K=3**) bounded re
 2. **Bounded repair (K=3)** — repair each by its *own* recovery, re-running `close-node`:
    - no-op leg → **re-dispatch** the leg's role so it writes its declared file;
    - overflow → `revert-overflow` (NEVER `drop-base`);
-   - real conflict → dispatch a reasoning-class **Opus**-floor `synthesizer` agent to resolve **by
+   - real conflict → dispatch a **reasoning-floor** `synthesizer` agent to resolve **by
      intent** (a non-reasoning tier is a dispatch refusal, never a silent downgrade; a clean agentic
      merge is a weak signal — the union barrier on M is the landing gate, not the merge succeeding).
 3. **Escalate** — on the K-th failure: `write-halt --project {project} --node-id {nodeId} --reason
@@ -425,7 +462,7 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 
 | `reason` | Recovery |
 |---|---|
-| `write_set_overflow` (+ subtypes) | `revert-overflow` (NEVER `drop-base`) |
+| `write_set_overflow` (+ subtypes) | `revert-overflow` to DISCARD stray files; `amend-surface` to KEEP companion work owned by a discharged spine milestone (NEVER `drop-base`) |
 | `sensitive_write_unreviewed` | Remove the sensitive write OR planner-owned re-plan with a real security certifier path |
 | `unattributed_write` | `owning_node: null` in route-findings → settle attempt → planner-owned re-plan |
 | `barrier_failed` | Read `findings-route.json` → dispatch fix agent → close repair loop |
@@ -446,4 +483,3 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 | `repair_writer_ownership_mismatch` | Maximal writer owns no blocking finding → `repair-node --node-id {semantic_owner}` |
 | `dependent_producer_replay_required` | Non-maximal owner with completed downstream writers → replan from `semantic_owner` (`/kaola-workflow-adapt`, #699) |
 | `repair_scope_spans_writers` | Maximal writer owns SOME but not ALL blocking findings → if `ownership_candidates` names one other writer that owns them all, `repair-node --node-id {that writer}`; otherwise `/kaola-workflow-adapt` for a plan giving each blocking finding a writer (`unowned_findings` ⇒ the plan declares no writer for that path) |
-| `plan_hash_mismatch` | Plan tampered → re-run `--freeze-checked` → `--freeze` |

@@ -4,6 +4,10 @@ node_modules/
 .codex/
 .opencode/
 .kimi/
+# Per-forge generated trees for the additive runtime editions (.opencode-gitlab,
+# .kimi-gitea, …). Same generated-artifact posture as the bare trees above.
+.opencode-*/
+.kimi-*/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/

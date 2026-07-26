@@ -6,15 +6,15 @@ Document coding style, testing rules, Git practices, naming, and review expectat
 
 The lean-orchestrator boundary is enforced through role-profile placement, not agent willpower.
 
-- **Procedure lives in agent profiles.** The complete Finalization procedure (scripts, bookkeeping, archive, roadmap regen) lives solely in the `contractor` agent profile. The claim + author + adaptive-handoff procedure lives solely in the `workflow-planner` profile. Orchestrator command files (`finalize.md`, `kaola-workflow-adapt.md`) keep only thin dispatch handles — they invoke the contractor or planner subagent and wait for their result; they do not duplicate bookkeeping inline.
+- **Procedure lives in agent profiles — where a profile still owns one.** The claim + author + adaptive-handoff procedure lives solely in the `workflow-planner` profile, and `kaola-workflow-adapt.md` keeps only a thin dispatch handle. Finalization is the counter-case (issue #816): its mechanical residue is not prose at all but ONE `cmdFinalize` transaction the orchestrator runs directly, so there is no bookkeeping profile to place it in and no dispatch handle to keep.
 - **Main runs dispatch handles, the per-node loop, and the sink.** The main Opus session dispatches subagents and judges their output. It also owns the adaptive per-node lifecycle transactions (`kaola-workflow-adaptive-node.js`, main-direct by design) and the Finalization sink (merge/PR + issue close). These two are explicitly out of attestation scope.
-- **Script-side enforcement.** `validate-workflow-contracts.js` text-locks the contractor dispatch handle on all four editions. A contractor-reference removal from an orchestrator command file fails the contract gate.
+- **Script-side enforcement, both directions.** `validate-workflow-contracts.js` and the three edition twins text-lock the planner dispatch handle, and lock the finalize seam's inversion in BOTH directions: a re-introduced bookkeeping-role dispatch on any finalize surface fails the contract gate, and so does a dropped one-call transaction.
 
 ## Codex Subagent Dispatch (issue #266)
 
 Codex subagent dispatch uses a **native role-dispatch packet**, not a Claude `Agent(subagent_type=..., model=...)` call. When the main Codex session invokes a Kaola subagent, it names the installed agent role and passes a dispatch packet:
 
-- `role` — the installed agent role name (e.g. `workflow-planner`, `contractor`)
+- `role` — the installed agent role name (e.g. `workflow-planner`, `code-reviewer`)
 - `prompt` — the task prompt
 - `cwd` — the working directory
 - `expected_cache` — the expected evidence-cache path(s)
@@ -26,6 +26,7 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 **No-silent-inline-fallback rule (hard gate):** Before any `subagent-invoked` compliance row is written, `kaola-workflow-codex-preflight.js` MUST return `status:"ok"` (exit 0). A non-ok preflight result is a STOP — the caller records a typed refusal, not an inline execution. There is no silent fallback when role profiles are absent or stale; the preflight gate is the enforcement point for the `delegation_policy: delegate` / `subagent-invoked` contract (see `docs/workflow-state-contract.md` § Workflow State Fields). Specifically:
 
 - `subagent-invoked` — only valid after preflight passes.
+- `main-session-direct` — the node ran in the main session, not as a subagent. Unconditional for the two non-delegable roles (the `finalize` sink and a `main-session-gate`); otherwise recorded when the orchestrator judged the unit worth running inline and closed it with `--main-session-direct`. A record, never a gate: nothing refuses on it, and the fail-closed anchors (evidence-binding nonce, `record-evidence --verify`, the exact-path write-set barrier) bind identically either way. It is not a fallback token and never substitutes for the two below.
 - `local-fallback-tool-unavailable` — only valid when subagent tooling is genuinely unavailable (runtime detection, not a silent config-drift shortcut).
 - `local-fallback-explicit` — only valid when the user explicitly set `delegation_policy: local-authorized`.
 
@@ -129,7 +130,7 @@ Behavior that intentionally exercises a real network or installed forge client b
 
 - **Routing / adaptive prose propagates to SIX prose surfaces, not ×4 (issue #400).** Adaptive-path, routing, bundle-lane, or finalize-wiring PROSE lives on **six** surfaces — the three Claude **commands** plus the three Codex **SKILL packs**: (1) `commands/` (github-claude), (2) `plugins/kaola-workflow-gitlab/commands/`, (3) `plugins/kaola-workflow-gitea/commands/`, (4) `plugins/kaola-workflow/skills/` (github-codex), (5) `plugins/kaola-workflow-gitlab/skills/`, (6) `plugins/kaola-workflow-gitea/skills/`. A change landing on only 4 of the 6 (the recurring CHANGELOG **"×4"** wording is the symptom) leaves the two forge-codex SKILL packs as a **propagation dead zone** — exactly how #369 (`--issue-numbers`) and #380 (auto-bundle restructure) shipped reaching the commands + the github-codex SKILL but not the two forge SKILLs. Forge nouns differ per edition (gitlab = MR / `glab` / `kaola-gitlab-workflow-*.js`; gitea = PR / `tea` / `kaola-gitea-workflow-*.js`; the forge contract validators FORBID `plugins/kaola-workflow/scripts`, `\bgh\b`, `/pull request/i` in SKILLs — verify each with `--forbidden-only`). The **route-reachability contract** (`#400`, in all four `validate-*-contracts.js` + `scripts/test-route-reachability.js`) machine-enforces that every schema-emitted route target resolves to an installed surface AND that a mirrored SKILL carries the command's wiring tokens — so a missing-SKILL or hollow-SKILL dead zone reds the chain with the unreachable target named. Adaptive/routing prose changes are a cross-edition diff.
 
-- **Twelve of the six-surface set are GENERATED, not hand-authored (issue #630).** The plan-run and next topics — 3 commands + 3 SKILLs each, 12 surfaces total — render from one canonical skeleton per topic (`templates/routing/plan-run.skeleton.md`, `templates/routing/next.skeleton.md`) plus `templates/routing/slots.js` (frontmatter/H1/setup-resolver/runtime-conditional region content) and `templates/routing/rename-table.js` (forge-noun renames), via `scripts/generate-routing-surfaces.js`. **Never hand-edit those 12 surfaces** — edit the skeleton, a slot, or the rename table, then run `node scripts/generate-routing-surfaces.js --write`. A `--check` byte-compare (the default with no args) is wired into all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains, so a hand-edit that drifts from the generated output reds its own chain — closing the present-but-wrong-prose class the token-pin regime alone could miss on a generated surface. The six **finalize** surfaces are NOT generated — their command/SKILL forms diverge roughly 2:1, so they stay hand-authored, guarded only by the manifest below. `templates/routing/required-blocks.js` is the single-source required-block manifest underlying both: each routing-prose block is declared once with a topic, a `runtime_tag`/`surface_type_tag` pair, and its distinctive content tokens; a derived-universe presence checker in `scripts/test-route-reachability.js` computes each block's obligated surface set from those tags (never a hand-typed file list), so a block structurally cannot obligate a subset of its true surface set — the whole-block-drop class (the #624 finalize-gate-block loss) is closed by construction. The manifest is additive-superset over the pre-existing token pins in `scripts/test-route-reachability.js` and all four `validate-*-contracts.js` — those pins stay.
+- **Every routing surface is GENERATED, not hand-authored (issues #630, #812).** All five topics — plan-run, next, init, finalize and adapt, 3 commands + 3 SKILLs each, **30 surfaces total** — render from one canonical skeleton per topic (`templates/routing/{plan-run,next,init,finalize,adapt}.skeleton.md`) plus `templates/routing/slots.js` (frontmatter/H1/setup-resolver/runtime-conditional region content) and `templates/routing/rename-table.js` (forge-noun renames), via `scripts/generate-routing-surfaces.js`. **Never hand-edit those 30 surfaces** — edit the skeleton, a slot, or the rename table, then run `node scripts/generate-routing-surfaces.js --write`. A `--check` byte-compare (the default with no args) is wired into all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains, so a hand-edit that drifts from the generated output reds its own chain — closing the present-but-wrong-prose class the token-pin regime alone could miss on a generated surface. There is no hand-authored routing topic left. init, finalize and adapt were folded in despite their command/SKILL forms diverging roughly 2:1 — that divergence is preserved as declared `REGION`/`SPLICE` directives rather than collapsed, so the byte-compare holds without harmonizing any prose. A second guard covers the generator's own duplication: no `SPLICE` variant may exceed 8 lines and no two variants may share more than 6 consecutive identical non-blank lines, enforced by default with an empty exempt-list — because storing a shared body once per forge would relocate the drift into `slots.js`, where `--check` (which compares surfaces to the skeleton, never variants to each other) cannot see it. `templates/routing/required-blocks.js` is the single-source required-block manifest underlying both: each routing-prose block is declared once with a topic, a `runtime_tag`/`surface_type_tag` pair, and its distinctive content tokens; a derived-universe presence checker in `scripts/test-route-reachability.js` computes each block's obligated surface set from those tags (never a hand-typed file list), so a block structurally cannot obligate a subset of its true surface set — the whole-block-drop class (the #624 finalize-gate-block loss) is closed by construction. The manifest is additive-superset over the pre-existing token pins in `scripts/test-route-reachability.js` and all four `validate-*-contracts.js` — those pins stay.
 
 - **Shared engine `workflow-state.md` field parity (#580 / D-580-01).** Fields that every
   edition's `active-folders` port must parse and surface are declared ONCE in
@@ -281,6 +282,19 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `workflow-planner`'
 
 **Agent-set deltas carry an exact-match registration surface (#340).** Adding or removing an agent profile (root `agents/<name>.md` or a plugin `agents/<name>.toml`) breaks exact-match registries and by-name dispatch registrations that are **keyed on no symbol of the new file** — so a symbol-grep (#306) cannot find them. The full 22-path surface: the three sibling edition profiles; the three `config/agents.toml` codex-dispatch templates (the `[agents.<name>]` table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile installs); `validate-vendored-agents.js` (`localAgents` exact listing); `install.sh` **and** `uninstall.sh` `REQUIRED_AGENTS` (a missing uninstall name orphans the installed agent); `resolve-agent-model.js` (×4, byte-identical); the plan-validator `CANONICAL_ROLES` (×4); the gitlab/gitea contract-validator agent counts; and the two forge `test-*-workflow-scripts.js` counts. The adaptive plan validator refuses an addition omitting any of these at freeze (`agent-registration gap`); removals are not machine-detected on the plan side but the derived config↔dir and install↔uninstall parity guards in the contract validators red the affected chain. This is itself a cross-edition diff.
 
+**The 22-path validator wall is a floor, not the whole surface (measured while adding `investigator`).** Six further paths red a chain on an agent-set delta and are *not* in `agentRegistrationSurface()`, so the freeze wall cannot refuse an addition that omits them — they surface only when the chains run:
+
+| Path | What pins the roster |
+|------|----------------------|
+| `scripts/test-agent-profile-parity.js` | `TOML_TREES` per-tree profile **count** |
+| `scripts/kaola-workflow-adaptive-schema.js` | `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` — a role in neither has "no Codex profile-tier policy" |
+| `scripts/kaola-workflow-codex-preflight.js` | its **own** copy of both tier lists (authored `require`-free, so it cannot import the schema) |
+| `plugins/*/scripts/install-codex-agent-profiles.js` (×3) | a **third** copy of both tier lists |
+| `scripts/kaola-workflow-adaptive-schema.js` | `ROLE_CAPABILITY_MANIFEST` — bidirectionally drift-walled against `agents/*.md` |
+| `README.md` | two derived-checked role lists: the Agent/Tier table and the ```text codex role catalog (set-equality against `config/agents.toml`) |
+
+Note the tier lists exist in **three** independent copies. Adding a role to only the schema leaves the codex chain red at preflight; that duplication is the standing cost of the preflight's require-free authoring.
+
 ## Forge-Neutral Plugin Agent Profiles (issue #341)
 
 - Plugin agent/command/skill prose is **forge-neutral**: never name a forge-specific CLI
@@ -348,7 +362,7 @@ Three-part machine-enforced contract:
 
 1. **`.toml` triple byte-identity** — `validate-script-sync.js` `BYTE_IDENTICAL_GROUPS`
    includes a programmatic entry for every `plugins/kaola-workflow/agents/*.toml` file
-   (built via `readdirSync`), covering all 16 base-role profiles.
+   (built via `readdirSync`), covering all 15 base-role profiles.
    Any byte divergence between the three plugin-tree copies of a `.toml` reds the validation
    run. A new profile added to the codex tree is auto-covered.
 
@@ -427,6 +441,52 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
   | `join-protocol.md` | Wait budgets, long-poll join loop, escalation ladder, writer kill-safety (`reconcile-running-set`), typed `delegation_outcome`, frontier dispatch + slot awareness (#611) |
 
 **Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
+
+## Execution mode is orchestrator judgment (#817)
+
+`CLAUDE.md` § *Maximize Workflow Efficiency* states it: **dispatch production; keep decisions** — delegating discretionary production is the default, what stays inline is the deciding itself, and *no justifier, evidence line, or approval attaches to the choice*. This section is that principle's home; the six plan-run surfaces carry the operative sentence for the deciding agent, and the six workflow-init CLAUDE.md templates carry the design principle for consumer repos. It is **not** restated on the other surfaces — one rule, one wording.
+
+**What it means.** Dispatch-vs-inline is a per-unit economic call the orchestrator makes with its own judgment. Delegation is the default for discretionary production because a handoff costs once while inline residue taxes every later decision. Mechanical execution, a fully-specified small write, and interpretation/adjudication routinely do not repay a spawn; a node the orchestrator ran inline closes with `--main-session-direct`, which is a **record, never a gate**.
+
+**What it forbids.** Three shapes, all of them regulation this project deliberately subtracted:
+
+- **A dispatch mandate** — prose making dispatch the only sanctioned execution mode, or obliging a spawn for every node / each unit / any composed unit. Width is already governed by faithful decomposition; boundary count is not a separate rule.
+- **A justifier** — any reason token, justification, excuse, or evidence line the orchestrator must produce *because* it ran a unit inline. `local-fallback-tool-unavailable` keeps only its literal meaning (the dispatch tool was genuinely unavailable) and is not the record for a judged inline run.
+- **An approval gate on the choice** — routing the inline/dispatch decision to consent, an operator sign-off, or a checker. Adding a validator for a judgment call recreates the mandate one layer up; that is explicitly out of scope.
+
+**What it does NOT relax.** The judgment grant is bounded by rules that are still absolute, and none of them is an exception the guard has to tolerate — each is *role-scoped* or *availability-scoped*, never a claim about the node population:
+
+- **Non-delegable roles must run inline.** The `finalize` sink and `main-session-gate` are a mandate in the opposite direction; their compliance row is unconditionally `main-session-direct`.
+- **The gate-independence fence.** For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`, an inline gate reviewing its own writer-context is no gate: route through `write-halt --reason consent`, never a self-issued `verdict: pass`.
+- **The mode-refused / unavailable-dispatch notice.** A genuinely absent agent tool or a runtime that mode-refuses the spawn still fires the prominent run-start notice and still records `local-fallback-tool-unavailable`.
+- **The planner seam.** The starting contract and the DAG authoring are delegated to `workflow-planner`; this session never claims or authors inline.
+- **The user's standing.** `delegation_policy: local-authorized` / `local-fallback-explicit` remain the user's channel to direct local execution. Humans decide values (axiom 4); the subtraction removed a *workflow-imposed* justifier, not the user's.
+- **Every fail-closed anchor.** The seeded `evidence-binding` nonce, `record-evidence --verify`, the exact-path write-set barrier, and the post-dominating gate nodes bind identically whichever mode ran the unit — which is exactly why the mandate guarded nothing.
+
+**Enforcement — presence only, mutation-proven, and that limit is deliberate.** `templates/routing/required-blocks.js` block `pr-execution-mode-judgment` obligates the grant's wording on all six plan-run surfaces through the derived-universe checker, so it cannot be quietly deleted or shortened on 4-of-6.
+
+There is **no absence audit**, and the gap is stated rather than hidden: nothing mechanically detects a mandate re-*added* alongside a grant left nominally intact. That case is caught by review, not by a check. One was built and rejected on measurement — a clause scanner keyed on obligation modals, role backticks, and justifier vocabulary passed five natural dispatch mandates on all six surfaces with every chain green, while convicting seven of nine faithful renditions of the not-relaxed rules above, including the plan-run skill's own `description:` frontmatter. Drawing the line between a mandate and a role-scoped rule requires knowing *who the obligation binds*; a word list keys on incidental surface features instead, and both of its error directions point away from the philosophy it exists to protect. A guard whose green is misleading is worse than an acknowledged gap, and shipping one would itself have added to the system this principle subtracts from. Either build a real structural check or leave this to review.
+
+## Two validation tiers — the fast gate is SAMPLED (#801)
+
+`npm run test:kaola-workflow:claude` is the **fast gate**: a hard 10-minute budget, bought by sampling, measured at 391s. `npm run test:kaola-workflow:claude:full` is the **complete gate**, and it is what a release receipt requires. `npm run test:full` chains the complete gate with the other three editions.
+
+- **What the fast gate does NOT execute on a given run.** 11 of every 12 scenarios in `test-adaptive-node`, `test-replan` and `simulate-workflow-walkthrough`; and all of `test-interior-gate-freshness`, `test-release`, `test-run-chains`, `test-claim-hardening`, `test-barrier-base-integrity`, `test-sink-merge`. Those six are not registry-backed, so sampling is unavailable and whole-suite deferral was the only option.
+- **The rotation is the bound on that loss.** `--shard auto/N` seeds the slice index from HEAD: the same commit always runs the same slice (so a red is reproducible and re-running cannot shuffle a failure out of view), while consecutive commits run different slices (so the whole registry is covered across N commits). A fixed slice would leave the other N−1 permanently unexecuted for the same runtime — strictly worse.
+- **Coverage loss stays fail-closed.** The shard-coverage audit still asserts that shards agree on the registered scenario count and that their slices sum to exactly it, so a partition that drops or duplicates a scenario reds the chain.
+- **A cut must name its surviving gate.** Deferring a suite from the fast gate does not retire it: the full tier still runs it. Never defer without recording the defect class that stops being checked per-run and where it is still checked.
+- **Do not reach for concurrency.** It has been measured twice on this suite set and produces false reds — see the #801 CHANGELOG entry and `docs/decisions/D-523-01.md`. Spawn reduction is likewise already refuted; the time is genuine nested work.
+
+## Cross-runtime lexicon parity (#812)
+
+A typed refusal code emitted by the shared engine (`scripts/kaola-workflow-*.js`) can reach **any** runtime, so it must be documented on **every** runtime or on none. `scripts/test-runtime-lexicon-parity.js` enforces this and is wired into the claude chain (~0.3s).
+
+- **The domain is derived, not curated.** Candidates are the ~555 snake_case typed codes the shared engine actually emits, read off both spellings — a `reason:` field and the first argument of `refuse|halt|warn|blocked|refusal(...)`. The oracle never decides which codes are agent-facing; a code documented nowhere is silent and a code documented everywhere is silent, so **only asymmetry speaks**. Widening coverage means widening `EMIT_PATTERNS`, never hand-adding a token.
+- **Enforcement is the default.** `RUNTIME_NATIVE` allowlists what is **exempt** (with a one-line capability reason), the inverse of `test-agent-profile-parity.js`'s opt-in `FEATURE_TOKENS`, where a token nobody remembered to add is silently unguarded. It is **bidirectional**: a Codex-only token is a violation exactly like a Codex-missing one.
+- **Six buckets, not four.** The three Codex editions are collected separately (`codex-github` / `codex-gitlab` / `codex-gitea`). Merging them let a code surviving in only one edition count as present for all three — the very drift the oracle exists to catch.
+- **The canonical agent tree is flat, and nested subtrees are excluded by construction.** The sync scripts render only the top-level agents + commands, so walking a nested override subtree would red the always-run chain for a structural difference rather than a drift.
+- **Anti-vacuity floors are part of the guard.** A broken extractor refuses with `derivation_vacuous` and an empty runtime tree with `runtime_tree_vacuous`, because a guard that silently measures nothing is the failure mode this issue exists to close.
+- **Mutation-proof any new guard.** `test-kimi-edition.js` previously passed 415 assertions while detecting no template drift at all. A green suite is not evidence; only a demonstrated RED-on-mutation is.
 
 ## `.md` files as production surfaces (#424)
 
@@ -529,10 +589,10 @@ Plans may include an optional `goal: <text>` prose line in `## Meta`. Key proper
 
 Prose assertions ("chains passed", "npm test is green") are insufficient evidence of test-chain greenness at Finalization. The `--finalize-check` gate is **dual-mode by repo kind (#475)**, auto-detected by whether `package.json` declares any `test:kaola-workflow:*` script.
 
-**Self-host (npm).** The contractor MUST:
+**Self-host (npm).** The orchestrator MUST:
 
 1. Run `node scripts/kaola-workflow-run-chains.js --project <P>` to produce `.cache/chain-receipt.json`.
-2. Cite the receipt path as evidence in the contractor summary.
+2. Cite the receipt path as evidence in the finalization summary.
 3. Never record a `chains_passed: true` prose attestation without the receipt artifact.
 
 **Per-chain kill ceiling and timeout observability (#608).** The `spawnSync`/`spawn` kill ceiling
@@ -560,7 +620,7 @@ manual retry, an environmental flake) by appending a `gap: <class> — <text>` l
 `.cache/run-gaps-manual.md` (issue #653 / D-653-01) — the reverse-containment check in step 3
 below refuses a `## Run gaps` entry with no matching seeded or scanned source.
 
-The contractor MUST:
+The orchestrator MUST:
 
 1. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --json` to produce
    `.cache/run-gaps.json`. The scanner reads only `kaola-workflow/<P>/.cache/` (scope guard —
@@ -597,7 +657,7 @@ The contractor MUST:
    paren-bearing sample now parses (issue #726), a hand-typed row whose sample contains `)` is
    subject to reverse containment like any other — previously such a row never parsed, so it fell
    through to the both-sides-empty vacuous pass and escaped the check entirely.
-4. Cite the gate exit code as evidence in the contractor summary. Never record a
+4. Cite the gate exit code as evidence in the finalization summary. Never record a
    `gaps_addressed: true` prose attestation without a passing `--check` invocation.
 
 The `--check` gate is the ONLY valid run-gap evidence; classify its result structurally by the
@@ -873,10 +933,10 @@ existing gate belongs in the gate itself, with its own review, not as an axiom a
 
 See `docs/decisions/D-645-01.md`.
 
-## Issue-scout higher-profile model tier (#646; role fully retired by #789)
+## Issue-scout model tier (#646; role fully retired by #789)
 
-The standalone `issue-scout` agent, its higher-profile `model: opus` override, and the
+The standalone `issue-scout` agent, its reasoning-tier `model: opus` override, and the
 `ISSUE_SCOUT_MODEL` install-time placeholder are retired: the no-target backlog survey folded
-into `workflow-planner`'s own no-target mode, which was already Opus-pinned under every
-profile. There is nothing left to model-tier separately. See `docs/decisions/D-646-01.md` for
+into `workflow-planner`'s own no-target mode, which is reasoning-pinned on every install.
+There is nothing left to model-tier separately. See `docs/decisions/D-646-01.md` for
 the original tier-governance history.

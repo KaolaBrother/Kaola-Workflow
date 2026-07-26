@@ -54,7 +54,12 @@ function runNode(script, args, cwd, extraEnv, opts) {
   // Git isolation: prevent developer gpgsign/hooksPath from breaking fixture commits.
   baseEnv.GIT_CONFIG_GLOBAL = '/dev/null';
   baseEnv.GIT_CONFIG_NOSYSTEM = '1';
-  const timeout = (opts && opts.timeout != null) ? opts.timeout : 120000;
+  // The timeout is a HANG guard, not an assertion. When this suite runs inside a concurrent
+  // chain pool a single fixture subprocess legitimately takes far longer than on an idle
+  // host, so the runner exports KAOLA_TEST_TIMEOUT_SCALE and the guard tracks the load it is
+  // running under. A standalone run (no scale set) keeps the original bound exactly.
+  const timeoutScale = Math.max(1, Number(process.env.KAOLA_TEST_TIMEOUT_SCALE) || 1);
+  const timeout = ((opts && opts.timeout != null) ? opts.timeout : 120000) * timeoutScale;
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
@@ -180,6 +185,19 @@ function seedAdaptiveFinalizeFixture(root, project, writeSet) {
   } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
     'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
+}
+
+// #816: cmdFinalize's Step-8a artifact mirror pushes the MAIN checkout's Finalization artifacts
+// into the linked worktree, so the main copy is the authoritative one at the gate. A fixture that
+// seeds both roots independently records a per-root candidate hash; align them the way a real run
+// does (the orchestrator authors ONE final-validation record) so the mirror is a no-op in content.
+function alignFinalizeFixtureAcrossRoots(mainRoot, wtRoot, project) {
+  const rel = path.join('kaola-workflow', project, '.cache', 'final-validation.md');
+  try {
+    const to = path.join(mainRoot, rel);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(path.join(wtRoot, rel), to);
+  } catch (_) {}
 }
 
 function read(file) {
@@ -2605,16 +2623,34 @@ function testAdaptiveGateBarrierEnforcement() {
       'control: declared sensitive write WITH a security-reviewer must pass');
     assert(planValidator.barrierCheck(noSec, ['src/surprise.js'], {}).result === 'refuse',
       'H3: out-of-allowlist production write must refuse');
-    assert(planValidator.barrierCheck(noSec, ['lib/foo.js', 'docs/x.md', 'CHANGELOG.md', 'test/foo.test.js', 'kaola-workflow/p/workflow-plan.md'], {}).result === 'pass',
-      'control: declared + docs + tests + workflow-artifact writes must pass');
+    // #813: a test file a node authors is DECLARED like any other file, so the all-bands control
+    // declares its test path. Docs / CHANGELOG / workflow-artifact stay allowband-exempt.
+    const noSecT = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js test/foo.test.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert(planValidator.barrierCheck(noSecT, ['lib/foo.js', 'docs/x.md', 'CHANGELOG.md', 'test/foo.test.js', 'kaola-workflow/p/workflow-plan.md'], {}).result === 'pass',
+      'control: declared code + declared test + docs + workflow-artifact writes must pass');
+    // #813: the SAME test path UNDECLARED is now an ordinary overflow — the exemption no longer
+    // hides it from the allowlist. RED before the split (this passed vacuously).
+    const undeclaredTest = planValidator.barrierCheck(noSec, ['lib/foo.js', 'test/foo.test.js'], {});
+    assert(undeclaredTest.result === 'refuse' && undeclaredTest.reason === 'write_set_overflow'
+      && undeclaredTest.outOfAllow.indexOf('test/foo.test.js') >= 0,
+      '#813: an UNDECLARED test write is attributable — write_set_overflow naming the path, got ' + JSON.stringify(undeclaredTest));
 
-    // --- v3.20.1 Fix #2 (false-refusal): the sensitivity scan must EXEMPT docs / tests /
+    // --- v3.20.1 Fix #2 (false-refusal): the SENSITIVITY scan must EXEMPT docs / tests /
     // workflow-artifacts — a docs/test path whose NAME matches a Phase-5 pattern is not production
-    // code and must NOT refuse even with no security-reviewer node.
-    assert(planValidator.barrierCheck(noSec, ['test/login.test.js'], {}).result === 'pass',
-      'Fix#2: a tests-only path matching a sensitive pattern must NOT refuse');
+    // code and must NOT demand a security-reviewer. #813 narrowed this exemption to sensitivity ONLY,
+    // so the shield is now asserted on a DECLARED test path (attribution satisfied) and, separately,
+    // on `sensitiveHits` staying empty when attribution refuses.
+    const noSecLogin = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js test/login.test.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert(planValidator.barrierCheck(noSecLogin, ['test/login.test.js'], {}).result === 'pass',
+      'Fix#2: a DECLARED tests-only path matching a sensitive pattern must NOT refuse');
     assert(planValidator.barrierCheck(noSec, ['docs/auth.md'], {}).result === 'pass',
       'Fix#2: a docs-only path matching a sensitive pattern must NOT refuse');
+    // #813: an UNDECLARED sensitive-NAMED test path refuses on ATTRIBUTION, never on sensitivity —
+    // the two arms are independent. sensitiveHits stays empty (the shield), reason is the overflow family.
+    const shielded = planValidator.barrierCheck(noSec, ['test/login.test.js'], {});
+    assert(shielded.reason === 'write_set_overflow' && shielded.sensitiveHits.length === 0,
+      '#813: the sensitivity shield survives the attribution split — an undeclared test path refuses as '
+      + 'overflow with NO sensitivity hit, got ' + JSON.stringify(shielded));
     // control: a real PRODUCTION sensitive write with no security-reviewer still refuses.
     assert(planValidator.barrierCheck(noSec, ['src/auth/login.js'], {}).result === 'refuse',
       'Fix#2 control: a production sensitive write with no security-reviewer must still refuse');
@@ -3276,8 +3312,12 @@ function testBundle424432433ValidatorGates() {
     const reg = pv.ROLE_TOKEN_REGISTRY;
     assert(reg && typeof reg === 'object', '#433 (5): ROLE_TOKEN_REGISTRY must be exported as an object');
     const expect = {
-      'tdd-guide':             ['evidence-binding', 'RED', 'GREEN'],
-      'implementer':          ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+      // Custody, not order: the test author keeps RED and gains its baseline receipt but loses
+      // GREEN (a passing suite grades the implementation, and the test's author is not its grader);
+      // the universal implementing role drops `non_tdd_reason` with the dichotomy that justified it
+      // and keeps a verification-tier alternation now led by the behavioral tier.
+      'tdd-guide':             ['evidence-binding', 'RED', 'red_baseline'],
+      'implementer':          ['evidence-binding', 'tests-green|regression-green|build-green|smoke-integration'],
       'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
       'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
       'adversarial-verifier': ['evidence-binding', 'verdict'],
@@ -4137,17 +4177,28 @@ function testBundle424432433NodeSeeding() {
       assert(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
         '#433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
 
-      // (6c) tdd-guide role stubs: RED and GREEN must be present as stub keys.
+      // (6c) tdd-guide role stubs follow CUSTODY: the test author proves RED and BINDS it to the
+      // baseline it was captured on, so the seed carries BOTH `RED` and its `red_baseline` receipt.
+      // GREEN is absent by contract — a passing suite is a verdict about the implementation and the
+      // test author is not the grader of the code, so GREEN authority sits gate-side. Asserting its
+      // ABSENCE is what keeps the seed from quietly re-acquiring the retired self-grading token.
       assert(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
         '#433 (6c): tdd-guide evidence stub must contain RED token, got:\n' + evidenceContent);
-      assert(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
-        '#433 (6c): tdd-guide evidence stub must contain GREEN token, got:\n' + evidenceContent);
+      assert(/^red_baseline: /m.test(evidenceContent) || /^<!-- red_baseline/.test(evidenceContent),
+        '#433 (6c): tdd-guide evidence stub must contain the red_baseline receipt token (RED is bound '
+        + 'to the baseline it was captured on, not asserted), got:\n' + evidenceContent);
+      assert(!/^GREEN\b/m.test(evidenceContent) && !/^<!-- GREEN/m.test(evidenceContent),
+        '#433 (6c): tdd-guide evidence stub must NOT seed a GREEN token — GREEN authority is gate-side, '
+        + 'got:\n' + evidenceContent);
 
       // (6d) The JSON response carries evidence_file + required_tokens metadata.
       assert(onOut.opened.evidence_file === '.cache/n1.md',
         '#433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
-      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
-        '#433 (6d): opened.required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED')
+        && onOut.opened.required_tokens.includes('red_baseline')
+        && !onOut.opened.required_tokens.includes('GREEN'),
+      '#433 (6d): opened.required_tokens must be the custody set for tdd-guide — RED + red_baseline, no GREEN, got '
+        + JSON.stringify(onOut.opened.required_tokens));
 
       // (6f) #611 AC2: the dispatch card carries a concrete per-node wait budget (the Codex join
       // protocol's non-interrupt floor) — never left to model improvisation. n1's untiered cell resolves
@@ -6265,6 +6316,7 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
     plantActiveFolder(wtPath, 'issue-701', 701, null);
     seedAdaptiveFinalizeFixture(tmp, 'issue-701');
     seedAdaptiveFinalizeFixture(wtPath, 'issue-701');
+    alignFinalizeFixtureAcrossRoots(tmp, wtPath, 'issue-701');
 
     // Use --keep-worktree so the linked worktree directory is not removed after archiving;
     // this lets us assert that the archive exists inside the linked worktree.
@@ -6318,6 +6370,7 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
     plantActiveFolder(wtPath, 'issue-701', 701, null);
     seedAdaptiveFinalizeFixture(tmp, 'issue-701');
     seedAdaptiveFinalizeFixture(wtPath, 'issue-701');
+    alignFinalizeFixtureAcrossRoots(tmp, wtPath, 'issue-701');
     // Plant a stray UNTRACKED foreign archive dir+file before finalize
     const foreignDir = path.join(wtPath, 'kaola-workflow', 'archive', 'issue-999');
     fs.mkdirSync(foreignDir, { recursive: true });
@@ -9254,25 +9307,21 @@ function testFinalizeCleansRoadmapEntry() {
       finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,
       'receipt: closure_invariants.ok must be true, got ' + JSON.stringify(finalizeResult.closure_invariants)
     );
-    // M2 (#277): warn-first attestation fields must be present; no dispatch-log in offline test
-    // so both fields are 'missing', but closure_invariants.ok must still be true (warn-first contract).
+    // M2 (#277): the warn-first attestation field must be present; no dispatch-log in the offline
+    // test so it is 'missing', but closure_invariants.ok must still be true (warn-first contract).
     assert(
       finalizeResult.closure_receipt && 'claim_planner_attested' in finalizeResult.closure_receipt,
       'M2 (#277): closure_receipt must have claim_planner_attested field'
-    );
-    assert(
-      finalizeResult.closure_receipt && 'finalize_contractor_attested' in finalizeResult.closure_receipt,
-      'M2 (#277): closure_receipt must have finalize_contractor_attested field'
     );
     assert(
       finalizeResult.closure_receipt.claim_planner_attested === 'missing' ||
       finalizeResult.closure_receipt.claim_planner_attested === 'attested',
       'M2 (#277): claim_planner_attested must be missing or attested, got ' + finalizeResult.closure_receipt.claim_planner_attested
     );
+    // #816: the finalize seam is orchestrator-owned — it emits no attestation field at all.
     assert(
-      finalizeResult.closure_receipt.finalize_contractor_attested === 'missing' ||
-      finalizeResult.closure_receipt.finalize_contractor_attested === 'attested',
-      'M2 (#277): finalize_contractor_attested must be missing or attested, got ' + finalizeResult.closure_receipt.finalize_contractor_attested
+      finalizeResult.closure_receipt && !('finalize_contractor_attested' in finalizeResult.closure_receipt),
+      '#816: closure_receipt must NOT carry a retired finalize-seam attestation field'
     );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -10455,8 +10504,8 @@ function testWatchPrMergedClosureReceipt() {
       'watch-pr MERGED receipt.claim_planner_attested must be missing after attestation check, got: ' + receipt.claim_planner_attested
     );
     assert(
-      receipt.finalize_contractor_attested === 'missing',
-      'watch-pr MERGED receipt.finalize_contractor_attested must be missing after attestation check, got: ' + receipt.finalize_contractor_attested
+      !('finalize_contractor_attested' in receipt),
+      '#816: watch-pr MERGED receipt must NOT carry a retired finalize-seam attestation field, got: ' + JSON.stringify(Object.keys(receipt))
     );
     console.log('testWatchPrMergedClosureReceipt: PASSED');
   } finally {
@@ -10693,6 +10742,10 @@ function testKeepOpenMergeFullChain() {
       [path.join(wt860, 'kaola-workflow', 'issue-860', 'workflow-plan.md'), '--candidate-hash', '--json'], wt860).stdout).validated_candidate_hash;
     fs.appendFileSync(path.join(wt860, 'kaola-workflow', 'issue-860', '.cache', 'final-validation.md'),
       'validated_candidate_hash: ' + cand860 + '\n');
+    // #816: the finalize transaction mirrors MAIN → worktree, so main's copy of the consumer
+    // evidence is the authoritative one at the gate. Keep the two roots consistent.
+    fs.copyFileSync(path.join(wt860, 'kaola-workflow', 'issue-860', '.cache', 'final-validation.md'),
+      path.join(cache860, 'final-validation.md'));
 
     // finalize --keep-worktree WITHOUT --keep-open: exercises state-field derivation (OFFLINE).
     const finResult = spawnSync(process.execPath, [
@@ -10747,8 +10800,8 @@ function testKeepOpenMergeFullChain() {
 }
 
 // #336 — cmdFinalize MUST honor the --keep-issue-open FLAG as the sole keep-open signal.
-// Regression for the inert-flag false-green: every prose surface (contractor.md:156 passes ONLY
-// $SINK_KEEP_OPEN_FLAG, the crash-resume note at contractor.md:169 re-runs with --keep-issue-open
+// Regression for the inert-flag false-green: every prose surface passes ONLY
+// $SINK_KEEP_OPEN_FLAG, and the crash-resume note re-runs with --keep-issue-open
 // "since the live state is gone and state-field derivation is unavailable") dispatches
 // --keep-issue-open, but claim.js parseArgs only recognized --keep-open — the flag was a no-op.
 // This fixture OMITS the durable `issue_action` field, so the FLAG is the only thing that can
@@ -10835,6 +10888,9 @@ function testKeepOpenFinalizeFlagAlias() {
       [path.join(wt861, 'kaola-workflow', 'issue-861', 'workflow-plan.md'), '--candidate-hash', '--json'], wt861).stdout).validated_candidate_hash;
     fs.appendFileSync(path.join(wt861, 'kaola-workflow', 'issue-861', '.cache', 'final-validation.md'),
       'validated_candidate_hash: ' + cand861 + '\n');
+    // #816: the finalize transaction mirrors MAIN → worktree; keep the two roots consistent.
+    fs.copyFileSync(path.join(wt861, 'kaola-workflow', 'issue-861', '.cache', 'final-validation.md'),
+      path.join(cache861, 'final-validation.md'));
 
     // finalize WITH the explicit --keep-issue-open flag, NO issue_action field → the flag must
     // drive the keep-open terminal entirely on its own (OFFLINE).
@@ -13822,6 +13878,7 @@ function makeHandoffPlan(nodesRows, ledgerRows, labels) {
     '## Design', '',
     'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the review gate clears and validation passes.',
     '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '',
     '| id | status |',
     '|---|---|',
@@ -14346,6 +14403,7 @@ function testFreezeCheckedGovernanceAckStale() {
     '| done | finalize | rv | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '',
     'Decompose: ex explores; a builds aaa/x.js; rv gates; done sinks. sequence a→rv: S1 — rv consumes a\'s change. Done: review clears and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
     '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
@@ -14882,6 +14940,8 @@ function testAdaptiveWorktreeProvisionedE2E() {
     const cand530 = JSON.parse(runNode(planValidatorScript,
       [path.join(projDst, 'workflow-plan.md'), '--candidate-hash', '--json'], wt530).stdout).validated_candidate_hash;
     fs.appendFileSync(path.join(cacheDir, 'final-validation.md'), 'validated_candidate_hash: ' + cand530 + '\n');
+    // #816: the finalize transaction mirrors MAIN → worktree; keep the two roots consistent.
+    fs.copyFileSync(path.join(cacheDir, 'final-validation.md'), path.join(mainCache530, 'final-validation.md'));
 
     // Step 5: finalize --keep-worktree
     const finResult = spawnSync(process.execPath, [
@@ -15117,7 +15177,7 @@ function testPlanRunWiredForWorktree() {
 }
 
 // ---------------------------------------------------------------------------
-// #399: contractor Step-8a ledger-regression guard. The artifact mirror copies the main plan
+// #399: the Step-8a ledger-regression guard. The artifact mirror copies the main plan
 // over the worktree plan right before archive; run from the wrong direction it would reset a
 // finished worktree ledger complete->pending. The guard refuses that copy. Plant a SOURCE (main)
 // all-pending plan + a DEST (worktree) all-complete plan -> guard exits 3 (would_regress); the
@@ -15753,9 +15813,41 @@ function testGateEvidenceNonceRotation654() {
 
     const openWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
-    const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+
+    // ---- CUSTODY UPGRADE PATH (the deliberate NON-tolerance). A pre-custody in-flight artifact —
+    //      `RED` plus the retired `GREEN`, no `red_baseline` receipt — must REFUSE at close. An
+    //      in-flight node ALWAYS carries this open's nonce, so the receipt check always runs; there is
+    //      no grandfather clause and that is the point, because closing on a RED nobody can bind to a
+    //      baseline is exactly what the receipt exists to prevent. The escape hatch in
+    //      checkEvidenceShape is a no-expectedNonce OFFLINE read, never a close. Recovery is
+    //      reopen-node + re-run, and the operator hint must SAY so — an operator who is refused
+    //      without being told the recovery will paste a baseline in by hand, which launders the
+    //      receipt back into the self-description it replaced.
+    const legacyRec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
         + '\nRED: writer failed before implementation\nGREEN: writer passes after implementation\n',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
+    });
+    assert(legacyRec.status === 0,
+      'custody: record-evidence stays a verbatim transport for pre-custody bytes: ' + legacyRec.stderr + legacyRec.stdout);
+    const legacyClose = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp);
+    assert(legacyClose.status === 1,
+      'custody: a pre-custody tdd-guide artifact (RED + GREEN, no red_baseline) must REFUSE the close, got exit '
+      + legacyClose.status + '\n' + legacyClose.stdout + legacyClose.stderr);
+    const legacyOut = JSON.parse(legacyClose.stdout);
+    assert(legacyOut.result === 'refuse' && legacyOut.reason === 'evidence_shape_failed'
+      && legacyOut.missingTokenClass === 'red_baseline',
+    'custody: the refusal is typed evidence_shape_failed / missingTokenClass red_baseline, got ' + JSON.stringify(legacyOut));
+    assert(/reopen-node/.test(String(legacyOut.operator_hint || '')),
+      'custody: the operator hint must name the reopen-node recovery for a pre-custody artifact, got '
+      + JSON.stringify(legacyOut.operator_hint));
+    assert(/\| writer \| in_progress \|/.test(fs.readFileSync(planPath, 'utf8')),
+      'custody: the refusal precedes any ledger advance — writer must still be in_progress');
+
+    // ---- the CUSTODY-shaped artifact closes: RED bound to this open's recorded baseline, no GREEN. ----
+    const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+      cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
+        + '\nRED: writer failed before implementation\nred_baseline: ' + openWriter.nonce + '\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(rec.status === 0, '#654 writer evidence records: ' + rec.stderr + rec.stdout);
@@ -15784,7 +15876,7 @@ function testGateEvidenceNonceRotation654() {
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
     const repairedEvidence = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
-        + '\nRED: repair regression reproduced\nGREEN: repair regression passes\n',
+        + '\nRED: repair regression reproduced\nred_baseline: ' + openWriter.nonce + '\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(repairedEvidence.status === 0, '#654 repaired writer evidence records');
@@ -15846,7 +15938,7 @@ function testMixedRepairReplayJournal748() {
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
     const writerBody = (nodeId, nonce, tag) => 'evidence-binding: ' + nodeId + ' ' + nonce
-      + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+      + '\nRED: ' + tag + ' reproduced\nred_baseline: ' + nonce + '\n';
     const failBody = (nonce, file) => 'evidence-binding: reviewer ' + nonce
       + '\nverdict: fail\nfindings_blocking: 1\n'
       + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=' + file + '\n';
@@ -16653,6 +16745,7 @@ function testReviewerContractV2Conformance() {
       '| finalize | finalize | reviewer | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '',
       'Decompose: writer builds lib/impl.js; reviewer gates it; finalize sinks. sequence writer→reviewer: S1 — reviewer consumes writer\'s change. Done: review clears and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
@@ -16676,7 +16769,7 @@ function testReviewerContractV2Conformance() {
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
         input: 'evidence-binding: writer ' + openedWriter.nonce
-          + '\nRED: old behavior reproduced\nGREEN: new behavior passes\n',
+          + '\nRED: old behavior reproduced\nred_baseline: ' + openedWriter.nonce + '\n',
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
     assert(writerRecord.status === 0, 'review-v2 writer evidence records: ' + writerRecord.stdout + writerRecord.stderr);
@@ -16723,7 +16816,16 @@ function testReviewerContractV2Conformance() {
       && !fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
     'review-v2 stale candidate refuses before finding parsing, receipt creation, or journal creation: '
       + staleClose.stdout + staleClose.stderr);
-    const discoveryFinding = {
+    // #805 D1 — A CHANGE GATE'S BLOCKING FINDINGS MUST BE ROUTABLE, PROVEN AT THE RECORD SEAM.
+    //
+    // Every in-plan repair route keys on the finding's primary-anchor PATH (the spine router places it
+    // in a milestone surface; the write-set router resolves the owning writer). An
+    // `evidence_observation` anchor carries none, so a BLOCKING finding anchored that way used to
+    // commit a receipt + journal attempt that no route could ever act on: repair-node degraded to
+    // `repair_requires_replan`, reopen-node then refused `review_attempt_unresolved`, and re-recording
+    // the gate refused `evidence_generation_stale` — a closed cycle whose only exits were a re-plan
+    // epoch or a manual fix. Refuse it HERE, before the attempt exists, so the cycle cannot form.
+    const unroutableFindingBase = {
       failure_class: 'correctness',
       trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
         expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
@@ -16732,6 +16834,49 @@ function testReviewerContractV2Conformance() {
         observation_key: 'writer:review-v2-regression' },
       secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
       status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+    };
+    const unroutableRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, dispatch.candidate_digest,
+          'changes_requested', ['finding_json: ' + JSON.stringify(unroutableFindingBase)]),
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(unroutableRecord.status === 0,
+      '#805: record-evidence stays a verbatim transport for the unroutable-anchor bytes: '
+      + unroutableRecord.stdout + unroutableRecord.stderr);
+    const unroutableClose = runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp);
+    const unroutableOut = JSON.parse(unroutableClose.stdout);
+    assert(unroutableClose.status !== 0 && unroutableOut.reason === 'review_finding_anchor_unroutable',
+      '#805: a change gate requesting changes on a BLOCKING finding whose primary anchor carries no '
+      + 'path must refuse review_finding_anchor_unroutable, got ' + unroutableClose.stdout + unroutableClose.stderr);
+    assert(JSON.stringify(unroutableOut.anchor_kinds) === JSON.stringify(['evidence_observation'])
+      && Array.isArray(unroutableOut.routable_anchor_kinds)
+      && !unroutableOut.routable_anchor_kinds.includes('evidence_observation')
+      && unroutableOut.routable_anchor_kinds.length === schema.FINDING_ANCHOR_KINDS.length - 1,
+    '#805: the refusal must NAME the offending anchor kind and the routable set (derived from the ONE '
+      + 'anchor-kind vocabulary), got ' + JSON.stringify({ k: unroutableOut.anchor_kinds, r: unroutableOut.routable_anchor_kinds }));
+    assert(typeof unroutableOut.operator_hint === 'string' && /re-anchor/i.test(unroutableOut.operator_hint),
+      '#805: the refusal carries an operator hint that says how to fix it, got ' + JSON.stringify(unroutableOut.operator_hint));
+    assert(!fs.existsSync(path.join(cacheDir, 'review-receipts'))
+      && !fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
+    '#805: the unroutable finding is refused BEFORE any receipt or journal attempt exists — so the '
+      + 'unrepairable-attempt cycle can never form');
+
+    // The SAME finding re-anchored on a path-bearing kind is admitted. `candidate_range` binds to the
+    // real candidate blob, so the anchor index (which is what makes an anchor trustworthy) validates it.
+    const implBytes = fs.readFileSync(path.join(tmp, 'lib', 'impl.js'));
+    const objectFormat805 = String(spawnSync('git', ['-C', tmp, 'rev-parse', '--show-object-format'],
+      { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
+    const implObjectId = String(spawnSync('git', ['-C', tmp, 'hash-object', 'lib/impl.js'],
+      { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
+    assert(/^[0-9a-f]{40,64}$/.test(implObjectId),
+      '#805 fixture: the candidate blob id resolves, got ' + JSON.stringify(implObjectId));
+    const discoveryFinding = {
+      ...unroutableFindingBase,
+      primary_anchor: { kind: 'candidate_range', path: 'lib/impl.js',
+        object_format: objectFormat805, tree_mode: '100644', object_id: implObjectId,
+        start: 0, end: 1, blob_length: implBytes.length },
     };
     const reviewRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
@@ -16744,17 +16889,42 @@ function testReviewerContractV2Conformance() {
       ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
     assert(discoveryClose.result === 'review_failed' && discoveryClose.attempt_id,
       'review-v2 discovery failure persists a repairable schema-v2 attempt');
+
+    // #805 D1 — THE CYCLE IS BROKEN, END TO END. The path-bearing anchor RESOLVES the finding to its
+    // owning writer: `ownership_candidates` / `owning_node` are exactly the fields the dead-end run
+    // reported as `[]` / `null`, and they are what every in-plan repair route reads.
+    const attemptJournal805 = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    const failedAttempt805 = attemptJournal805.attempts.find(a => a.attempt_id === discoveryClose.attempt_id);
+    assert(failedAttempt805 && (failedAttempt805.route_candidates || []).length > 0
+      && failedAttempt805.route_candidates.every(r =>
+        JSON.stringify(r.ownership_candidates) === JSON.stringify(['writer']) && r.owning_node === 'writer'),
+    '#805: the finding\'s anchor PATH must resolve ownership to the writer — this is the literal '
+      + 'ownership_candidates:[] / owning_node:null the unrepairable dead end reported, got '
+      + JSON.stringify(failedAttempt805 && failedAttempt805.route_candidates));
+    // …and the writer whose row this finding lands on is already COMPLETE — the precondition of the
+    // whole dead end (a gate finding raised after its producer closed).
+    assert(/^\| writer \| complete \|$/m.test(fs.readFileSync(planPath, 'utf8')),
+      '#805 PRECONDITION: the finding\'s writer is COMPLETE at repair time');
     const repair = json(runNode(adaptiveNodeScript,
       ['repair-node', '--project', project, '--attempt-id', discoveryClose.attempt_id,
         '--node-id', 'writer', '--json'], tmp));
     assert(repair.result === 'ok' && repair.consumed_by === 'writer' && repair.baselineReused === true,
       'review-v2 failed attempt is consumed through the unchanged anti-laundering repair path');
+    assert(repair.result !== 'repair_requires_replan'
+      && !fs.existsSync(path.join(cacheDir, 'replan-source.json')),
+    '#805: a gate finding on a COMPLETE writer reaches its repair with ZERO re-plan epochs — no '
+      + 'replan source is ever prepared');
+    assert(repair.repair_brief && repair.repair_brief.scope === 'assigned_findings'
+      && repair.repair_brief.assigned_uids.length === 1
+      && repair.repair_brief.findings[0].anchor_path === 'lib/impl.js',
+    '#805: the reopened writer receives a brief that NAMES the anchored file, got '
+      + JSON.stringify(repair.repair_brief && { s: repair.repair_brief.scope, u: repair.repair_brief.assigned_uids }));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
     const repairedWriterRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
         input: 'evidence-binding: writer ' + openedWriter.nonce
-          + '\nRED: review regression reproduced\nGREEN: repair passes\n',
+          + '\nRED: review regression reproduced\nred_baseline: ' + openedWriter.nonce + '\n',
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
     assert(repairedWriterRecord.status === 0, 'review-v2 repaired writer evidence records');
@@ -16922,6 +17092,7 @@ const SPINE_PLAN_758 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 and m2 are milestones whose interior frontiers are composed at open time (m2 consumes m1\'s evidence packet — S1); wall reviews both composed frontiers; done sinks. Done: both milestones land their goals reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -17219,6 +17390,7 @@ const SPINE_PLAN_759 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -18311,6 +18483,7 @@ function testReExpandCascade761() {
       '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761a', PLAN, 'workflow/issue-761a');
     try {
@@ -18329,6 +18502,13 @@ function testReExpandCascade761() {
         '#761 (a): re-open appends monotonic m1#2 at a pristine sink, got ' + JSON.stringify({ r: p.reopened, id: p.expansion_id, s: p.sink_progress }));
       assert(ledgerOf(ctx.planPath).m1 === 'pending',
         '#761 (a): the re-opened owner returns to its un-discharged (pending) state, got ' + ledgerOf(ctx.planPath).m1);
+      // #807 D1 — a RE-expansion is the same transaction, so it presents the composed shape too: the
+      // newly composed unit is announced through the transition channel (an id the visible list does
+      // not hold is an INSERT), not silently added to the ledger alone.
+      assert((p.units || []).length > 0 && p.units.every(u =>
+        (p.taskTransitions || []).some(t => t.id === u.id)),
+      '#807: reexpand-open must announce every unit of the new record through taskTransitions, got '
+        + JSON.stringify({ units: (p.units || []).map(u => u.id), t: p.taskTransitions }));
       // APPEND-ONLY on the records channel + the spine hash is invariant + resume-check green.
       const recSec = (t) => t.slice(t.indexOf('## Expansion Records'));
       const now = fs.readFileSync(ctx.planPath, 'utf8');
@@ -18351,6 +18531,7 @@ function testReExpandCascade761() {
       '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761b', PLAN, 'workflow/issue-761b');
     try {
@@ -18380,6 +18561,7 @@ function testReExpandCascade761() {
       '| wall | code-reviewer | m1, m2, m3 | — | 1 | sequence | every milestone lands its goal with no unreviewed surface | the accumulated candidate across all expansions | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose: probe explores; m1/m2/m3 are independent milestones composed at open time (disjoint surfaces scripts//docs/); wall reviews all composed frontiers; done sinks. Done: every milestone lands its goal reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| probe | complete |', '| m1 | pending |', '| m2 | pending |', '| m3 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761c', PLAN, 'workflow/issue-761c');
@@ -18449,6 +18631,7 @@ const SPINE_PLAN_760 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -18462,19 +18645,26 @@ function testSerializationInversion760() {
   const wrepo = adaptiveTmp('serialization-760');
   initGitRepoWithBareRemote(wrepo);
   spawnSync('git', ['-C', wrepo, 'checkout', '-b', 'workflow/issue-760'], { encoding: 'utf8' });
-  // The seed file BOTH legs will independently edit — a common ancestor so the octopus merge has a
-  // real 3-way base. `.kw/` is gitignored (leg worktrees live there) mirroring #759 (e)'s fixture.
+  // `.kw/` is gitignored (leg worktrees live there) mirroring #759 (e)'s fixture.
   fs.mkdirSync(path.join(wrepo, 'lib'), { recursive: true });
-  // shared.test.js (not shared.js): the barrier's isTestLikePath allowband exempts a test-like path
-  // from the declared-write-set allowlist ENTIRELY (both the per-leg AND the group barrier), which is
-  // what makes it possible for a genuinely directory-shaped (uncertain) declaration to co-open AND
-  // actually complete: a non-test concrete file always overflows its OWN leg's exact-path barrier the
-  // instant it is produced (declared vs. actual is a strict Set membership check, prefix declarations
-  // included), regardless of co-open vs. serial — that failure mode is orthogonal to this inversion.
-  fs.writeFileSync(path.join(wrepo, 'lib', 'shared.test.js'), 'line 2\nline 3\nline 4\n');
+  // A pre-existing library file so `lib/` is a real, tracked directory in every provisioned leg —
+  // the directory-shaped grant w2 declares below is a grant over existing code, not over nothing.
+  fs.writeFileSync(path.join(wrepo, 'lib', 'base.js'), '// pre-existing\n');
   fs.writeFileSync(path.join(wrepo, '.gitignore'), '.kw/\n');
   const proj = path.join(wrepo, 'kaola-workflow', 'issue-760');
   fs.mkdirSync(proj, { recursive: true });
+  // The seed file BOTH legs will independently edit — a common ancestor so the octopus merge has a
+  // real 3-way base. It lives in the WORKFLOW-ARTIFACT band, which is the only band two legs may
+  // legitimately co-write: it is barrier-exempt in every scope BY DESIGN (per-leg state legitimately
+  // differs leg to leg), so a genuine same-file overlap can materialize and reach the synthesizer.
+  // A shared PRODUCTION file cannot: declared-vs-actual is a strict Set membership check, so a
+  // concrete file only one leg declares overflows the OTHER leg's exact-path barrier the instant it is
+  // produced — and a shared TEST file now does exactly the same, since test-like paths are attributable
+  // (the earlier fixture named this file `lib/shared.test.js` precisely to buy the blanket exemption
+  // that no longer exists). Each leg's PRODUCTION write therefore stays inside its own declared lane
+  // below, while the shared ancestor carries the same-file 3-way merge this scenario is about.
+  const sharedAncestor = path.join(proj, 'shared-ancestor.md');
+  fs.writeFileSync(sharedAncestor, 'line 2\nline 3\nline 4\n');
   const planPath = path.join(proj, 'workflow-plan.md');
   const readPlan = () => fs.readFileSync(planPath, 'utf8');
   const expandOpen = (nodeId, composition) => runNode(adaptiveNodeScript,
@@ -18503,12 +18693,15 @@ function testSerializationInversion760() {
         join: 'mechanical — a merge, not the synthesizer agent',
         probe: 'no unit outcome reshapes the other',
         serializer: 'none present — no S1 artifact, no S2 shared resource, worktrees available; '
-          + 'exact-path disjointness between lib/shared.test.js and lib/ is unprovable (uncertain, not '
+          + 'exact-path disjointness between lib/w1.js and lib/ is unprovable (uncertain, not '
           + 'proven), so this is not a named serializer and the frontier co-opens',
       },
       units: [
-        { name: 'w1', role: 'tdd-guide', model: 'standard', write_set: 'lib/shared.test.js', mode: 'co_open' },
-        { name: 'w2', role: 'tdd-guide', model: 'standard', write_set: 'lib/', mode: 'co_open' },
+        // w2 carries BOTH an exact file (the concrete write its own leg barrier attributes) and the
+        // directory-shaped `lib/` token that makes exact-path disjointness against w1 UNPROVABLE —
+        // the kind:'coarse' unresolvable shape this inversion is about.
+        { name: 'w1', role: 'tdd-guide', model: 'standard', write_set: 'lib/w1.js', mode: 'co_open' },
+        { name: 'w2', role: 'tdd-guide', model: 'standard', write_set: 'lib/w2.js lib/', mode: 'co_open' },
       ],
     };
     const e = expandOpen('m1', composition);
@@ -18524,18 +18717,41 @@ function testSerializationInversion760() {
     assert(rs.lane_group && Object.keys(rs.lane_group.legs || {}).length === 2,
       '#760: the co-open must provision an isolated leg per unit, got ' + JSON.stringify(rs.lane_group));
 
-    // ---- both legs ACTUALLY touch the same file (the uncertainty materializes as a real, but
-    //      non-conflicting, overlap) — non-overlapping edits so the mechanical merge is clean. ----
-    const legW1 = path.join(wrepo, '.kw', 'legs', 'issue-760', 'm1-r1-w1', 'lib', 'shared.test.js');
-    const legW2 = path.join(wrepo, '.kw', 'legs', 'issue-760', 'm1-r1-w2', 'lib', 'shared.test.js');
-    fs.writeFileSync(legW1, 'line 2\nline 3\nline 4\nline 5 (from w1)\n');   // w1 appends
-    fs.writeFileSync(legW2, 'line 1 (from w2)\nline 2\nline 3\nline 4\n');  // w2 prepends
+    // ---- each leg writes its OWN declared production file, and BOTH legs additionally edit the one
+    //      shared ancestor (the uncertainty materializes as a real, but non-conflicting, same-file
+    //      overlap) — non-overlapping edits so the mechanical merge is clean. ----
+    const legRoot = id => path.join(wrepo, '.kw', 'legs', 'issue-760', id);
+    fs.writeFileSync(path.join(legRoot('m1-r1-w1'), 'lib', 'w1.js'), '// w1\n');
+    fs.writeFileSync(path.join(legRoot('m1-r1-w2'), 'lib', 'w2.js'), '// w2\n');
+    const legShared = id => path.join(legRoot(id), 'kaola-workflow', 'issue-760', 'shared-ancestor.md');
+    fs.writeFileSync(legShared('m1-r1-w1'), 'line 2\nline 3\nline 4\nline 5 (from w1)\n');   // w1 appends
+    fs.writeFileSync(legShared('m1-r1-w2'), 'line 1 (from w2)\nline 2\nline 3\nline 4\n');  // w2 prepends
     // #633: a write-role lane-group member SELF-WRITES its evidence INSIDE its own leg (never synced
     // back to the parent) — resolveEvidenceCachePath prefers the leg's own copy over the parent's.
     for (const id of ['m1-r1-w1', 'm1-r1-w2']) {
-      const evPath = path.join(wrepo, '.kw', 'legs', 'issue-760', id, 'kaola-workflow', 'issue-760', '.cache', id + '.md');
-      fs.appendFileSync(evPath, '\nRED: a failing test named the shared helper first\nGREEN: the implementation makes it pass\n');
+      const evPath = path.join(legRoot(id), 'kaola-workflow', 'issue-760', '.cache', id + '.md');
+      // The RED receipt binds to THIS open's recorded baseline. Read the nonce back out of the seeded
+      // line-1 binding instead of restating it, so the fixture cannot drift from what the opener wrote.
+      const legNonce = (fs.readFileSync(evPath, 'utf8').match(/^evidence-binding:[ \t]*\S+[ \t]+(\S+)/) || [])[1];
+      fs.appendFileSync(evPath, '\nRED: a failing test named the shared helper first\nred_baseline: ' + legNonce + '\n');
     }
+
+    // ---- #813 (the loophole this fixture used to depend on, now proven CLOSED): a stray TEST file
+    //      that no unit declared is attributable exactly like a stray production file, so it refuses
+    //      at w1's OWN per-leg barrier before any ledger advance. Removing it lets the close proceed —
+    //      the existing revert-overflow choreography, no new refusal family, no new subcommand. ----
+    const strayTest = path.join(legRoot('m1-r1-w1'), 'lib', 'stray.test.js');
+    fs.writeFileSync(strayTest, '// undeclared test file\n');
+    {
+      const blocked = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-760', '--node-id', 'm1-r1-w1', '--json'], wrepo);
+      assert(blocked.status === 1, '#813: an UNDECLARED test write in a leg must refuse the close, got exit ' + blocked.status + '\n' + blocked.stdout + blocked.stderr);
+      const bp = JSON.parse(blocked.stdout);
+      assert(bp.result === 'refuse' && bp.legBarrier && bp.legBarrier.outOfAllow.indexOf('lib/stray.test.js') >= 0,
+        '#813: the per-leg barrier must NAME the undeclared test path in outOfAllow, got ' + JSON.stringify(bp));
+      assert(/\| m1-r1-w1 \| in_progress \|/.test(readPlan()),
+        '#813: the refusal precedes any ledger advance — the member row must still be in_progress');
+    }
+    fs.rmSync(strayTest);
 
     // ---- close both units: the non-last DEFERS to the group; the last runs the group barrier — the
     //      octopus merge (the synthesizer) reconciles the two non-conflicting edits into ONE commit. ----
@@ -18545,10 +18761,15 @@ function testSerializationInversion760() {
     assert(c2.result === 'ok' && c2.barrier === 'group_passed' && c2.synthesized === true && typeof c2.mergeCommit === 'string' && c2.mergeCommit.length >= 7,
       '#760: the last close must run the group barrier and report a synthesizer merge commit — the '
       + 'reconciliation this inversion relies on, got ' + JSON.stringify(c2));
-    const merged = execFileSync('git', ['-C', wrepo, 'show', 'HEAD:lib/shared.test.js'], { encoding: 'utf8' });
+    const merged = execFileSync('git', ['-C', wrepo, 'show', 'HEAD:kaola-workflow/issue-760/shared-ancestor.md'], { encoding: 'utf8' });
     assert(merged.includes('line 5 (from w1)') && merged.includes('line 1 (from w2)'),
-      '#760: the merged lib/shared.test.js on HEAD must carry BOTH legs\' edits (the synthesizer '
-      + 'reconciled the real same-file overlap, not just declared it away), got:\n' + merged);
+      '#760: the merged shared ancestor on HEAD must carry BOTH legs\' edits — a REAL 3-way octopus '
+      + 'base (a wrong/empty base would drop one side or conflict), not a declared-away overlap, got:\n' + merged);
+    // Each leg's own declared production file also lands in the SAME merge commit.
+    for (const f of ['lib/w1.js', 'lib/w2.js']) {
+      assert(execFileSync('git', ['-C', wrepo, 'cat-file', '-e', 'HEAD:' + f], { encoding: 'utf8' }) === '',
+        '#760: ' + f + ' (the leg\'s own in-lane write) must be present on the synthesized merge commit');
+    }
 
     // ---- discharge the milestone; the spine advances to the review wall. ----
     const dc = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-760', '--node-id', 'm1', '--json'], wrepo);
@@ -18844,8 +19065,8 @@ function buildRegistry() {
   add('testDispatchLogEmitsModelFields566',               testDispatchLogEmitsModelFields566);
   add('testDispatchLogResolverResolvesUnderOpencodeLayout567', testDispatchLogResolverResolvesUnderOpencodeLayout567);
   add('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568', testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568);
-  add('testContractorAttestFlagBackfills338',             testContractorAttestFlagBackfills338);
-  add('testContractorAttestAbsentWarnsNonBlocking338',    testContractorAttestAbsentWarnsNonBlocking338);
+  add('testRetiredFinalizeAttestFlagIsInert816',          testRetiredFinalizeAttestFlagIsInert816);
+  add('testInlineFinalizeSeamRaisesNoAttestationAlarm816', testInlineFinalizeSeamRaisesNoAttestationAlarm816);
   add('testAttestationWarningPersistence',                testAttestationWarningPersistence);
   add('testSelectionEvidenceDocking',                     testSelectionEvidenceDocking);
   add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
@@ -18895,6 +19116,7 @@ function buildRegistry() {
   add('testDeclaredNotWalled762',                         testDeclaredNotWalled762);
   add('testReExpansionEpochTransition756',                testReExpansionEpochTransition756);
   add('testSpineAuthoringOrchestrationKeystone767',       testSpineAuthoringOrchestrationKeystone767);
+  add('testAcceptanceSurfaceEndToEnd',                    testAcceptanceSurfaceEndToEnd);
   return reg;
 }
 
@@ -18907,11 +19129,22 @@ async function main() {
     runFocusedReviewOutcomeTransport699();
     return;
   }
+  // --shard i/N runs a disjoint stride of the registry in this process. The shared-tmp
+  // group is ONE indivisible unit (its members share a single fixture root and run in
+  // order), so it is registered as a single ordinal and lands whole in one shard.
+  //
+  // NOT PROVEN FOR CONCURRENT USE: several scenarios here drive real subprocesses under
+  // their own timeouts, and shards of this suite running side by side against one checkout
+  // have been observed to go red. The chain runner therefore does NOT fan this suite out.
+  const shardLib = require('./test-shard-lib');
+  const shard = shardLib.selector(args);
   const onlyTokens = [];
   let listMode = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--list') {
       listMode = true;
+    } else if (args[i] === '--shard') {
+      i++;   // consumed by the shard selector above
     } else if (args[i] === '--only') {
       if (i + 1 >= args.length) {
         process.stderr.write('Error: --only requires a token argument\n');
@@ -18959,12 +19192,21 @@ async function main() {
     // just like every standalone claim fixture that calls initGitRepo itself.
     initGitRepo(tmp);
     if (fullRun) {
-      // Full run: same order as original main(), shared-tmp group first.
-      await runSharedTmpGroup(tmp);
+      // Full run: same order as original main(), shared-tmp group first. Ordinal 0 is
+      // the shared-tmp group; ordinals 1..n are the standalone scenarios in file order.
+      let ordinal = 0;
+      let ran = 0;
+      if (shard.owns(ordinal++)) {
+        await runSharedTmpGroup(tmp);
+        ran++;
+      }
       for (const entry of SCENARIO_REGISTRY) {
-        if (entry.sharedTmp) continue; // already ran above
+        if (entry.sharedTmp) continue; // part of the group unit above
+        if (!shard.owns(ordinal++)) continue;
+        ran++;
         await entry.fn();
       }
+      shardLib.reportCoverage('simulate-workflow-walkthrough', shard, ordinal, ran, ran, 0);
       console.log('Workflow walkthrough simulation passed');
     } else {
       // Subset run.
@@ -18985,7 +19227,7 @@ async function main() {
 
 // ── attestation warning durable persistence — a non-empty ATTESTATION WARNING must land in the
 // archived finalization-summary.md and workflow-state.md ## Closure block, not just stdout JSON.
-// Seed a contractor-only dispatch-log (no workflow-planner entry) so the planner seam surfaces
+// Seed a role-only dispatch-log (no workflow-planner entry) so the planner seam surfaces
 // the warning, finalize, then assert both archived artifacts carry it verbatim.
 function testAttestationWarningPersistence() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-')));
@@ -19002,19 +19244,19 @@ function testAttestationWarningPersistence() {
     // authored run, so seed a minimal frozen adaptive plan + passing gate.
     seedAdaptiveFinalizeFixture(tmp, project);
 
-    // Seed dispatch-log with ONLY a contractor entry (no workflow-planner) — the inline-bypass
+    // Seed dispatch-log with ONLY a role entry (no workflow-planner) — the inline-bypass
     // scenario the ATTESTATION WARNING exists to catch.
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'contractor', agent_id: 'test-seed', cwd: tmp }) + '\n');
+      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'tdd-guide', agent_id: 'test-seed', cwd: tmp }) + '\n');
 
     const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
     assert(finResult.status === 'closed',
       'attestation persistence: finalize must return status:closed, got: ' + JSON.stringify(finResult));
     const finReceipt = finResult.closure_receipt;
     assert(finReceipt && finReceipt.claim_planner_attested === 'missing',
-      'attestation persistence: seeded contractor-only dispatch-log must leave claim_planner_attested missing, got: ' +
+      'attestation persistence: seeded role-only dispatch-log must leave claim_planner_attested missing, got: ' +
       JSON.stringify(finReceipt));
 
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
@@ -19097,9 +19339,9 @@ function testSelectionEvidenceDocking() {
 
 // ── #280: AC1 — M1 planner back-fill + M2 sink-merge attestation check ──────
 // Drives a real startup claim WITH --attest-planner-spawn, verifies the back-fill
-// lands in dispatch-log.jsonl, then appends a contractor line (simulating the hook),
-// runs finalize, asserts claim_planner_attested===attested + finalize_contractor_attested===attested
-// in BOTH the finalize receipt and the sink-merge closure_receipt.
+// lands in dispatch-log.jsonl, then runs finalize and asserts claim_planner_attested===attested
+// in BOTH the finalize receipt and the sink-merge closure_receipt. The claim/author seam is the
+// ONLY attested seam — the finalize seam is orchestrator-owned and emits no attestation field.
 // The sink-merge assertion is the primary M2 regression check.
 function testPlannerAttestFlagBackfillsDispatchLog() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-280-ac1-')));
@@ -19129,16 +19371,7 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     const plannerLine = lines.find(l => { try { return JSON.parse(l).agent_type === 'workflow-planner'; } catch(_) { return false; } });
     assert(plannerLine, 'M1 (#280): dispatch-log must contain a workflow-planner entry, got: ' + logContent);
 
-    // Append a contractor line (simulating the SubagentStart hook logging the contractor)
-    const contractorEntry = JSON.stringify({
-      ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      agent_type: 'contractor',
-      agent_id: 'test-contractor',
-      cwd: tmp
-    });
-    fs.appendFileSync(dispatchLog, contractorEntry + '\n');
-
-    // finalize — must see both lines (archive-first check matches cmdFinalize behaviour)
+    // finalize — must see the planner line (archive-first check matches cmdFinalize behaviour)
     const finResult = runClaimOnlineLastJson(
       ['finalize', '--project', project],
       tmp, binDir
@@ -19148,8 +19381,8 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     assert(finReceipt, 'M1 (#280): finalize must emit closure_receipt');
     assert(finReceipt.claim_planner_attested === 'attested',
       'M1 (#280): finalize closure_receipt.claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
-    assert(finReceipt.finalize_contractor_attested === 'attested',
-      'M1 (#280): finalize closure_receipt.finalize_contractor_attested must be attested, got: ' + finReceipt.finalize_contractor_attested);
+    assert(!('finalize_contractor_attested' in finReceipt),
+      '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
 
     // sink-merge — M2: must also check the archived dispatch-log (archive-first)
     // Set up the worktree branch that sink-merge needs to FF-merge.
@@ -19184,8 +19417,8 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     assert(smReceipt, 'M2 (#280): sink-merge must emit closure_receipt');
     assert(smReceipt.claim_planner_attested === 'attested',
       'M2 (#280): sink-merge closure_receipt.claim_planner_attested must be attested, got: ' + smReceipt.claim_planner_attested);
-    assert(smReceipt.finalize_contractor_attested === 'attested',
-      'M2 (#280): sink-merge closure_receipt.finalize_contractor_attested must be attested, got: ' + smReceipt.finalize_contractor_attested);
+    assert(!('finalize_contractor_attested' in smReceipt),
+      '#816: the sink-merge receipt emits no finalize-seam attestation field, got: ' + JSON.stringify(Object.keys(smReceipt)));
 
     console.log('testPlannerAttestFlagBackfillsDispatchLog: PASSED');
   } finally {
@@ -19232,8 +19465,8 @@ function testPlannerAttestFlagAbsentStaysMissing() {
     assert(finReceipt, 'AC2 (#280): finalize must emit closure_receipt');
     assert(finReceipt.claim_planner_attested !== 'attested',
       'AC2 (#280): finalize closure_receipt.claim_planner_attested must NOT be attested (inline-bypass guard), got: ' + finReceipt.claim_planner_attested);
-    assert(finReceipt.finalize_contractor_attested !== 'attested',
-      'AC2 (#280): finalize closure_receipt.finalize_contractor_attested must NOT be attested, got: ' + finReceipt.finalize_contractor_attested);
+    assert(!('finalize_contractor_attested' in finReceipt),
+      '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
 
     // sink-merge
     const wtPath = sResult.worktree_path;
@@ -19262,8 +19495,8 @@ function testPlannerAttestFlagAbsentStaysMissing() {
     assert(smReceipt, 'AC2 (#280): sink-merge must emit closure_receipt');
     assert(smReceipt.claim_planner_attested !== 'attested',
       'AC2 (#280): sink-merge closure_receipt.claim_planner_attested must NOT be attested (no flag), got: ' + smReceipt.claim_planner_attested);
-    assert(smReceipt.finalize_contractor_attested !== 'attested',
-      'AC2 (#280): sink-merge closure_receipt.finalize_contractor_attested must NOT be attested (no flag), got: ' + smReceipt.finalize_contractor_attested);
+    assert(!('finalize_contractor_attested' in smReceipt),
+      '#816: the sink-merge receipt emits no finalize-seam attestation field, got: ' + JSON.stringify(Object.keys(smReceipt)));
 
     console.log('testPlannerAttestFlagAbsentStaysMissing: PASSED');
   } finally {
@@ -19285,7 +19518,7 @@ function testPlannerAttestFlagPresentInPlannerAgent() {
 }
 
 // ── #338 T3: dispatch-log hook is worktree-aware (dual-root capture) ──────────
-// Producer-side false-negative fix: a contractor dispatched into a linked worktree must be
+// Producer-side false-negative fix: a role dispatched into a linked worktree must be
 // logged where the worktree's consumers (cmdFinalize) read .cache/dispatch-log.jsonl. The hook
 // runs with cwd=main but must ALSO resolve the dispatched agent's cwd (AGENT_CWD) toplevel and
 // append there. Also assert the in-place case (cwd==main, active project in main) logs once.
@@ -19304,15 +19537,15 @@ function testDispatchLogHookWorktreeAware338() {
     fs.mkdirSync(wtProj, { recursive: true });
     fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
     // No active project in main → the old hook (hook-cwd only) would log nothing.
-    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: wt });
+    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: wt });
     const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#338 T3: hook must exit 0 (fail-open), got ' + hr.status);
     const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
     assert(fs.existsSync(wtLog),
-      '#338 T3: worktree-dispatched contractor must be logged under the WORKTREE project .cache/');
+      '#338 T3: a worktree-dispatched role must be logged under the WORKTREE project .cache/');
     const wtLogContent = fs.readFileSync(wtLog, 'utf8');
-    assert(wtLogContent.includes('"agent_type":"contractor"'),
-      '#338 T3: worktree dispatch-log must contain a contractor entry, got: ' + wtLogContent);
+    assert(wtLogContent.includes('"agent_type":"tdd-guide"'),
+      '#338 T3: worktree dispatch-log must contain the role entry, got: ' + wtLogContent);
     try { spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: main, encoding: 'utf8' }); } catch (_) {}
     try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
   } finally {
@@ -19326,7 +19559,7 @@ function testDispatchLogHookWorktreeAware338() {
     const proj = path.join(inplace, 'kaola-workflow', 'proj');
     fs.mkdirSync(proj, { recursive: true });
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
-    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: inplace });
+    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: inplace });
     const hr = spawnSync('bash', [hookPath], { cwd: inplace, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#338 T3: in-place hook must exit 0, got ' + hr.status);
     const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
@@ -19356,7 +19589,7 @@ function testDispatchLogEmitsModelFields566() {
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
     // Payload INCLUDES a `model` field (simulating the codex runtime supply); n1 finding: only the
     // codex CLI runtime exposes model, so the test injects it directly.
-    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: tmp, model: 'gpt-5.2' });
+    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: tmp, model: 'gpt-5.2' });
     const hr = spawnSync('bash', [hookPath], { cwd: tmp, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#566: hook must exit 0 (fail-open), got ' + hr.status);
     const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
@@ -19364,9 +19597,9 @@ function testDispatchLogEmitsModelFields566() {
     const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
     assert(lines.length === 1, '#566: exactly one JSONL line expected, got ' + lines.length);
     const parsed = JSON.parse(lines[0]);
-    assert(parsed.agent_type === 'contractor', '#566: agent_type preserved, got ' + parsed.agent_type);
+    assert(parsed.agent_type === 'tdd-guide', '#566: agent_type preserved, got ' + parsed.agent_type);
     assert(parsed.model_planned && parsed.model_planned.length > 0,
-      '#566: model_planned must be non-empty (resolver returns a tier for contractor), got: ' + JSON.stringify(parsed.model_planned));
+      '#566: model_planned must be non-empty (resolver returns a tier for tdd-guide), got: ' + JSON.stringify(parsed.model_planned));
     assert(parsed.model === 'gpt-5.2',
       '#566: model must equal the payload-supplied value, got: ' + JSON.stringify(parsed.model));
   } finally {
@@ -19405,7 +19638,7 @@ function testDispatchLogResolverResolvesUnderOpencodeLayout567() {
     // Control: the sibling lookup (<cfg>/scripts) must be genuinely absent, so a pass can only come
     // from the opencode-native (<cfg>/kaola-workflow/scripts) candidate.
     assert(!fs.existsSync(path.join(cfg, 'scripts')), '#567: control — sibling scripts/ must be absent');
-    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: repo });
+    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: repo });
     const hr = spawnSync('bash', [hookDst], { cwd: repo, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#567: hook must exit 0 (fail-open), got ' + hr.status);
     const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
@@ -19465,10 +19698,11 @@ function testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568() {
   console.log('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568: PASSED');
 }
 
-// ── #338 T4: cmdFinalize --attest-contractor-spawn → finalize_contractor_attested:attested ──
-// No hook, no planner flag: the contractor's own --attest-contractor-spawn back-fills its
-// dispatch marker so the closure receipt reads attested even where the hook cannot fire.
-function testContractorAttestFlagBackfills338() {
+// ── #816: --attest-contractor-spawn is a RETIRED warn-and-ignore shim ──
+// The finalize seam is orchestrator-owned, so there is nothing to attest and nothing to back-fill.
+// A stale caller still passing the flag must be accepted (never an unknown_flag refusal) and must
+// produce NO dispatch marker and NO receipt field.
+function testRetiredFinalizeAttestFlagIsInert816() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-attest-')));
   const kwRoot = tmp + '.kw';
   try {
@@ -19485,37 +19719,34 @@ function testContractorAttestFlagBackfills338() {
 
     // No dispatch-log yet (no flag at claim, no hook in test env).
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
-    assert(!fs.existsSync(dispatchLog), '#338 T4: no dispatch-log before finalize back-fill');
+    assert(!fs.existsSync(dispatchLog), '#816: no dispatch-log before finalize');
 
     const finResult = runClaimOnlineLastJson(
       ['finalize', '--project', project, '--attest-contractor-spawn'], tmp, binDir);
-    assert(finResult.status === 'closed', '#338 T4: finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    assert(finResult.status === 'closed',
+      '#816: the retired flag must warn-and-ignore, never refuse, got: ' + JSON.stringify(finResult));
     const finReceipt = finResult.closure_receipt;
-    assert(finReceipt, '#338 T4: finalize must emit closure_receipt');
-    assert(finReceipt.finalize_contractor_attested === 'attested',
-      '#338 T4: --attest-contractor-spawn must make finalize_contractor_attested attested, got: ' + finReceipt.finalize_contractor_attested);
+    assert(finReceipt, '#816: finalize must emit closure_receipt');
+    assert(!('finalize_contractor_attested' in finReceipt),
+      '#816: the retired flag must record no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
 
-    // The archived dispatch-log must carry the finalize-backfill contractor marker.
+    // Nothing may be back-filled into the archived dispatch-log.
     const archiveLog = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(archiveLog), '#338 T4: archived dispatch-log must exist after back-fill');
-    const archiveContent = fs.readFileSync(archiveLog, 'utf8');
-    assert(archiveContent.includes('finalize-backfill'),
-      '#338 T4: archived dispatch-log must contain finalize-backfill entry, got: ' + archiveContent);
-    console.log('testContractorAttestFlagBackfills338: PASSED');
+    const archiveContent = fs.existsSync(archiveLog) ? fs.readFileSync(archiveLog, 'utf8') : '';
+    assert(!/finalize-backfill|"agent_type":"contractor"/.test(archiveContent),
+      '#816: the retired flag must back-fill no dispatch marker, got: ' + archiveContent);
+    console.log('testRetiredFinalizeAttestFlagIsInert816: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
   }
 }
 
-// ── #338 T5: inline finalize bypass → contractor missing + ATTESTATION WARNING, NON-blocking ──
-// The exact false-positive scenario from the issue: the planner WAS dispatched (its back-fill
-// populates a dispatch-log), but the contractor finalize seam is run INLINE (no
-// --attest-contractor-spawn). The dispatch-log exists with a planner entry and no contractor
-// entry → the per-seam ATTESTATION WARNING fires and finalize_contractor_attested:missing.
-// Pins the explicit-fallback branch demanded by AC2: a future change must not make a missing
-// contractor attestation silently blocking, nor silently quiet.
-function testContractorAttestAbsentWarnsNonBlocking338() {
+// ── #816: an inline finalize is the DESIGN, not a bypass ──
+// The planner WAS dispatched (its back-fill populates a dispatch-log) and the finalize seam runs
+// inline. The claim/author seam still attests; the finalize seam emits no field and no warning —
+// treating inline finalize as suspect is exactly the inversion this retires.
+function testInlineFinalizeSeamRaisesNoAttestationAlarm816() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-fallback-')));
   const kwRoot = tmp + '.kw';
   try {
@@ -19523,7 +19754,7 @@ function testContractorAttestAbsentWarnsNonBlocking338() {
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
 
-    // Planner WAS dispatched (its back-fill writes a dispatch-log) — but no contractor entry.
+    // Planner WAS dispatched (its back-fill writes a dispatch-log).
     const sResult = runClaimOnlineLastJson(
       ['startup', '--target-issue', '338002', '--attest-planner-spawn'], tmp, binDir);
     assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
@@ -19533,20 +19764,20 @@ function testContractorAttestAbsentWarnsNonBlocking338() {
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
     assert(fs.existsSync(dispatchLog), '#338 T5: planner back-fill must create a dispatch-log');
 
-    // finalize WITHOUT --attest-contractor-spawn → contractor seam run inline.
+    // finalize run inline by the orchestrator — the design, not a bypass.
     const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
     assert(finResult.status === 'closed',
-      '#338 T5: finalize must still return status:closed (warn-first, NEVER blocks), got: ' + JSON.stringify(finResult));
+      '#816: an inline finalize must return status:closed, got: ' + JSON.stringify(finResult));
     const finReceipt = finResult.closure_receipt;
-    assert(finReceipt, '#338 T5: finalize must emit closure_receipt');
+    assert(finReceipt, '#816: finalize must emit closure_receipt');
     assert(finReceipt.claim_planner_attested === 'attested',
-      '#338 T5: planner WAS dispatched → claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
-    assert(finReceipt.finalize_contractor_attested === 'missing',
-      '#338 T5: inline finalize (no flag) → finalize_contractor_attested must be missing, got: ' + finReceipt.finalize_contractor_attested);
+      '#816: planner WAS dispatched → claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
+    assert(!('finalize_contractor_attested' in finReceipt),
+      '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
     assert(Array.isArray(finReceipt.warnings) &&
-      finReceipt.warnings.some(w => w.includes('ATTESTATION WARNING: no contractor dispatch found in dispatch-log')),
-      '#338 T5: missing contractor attestation must surface the ATTESTATION WARNING, got: ' + JSON.stringify(finReceipt.warnings));
-    console.log('testContractorAttestAbsentWarnsNonBlocking338: PASSED');
+      !finReceipt.warnings.some(w => /contractor|finalize seam may have been run inline/i.test(String(w))),
+      '#816: an inline finalize raises NO attestation alarm, got: ' + JSON.stringify(finReceipt.warnings));
+    console.log('testInlineFinalizeSeamRaisesNoAttestationAlarm816: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
@@ -21374,6 +21605,7 @@ function testRunProgressMirror605() {
       spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605c', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
       plantActiveFolder(wtPath, 'issue-605c', 605, null);
       seedAdaptiveFinalizeFixture(wtPath, 'issue-605c');
+      alignFinalizeFixtureAcrossRoots(tmp, wtPath, 'issue-605c');
       const fin = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-605c', '--keep-worktree'], {
         cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
       assert(fin.status === 0, '#605 (c): finalize from linked worktree should exit 0\nstderr: ' + fin.stderr);
@@ -21446,6 +21678,7 @@ function testDeclaredNotWalled762() {
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
 
   const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
@@ -21730,6 +21963,97 @@ function testDeclaredNotWalled762() {
     } finally { cleanup(); }
   }
 
+  // ---- (#792) REACHABLE, NOT ROUTED. The transaction above was production-unreachable BY INSTRUCTION:
+  //      every instructed recovery from `write_set_overflow` named `revert-overflow` — the primitive that
+  //      DISCARDS exactly the companion work amend-surface exists to preserve — and no operator hint,
+  //      card or surface mentioned the preserve half at all. The fix is to NAME it, not to route it: the
+  //      hint lists both primitives and one line on when each fits, and nothing selects between them.
+  //
+  //      This case is the reachability proof and it never hand-authors the command. It reproduces the
+  //      real wedge, reads the hint the PRODUCTION refusal emits, EXTRACTS the amend-surface invocation
+  //      from that hint text, runs it, and drives the result to a cleared barrier. If the hint stops
+  //      naming amend-surface, the extraction finds nothing and this goes RED — which is the only way a
+  //      "reachable" claim can be held honest.
+  {
+    const { repo, proj, planPath, ledgerOf, driveMilestone, driveWall, cleanup } = mkHarness('issue-792');
+    try {
+      fs.writeFileSync(planPath, mkRunPlan());
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#792: spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+      driveMilestone('m1');
+      driveWall('wall');
+
+      // THE WEDGE: a required companion file lands outside every declared surface.
+      const wedged = fs.readFileSync(planPath, 'utf8');
+      const bWedge = validator.barrierCheck(wedged, ['lib/companion.js'], { project: 'issue-792' });
+      assert(bWedge.result === 'refuse' && bWedge.reason === 'write_set_overflow',
+        '#792 PRECONDITION: the barrier must reproduce the out-of-surface wedge, got ' + bWedge.result + ' ' + bWedge.reason);
+
+      // (1) REACHABILITY — the emitted hint names BOTH primitives, so the preserve option is no longer
+      //     hidden. Same obligation on the per-node close path's own registry.
+      const hint = String(bWedge.operator_hint || '');
+      assert(/revert-overflow/.test(hint) && /amend-surface/.test(hint),
+        '#792: the write_set_overflow hint must name BOTH the discard primitive and the preserve '
+        + 'primitive — an operator who is only told about revert-overflow will discard companion work '
+        + 'it was supposed to keep. Got: ' + JSON.stringify(hint));
+      const nodeHint = String(adaptiveNode.getOperatorHint('write_set_overflow', { nodeId: 'n4' }));
+      assert(/revert-overflow/.test(nodeHint) && /amend-surface/.test(nodeHint),
+        '#792: the per-node close path emits its own write_set_overflow hint and owes the same pair, got '
+        + JSON.stringify(nodeHint));
+      // NOT ROUTED: naming both is the whole change — nothing decides for the agent.
+      assert(!/\bmust run\b|\brequired\b/i.test(hint),
+        '#792: the hint NAMES the options; it must not mandate one, got ' + JSON.stringify(hint));
+
+      // (2) END TO END FROM THE HINTED PATH — extract the invocation the hint printed and run THAT.
+      const m = /(amend-surface[^\n]*?--json)/.exec(hint);
+      assert(m, '#792: the hint must print a runnable amend-surface invocation, got ' + JSON.stringify(hint));
+      const argv = m[1].split(/\s+/).map(tok => tok
+        .replace('<project>', 'issue-792').replace('<P>', 'issue-792')
+        .replace('<expansion-point>', 'm1')
+        .replace('"<paths>"', 'lib/companion.js').replace('<paths>', 'lib/companion.js'));
+      assert(argv.indexOf('m1') > 0 && argv.indexOf('lib/companion.js') > 0,
+        '#792: the extracted invocation must carry the point + files slots, got ' + JSON.stringify(argv));
+      const am = runNode(adaptiveNodeScript, argv, repo);
+      assert(am.status === 0, '#792: the invocation the hint printed must RUN, got ' + am.status + '\n' + am.stdout + am.stderr);
+      const ap = JSON.parse(am.stdout);
+      assert(ap.amended === true && ap.reopened === true && JSON.stringify(ap.amended_surface) === '["lib/companion.js"]',
+        '#792: the hinted invocation runs the real attribute→amend→re-review transaction, got '
+        + JSON.stringify({ a: ap.amended, r: ap.reopened, s: ap.amended_surface }));
+      assert(ledgerOf().m1 === 'pending' && ledgerOf().wall === 'pending',
+        '#792: the hinted path routes the owner + its wall to RE-REVIEW, got ' + JSON.stringify(ledgerOf()));
+
+      // (3) …and the preserved work actually lands: re-discharge the point, and the barrier CLEARS the
+      //     file revert-overflow would have thrown away, while an unamended write still refuses.
+      // The hint's bare invocation composes the DEFAULT fixer unit (`implementer` over the attributed
+      // files), so its evidence carries the implementer token classes AND the upstream-consumption echo
+      // the production close demands — another way this case exercises the hinted path rather than a
+      // hand-tuned composition.
+      const upstreamEchoes = fs.readdirSync(path.join(proj, '.cache'))
+        .filter(n => /^m1-r1-.*\.md$/.test(n))
+        .map(n => /^evidence-binding:\s*(\S+)\s+(\S+)/m.exec(fs.readFileSync(path.join(proj, '.cache', n), 'utf8')))
+        .filter(Boolean)
+        .map(m => 'upstream_read: ' + m[1] + ' ' + m[2] + '\n').join('');
+      for (const u of (ap.opened || []).map(n => n.id)) {
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'),
+          '\nnon_tdd_reason: re-run over the attributed companion surface\nregression-green: walkthrough\n'
+          + upstreamEchoes + 'findings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-792', '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#792: close re-opened unit ' + u + ': ' + c.stdout + c.stderr);
+      }
+      const d2 = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-792', '--node-id', 'm1', '--json'], repo);
+      assert(d2.status === 0, '#792: re-discharge m1, got ' + d2.stdout + d2.stderr);
+      const cleared = fs.readFileSync(planPath, 'utf8');
+      assert(validator.barrierCheck(cleared, ['lib/companion.js'], { project: 'issue-792' }).result === 'pass',
+        '#792: end to end from the hint, the companion work is KEPT and the barrier clears');
+      const bStill = validator.barrierCheck(cleared, ['lib/companion.js', 'lib/tamper.js'], { project: 'issue-792' });
+      assert(bStill.result === 'refuse' && bStill.reason === 'write_set_overflow',
+        '#792: the fail-closed floor is unchanged — an UNAMENDED write still refuses, got ' + bStill.reason);
+    } finally { cleanup(); }
+  }
+
   console.log('testDeclaredNotWalled762: PASSED');
 }
 
@@ -21814,6 +22138,7 @@ function testReExpansionEpochTransition756() {
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
   const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
   const fixerComp = (writeSet) => ({ derivation: DERIV,
@@ -21959,6 +22284,7 @@ function testReExpansionEpochTransition756() {
       '| wall | code-reviewer | impl | — | 1 | sequence | the recovered companion file is correct | lib/companion.js | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose (epoch child): impl re-builds the recovered companion lib/companion.js; wall re-reviews it; done sinks. sequence impl→wall: S1 — wall consumes impl\'s change. Done: the companion is reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     try {
       fs.writeFileSync(planPath, childPlan);
@@ -21978,7 +22304,7 @@ function testReExpansionEpochTransition756() {
       fs.writeFileSync(path.join(repo, 'lib', 'companion.js'), '// recovered companion, now reviewed\n');
       spawnSync('git', ['-C', repo, 'add', '-A'], { encoding: 'utf8' });
       spawnSync('git', ['-C', repo, 'commit', '-m', 'impl'], { encoding: 'utf8' });
-      fs.appendFileSync(path.join(proj, '.cache', 'impl.md'), '\nnon_tdd_reason: trivial recovered file\nregression-green: ok\n');
+      fs.appendFileSync(path.join(proj, '.cache', 'impl.md'), '\nregression-green: ok\n');
       const ci = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-756c', '--node-id', 'impl', '--json'], repo);
       assert(ci.status === 0, '#756 (c): close impl + fused-advance to wall: ' + ci.stdout + ci.stderr);
       const cip = JSON.parse(ci.stdout);
@@ -22054,6 +22380,7 @@ const SPINE_PLAN_767 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -22227,6 +22554,157 @@ function testSpineAuthoringOrchestrationKeystone767() {
     try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {}
   }
   console.log('testSpineAuthoringOrchestrationKeystone767: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAcceptanceSurfaceEndToEnd — the acceptance surface across a WHOLE run: transcribed at freeze,
+// carried untampered through every node close, and still the object the finalize Acceptance Check
+// walks at the sink. Before the section existed, finalize's "verify the deliverable matches the
+// acceptance criteria" had nothing to verify against; this drives the run that gives it one.
+// ---------------------------------------------------------------------------
+function testAcceptanceSurfaceEndToEnd() {
+  const validator = require('./kaola-workflow-plan-validator');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-acceptance-e2e-')));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-acceptance-e2e';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const ACCEPTANCE = [
+      'A1: lib/impl.js exports the parsed record instead of the placeholder.',
+      'A2: `node --check lib/impl.js` passes over the final candidate.',
+      'A3: the change is reviewed before it reaches the sink.',
+    ];
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — acceptance surface end to end', '',
+      '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
+      'code_certifier: reviewer', 'security_certifier: none',
+      'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+      'validation_command: node --check lib/impl.js', 'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
+      '| reviewer | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize | reviewer | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '',
+      'Decompose: writer builds lib/impl.js; reviewer gates it; finalize sinks. sequence writer→reviewer: S1 — reviewer consumes writer\'s change.', '',
+      '## Acceptance', '', ...ACCEPTANCE, '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+      '| tdd-guide (writer) | pending | | |', '| code-reviewer (reviewer) | pending | | |',
+      '| finalize (finalize) | pending | | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+
+    const freeze = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);
+    assert(freeze.status === 0, 'acceptance-e2e: the plan freezes with its acceptance surface: ' + freeze.stdout + freeze.stderr);
+    const frozenAcceptance = validator.acceptanceDigest(fs.readFileSync(planPath, 'utf8'));
+    assert(/^[0-9a-f]{64}$/.test(String(frozenAcceptance || '')),
+      'acceptance-e2e: the frozen plan carries a transcribed acceptance surface');
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['commit', '-m', 'acceptance e2e fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+
+    // Drive the run: writer produces the change, reviewer clears it, the sink opens.
+    const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = { record: true };\n');
+    const writerRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8',
+        input: 'evidence-binding: writer ' + openedWriter.nonce
+          + '\nRED: the placeholder export reproduced\nred_baseline: ' + openedWriter.nonce + '\n'
+          + 'covers: A1 — the export now returns the parsed record (advisory hint for the judge, never diffed)\n',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(writerRecord.status === 0, 'acceptance-e2e: writer evidence records: ' + writerRecord.stdout + writerRecord.stderr);
+    const writerClose = json(runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    assert(writerClose.opened && writerClose.opened.id === 'reviewer',
+      'acceptance-e2e: the reviewer opens after the writer close: ' + JSON.stringify(writerClose));
+
+    // The acceptance surface is UNCHANGED by a node close — the plan still resume-checks, which is
+    // exactly the tamper-evidence claim, now proven across a live run rather than in isolation.
+    const midRun = fs.readFileSync(planPath, 'utf8');
+    assert(validator.acceptanceDigest(midRun) === frozenAcceptance
+      && validator.revalidateForResume(midRun, { root: tmp }).ok === true,
+      'acceptance-e2e: the acceptance surface survives node execution byte-for-byte');
+
+    // The sink's Acceptance Check finally has an OBJECT: the frozen items, read through the one
+    // parser, each satisfiable by a covering test / gate receipt / prose evidence — judged, not matched.
+    const items = validator.parseAcceptanceItems(midRun);
+    assert(items.length === 3 && items.map(i => i.id).join(',') === 'A1,A2,A3',
+      'acceptance-e2e: finalize reads the frozen items to walk, got ' + JSON.stringify(items));
+    // AC3's second clause — "finalize CITES the items" — is AGENT PROSE. The Acceptance Check is a
+    // judged walk ("a covering test, a gate receipt, or prose evidence, judged in context") that
+    // deliberately produces no machine artifact and no per-item ledger, so nothing downstream can assert
+    // the citing end to end. A test that builds a summary from the items and then asserts the summary
+    // contains the items is a tautology over data it just wrote — which is how the previous version of
+    // this block read as coverage while proving nothing (garbage item texts passed it unchanged).
+    //
+    // What IS provable, and is proven here: the walk has a real OBJECT with real BINDINGS. Every frozen
+    // item resolves against something THIS RUN declared or produced — a path in the frozen declared
+    // write set, the frozen `validation_command`, or the frozen gate declaration whose receipt the
+    // production CLI wrote to `.cache` — never against a literal constructed alongside the assertion.
+    // Replace an item's text with unrelated words and its binding disappears: this goes RED.
+    const sinkItems = items;
+    const nodes = validator.parseNodes(midRun);
+    const declaredWrites = nodes.reduce((acc, n) => acc.concat(Array.from(n.writeSet || [])), []);
+    const validationCommand = ((midRun.match(/^validation_command:\s*(.+)$/m) || [])[1] || '').trim();
+    const gateNode = nodes.find(n => n.gateClaim && n.gateClaim !== '—');
+    const writerEvidence = fs.readFileSync(path.join(projectDir, '.cache', 'writer.md'), 'utf8');
+    assert(declaredWrites.includes('lib/impl.js') && validationCommand && gateNode
+      && /^RED:/m.test(writerEvidence) && /^red_baseline:/m.test(writerEvidence),
+      'acceptance-e2e: the binding SOURCES are the run\'s own frozen declarations and recorded '
+        + 'evidence, not test literals');
+    const bindings = sinkItems.map(item => ({
+      id: item.id,
+      satisfied_by:
+        declaredWrites.some(p => p && item.text.includes(p)) ? 'covering test over the declared write set'
+        : (validationCommand && item.text.includes(validationCommand)) ? 'recorded validation result'
+        : (/review/i.test(item.text) && gateNode) ? 'gate receipt'
+        : null,
+    }));
+    assert(bindings.every(b => b.satisfied_by),
+      'acceptance-e2e: every frozen acceptance item binds to a declared write path, the frozen '
+        + 'validation_command, or the frozen gate declaration — the finalize walk has a real object, got '
+        + JSON.stringify(bindings));
+
+    // ...and the object is the one the SHIPPED finalize surfaces tell the agent to walk. These are real
+    // repo files: weaken Step 2's binding on any of the six and this goes RED.
+    const repoRoot = path.resolve(__dirname, '..');
+    const finalizeSurfaces = [
+      'commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+      'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+      'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+    ];
+    for (const rel of finalizeSurfaces) {
+      const surface = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+      assert(/`## Acceptance`/.test(surface) && /`A1:`/.test(surface),
+        'acceptance-e2e: ' + rel + ' binds the Acceptance Check to the frozen `## Acceptance` items');
+    }
+    assert(sinkItems.every(i => /^A\d+$/.test(i.id)),
+      'acceptance-e2e: the ids this run froze are the `A1:`/`A2:` form those surfaces name');
+
+    // Tamper probe on the artifact finalize actually reads: corrupting an item's TEXT after freeze is
+    // caught by the hash coverage AND changes what the walk would read. Both directions, on real bytes.
+    const tampered = midRun.replace(sinkItems[0].text, 'A1 now means whatever the run felt like.');
+    assert(tampered !== midRun, 'acceptance-e2e: the tamper probe actually mutates an item');
+    assert(validator.revalidateForResume(tampered, { root: tmp }).ok !== true,
+      'acceptance-e2e: a post-freeze acceptance item edit is tamper-evident');
+    assert(!validator.parseAcceptanceItems(tampered).some(i => i.text === sinkItems[0].text),
+      'acceptance-e2e: ...and the finalize walk would read the corrupted item, not the frozen one');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testAcceptanceSurfaceEndToEnd: PASSED');
 }
 
 main().catch(err => {

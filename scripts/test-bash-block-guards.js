@@ -5,8 +5,13 @@
 // shipped the #294 fail-open bug and #344/#345 (both would have failed instantly under execution).
 // ~44 fenced bash blocks per edition are otherwise only substring-pinned by the contract validators.
 // This harness EXTRACTS a named block and RUNS it in a prepared tmp fixture, asserting exit + side
-// effects. It starts with the two highest-value blocks (contractor Step-8a artifact mirror; the
-// Finalization four-gate resolver) and a cross-edition static guard; grow opportunistically.
+// effects. The Finalization four-gate resolver is the surviving executable-prose block, with a
+// cross-edition static guard; grow opportunistically.
+//
+// The Step-8a artifact mirror and the single-project staging rule are NO LONGER prose — they moved
+// into the finalize transaction. Their failure classes (a renamed path mirrored literally, a
+// ledger guard that fails CLOSED on a first sync, a fail-open staging guard) are still covered
+// here, exercised against the exported script primitives instead of a bash block.
 //
 // Hand-rolled assert + counter; repo style (no framework).
 
@@ -39,55 +44,44 @@ function extractBashBlocks(content, marker) {
 function git(cwd, args) { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }); }
 
 // ---------------------------------------------------------------------------
-// Test A (#361): contractor Step-8a artifact mirror — a RENAMED tracked file must be mirrored to the
-// linked worktree by its NEW path. The pre-fix `f="${line:3}"` left the literal "old -> new" string
-// for a rename entry, so `cp` silently skipped the renamed artifact (RED). The fix mirrors the new path.
+// Test A (#361/#816): artifact mirror — a RENAMED tracked file must be mirrored to the linked
+// worktree by its NEW path. The pre-fix `f="${line:3}"` left the literal "old -> new" string for a
+// rename entry, so the copy silently skipped the renamed artifact (RED). The mirror now lives in
+// the finalize transaction and resolves the NEW path through parsePorcelainPaths.
 // ---------------------------------------------------------------------------
 {
-  const block = extractBashBlocks(read('agents/contractor.md'), 'git status --porcelain | while')[0];
-  assert(!!block, 'A: contractor Step-8a artifact-mirror bash block is extractable');
-  if (block) {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bashblock-stepa-'));
-    const repo = path.join(tmp, 'repo');
-    fs.mkdirSync(repo, { recursive: true });
-    git(repo, ['init', '-b', 'main']);
-    git(repo, ['config', 'user.email', 't@t.com']);
-    git(repo, ['config', 'user.name', 'T']);
-    // committed file we will rename
-    fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
-    fs.writeFileSync(path.join(repo, 'docs', 'old-name.md'), 'renamed artifact body');
-    // project state folder with a worktree_path pointing at a real linked worktree
-    const proj = 'issue-700';
-    fs.mkdirSync(path.join(repo, 'kaola-workflow', proj), { recursive: true });
-    const wt = path.join(tmp, 'wt');
-    fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
-      'project: ' + proj + '\nworktree_path: ' + wt + '\n');
-    // #423: the Step-8a ledger-compare guard requires the --source plan to exist and be readable.
-    // Add a minimal workflow-plan.md with a ## Node Ledger section so the guard can parse it.
-    // Using a pending row (not complete) ensures sourceComplete=0, destComplete=0 => fail-open/safe.
-    fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-plan.md'),
-      '# Workflow Plan\n\n## Node Ledger\n\n| id | status |\n|---|---|\n| n1 | pending |\n');
-    git(repo, ['add', '-A']);
-    git(repo, ['commit', '-m', 'init']);
-    git(repo, ['branch', 'workflow/' + proj]);
-    git(repo, ['worktree', 'add', wt, 'workflow/' + proj]);
-    // STAGE a rename (porcelain → "R  docs/old-name.md -> docs/new-name.md")
-    git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
+  const { mirrorFinalizationArtifacts } = require('./kaola-workflow-claim.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-mirror-rename-'));
+  const repo = path.join(tmp, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, ['init', '-b', 'main']);
+  git(repo, ['config', 'user.email', 't@t.com']);
+  git(repo, ['config', 'user.name', 'T']);
+  fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs', 'old-name.md'), 'renamed artifact body');
+  const proj = 'issue-700';
+  fs.mkdirSync(path.join(repo, 'kaola-workflow', proj), { recursive: true });
+  const wt = path.join(tmp, 'wt');
+  fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
+    'project: ' + proj + '\nworktree_path: ' + wt + '\n');
+  fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-plan.md'),
+    '# Workflow Plan\n\n## Node Ledger\n\n| id | status |\n|---|---|\n| n1 | pending |\n');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-m', 'init']);
+  git(repo, ['branch', 'workflow/' + proj]);
+  git(repo, ['worktree', 'add', wt, 'workflow/' + proj]);
+  // STAGE a rename (porcelain → "R  docs/old-name.md -> docs/new-name.md")
+  git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
 
-    // run the extracted block with {project} substituted, from the repo root
-    const script = block.replace(/\{project\}/g, proj);
-    const sp = path.join(tmp, 'stepa.sh');
-    fs.writeFileSync(sp, script);
-    const res = spawnSync('bash', [sp], { cwd: repo, encoding: 'utf8' });
-    assert(res.status === 0, 'A: Step-8a block exits 0; stderr: ' + res.stderr);
-    // GREEN: the renamed NEW path is mirrored into the worktree.
-    assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
-      'A (#361): the renamed file is mirrored to the worktree by its NEW path (docs/new-name.md)');
-    // and NO literal "old -> new" path artifact was created.
-    const litArrow = fs.readdirSync(path.join(wt, 'docs')).some(n => n.includes('->'));
-    assert(!litArrow, 'A (#361): no literal "old -> new" path artifact created in the worktree');
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  // The transaction runs FROM the linked worktree and pulls main → worktree.
+  const out = mirrorFinalizationArtifacts(wt, proj);
+  assert(out && out.mirror === 'mirrored',
+    'A (#816): the transaction mirrors main → linked worktree, got ' + JSON.stringify(out));
+  assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
+    'A (#361): the renamed file is mirrored to the worktree by its NEW path (docs/new-name.md)');
+  const litArrow = fs.readdirSync(path.join(wt, 'docs')).some(n => n.includes('->'));
+  assert(!litArrow, 'A (#361): no literal "old -> new" path artifact created in the worktree');
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -142,92 +136,77 @@ for (const ed of [
 }
 
 // ---------------------------------------------------------------------------
-// Test D (#423): negative scenario — full/fast-path project (no workflow-plan.md, no ledger-compare
-// script available). The Step-8a block must exit 0 and still mirror renames. When kaola_script
-// cannot locate kaola-workflow-ledger-compare.js (LEDGER_COMPARE_JS is empty), the `[ -n ... ]`
-// guard short-circuits and the block proceeds without a refusal.
+// Test D (#423/#816): negative scenario — a project with NO workflow-plan.md. The ledger-regression
+// guard has nothing to protect, so the mirror must FAIL OPEN (proceed, still mirroring renames)
+// rather than refuse. A guard that fails closed here bricks every first sync.
 // ---------------------------------------------------------------------------
 {
-  const block = extractBashBlocks(read('agents/contractor.md'), 'git status --porcelain | while')[0];
-  assert(!!block, 'D: contractor Step-8a artifact-mirror bash block is extractable for no-plan scenario');
-  if (block) {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bashblock-stepa-noplan-'));
-    const repo = path.join(tmp, 'repo');
-    // Hermetic HOME: ensures kaola_script finds nothing in ~/.claude/kaola-workflow/
-    const fakeHome = path.join(tmp, 'home');
-    fs.mkdirSync(repo, { recursive: true });
-    fs.mkdirSync(fakeHome, { recursive: true });
-    git(repo, ['init', '-b', 'main']);
-    git(repo, ['config', 'user.email', 't@t.com']);
-    git(repo, ['config', 'user.name', 'T']);
-    // committed file we will rename
-    fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
-    fs.writeFileSync(path.join(repo, 'docs', 'old-name.md'), 'artifact body');
-    // project state with worktree_path but NO workflow-plan.md (full/fast-path project)
-    const proj = 'issue-800';
-    fs.mkdirSync(path.join(repo, 'kaola-workflow', proj), { recursive: true });
-    const wt = path.join(tmp, 'wt2');
-    fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
-      'project: ' + proj + '\nworktree_path: ' + wt + '\n');
-    // Deliberately NO workflow-plan.md — simulates full/fast-path
-    git(repo, ['add', '-A']);
-    git(repo, ['commit', '-m', 'init']);
-    git(repo, ['branch', 'workflow/' + proj]);
-    git(repo, ['worktree', 'add', wt, 'workflow/' + proj]);
-    // STAGE a rename
-    git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
+  const { mirrorFinalizationArtifacts } = require('./kaola-workflow-claim.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-mirror-noplan-'));
+  const repo = path.join(tmp, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, ['init', '-b', 'main']);
+  git(repo, ['config', 'user.email', 't@t.com']);
+  git(repo, ['config', 'user.name', 'T']);
+  fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs', 'old-name.md'), 'artifact body');
+  const proj = 'issue-800';
+  fs.mkdirSync(path.join(repo, 'kaola-workflow', proj), { recursive: true });
+  const wt = path.join(tmp, 'wt2');
+  fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
+    'project: ' + proj + '\nworktree_path: ' + wt + '\n');
+  // Deliberately NO workflow-plan.md.
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-m', 'init']);
+  git(repo, ['branch', 'workflow/' + proj]);
+  git(repo, ['worktree', 'add', wt, 'workflow/' + proj]);
+  git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
 
-    const script = block.replace(/\{project\}/g, proj);
-    const sp = path.join(tmp, 'stepa-noplan.sh');
-    fs.writeFileSync(sp, script);
-    // Run with a hermetic HOME (no ~/.claude/...) and unset CLAUDE_PLUGIN_ROOT so kaola_script
-    // cannot find ledger-compare.js → LEDGER_COMPARE_JS is empty → guard is skipped → exit 0.
-    const env = Object.assign({}, process.env, { HOME: fakeHome, CLAUDE_PLUGIN_ROOT: '' });
-    const res = spawnSync('bash', [sp], { cwd: repo, encoding: 'utf8', env });
-    assert(res.status === 0,
-      'D (#423): Step-8a exits 0 when no workflow-plan.md and no ledger-compare available; stderr: ' + res.stderr);
-    // Renames must still be mirrored even without the ledger guard
-    assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
-      'D (#423): renamed file is mirrored to worktree by its NEW path even when no plan present');
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  const out = mirrorFinalizationArtifacts(wt, proj);
+  assert(out && !out.refused && out.ledger_compare === 'skipped_no_plan',
+    'D (#423): with no plan the ledger guard fails OPEN (skipped_no_plan), got ' + JSON.stringify(out));
+  assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
+    'D (#423): renamed file is mirrored to worktree by its NEW path even when no plan present');
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------
-// Test E (#505/#294): FOREIGN_ARCHIVE staging guard fail-closed. The guard in
-// `commands/kaola-workflow-finalize.md ## Staging Guard` must exit 1 when a foreign
-// project's archive band is staged. This tests the #294 class of fail-open bug on the
-// EXACT bash prose that npm test never executes otherwise.
+// Test E (#505/#294/#816): the single-project staging rule fails CLOSED. It moved from finalize
+// prose into the transaction; a foreign project's archive band in the index must produce the typed
+// `staging_guard_foreign_archive` refusal. This is the #294 fail-open class on its new home.
 // ---------------------------------------------------------------------------
 {
-  const block = extractBashBlocks(read('commands/kaola-workflow-finalize.md'), 'FOREIGN_ARCHIVE')[0];
-  assert(!!block, 'E: Staging Guard bash block (FOREIGN_ARCHIVE) is extractable from kaola-workflow-finalize.md');
-  if (block) {
-    // Substitute {project} with the project being finalized ('issue-200')
-    const proj = 'issue-200';
-    const script = block.replace(/\{project\}/g, proj);
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bashblock-staginggrd-'));
-    const repo = path.join(tmp, 'repo');
-    fs.mkdirSync(repo, { recursive: true });
-    git(repo, ['init', '-b', 'main']);
-    git(repo, ['config', 'user.email', 't@t.com']);
-    git(repo, ['config', 'user.name', 'T']);
-    // Create a committed file so the repo has a HEAD
-    fs.writeFileSync(path.join(repo, 'README.md'), 'repo');
-    git(repo, ['add', '-A']);
-    git(repo, ['commit', '-m', 'init']);
-    // Stage a FOREIGN archive file (different project: 'issue-999') — this must trigger exit 1
-    const foreignDir = path.join(repo, 'kaola-workflow', 'archive', 'issue-999');
-    fs.mkdirSync(foreignDir, { recursive: true });
-    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'project: issue-999\n');
-    git(repo, ['add', path.join('kaola-workflow', 'archive', 'issue-999', 'workflow-state.md')]);
-    const sp = path.join(tmp, 'staginggrd.sh');
-    fs.writeFileSync(sp, script);
-    const res = spawnSync('bash', [sp], { cwd: repo, encoding: 'utf8' });
-    assert(res.status === 1,
-      'E (#505/#294): Staging Guard exits 1 when a foreign archive band (issue-999) is staged for project ' + proj + '; got exit ' + res.status + '; stderr: ' + res.stderr);
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  const { checkFinalizeStagingGuard } = require('./kaola-workflow-claim.js');
+  const proj = 'issue-200';
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-staging-guard-'));
+  const repo = path.join(tmp, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, ['init', '-b', 'main']);
+  git(repo, ['config', 'user.email', 't@t.com']);
+  git(repo, ['config', 'user.name', 'T']);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'repo');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-m', 'init']);
+  // Stage a FOREIGN archive band (different project: 'issue-999').
+  const foreignDir = path.join(repo, 'kaola-workflow', 'archive', 'issue-999');
+  fs.mkdirSync(foreignDir, { recursive: true });
+  fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'project: issue-999\n');
+  git(repo, ['add', path.join('kaola-workflow', 'archive', 'issue-999', 'workflow-state.md')]);
+  const bad = checkFinalizeStagingGuard(repo, proj);
+  assert(bad && bad.ok === false && bad.reason === 'staging_guard_foreign_archive',
+    'E (#505/#294): a foreign archive band (issue-999) staged for ' + proj +
+    ' must refuse staging_guard_foreign_archive, got ' + JSON.stringify(bad));
+  // Control: this project's OWN suffixed archive band is not foreign.
+  git(repo, ['rm', '-r', '--cached', '-q', '--', path.join('kaola-workflow', 'archive', 'issue-999')]);
+  fs.rmSync(foreignDir, { recursive: true, force: true });
+  const ownDir = path.join(repo, 'kaola-workflow', 'archive', proj + '.archived-2026-01-01T00-00-00-000Z');
+  fs.mkdirSync(ownDir, { recursive: true });
+  fs.writeFileSync(path.join(ownDir, 'workflow-state.md'), 'project: ' + proj + '\n');
+  git(repo, ['add', '--', 'kaola-workflow/archive']);
+  const good = checkFinalizeStagingGuard(repo, proj);
+  assert(good && good.ok === true,
+    'E (#816): the project\'s own suffixed archive band must NOT trip the guard, got ' + JSON.stringify(good));
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 if (failed > 0) {

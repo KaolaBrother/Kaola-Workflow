@@ -29,17 +29,74 @@ assert.deepStrictEqual(
   Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
   'Codex profile classes must cover exactly the resolver role registry'
 );
+
+// DECLARED RUNTIME DIVERGENCE (Claude dispatch tier vs Codex declarative class).
+//
+// The two tables answer different questions, and for most roles they answer it identically:
+//   - DEFAULT_AGENT_MODELS is the Claude DISPATCH TIER — a real `model=` parameter on the spawn.
+//   - CODEX_PINNED_*_ROLES is a Codex DECLARATIVE CLASS — a label and wait-budget default. On Codex
+//     the child inherits the parent session's pair, so the class never selects a model
+//     (dispatchEffort returns codex_model: null for both classes; asserted below).
+//
+// A role appears here ONLY where those two genuinely disagree, with the reason it disagrees. The
+// entry names the class each runtime assigns, so a silent re-tiering on either side fails.
+const CLASS_DIVERGENCE = Object.freeze({
+  // Repair is dispatched hot and often; the Claude tier keeps it standard so a routine build/lint
+  // fix is not billed at the reasoning tier, while Codex labels it reasoning for the longer
+  // non-interrupt wait budget a root-cause hunt may need.
+  'build-error-resolver': Object.freeze({ claude: 'sonnet', codex: 'reasoning' }),
+  // Falsifying ONE recorded claim against ONE named surface is bounded read work, so the Claude
+  // tier is standard; a plan RAISES it per node where the claim warrants it (the post-G1
+  // intent-verifier on a synthesizer merge). Codex labels it reasoning for the wait budget.
+  'adversarial-verifier': Object.freeze({ claude: 'sonnet', codex: 'reasoning' }),
+});
+
+for (const role of Object.keys(CLASS_DIVERGENCE)) {
+  assert.ok(Object.prototype.hasOwnProperty.call(resolver.DEFAULT_AGENT_MODELS, role),
+    `declared class divergence names an unregistered role: ${role}`);
+}
+
 for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
   assert.ok(model === 'opus' || model === 'sonnet', `${role} must default to reasoning or standard`);
   const pinned = schema.CODEX_PINNED_STANDARD_ROLES.includes(role);
   const reasoning = schema.CODEX_PINNED_REASONING_ROLES.includes(role);
   assert.ok(pinned !== reasoning, `${role} must belong to exactly one Codex profile class`);
-  assert.strictEqual(model, pinned ? 'sonnet' : 'opus', `${role} declarative tier must match its Codex profile class`);
+  const codexClass = pinned ? 'standard' : 'reasoning';
+  const declared = CLASS_DIVERGENCE[role];
+  if (declared) {
+    // Bidirectional: a declared divergence must STILL diverge, and must diverge exactly as declared.
+    // A stale entry (the tables re-converged) fails just as loudly as an undeclared one.
+    assert.strictEqual(model, declared.claude,
+      `${role} Claude dispatch tier changed; the declared divergence says ${declared.claude}`);
+    assert.strictEqual(codexClass, declared.codex,
+      `${role} Codex declarative class changed; the declared divergence says ${declared.codex}`);
+    assert.notStrictEqual(model, pinned ? 'sonnet' : 'opus',
+      `${role} no longer diverges — delete its CLASS_DIVERGENCE entry instead of leaving it stale`);
+  } else {
+    assert.strictEqual(model, pinned ? 'sonnet' : 'opus',
+      `${role} declarative tier must match its Codex profile class, or declare the divergence in CLASS_DIVERGENCE`);
+  }
   const dispatch = schema.dispatchEffort(model);
   assert.strictEqual(dispatch.codex_model, null, `${role} must not select a Codex child model from tier metadata`);
   assert.strictEqual(dispatch.codex_reasoning_effort, null, `${role} must not select Codex effort from tier metadata`);
   assert.strictEqual(dispatch.codex_model_source, 'parent_session', `${role} model source is the parent session`);
   assert.strictEqual(dispatch.codex_reasoning_effort_source, 'parent_session', `${role} effort source is the parent session`);
+}
+
+// INSTALL-INVARIANT TIER. The installer rewrites every installed agent's frontmatter to
+// `model: inherit`, so the resolver's frontmatter step can never fire for an installed agent and
+// DEFAULT_AGENT_MODELS alone decides its tier. The source frontmatter still governs one case — an
+// ad-hoc dispatch pointed at the source tree — so the two must agree or the SAME role runs at
+// different tiers depending only on which directory it was dispatched from. This is the check that
+// makes the retired install-time model axis unrecoverable: with the manifest gone there is no third
+// carrier left to paper over a disagreement.
+for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
+  const source = path.join(__dirname, '..', 'agents', `${role}.md`);
+  assert.ok(fs.existsSync(source), `registered role ${role} must have a source agent file`);
+  const frontmatter = resolver.extractFrontmatterModel(fs.readFileSync(source, 'utf8'));
+  assert.strictEqual(frontmatter, model,
+    `${role} source frontmatter (${frontmatter || 'none'}) must equal its DEFAULT_AGENT_MODELS tier (${model}) — `
+      + 'installed agents resolve through the default map alone, so a divergence silently re-tiers the role');
 }
 
 function writeAgent(dir, name, model) {
@@ -57,7 +114,9 @@ function writeAgent(dir, name, model) {
   );
 }
 
-function writeManifest(dir, obj) {
+// Plants the RETIRED install-time model manifest. Resolution must ignore it entirely:
+// the chain is plan column -> frontmatter -> DEFAULT_AGENT_MODELS, with no fourth input.
+function plantRetiredManifest(dir, obj) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.kaola-agent-models.json'), JSON.stringify(obj));
 }
@@ -87,36 +146,47 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// NEW CASE 1: manifest hit wins over inherit frontmatter
+// RETIRED-MANIFEST INERTNESS (#794 AC5): the precedence chain is provably THREE steps
+// (plan column -> frontmatter -> DEFAULT_AGENT_MODELS). A `.kaola-agent-models.json`
+// planted in the agent dir — the file older installs wrote — has NO effect on any
+// resolution, in either direction (it can neither raise nor lower a role).
 const tmpManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-manifest-'));
 try {
-  writeManifest(tmpManifest, { 'code-architect': 'sonnet', 'security-reviewer': 'opus', 'code-explorer': 'opus' });
+  plantRetiredManifest(tmpManifest, {
+    'code-architect': 'haiku',       // would LOWER if honored
+    'security-reviewer': 'haiku',    // would LOWER if honored
+    'code-explorer': 'opus',         // would RAISE if honored
+    implementer: 'opus',             // would RAISE if honored
+    planner: 'haiku'                 // would LOWER if honored
+  });
+  // inherit frontmatter + planted manifest -> the static default answers, not the manifest
   writeAgent(tmpManifest, 'code-architect', 'inherit');
-  // manifest says sonnet; frontmatter says inherit — manifest must win
-  assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest }), 'sonnet');
-
-  // NEW CASE 2: higher-profile security-reviewer via manifest
+  assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest }), 'opus');
   writeAgent(tmpManifest, 'security-reviewer', 'inherit');
   assert.strictEqual(resolver.resolveAgentModel('security-reviewer', { agentDir: tmpManifest }), 'opus');
-
-  // Current Codex mode ignores a co-installed Claude manifest and returns declarative role metadata.
+  // no agent file at all + planted manifest -> still the static default
+  assert.strictEqual(resolver.resolveAgentModel('code-explorer', { agentDir: tmpManifest }), 'sonnet');
+  assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpManifest }), 'sonnet');
+  // a real frontmatter value still wins over the static default, and the manifest is still inert
+  writeAgent(tmpManifest, 'planner', 'opus');
+  assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmpManifest }), 'opus');
+  // Codex static-defaults mode is likewise unaffected.
   assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest, staticDefaults: true }), 'opus');
   assert.strictEqual(resolver.resolveAgentModel('code-explorer', { agentDir: tmpManifest, staticDefaults: true }), 'sonnet');
 } finally {
   fs.rmSync(tmpManifest, { recursive: true, force: true });
 }
 
-// NEW CASE 4: missing manifest file entirely → falls through to frontmatter/DEFAULT without throwing
+// No manifest file at all → frontmatter/DEFAULT without throwing.
 const tmpNoManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-nomf-'));
 try {
-  // no manifest file at all; no agent file either → DEFAULT
   assert.doesNotThrow(() => resolver.resolveAgentModel('planner', { agentDir: tmpNoManifest }));
   assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmpNoManifest }), 'opus');
 } finally {
   fs.rmSync(tmpNoManifest, { recursive: true, force: true });
 }
 
-// NEW CASE 5: unparseable manifest → falls through without throwing
+// An UNPARSEABLE planted manifest is equally inert — it is never read, so it cannot throw.
 const tmpBadManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-badmf-'));
 try {
   fs.mkdirSync(tmpBadManifest, { recursive: true });
@@ -127,23 +197,21 @@ try {
   fs.rmSync(tmpBadManifest, { recursive: true, force: true });
 }
 
-// CONTRACTOR CASE 1: no manifest, no agent file → DEFAULT fallback must return 'sonnet'
-const tmpContractorDefault = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-contractor-'));
+// STANDARD-TIER ROLE: no agent file → DEFAULT fallback must return 'sonnet'.
+const tmpStandardDefault = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-standard-'));
 try {
-  // empty dir — no manifest, no agent file
-  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpContractorDefault }), 'sonnet');
+  assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpStandardDefault }), 'sonnet');
 } finally {
-  fs.rmSync(tmpContractorDefault, { recursive: true, force: true });
+  fs.rmSync(tmpStandardDefault, { recursive: true, force: true });
 }
 
-// CONTRACTOR CASE 2: manifest maps contractor: 'sonnet', agent file has inherit → manifest wins
-const tmpContractorManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-contractor-mf-'));
+// #816: the RETIRED bookkeeping role is not in DEFAULT_AGENT_MODELS — the resolver must return the
+// empty string (unknown role), not a fabricated tier.
+const tmpRetiredRole = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-retired-'));
 try {
-  writeManifest(tmpContractorManifest, { contractor: 'sonnet' });
-  writeAgent(tmpContractorManifest, 'contractor', 'inherit');
-  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpContractorManifest }), 'sonnet');
+  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpRetiredRole }), '');
 } finally {
-  fs.rmSync(tmpContractorManifest, { recursive: true, force: true });
+  fs.rmSync(tmpRetiredRole, { recursive: true, force: true });
 }
 
 // #463 Slice 1 (AC14): reasoning-class floor ENFORCEMENT. The synthesizer (a REASONING_FLOOR_ROLE)
@@ -504,13 +572,13 @@ try {
   fs.rmSync(tmpFloorOk, { recursive: true, force: true });
 }
 
-// A manifest override that LOWERS the synthesizer to a non-reasoning tier:
+// A frontmatter override that LOWERS the synthesizer to a non-reasoning tier:
 //  - WITHOUT enforceFloor: the (wrong) lowered model still returns (back-compat unchanged)
 //  - WITH enforceFloor: resolveAgentModel THROWS a typed reasoning_floor_violation
 //  - enforceReasoningFloor reports ok:false with the typed reason
 const tmpFloorLower = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-lower-'));
 try {
-  writeManifest(tmpFloorLower, { synthesizer: 'sonnet' });
+  writeAgent(tmpFloorLower, 'synthesizer', 'sonnet');
   assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorLower }), 'sonnet',
     'back-compat: without enforceFloor a lowered synthesizer still returns');
   const v = resolver.enforceReasoningFloor('synthesizer', 'sonnet');
@@ -526,18 +594,20 @@ try {
   fs.rmSync(tmpFloorLower, { recursive: true, force: true });
 }
 
-// An explicit inherit on a floor role is ALSO a violation under enforceFloor (inherit may resolve to a
-// non-reasoning session model — the floor must not be silently surrendered).
+// An empty/inherit tier reaching enforceReasoningFloor is ALSO a violation (it may resolve to a
+// non-reasoning session model — the floor must not be silently surrendered). That value now arrives
+// only from a plan tier column: an `inherit` FRONTMATTER can no longer surrender the floor, because
+// the chain falls through to the reasoning-class static default instead of returning empty.
 const tmpFloorInherit = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-inherit-'));
 try {
-  writeManifest(tmpFloorInherit, { synthesizer: 'inherit' });
-  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit }), '',
-    'inherit resolves to empty without enforcement');
+  writeAgent(tmpFloorInherit, 'synthesizer', 'inherit');
+  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit }), 'opus',
+    'inherit frontmatter falls through to the reasoning-class static default, never to empty');
+  assert.doesNotThrow(() => resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit, enforceFloor: true }),
+    'the static default satisfies the floor, so enforceFloor passes');
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', '').ok, false, 'inherit (empty) violates the floor');
-  let threwI = null;
-  try { resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit, enforceFloor: true }); }
-  catch (e) { threwI = e; }
-  assert.ok(threwI && threwI.reason === 'reasoning_floor_violation', 'enforceFloor throws on inherit for a floor role');
+  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', '').reason, 'reasoning_floor_violation',
+    'typed reason on the empty-tier violation');
 } finally {
   fs.rmSync(tmpFloorInherit, { recursive: true, force: true });
 }

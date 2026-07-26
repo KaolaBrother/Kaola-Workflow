@@ -37,18 +37,16 @@ AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "investigator" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "workflow-planner" "synthesizer" "metric-optimizer")
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
-# Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
-# Pass --profile=common to install the Sonnet assignments for those three agents.
-PROFILE=higher
+# There is no install-time model axis: the agent tree ships one model assignment per role
+# and the frozen plan's per-node tier column governs every workflow dispatch.
 # The install seeds ~/.config/kaola-workflow/config.json with parallel_mode.
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common]"
-  echo "  --profile defaults to 'higher' (Opus reviewers); use --profile=common for Sonnet."
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -78,19 +76,6 @@ while [[ "$#" -gt 0 ]]; do
       usage
       exit 0
       ;;
-    --profile=*)
-      PROFILE="${1#--profile=}"
-      shift
-      ;;
-    --profile)
-      if [[ -z "${2:-}" ]]; then
-        echo "--profile requires common or higher" >&2
-        usage >&2
-        exit 2
-      fi
-      PROFILE="$2"
-      shift 2
-      ;;
     --enable-adaptive|--enable-adaptive=*)
       # Warn-and-ignore: adaptive is always installed, so this flag is a no-op. Accepted
       # (exit 0) rather than rejected so callers passing it are not broken.
@@ -103,15 +88,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
-
-case "$PROFILE" in
-  common|higher) ;;
-  *)
-    echo "Unknown profile: $PROFILE (must be common or higher)" >&2
-    usage >&2
-    exit 2
-    ;;
-esac
 
 case "$FORGE" in
   github)
@@ -309,13 +285,100 @@ manifest_lookup() {
   awk -F '\t' -v name="$file_name" '$1 == name { value = $2 } END { if (value) print value }' "$AGENT_MANIFEST_FILE"
 }
 
+# True when `$1` is a plain file name: non-empty, no path separator, not `.`/`..`,
+# not absolute. A deploy manifest records BASENAMES only, so anything else is
+# corruption or tampering and must never be turned into a filesystem path.
+is_plain_basename() {
+  local n="${1-}"
+  [[ -n "$n" ]] || return 1
+  case "$n" in
+    */*|*\\*|.|..) return 1 ;;
+  esac
+  return 0
+}
+
+# Print the hash the given manifest file records for `$1`, and return 0, when the
+# manifest lists that exact name; return 1 (printing nothing) otherwise. The
+# comparison is a literal string compare — the name is never interpolated into a
+# pattern, a path, or an awk assignment.
+manifest_row_hash() {
+  local want="$1" file="$2" row_name row_hash row_rest
+  [[ -f "$file" ]] || return 1
+  while IFS=$'\t' read -r row_name row_hash row_rest || [[ -n "${row_name:-}" ]]; do
+    [[ -n "${row_name:-}" ]] || continue
+    [[ "$row_name" == "$want" ]] || continue
+    printf '%s\n' "${row_hash:-}"
+    return 0
+  done < "$file"
+  return 1
+}
+
+# Warn once per manifest row that is not a plain file name. Such a row can never
+# describe a file this installer deployed into the agents dir, so it is reported
+# and then ignored — it never reaches a delete decision.
+warn_unsafe_manifest_names() {
+  local file="$1" row_name row_rest
+  [[ -f "$file" ]] || return 0
+  while IFS=$'\t' read -r row_name row_rest || [[ -n "${row_name:-}" ]]; do
+    [[ -n "${row_name:-}" ]] || continue
+    if ! is_plain_basename "$row_name"; then
+      echo "warning: ignoring agent manifest entry that is not a plain file name: $row_name" >&2
+    fi
+  done < "$file"
+  return 0
+}
+
+# Remove agents this installer deployed on a PREVIOUS run that the current tree no
+# longer ships (a retired role). Mirrors the stale-command and stale-script sweeps
+# above, but ~/.claude/agents/ is SHARED with user-authored agents and the file
+# names are not namespaced (bare `code-explorer.md`), so a blind prune is not
+# available — the sweep is manifest-driven and deletes ONLY what the previous
+# manifest proves this installer wrote, unmodified since.
+#
+# The sweep ENUMERATES THE AGENTS DIRECTORY and intersects it against the previous
+# manifest (the same shape as pruneStaleProfiles() in the Codex profile installer).
+# It never CONSTRUCTS a path from a manifest-supplied name, so a manifest row
+# holding `../…`, an absolute path, or a separator can only fail to match a real
+# directory entry — it can never escape $AGENTS_DIR. Such rows are reported on
+# stderr and skipped.
+#
+# Four fail-closed conditions, all required before any rm:
+#   1. the name is recorded in the PREVIOUS manifest (never touch an unlisted file
+#      — an unlisted file is user-authored, which is the whole point of a manifest);
+#   2. the name is NOT in REQUIRED_AGENTS (a required agent missing from the new
+#      manifest was SKIPPED as user-owned/modified, not retired — never sweep it);
+#   3. the installed file still carries the managed marker;
+#   4. its current sha256 still equals the hash the previous manifest recorded, so
+#      an agent the user edited after install is their work and stays.
+# An absent/empty previous manifest sweeps NOTHING (no directory entry matches).
+sweep_retired_agents() {
+  local prev_manifest="$1"
+  local dest base prev_hash current_hash agent is_required
+  [[ -f "$prev_manifest" ]] || return 0
+  warn_unsafe_manifest_names "$prev_manifest"
+  for dest in "$AGENTS_DIR"/*.md; do
+    [[ -f "$dest" ]] || continue
+    base="$(basename "$dest")"
+    is_required=0
+    for agent in "${REQUIRED_AGENTS[@]}"; do
+      if [[ "$agent.md" == "$base" ]]; then is_required=1; break; fi
+    done
+    [[ "$is_required" -eq 0 ]] || continue
+    prev_hash=""
+    if ! prev_hash="$(manifest_row_hash "$base" "$prev_manifest")"; then continue; fi
+    [[ -n "$prev_hash" ]] || continue
+    grep -Fq "$MANAGED_AGENT_MARKER" "$dest" || continue
+    current_hash="$(sha256_file "$dest")"
+    [[ "$current_hash" == "$prev_hash" ]] || continue
+    rm -f "$dest"
+    echo "Removed retired agent: $dest"
+  done
+  return 0
+}
+
 agent_source_file() {
-  local agent="$1"; local file_name="$agent.md"
-  local source_file="$SOURCE_AGENTS_DIR/$file_name"
-  if [[ "$PROFILE" == "higher" && -f "$SOURCE_AGENTS_DIR/profiles/higher/$file_name" ]]; then
-    source_file="$SOURCE_AGENTS_DIR/profiles/higher/$file_name"
-  fi
-  printf '%s\n' "$source_file"
+  local agent="$1"
+  printf '%s\n' "$SOURCE_AGENTS_DIR/$agent.md"
 }
 
 install_managed_agent() {
@@ -350,20 +413,27 @@ install_agent_files() {
 
   local manifest_tmp
   manifest_tmp="$(mktemp)"
+  # Snapshot the PREVIOUS manifest before it is overwritten — it is the only record
+  # of which agent files this installer owns, and the retired-agent sweep below
+  # reads it after the new manifest lands. Always a real file (empty when there is
+  # no previous manifest) so cleanup never has to branch.
+  local prev_manifest
+  prev_manifest="$(mktemp)"
+  if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
+    cp "$AGENT_MANIFEST_FILE" "$prev_manifest"
+  fi
   local installed=0
   local skipped=0
 
   for agent in "${REQUIRED_AGENTS[@]}"; do
     local file_name="$agent.md"
-    local source_file="$SOURCE_AGENTS_DIR/$file_name"
-    if [[ "$PROFILE" == "higher" && -f "$SOURCE_AGENTS_DIR/profiles/higher/$file_name" ]]; then
-      source_file="$SOURCE_AGENTS_DIR/profiles/higher/$file_name"
-    fi
+    local source_file
+    source_file="$(agent_source_file "$agent")"
     local dest="$AGENTS_DIR/$file_name"
 
     if [[ ! -f "$source_file" ]]; then
       echo "Required agent source not found: $source_file" >&2
-      rm -f "$manifest_tmp"
+      rm -f "$manifest_tmp" "$prev_manifest"
       exit 1
     fi
 
@@ -395,7 +465,7 @@ install_agent_files() {
 
     if ! grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
       echo "Install verification failed: missing managed marker in agent: $dest" >&2
-      rm -f "$manifest_tmp"
+      rm -f "$manifest_tmp" "$prev_manifest"
       exit 1
     fi
 
@@ -415,9 +485,14 @@ install_agent_files() {
 
   if [[ -s "$manifest_tmp" ]]; then
     mv "$manifest_tmp" "$AGENT_MANIFEST_FILE"
+    # Only sweep once the NEW manifest is durably in place: if the deploy produced
+    # nothing there is no converged state to reconcile against, so a partial run
+    # can never delete an agent it did not just replace.
+    sweep_retired_agents "$prev_manifest"
   else
     rm -f "$manifest_tmp"
   fi
+  rm -f "$prev_manifest"
 
   if [[ "$skipped" -gt 0 ]]; then
     echo "Skipped $skipped agent file(s). Existing files were left untouched."
@@ -432,7 +507,7 @@ install_agent_files
 
 default_agent_model() {
   case "$1" in
-    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier|contractor)
+    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|investigator|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier)
       printf '%s\n' "sonnet"
       ;;
     planner|workflow-planner)
@@ -483,44 +558,27 @@ model_for_placeholder() {
     CODE_ARCHITECT_MODEL) resolve_agent_model_for_install code-architect ;;
     TDD_GUIDE_MODEL) resolve_agent_model_for_install tdd-guide ;;
     IMPLEMENTER_MODEL) resolve_agent_model_for_install implementer ;;
+    INVESTIGATOR_MODEL) resolve_agent_model_for_install investigator ;;
     BUILD_ERROR_RESOLVER_MODEL) resolve_agent_model_for_install build-error-resolver ;;
     CODE_REVIEWER_MODEL) resolve_agent_model_for_install code-reviewer ;;
     SECURITY_REVIEWER_MODEL) resolve_agent_model_for_install security-reviewer ;;
     DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
-    CONTRACTOR_MODEL) resolve_agent_model_for_install contractor ;;
     WORKFLOW_PLANNER_MODEL) resolve_agent_model_for_install workflow-planner ;;
   esac
 }
 
-# Emit .kaola-agent-models.json so the adaptive resolver can look up
-# profile-aware models without parsing agent frontmatter at runtime.
-# Agents that resolve to empty or 'inherit' are omitted (they fall through
-# to the resolver's next precedence step).
-emit_agent_model_manifest() {
+# Disposal, not a tail: older installs wrote an agent model manifest that the runtime
+# resolver consulted ahead of the static defaults. The resolver no longer reads it, so a
+# leftover file would be inert but misleading — delete it on every upgrade.
+dispose_agent_model_manifest() {
   local manifest_file="$AGENTS_DIR/.kaola-agent-models.json"
-  local pairs=()
-  for agent in "${REQUIRED_AGENTS[@]}"; do
-    local model
-    model="$(resolve_agent_model_for_install "$agent")"
-    if [[ -z "$model" ]]; then
-      continue
-    fi
-    pairs+=("$agent" "$model")
-  done
-  # #363: encode the manifest via node (guaranteed present — the product is node scripts) so a
-  # model value containing a quote or backslash yields VALID JSON. The prior string-concat builder
-  # had no escaping, so such a value corrupted ~/.claude/agents/.kaola-agent-models.json (consumed
-  # by the runtime resolve-agent-model chain).
-  if [[ "${#pairs[@]}" -eq 0 ]]; then
-    # All agents resolved to inherit/empty — write empty object.
-    printf '{}\n' > "$manifest_file"
-  else
-    node -e 'const fs=require("fs");const out=process.argv[1];const a=process.argv.slice(2);const o={};for(let i=0;i<a.length;i+=2)o[a[i]]=a[i+1];fs.writeFileSync(out,JSON.stringify(o,null,2)+"\n");' "$manifest_file" "${pairs[@]}"
+  if [[ -f "$manifest_file" ]]; then
+    rm -f "$manifest_file"
+    echo "Removed retired agent model manifest: $manifest_file"
   fi
-  echo "Installed agent model manifest: $manifest_file"
 }
 
-emit_agent_model_manifest
+dispose_agent_model_manifest
 
 render_command_file() {
   local source_file="$1"
@@ -533,11 +591,11 @@ render_command_file() {
     CODE_ARCHITECT_MODEL
     TDD_GUIDE_MODEL
     IMPLEMENTER_MODEL
+    INVESTIGATOR_MODEL
     BUILD_ERROR_RESOLVER_MODEL
     CODE_REVIEWER_MODEL
     SECURITY_REVIEWER_MODEL
     DOC_UPDATER_MODEL
-    CONTRACTOR_MODEL
     WORKFLOW_PLANNER_MODEL
   )
 

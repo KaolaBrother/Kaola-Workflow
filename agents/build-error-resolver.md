@@ -125,6 +125,13 @@ npx eslint . --fix
 - Tests failing → use `tdd-guide`
 - Security issues → use `security-reviewer`
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Evidence Contract
 
 Evidence contract — you are a WRITE-role agent. SELF-WRITE your evidence directly into your seeded `.cache/{node-id}.md`. The seeded file already carries an `evidence-binding: <node-id> <nonce>` header line — read it, preserve it verbatim, never add/alter/strip it, and append your content below. Include every content-bearing token your role produces (`build-green`) with a non-empty value (a lossy one-line record is refused at close).

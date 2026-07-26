@@ -115,6 +115,36 @@ const FEATURE_TOKENS = [
   // twins carry both the sidecar path and its header token (md↔toml parity for the #796 fix).
   'selection-evidence',
   'selection_mode',
+  // #810: the planner dispatch brief's scope field. The six kaola-workflow-adapt surfaces render
+  // `Binding scope:` beside the target; the planner profile defines what it is and how it ranks
+  // against the resolved target. Present in agents/workflow-planner.md's Method step 1, so this
+  // enforces all three .toml twins carry both the field and its precedence rule (md↔toml parity;
+  // the surface→profile direction is pinned separately by the render↔define block below).
+  'Binding scope',
+  'the unit of completion',
+  // Polarity is load-bearing: the rule is that a binding scope NEVER widens/narrows/substitutes
+  // the claim. Pinning the bare verb phrase would let a full inversion of the precedence rule
+  // ("always widens, narrows, or substitutes") pass, so the negation is part of the token.
+  'never widens, narrows, or substitutes',
+  // #805 D2: validation ORDERING. A plan that executes the whole-candidate validation_command inside
+  // a review gate pays for the full suite against a candidate the gate may then reject, so a single
+  // blocking finding costs two validation runs instead of one. The planner authors the ordering, so
+  // the rule lives in agents/workflow-planner.md and must reach the three .toml twins the codex/forge
+  // planners actually read. Both halves are pinned: the placement rule and the conditional form a
+  // gate uses when its claim genuinely needs validation evidence. Polarity is load-bearing in the
+  // first token ("AFTER ... never inside it") — the bare phrase would let an inversion pass.
+  'Place expensive validation AFTER the review wall, never inside it',
+  'short-circuits before the expensive step',
+  // #814: the test-custody authoring lever. The plan grammar used to enforce test-before-code by
+  // ORDER; it now enforces it by CUSTODY — tdd-guide owns the test paths, implementer owns the
+  // production paths, and any other node reaching a test path needs a declared, hash-covered
+  // `## Meta` exemption. Present in agents/workflow-planner.md's implement-role bullet, so this
+  // enforces all three .toml twins carry both the rule and its escape hatch. Polarity is
+  // load-bearing on the first token: the whole point is that ORDER no longer decides, so pinning a
+  // bare "custody decides the implement roles" would let the retired order framing return beside
+  // it.
+  'Custody decides the implement roles, not order',
+  'test_custody_exemption',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
@@ -216,13 +246,25 @@ for (const tree of TOML_TREES) {
 // column-zero bare-key scan. These mutations never touch tracked files.
 {
   const canonical = read(`${TOML_TREES[0]}/implementer.toml`) || '';
+  // The anchor guard: a mutation built by .replace() on a string the profile no longer contains is
+  // a no-op, and the oracle passing a no-op proves nothing. Assert the anchors exist FIRST, so a
+  // future body rewrite that drops one goes RED here (naming the anchor) instead of silently
+  // disarming the mutation coverage below.
+  for (const anchor of ['developer_instructions', 'description', 'Output contract:']) {
+    assert(canonical.includes(anchor),
+      `closed Codex role grammar mutation anchor ${JSON.stringify(anchor)} must exist in implementer.toml (an absent anchor makes its mutation a silent no-op)`);
+  }
   const mutations = [
     canonical.replace(/^developer_instructions/m, '"behavior_contract_version" = 2\ndeveloper_instructions'),
     canonical.replace(/^developer_instructions/m, '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
     canonical.replace(/^developer_instructions/m, '[shadow] # valid TOML table\ndeveloper_instructions'),
     canonical.replace(/^description/m, 'name = "implementer"\ndescription'),
-    canonical.replace('Purpose:', 'Purpose:\n- invalid TOML escape: \\q'),
-    canonical.replace('Purpose:', 'Purpose:\rX'),
+    // Anchored on a heading the profile body is guaranteed to carry (every role toml states an
+    // output contract). A mutation whose anchor is absent silently becomes a NO-OP, and a no-op
+    // "mutation" that the oracle then passes is a guard that only looks armed — so the anchor
+    // itself is asserted below before the mutations run.
+    canonical.replace('Output contract:', 'Output contract:\n- invalid TOML escape: \\q'),
+    canonical.replace('Output contract:', 'Output contract:\rX'),
     `# raw control \u0001\n${canonical}`,
   ];
   for (const [index, mutation] of mutations.entries()) {
@@ -262,7 +304,9 @@ if (reviewerGenerator) {
   assert(repositoryErrors.length === 0,
     `tracked reviewer profiles must equal canonical generation: ${repositoryErrors.join('; ')}`);
 
-  assert(rendered.length === 14, `reviewer generator must render exactly 14 profiles, got ${rendered.length}`);
+  // 3 Claude reviewer sources + 9 Codex TOML outputs (3 roles x 3 forges). There is no
+  // second Claude variant: the install-time model axis is retired.
+  assert(rendered.length === 12, `reviewer generator must render exactly 12 profiles, got ${rendered.length}`);
   assert(JSON.stringify([...byPath.keys()].sort()) === JSON.stringify([...reviewerGenerator.EXPECTED_OUTPUT_PATHS].sort()),
     'reviewer generator output set must be complete and closed');
 
@@ -493,6 +537,54 @@ for (const file of ['agents/workflow-planner.md', ...TOML_TREES.map(t => t + '/w
     'semantic dependency and verification boundaries', 'independently testable',
     'large coherent nodes remain legal', 'file-count, line-count, complexity, or diff-size threshold']) {
     assert(normalizedContent.includes(token), `${file} must carry semantic-boundary planner guidance token ${JSON.stringify(token)}`);
+  }
+}
+
+// #810: render↔define pin for the planner dispatch brief's `Binding scope:` field. The six
+// kaola-workflow-adapt surfaces RENDER the field, but nothing required any workflow-planner profile
+// to DEFINE it — so it shipped decorative: a surface asserting a behavior no other surface defines
+// (the same defect family #796 exists to close). This pin closes the asymmetry from the receiving
+// end. It is conditional by construction: retiring the field from every adapt surface retires the
+// obligation, but rendering it while no profile defines it is RED.
+{
+  const ADAPT_SURFACES = [
+    'commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+  ];
+  const PLANNER_PROFILES = [
+    'agents/workflow-planner.md',
+    ...TOML_TREES.map(t => t + '/workflow-planner.toml'),
+  ];
+  // A definition is not the field name alone: the field exists to settle a precedence question, so
+  // the profile must also carry the rule — the resolved target stays the unit of completion, and a
+  // binding scope only steers what is authored inside it.
+  const BINDING_SCOPE_DEFINITION_TOKENS = [
+    'Binding scope:',
+    'the unit of completion',
+    // Negation included deliberately — see FEATURE_TOKENS above. Without it an inverted
+    // precedence rule still satisfies the define-side obligation.
+    'never widens, narrows, or substitutes',
+  ];
+  const rendering = ADAPT_SURFACES.filter(s => (read(s) || '').includes('Binding scope:'));
+  assert(rendering.length === 0 || rendering.length === ADAPT_SURFACES.length,
+    '#810: `Binding scope:` must render on ALL six kaola-workflow-adapt surfaces or on none — ' +
+    'rendered by ' + rendering.length + '/' + ADAPT_SURFACES.length +
+    ' (propagation gap: ' + ADAPT_SURFACES.filter(s => !rendering.includes(s)).join(', ') + ')');
+  if (rendering.length > 0) {
+    for (const profile of PLANNER_PROFILES) {
+      const content = read(profile) || '';
+      for (const token of BINDING_SCOPE_DEFINITION_TOKENS) {
+        assert(content.includes(token),
+          '#810: ' + rendering.length + ' kaola-workflow-adapt surface(s) RENDER `Binding scope:` ' +
+          'but ' + profile + ' does not DEFINE it — missing token ' + JSON.stringify(token) +
+          ' (a rendered dispatch field that no planner profile defines is decorative; define the ' +
+          'field and its precedence against the resolved target)');
+      }
+    }
   }
 }
 

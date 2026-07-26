@@ -46,7 +46,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -72,8 +72,10 @@ function allowedDomainOutcomes(role) {
 //
 // VOCABULARY CONTRACT (D-445-01 §3, binding):
 //   - the write_set_overflow family (write_set_overflow / write_set_granularity /
-//     lockfile_write / mirror_write / count_bump) references `revert-overflow`,
-//     NEVER `drop-base` (the D-424-01 laundering anti-pattern).
+//     lockfile_write / mirror_write / count_bump) references `revert-overflow`
+//     (and, where the out-of-set files may be preservable companion work,
+//     `amend-surface` alongside it), NEVER `drop-base` (the D-424-01 laundering
+//     anti-pattern).
 //   - a crash-repair / reopen-writer situation references `repair-node` (the
 //     anti-laundering primitive that keeps the original baseline).
 //   - No forge-specific CLI token appears in any hint — the hints
@@ -97,6 +99,9 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   // and the running set — a mutating lifecycle command like every other opener.
   'expand-open', 'expand-close',
   'reopen-node', 'revert-overflow', 'repair-node', 'route-findings', 'record-evidence',
+  // Records the dispatch-target swap into the project's .cache; a project-scoped mutation like
+  // every other, so it resolves the folder from the same worktree authority.
+  'substitute-role',
   // #439: the speculative-read discard is a mutating lifecycle transaction (ledger reset + baseline
   // drop + running-set removal) and must run from the worktree like every other mutator.
   'discard-speculative',
@@ -110,7 +115,7 @@ const REPLAN_GUARDED_SUBCOMMANDS = new Set([
   'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
   'expand-open', 'expand-close',
   'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
-  'discard-speculative', 'mirror-project',
+  'discard-speculative', 'mirror-project', 'substitute-role',
 ]);
 
 function lastReplanCas(transaction) {
@@ -297,8 +302,11 @@ const OPERATOR_HINT_REGISTRY = {
   // --- write-set overflow family (#424/#434 / D-434-01 §1) — ALWAYS revert-overflow, NEVER
   //     drop-base. These are the narrowed barrier subtypes that can surface as a top-level reason
   //     (e.g. when a caller drills the nested barrierCheck.reason out of a barrier_failed envelope). ---
+  // NAMED, not routed: the hint lists BOTH primitives and one line on when each fits, and nothing here
+  // selects between them — no branch, no gate, no reason code, no justifier. The orchestrator already
+  // owns the execution judgment; this only stops hiding the option that PRESERVES the out-of-set work.
   write_set_overflow: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set. Run: ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json.',
   write_set_granularity: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' wrote at a coarser granularity than its declared set allows. Narrow the write set (re-freeze) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
   lockfile_write: (ctx) =>
@@ -341,8 +349,21 @@ const OPERATOR_HINT_REGISTRY = {
   // --- evidence (#319/#359/#392) ---
   evidence_absent: (ctx) =>
     'No evidence file for ' + (ctx.nodeId || '<id>') + ' (' + (ctx.role || 'role') + '). Have the role agent write ' + (ctx.evidence_file || '.cache/<node-id>.md') + ' with the required tokens, then re-run record-evidence --verify.',
-  evidence_shape_failed: (ctx) =>
-    'Evidence for ' + (ctx.nodeId || '<id>') + ' is missing a required token' + (ctx.missingTokenClass ? ' (' + ctx.missingTokenClass + ')' : '') + '. Add the missing token(s) — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
+  evidence_shape_failed: (ctx) => {
+    const base = 'Evidence for ' + (ctx.nodeId || '<id>') + ' is missing a required token' + (ctx.missingTokenClass ? ' (' + ctx.missingTokenClass + ')' : '') + '. Add the missing token(s) — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.';
+    // `red_baseline` is the ONE token class the operator must NOT simply paste in. The receipt
+    // asserts the authored tests FAILED on THIS open's baseline; writing it after the fact restates
+    // the self-description the receipt exists to replace. This is exactly the shape a pre-custody
+    // in-flight artifact lands in (RED, no baseline receipt) — and its recovery is a re-run on a
+    // fresh baseline, never an edit of the artifact.
+    if (ctx.missingTokenClass === 'red_baseline') {
+      return base + ' Do NOT paste a baseline in after the fact — a RED nobody ran against this'
+        + ' baseline proves nothing. Re-run the node on a fresh baseline: ' + ADAPTIVE_NODE_SCRIPT
+        + ' reopen-node --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json, re-dispatch the'
+        + ' test author, and have it record `red_baseline:` from the RED run itself.';
+    }
+    return base;
+  },
   evidence_stale: (ctx) =>
     'Evidence for ' + (ctx.nodeId || '<id>') + ' carries a stale evidence-binding nonce (replayed from a prior open). Re-author the evidence with this open\'s nonce — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
   evidence_unbound: (ctx) =>
@@ -464,6 +485,49 @@ const OPERATOR_HINT_REGISTRY = {
       + 'Activate a replacement plan (/kaola-workflow-adapt) that gives each finding a writer'
       + ((ctx.owners && ctx.owners.length) ? ' (the open frontier spans ' + ctx.owners.join(', ') + ')' : '') + '.';
   },
+  // --- the ownership-unresolved replan, named by its ACTUAL cause ---
+  // A bare `repair_requires_replan` used to send the operator toward a whole re-plan epoch even when a
+  // one-line anchor change would have sufficed. Three distinguishable causes, three distinct next steps.
+  repair_ownership_unresolved: (ctx) => {
+    const d = (ctx && ctx.diagnosis) || {};
+    const kinds = Array.isArray(d.unroutable_anchor_kinds) ? d.unroutable_anchor_kinds : [];
+    const routable = Array.isArray(d.routable_anchor_kinds) ? d.routable_anchor_kinds : [];
+    const head = 'repair-node ' + (ctx.nodeId || '<id>') + ' cannot repair this attempt in place: ';
+    if (d.cause === 'anchor_kind_carries_no_path') {
+      return head + 'no ownership candidates — the finding\'s primary anchor kind ('
+        + kinds.join(', ') + ') carries no path, so no milestone surface or declared write set can claim it. '
+        + 'This is a REVIEWER-EVIDENCE defect, not a plan defect: re-anchor the blocking finding on a '
+        + 'path-bearing kind (' + routable.join(' | ') + ') and re-run the gate. A re-plan epoch would spend '
+        + 'a whole plan on a one-line anchor change.';
+    }
+    if (d.cause === 'no_node_declares_the_anchor_path') {
+      return head + 'no ownership candidates — the finding\'s anchors DO name paths, but no node declares '
+        + 'them and no milestone surface covers them. That is a genuine scope expansion: activate a '
+        + 'replacement plan (/kaola-workflow-adapt) that gives the finding a writer, or amend the owning '
+        + 'expansion point\'s surface (amend-surface) if the file belongs to a milestone already.';
+    }
+    return head + 'it is not the unique graph-maximal executed producer of this gate'
+      + ((Array.isArray(ctx.producer_slice) && ctx.producer_slice.length)
+        ? ' (the slice is ' + ctx.producer_slice.join(', ') + ')' : '')
+      + ((Array.isArray(d.ownership_candidates) && d.ownership_candidates.length)
+        ? ', and the findings are owned by ' + d.ownership_candidates.join(', ') : '')
+      + '. Re-run repair-node naming the finding\'s semantic owner, or activate a replacement plan.';
+  },
+  // The record-time twin of the hint above: refuse the unplaceable anchor BEFORE the receipt exists.
+  review_finding_anchor_unroutable: (ctx) => {
+    const kinds = Array.isArray(ctx.anchor_kinds) ? ctx.anchor_kinds : [];
+    const routable = Array.isArray(ctx.routable_anchor_kinds) ? ctx.routable_anchor_kinds : [];
+    // Worded off the derived gate EFFECT, not an outcome token: the same refusal is reachable from
+    // `changes_requested` on an approval gate and from `refuted` / `indeterminate` on an
+    // adversarial-verifier, and a hint naming only the approval spelling would misdescribe half of them.
+    return 'This change gate FAILED, carrying ' + ((ctx.unroutable_findings || []).length || 'one or more')
+      + ' blocking finding(s) whose primary anchor kind (' + (kinds.join(', ') || 'see anchor_kinds')
+      + ') carries no repository path, so no in-plan repair could ever place them — the attempt would '
+      + 'commit and then dead-end. Re-anchor each BLOCKING finding on a path-bearing kind ('
+      + (routable.join(' | ') || 'see routable_anchor_kinds') + ') and re-record the gate evidence. '
+      + 'An evidence_observation anchor stays legal as a secondary anchor, and on a non-blocking '
+      + '(deferred / out-of-scope / non-fix) finding.';
+  },
   dependent_producer_replay_required: (ctx) =>
     'The semantic owner ' + (ctx.semantic_owner || '<writer>') + ' is a NON-maximal upstream writer whose completed downstream writer(s)'
     + ((ctx.blocking_descendants && ctx.blocking_descendants.length) ? ' (' + ctx.blocking_descendants.join(', ') + ')' : '')
@@ -474,6 +538,18 @@ const OPERATOR_HINT_REGISTRY = {
     'A crashed open-ready left the running set in opening state. Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before opening more.',
   overlapping_write_sets: () =>
     'The write frontier members have overlapping declared sets — they cannot co-open as a lane group. The scheduler degrades to a serial open automatically.',
+  parallel_safe_indeterminate: () =>
+    'The disjointness prover (--parallel-safe) returned no verdict twice in a row — nothing was proven to overlap, the check itself did not complete. The scheduler fails closed to a serial open. Investigate the validator subprocess (a crash, an unreadable result, an oversized frontier) rather than treating this as a real overlap.',
+  seam_checkpoint_unattributable: (ctx) =>
+    'The parent worktree carries production change(s) (' + ((ctx.unattributed && ctx.unattributed.join(', ')) || 'see unattributed') + ') that NO closed write-capable node declared, so the serial→parallel seam checkpoint cannot vouch for them. Foreign bytes in the parent are an integrity signal: identify who wrote them (a stray edit, an escaped write), move them into a declared lane or revert them, then re-run open-ready.',
+  // The `commit` KEY's presence (not its truthiness) is the "HEAD advanced" signal: only the
+  // post-commit-fence halt sets it, and it may legitimately carry null if rev-parse could not resolve
+  // the new HEAD. Every other halt shape omits the key entirely.
+  seam_checkpoint_failed: (ctx) =>
+    'The serial→parallel seam checkpoint could not complete (' + (ctx.detail || 'see detail') + '). Nothing was co-opened and no serial degrade was substituted — the repair must positively prove success. '
+    + (Object.prototype.hasOwnProperty.call(ctx, 'commit')
+      ? 'HEAD HAS ADVANCED: the checkpoint commit ' + (ctx.commit || '(sha unresolved — see git log)') + ' already landed (' + ((ctx.committed && ctx.committed.join(', ')) || 'the attributed paths') + ') and was deliberately NOT rolled back — those paths were attributed to closed write-capable nodes, and the likeliest cause of this halt is a concurrent writer landing new bytes after the commit, which an auto-reset would destroy. Inspect the parent worktree for the NEW change the re-check tripped on (git status), attribute or remove it, then re-run open-ready — the landed checkpoint is idempotent and will not be re-made.'
+      : 'Nothing was committed and HEAD did not move. Inspect the parent worktree and the git state, resolve the failure, then re-run open-ready.'),
 
   // --- main() arg validation ---
   invalid_project: (ctx) =>
@@ -1775,6 +1851,25 @@ function buildReviewAnchorIndex(opts, context, candidateDigest, rawFindings, nod
   } };
 }
 
+// reviewRefusalDiagnostics — the WHITELIST of structured diagnosis fields a schema-2 review-validation
+// refusal is allowed to carry onto the close envelope. The close sites used to flatten every validator
+// refusal to `{reason, detail, missingTokenClass}`, so a typed refusal that had already computed the
+// operator's next step (which findings, which anchor kind, which kinds would work) arrived as a bare
+// token. A whitelist rather than a spread: the validator's OK return also carries the whole prepared
+// review (receipt, context, plan view), and spreading would make a refusal's shape depend on how far
+// validation happened to get. Absent fields are omitted, so every other refusal stays byte-identical.
+const REVIEW_REFUSAL_DIAGNOSTIC_FIELDS = Object.freeze([
+  'unroutable_findings', 'anchor_kinds', 'routable_anchor_kinds',
+]);
+function reviewRefusalDiagnostics(review) {
+  const out = {};
+  if (!review || typeof review !== 'object') return out;
+  for (const field of REVIEW_REFUSAL_DIAGNOSTIC_FIELDS) {
+    if (review[field] !== undefined) out[field] = review[field];
+  }
+  return out;
+}
+
 function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceContent) {
   const validator = require('./kaola-gitlab-workflow-plan-validator');
   if (reviewMetaValue(planContent, 'plan_schema_version') === null) {
@@ -1941,6 +2036,64 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
       return { ok: false, reason: 'review_changes_missing_findings' };
     }
   }
+  // A CHANGE GATE's BLOCKING findings must be ROUTABLE, and that is decided HERE — at record time —
+  // not discovered at repair time.
+  //
+  // THE DEAD END THIS CLOSES. Every in-plan repair route keys on the finding's primary-anchor PATH: the
+  // spine router places the finding inside an expansion point's declared surface (the local
+  // re-expansion that is the primary repair today), and the write-set router resolves the owning
+  // writer. An `evidence_observation` anchor carries NO path (see findingAnchorCarriesPath), so a
+  // blocking finding anchored that way places NOWHERE — `ownership_candidates` is [], the local route
+  // returns nothing, and `repair-node` degrades to `repair_requires_replan` even though the defect sits
+  // squarely inside one node's declared write set. By then the attempt is committed and unresolved, so
+  // `reopen-node` refuses `review_attempt_unresolved` and re-recording the gate refuses
+  // `evidence_generation_stale`: a closed cycle whose only exits are a re-plan epoch or a manual fix.
+  // Refusing the malformed anchor before the receipt exists costs one typed refusal the reviewer can
+  // fix in one line; admitting it costs an epoch.
+  //
+  // SCOPE — deliberately the NARROWEST predicate that closes the cycle:
+  //   - CHANGE GATES only. An investigation-mode adversarial gate produces no repair obligation
+  //     (deriveGateEffect returns 'none' there, never 'fail'), so the mode test is already folded in.
+  //   - GATE FAILURE only, read from the DERIVED gate effect — never from a role's outcome token.
+  //     `changes_requested` belongs to APPROVAL_OUTCOMES; an adversarial-verifier speaks
+  //     ADVERSARIAL_OUTCOMES, so keying on that literal made the predicate UNSATISFIABLE for the one
+  //     role whose change gate most often anchors on producer evidence — an AV `refuted` sailed
+  //     straight into the dead end this guard exists to close. `deriveGateEffect` is the single place
+  //     that maps (role, mode, outcome) → pass/fail/none, so reading it here makes the guard
+  //     ROLE-AGNOSTIC by construction: a future gate role with a fourth vocabulary is covered the day
+  //     its outcomes are added there, with no second token list to remember. For an approval role the
+  //     two predicates are EQUIVALENT at this point in the function (`approved` with open findings is
+  //     already refused above as `review_approval_has_findings`, so `approved` ⇒ zero blockers ⇒
+  //     'pass', and `changes_requested` ⇒ 'fail'), which is what keeps this a pure EXTENSION rather
+  //     than a behavior change for code/security/main-session gates.
+  //   - `indeterminate` IS included, deliberately. Its derived effect on a change gate is 'fail', so
+  //     it settles the attempt as a failure and carries the same repair obligation as `refuted`. That
+  //     does NOT re-open the trap the settlement invariant avoids: an honest abstention carries no
+  //     repair-responsible finding, so `repairResponsibleFindings` is empty and this guard never
+  //     fires — an absorbed minority replica still closes normally. The only thing refused is a
+  //     finding the reviewer DID author, whose anchor cannot be placed; fixing it is a one-line
+  //     re-anchor, never the fabrication of evidence for a defect nobody could determine.
+  //   - REPAIR-RESPONSIBLE findings only — the SAME `repairResponsibleFindings` population repair-node
+  //     partitions on, so exactly what is admitted here is what can be routed there. A deferred,
+  //     out-of-scope, or non-`fix` finding obliges nobody, so it may observe producer evidence freely.
+  //   - PRIMARY anchor only, matching computeFindingUid's scoping and the routers' own lookup.
+  // Nothing is removed from the reviewer's vocabulary: `evidence_observation` stays legal as a
+  // SECONDARY anchor, as the primary anchor of a non-blocking finding, and on an investigation gate.
+  //
+  // Computed ONCE and reused by the receipt below, so the effect the guard judged and the effect the
+  // receipt records can never be two different derivations of the same inputs.
+  const gateEffect = reviewSchema.deriveGateEffect(nodeInfo.role, gateMode, domainOutcome, openFindings.length);
+  if (gateEffect === 'fail') {
+    const unroutable = reviewSchema.repairResponsibleFindings(openFindings)
+      .filter(finding => !(finding.primary_anchor && finding.primary_anchor.path));
+    if (unroutable.length) {
+      return { ok: false, reason: 'review_finding_anchor_unroutable',
+        unroutable_findings: unroutable.map(finding => String(finding.uid)).sort(),
+        anchor_kinds: [...new Set(unroutable.map(finding =>
+          String((finding.primary_anchor && finding.primary_anchor.kind) || 'unknown')))].sort(),
+        routable_anchor_kinds: reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.slice() };
+    }
+  }
   const logicalGate = reviewLogicalGate(reviewNodes, nodeInfo);
   const receipt = {
     schema_version: 2,
@@ -1956,7 +2109,7 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
     candidate_digest: dispatch.candidate_digest,
     execution_status: 'complete',
     domain_outcome: domainOutcome,
-    gate_effect: reviewSchema.deriveGateEffect(nodeInfo.role, gateMode, domainOutcome, openFindings.length),
+    gate_effect: gateEffect,
     surface: String(nodeInfo.gateSurface || ''),
     findings: normalized.findings,
     resolutions: resolutions.resolutions,
@@ -2030,12 +2183,40 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
 
     const bindingLine = 'evidence-binding: ' + nodeId + ' ' + (nonce || '');
 
+    // State which primary-anchor kinds are ROUTABLE, the same way the outcome enum is already
+    // surfaced. The close-time gate refuses a BLOCKING finding whose primary anchor names no
+    // repository path, because no in-plan repair route can place it; a reviewer that learned this
+    // only at close had already spent the whole review. The routable set is read from the ONE
+    // derived constant the validator reads, so the two can never disagree. Kept — like the
+    // domain_outcome note — as a single `<!-- ... -->` line that is NOT column-0 anchored on a token
+    // key, so the hollow-seed and finding-parsing guards are unchanged.
+    const routableAnchorNote = () =>
+      '<!-- a BLOCKING finding (scope in_scope, action fix, status open) must use a '
+      + 'PATH-BEARING primary_anchor.kind — one of '
+      + reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.join(' | ')
+      + ' — so the repair transaction can place it in a milestone surface / write set; '
+      + 'evidence_observation carries no path and is admitted only as a secondary anchor or on a '
+      + 'non-blocking (deferred / out-of-scope / non-fix) finding -->\n';
+    // WHICH reviewers must be told. The rule binds every CHANGE GATE, but the note used to ride on
+    // the `finding_json|findings_none` token class — and an adversarial-verifier is never asked for
+    // one (its contract tokens are the claim/gate identity, not a findings key). It can still emit
+    // canonical `finding_json:` rows, which the close-time parser reads and the routability gate
+    // judges, so the one role whose change gate most naturally anchors on producer evidence was the
+    // only role never shown the anchor-kind rule. Render it for a change gate that carries no
+    // findings token class too, so the reviewer contract is stated to EVERY reviewer it binds.
+    // Investigation mode is excluded on purpose: it produces no repair obligation, so the rule does
+    // not apply there and printing it would be false guidance.
+    const changeGateWithoutFindingToken = reviewOpen && reviewOpen.review_gate === true
+      && reviewOpen.gate_mode === 'change_gate'
+      && !stubTokens.some(tokenClass => tokenClass.startsWith('finding_json'));
+
     const freshSeed = () => {
       let freshContent = bindingLine + '\n';
       for (const tokenClass of stubTokens) {
         const firstAlt = tokenClass.split('|')[0];
         if (tokenClass.includes('|')) {
           freshContent += '<!-- ' + tokenClass + ' -->\n';
+          if (tokenClass.startsWith('finding_json')) freshContent += routableAnchorNote();
           freshContent += firstAlt + ': \n';
         } else if (tokenClass === 'domain_outcome') {
           // #727: the reviewer-contract `domain_outcome` vocabulary is ROLE-KIND-dependent, and the
@@ -2052,6 +2233,7 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
           freshContent += tokenClass + ': \n';
         }
       }
+      if (changeGateWithoutFindingToken) freshContent += routableAnchorNote();
       for (const upId of upstreamStubIds) {
         freshContent += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
         freshContent += 'upstream_read: ' + upId + '\n';
@@ -2311,7 +2493,7 @@ function complianceRowExists(content, requirementCell, nodeId) {
   return false;
 }
 
-function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker) {
+function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker, mainSessionDirect, roleSubstitution) {
   const canonicalRequirement = role + ' (' + nodeId + ')';
   // Legacy bare cells (code-reviewer / security-reviewer, emitted before the canonical-cell
   // producer fix) remain READ/match-compatible so an already-emitted row still advances in
@@ -2321,7 +2503,24 @@ function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierM
   let evidenceSummary = evidenceContent
     ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
   if (barrierMarker) evidenceSummary += '; barrier: ' + barrierMarker;
-  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+  // A substituted node records WHAT ACTUALLY RAN and the basis that made it legal, so the divergence
+  // between the frozen `role` cell and the dispatched role is on the record by construction rather
+  // than by the orchestrator remembering to write a note.
+  if (roleSubstitution && roleSubstitution.to_role) {
+    evidenceSummary += '; role_substituted: ' + roleSubstitution.from_role + '→' +
+      roleSubstitution.to_role + ' (' + roleSubstitution.basis + ')';
+  }
+  // Execution mode is the orchestrator's per-unit judgment, so the row records what actually ran
+  // it: `main-session-direct` for the two NON-DELEGABLE roles — the `finalize` sink and a
+  // `main-session-gate` (the validator refuses a model on either; neither is ever dispatched as a
+  // subagent, so `subagent-invoked` would be a false delegation claim on a GATE) — and for ANY node
+  // the caller says it ran inline (`--main-session-direct`). A record, never a gate — the status is
+  // already in the validator's accepted vocabulary, nothing refuses on it, and the fail-closed
+  // anchors (the seeded evidence-binding nonce, `record-evidence --verify`, the exact-path write-set
+  // barrier) are author-agnostic and bind identically either way. Absent flag ⇒ `subagent-invoked`.
+  const complianceStatus =
+    (role === 'finalize' || role === 'main-session-gate' || mainSessionDirect === true)
+      ? 'main-session-direct' : 'subagent-invoked';
 
   // Schema-2 plans pre-seed the exact one-row-per-node compliance set at
   // freeze time.  Presence is therefore not proof of completion: advance the
@@ -2494,9 +2693,10 @@ function writeRunProgressMirror(mainRoot, project, planPath, readFile, op, mainR
 // ---------------------------------------------------------------------------
 // checkEvidenceShape — presence-only check for role-specific evidence tokens.
 //
-// tdd-guide:        needs BOTH 'RED' AND 'GREEN' (or 'n/a' reason).
-// implementer:      needs 'non_tdd_reason' AND one of {regression-green, build-green,
-//                   smoke-integration} (or 'n/a').
+// tdd-guide:        needs 'RED' AND a 'red_baseline' matching this open's recorded baseline
+//                   (or 'n/a'). 'GREEN' is retired — GREEN authority is gate-side.
+// implementer:      needs one of {tests-green, regression-green, build-green,
+//                   smoke-integration} (or 'n/a'). 'non_tdd_reason' is retired.
 // metric-optimizer: needs a NON-EMPTY value for each of 'metric_baseline', 'metric_final',
 //                   'iterations_used', 'regression-green' (the hollow-stub guard — token keys
 //                   alone are not enough) (or 'n/a').
@@ -2508,7 +2708,7 @@ function writeRunProgressMirror(mainRoot, project, planPath, readFile, op, mainR
 // @returns {{ ok:boolean, kind?:'absent'|'shape', missingTokenClass?:string, reason?:string, expected?:string[] }}
 //   #319: on failure, `kind` discriminates absent ('absent') vs malformed
 //   ('shape') evidence; `missingTokenClass` names the failed class
-//   ('non_tdd_reason' / 'change-type' / 'RED' / 'GREEN' / 'non-empty').
+//   ('change-type' / 'RED' / 'red_baseline' / 'non-empty').
 // ---------------------------------------------------------------------------
 function checkEvidenceShape(role, nodeId, evidence, opts) {
   const content = evidence || '';
@@ -2621,36 +2821,68 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     return { ok: true };
   }
 
+  // The TEST AUTHOR. It owns the test artifact and never writes production code, so its evidence
+  // proves ONE thing: the tests it authored FAIL on the recorded baseline. `GREEN` is retired from
+  // this contract — a passing suite is a verdict about the implementation, and the writer of the
+  // tests is not the grader of the code; GREEN authority sits gate-side (validation-vector receipts
+  // and the post-dominating review wall). In exchange RED gains its receipt: `red_baseline` must
+  // name the baseline the failing test was captured on, and the runtime checks it against THIS
+  // open's recorded barrier baseline (the nonce is that baseline's 12-char SHA prefix). That turns
+  // fail-on-baseline from a self-description into a checkable value, and makes a RED signature
+  // non-transferable across reopens. An EXTRA `GREEN` line is still tolerated (nothing forbids the
+  // retired token), but a legacy artifact carrying ONLY `RED` REFUSES at close: an in-flight node
+  // ALWAYS carries this open's nonce, so the receipt check always runs and a missing `red_baseline`
+  // fails closed (`evidence_shape_failed`, missingTokenClass `red_baseline`). That refusal is the
+  // rule, not a gap — grandfathering would close a node on a RED nobody can bind to a baseline.
+  // The recovery for an in-flight pre-rule artifact is `reopen-node` (fresh baseline) then re-run,
+  // and the operator hint names it. The no-expectedNonce skip reaches only a read with NO recorded
+  // barrier baseline (readNonce found no .cache/barrier-base-<id>) — the 3-arg unit callers and an
+  // offline read of a never-opened node — never a close, which already fails closed on a missing
+  // baseline (`no_barrier_base`). A legacy frozen PLAN is untouched by all of this: the custody wall
+  // is freeze-only, so revalidateForResume still resumes it byte-for-byte.
   if (role === 'tdd-guide') {
+    const expectedTokens = ['RED', 'red_baseline'];
     if (!content) {
-      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: expectedTokens };
     }
-    // The open-time seed contains empty RED:/GREEN: keys and comments naming both tokens. Require a
-    // non-empty column-0 value so a seed-only file can never satisfy --verify or close.
-    const hasRed   = /^RED:[ \t]*(\S.*)$/m.test(content);
-    const hasGreen = /^GREEN:[ \t]*(\S.*)$/m.test(content);
+    // The open-time seed contains empty RED:/red_baseline: keys and comments naming both tokens.
+    // Require a non-empty column-0 value so a seed-only file can never satisfy --verify or close.
+    const hasRed = /^RED:[ \t]*(\S.*)$/m.test(content);
     if (!hasRed) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: expectedTokens };
     }
-    if (!hasGreen) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'GREEN', reason: 'tdd-guide ' + nodeId + ' evidence missing GREEN token', expected: ['RED', 'GREEN'] };
+    if (opts.expectedNonce) {
+      const bm = content.match(/^red_baseline:[ \t]*(\S+)[ \t]*$/m);
+      if (!bm) {
+        return { ok: false, kind: 'shape', missingTokenClass: 'red_baseline',
+          reason: 'tdd-guide ' + nodeId + ' evidence missing the column-0 `red_baseline: <baseline-sha>` receipt — RED is bound to the baseline it was captured on, not asserted',
+          expected: expectedTokens };
+      }
+      if (!String(bm[1]).startsWith(opts.expectedNonce)) {
+        return { ok: false, kind: 'shape', missingTokenClass: 'red_baseline',
+          reason: 'tdd-guide ' + nodeId + ' red_baseline "' + bm[1] + '" is not this open\'s recorded baseline (expected a sha beginning "' + opts.expectedNonce + '") — a RED signature captured on another baseline proves nothing about this one',
+          expected: ['red_baseline: ' + opts.expectedNonce + '…'] };
+      }
     }
     return { ok: true };
   }
 
+  // The UNIVERSAL implementing role. It takes over behavioral logic and keeps full read+execute
+  // access to the tests (custody governs WRITE, never read or run), so its evidence records the
+  // verification tier it actually reached — `tests-green` for behavioral work (LOCAL working
+  // evidence; the authoritative verdict is gate-side), or one of the three non-behavioral tiers.
+  // `non_tdd_reason` is retired with the test-first/no-test dichotomy that justified it; an old
+  // artifact still carrying it closes unchanged, so a legacy in-flight node is tolerated on read.
   if (role === 'implementer') {
+    const expectedTokens = ['tests-green|regression-green|build-green|smoke-integration'];
     if (!content) {
-      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: expectedTokens };
     }
-    // The open-time seed contains empty keys and a comment listing the alternation. Require actual
-    // non-empty column-0 values so encrypted-return recovery cannot accept untouched scaffolding.
-    const hasReason = /^non_tdd_reason:[ \t]*(\S.*)$/m.test(content);
-    const hasChangeType = /^(?:regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
-    if (!hasReason) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'non_tdd_reason', reason: 'implementer ' + nodeId + ' evidence missing non_tdd_reason', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
-    }
+    // The open-time seed contains an empty key and a comment listing the alternation. Require an
+    // actual non-empty column-0 value so encrypted-return recovery cannot accept untouched scaffolding.
+    const hasChangeType = /^(?:tests-green|regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
     if (!hasChangeType) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing change-type token', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing verification-tier token', expected: expectedTokens };
     }
     return { ok: true };
   }
@@ -2856,10 +3088,35 @@ function readContextPacket(planPath, readFile) {
   } catch (_) { return null; }
 }
 
+// Read the ACTIVE role substitution for the node being carded. Best-effort and fail-soft by design:
+// an absent/unreadable record means no substitution, so a card built without a project on disk (the
+// unit-test path) is byte-identical to one built before substitution existed. The record is only
+// honored when its `from_role` still matches the frozen role — a plan whose role cell no longer
+// matches what was substituted from is stale evidence, and silently redirecting on it would be the
+// exact frozen-artifact/execution divergence this channel exists to keep visible.
+function resolveRoleSubstitution(ctx, nodeInfo) {
+  if (!nodeInfo || !nodeInfo.id) return null;
+  if (ctx && ctx.role_substitution) return ctx.role_substitution;
+  const planPath = ctx && ctx.planPath;
+  if (!planPath) return null;
+  try {
+    const fsMod = require('fs');
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    const row = activeRoleSubstitution(cacheDir, (p) => fsMod.readFileSync(p, 'utf8'), nodeInfo.id);
+    if (row && row.from_role === nodeInfo.role && row.to_role) return row;
+  } catch (_) { /* no record ⇒ no substitution */ }
+  return null;
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
   const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
   const codexTaskName = codexTaskNameForNode(nodeInfo);
+  // A recorded role substitution redirects the DISPATCH TARGET only. The plan's `role` cell is what
+  // was frozen and stays the node's identity everywhere else (model tier still resolves from the
+  // plan's own `model` column, so a substitution can never lower a floor). Conditionally attached
+  // like goal_line/leg_path: with nothing on record the card stays byte-identical to before.
+  const substitution = resolveRoleSubstitution(ctx, nodeInfo);
   const d = {
     node_id:            nodeInfo.id,
     role:               nodeInfo.role,
@@ -2871,7 +3128,7 @@ function buildDispatch(nodeInfo, context) {
     required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
-    agent_type:         nodeInfo.role,
+    agent_type:         substitution ? substitution.to_role : nodeInfo.role,
     codex_dispatch_mode: codexDispatchMode,
     codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model, nodeInfo.codex_session_proof || ctx.session_proof),
@@ -2917,6 +3174,14 @@ function buildDispatch(nodeInfo, context) {
   // override fields still state the intentional null/unresolved posture explicitly.
   const nodeModelDisplay = modelDisplay(nodeInfo.model);
   if (nodeModelDisplay) d.model_display = nodeModelDisplay;
+  // A substitution states BOTH roles on the card: what to dispatch (agent_type, above) and what the
+  // frozen plan says (agent_type_frozen). Naming only the substitute would hide the divergence the
+  // record exists to make visible.
+  if (substitution) {
+    d.agent_type_frozen = nodeInfo.role;
+    d.role_substituted = true;
+    d.role_substitution_basis = substitution.basis;
+  }
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
   }
@@ -3555,7 +3820,39 @@ function findingOwnershipSummary(attempt, nodeId) {
     unownedBlockingFindingIds, ambiguousBlockingFindingIds, foreignOwnedBlockingFindingIds,
     spansForeignWriters,
     ownsWholeBlockingFrontier: blockingFindings.length > 0 && !spansForeignWriters,
+    unroutableAnchorKinds: unroutableAnchorKindsOf(attempt),
   };
+}
+
+// unroutableAnchorKindsOf — WHY ownership came back empty, in the finding's own vocabulary. Joins the
+// attempt's still-open route rows that resolved to NO writer against their canonical finding records
+// (by uid — the SAME join buildRepairBrief performs) and reports the distinct primary-anchor kinds that
+// carry no repository path. This is the difference between two situations a bare
+// `repair_requires_replan` used to conflate:
+//   - kinds returned  ⇒ the anchor STRUCTURALLY cannot be placed; the reviewer's evidence is the fix,
+//                       and a re-plan epoch would be spent on a one-line anchor change.
+//   - kinds empty     ⇒ the anchors DO carry paths but no node declares them (a genuine scope
+//                       expansion), which really is a plan-shape problem.
+// PURE, total, never throws — it only ever decorates a refusal that is already decided.
+function unroutableAnchorKindsOf(attempt) {
+  try {
+    const canonicalByUid = new Map();
+    for (const finding of (Array.isArray(attempt && attempt.findings) ? attempt.findings : [])) {
+      if (!finding || typeof finding !== 'object') continue;
+      const key = finding.uid != null ? String(finding.uid)
+        : (finding.id != null ? String(finding.id) : null);
+      if (key != null && !canonicalByUid.has(key)) canonicalByUid.set(key, finding);
+    }
+    const kinds = new Set();
+    for (const row of stillOpenRouteCandidates(attempt)) {
+      if (Array.isArray(row.ownership_candidates) && row.ownership_candidates.length) continue;
+      const uid = String(row.finding_id != null ? row.finding_id : (row.id != null ? row.id : ''));
+      const anchor = (canonicalByUid.get(uid) || {}).primary_anchor;
+      const kind = anchor && anchor.kind ? String(anchor.kind) : null;
+      if (kind && !reviewSchema.findingAnchorCarriesPath(kind)) kinds.add(kind);
+    }
+    return Array.from(kinds).sort();
+  } catch (_) { return []; }
 }
 
 // ---------------------------------------------------------------------------
@@ -5588,7 +5885,8 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
       return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
     }
     if (closed.changed) plan = closed.content;
-    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent);
+    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect,
+      activeRoleSubstitution(path.join(path.dirname(opts.planPath), '.cache'), opts.readFile, ctx.nodeInfo.id));
     opts.writeFile(opts.planPath, plan);
     appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
     removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
@@ -5678,7 +5976,8 @@ function prepareReviewClose(opts, ctx) {
         const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
         if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
         if (closed.changed) plan = closed.content;
-        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent);
+        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect,
+      activeRoleSubstitution(path.join(path.dirname(opts.planPath), '.cache'), opts.readFile, ctx.nodeInfo.id));
         // Plan/compliance first, then replay-safe sidecars, then running-set removal. A crash after
         // any prefix is completed by the unchanged retry without duplicating durable evidence.
         opts.writeFile(opts.planPath, plan);
@@ -6576,6 +6875,8 @@ function runOpenNext(opts) {
     ...deriveDispatchChannel(planContent, targetNode, project),
     // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
     context_packet: readContextPacket(planPath, readFile),
+    // Lets the card resolve a recorded role substitution; absent record ⇒ card byte-unchanged.
+    planPath,
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -6874,7 +7175,8 @@ function runCloseAndOpenNext(opts) {
     : { ok: true, review_gate: false };
   if (!schema2Review.ok) {
     return { result: 'refuse', reason: schema2Review.reason, detail: schema2Review.detail || null,
-      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role };
+      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
+      ...reviewRefusalDiagnostics(schema2Review) };
   }
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, {
     expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes, reviewV2: schema2Review,
@@ -6998,7 +7300,8 @@ function runCloseAndOpenNext(opts) {
     currentPlan = closeResult.content;
   }
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
 
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
@@ -7238,6 +7541,8 @@ function runCloseAndOpenNext(opts) {
     ...deriveDispatchChannel(planForAdvance, nextNode, project),
     // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
     context_packet: readContextPacket(planPath, readFile),
+    // Lets the card resolve a recorded role substitution; absent record ⇒ card byte-unchanged.
+    planPath,
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -7456,7 +7761,7 @@ function removeDurableConsentHalt(planContent) {
 // ---------------------------------------------------------------------------
 // runClearHalt (#360) — the script-owned inverse of write-halt. Removes the ledger
 // `consent_halt: pending` marker AND the matching `escalated_to_full` state marker(s) in ONE
-// typed transaction, replacing the prior two-file PROSE lockstep (contractor-driven) that ADR
+// typed transaction, replacing the prior two-file PROSE lockstep (agent-driven) that ADR
 // 0004/0005 eliminated elsewhere. Typed refusal with ZERO mutation when no durable halt is present.
 // ---------------------------------------------------------------------------
 // hasEscalatedMarker (#391a) — true when workflow-state.md carries a durable `escalated_to_full:`
@@ -8007,6 +8312,19 @@ function runRevertOverflow(opts) {
   const barrierRoot = getRoot();
 
   // (2) Restore each outOfAllow path to its baseline state.
+  //
+  // KNOWN GAP, recorded where it bites rather than filed: `git checkout <baseSha> -- <path>`
+  // cannot restore a path that did not exist at baseSha. A NEWLY-CREATED undeclared file has no
+  // blob at the baseline, so git exits non-zero and the whole revert refuses `git_checkout_failed`
+  // — including for the siblings that would have reverted cleanly, since the paths are passed in
+  // one invocation. The operator is then holding an overflow this primitive cannot clear.
+  //
+  // This matters more than it reads. Since test writes became attributable, newly-created files
+  // are the DOMINANT overflow class, so the discard primitive fails on exactly the case it is now
+  // most often reached for. The preserve primitive (`amend-surface`) is the working recovery for
+  // companion work owned by a discharged milestone, which is why the `write_set_overflow` hint
+  // names both. A correct fix here would partition outOfAllow into paths present at baseSha
+  // (checkout) and paths absent from it (delete), and report the two sets separately.
   const revertedPaths = [];
   if (gitCheckoutSeam) {
     const r = gitCheckoutSeam(barrierRoot, baseSha, outOfAllow);
@@ -8447,6 +8765,32 @@ function runRepairNodeCore(opts) {
       // ownership is unresolvable (anchor-less findings / a pre-fix journal) so it never falsely accuses a
       // maximal writer that simply has no routable owner — those defer to the unchanged proof below.
       const own = findingOwnershipSummary(repairAttempt, nodeId);
+      // A BARE `repair_requires_replan` is a token, not a diagnosis: it reads as "this needs a re-plan
+      // epoch" whether the cause is a structurally unplaceable anchor (a one-line reviewer fix) or a
+      // genuine multi-writer / scope-expansion frontier (a real plan-shape problem). Decorate the two
+      // bare arms below with an `ownership_diagnosis` + an `operator_hint` that names the ACTUAL cause.
+      //
+      // DELIBERATELY NOT a `reason` field. `reason` is lifted verbatim into the digest-bound
+      // `replan-source.json` authority payload, so typing it here would change a committed transport
+      // record to carry an operator-diagnostic string — a semantic widening of an authority artifact for
+      // a purely human-facing benefit. `operator_hint` and the diagnosis are envelope-only (the payload
+      // is built from an explicit key list), so this stays additive and byte-neutral on that seam.
+      const bareReplan = () => {
+        const kinds = own.unroutableAnchorKinds;
+        const diagnosis = {
+          cause: !own.anyOwned
+            ? (kinds.length ? 'anchor_kind_carries_no_path' : 'no_node_declares_the_anchor_path')
+            : 'writer_not_graph_maximal',
+          unowned_findings: own.unownedBlockingFindingIds.slice(),
+          unroutable_anchor_kinds: kinds.slice(),
+          routable_anchor_kinds: reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.slice(),
+          ownership_candidates: own.ownersUnionSorted.slice(),
+        };
+        return { result: 'repair_requires_replan', attempt_id: attemptId,
+          producer_slice: proof.producer_slice, ownership_diagnosis: diagnosis,
+          operator_hint: getOperatorHint('repair_ownership_unresolved',
+            { nodeId, diagnosis, producer_slice: proof.producer_slice }) };
+      };
       if (!proof.ok) {
         // nodeId is NOT the unique graph-maximal executed producer (the #682/#684 antichain refusal). When
         // the operator named the true SEMANTIC OWNER instead — a non-maximal upstream writer that UNIQUELY
@@ -8487,10 +8831,10 @@ function runRepairNodeCore(opts) {
                   { semantic_owner: nodeId, blocking_descendants: blocking }) };
             }
           } else {
-            return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
+            return bareReplan();
           }
         } else {
-          return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
+          return bareReplan();
         }
       }
       // proof.ok — nodeId is graph-maximal. When ownership is RESOLVABLE (≥1 open finding routed to a
@@ -9842,6 +10186,50 @@ function laneWriteUnion(writeNodes) {
 }
 
 // ---------------------------------------------------------------------------
+// classifyParallelSafeVerdict (#804 D1) — the ONE classifier BOTH `--parallel-safe` call sites
+// (tryFormLaneGroup, selectSpeculativeWriteGroup) read, so the two can never drift again.
+//   'ok'            exitCode 0 + result 'ok' — a delivered, clean disjointness verdict.
+//   'overlap'       a non-ok verdict carrying a WELL-FORMED `overlapping` array (even empty) — a real
+//                   overlap REPORT. This is the one serializer the doctrine accepts without question
+//                   (S2 in present-tense, checkable form: the prover named the colliding pair).
+//   'indeterminate' a non-ok verdict WITHOUT one (subprocess crash, unparseable JSON, an unreachable
+//                   non-ok shape that omits the field). NOBODY proved an overlap — the prover never
+//                   delivered a verdict at all, so labelling it `overlapping_write_sets` would satisfy
+//                   the doctrine's evidence bar with a LABEL instead of evidence.
+// ---------------------------------------------------------------------------
+function classifyParallelSafeVerdict(ps) {
+  if (ps && ps.exitCode === 0 && ps.result === 'ok') return { kind: 'ok', overlapping: [] };
+  if (ps && Array.isArray(ps.overlapping)) return { kind: 'overlap', overlapping: ps.overlapping };
+  return { kind: 'indeterminate', overlapping: [] };
+}
+
+// ---------------------------------------------------------------------------
+// probeParallelSafe (#804 D2) — run the validator's `--parallel-safe` probe and classify it, with
+// EXACTLY ONE bounded re-probe on an indeterminate verdict. The probe is READ-ONLY and IDEMPOTENT
+// (it reads the frozen plan and answers a pure question about declared sets), and the plausible cause
+// class of an indeterminate verdict is transient — a signal, ENOBUFS on a huge frontier, a scheduler
+// hiccup — so re-asking once is the cheapest repair of a REMOVABLE blocker. TWO OUTCOMES, NO RETRY
+// LOOP: a second indeterminate is final and fails CLOSED at the caller, labelled.
+// A PROVEN overlap (or a clean ok) NEVER re-probes: the prover delivered a verdict, and re-asking a
+// settled question is pure waste.
+// Fail-closed stays fail-closed: an indeterminate verdict never co-opens. The doctrine's "uncertain
+// overlap co-opens under the retained net" governs a DELIVERED verdict about unresolvable write-set
+// entries; a crashed prover delivered no verdict about anything, including the retained net.
+// @returns { kind:'ok'|'overlap'|'indeterminate', overlapping:Array, probes:1|2 }
+// ---------------------------------------------------------------------------
+function probeParallelSafe(ids, planPath, shell, writeOverlapConsent) {
+  const vArgs = [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json'];
+  if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
+  let v = classifyParallelSafeVerdict(shell(validatorPath, vArgs));
+  let probes = 1;
+  if (v.kind === 'indeterminate') {
+    v = classifyParallelSafeVerdict(shell(validatorPath, vArgs));
+    probes = 2;
+  }
+  return { kind: v.kind, overlapping: v.overlapping, probes };
+}
+
+// ---------------------------------------------------------------------------
 // tryFormLaneGroup (#437 D-419 P2 §1.3) — attempt a co-open lane group from the
 // write frontier. The frontier is already a next-action ready antichain; the
 // validator's `--parallel-safe` flag re-checks pairwise disjointness AUTHORITATIVELY
@@ -9860,16 +10248,22 @@ function laneWriteUnion(writeNodes) {
 // overrides that.
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
-//        | { ok:false, reason:'overlapping_write_sets', overlapping? }
+//        | { ok:false, reason:'overlapping_write_sets'|'parallel_safe_indeterminate', overlapping, probes }
 // ---------------------------------------------------------------------------
 function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
   const ids = writeNodes.map(n => n.id);
   if (ids.length < 2) return { ok: false, reason: 'too_few_write_nodes' };
-  const vArgs = [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json'];
-  if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
-  const ps = shell(validatorPath, vArgs);
-  if (!(ps.exitCode === 0 && ps.result === 'ok')) {
-    return { ok: false, reason: 'overlapping_write_sets', overlapping: ps.overlapping || [] };
+  const v = probeParallelSafe(ids, planPath, shell, writeOverlapConsent);
+  if (v.kind !== 'ok') {
+    return {
+      ok: false,
+      // #804 (D1/D3): the classified cause, never a laundered `overlapping_write_sets` for a prover that
+      // delivered no verdict at all. A PROVEN overlap keeps the legitimate serializer label; a crashed /
+      // garbled prover is `parallel_safe_indeterminate` (fail-CLOSED all the same — see probeParallelSafe).
+      reason: v.kind === 'overlap' ? 'overlapping_write_sets' : 'parallel_safe_indeterminate',
+      overlapping: v.overlapping,
+      probes: v.probes,
+    };
   }
   const sorted = ids.slice().sort();
   return {
@@ -9877,6 +10271,7 @@ function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
     members: sorted,
     group_id: laneGroupId(ids),
     write_union: laneWriteUnion(writeNodes),
+    probes: v.probes,
   };
 }
 
@@ -9903,49 +10298,286 @@ function parentCarriesProductionDirt(planPath, project, shell) {
   return fence.exitCode !== 0 || fence.result !== 'pass';
 }
 
-// #641 (D-641-01) R2b: the consent-tier LEGLESS-co-open decision. Over a DIRTY parent, R1's leg path is
-// unsound — a leg branches off HEAD and would miss the uncommitted serial-sibling context, silently
-// degrading the writer's inputs (accuracy loss, precedence #1). The only sound co-open keeps the writer
-// LEGLESS in the parent (so it sees that context), which means the closed-work-observation invariant must
-// hold CONTRACTUALLY on the READ side. Returns the single highest-priority writer node to co-open when:
-//   (i)  EVERY live read is a freeze-validated `observes: scratch` adversarial-verifier — its verdict is
-//        rendered from .cache evidence of closed nodes + scratch, NEVER the worktree tree/diff; AND
-//   (ii) that writer's declared set is scratch-observable-safe (scratchObservableWriteSet — the docs
-//        allowband minus #547 test-consumed prose, or the writer's own .cache evidence).
-// Returns null otherwise ⇒ the caller's byte-identical parent_dirty hold. Re-reads the FROZEN plan for the
-// reads' role + observes annotation (the running-set entry carries neither); fail-closed on any parse miss.
-function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile) {
-  let parseNodes, scratchObservableWriteSet, parseValidationTestConsumes;
-  try { ({ parseNodes, scratchObservableWriteSet, parseValidationTestConsumes } = require('./kaola-gitlab-workflow-plan-validator')); } catch (_) { return null; }
-  if (typeof parseNodes !== 'function' || typeof scratchObservableWriteSet !== 'function') return null;
-  // A live main-session-gate (kind:'gate') is a live observer, not a scratch reader — hold the legless
-  // co-open while a gate is running (its verdict window must not span a co-running writer's uncommitted
-  // bytes). Defensive fail-closed so the co-open precondition independently sees the gate.
-  if ((liveNodes || []).some(n => n.kind === 'gate')) return null;
-  let planNodes, planContent;
-  try { planContent = readFile(planPath); planNodes = parseNodes(planContent); } catch (_) { return null; }
+// liveReadsAllScratchGates — the READ-side precondition for attempting the seam checkpoint at the
+// write-awaits-drain seam. TRUE iff the running set is non-empty and EVERY live MEMBER is a
+// freeze-declared `observes: scratch` adversarial-verifier read: such a gate renders its verdict from
+// .cache evidence of closed nodes + scratch, NEVER the worktree tree or refs. `git commit` is
+// tree-content-NEUTRAL (it touches the index + refs, never working-tree bytes), so checkpointing under
+// exactly these observers changes no live observer's inputs.
+// MEMBER, NOT READ. The quantifier ranges over the WHOLE running set, not over its read subset. An
+// earlier shape filtered to kind:'read' and separately rejected kind:'gate', which made a live
+// kind:'write' member INVISIBLE — [{kind:'read'},{kind:'write'}] answered TRUE, i.e. the checkpoint
+// could sweep a LIVE writer's still-in-flight bytes into a commit attributed to CLOSED nodes. Any
+// member that is not a read (a live writer, a main-session gate, an unrecognized/absent kind) fails
+// closed here. The callers' own earlier guards make some of those unreachable today; this function is
+// the defensive floor its own contract promises, so it must hold on its own.
+// Re-reads the FROZEN plan for the reads' role + observes annotation (the running-set entry carries
+// neither); fail-closed on any parse miss.
+function liveReadsAllScratchGates(liveNodes, planPath, readFile) {
+  let parseNodes;
+  try { ({ parseNodes } = require('./kaola-gitlab-workflow-plan-validator')); } catch (_) { return false; }
+  if (typeof parseNodes !== 'function') return false;
+  const live = liveNodes || [];
+  if (!live.length) return false;
+  if (live.some(n => !n || n.kind !== 'read')) return false;
+  let planNodes;
+  try { planNodes = parseNodes(readFile(planPath)); } catch (_) { return false; }
   const byId = new Map(planNodes.map(n => [n.id, n]));
-  const liveReads = (liveNodes || []).filter(n => n.kind === 'read');
-  // (i) every live read must be a freeze-declared observes:scratch adversarial-verifier. No live reads,
-  // or any non-scratch reader (a full-diff observer), fails closed — no legless co-open.
-  const allScratchGates = liveReads.length > 0 && liveReads.every(n => {
+  return live.every(n => {
     const pn = byId.get(n.id);
     return !!(pn && pn.role === 'adversarial-verifier' && pn.observes === 'scratch');
   });
-  if (!allScratchGates) return null;
-  // (ii) the highest-priority writer (the frontier is longest-path-to-sink ordered) must be
-  // scratch-observable-safe over its OWN declared set.
-  const writer = writeNodes[0];
-  if (!writer) return null;
-  const pn = byId.get(writer.id);
-  let ws = (pn && pn.writeSet) ? pn.writeSet : null;
-  if (!ws) { try { ws = require('./kaola-gitlab-workflow-classifier').parseWriteSetCell(writer.declared_write_set); } catch (_) { ws = []; } }
-  // Widen the scratch-observable predicate with the plan's validation_test_consumes so a fork declaring a
-  // verdict-affecting prose file (e.g. a custom guide) makes that file observation-VISIBLE — a writer of
-  // it is then NOT scratch-observable-safe and stays serial (never a legless co-open over a dirty parent).
-  const testConsumedExtra = (typeof parseValidationTestConsumes === 'function') ? parseValidationTestConsumes(planContent) : [];
-  if (!scratchObservableWriteSet(ws, { project, ownerNodeId: writer.id, testConsumedExtra })) return null;
-  return writer;
+}
+
+// ---------------------------------------------------------------------------
+// SEAM_WRITE_CAPABLE_ROLES — the roles a plan may LEGALLY declare a write set on, i.e. the roles whose
+// declared set is a reviewed production lane rather than an out-of-grammar annotation. This is the
+// validator's own authoring rule restated: freezing refuses `read-only role <r> (node <id>) declares a
+// write set` for every role outside this set (the sink role is the one non-WRITE_ROLES exception the
+// same rule carves out). The validator does not export the set, so `test-adaptive-node.js` pins this
+// list against the validator's source — the duplication is mutation-proven, never silent.
+// Used ONLY by seamCheckpointAttribution: attribution is the gate on a primitive that COMMITS, so it
+// takes the positive (fail-closed) form — an unknown or absent role is NOT write-capable.
+const SEAM_WRITE_CAPABLE_ROLES = new Set([
+  'tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer',
+  'implementer', 'synthesizer', 'metric-optimizer',
+  'finalize',
+]);
+
+// ---------------------------------------------------------------------------
+// seamCheckpointAttribution (#802 D1 step 2) — the ATTRIBUTION proof. Every dirty path the fence
+// reported must fall inside the union of the declared write sets of the ledger's CLOSED
+// (status `complete`) write-capable rows. This is PROVABLE, not heuristic: each of those nodes passed
+// its OWN per-node barrier at close, so its declared writes are already proven in-lane and reviewed.
+// WRITE-CAPABLE IS CHECKED, NOT ASSUMED. A `complete` row with a non-empty declared set is not enough:
+// the row's ROLE must be one the grammar lets declare a write set (SEAM_WRITE_CAPABLE_ROLES). The
+// freeze validator already refuses a read-only role that declares one, but this function is reachable
+// over any plan text whose plan_hash matches (a recorded expansion unit, a hand-repaired plan, a future
+// caller), and it is the gate on a COMMIT — so it enforces its own stated contract rather than
+// inheriting it from an upstream check.
+// Membership is EXACT-path, mirroring the barrier's own `declared.has(p)` rule (a directory/glob-shaped
+// declared token attributes nothing — the strictly fail-closed direction), over the EXECUTION node view
+// (spine + recorded expansion units), which is the same view barrierCheck ranges over.
+// EPOCH LINEAGE: under a schema-2 CHILD epoch the parent epochs' closed rows count too (their
+// uncommitted production work is still in this worktree — replan is claim-preserving). The lineage is
+// resolved through the validator's ONE verified walker; an applicable-but-unresolvable lineage returns
+// { ok:false } so the caller halts rather than MISattributes.
+// @returns { ok:true, union:Set<string>, nodeIds:string[] } | { ok:false, reason:string }
+// ---------------------------------------------------------------------------
+function seamCheckpointAttribution(planContent, planPath) {
+  const statuses = readLedgerStatuses(planContent);
+  const nodes = parseNodesFromContent(planContent);
+  const union = new Set();
+  const nodeIds = [];
+  for (const n of nodes) {
+    if (String(statuses[n.id] || '').toLowerCase() !== 'complete') continue;
+    if (!SEAM_WRITE_CAPABLE_ROLES.has(String((n && n.role) || '').trim())) continue;
+    const paths = nodeDeclaredPaths(n);
+    if (!paths.size) continue;
+    nodeIds.push(n.id);
+    for (const p of paths) union.add(p);
+  }
+  let pv = null;
+  try { pv = require('./kaola-gitlab-workflow-plan-validator'); } catch (_) { pv = null; }
+  if (pv && typeof pv.resolveEpochLineagePlans === 'function') {
+    let lineage;
+    try { lineage = pv.resolveEpochLineagePlans(planContent, planPath); }
+    catch (e) { return { ok: false, reason: 'epoch_lineage_unreadable' }; }
+    if (lineage && lineage.applicable) {
+      if (!lineage.ok) return { ok: false, reason: 'epoch_lineage_' + (lineage.reason || 'unverified') };
+      for (const lp of (lineage.lineagePlans || [])) {
+        for (const n of (lp.nodes || [])) {
+          if (!(lp.ledger && String(lp.ledger.get(n.id) || '').toLowerCase() === 'complete')) continue;
+          // Same write-capability wall as the child rows above — a sealed ancestor epoch's read-only
+          // row may not widen the attributed set either.
+          if (!SEAM_WRITE_CAPABLE_ROLES.has(String((n && n.role) || '').trim())) continue;
+          const paths = nodeDeclaredPaths(n);
+          if (!paths.size) continue;
+          nodeIds.push(n.id);
+          for (const p of paths) union.add(p);
+        }
+      }
+    }
+  }
+  return { ok: true, union, nodeIds };
+}
+
+// ---------------------------------------------------------------------------
+// SCHEDULER_COMMIT_CONFIG (#802) — the `-c` overrides EVERY scheduler-owned commit carries (the seam
+// checkpoint, the `kw-stub` evidence-stub commit, the `kw-leg` capture, the `kw-synth` merge). One
+// constant so the four sites cannot drift.
+//
+// THE CRUX — attribution is overridden, CONTENT INSPECTION IS NOT:
+//   * IDENTITY IS INJECTED (`user.email` / `user.name`). These commits are the SCHEDULER's, not the
+//     user's, so the scheduler names itself rather than inheriting an ambient identity — and a consumer
+//     repo with no `user.email`/`user.name` configured at all must not hard-refuse at a scheduling seam.
+//   * SIGNING IS DISABLED (`commit.gpgsign=false`). A signature asserts AUTHORSHIP ATTRIBUTION; it says
+//     nothing about the bytes. A missing or unusable key is therefore an attribution fact, not a content
+//     fact, and must never halt a run — and the scheduler must not sign as the human author regardless.
+//   * HOOKS ARE **NOT** BYPASSED — there is deliberately NO `--no-verify` here, at any of the four sites.
+//     A `pre-commit` / `commit-msg` hook INSPECTS CONTENT (a consumer's secret scanner, license gate,
+//     lint or policy check), and the seam checkpoint is the ONE scheduler commit that lands USER
+//     PRODUCTION SOURCE. Bypassing the hook would disarm that inspection on exactly the bytes it exists
+//     to see — and permanently, since the bytes enter history where the finalize-time commit (which does
+//     run hooks) never re-examines them. A veto is HONORED: the seam DEGRADES to the known-good serial
+//     path under a typed, visible label (`seam_checkpoint_declined`), never ignoring the hook and never
+//     wedging the run.
+// ---------------------------------------------------------------------------
+const SCHEDULER_COMMIT_CONFIG = [
+  '-c', 'user.email=kaola-workflow@local',
+  '-c', 'user.name=kaola-workflow',
+  '-c', 'commit.gpgsign=false',
+];
+
+// ---------------------------------------------------------------------------
+// runSeamCheckpoint (#802 D1) — the orchestrator-owned, attribution-proven commit at the
+// serial→parallel seam.
+//
+// PRINCIPLE: a precondition the orchestrator itself created is a REPAIR OBLIGATION, not a serializer.
+// The parent's production dirt here is the guaranteed product of the workflow's own finalize-owned-
+// commit policy — it is none of the three named serializers (S1 data dependency / S2 shared
+// irreversible effect / S3 failed environment probe), so serial-degrading over it lets a REMOVABLE
+// blocker impersonate evidence. Fail-closed-to-serial is only virtuous while no sound repair exists.
+//
+// The five steps, in order, each fail-closed:
+//   1 CLASSIFY   re-run the SAME `--parent-clean-check --json` fence and take its `dirty` array
+//                VERBATIM (the fence already classifies against barrierExemptPath with
+//                --untracked-files=all, and already normalizes renames to the NEW path and unquotes
+//                git-quoted paths) — no second classifier, no producer/consumer drift.
+//   2 ATTRIBUTE  every dirty path must be vouched for by a CLOSED write-capable row
+//                (seamCheckpointAttribution). Otherwise → `seam_checkpoint_unattributable`: foreign
+//                bytes in the parent (a user edit, an escaped write) are an INTEGRITY SIGNAL, and
+//                today's silent serialization buries it. The halt is the point.
+//   3 COMMIT     `git add -- <exact dirty paths>` (stages deletions too) then a path-SCOPED
+//                `git commit -- <same paths>`, so a pre-staged unrelated index entry can never ride
+//                along. The commit itself IS the durable journal — no new state file, no ledger row.
+//   4 RE-VERIFY  re-run the fence; ONLY a `pass` proceeds. Anything else (a second parent_dirty,
+//                cannot_prove_clean, a crashed probe) → `seam_checkpoint_failed`.
+//   5 PROCEED    the caller forms the group exactly as on a clean parent. The group baseline (parent
+//                HEAD at open) now INCLUDES the checkpoint, so the serial work sits BEFORE the baseline
+//                and outside the group diff (Horn B dissolves), and legs branch off the checkpoint so
+//                they SEE the serial context (the input-freshness unsoundness dissolves).
+//
+// THREE OUTCOMES, NO RETRY LOOP — proceed, a typed HALT, or a labeled DEGRADE; and "no proceed" is NOT
+// the same as "no mutation", so the contract says which is which:
+//   - Steps 1, 1b and 2 halt BEFORE any git write: nothing staged, nothing committed, HEAD unmoved.
+//     These are INTEGRITY signals (an unclassifiable fence, an undecodable path, foreign bytes in the
+//     parent) — they stay loud halts, because burying them is the failure mode the repair exists to end.
+//   - Step 3 DEGRADES on a git add/commit failure: the ENVIRONMENT declined (a content-inspecting hook
+//     veto, an unusable signing key, any git error). The commit did not land (git never advances the ref
+//     on a failed commit) and the index is reset for the paths it staged, so the tree is again as-is —
+//     and the caller falls back to the pre-#802 serial path under `serialDegradeReason:
+//     'seam_checkpoint_declined'`. Visible and typed, so it is a labeled degrade, not a silent serial.
+//   - Step 4 halts AFTER the commit has landed. HEAD HAS ADVANCED. The refusal therefore DISCLOSES it:
+//     `commit` (the new HEAD) and `committed` (the paths that went in) ride on the halt envelope, and
+//     the operator hint says so. Nothing is rolled back, deliberately: every committed path was already
+//     attributed to a CLOSED write-capable node in step 2, so the commit itself is sound — while the
+//     most likely cause of a non-`pass` re-fence is a CONCURRENT writer landing new bytes between the
+//     two fence spawns, and auto-resetting would destroy that writer's work. Turning a loud halt into
+//     silent data loss is the worse trade; disclosure keeps the halt loud AND the bytes safe.
+// CRASH-SAFE BY CONSTRUCTION: a crash after the commit but before the group opens leaves a CLEAN
+// parent — the next open-ready re-runs the fence, finds `pass`, and forms the group; nothing re-commits.
+// The step-4 halt lands the operator in exactly that resumable state.
+// @returns { ok:true, committed:string[], nodeIds:string[], commit:string }
+//        | { ok:false, reason:'seam_checkpoint_unattributable', unattributed:string[], dirty:string[] }
+//        | { ok:false, reason:'seam_checkpoint_failed', detail:string }
+//        | { ok:false, reason:'seam_checkpoint_failed', detail:string, commit:string, committed:string[] }
+//              — the step-4 shape ONLY: the checkpoint commit landed and HEAD advanced.
+//        | { ok:false, degrade:true, reason:'seam_checkpoint_declined', detail:string }
+//              — the step-3 shape ONLY: the environment refused the commit; nothing landed; the caller
+//                degrades to the pre-#802 serial path under this label instead of halting.
+// ---------------------------------------------------------------------------
+function runSeamCheckpoint(planPath, project, shell, readFile) {
+  // 1 CLASSIFY.
+  const fence = shell(validatorPath, [planPath, '--parent-clean-check', '--project', project, '--json']);
+  if (fence && fence.exitCode === 0 && fence.result === 'pass') {
+    return { ok: true, committed: [], nodeIds: [], commit: null };
+  }
+  const dirty = (fence && Array.isArray(fence.dirty))
+    ? fence.dirty.map(p => String(p || '').trim()).filter(Boolean) : null;
+  if (!dirty || !dirty.length) {
+    // The fence could not ENUMERATE what is dirty (root_mismatch, cannot_prove_clean, a crashed probe,
+    // or an empty report). There is nothing to attribute and nothing to commit — and "cannot prove
+    // clean" must never become "assume clean", so this is a loud stop, never a silent serial.
+    return { ok: false, reason: 'seam_checkpoint_failed',
+      detail: 'parent_clean_fence_unclassified:' + ((fence && fence.reason) || 'no_dirty_report') };
+  }
+  // 1b GIT-QUOTED PATHS ARE REFUSED, NOT GUESSED. The fence's porcelain parser strips a path's
+  // SURROUNDING double quotes but does NOT decode git's C-style escapes, so any path git had to quote
+  // (a non-ASCII byte, a tab/newline, an embedded quote or backslash) arrives here in its ESCAPED form
+  // — `src/caf\303\251.js` for `src/café.js`. That string is neither the token a node declared nor a
+  // pathspec git can match back. Left to run, `norm()` below folds every backslash to `/`, which can
+  // make such a path COMPARE EQUAL to an unrelated declared path (a tab-named `src/a\tb.js` normalizes
+  // onto a declared `src/a/tb.js`) — a misattribution the subsequent `git add` only fails to consummate
+  // because the same undecoded string matches no file on disk. Refusing the whole checkpoint HERE makes
+  // that fail-closed BY DESIGN rather than by coincidence, keeps the misattribution from ever entering
+  // the attributed set, and hands the operator a truthful reason instead of a raw git pathspec error.
+  // Git always reports separators as `/`, so a backslash in a fence-reported path is always an escape.
+  const quotedPaths = dirty.filter(p => p.indexOf('\\') !== -1);
+  if (quotedPaths.length) {
+    return { ok: false, reason: 'seam_checkpoint_failed',
+      detail: 'quoted_path_unsupported:' + quotedPaths.join(', ') };
+  }
+  // 2 ATTRIBUTE.
+  let planContent;
+  try { planContent = readFile(planPath); } catch (_) {
+    return { ok: false, reason: 'seam_checkpoint_failed', detail: 'plan_unreadable' };
+  }
+  const attribution = seamCheckpointAttribution(planContent, planPath);
+  if (!attribution.ok) {
+    return { ok: false, reason: 'seam_checkpoint_failed', detail: attribution.reason };
+  }
+  const norm = p => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
+  const unattributed = dirty.filter(p => !attribution.union.has(norm(p)));
+  if (unattributed.length) {
+    return { ok: false, reason: 'seam_checkpoint_unattributable', unattributed, dirty };
+  }
+  // 3 COMMIT.
+  let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
+  const git = (args) => execFileSync('git', ['-C', root, ...args],
+    { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] });
+  const resetIndex = () => { try { git(['reset', '-q', '--'].concat(dirty)); } catch (_) {} };
+  const message = 'kaola-checkpoint(' + project + '): serial→parallel seam — nodes '
+    + (attribution.nodeIds.length ? attribution.nodeIds.join(', ') : '(none)');
+  // This commit is scheduler bookkeeping in ORIGIN, but its CONTENT is user production source — it is
+  // the only scheduler commit that lands any. So it carries SCHEDULER_COMMIT_CONFIG (injected identity +
+  // signing off) and NOT `--no-verify`: the consumer's content-inspecting hooks must see these bytes
+  // (see the constant's header for why that distinction is the whole design). `-m` already makes
+  // `commit.template` unreachable and the path-scoped pathspec already makes a pre-staged index entry
+  // unreachable. A redirected `core.hooksPath` is honored like any other hook location. (A `post-commit`
+  // hook runs too, but git ignores its exit status, so it cannot fail the commit.)
+  const COMMIT_ARGS = [...SCHEDULER_COMMIT_CONFIG, 'commit', '-m', message, '--'];
+  try {
+    git(['add', '--'].concat(dirty));
+    git(COMMIT_ARGS.concat(dirty));
+  } catch (e) {
+    // ENVIRONMENT REFUSAL ⇒ DEGRADE, NOT HALT. A hook veto, an unusable signing key, a git error — the
+    // environment declined to take this commit. The commit did NOT land (git never advances the ref on a
+    // failed commit), so once the index is reset for the paths we staged the tree is exactly as it was,
+    // and the pre-#802 `parent_dirty` SERIAL path is still available and still correct. Wedging a run
+    // that would otherwise complete is strictly worse than completing it serially, so the caller
+    // degrades onto that path — LABELED `seam_checkpoint_declined`, which is what keeps this from being
+    // the silent serialization #802's doctrine forbids: the label says the repair was ATTEMPTED and
+    // REFUSED BY THE ENVIRONMENT, which is a checkable present-tense fact about this host, not a guess.
+    // Only environment refusal degrades. The integrity signals stay loud halts:
+    // `seam_checkpoint_unattributable` (foreign bytes in the parent) and the post-commit fence below.
+    resetIndex();
+    return { ok: false, degrade: true, reason: 'seam_checkpoint_declined',
+      detail: 'git:' + String((e && e.message) || e).split('\n')[0] };
+  }
+  // HEAD has advanced from here on. Resolve the new HEAD in its OWN try so a rev-parse hiccup can never
+  // misreport a LANDED commit as a step-3 (zero-mutation) git failure.
+  let commitSha = null;
+  try { commitSha = String(git(['rev-parse', 'HEAD']) || '').trim() || null; } catch (_) { commitSha = null; }
+  // 4 RE-VERIFY — only a `pass` proceeds. A non-`pass` here halts over a tree whose HEAD HAS ALREADY
+  // MOVED, so the refusal discloses the commit rather than implying the tree is untouched.
+  const after = shell(validatorPath, [planPath, '--parent-clean-check', '--project', project, '--json']);
+  if (!(after && after.exitCode === 0 && after.result === 'pass')) {
+    return { ok: false, reason: 'seam_checkpoint_failed',
+      detail: 'post_commit_fence:' + ((after && after.reason) || 'non_pass'),
+      commit: commitSha, committed: dirty };
+  }
+  return { ok: true, committed: dirty, nodeIds: attribution.nodeIds, commit: commitSha };
 }
 
 // ---------------------------------------------------------------------------
@@ -10130,11 +10762,15 @@ function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
 //       production paths first (the parent-clean fence) so a floated own-lane slip fails closed BEFORE
 //       this, never lost from M. A real conflict (overlapping/same-file, the deferred tier) makes octopus
 //       BAIL → `merge --abort` + return merge_conflict (the Opus resolver + K=3 repair is Slice 5).
-// Returns { ok:true, mergeCommit } | { ok:false, reason, ... }. An explicit committer identity is passed
-// so the merge/commit never depends on ambient git config. Pure git over the shared object DB.
+// Returns { ok:true, mergeCommit } | { ok:false, reason, ... }. Both git writes carry
+// SCHEDULER_COMMIT_CONFIG, so the capture/merge never depends on an ambient identity and a key-less
+// `commit.gpgsign true` cannot wedge a group that is already open (there is no serial path to degrade to
+// once legs exist — the only safe repair is not to let a signing config reach here at all). Hooks are
+// NOT bypassed: a content-inspecting veto on leg bytes is honored and surfaces as the existing
+// `leg_capture_failed` / `merge_conflict` typed refusal. Pure git over the shared object DB.
 // ---------------------------------------------------------------------------
 function synthesizeLevel(root, legs, groupId, planPath) {
-  const ID = ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow'];
+  const ID = SCHEDULER_COMMIT_CONFIG;
   const QUIET = { stdio: ['ignore', 'ignore', 'ignore'] };
   const ids = Object.keys(legs || {});
   if (!ids.length) return { ok: false, reason: 'no_leg_branches' };
@@ -10518,15 +11154,53 @@ function runOpenReady(opts) {
   // speculative fallback even fires) is the ONLY exclusivity invariant that still applies. Named ONLY
   // as an explanatory field on the response (never a hard refuse) so read speculation stays unaffected.
   let speculativeWriteExcluded = null;
-  // #616 (D-616-01): the non-speculative co-open sibling of speculativeWriteExcluded — labels WHY a
-  // normal write frontier degraded to a single serial write, so a persistently dirty parent (a stuck
-  // or misconfigured --parent-clean-check fence) is visible instead of silently serializing every write
-  // frontier forever. Set ONLY on the branch below where parentCarriesProductionDirt() is the reason the
-  // group never even attempted to form (:4335) — NOT on the pre-existing plain single-write-node case,
-  // nor on a group attempt that failed for an unrelated reason (grp.ok===false / groupCeiling<2), so the
-  // two serial-degrade causes stay distinguishable. null ⇒ no field on the response (byte-identical to
-  // pre-#616 for every other degrade cause).
+  // #616 (D-616-01) + #804 (D3): the non-speculative co-open sibling of speculativeWriteExcluded —
+  // labels WHY a normal write frontier degraded to a single serial write, so a persistent degrade is
+  // VISIBLE instead of silently serializing every write frontier forever. Set on the branches where a
+  // real DEGRADE cause exists: a PROVEN overlap (`overlapping_write_sets`), a prover that delivered no
+  // verdict twice (`parallel_safe_indeterminate`), the pre-repair `parent_dirty` fallback under the
+  // KAOLA_SEAM_CHECKPOINT=0 opt-out, and — #802 D7 repair — `seam_checkpoint_declined` when the seam
+  // repair was ATTEMPTED and this host's environment refused the commit. NOT set on the plain
+  // single-write-node case, the legs-off case, or the operator's <2 write-cap ceiling: those are
+  // ORDINARY serial, not degrades.
+  // null ⇒ no field on the response (byte-identical to pre-#616 for every non-degrade cause).
   let serialDegradeReason = null;
+  // #802: the serial→parallel seam checkpoint this call performed (null ⇒ none — the parent was already
+  // clean, or the repair is opted out). Surfaced additively on the success envelope.
+  let seamCheckpoint = null;
+  const seamCheckpointOn = seamCheckpointDefaultOn(process.env);
+  // #802: the environment's refusal of the seam-checkpoint commit, when it refused one — a hook veto, an
+  // unusable signing key, any git error. `{ reason:'seam_checkpoint_declined', detail:'git:…' }`.
+  // Surfaced additively so the operator sees WHICH refusal produced the labeled degrade.
+  let seamCheckpointDeclined = null;
+  // #802: the ONE seam-repair transaction both write sites share. Returns:
+  //   null                    — proceed (parent repaired, or already clean).
+  //   { degrade:'<reason>' }  — the ENVIRONMENT refused the commit. Nothing landed. The caller degrades
+  //                             onto the pre-#802 serial path, LABELED with this reason. Never silent.
+  //   anything else           — the TYPED HALT envelope to return verbatim (an integrity signal).
+  const repairSeamOrHalt = () => {
+    const cp = runSeamCheckpoint(planPath, project, shell, readFile);
+    if (cp.ok) {
+      seamCheckpoint = { committed: cp.committed, nodes: cp.nodeIds, commit: cp.commit };
+      return null;
+    }
+    if (cp.degrade) {
+      seamCheckpointDeclined = { reason: cp.reason, detail: cp.detail || null };
+      return { degrade: cp.reason };
+    }
+    return {
+      result: 'refuse', reason: cp.reason,
+      ...(cp.unattributed ? { unattributed: cp.unattributed } : {}),
+      ...(cp.dirty ? { dirty: cp.dirty } : {}),
+      ...(cp.detail ? { detail: cp.detail } : {}),
+      // #802 post-commit-fence halt: the checkpoint commit LANDED and HEAD advanced before the repair
+      // gave up. Forward that verbatim — a refusal that omitted it would tell the caller "nothing
+      // happened" over a moved HEAD, and the operator hint keys off `commit` to say so.
+      ...(Object.prototype.hasOwnProperty.call(cp, 'commit') && !cp.ok
+        ? { commit: cp.commit, committed: cp.committed } : {}),
+      taskTransitions: [],
+    };
+  };
   if (readOnly.length > 0) {
     // #607: a live main-session-gate (kind:'gate') is a MAIN-SESSION-run marker, NOT a subagent fan-out
     // slot occupant — exclude it from the read-slot base so speculative reads behind a gate get the full
@@ -10626,8 +11300,23 @@ function runOpenReady(opts) {
     // never attempted, so spawning the fence would be pure waste. Evaluated ONCE into parentDirty (rather
     // than inline in the `if` below) so #616's serialDegradeReason can reuse the SAME verdict instead of
     // re-spawning the fence subprocess a second time.
-    const parentDirty = (legCoupled && writeNodes.length >= 2)
+    let parentDirty = (legCoupled && writeNodes.length >= 2)
       ? parentCarriesProductionDirt(planPath, project, shell) : false;
+    // #802 (D2, normal co-open site): the dirt is a REMOVABLE BLOCKER the orchestrator itself created,
+    // not one of the three named serializers — so REPAIR it before degrading. The running set is EMPTY
+    // on this branch (no open serial node exists whose full-worktree base could straddle the
+    // checkpoint), which is exactly why the repair is sound here. Two outcomes: the seam is
+    // checkpointed and the frontier co-opens as on a clean parent, or a TYPED HALT names the offending
+    // paths. Under KAOLA_SEAM_CHECKPOINT=0 this site returns the pre-repair parent_dirty serial
+    // degrade (see the opt-out's exact scope at the write-awaits-drain site below).
+    if (parentDirty && seamCheckpointOn) {
+      const outcome = repairSeamOrHalt();
+      // ENVIRONMENT REFUSAL ⇒ leave parentDirty TRUE and fall through to the serial else-branch below,
+      // which labels it `seam_checkpoint_declined` (not `parent_dirty`): the dirt is still there, but the
+      // reason we are serial is that this host refused the repair, and the operator needs to see WHICH.
+      if (outcome && !outcome.degrade) return outcome;
+      if (!outcome) parentDirty = false;
+    }
     if (legCoupled && writeNodes.length >= 2 && !parentDirty) {
       const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {
@@ -10661,6 +11350,15 @@ function runOpenReady(opts) {
       } else {
         toOpen = [writeNodes[0]];
         openKind = 'write';
+        // #804 (D3): label the group-attempt-failed degrade with its CLASSIFIED cause. Before this,
+        // "label absent" was shared by four causes (legs off, <2 writers, a proven overlap, a crashed
+        // prover) and therefore distinguished nothing — a persistently-failing validator subprocess
+        // silently serialized every write frontier forever. `too_few_write_nodes` cannot be reached from
+        // this arm (writeNodes.length >= 2 gates it) and stays unlabeled defensively; the <2-ceiling
+        // degrade below is an operator cap, i.e. ORDINARY serial, and stays unlabeled by design.
+        if (grp.reason === 'overlapping_write_sets' || grp.reason === 'parallel_safe_indeterminate') {
+          serialDegradeReason = grp.reason;
+        }
       }
     } else {
       toOpen = [writeNodes[0]];
@@ -10668,7 +11366,14 @@ function runOpenReady(opts) {
       // #616: this else fires for THREE distinct causes (!legCoupled, writeNodes.length<2, or
       // parentDirty) — label it ONLY when parentDirty is the actual cause (the other two never even
       // evaluated the fence, so parentDirty is false there and this stays a no-op).
-      if (parentDirty) serialDegradeReason = 'parent_dirty';
+      // #802: parentDirty can still be TRUE here in exactly two cases — the KAOLA_SEAM_CHECKPOINT=0
+      // opt-out (the label is then the pre-repair `parent_dirty` serial degrade, unchanged), or the
+      // repair was ATTEMPTED and the environment REFUSED the commit (`seam_checkpoint_declined`). The two
+      // must not share a label: the first is an operator choice, the second is a checkable fact about
+      // this host that the operator would otherwise never see.
+      if (parentDirty) {
+        serialDegradeReason = seamCheckpointDeclined ? seamCheckpointDeclined.reason : 'parent_dirty';
+      }
     }
   } else {
     // Only write nodes are ready but the running set is non-empty (read-only members live).
@@ -10700,6 +11405,9 @@ function runOpenReady(opts) {
       // never reaches this branch — so labeling the KAOLA_PARALLEL_WRITES=0 hold here (AC2) does not
       // perturb the operator-recovery serial execution. null degradeReason ⇒ no field (defensive).
       ...(degradeReason ? { serialDegradeReason: degradeReason } : {}),
+      // #802 (D7 repair): when the degrade cause is `seam_checkpoint_declined`, carry WHICH refusal
+      // produced it (the first line of git's own error) so the operator can see the hook/key at fault.
+      ...(seamCheckpointDeclined ? { seamCheckpointDeclined } : {}),
       taskTransitions: [],
     });
     // A live main-session-gate (kind:'gate') is a live observer of the parent tree — HOLD the relaxed write
@@ -10709,35 +11417,48 @@ function runOpenReady(opts) {
     if (!legCoupled) return holdDrain('parallel_writes_off');
     if (liveGroupId) return holdDrain('lane_group_live');
     if (parentCarriesProductionDirt(planPath, project, shell)) {
-      // #641 R2b (consent-tier): R1's leg path is unsound over a dirty parent (a leg would miss the
-      // uncommitted context). Try a LEGLESS co-open behind an `observes: scratch` adversarial-verifier
-      // gate — legal iff EVERY live read is such a gate AND the writer's set is scratch-observable-safe.
-      // Annotation absent / non-qualifying writer ⇒ today's byte-identical parent_dirty hold.
-      const r2bWriter = tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile);
-      if (!r2bWriter) return holdDrain('parent_dirty');
-      // A single LEGLESS writer opens in the parent tree (it must SEE the uncommitted context). NO
-      // groupForm ⇒ no leg provisioning, no lane_group descriptor. The scratch gate never observes the
-      // writer's (docs-band) bytes — verdict from .cache evidence + scratch, by the pinned contract. From
-      // the NEXT tick this legless writer excludes further opens (the #588/G3 invariant for every OTHER
-      // node), deliberately relaxed ONLY for the scratch gate already co-running.
-      toOpen = [r2bWriter];
-      openKind = 'write';
-    } else {
-      // R1 leg-contained co-open. Reuse the #596 size-1-capable selection: authoritative --parallel-safe
-      // re-verification across {candidates ∪ live writes} (live writes are empty here — no legless write,
-      // no live lane_group), a lone writer forms a size-1 group. An empty `chosen` means every candidate
-      // was excluded (overlap or an indeterminate verdict) ⇒ fail-closed to today's hold with the cause.
-      const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
-      if (sel.chosen.length === 0) return holdDrain(sel.excludedReason);
-      toOpen = sel.chosen;
-      openKind = 'write';
-      laneGroupCeiling = sel.ceiling;
-      groupForm = {
-        group_id: laneGroupId(sel.chosen.map(n => n.id)),
-        members: sel.chosen.map(n => n.id).slice().sort(),
-        write_union: laneWriteUnion(sel.chosen),
-      };
+      // #802 (D2, write-awaits-drain site): REPAIR the removable blocker instead of holding on it —
+      // but only under the exact precondition the retired legless path already established: EVERY live
+      // member is a freeze-declared `observes: scratch` adversarial-verifier. Such a gate renders its
+      // verdict from .cache evidence + scratch, never the tree or refs, and `git commit` is
+      // tree-content-neutral, so no live observer's inputs change. A non-scratch live reader (a
+      // full-diff observer) or a live gate keeps the `parent_dirty` hold, as does the
+      // KAOLA_SEAM_CHECKPOINT=0 opt-out. With the parent repaired, the ordinary leg-contained (R1) group
+      // co-open below follows — strictly STRONGER than the legless single-writer exception it replaces
+      // (N writers instead of 1, leg containment instead of a contract-only observation promise).
+      //
+      // WHAT THE OPT-OUT RESTORES, PRECISELY. `KAOLA_SEAM_CHECKPOINT=0` restores the `parent_dirty`
+      // SERIAL DEGRADE — the single serial write at the normal co-open site, and this `write_awaits_drain`
+      // hold here. It does NOT resurrect the legless single-writer co-open that used to fire at this seam
+      // for a scratch-observable write set: that path is retired UNCONDITIONALLY, as a separate and
+      // deliberate tightening, and no toggle brings it back. The two changes point the same way (the
+      // opt-out is never LESS strict than the repair it replaces), so a dirty seam under the opt-out
+      // holds where it once legless-co-opened. That is the intended posture: the recovery toggle is a
+      // fail-CLOSED escape hatch, not a time machine.
+      if (!seamCheckpointOn || !liveReadsAllScratchGates(liveNodes, planPath, readFile)) {
+        return holdDrain('parent_dirty');
+      }
+      const outcome = repairSeamOrHalt();
+      if (outcome && !outcome.degrade) return outcome;
+      // ENVIRONMENT REFUSAL ⇒ fall back to this site's own pre-#802 posture (the hold), labeled with the
+      // refusal rather than with `parent_dirty` — same reasoning as the normal co-open site above.
+      if (outcome) return holdDrain(outcome.degrade);
     }
+    // R1 leg-contained co-open (the parent is clean here — either it always was, or the seam checkpoint
+    // above just made it so). Reuse the #596 size-1-capable selection: authoritative --parallel-safe
+    // re-verification across {candidates ∪ live writes} (live writes are empty here — no legless write,
+    // no live lane_group), a lone writer forms a size-1 group. An empty `chosen` means every candidate
+    // was excluded (overlap or a twice-indeterminate verdict) ⇒ fail-closed to today's hold with the cause.
+    const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
+    if (sel.chosen.length === 0) return holdDrain(sel.excludedReason);
+    toOpen = sel.chosen;
+    openKind = 'write';
+    laneGroupCeiling = sel.ceiling;
+    groupForm = {
+      group_id: laneGroupId(sel.chosen.map(n => n.id)),
+      members: sel.chosen.map(n => n.id).slice().sort(),
+      write_union: laneWriteUnion(sel.chosen),
+    };
   }
 
   if (toOpen.length === 0) {
@@ -10773,7 +11494,10 @@ function runOpenReady(opts) {
   // Session proof is valid only for this immediate parent turn. Retain it in a transient lookup for
   // card construction, but never persist it in running-set.json or reuse it during reconciliation.
   const sessionProofById = new Map(toOpen.map(n => [n.id, n.codex_session_proof || null]));
-  const newNodes = toOpen.map(n => ({
+  // #802 (D7 repair): built AFTER the group/leg phase below, not before it — the `kw-stub` degrade can
+  // still collapse a formed group back to a single serial write at that point, and `newNodes` stamps
+  // each member's `group_id`/`kind`, so building it earlier would bake in a group that no longer exists.
+  const buildNewNodes = () => toOpen.map(n => ({
     id: n.id,
     role: n.role,
     kind: openKind,
@@ -10850,6 +11574,12 @@ function runOpenReady(opts) {
   // parent-side (Slice 3 routes into legs). On any provisionLeg failure, teardown every leg already
   // provisioned THIS call (clean rollback — no partial leg set) and refuse.
   let legs = null;
+  // #802 (D7 repair): set when the ENVIRONMENT refused the `kw-stub` commit — the SECOND scheduler commit
+  // at this same seam. Non-null ⇒ the group phase is abandoned and this open degrades to a single serial
+  // write, labeled, below. (A `break groupPhase` is how the abandonment leaves the block: every other
+  // abort inside it is a hard `return`, and this one alone must fall through to the degrade.)
+  let stubDeclined = null;
+  groupPhase:
   if (groupForm && legCoupled) {
     let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
     const mainRoot = getMainRoot(root);
@@ -10882,7 +11612,7 @@ function runOpenReady(opts) {
     // flipping" was wrong: the flip is in-memory until writeFile(planPath) at the end of Phase 2.)
     // dropRecordedBaselines is called with the id list this loop has actually recorded a baseline for at
     // the moment of each abort (a prefix of `toOpen` for the mid-loop baseline_failed itself; the FULL
-    // `toOpen` set for every abort strictly after this loop completes — stub_commit_failed and both
+    // `toOpen` set for every abort strictly after this loop completes — the #802 kw-stub degrade and both
     // leg_provision_failed variants below).
     // #674/#678/#680: recordedBaselineIds + dropRecordedBaselines + dropGroupBaseline are declared at
     // runOpenReady scope (above the group-baseline record) so the Phase-2 aborts reach them too. This
@@ -10916,14 +11646,28 @@ function runOpenReady(opts) {
         // commit below) inherits it (see the #633 comment above) — an unforced add on a gitignored path
         // refuses instead, silently serial-degrading the authored parallel-write antichain.
         execFileSync('git', ['add', '-f', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
-        execFileSync('git', ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow',
+        // Scheduler bookkeeping, MID-schedule — SCHEDULER_COMMIT_CONFIG, and deliberately NO
+        // `--no-verify`. This commit's content is `.cache/*.md` evidence stubs, never production source,
+        // but the posture is uniform across all four scheduler commit sites for one reason: a consumer's
+        // hooks are the consumer's, and the engine does not get to decide which of their commits are
+        // worth inspecting. A veto here is honored and DEGRADES (below), exactly as at the checkpoint.
+        execFileSync('git', [...SCHEDULER_COMMIT_CONFIG,
           'commit', '-m', 'kw-stub: ' + groupForm.group_id, '--allow-empty'], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
       } catch (e) {
         // #674 (D-674-01 b): the loop above recorded a baseline for EVERY toOpen member — drop them all.
         dropRecordedBaselines(recordedBaselineIds);
         // #678 (R1): also drop the shared group baseline recorded before this loop started.
         dropGroupBaseline();
-        return { result: 'refuse', reason: 'stub_commit_failed', group_id: groupForm.group_id, detail: String((e && e.message) || e) };
+        // #802 (D7 repair): ENVIRONMENT REFUSAL ⇒ DEGRADE, NOT REFUSE. `stub_commit_failed` was a
+        // dead end — the next open-ready re-runs the same commit against the same hook and refuses
+        // identically, so the run could never finish. Nothing has been written to disk yet (the ledger
+        // flip is spliced in Phase 2 and written only at the end of it) and every baseline is dropped
+        // above, so abandoning the group here is a clean rollback to a state from which the ordinary
+        // SERIAL write path — which needs no scheduler commit at all — completes the run.
+        try { execFileSync('git', ['reset', '-q', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) { /* best-effort unstage */ }
+        stubDeclined = { reason: 'seam_checkpoint_declined',
+          detail: 'kw-stub:' + String((e && e.message) || e).split('\n')[0] };
+        break groupPhase;
       }
     }
 
@@ -10975,6 +11719,26 @@ function runOpenReady(opts) {
       appendNodeTiming(planPath, n.id, 'leg_opened');
     }
   }
+
+  // #802 (D7 repair): COLLAPSE the abandoned group phase to a single serial write. Reached ONLY from the
+  // `kw-stub` environment refusal above, which already dropped every baseline this call recorded (member
+  // AND group) and unstaged what it staged; no leg was provisioned (leg provisioning runs strictly after
+  // the stub commit) and nothing has been written to disk. So this is a clean rollback to the pre-group
+  // state, from which the ordinary serial write path — which makes no scheduler commit at all — runs. The
+  // degrade is LABELED, never silent: `serialDegradeReason: 'seam_checkpoint_declined'` plus the git
+  // error that caused it.
+  if (stubDeclined) {
+    groupForm = undefined;
+    legs = null;
+    laneGroupCeiling = null;
+    groupBaselineSha = null;
+    recordedBaselineIds.length = 0;
+    toOpen = [toOpen[0]];
+    openKind = 'write';
+    serialDegradeReason = stubDeclined.reason;
+    seamCheckpointDeclined = stubDeclined;
+  }
+  const newNodes = buildNewNodes();
 
   // -- Phase 1: write running-set.json in state:'opening' with the FULL intended node set
   //    BEFORE flipping any ledger row. A crash here is reconcilable (never an orphan).
@@ -11153,6 +11917,8 @@ function runOpenReady(opts) {
           ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet, openIntoLeg: !!legInfo }),
           // #763: the shared context packet orient wrote — carried VERBATIM onto each co-opened member's card.
           context_packet: readContextPacket(planPath, readFile),
+          // Lets the card resolve a recorded role substitution; absent record ⇒ card byte-unchanged.
+          planPath,
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
@@ -11167,11 +11933,18 @@ function runOpenReady(opts) {
     // excluded this call (overlap with a live writer) — surface the explanatory field alongside the
     // success envelope so the operator sees the partial exclusion, not just the members that opened.
     ...(speculativeWriteExcluded ? { speculativeWriteExcluded } : {}),
-    // #616 (D-616-01): label a normal (non-speculative) co-open's serial degrade when
-    // parentCarriesProductionDirt() caused it, mirroring speculativeWriteExcluded's `parent_dirty` reason
-    // on this SUCCESSFUL-open path. Absent (undefined) for every other degrade cause and for a formed
-    // lane group — the pre-#616 byte-identical shape.
+    // #616 (D-616-01) + #804 (D3): label a normal (non-speculative) co-open's serial degrade with its
+    // classified cause (a proven overlap, a twice-indeterminate prover, or — under the seam-checkpoint
+    // opt-out — a dirty parent), mirroring speculativeWriteExcluded's reason on this SUCCESSFUL-open
+    // path. Absent (undefined) for every non-degrade cause and for a formed lane group.
     ...(serialDegradeReason ? { serialDegradeReason } : {}),
+    // #802: the serial→parallel seam checkpoint this open performed, when it performed one. Absent ⇒
+    // the parent was already clean (or the repair is opted out) — the pre-#802 byte-identical shape.
+    ...(seamCheckpoint ? { seamCheckpoint } : {}),
+    // #802 (D7 repair): the environment REFUSED the checkpoint commit (a content-inspecting hook veto,
+    // an unusable signing key, a git error) and this open degraded to the serial path instead of
+    // wedging. `serialDegradeReason: 'seam_checkpoint_declined'` is the label; this carries the cause.
+    ...(seamCheckpointDeclined ? { seamCheckpointDeclined } : {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -11189,7 +11962,7 @@ function runOpenReady(opts) {
 // liveNodes is defensive — the running-set "write node runs strictly alone" invariant (:3868) means no
 // OTHER write can be live while a speculative fan-out is even reachable, so liveWriteIds is normally
 // empty; the check is still applied generically so a future relaxation of that invariant stays safe.
-// @returns { chosen: Node[], excluded: string[], ceiling: number }
+// @returns { chosen: Node[], excluded: string[], ceiling: number, probes: number, excludedReason: string }
 // ---------------------------------------------------------------------------
 function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, writeOverlapConsent, max) {
   const liveWriteIds = (liveNodes || []).filter(n => n.kind === 'write').map(n => n.id);
@@ -11202,25 +11975,25 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
   // exclude-ALL branch (a validator crash / garbled result with no overlap report to act on) is a
   // `parallel_safe_indeterminate` — the disjointness verdict is unknown, not a known overlap.
   let indeterminate = false;
+  let probes = 0;
   if (allIds.length >= 2) {
-    const vArgs = [planPath, '--parallel-safe', '--nodes', allIds.join(','), '--json'];
-    if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
-    const ps = shell(validatorPath, vArgs);
-    if (!(ps.exitCode === 0 && ps.result === 'ok')) {
-      // #599: mirror tryFormLaneGroup's fail-CLOSED posture. A non-ok result carrying a WELL-FORMED
-      // `overlapping` array (even empty) is a real overlap report — keep the existing per-pair
-      // exclusion. A non-ok result WITHOUT one (subprocess crash, unparseable JSON, or an unreachable
-      // non-ok shape that omits the field) carries no overlap report to act on — exclude EVERY
-      // candidate (no speculative open) rather than fail-open by excluding nothing.
-      if (Array.isArray(ps.overlapping)) {
-        for (const o of ps.overlapping) {
-          if (candIds.includes(o.a)) excluded.add(o.a);
-          if (candIds.includes(o.b)) excluded.add(o.b);
-        }
-      } else {
-        indeterminate = true;
-        for (const id of candIds) excluded.add(id);
+    // #599/#804 (D1/D2): ONE shared classifier + ONE bounded re-probe, shared verbatim with
+    // tryFormLaneGroup (probeParallelSafe). A non-ok result carrying a WELL-FORMED `overlapping` array
+    // (even empty) is a real overlap report — keep the existing per-pair exclusion, and never re-probe a
+    // settled verdict. A non-ok result WITHOUT one (subprocess crash, unparseable JSON, or an unreachable
+    // non-ok shape that omits the field) carries no overlap report to act on — re-probe EXACTLY ONCE,
+    // and on a second indeterminate exclude EVERY candidate (no speculative open) rather than fail-open
+    // by excluding nothing.
+    const v = probeParallelSafe(allIds, planPath, shell, writeOverlapConsent);
+    probes = v.probes;
+    if (v.kind === 'overlap') {
+      for (const o of v.overlapping) {
+        if (candIds.includes(o.a)) excluded.add(o.a);
+        if (candIds.includes(o.b)) excluded.add(o.b);
       }
+    } else if (v.kind === 'indeterminate') {
+      indeterminate = true;
+      for (const id of candIds) excluded.add(id);
     }
   }
   const eligible = candidates.filter(n => !excluded.has(n.id));
@@ -11230,7 +12003,7 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
   if (Number.isInteger(max) && max >= 1) ceiling = Math.min(ceiling, max);
   const room = Math.max(0, ceiling - liveWriteIds.length);
   const chosen = eligible.slice(0, room);
-  return { chosen, excluded: Array.from(excluded), ceiling, excludedReason: indeterminate ? 'parallel_safe_indeterminate' : 'overlaps_live_writer' };
+  return { chosen, excluded: Array.from(excluded), ceiling, probes, excludedReason: indeterminate ? 'parallel_safe_indeterminate' : 'overlaps_live_writer' };
 }
 
 // ---------------------------------------------------------------------------
@@ -11353,7 +12126,8 @@ function runCloseNode(opts) {
     : { ok: true, review_gate: false };
   if (!schema2Review.ok) {
     return { result: 'refuse', reason: schema2Review.reason, detail: schema2Review.detail || null,
-      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role };
+      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
+      ...reviewRefusalDiagnostics(schema2Review) };
   }
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, {
     expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes, reviewV2: schema2Review,
@@ -11457,7 +12231,8 @@ function runCloseNode(opts) {
   }
   if (closeResult.changed) currentPlan = closeResult.content;
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
   writeFile(planPath, currentPlan);
@@ -11609,7 +12384,8 @@ function closeGroupMember(ctx) {
     }
     if (closeResult.changed) currentPlan = closeResult.content;
     // Compliance row carrying the literal `deferred_to_group` marker in the Evidence cell (grep/audit).
-    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group');
+    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group', opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
     writeFile(planPath, currentPlan);
     appendNodeTiming(planPath, nodeId, 'closed');
     appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -11723,7 +12499,8 @@ function closeGroupMember(ctx) {
     return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
   }
   if (closeResult.changed) currentPlan = closeResult.content;
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed');
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed', opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
   appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -11973,7 +12750,9 @@ function runReconcileRunningSet(opts) {
       ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
       ...(rolled.rolledForward.length ? { expansionsRolledForward: rolled.rolledForward } : {}),
       ...(rolled.refusals.length ? { expansionRefusals: rolled.refusals } : {}),
-      taskTransitions: [] };
+      // A roll-forward RE-OPENED units: announce them, or the documented recovery repairs the ledger
+      // and leaves the operator's list describing a run that no longer exists.
+      taskTransitions: rolled.taskTransitions };
   }
 
   const wholeOpening = running.state === 'opening';
@@ -12033,7 +12812,9 @@ function runReconcileRunningSet(opts) {
       ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
       ...(rolledAny ? { expansionsRolledForward: stableRoll.rolledForward } : {}),
       ...(stableRoll.refusals.length ? { expansionRefusals: stableRoll.refusals } : {}),
-      taskTransitions: [] };
+      // Same obligation as the no_running_set arm: a stable-plan no-op emits nothing, a real
+      // roll-forward emits the shape it just re-opened.
+      taskTransitions: stableRoll.taskTransitions };
   }
 
   // In a rolling top-up crash, state:'opening' covers the transaction but only
@@ -12076,6 +12857,16 @@ function runReconcileRunningSet(opts) {
   }
   // Reset the ledger row for each gate-check rollback BEFORE the survivors/leg-teardown logic runs below
   // (mirrors discard-speculative's ordering: ledger reset first, --drop-base is not #424 window-locked).
+  //
+  // KNOWN GAP, recorded where it bites rather than filed: these resets move ledger rows
+  // `in_progress → pending` and announce NOTHING. The expansion roll-forward on this same command
+  // was fixed to return a `taskTransitions` entry for every row it moves, precisely so the
+  // presented task list cannot contradict the ledger — but the running-set repair's OWN rollbacks
+  // (this `specWriteGateRollback` set, and the `cappedOut` set below) were not part of that fix.
+  // Same species, different mechanism: after a crash recovery that rolls back a speculative write
+  // leg or caps re-opens at the ceiling, the operator's task list still shows those units running.
+  // The fix is the same shape — build the transitions through the shared announce helper and fold
+  // them into the same returned channel.
   if (specWriteGateRollback.length) {
     let planContentForReset = readFile(planPath);
     let changedAny = false;
@@ -12301,7 +13092,10 @@ function runReconcileRunningSet(opts) {
     writerReconciliation,
     writerHalt,
     state: 'open',
-    taskTransitions: [],
+    // The third crash arm owes the same announcement as the other two — the running-set repair above is
+    // silent by design (it moves nothing the operator's list holds), but the expansion roll-forward that
+    // follows it re-opens real units.
+    taskTransitions: expansionRoll.taskTransitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
 }
@@ -12516,6 +13310,41 @@ function validateComposition(composition, ctx) {
   return { ok: true, units, derivation };
 }
 
+// appendShapeTransitions — the ONE place a composed frontier's transition channel is assembled, shared
+// by the expand-open transaction and the reconcile roll-forward so a crash-recovered expansion presents
+// the SAME shape a first-try one does. Appends into `acc` (dedup keyed by `covered`, FIRST wins):
+//
+//   1. every transition the frontier open itself produced that names a NON-unit node (another spine
+//      node the same open-ready call happened to start) — kept, never dropped;
+//   2. one transition per COMPOSED unit, IN RECORD ORDER: the open's own entry when it opened that unit
+//      (`in_progress`), otherwise a `pending` INSERT for a unit that exists but is still behind the
+//      frontier.
+//
+// RECORD ORDER is load-bearing, not cosmetic: every plan-run surface instructs the operator to insert a
+// newly-announced unit's task "in record order", and a raw frontier-order array cannot be followed —
+// a frontier that opens u2/u3 while u1 waits would arrive as [u2, u3, u1]. Ordering the unit entries
+// here makes the emitted array something the shipped rule can actually be applied to.
+function appendShapeTransitions(acc, covered, base, unitIds, reason) {
+  const ids = Array.isArray(unitIds) ? unitIds.map(String) : [];
+  const unitSet = new Set(ids);
+  const byId = new Map();
+  const nonUnit = [];
+  for (const t of (Array.isArray(base) ? base : [])) {
+    const key = (t && t.id != null) ? String(t.id) : null;
+    if (key !== null && unitSet.has(key)) { if (!byId.has(key)) byId.set(key, t); }
+    else nonUnit.push(t);
+  }
+  const add = (t) => {
+    const key = (t && t.id != null) ? String(t.id) : null;
+    if (key === null || covered.has(key)) return;
+    covered.add(key);
+    acc.push(t);
+  };
+  for (const t of nonUnit) add(t);
+  for (const id of ids) add(byId.get(id) || buildTransition(id, 'pending', reason));
+  return acc;
+}
+
 // runExpandOpen — MUTATES the plan (record block + unit ledger rows + open proof block), the
 // baselines and the running set. See the transaction header above for the phase order.
 function runExpandOpen(opts) {
@@ -12618,10 +13447,17 @@ function runExpandOpen(opts) {
   const block = renderExpansionRecord(recordId, nodeId, planHash, composed.derivation, composed.units);
   let baseForRecord = content;
   let reactivation = null;
+  // The cascade moves rows OTHER than the composed units (the owner milestone, re-verified downstream
+  // milestones, their review walls, the sink) — every one of them a ledger flip the presented task list
+  // must be told about. `_reactivate` therefore hands back a transition per row it actually MOVED; a
+  // cascade that flips `complete` -> `pending` in the ledger while the list still reads "milestone done,
+  // review passed" is a worse lie than the stale list the shape channel exists to fix.
+  let reactivationTransitions = [];
   if (typeof opts._reactivate === 'function') {
     const ra = opts._reactivate(content);
     baseForRecord = ra.content;
     reactivation = ra.reactivation;
+    if (Array.isArray(ra.transitions)) reactivationTransitions = ra.transitions;
   }
   const withRecord = appendExpansionBlock(baseForRecord, block);
   const led = appendLedgerRows(withRecord, unitIds);
@@ -12649,8 +13485,36 @@ function runExpandOpen(opts) {
 
   // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
   const rolled = openExpansionFrontier(opts, recordId);
+
+  // THE TRANSITION CHANNEL MUST PRESENT THE COMPOSED **SHAPE**, NOT ONLY THE STATUS FLIPS.
+  //
+  // Expansion is the one lifecycle step that changes the run's SHAPE: units that did not exist a
+  // moment ago now do. `rolled` carries only what the FIRST frontier opened, so a unit further down
+  // the interior DAG emitted nothing at all — and a `taskTransitions` entry for an id the visible list
+  // has never heard of is, by definition, an INSERT. Emitting one transition per unit of THIS record
+  // (`in_progress` for the units this open started, `pending` for the composed-but-unopened rest) is
+  // what lets the presented task list stop showing the frozen spine and start showing the run.
+  // The durable mirror already lists the same unit ids; this makes the two channels agree.
+  //
+  // UNION, never a replacement: `rolled.taskTransitions` may legitimately also name non-unit nodes the
+  // same open-ready call started, and dropping those would lose real information. Composed units the
+  // frontier did not open are APPENDED, in record order, after whatever the open already reported.
+  //
+  // FAIL-OPEN, like every other mirror emission: this runs strictly after the committed Phase-1 ledger
+  // write, so any throw falls back to exactly what `rolled` carried. A presentation detail must never
+  // turn a committed expansion into a refusal.
+  let shapeTransitions = Array.isArray(rolled && rolled.taskTransitions) ? rolled.taskTransitions : [];
+  try {
+    shapeTransitions = appendShapeTransitions([], new Set(), shapeTransitions, unitIds, 'expand-open');
+  } catch (_) { /* fail-open: keep whatever the frontier open already reported */ }
+  // The cascade's flips are PREPENDED, never merged into the dedup above: they happened in Phase 1,
+  // BEFORE the open, so emitting them first is the true sequential history — and if the open later
+  // re-touched one of those ids, its own entry follows and supersedes on application.
+  if (reactivationTransitions.length) shapeTransitions = reactivationTransitions.concat(shapeTransitions);
+
   return {
     ...rolled,
+    taskTransitions: shapeTransitions,
     expansion_id: recordId,
     expansion_point: nodeId,
     ordinal,
@@ -12690,23 +13554,41 @@ function openExpansionFrontier(opts, recordId) {
 //
 // Never rolls BACK. A record is the durable statement that this frontier was composed; discarding it
 // would lose the composition and the derivation with no operator signal, and re-opening is cheap.
+//
+// It also carries the SHAPE back out. A roll-forward re-opens units through the same scheduler, so
+// runOpenReady builds real `in_progress` transitions — and the recovery path used to drop every one of
+// them on the floor, so the DOCUMENTED crash recovery (`reconcile-running-set` -> re-orient) repaired
+// the ledger while leaving the presented task list still showing the frozen spine. Reusing
+// appendShapeTransitions gives recovery the identical channel a first-try expand-open emits, including
+// the `pending` INSERT for a composed unit still behind the frontier. `covered` spans ALL records
+// (FIRST wins): one runOpenReady call can legitimately open units belonging to a LATER record, and
+// without the shared set that record's top-up would contradict its own `in_progress` with a `pending`.
 function rollForwardExpansions(opts) {
   const { planPath, readFile } = opts;
+  const empty = { rolledForward: [], refusals: [], taskTransitions: [] };
   let content;
-  try { content = readFile(planPath); } catch (_) { return { rolledForward: [], refusals: [] }; }
+  try { content = readFile(planPath); } catch (_) { return empty; }
   const validator = require('./kaola-gitlab-workflow-plan-validator');
-  if (validator.parsePlanForm(content).form !== 'spine') return { rolledForward: [], refusals: [] };
+  if (validator.parsePlanForm(content).form !== 'spine') return empty;
   const parsed = validator.parseExpansionRecords(content);
   const rolledForward = [];
   const refusals = [];
+  const taskTransitions = [];
+  const covered = new Set();
   for (const r of parsed.records) {
     if (r.malformed.length) { refusals.push({ expansion_id: r.id, reason: 'expansion_records_malformed', detail: r.malformed.join('; ') }); continue; }
     if (validator.expansionRecordOpened(parsed, r.id)) continue;
     const out = openExpansionFrontier(opts, r.id);
-    if (out && out.result === 'refuse') refusals.push({ expansion_id: r.id, reason: out.reason || 'open_failed' });
-    else rolledForward.push(r.id);
+    if (out && out.result === 'refuse') { refusals.push({ expansion_id: r.id, reason: out.reason || 'open_failed' }); continue; }
+    rolledForward.push(r.id);
+    // Fail-OPEN like every other mirror/transition emission: the roll-forward has already committed, so
+    // a presentation fault must never turn a completed recovery into a refusal.
+    try {
+      appendShapeTransitions(taskTransitions, covered, out && out.taskTransitions,
+        (r.units || []).map(u => u && u.id).filter(Boolean), 'reconcile-running-set');
+    } catch (_) { /* keep whatever was already accumulated */ }
   }
-  return { rolledForward, refusals };
+  return { rolledForward, refusals, taskTransitions };
 }
 
 // runExpandClose — MUTATES the ledger (the expansion point row) + appends the `discharge()` block
@@ -12716,8 +13598,16 @@ function rollForwardExpansions(opts) {
 // unit's `close-node`, because close-node must stay unchanged: it closes ONE running-set member and
 // knows nothing about milestones. Discharging is gated by the same fail-closed settled predicate the
 // re-expansion gate uses, so a point can never go terminal over a unit that is merely missing a row.
+//
+// It is a LEDGER-MUTATING subcommand and therefore owes the mutation-time task-mirror contract every
+// other one honors: return the machine-readable transition for the row it moved, and refresh the
+// durable `workflow-tasks.json` after the final stable plan write. Without both, the milestone's task
+// stays visibly open forever after its discharge — the run's last shape change is the one the operator
+// never sees — and the durable mirror stays stale until some unrelated mutation happens to refresh it.
+// The `alreadyDischarged` early return below stays EMPTY on purpose: nothing was mutated, so there is
+// no transition to report and nothing to re-derive.
 function runExpandClose(opts) {
-  const { planPath, nodeId, readFile, writeFile, now } = opts;
+  const { planPath, project, nodeId, shell, readFile, writeFile, now } = opts;
 
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'] });
   if (guard) return guard;
@@ -12779,7 +13669,12 @@ function runExpandClose(opts) {
     writeFile(evidencePath, evidence.replace(/\s*$/, '\n') + line + '\n');
   } catch (_) { /* advisory-only — the discharge above already committed */ }
 
-  return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id), taskTransitions: [] };
+  // The mutation-time mirror sync, AFTER the final stable plan write above (the efficiency line lands in
+  // .cache, which the mirror does not read). Fail-open by contract: a mirror-refresh failure is reported
+  // in `taskMirror` and never rolls back the committed discharge.
+  return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id),
+    taskTransitions: [buildTransition(nodeId, 'complete', 'expand-close')],
+    taskMirror: refreshTaskMirror(project, shell) };
 }
 
 // ===========================================================================
@@ -13323,6 +14218,13 @@ function runReExpandOpen(opts) {
   const reactivationLog = { owner: nodeId, walls_reactivated: [], downstream_reverified: [], downstream_untouched: [] };
   const _reactivate = (planContent) => {
     let c = planContent;
+    // ONE transition per row this cascade actually MOVES. A re-open un-completes the owner milestone,
+    // any re-verified downstream milestone, their review walls and the sink — so a channel that
+    // announced only the newly composed fixer units would leave the presented list asserting
+    // "milestone done, review passed" about a run that has re-opened both. Built from the splice's own
+    // `changed` flag, so an already-pending row (an idempotent re-entry) announces nothing.
+    const transitions = [];
+    const announce = (id) => transitions.push(buildTransition(id, 'pending', 'reexpand-open'));
     // The DURABLE surface amendment (when this re-open is the re-review half of an amend-surface
     // transaction) is folded into THIS SAME atomic Phase-1 write. The block is what makes the barrier
     // attribute the amended file, and it attributes while the owning point reads `complete` — so
@@ -13341,7 +14243,7 @@ function runReExpandOpen(opts) {
     // in_progress would make the running-set scheduler treat it as a live serial node and refuse the
     // fan-out). Its review wall, re-activated in (c), stays withheld until the milestone re-discharges.
     const ro = spliceLedgerNode(c, nodeId, 'pending', { allowFrom: ['complete'] });
-    if (ro.found) c = ro.content;
+    if (ro.found) { c = ro.content; if (ro.changed) announce(nodeId); }
     // (b) SELECTIVE re-verify of the other milestones (forced-by-dependency OR surface-intersection).
     for (const d of otherPoints) {
       const dStatus = String(ledger[d] || '').toLowerCase();
@@ -13351,7 +14253,7 @@ function runReExpandOpen(opts) {
       const surfaces = declared.concat(amendedSurfacesFor(d, amendedSurfaces));
       const intersects = fixFiles.some(f => surfaces.some(s => surfaceCoversFile(s, f)));
       if (dependents.has(d) || intersects) {
-        flipToPending(d);
+        if (flipToPending(d)) announce(d);
         resetMilestones.push(d);
         reactivationLog.downstream_reverified.push(d);
       } else {
@@ -13364,16 +14266,16 @@ function runReExpandOpen(opts) {
     // its DIRECT review-class dependents.
     const walls = new Set();
     for (const m of resetMilestones) for (const w of wallsOfMilestone(m, contracts, nodes)) walls.add(w);
-    for (const w of Array.from(walls).sort()) if (flipToPending(w)) reactivationLog.walls_reactivated.push(w);
+    for (const w of Array.from(walls).sort()) if (flipToPending(w)) { reactivationLog.walls_reactivated.push(w); announce(w); }
     // (d) the sink: a re-expansion invalidates any in-flight or (locally) settled sink attempt — GATE 3
     // has PROVEN no irreversible step ran (pristine), so resetting it is safe. Reset it to pending so it
     // re-runs AFTER the re-expansion, and so the fan-out is never refused over a live serial sink.
     const sink = nodes.find(n => n && n.role === 'finalize');
     if (sink) {
       const rs = spliceLedgerNode(c, sink.id, 'pending', { allowFrom: ['complete', 'in_progress'] });
-      if (rs.found && rs.changed) { c = rs.content; reactivationLog.sink_reset = sink.id; }
+      if (rs.found && rs.changed) { c = rs.content; reactivationLog.sink_reset = sink.id; announce(sink.id); }
     }
-    return { content: c, reactivation: reactivationLog };
+    return { content: c, reactivation: reactivationLog, transitions };
   };
 
   // Delegate to the PROVEN expand-open transaction with the re-open shape enabled. runExpandOpen runs
@@ -13427,6 +14329,24 @@ function isExactFileToken(tok) {
 function runAmendSurface(opts) {
   // No writeFile here by design: this command validates and composes, then hands the whole mutation —
   // amend block INCLUDED — to the single atomic re-open transaction below.
+  //
+  // KNOWN GAP, recorded where it bites rather than filed. This primitive widens a milestone's
+  // attributed surface after the fact, and in doing so it steps around two fences that bind
+  // everywhere else:
+  //
+  //   1. The test-custody wall. A node declaring a test-like path must BE a test-owning node or
+  //      carry a declared, hash-covered `## Meta test_custody_exemption`. An amendment attributes
+  //      arbitrary exact files to an already-discharged milestone WITHOUT re-running that check,
+  //      so a test path can enter a production node's surface through this door alone.
+  //   2. `plan_hash`. The amend block is composed into the plan, but the amended surface is not
+  //      folded back into the frozen digest, so the plan a run is judged against can widen while
+  //      its hash stays constant.
+  //
+  // Both are narrow in practice — amend-surface is operator-invoked from a refusal hint, never
+  // reached autonomously, and the barrier still attributes every write. But "narrow" is not
+  // "closed", and the honest reading is that this is the one seam where the custody wall is
+  // advisory. Do not widen its reach (routing it, or invoking it from an automated recovery)
+  // without first making it re-run the custody check and re-stamp the digest.
   const { planPath, nodeId, readFile } = opts;
   if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point whose surface to amend' });
   const rawFiles = Array.isArray(opts.files) ? opts.files : [];
@@ -13494,6 +14414,16 @@ function findingFilesFromAttempt(attempt) {
   const files = new Set();
   let rows = [];
   try { rows = stillOpenRouteCandidates(attempt); } catch (_) { rows = []; }
+  // DELIBERATELY row-only, and NOT joined to the attempt's canonical findings. A schema-2 ROUTE row is
+  // an ownership projection that carries no anchors, so this returns [] for every schema-2 attempt and
+  // the spine local-re-expansion precheck passes through to the replan family. That looks like a bug and
+  // is a KNOWN, deliberate hold: joining the canonical findings here does make the paths reach the
+  // router — but the resulting `route_local_reexpansion` directive is not executable while the attempt
+  // is unresolved (`reexpand-open` half-appends its record and ledger row, then the review-journal
+  // fence refuses `review_attempt_unresolved`, leaving the plan wedged). Settling the attempt from the
+  // re-expansion side needs a `repair.selected_writer` / `consumed_by` pair the journal validator
+  // requires and an expansion point cannot supply — the inline repair lane, not this seam. Until that
+  // lands, falling through to the (working, if expensive) replan family is strictly the safer exit.
   for (const row of rows) for (const f of findingFilesFromIndexRow(row)) files.add(f);
   return Array.from(files).sort();
 }
@@ -13559,14 +14489,14 @@ function runSelfTest() {
     assert(r1.evidence_file === '.cache/n1-impl.md', 'T1 evidence_file correct path');
     assert(Array.isArray(r1.required_tokens), 'T1 required_tokens is array');
     assert(r1.required_tokens.includes('RED'), 'T1 required_tokens includes RED');
-    assert(r1.required_tokens.includes('GREEN'), 'T1 required_tokens includes GREEN');
+    assert(r1.required_tokens.includes('red_baseline'), 'T1 required_tokens includes red_baseline (GREEN retired — GREEN authority is gate-side)');
     const seededPath = tmpDir + '/.cache/n1-impl.md';
     assert(fs.existsSync(seededPath), 'T1 seeded file exists');
     const seededContent = fs.readFileSync(seededPath, 'utf8');
     const firstLine = seededContent.split('\n')[0];
     assert(firstLine === 'evidence-binding: n1-impl abc123def456', 'T1 binding header is line 1');
     assert(/RED:/.test(seededContent), 'T1 RED stub present');
-    assert(/GREEN:/.test(seededContent), 'T1 GREEN stub present');
+    assert(/red_baseline:/.test(seededContent), 'T1 red_baseline stub present');
 
     // Test 2: second call (crash-resume) does NOT overwrite the existing file.
     // Write custom content to simulate in-progress evidence.
@@ -13591,7 +14521,7 @@ function runSelfTest() {
     assert(rotatedFirstLine === 'evidence-binding: n1-impl rotated456789', 'T3 line 1 rewritten with new nonce');
     assert(!rotatedContent.includes('RED: some test output'), 'T3 stale evidence body GONE after forceRotate');
     assert(/RED:/.test(rotatedContent), 'T3 fresh RED stub present after forceRotate');
-    assert(/GREEN:/.test(rotatedContent), 'T3 fresh GREEN stub present after forceRotate');
+    assert(/red_baseline:/.test(rotatedContent), 'T3 fresh red_baseline stub present after forceRotate');
 
     // Test 4: provenance log entry appears after an open event.
     appendProvenanceLog(planPath, 'open', 'n2-check', 'deadbeef1234');
@@ -13607,13 +14537,16 @@ function runSelfTest() {
 
     // Test 5: implementer role gets correct stubs.
     const r5 = seedEvidenceFile(planPath, 'n3-impl', 'impl99999999', 'implementer', false);
-    assert(r5.required_tokens.includes('non_tdd_reason'), 'T5 implementer has non_tdd_reason token');
+    assert(r5.required_tokens.includes('tests-green|regression-green|build-green|smoke-integration'),
+      'T5 implementer has the verification-tier alternation (non_tdd_reason retired with the dichotomy that justified it)');
     const implPath = tmpDir + '/.cache/n3-impl.md';
     const implContent = fs.readFileSync(implPath, 'utf8');
     assert(implContent.split('\n')[0] === 'evidence-binding: n3-impl impl99999999', 'T5 implementer binding header');
-    assert(/non_tdd_reason:/.test(implContent), 'T5 implementer non_tdd_reason stub');
-    // The alternation class regression-green|build-green|smoke-integration seeds the FIRST alternative.
-    assert(/regression-green:/.test(implContent), 'T5 implementer regression-green stub (first alt)');
+    // The alternation class tests-green|regression-green|build-green|smoke-integration seeds the
+    // FIRST alternative, plus a comment naming every alternative.
+    assert(/tests-green:/.test(implContent), 'T5 implementer tests-green stub (first alt)');
+    assert(/<!-- tests-green\|regression-green\|build-green\|smoke-integration -->/.test(implContent),
+      'T5 implementer alternation comment names every tier');
 
     // Test 6: seedEvidenceFile is advisory — a failure must not throw.
     try {
@@ -13677,7 +14610,26 @@ function parseFindingLine(line) {
   const securityFlag = /\bsecurity\b/.test(lower);
   const status = (/\bn\/a\b/.test(lower) || /\bnon-blocking\b/.test(lower)) ? 'n/a' : 'open';
 
-  return { finding_id, file, text, securityFlag, status };
+  return { finding_id, file, text, securityFlag, custodyFlag: isTestCustodyFinding(body), status };
+}
+
+// ---------------------------------------------------------------------------
+// isTestCustodyFinding — does this finding land on the TEST ARTIFACT rather than the production
+// code? Behaviour, coverage, and test-defect findings are all statements about the oracle: the
+// suite does not pin the behaviour, does not reach the case, or asserts the wrong thing. Under
+// custody those belong to the test AUTHOR — the implementing context can read and run the suite
+// but never writes it, so routing such a finding to the implementer would either strand it or
+// invite the exact self-graded-oracle edit custody exists to prevent.
+//
+// Deliberately a NARROW vocabulary over the three concepts the routing names. `regression` is
+// excluded: a regression finding is most often a statement about the code that broke, not about the
+// test, and the reviewer can always say so explicitly with `fix_role=tdd-guide` in the canonical
+// finding grammar (which this inference never overrides).
+// ---------------------------------------------------------------------------
+const TEST_CUSTODY_FINDING_RE =
+  /\bbehaviou?r(?:al)?\b|\bcoverage\b|\buncovered\b|\buntested\b|\btest[- ]defect\b|\bdefective test\b|\btest is wrong\b|\bwrong test\b|\bmissing test\b/i;
+function isTestCustodyFinding(text) {
+  return TEST_CUSTODY_FINDING_RE.test(String(text || ''));
 }
 
 // ---------------------------------------------------------------------------
@@ -13742,10 +14694,16 @@ function routeCanonicalFindings(findings, nodes, sourceNode) {
 // over the frozen plan, infers a fix_role, and writes `.cache/findings-route.json`
 // (an array of { finding_id, file, owning_node, fix_role, status }).
 //
-// fix_role precedence (D-446-01 §2):
+// fix_role precedence (D-446-01 §2, extended by test custody):
 //   1. `security` in the finding text → 'security-reviewer'.
-//   2. else a node DECLARES the file (owning_node resolved) → 'implementer'.
-//   3. else (no producing/declaring node) → 'code-reviewer'.
+//   2. else a node DECLARES the file (owning_node resolved) AND the finding is about the test
+//      ORACLE (behaviour / coverage / test-defect, isTestCustodyFinding) → 'tdd-guide', the test
+//      author who holds custody of the test artifact.
+//   3. else a node DECLARES the file → 'implementer'.
+//   4. else (no producing/declaring node) → 'code-reviewer'.
+//
+// The CANONICAL finding grammar's explicit `fix_role` always wins — this inference runs only on the
+// free-prose fallback, where the reviewer named no role at all.
 //
 // owning_node === null is the plan-repair signal (the file no node owns).
 //
@@ -13753,6 +14711,190 @@ function routeCanonicalFindings(findings, nodes, sourceNode) {
 // @returns {{ result:'ok', count:number, file:string, findings:array }}
 //        | {{ result:'refuse', reason:string, ... }}
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ROLE SUBSTITUTION — the typed, same-kind, superset-proven dispatch remedy.
+//
+// When a frozen `role` cell turns out not to cover its node's brief, the plan itself must not be
+// rewritten: a frozen plan and its `plan_hash` are the run's identity. Substitution is DISPATCH
+// METADATA — the plan, the `## Node Ledger`, and the `plan_hash` stay byte-identical, and only the
+// card the orchestrator dispatches from changes. That keeps the remedy claim-preserving.
+//
+// "Role B's manifest covers role A's, same kind, same evidence contract" is a CHECKABLE FACT, so it
+// is decided mechanically rather than escalated: the fact-vs-value split says a machine settles it.
+// When no in-kind superset exists there is nothing to check and the existing consent valve fires.
+//
+// The record is durable (.cache/role-substitutions.json) and folds into the compliance row at close,
+// so the divergence between the frozen artifact and what actually ran is on the record BY
+// CONSTRUCTION rather than by an orchestrator remembering to annotate it.
+const ROLE_SUBSTITUTIONS_NAME = 'role-substitutions.json';
+const ROLE_SUBSTITUTION_SCHEMA_VERSION = 1;
+
+// v1 scope is producer -> producer ONLY. A gate carries a verdict contract and a write role carries
+// write-set semantics; substituting either would move a wall, not just a dispatch target, so they
+// stay out until a real incident defines what the safe check would even be.
+const SUBSTITUTABLE_KINDS = new Set(['producer']);
+
+function readRoleSubstitutions(cacheDir, readFile) {
+  try {
+    const parsed = JSON.parse(readFile(path.join(cacheDir, ROLE_SUBSTITUTIONS_NAME)));
+    if (parsed && Array.isArray(parsed.substitutions)) return parsed;
+  } catch (_) { /* absent or unreadable => no substitutions on record */ }
+  return { schema_version: ROLE_SUBSTITUTION_SCHEMA_VERSION, substitutions: [] };
+}
+
+// The ACTIVE substitution for a node (the last one recorded), or null. Consumed by buildDispatch so
+// every opener emits the same card, and by the close path so the compliance row carries the basis.
+function activeRoleSubstitution(cacheDir, readFile, nodeId) {
+  const rows = readRoleSubstitutions(cacheDir, readFile).substitutions;
+  let found = null;
+  for (const row of rows) if (row && row.node_id === nodeId) found = row;
+  return found;
+}
+
+function runSubstituteRole(opts, project) {
+  const { nodeId, toRole } = opts;
+  const fsMod = opts.fs || require('fs');
+  const readFile = opts.readFile || ((p) => fsMod.readFileSync(p, 'utf8'));
+  const writeFile = opts.writeFile || ((p, c) => fsMod.writeFileSync(p, c, 'utf8'));
+  const repoRoot = opts.repoRoot || getRoot();
+  const planPath = opts.planPath
+    || path.join(repoRoot, 'kaola-workflow', project, 'workflow-plan.md');
+  const projectDir = path.dirname(planPath);
+  const cacheDir = path.join(projectDir, '.cache');
+  const now = opts.now || (() => new Date().toISOString());
+
+  if (!nodeId) return refuse('missing_node_id', { detail: 'substitute-role requires --node-id' });
+  if (!toRole) return refuse('missing_to_role', { node_id: nodeId, detail: 'substitute-role requires --to-role' });
+
+  let planContent = '';
+  try { planContent = readFile(planPath); }
+  catch (_) { return refuse('plan_unreadable', { node_id: nodeId, detail: 'cannot read ' + planPath }); }
+
+  const nodes = parseNodesFromContent(planContent);
+  const node = nodes.find(n => n.id === nodeId);
+  if (!node) return refuse('unknown_node', { node_id: nodeId, detail: 'no node "' + nodeId + '" in the frozen plan' });
+  const fromRole = node.role;
+
+  const manifest = reviewSchema.ROLE_CAPABILITY_MANIFEST;
+  let registry = {};
+  try { ({ ROLE_TOKEN_REGISTRY: registry } = require('./kaola-gitlab-workflow-plan-validator')); }
+  catch (_) { registry = {}; }
+
+  // P1 — the target must be a role the library can actually dispatch.
+  const target = manifest[toRole];
+  if (!target) {
+    return refuse('substitute_unknown_role', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      detail: 'role "' + toRole + '" is not in the installed library',
+    });
+  }
+  const source = manifest[fromRole];
+  if (!source) {
+    return refuse('substitute_unknown_role', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      detail: 'the frozen role "' + fromRole + '" has no capability manifest row',
+    });
+  }
+
+  // Idempotent replay: the same target already on record is a no-op, not a second record. A crash
+  // between the record and the dispatch therefore resumes by re-running the identical command.
+  const active = activeRoleSubstitution(cacheDir, readFile, nodeId);
+  if (active && active.to_role === toRole) {
+    return {
+      result: 'ok', node_id: nodeId, from_role: active.from_role, to_role: toRole,
+      basis: active.basis, recorded_at: active.ts, idempotent: true,
+      substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
+    };
+  }
+
+  // P2 — same kind, and only the kinds whose substitution is defined.
+  if (source.kind !== target.kind || !SUBSTITUTABLE_KINDS.has(target.kind)) {
+    return refuse('substitute_kind_mismatch', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      from_kind: source.kind, to_kind: target.kind,
+      detail: 'substitution is defined for ' + [...SUBSTITUTABLE_KINDS].join('/') +
+        ' roles of the SAME kind; got ' + source.kind + ' -> ' + target.kind,
+    });
+  }
+
+  // P3 — the target's manifest must COVER the source's. Anything the brief could already demand of
+  // the frozen role stays performable after the swap; substitution may only widen capability.
+  const missing = source.tools.filter(t => !target.tools.includes(t));
+  if (missing.length) {
+    return refuse('substitute_not_superset', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      missing_tools: missing,
+      detail: 'role "' + toRole + '" does not cover ' + fromRole + "'s manifest; missing: " + missing.join(', '),
+    });
+  }
+
+  // P4 — identical evidence contracts, so evidence-check semantics are untouched by the swap.
+  const fromTokens = Array.isArray(registry[fromRole]) ? registry[fromRole] : null;
+  const toTokens = Array.isArray(registry[toRole]) ? registry[toRole] : null;
+  if (!fromTokens || !toTokens || JSON.stringify(fromTokens) !== JSON.stringify(toTokens)) {
+    return refuse('substitute_token_contract_mismatch', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      from_tokens: fromTokens, to_tokens: toTokens,
+      detail: 'evidence token contracts differ; substituting would change what close-time evidence-check requires',
+    });
+  }
+
+  // P5 — the node must still be dispatchable. A closed row, or one whose evidence body already
+  // carries a deliverable, means the frozen role's work exists; swapping the card then would
+  // relabel completed work rather than redirect pending work.
+  const statuses = readLedgerStatuses(planContent);
+  const status = statuses[nodeId] || 'pending';
+  if (status !== 'pending' && status !== 'in_progress') {
+    return refuse('substitute_node_closed', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole, status,
+      detail: 'node status is "' + status + '"; substitution applies only to a pending/in_progress row',
+    });
+  }
+  let evidenceBody = '';
+  try { evidenceBody = readFile(path.join(cacheDir, nodeId + '.md')); } catch (_) { evidenceBody = ''; }
+  if (evidenceBody && hasEvidenceBodyBelowHeader(evidenceBody)) {
+    return refuse('substitute_node_closed', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole, status,
+      detail: 'evidence for "' + nodeId + '" already carries a recorded body; substitution applies only before a deliverable exists',
+    });
+  }
+
+  const basis = 'manifest superset (' + target.tools.join('+') + ' covers ' + source.tools.join('+') +
+    '), kind ' + target.kind + ', identical token contract [' + toTokens.join(', ') + ']';
+  const record = {
+    node_id: nodeId, from_role: fromRole, to_role: toRole, basis, ts: now(),
+  };
+  const store = readRoleSubstitutions(cacheDir, readFile);
+  store.schema_version = ROLE_SUBSTITUTION_SCHEMA_VERSION;
+  store.substitutions = store.substitutions.concat([record]);
+  try { fsMod.mkdirSync(cacheDir, { recursive: true }); } catch (_) {}
+  writeFile(path.join(cacheDir, ROLE_SUBSTITUTIONS_NAME), JSON.stringify(store, null, 2) + '\n');
+
+  return {
+    result: 'ok', node_id: nodeId, from_role: fromRole, to_role: toRole, basis,
+    recorded_at: record.ts, idempotent: false,
+    substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
+    plan_unchanged: true,
+  };
+}
+
+// True when the seeded evidence file carries a real deliverable rather than only its seeded header.
+// The seed is the `evidence-binding:` line plus the required-token scaffold the opener writes; a
+// node that has been dispatched and returned has content beyond that.
+function hasEvidenceBodyBelowHeader(content) {
+  const lines = String(content).split('\n');
+  const bindingIdx = lines.findIndex(l => /^evidence-binding:/.test(l.trim()));
+  if (bindingIdx < 0) return String(content).trim() !== '';
+  return lines.slice(bindingIdx + 1).some(l => {
+    const t = l.trim();
+    if (t === '') return false;
+    // A seeded token scaffold is `token:` with no value; a real deliverable puts a value after it.
+    const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(t);
+    if (m) return m[2].trim() !== '';
+    return true;
+  });
+}
+
 function runRouteFindings(opts, project) {
   const { nodeId } = opts;
   const fs = opts.fs || require('fs');
@@ -13800,7 +14942,7 @@ function runRouteFindings(opts, project) {
         const ownership_candidates = resolveOwningNodes(parsed.file, nodes);
         const owning_node = ownership_candidates.length === 1 ? ownership_candidates[0] : null;
         const fix_role = parsed.securityFlag ? 'security-reviewer'
-          : (owning_node ? 'implementer' : 'code-reviewer');
+          : (owning_node ? (parsed.custodyFlag ? 'tdd-guide' : 'implementer') : 'code-reviewer');
         findings.push({
           finding_id: parsed.finding_id,
           file: parsed.file,
@@ -13857,6 +14999,7 @@ function main() {
       '  expand-open         --project P --node-id N --stdin  (compose + record + open one expansion point)\n' +
       '  expand-close        --project P --node-id N          (discharge a fully-settled expansion point)\n' +
       '  amend-surface       --project P --node-id N --files "a,b"  (attribute an out-of-surface companion file + route to re-review)\n' +
+      '  substitute-role     --project P --node-id N --to-role R  (same-kind, superset-proven dispatch swap; plan + plan_hash unchanged)\n' +
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -13865,7 +15008,8 @@ function main() {
       '  repair-node         --project P --attempt-id A --node-id N\n' +
       '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
       '\n' +
-      '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n'
+      '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n' +
+      '  --main-session-direct  (close-node / close-and-open-next) record this node as main-session-direct\n'
     );
     return;
   }
@@ -14136,6 +15280,7 @@ function main() {
     } else {
       result = runCloseNode({
         planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        mainSessionDirect: args.includes('--main-session-direct'),
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
       });
     }
@@ -14196,6 +15341,18 @@ function main() {
         });
       }
     }
+  } else if (subcommand === 'substitute-role') {
+    // Redirect ONE node's dispatch target to a role whose manifest covers the frozen role's, same
+    // kind and same evidence contract. Every precondition is a checkable fact, so this decides
+    // mechanically; when nothing in-kind covers the brief there is no fact to check and the
+    // orchestrator escalates through the existing `write-halt --reason consent` valve instead.
+    const toRoleIdx = args.indexOf('--to-role');
+    result = decorateOperatorHint(runSubstituteRole({
+      planPath, project, nodeId,
+      toRole: (toRoleIdx >= 0 && toRoleIdx + 1 < args.length) ? args[toRoleIdx + 1] : null,
+      repoRoot: getRoot(), readFile, writeFile,
+      now: () => new Date().toISOString(),
+    }, project));
   } else if (subcommand === 'amend-surface') {
     // #762: attribute an out-of-surface companion file to a DISCHARGED expansion point + route it to
     // re-review. --files "a,b" names the EXACT files (dir/glob refused). An optional stdin composition
@@ -14267,6 +15424,7 @@ function main() {
       // #607: mkdirp + now let the fused-advance gate state-channel write stamp openedAt / ensure .cache.
       result = runCloseAndOpenNext({
         planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode,
+        mainSessionDirect: args.includes('--main-session-direct'),
         mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
         now: () => new Date().toISOString(),
       });
@@ -14443,6 +15601,11 @@ if (require.main === module) {
 module.exports = {
   spliceLedgerNode,
   readLedgerStatuses,
+  // The same-kind, superset-proven dispatch swap + its record readers, exported for direct coverage
+  // of the five typed refusals and the plan/plan_hash byte-identity claim.
+  runSubstituteRole,
+  readRoleSubstitutions,
+  activeRoleSubstitution,
   spliceComplianceRow,
   complianceRowExists,
   removeDurableConsentHalt,
@@ -14538,8 +15701,19 @@ module.exports = {
   // Durable node channel: brief→goal_line + upstream_evidence derivation, and the close-time consumed-proof.
   deriveDispatchChannel,
   checkUpstreamConsumed,
-  // Scheduler legless-co-open predicate (exported for the gate-count + test-consumed-widening pins).
-  tryR2bLeglessCoopen,
+  // Scheduler seam predicates (exported for direct unit pins).
+  liveReadsAllScratchGates,
+  // #804: the ONE `--parallel-safe` verdict classifier + its single bounded re-probe, plus the normal
+  // co-open site that reads them (exported for the classification + probe-count pins).
+  classifyParallelSafeVerdict,
+  probeParallelSafe,
+  tryFormLaneGroup,
+  // #802: the serial→parallel seam checkpoint + its attribution proof. SEAM_WRITE_CAPABLE_ROLES is
+  // exported so the suite can pin it against the validator's own WRITE_ROLES + sink-role rule (the
+  // validator does not export that set, so the duplication is mutation-proven rather than trusted).
+  SEAM_WRITE_CAPABLE_ROLES,
+  seamCheckpointAttribution,
+  runSeamCheckpoint,
   // #602: --summary dispatch-segment extractor.
   dispatchSummarySegments,
   // #605: derived run-progress mirror primitives.

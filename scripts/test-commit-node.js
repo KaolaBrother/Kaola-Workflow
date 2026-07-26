@@ -230,6 +230,254 @@ function assert(condition, message) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 6T (#813): TEST-PATH WRITE-SET ATTRIBUTION. isTestLikePath used to be unioned into the
+// barrier's exempt band WHOLESALE, so a test-like path was invisible to the ALLOWLIST in every
+// scope (per-node, lane-group, whole-plan, leg) — any node could create/edit/delete any test file
+// with no declaration and no evidence trail, while tests are the artifact the rest of the machinery
+// treats as ground truth. The exemption SPLITS here: test-like paths stay out of SENSITIVITY
+// classification (the original motive: `test/login.test.js` must not demand a security-reviewer by
+// pattern match) and JOIN attribution (an out-of-allow test path lands in the EXISTING
+// write_set_overflow / unattributed_write families — no fifth refusal family).
+// `KAOLA_TEST_ATTRIBUTION=0` restores the pre-change exemption byte-identically (proved by the
+// LEGACY_GOLDEN corpus below, captured from the pre-change validator).
+// ---------------------------------------------------------------------------
+{
+  const schema813 = require('./kaola-workflow-adaptive-schema');
+
+  // t1 declares a test path whose NAME matches a Phase-5 sensitivity pattern (`login`); t2 declares
+  // a production file; t3 declares a test path but its ledger row is `n/a` (never ran). The plan has
+  // NO security-reviewer node, so any sensitivity hit refuses.
+  const PLAN_813 = [
+    '# Workflow Plan — issue #813', '', '## Meta', 'labels: area:scripts', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| t1 | tdd-guide | — | test/login.test.js | 1 | sequence |',
+    '| t2 | tdd-guide | — | src/app.js | 1 | sequence |',
+    '| t3 | tdd-guide | — | spec/orphan.spec.ts | 1 | sequence |',
+    '| review | code-reviewer | t1,t2,t3 | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| t1 | complete |', '| t2 | complete |', '| t3 | n/a |',
+    '| review | complete |', '| done | complete |', '',
+  ].join('\n');
+
+  // Run `fn` with KAOLA_TEST_ATTRIBUTION forced to `val` (null ⇒ variable absent), then restore.
+  const withToggle = (val, fn) => {
+    const had = Object.prototype.hasOwnProperty.call(process.env, 'KAOLA_TEST_ATTRIBUTION');
+    const prev = process.env.KAOLA_TEST_ATTRIBUTION;
+    if (val === null) delete process.env.KAOLA_TEST_ATTRIBUTION;
+    else process.env.KAOLA_TEST_ATTRIBUTION = val;
+    try { return fn(); } finally {
+      if (had) process.env.KAOLA_TEST_ATTRIBUTION = prev;
+      else delete process.env.KAOLA_TEST_ATTRIBUTION;
+    }
+  };
+  // Every case below is evaluated with the variable ABSENT — the shipped default must be ON.
+  const bc = (plan, actual, opts) => withToggle(null, () => planValidator.barrierCheck(plan, actual, opts));
+
+  // -- 6T-a (AC1 GREEN half): a DECLARED test write passes WITHOUT a security-reviewer. The
+  //    sensitivity shield survives: `test/login.test.js` matches /login/ but is not a sensitivity hit.
+  {
+    const r = bc(PLAN_813, ['test/login.test.js'], { nodeId: 't1' });
+    assert(r.result === 'pass', '6T-a: a DECLARED test write passes with no security-reviewer, got ' + JSON.stringify(r));
+    assert(r.sensitiveHits.length === 0, '6T-a: the sensitivity shield still skips test-like paths, got ' + JSON.stringify(r.sensitiveHits));
+  }
+  // -- 6T-a2 (shield is TEST-SCOPED, not blanket-off): the same /login/ pattern on a PRODUCTION path
+  //    still refuses sensitive_write_unreviewed. Without this control 6T-a could pass because the
+  //    sensitivity teeth were removed rather than shielded.
+  {
+    const r = bc(PLAN_813, ['src/login.js'], { nodeId: 't2' });
+    assert(r.sensitiveHits.includes('src/login.js') && r.reason === 'sensitive_write_unreviewed',
+      '6T-a2: the shield is test-scoped — a PRODUCTION /login/ path still trips sensitivity, got ' + JSON.stringify(r));
+  }
+  // -- 6T-b (AC1 RED half, PER-NODE scope): an UNDECLARED test write overflows.
+  {
+    const r = bc(PLAN_813, ['test/login.test.js', 'test/rogue.test.js'], { nodeId: 't1' });
+    assert(r.result === 'refuse', '6T-b: an UNDECLARED test write must refuse at the per-node barrier, got ' + JSON.stringify(r));
+    assert(r.reason === 'write_set_overflow', '6T-b: the EXISTING overflow family (no fifth family), got ' + r.reason);
+    assert(r.outOfAllow.includes('test/rogue.test.js'), '6T-b: the out-of-allow test path is NAMED in outOfAllow, got ' + JSON.stringify(r.outOfAllow));
+    assert(r.sensitiveHits.length === 0, '6T-b: attribution refuses without dragging the test path into sensitivity');
+  }
+  // -- 6T-c: a node writing a SIBLING's declared test lane is its own per-node overflow.
+  {
+    const r = bc(PLAN_813, ['spec/orphan.spec.ts'], { nodeId: 't1' });
+    assert(r.result === 'refuse' && r.outOfAllow.includes('spec/orphan.spec.ts'),
+      '6T-c: a sibling-lane test write is a per-node overflow, got ' + JSON.stringify(r));
+  }
+  // -- 6T-d (LANE-GROUP scope): the union allowlist covers declared test paths; a stray does not.
+  {
+    const ok = bc(PLAN_813, ['test/login.test.js', 'src/app.js'], { groupMembers: ['t1', 't2'] });
+    assert(ok.result === 'pass', '6T-d: the group union allows each member\'s DECLARED test path, got ' + JSON.stringify(ok));
+    const bad = bc(PLAN_813, ['test/login.test.js', 'src/app.js', 'tests/stray.js'], { groupMembers: ['t1', 't2'] });
+    assert(bad.result === 'refuse' && bad.reason === 'write_set_overflow' && bad.outOfAllow.includes('tests/stray.js'),
+      '6T-d: an undeclared test write refuses in LANE-GROUP scope (the laundering lane closes), got ' + JSON.stringify(bad));
+  }
+  // -- 6T-e (WHOLE-PLAN scope): the plan-wide union likewise ranges over test paths.
+  {
+    const ok = bc(PLAN_813, ['test/login.test.js'], {});
+    assert(ok.result === 'pass', '6T-e: whole-plan union allows a declared test path, got ' + JSON.stringify(ok));
+    const bad = bc(PLAN_813, ['__tests__/stray.js'], {});
+    assert(bad.result === 'refuse' && bad.reason === 'write_set_overflow' && bad.outOfAllow.includes('__tests__/stray.js'),
+      '6T-e: an undeclared test write refuses in WHOLE-PLAN scope, got ' + JSON.stringify(bad));
+  }
+  // -- 6T-f (WHOLE-PLAN unattributed floor): a test path declared ONLY by an `n/a` node lands in the
+  //    EXISTING unattributed_write family — the producer claims it did not run, so the write is unreviewed.
+  {
+    const r = bc(PLAN_813, ['spec/orphan.spec.ts'], {});
+    assert(r.result === 'refuse' && r.reason === 'unattributed_write' && r.unattributed.includes('spec/orphan.spec.ts'),
+      '6T-f: a test path owned only by a non-complete node is unattributed_write (rank 4, no new family), got ' + JSON.stringify(r));
+  }
+  // -- 6T-g (LEG scope): the per-leg write-isolation barrier sees test paths too.
+  {
+    const ok = bc(PLAN_813, ['test/login.test.js'], { nodeId: 't1', legScoped: true });
+    assert(ok.result === 'pass', '6T-g: a leg\'s DECLARED test write passes, got ' + JSON.stringify(ok));
+    const bad = bc(PLAN_813, ['test/rogue.test.js'], { nodeId: 't1', legScoped: true });
+    assert(bad.result === 'refuse' && bad.outOfAllow.includes('test/rogue.test.js'),
+      '6T-g: an out-of-lane test write refuses at the LEG barrier, got ' + JSON.stringify(bad));
+  }
+  // -- 6T-h (precedence contract unchanged): every refusal above is one of the FOUR existing families.
+  {
+    const FAMILIES = new Set(['foreign_archive', 'sensitive_write_unreviewed', 'write_set_overflow',
+      'write_set_granularity', 'lockfile_drift', 'generated_mirror', 'count_bump', 'unattributed_write']);
+    for (const [label, actual, opts] of [
+      ['per-node', ['test/rogue.test.js'], { nodeId: 't1' }],
+      ['group', ['tests/stray.js'], { groupMembers: ['t1', 't2'] }],
+      ['whole-plan', ['__tests__/stray.js'], {}],
+    ]) {
+      const r = bc(PLAN_813, actual, opts);
+      assert(FAMILIES.has(r.reason), '6T-h (' + label + '): no fifth refusal family — reason must stay in the shipped table, got ' + r.reason);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 6T-i (AC3) — KAOLA_TEST_ATTRIBUTION=0 reproduces the PRE-CHANGE barrier BYTE-IDENTICALLY.
+  // LEGACY_GOLDEN holds `JSON.stringify(barrierCheck(...))` for every corpus case, CAPTURED BY
+  // RUNNING THE PRE-CHANGE VALIDATOR (commit 1a82dc69, before the attribution split). The corpus is
+  // reproduced here verbatim; the toggle-off run must emit the same bytes. The companion non-vacuity
+  // assertion proves the corpus actually exercises the changed path (otherwise byte-identity would be
+  // trivially true and the test would be inert).
+  // -------------------------------------------------------------------------
+  {
+    const PLAN_DIRGRANT = [
+      '# Workflow Plan — issue #813', '', '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| d1 | tdd-guide | — | tests/ | 1 | sequence |',
+      '| done | finalize | d1 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| d1 | complete |', '| done | complete |', '',
+    ].join('\n');
+
+    const CORPUS = [
+      ['node-declared-test', PLAN_813, ['test/login.test.js'], { nodeId: 't1' }],
+      ['node-undeclared-test', PLAN_813, ['test/login.test.js', 'test/rogue.test.js'], { nodeId: 't1' }],
+      ['node-sibling-lane-test', PLAN_813, ['spec/orphan.spec.ts'], { nodeId: 't1' }],
+      ['node-undeclared-tests-dir', PLAN_813, ['tests/extra.js'], { nodeId: 't2' }],
+      ['node-undeclared-__tests__', PLAN_813, ['__tests__/x.js'], { nodeId: 't2' }],
+      ['node-undeclared-spec-name', PLAN_813, ['src/thing.spec.js'], { nodeId: 't2' }],
+      ['node-production-control', PLAN_813, ['src/app.js', 'src/stray.js'], { nodeId: 't2' }],
+      ['node-dirgrant-test', PLAN_DIRGRANT, ['tests/a.test.js'], { nodeId: 'd1' }],
+      ['group-declared-test', PLAN_813, ['test/login.test.js', 'src/app.js'], { groupMembers: ['t1', 't2'] }],
+      ['group-undeclared-test', PLAN_813, ['test/login.test.js', 'src/app.js', 'test/rogue.test.js'], { groupMembers: ['t1', 't2'] }],
+      ['group-subset-scoped-test', PLAN_813, ['test/login.test.js'], { groupMembers: ['t2'] }],
+      ['plan-declared-test', PLAN_813, ['test/login.test.js'], {}],
+      ['plan-undeclared-test', PLAN_813, ['test/rogue.test.js'], {}],
+      ['plan-na-owner-test', PLAN_813, ['spec/orphan.spec.ts'], {}],
+      ['plan-production-control', PLAN_813, ['src/stray.js'], {}],
+      ['leg-declared-test', PLAN_813, ['test/login.test.js'], { nodeId: 't1', legScoped: true }],
+      ['leg-undeclared-test', PLAN_813, ['test/rogue.test.js'], { nodeId: 't1', legScoped: true }],
+      ['sens-declared-test-login', PLAN_813, ['test/login.test.js'], { nodeId: 't1' }],
+      ['sens-production-auth', PLAN_813, ['src/auth/session.js'], { nodeId: 't2' }],
+      ['workflow-artifact', PLAN_813, ['kaola-workflow/p/workflow-plan.md'], {}],
+      ['docs-allowband', PLAN_813, ['docs/guide.md'], {}],
+    ];
+    const PASS_NULL = '{"result":"pass","reason":null,"errors":[],"sensitiveHits":[],"outOfAllow":[],"foreignArchiveHits":[],"unattributed":[]}';
+    const LEGACY_GOLDEN = {
+      'node-declared-test': PASS_NULL,
+      'node-undeclared-test': PASS_NULL,
+      'node-sibling-lane-test': PASS_NULL,
+      'node-undeclared-tests-dir': PASS_NULL,
+      'node-undeclared-__tests__': PASS_NULL,
+      'node-undeclared-spec-name': PASS_NULL,
+      'node-production-control': '{"result":"refuse","reason":"write_set_overflow","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      'node-dirgrant-test': PASS_NULL,
+      'group-declared-test': PASS_NULL,
+      'group-undeclared-test': PASS_NULL,
+      'group-subset-scoped-test': PASS_NULL,
+      'plan-declared-test': PASS_NULL,
+      'plan-undeclared-test': PASS_NULL,
+      'plan-na-owner-test': PASS_NULL,
+      'plan-production-control': '{"result":"refuse","reason":"write_set_overflow","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      'leg-declared-test': PASS_NULL,
+      'leg-undeclared-test': PASS_NULL,
+      'sens-declared-test-login': PASS_NULL,
+      'sens-production-auth': '{"result":"refuse","reason":"sensitive_write_unreviewed","errors":["actual writes touch a Phase-5 sensitive area (src/auth/session.js) but the plan has no security-reviewer node — revoke and escalate (G2)","actual writes outside the declared allowlist (src/auth/session.js) — overflow beyond the frozen write set"],"sensitiveHits":["src/auth/session.js"],"outOfAllow":["src/auth/session.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      'workflow-artifact': PASS_NULL,
+      'docs-allowband': PASS_NULL,
+    };
+
+    // The toggle's contract is to restore prior ATTRIBUTION behaviour, not to freeze operator_hint
+    // PROSE — the hint is regenerated at emit time from OPERATOR_HINT_REGISTRY (D-445-01) and is free
+    // to reword (e.g. write_set_overflow now names BOTH revert-overflow and amend-surface) without
+    // that being an attribution regression. So the byte-identity comparison below is scoped to the
+    // DECISION fields the toggle actually governs; a dedicated substring check further down covers
+    // hint content without re-freezing its prose (full hint-presence coverage also lives independently
+    // in test-adaptive-node.js's T-445-A corpus).
+    const decisionOnly = (r) => JSON.stringify({
+      result: r.result, reason: r.reason, errors: r.errors, sensitiveHits: r.sensitiveHits,
+      outOfAllow: r.outOfAllow, foreignArchiveHits: r.foreignArchiveHits, unattributed: r.unattributed,
+    });
+
+    // (i-1) BYTE-IDENTITY (decision fields only): toggle OFF reproduces the pre-change decision for
+    // EVERY corpus case.
+    let offMismatch = 0;
+    withToggle('0', () => {
+      for (const [key, plan, actual, opts] of CORPUS) {
+        const got = decisionOnly(planValidator.barrierCheck(plan, actual, opts));
+        if (got !== LEGACY_GOLDEN[key]) {
+          offMismatch++;
+          console.error('  6T-i byte-diff [' + key + ']\n    want: ' + LEGACY_GOLDEN[key] + '\n    got:  ' + got);
+        }
+      }
+    });
+    assert(offMismatch === 0, '6T-i-1 (AC3): KAOLA_TEST_ATTRIBUTION=0 must reproduce the PRE-CHANGE barrier byte-identically — '
+      + offMismatch + ' of ' + CORPUS.length + ' corpus cases diverged');
+
+    // (i-1b) HINT CONTENT — separate from byte-identity and substring-based (not byte-frozen) so an
+    // unrelated wording revision does not re-break this corpus: the write_set_overflow hint must still
+    // name its recovery primitive with the toggle off.
+    for (const key of ['node-production-control', 'plan-production-control']) {
+      const entry = CORPUS.find((c) => c[0] === key);
+      const r = withToggle('0', () => planValidator.barrierCheck(entry[1], entry[2], entry[3]));
+      assert(r.operator_hint && r.operator_hint.includes('revert-overflow'),
+        '6T-i-1b hint [' + key + ']: operator_hint still names revert-overflow, got ' + JSON.stringify(r.operator_hint));
+    }
+
+    // (i-2) NON-VACUITY: with the toggle at its shipped default the corpus MUST diverge from the
+    // legacy decision on the test-path cases — otherwise (i-1) proves nothing.
+    let onDiff = 0;
+    withToggle(null, () => {
+      for (const [key, plan, actual, opts] of CORPUS) {
+        if (decisionOnly(planValidator.barrierCheck(plan, actual, opts)) !== LEGACY_GOLDEN[key]) onDiff++;
+      }
+    });
+    assert(onDiff >= 8, '6T-i-2 (AC3 non-vacuity): the corpus must actually exercise the changed path — '
+      + 'expected ≥8 default-ON divergences from the legacy bytes, got ' + onDiff);
+
+    // (i-3) DEFAULT IS ON: absent variable, and any value other than the three opt-out spellings.
+    assert(schema813.testAttributionDefaultOn({}) === true, '6T-i-3: absent KAOLA_TEST_ATTRIBUTION ⇒ attribution ON');
+    assert(schema813.testAttributionDefaultOn({ KAOLA_TEST_ATTRIBUTION: '1' }) === true, '6T-i-3: "1" ⇒ ON');
+    assert(schema813.testAttributionDefaultOn({ KAOLA_TEST_ATTRIBUTION: '' }) === true, '6T-i-3: empty ⇒ ON (only an explicit opt-out disarms)');
+    for (const off of ['0', 'false', 'no']) {
+      assert(schema813.testAttributionDefaultOn({ KAOLA_TEST_ATTRIBUTION: off }) === false, '6T-i-3: "' + off + '" ⇒ OFF');
+    }
+    assert(schema813.TEST_ATTRIBUTION_ENV === 'KAOLA_TEST_ATTRIBUTION', '6T-i-3: the env name is exported forge-neutrally');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Test 7 (#366): per-node end-mode makes ONE fused --node-end validator spawn instead of FOUR
 // (barrier + gate + verdict + selector) — ≥40% reduction. A logging stub counts validator
 // invocations. The fallback (stub without --node-end support) re-runs the legacy spawns.
@@ -844,6 +1092,9 @@ function assert(condition, message) {
         ...nodeRows, '',
         '## Design', '',
         'Decompose: seed explores; A and B are disjoint write legs (src/a.js vs lib/b.js) co-opened; synth unions them; review gates; finalize sinks. sequence synth→review: S1 — review consumes synth\'s merged tree. Done: CHANGELOG updated and review passes.', '',
+        '## Acceptance', '',
+        'A1: the disjoint legs land src/a.js and lib/b.js and the union carries both.',
+        'A2: the recorded validation_command passes over the merged candidate.', '',
         '## Node Ledger', '',
         '| id | status |', '| --- | --- |',
         ...ledgerRows, '',
@@ -1078,6 +1329,15 @@ function assert(condition, message) {
       ...nodeTable, '',
       '## Design', '',
       'Decompose: seed explores; impl builds src/a.js; review gates; finalize sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation_command passes and review clears.', '',
+      // A CODE-PRODUCING schema-2 plan must transcribe its acceptance surface to clear the freeze
+      // wall. Emitted for schema-2 only: the 'legacy' v1 fixture exists to prove v1 freeze/resume
+      // back-compat is byte-exact, and the wall never ranges over v1 — adding the section there
+      // would change the very bytes that assertion is about.
+      ...(shape === 'legacy' ? [] : [
+        '## Acceptance', '',
+        'A1: src/a.js carries the change the plan was frozen for.',
+        'A2: the recorded validation_command passes over the final candidate.', '',
+      ]),
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | pending |', '| impl | pending |', '| review | pending |', '| finalize | pending |', '',

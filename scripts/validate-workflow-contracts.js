@@ -552,13 +552,19 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'final_validation_unverifi
 // #653: the consumer candidate binding (validated_candidate_hash) — the plan-run All-done consumer
 // block must instruct recording the hash so the verdict is bound to the exact validated tree.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'validated_candidate_hash');
-// #277 M3: --keep-worktree procedure relocated from phase6 inline body to agents/contractor.md;
-// still asserted in the dispatch prompt string inside finalize.md (pass-through reference).
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
 assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata captured before Step 8b');
-// #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
-// agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
-assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+// #816: ownership-inversion lock — the finalize seam is orchestrator-owned and the mechanical
+// residue is ONE script transaction, so the command must carry NO dispatchable bookkeeping role
+// and MUST carry the one-call transaction. Both directions are pinned: re-introducing a dispatch
+// reds the chain, and dropping the transaction call reds it too.
+assertNotIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+assertNotIncludes('commands/kaola-workflow-finalize.md', 'contractor');
+assertIncludes('commands/kaola-workflow-finalize.md', 'ONE resumable script transaction');
+assertIncludes('commands/kaola-workflow-finalize.md', 'node "$CLAIM_JS" finalize \\\n  --project {project} --keep-worktree $SINK_KEEP_OPEN_FLAG');
+assertIncludes('commands/kaola-workflow-finalize.md', 'implementation_commit_missing');
+assertIncludes('commands/kaola-workflow-finalize.md', 'staging_guard_multi_project');
+assertIncludes('commands/kaola-workflow-finalize.md', 'finalize_mirror_refused');
 
 // #336: keep-open partial-close sink lane — pin the durable field, the sink-merge flag, and the
 // merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard is shell prose no walkthrough
@@ -577,9 +583,10 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN"
 assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --barrier-check');
 assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --verdict-check');
 assertNotIncludes('commands/kaola-workflow-finalize.md', 'node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check');
-// #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
-// 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
-// cross-file ordering is not expressible via assertBefore (single-file only).
+// assertBefore calls for 'commit -m "chore: finalize {project}"' and 'node "$CLAIM_JS" finalize'
+// DROPPED: the finalize commit is no longer a prompt-authored bash step whose ORDER a command file
+// could express. `cmdFinalize` owns it inside the one mechanical transaction, so the ordering is
+// enforced by the code path (and its suite), not by token order in a command surface.
 
 const packageJson = JSON.parse(read('package.json'));
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package files must include hooks/');
@@ -736,15 +743,14 @@ assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan valida
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
 assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progress'); // #343 mid-gate reopen
-// #338: anti-drift pins — the finalize sink row is main-session-direct (not subagent-invoked),
-// and the contractor self-attest back-fill flag is wired through claim.js + the contractor profile.
+// #338: anti-drift pin — the finalize sink row is main-session-direct (not subagent-invoked).
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'main-session-direct');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
 // #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
 // DEFINED via the kaola_script() resolver before its first use — an undefined handle is
 // MODULE_NOT_FOUND in a consumer plugin install (no local scripts dir). Pin the resolver + the
 // assignment so removing either regresses the chain.
-// #360: the consent-halt clear path is the script-owned `clear-halt` subcommand, not a contractor
+// #360: the consent-halt clear path is the script-owned `clear-halt` subcommand, not an agent
 // lockstep — pin its presence in the prose + the script so the prose mutation cannot return.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'clear-halt');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
@@ -786,7 +792,11 @@ assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'findings-route.json'
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'VERDICT_ROLES');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
-assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
+// #816: the finalize seam records no attestation — the field, the back-fill, and the inline-suspect
+// warning are retired. Pinned as an ABSENCE so a revival reds the chain, alongside the POSITIVE pin
+// on the folded transaction below (the two directions of the same invariant).
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'finalize_contractor_attested');
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'attestContractorSpawn');
 // #347: pin the planner self-attest back-fill flag (the #280 producer) so the forge-port asymmetry
 // it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
@@ -794,14 +804,27 @@ assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes('agents/workflow-planner.md', '--attest-planner-spawn');
 // persistence lock: a non-empty attestation warning must be transcribed into the durable summary.
 assertIncludes('scripts/kaola-workflow-claim.js', '## Attestation');
-assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
-// #399: the Step-8a artifact mirror must run the ledger-regression guard (forge-neutral
-// kaola-workflow-ledger-compare.js) BEFORE its `cp -R`, and the finalization preamble must
-// carry the sync-order recovery phrase (worktree->main BEFORE the mirror). Pin both so a prose
-// mutation that drops the guard or the recovery note cannot silently return — the 2026-06-11
-// audit reproduced the clobber live.
-assertIncludes('agents/contractor.md', 'kaola-workflow-ledger-compare.js');
-assertIncludes('agents/contractor.md', 'sync worktree->main FIRST');
+// #816: the retired bookkeeping role must not come back as a file on any runtime.
+assert(!exists('agents/contractor.md'), 'agents/contractor.md must be retired');
+for (const forge of ['', '-gitlab', '-gitea']) {
+  assert(!exists('plugins/kaola-workflow' + forge + '/agents/contractor.toml'),
+    'plugins/kaola-workflow' + forge + '/agents/contractor.toml must be retired');
+}
+// #399/#816: the Step-8a artifact mirror now lives INSIDE cmdFinalize and must still run the
+// ledger-regression guard BEFORE the copy, still refusing with the sync-order recovery phrase.
+// Pin both so a change that drops the guard or the recovery note cannot silently return — the
+// 2026-06-11 audit reproduced the clobber live.
+assertIncludes('scripts/kaola-workflow-claim.js', 'kaola-workflow-ledger-compare.js');
+assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'finalize_mirror_refused',");
+assertIncludes('scripts/kaola-workflow-claim.js', 'if (!verdict.safe) {');
+assertIncludes('scripts/kaola-workflow-claim.js', 'worktree→main FIRST, then re-run finalize');
+// #816: the folded transaction — mirror, archive/close, roadmap staging, commit gate — plus the
+// two typed guardrails that carry over. Dropping any of them reds the chain.
+assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'implementation_commit_missing',");
+assertIncludes('scripts/kaola-workflow-claim.js', 'staging_guard_foreign_archive');
+assertIncludes('scripts/kaola-workflow-claim.js', 'staging_guard_multi_project');
+assertIncludes('scripts/kaola-workflow-claim.js', "'chore: finalize ' + args.project");
+assertIncludes('scripts/kaola-workflow-claim.js', 'finalize_transaction');
 // #353: durable-state writes must route through the crash-safe atomic replace (no torn
 // workflow-plan.md/workflow-state.md/active-batch.json). Pin the helper + its adoption.
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileAtomicReplace');
@@ -952,9 +975,7 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'workflow_path: adaptive')
 for (const reviewerBody of [
   'agents/code-reviewer.md',
   'agents/security-reviewer.md',
-  'agents/adversarial-verifier.md',
-  'agents/profiles/higher/code-reviewer.md',
-  'agents/profiles/higher/security-reviewer.md'
+  'agents/adversarial-verifier.md'
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
 }
@@ -1000,7 +1021,9 @@ assertIncludes('commands/kaola-workflow-plan-run.md', '--forbidden-only');
 assertIncludes('commands/kaola-workflow-plan-run.md', '<!-- PIN: node-briefs-relay -->');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'carry it VERBATIM into the role dispatch');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'record a column-0 `upstream_read: <node-id> <nonce>` line');
-assertIncludes('commands/kaola-workflow-plan-run.md', "derived from each role's tool manifest");
+assertIncludes('commands/kaola-workflow-plan-run.md', 'One contract, every role, every runtime');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'is the FALLBACK channel, never the primary one');
+assertNotIncludes('commands/kaola-workflow-plan-run.md', "derived from each role's tool manifest");
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '**READ-ONLY roles**');
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '**WRITE-role agents**');
 
@@ -1061,7 +1084,7 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'Every spawn parameter com
 assertIncludes('commands/kaola-workflow-plan-run.md', 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
 assertIncludes('commands/kaola-workflow-plan-run.md', '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
 assertIncludes('commands/kaola-workflow-plan-run.md', '← {node_id} · {role} returned: {verdict or one-line outcome}');
-assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline (…reason token…)');
+assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline');
 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes('commands/kaola-workflow-plan-run.md', '{node-id} → complete; opened: {next-id|—}');
@@ -1193,11 +1216,12 @@ for (const file of [...codexJoinProtocolSurfaces611, ...claudeJoinProtocolSurfac
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
-// #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the finalize command so a silent drop
-// (the #294 fail-open class) turns the chain RED. npm test never executes the bash prose;
-// these pins are its only mechanical enforcement (the bash-block-guards Test E covers runtime).
-assertIncludes('commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');
-assertIncludes('commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
+// #505 ITEM 1 / #816: the foreign-archive staging guard is no longer bash prose — it moved INTO
+// the finalize transaction as a typed refusal. Pin the refusal in the producer script (a silent
+// drop is the #294 fail-open class) and the surviving pointer in the finalize command, so neither
+// half can vanish unnoticed.
+assertIncludes('scripts/kaola-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
+assertIncludes('commands/kaola-workflow-finalize.md', 'staging_guard_foreign_archive');
 assertIncludes('commands/kaola-workflow-finalize.md', '## Staging Guard');
 
 // n5 (#653 finding D): selection-evidence docking + run-gap manual-seed prose must reach the
@@ -1404,6 +1428,105 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
         }
       }
     }
+  }
+}
+
+// VENDOR_MODEL_NOUN_BAN: no agent-facing prompt surface, in ANY edition, may name a vendor's
+// model by brand. A prompt describes the reasoning class it needs — `reasoning tier`,
+// `reasoning-floor`, `standard tier` — never "Opus"/"Sonnet"/"GPT-5". A brand noun is wrong on
+// three of the four runtimes that read the same wording, and it silently re-teaches a rule the
+// portable plan vocabulary already states.
+//
+// This is the ALWAYS-ON half of the rule. Neutral wording used to be produced by per-runtime
+// rewrite transforms applied on the way out; those are retired, because generated text must be
+// runtime-neutral AT THE SOURCE. With the transforms gone, this scan is the only thing standing
+// between a brand noun and four shipped editions, so it lives here — inside the claude chain —
+// rather than in a runtime suite that no chain runs.
+//
+// EXEMPT-LIST, NOT ALLOWLIST. Every .md/.toml under every declared root is scanned; a newly-added
+// prompt surface is guarded the moment it lands, with no registration step. Only an explicitly
+// named path with a stated reason is skipped. History is out of scope by construction — it is not
+// under these roots: docs/decisions/, docs/investigations/, docs/audits/, and CHANGELOG.md record
+// what was decided and when, and rewriting them would falsify the record.
+//
+// Lowercase `opus`/`sonnet` are DELIBERATELY not matched: they are the portable plan `model`-column
+// tier aliases (schema TIER_ALIASES), a closed machine vocabulary, not prose about a vendor.
+{
+  const VENDOR_MODEL_NOUN_BAN =
+    /\b(Opus|Sonnet|Haiku|Gemini|Llama|Mistral|Grok|Qwen|DeepSeek|GPT-[0-9][\w.-]*|GLM-[0-9][\w.-]*)\b/;
+
+  const editions = ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'];
+  const promptSurfaceRoots = [
+    { dir: 'commands' },
+    { dir: 'agents' },
+    // Shipped by install.sh into every forge's support dir; the plan-run command routes into them,
+    // so they are read as prompt text at runtime exactly like a command body.
+    { dir: 'docs/plan-run-cards' },
+    ...editions.flatMap(edition => [
+      // The github Codex plugin ships SKILL packs rather than command files; the two forge plugins
+      // ship both. A root that is absent for that structural reason is declared optional here, so
+      // a root that goes missing for ANY OTHER reason still fails closed.
+      { dir: 'plugins/' + edition + '/commands', optional: edition === 'kaola-workflow' },
+      { dir: 'plugins/' + edition + '/skills' },
+      { dir: 'plugins/' + edition + '/agents' }
+    ])
+  ];
+
+  // Paths intentionally allowed to carry a brand noun, each with the reason it must. Empty is the
+  // correct steady state: an entry here is a documented exception, never a parking spot for a
+  // surface someone did not want to fix.
+  const VENDOR_NOUN_EXEMPT = new Map([]);
+
+  const scanned = [];
+  for (const { dir, optional } of promptSurfaceRoots) {
+    const absolute = path.join(root, dir);
+    if (!fs.existsSync(absolute)) {
+      assert(optional === true,
+        'VENDOR_MODEL_NOUN_BAN — declared prompt-surface root "' + dir + '" is missing; the guard ' +
+        'cannot scan it. Restore the directory, or mark the root optional with a stated reason.');
+      continue;
+    }
+    const stack = [absolute];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) stack.push(full);
+        else if (/\.(md|toml)$/.test(entry.name)) scanned.push(path.relative(root, full));
+      }
+    }
+  }
+
+  // A guard that scans nothing passes everything. Assert the walk actually reached the surfaces.
+  assert(scanned.length >= 90,
+    'VENDOR_MODEL_NOUN_BAN — expected to scan every prompt surface across all editions, but only ' +
+    scanned.length + ' file(s) were reached; the root list or the directory walk is broken.');
+
+  for (const rel of scanned.sort()) {
+    if (VENDOR_NOUN_EXEMPT.has(rel)) continue;
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(VENDOR_MODEL_NOUN_BAN);
+      if (m) {
+        assert(false,
+          rel + ':' + (i + 1) + ': VENDOR_MODEL_NOUN_BAN — vendor model noun "' + m[0] +
+          '" must not appear in an agent-facing prompt surface. Name the reasoning class instead ' +
+          '(e.g. "reasoning tier", "reasoning-floor", "standard tier"); the lowercase `opus`/' +
+          '`sonnet` plan-column aliases are unaffected. See docs/conventions.md.');
+      }
+    }
+  }
+
+  // Stale-exemption sweep: an exemption that no longer names a real file, or names a file that no
+  // longer needs it, is deleted rather than carried. Bidirectional by construction.
+  for (const [rel, reason] of VENDOR_NOUN_EXEMPT) {
+    assert(typeof reason === 'string' && reason.trim().length > 0,
+      'VENDOR_MODEL_NOUN_BAN — exemption "' + rel + '" must state a one-line reason');
+    assert(exists(rel),
+      'VENDOR_MODEL_NOUN_BAN — exemption "' + rel + '" names a file that does not exist; delete it');
+    assert(VENDOR_MODEL_NOUN_BAN.test(read(rel)),
+      'VENDOR_MODEL_NOUN_BAN — exemption "' + rel + '" is stale: the file carries no vendor model ' +
+      'noun. Delete the exemption so the surface is guarded again.');
   }
 }
 

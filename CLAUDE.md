@@ -55,6 +55,8 @@ Concurrency is the standing default for any frontier. Holding work serial is a p
 - **S2 — shared irreversible effect**: name the shared resource both units mutate (resource identity, not a conflict forecast).
 - **S3 — environment**: a failed worktree-support probe (a measurement).
 
+**A serializer must be one the orchestrator cannot remove.** A blocker the workflow itself created — state produced by its own commit policy rather than by the task — is a **repair obligation discharged before dispatch**, never evidence. Repair it, then co-open; where the repair cannot be *proven* sound, halt loudly rather than serialize over it, because silent serialization buries the integrity signal it should be raising. The repair belongs to the **scheduler, not the plan**: the planner authors the shape, the scheduler clears its own residue.
+
 Uncertainty is not a serializer — uncertain writes co-open in isolated legs and reconcile at the join. Rationale: wrong-parallel costs one bounded, visible synthesis pass; wrong-serial costs invisible wall-clock on every frontier, so the burden of proof sits on serial. This governs **mode** only: width stays governed by faithful decomposition, and the recorded evidence line is audit-only (the only mechanical check allowed is that it exists).
 
 ### Self-Sufficient by Default; CI/CD Is Not a Gate
@@ -64,6 +66,16 @@ Minimize **synergy** (coupling to systems the workflow does not own); maximize *
 - **CI/CD is never a required gate** — not a plan node, not a finalization precondition, not something the orchestrator / `--sink` / finalize waits on or blocks on. Coupling correctness to an external pipeline assumes infrastructure that may not exist and hands the verdict to a system we don't own.
 - **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
 - **Accuracy still comes from inside** — this does not weaken axiom 1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*.
+
+### One Rule, One Wording; Runtime Divergence Requires Declaration
+
+A rule, refusal code, or generated template has **exactly one wording**, and every agent runtime reads that wording. A runtime is a *rendering target*, never an authoring surface: the same rule may not be restated, abridged, or re-neutralized per runtime.
+
+- **Divergence must be declared** — allowed only where a runtime's capabilities genuinely differ (Codex spawns via `agent_type` where Claude uses `subagent_type`; Kimi subagents inherit the session model). Express it as a named region in the single source or a named entry in an exemption table with a one-line reason, never as an incidental rewrite rule.
+- **Generated text is runtime-neutral at the source**, not neutralized on the way out. Every per-runtime rewrite is a site where two targets can silently diverge, so the count of rewrite rules is itself the reliability metric — drive it toward zero.
+- **Consumer-facing artifacts this project writes into someone else's repo** (`CLAUDE.md`, `AGENTS.md`) are read by every runtime: name no vendor, no model, and no command that does not resolve on the reader's runtime.
+- **Regulating clause** — any change touching a prompt surface states which runtimes it reaches. "I edited the Claude command" is not a complete change; the surface set is part of the diff.
+- **A guard is evidence only once mutation-proven.** A green suite is not evidence a guard is armed — enforcement must default to on (exempt-lists, not opt-in allowlists) and be bidirectional, or a forgotten token is silently unguarded.
 
 ### The Adaptive Workflow
 
@@ -92,11 +104,14 @@ node scripts/simulate-workflow-walkthrough.js
 ```
 Must exit 0 with "Workflow walkthrough simulation passed".
 
+Two tiers. `test:kaola-workflow:claude` is the **fast gate** (~6.5 min): every cheap step at full coverage, but the three heavyweight suites run a rotating 1/12 slice and six non-samplable suites are deferred. `test:kaola-workflow:claude:full` runs everything.
+
 For any **cross-edition** diff (see Validation Policy), run all four chains sequentially:
 ```bash
 npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
   npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
 ```
+A **release receipt must use the complete tier** — `npm run test:full` — never the sampled gate. See `docs/conventions.md` § Two validation tiers for exactly what the fast gate skips.
 
 ## Documentation Update Checklist
 
@@ -120,7 +135,7 @@ npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
 - Read before writing: inspect the target file and relevant surrounding conventions immediately before editing or creating files.
 - Keep it simple: solve the requested problem without speculative abstractions.
 - Make surgical changes: touch only what the task requires.
-- Goal-driven execution: Define verifiable success criteria before starting. Prefer write-the-failing-test-first for bugs and features. Loop until criteria pass; don't declare done on weak signals.
+- Goal-driven execution: Define verifiable success criteria before starting. Keep the tests in separate custody from the code they judge — whoever implements a behavior does not author its tests. Loop until criteria pass; don't declare done on weak signals.
 - Verify facts, don't fabricate: do not guess API/library behavior, interfaces, or signatures — confirm them against documentation, source, or a run before relying on them. Do not claim to understand code, errors, or requirements you have not verified; name what you do not know and find out.
 - Reuse before adding: before writing a new interface, search for an existing equivalent and extend it rather than duplicate functionality.
 - Escalate irreversible changes: do not unilaterally make hard-to-reverse changes or alter a user-owned contract (public API, schema or data migration, dependency or build-tooling swap, deletion of working capability); state the decision and its evidence, then get confirmation before proceeding.

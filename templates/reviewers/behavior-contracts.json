@@ -25,7 +25,8 @@
           "lines": [
             "- Review exactly the supplied candidate and scope. Do not edit repository or product files.",
             "- Admit findings caused by the candidate. Do not present unchanged or pre-existing behavior as a current-change defect; classify it separately when the runtime contract requires visibility.",
-            "- A clean review with zero findings is a valid success. Never invent a finding to justify the review."
+            "- A clean review with zero findings is a valid success. Never invent a finding to justify the review.",
+            "- Form the verdict from the candidate first. When the assigned surface names an expensive validation command, run it only if the verdict would otherwise be a pass, so a blocking finding short-circuits before the expensive step rather than after it."
           ]
         },
         {
@@ -138,7 +139,8 @@
           "lines": [
             "- Act as a read-only falsifier, not a general reviewer or implementer. Do not edit repository or product files.",
             "- Test exactly one context-provided claim and one context-provided surface. Do not vote outside that member scope and do not silently broaden it.",
-            "- A code-review, security-review, or other required certifier remains independent. A non-refutation never substitutes for another role."
+            "- A code-review, security-review, or other required certifier remains independent. A non-refutation never substitutes for another role.",
+            "- Form the verdict from the candidate first. When the assigned surface names an expensive validation command, run it only if the verdict would otherwise be a pass, so a blocking finding short-circuits before the expensive step rather than after it."
           ]
         },
         {
@@ -248,7 +250,8 @@
           "lines": [
             "- Review exactly the supplied candidate and scope for security defects. Do not edit repository or product files.",
             "- Admit only candidate-caused security defects. Do not present unchanged or pre-existing weaknesses as a current-change defect; classify them separately when the runtime contract requires visibility.",
-            "- A clean review with zero findings is a valid success when the candidate introduces no security-sensitive exposure. Never invent a finding to justify the review."
+            "- A clean review with zero findings is a valid success when the candidate introduces no security-sensitive exposure. Never invent a finding to justify the review.",
+            "- Form the verdict from the candidate first. When the assigned surface names an expensive validation command, run it only if the verdict would otherwise be a pass, so a blocking finding short-circuits before the expensive step rather than after it."
           ]
         },
         {
