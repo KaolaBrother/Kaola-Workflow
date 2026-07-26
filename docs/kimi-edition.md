@@ -8,6 +8,31 @@ generated `.kimi/` tree plus a managed `[[hooks]]` block in the Kimi `config.tom
 fully **additive**: it touches none of the existing `claude`/`codex`/`gitlab`/`gitea`/
 `opencode` edition machinery.
 
+## Forge axis
+
+The runtime is not a forge, but the workflow *prose* is forge-shaped (`gh` vs `glab` vs
+`tea`, pull requests vs merge requests, per-forge support-script basenames), so
+`install-kimi.sh` takes `--forge=github|gitlab|gitea` (default `github`) and a GitLab/Gitea
+project receives a forge-correct edition rather than GitHub-shaped skills.
+
+The forge variants are **generated, never hand-ported**. `sync-kimi-edition.js` renders each
+forge from the routing-surface registry (`scripts/generate-routing-surfaces.js`, via
+`scripts/runtime-edition-forge.js`), so every forge tree derives from the same byte-checked
+command surfaces the Claude and Codex editions ship. github renders the bare `.kimi/` tree; a
+forge renders the sibling `.kimi-<forge>/`. All generated trees are gitignored build
+artifacts. The managed `[[hooks]]` block is forge-aware too — it names the compact-context
+basename the selected forge actually installs.
+
+```bash
+./install-kimi.sh --forge=gitlab                # GitLab-shaped edition
+node scripts/sync-kimi-edition.js --forge=gitea --check
+```
+
+**Additive is unchanged by this.** Being additive is about edition *machinery*, not forge
+support: the edition stays out of `npm test`, `edition-sync.js`, `install.sh`, and the
+routing-surface contract, and keeps its own suite. An unknown `--forge` value is refused,
+never silently defaulted to github.
+
 ## What gets generated
 
 Everything under `.kimi/` is **generated from canonical** by
@@ -127,16 +152,18 @@ surface inherits the canonical repair loop verbatim.
 
 ## Installer command set
 
-`install-kimi.sh` is a standalone installer (not `install.sh --forge`). It deploys the workflow
-command skills — adapt, finalize, plan-run, workflow-init, workflow-next — plus all 16
-`kaola-role-*` skills. `copy_skills` is **self-healing**: before re-copying it prunes every
-kaola-owned skill dir not in that set, so a reinstall converges to exactly the workflow skill set
-on disk.
+`install-kimi.sh` is a standalone installer — it has its own `--forge` flag and does not run
+through `install.sh --forge`. It deploys the workflow command skills — adapt, finalize, plan-run,
+workflow-init, workflow-next — plus all 16 `kaola-role-*` skills. `copy_skills` is
+**self-healing**: before re-copying it prunes every kaola-owned skill dir not in that set, so a
+reinstall converges to exactly the workflow skill set on disk. Support scripts come from the
+selected forge's script tree, and the installer fails closed if an allowlisted script is missing
+from source.
 
-`sync-kimi-edition.js` produces one command skill per canonical `commands/*.md` file into the
-in-repo `.kimi/skills/` tree (the single source the installer copies from). The test pins the
-command set as exhaustive — a new canonical command unassigned to the set fails both the test and
-the installer (fail-closed).
+`sync-kimi-edition.js` produces one command skill per command surface the routing registry
+declares for the selected forge, into the in-repo `.kimi[-<forge>]/skills/` tree (the single
+source the installer copies from). The test pins the command set as exhaustive — a new canonical
+command unassigned to the set fails both the test and the installer (fail-closed).
 
 ## Hooks
 
@@ -207,7 +234,7 @@ token anywhere in the generated tree (the kimi twin of the opencode #544 path-le
 - **Self-dev (this repo)** — `package.json` name is `kaola-workflow`, so `./scripts/`
   resolves first. Nothing else needed; the edition works in place.
 - **Consumer project** — `install-kimi.sh` copies the support scripts (the
-  install-manifest `--forge=github --scripts` set, 27 scripts) plus the 3 hook scripts to
+  install-manifest `--scripts` set for the selected `--forge`) plus the 3 hook scripts to
   `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hooks}/` (a path
   `kaola_script()` already searches), so commands resolve without editing them. Skip with
   `--no-scripts`.

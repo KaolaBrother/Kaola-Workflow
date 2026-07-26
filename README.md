@@ -268,8 +268,8 @@ Kaola-Workflow installs along two independent axes:
 |---|---|---|
 | **Claude Code** | `./install.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Codex** | `codex plugin marketplace add` + the matching plugin entry | per-plugin entry (`kaola-workflow`, `-gitlab`, `-gitea`) |
-| **opencode** | `./install-opencode.sh` | — (runtime-only; no forge axis) |
-| **Kimi Code** | `./install-kimi.sh` | — (runtime-only; no forge axis) |
+| **opencode** | `./install-opencode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **Kimi Code** | `./install-kimi.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 
 **Install/refresh every runtime at once — `./install-all.sh`.** To reinstall all four runtimes from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
 
@@ -279,9 +279,11 @@ Forge editions:
 - **GitLab**: opt-in. GitLab issues, merge requests, `glab`.
 - **Gitea**: opt-in. Gitea issues, pull requests, `tea` ≥ 0.9.2, Gitea server ≥ 1.17. **Forgejo** ≥ 1.18 is expected to work via the shared API surface but is not explicitly tested.
 
-Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): it has no separate forge editions, `./install-opencode.sh` touches none of the existing edition machinery, and it is fully **standalone** — it resolves its support scripts under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts` and never touches `~/.claude/`, so it runs on a machine with no Claude Code installed. See [docs/opencode-edition.md](docs/opencode-edition.md).
+Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): `./install-opencode.sh` touches none of the existing edition machinery, and it is fully **standalone** — it resolves its support scripts under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts` and never touches `~/.claude/`, so it runs on a machine with no Claude Code installed. Its `--forge` flag selects which forge's workflow prose and support scripts to deploy; the forge variants are **generated** from the same routing surfaces the Claude/Codex editions ship, so there is no hand-ported per-forge tree. See [docs/opencode-edition.md](docs/opencode-edition.md).
 
-**Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. See [docs/kimi-edition.md](docs/kimi-edition.md).
+**Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. It takes the same generated `--forge` axis. See [docs/kimi-edition.md](docs/kimi-edition.md).
+
+Being additive is about *edition machinery*, not about forge support: both runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`).
 
 **Adaptive planning runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only. Adaptive is the only workflow path; there is nothing to select. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
 

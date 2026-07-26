@@ -7,6 +7,31 @@ so this edition is delivered the opencode-native way — a project `opencode.jso
 plus a generated `.opencode/` tree — and is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea` edition machinery.
 
+## Forge axis
+
+The runtime is not a forge, but the workflow *prose* is forge-shaped (`gh` vs `glab`
+vs `tea`, pull requests vs merge requests, per-forge support-script basenames), so
+`install-opencode.sh` takes `--forge=github|gitlab|gitea` (default `github`) and a
+GitLab/Gitea project receives a forge-correct edition rather than GitHub-shaped
+commands.
+
+The forge variants are **generated, never hand-ported**. `sync-opencode-edition.js`
+renders each forge from the routing-surface registry
+(`scripts/generate-routing-surfaces.js`, via `scripts/runtime-edition-forge.js`), so
+every forge tree derives from the same byte-checked command surfaces the Claude and
+Codex editions ship. github renders the bare `.opencode/` tree; a forge renders the
+sibling `.opencode-<forge>/`. All generated trees are gitignored build artifacts.
+
+```bash
+./install-opencode.sh --forge=gitlab            # GitLab-shaped edition
+node scripts/sync-opencode-edition.js --forge=gitea --check
+```
+
+**Additive is unchanged by this.** Being additive is about edition *machinery*, not
+forge support: the edition stays out of `npm test`, `edition-sync.js`, `install.sh`,
+and the routing-surface contract, and keeps its own suite. An unknown `--forge`
+value is refused, never silently defaulted to github.
+
 ## What gets generated
 
 Everything under `.opencode/` is **generated from canonical** by
@@ -275,14 +300,17 @@ touched**.
 
 ### Installer command set
 
-`install-opencode.sh` is a standalone installer (not `install.sh --forge`). It deploys the workflow
-command set — adapt, finalize, plan-run, workflow-init, workflow-next. `copy_tree` is
-**self-healing**: before re-copying it prunes every kaola-owned command file not in that set, so a
-reinstall converges to exactly the workflow command set on disk.
+`install-opencode.sh` is a standalone installer — it has its own `--forge` flag and does not run
+through `install.sh --forge`. It deploys the workflow command set — adapt, finalize, plan-run,
+workflow-init, workflow-next. `copy_tree` is **self-healing**: before re-copying it prunes every
+kaola-owned command file not in that set, so a reinstall converges to exactly the workflow command
+set on disk. Support scripts come from the selected forge's script tree, and the installer fails
+closed if an allowlisted script is missing from source.
 
-`sync-opencode-edition.js writeCommands` produces one command file per canonical `commands/*.md`
-into the committed in-repo `.opencode/command/` (the single source the installer copies from). The
-route-reachability + content-reachability assertions read the committed tree and stay green.
+`sync-opencode-edition.js writeCommands` produces one command file per command surface the routing
+registry declares for the selected forge, into the in-repo `.opencode[-<forge>]/command/` (the
+single source the installer copies from). The route-reachability + content-reachability assertions
+read the github tree and stay green.
 
 ## Hooks
 
@@ -431,7 +459,7 @@ The validator is self-contained (run directly with `node`; it is intentionally
 | --- | --- | --- |
 | Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `opencode.json` + `.opencode/agent` + `.opencode/command` |
 | Agent format | TOML profiles | Markdown (frontmatter + prompt body) |
-| Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | runtime-only; no forge axis |
+| Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
 | Models | baked per-agent | **two tiers as reasoning-effort variants** of your inherited model (`mapTier`, provider-adaptive); default = your model |
 
 ## Verification
