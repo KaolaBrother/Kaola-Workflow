@@ -2071,8 +2071,8 @@ function testInstallProfilesFeaturesTableHandling() {
     const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      15,
-      'should install 15 agent TOML files (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789)'
+      16,
+      'should install 16 agent TOML files (13 base + synthesizer #463 + metric-optimizer #634 + investigator #798; <role>-max retired #451, issue-scout retired #789)'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),

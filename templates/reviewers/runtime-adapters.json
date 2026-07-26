@@ -2,17 +2,17 @@
   "schema_version": 1,
   "adapters": {
     "claude-standard": {
-      "tools": "claude-read-shell",
+      "tools": "read-shell-seeded-write",
       "model_policy_ref": "claude-standard",
-      "evidence_transport": "return-for-recording"
+      "evidence_transport": "write-seeded-cache"
     },
     "claude-reasoning": {
-      "tools": "claude-read-shell",
+      "tools": "read-shell-seeded-write",
       "model_policy_ref": "claude-reasoning",
-      "evidence_transport": "return-for-recording"
+      "evidence_transport": "write-seeded-cache"
     },
     "codex": {
-      "tools": "codex-read-shell",
+      "tools": "read-shell-seeded-write",
       "model_policy_ref": "codex-inherit-by-omission",
       "evidence_transport": "write-seeded-cache"
     }

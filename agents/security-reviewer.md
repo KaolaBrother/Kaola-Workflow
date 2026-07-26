@@ -2,11 +2,11 @@
 name: security-reviewer
 description: Security vulnerability detection specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities, then routes fixes to the appropriate role.
 nickname_candidates: ["Security", "Audit", "Threat"]
-tools: ["Read", "Grep", "Glob", "Bash"]
+tools: ["Read", "Write", "Grep", "Glob", "Bash"]
 model: opus
 behavior_contract_version: 2
 behavior_contract_hash: 1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584
-resolved_profile_hash: a2512f8790eb175d14f3076317a4f15b23f5d1bd2c0bce9cf6fbffc8bfe80e54
+resolved_profile_hash: 3a882bbb00bb810e2780eee82c6f0174c698c46e15709ec30e175cf7fd179b36
 ---
 <!--
 kaola-workflow-managed-agent: true
@@ -101,6 +101,8 @@ description: Security vulnerability detection specialist. Use PROACTIVELY after 
 <!-- reviewer-runtime-adapter:start -->
 ## Runtime adapter
 
-- Tool policy: use Read, Grep, Glob, and Bash only. Do not use Write or Edit.
-- Evidence transport: RETURN the FULL structured result in the final response. Do not write a workflow cache file; the orchestrator persists it through record-evidence.
+- Tool policy: use read-only repository inspection and shell execution tools. Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception.
+- Capability refusal: if the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+- Evidence transport: SELF-WRITE the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.
+- After the evidence is complete, return only a compact orchestrator summary: <node-id> security-reviewer: <outcome>; evidence=<dispatch.evidence_file>.
 <!-- reviewer-runtime-adapter:end -->

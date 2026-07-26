@@ -282,6 +282,19 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `workflow-planner`'
 
 **Agent-set deltas carry an exact-match registration surface (#340).** Adding or removing an agent profile (root `agents/<name>.md` or a plugin `agents/<name>.toml`) breaks exact-match registries and by-name dispatch registrations that are **keyed on no symbol of the new file** — so a symbol-grep (#306) cannot find them. The full 22-path surface: the three sibling edition profiles; the three `config/agents.toml` codex-dispatch templates (the `[agents.<name>]` table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile installs); `validate-vendored-agents.js` (`localAgents` exact listing); `install.sh` **and** `uninstall.sh` `REQUIRED_AGENTS` (a missing uninstall name orphans the installed agent); `resolve-agent-model.js` (×4, byte-identical); the plan-validator `CANONICAL_ROLES` (×4); the gitlab/gitea contract-validator agent counts; and the two forge `test-*-workflow-scripts.js` counts. The adaptive plan validator refuses an addition omitting any of these at freeze (`agent-registration gap`); removals are not machine-detected on the plan side but the derived config↔dir and install↔uninstall parity guards in the contract validators red the affected chain. This is itself a cross-edition diff.
 
+**The 22-path validator wall is a floor, not the whole surface (measured while adding `investigator`).** Six further paths red a chain on an agent-set delta and are *not* in `agentRegistrationSurface()`, so the freeze wall cannot refuse an addition that omits them — they surface only when the chains run:
+
+| Path | What pins the roster |
+|------|----------------------|
+| `scripts/test-agent-profile-parity.js` | `TOML_TREES` per-tree profile **count** |
+| `scripts/kaola-workflow-adaptive-schema.js` | `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` — a role in neither has "no Codex profile-tier policy" |
+| `scripts/kaola-workflow-codex-preflight.js` | its **own** copy of both tier lists (authored `require`-free, so it cannot import the schema) |
+| `plugins/*/scripts/install-codex-agent-profiles.js` (×3) | a **third** copy of both tier lists |
+| `scripts/kaola-workflow-adaptive-schema.js` | `ROLE_CAPABILITY_MANIFEST` — bidirectionally drift-walled against `agents/*.md` |
+| `README.md` | two derived-checked role lists: the Agent/Tier table and the ```text codex role catalog (set-equality against `config/agents.toml`) |
+
+Note the tier lists exist in **three** independent copies. Adding a role to only the schema leaves the codex chain red at preflight; that duplication is the standing cost of the preflight's require-free authoring.
+
 ## Forge-Neutral Plugin Agent Profiles (issue #341)
 
 - Plugin agent/command/skill prose is **forge-neutral**: never name a forge-specific CLI

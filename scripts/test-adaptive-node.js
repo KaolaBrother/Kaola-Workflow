@@ -24576,6 +24576,119 @@ scenario(() => {
   }
 });
 
+// substitute-role (#798) — the same-kind, superset-proven dispatch swap. Covers the happy path,
+// the plan/plan_hash byte-identity claim (substitution is dispatch metadata, never plan mutation),
+// idempotent replay across a crash between record and dispatch, the dispatch-card fold-in, and each
+// of the five typed refusals.
+scenario(() => {
+  const { runSubstituteRole, activeRoleSubstitution, buildDispatch } = require('./kaola-workflow-adaptive-node');
+
+  const makePlan = (role, status) => [
+    '# Workflow Plan', '',
+    '## Meta', 'plan_form: spine', 'plan_hash: deadbeefdeadbeef', '',
+    '## Nodes', '',
+    '| id | role | model | depends_on | shape | declared_write_set | cardinality |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| n1 | ' + role + ' | standard | — | sequence | — | 1 |',
+    '| n2 | code-reviewer | standard | n1 | sequence | — | 1 |',
+    '| sink | finalize | — | n2 | sequence | — | 1 |', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| n1 | ' + status + ' |', '| n2 | pending |', '| sink | pending |', '',
+  ].join('\n');
+
+  const fixture = (role, status, evidence) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-subrole-'));
+    const proj = path.join(dir, 'kaola-workflow', 'p1');
+    fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, makePlan(role || 'code-explorer', status || 'pending'), 'utf8');
+    if (evidence != null) fs.writeFileSync(path.join(proj, '.cache', 'n1.md'), evidence, 'utf8');
+    return { proj, planPath };
+  };
+
+  // Happy path: code-explorer -> investigator is a proven superset, same kind, same token contract.
+  {
+    const f = fixture();
+    const before = fs.readFileSync(f.planPath, 'utf8');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'ok' && r.from_role === 'code-explorer' && r.to_role === 'investigator',
+      '#798: code-explorer -> investigator must substitute, got ' + JSON.stringify(r));
+    assert(fs.readFileSync(f.planPath, 'utf8') === before,
+      '#798: the frozen plan (and its plan_hash) must stay BYTE-IDENTICAL after a substitution');
+    const store = JSON.parse(fs.readFileSync(path.join(f.proj, '.cache', 'role-substitutions.json'), 'utf8'));
+    assert(store.substitutions.length === 1, '#798: exactly one durable record, got ' + store.substitutions.length);
+    assert(activeRoleSubstitution(path.join(f.proj, '.cache'), p => fs.readFileSync(p, 'utf8'), 'n1').to_role === 'investigator',
+      '#798: the record must read back as the active substitution');
+
+    // Crash between record and dispatch ⇒ re-running the identical command is a no-op.
+    const again = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(again.result === 'ok' && again.idempotent === true, '#798: replay must be idempotent, got ' + JSON.stringify(again));
+    const store2 = JSON.parse(fs.readFileSync(path.join(f.proj, '.cache', 'role-substitutions.json'), 'utf8'));
+    assert(store2.substitutions.length === 1, '#798: replay must not append a second record');
+
+    const d = buildDispatch({ id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' },
+      { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: 'abc123' });
+    assert(d.agent_type === 'investigator', '#798: card agent_type must be the SUBSTITUTE, got ' + d.agent_type);
+    assert(d.agent_type_frozen === 'code-explorer', '#798: card must state the frozen role, got ' + d.agent_type_frozen);
+    assert(d.role_substituted === true, '#798: card must flag the substitution');
+    assert(typeof d.role_substitution_basis === 'string' && d.role_substitution_basis.length > 0,
+      '#798: card must carry the substitution basis');
+  }
+
+  // No record on file ⇒ the dispatch card is byte-identical to a pre-substitution card.
+  {
+    const f = fixture();
+    const d = buildDispatch({ id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' },
+      { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: 'abc123' });
+    assert(d.agent_type === 'code-explorer' && !('agent_type_frozen' in d) && !('role_substituted' in d),
+      '#798: an unsubstituted card must gain NO substitution keys, got ' + JSON.stringify(Object.keys(d)));
+  }
+
+  // The five typed refusals.
+  {
+    const f = fixture();
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'no-such-role' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_unknown_role', '#798: unknown target must refuse, got ' + JSON.stringify(r));
+    assert(!fs.existsSync(path.join(f.proj, '.cache', 'role-substitutions.json')), '#798: a refusal must write NO record');
+  }
+  {
+    const f = fixture();
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-reviewer' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_kind_mismatch',
+      '#798: producer -> gate must refuse kind_mismatch, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture('investigator');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-explorer' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_not_superset' && (r.missing_tools || []).includes('Bash'),
+      '#798: dropping Bash must refuse not_superset naming the tool, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture();
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-architect' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_token_contract_mismatch',
+      '#798: differing evidence contracts must refuse, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture('code-explorer', 'complete');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+      '#798: a complete row must refuse node_closed, got ' + JSON.stringify(r));
+  }
+  {
+    const f = fixture('code-explorer', 'in_progress', 'evidence-binding: n1 abc123\nfindings: already delivered\n');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+      '#798: a recorded deliverable must refuse node_closed, got ' + JSON.stringify(r));
+  }
+  // A SEEDED-but-valueless evidence file is not a deliverable and must stay substitutable.
+  {
+    const f = fixture('code-explorer', 'in_progress', 'evidence-binding: n1 abc123\nfindings:\n');
+    const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
+    assert(r.result === 'ok', '#798: a seed-only evidence file must remain substitutable, got ' + JSON.stringify(r));
+  }
+});
+
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 
 if (failed > 0) {

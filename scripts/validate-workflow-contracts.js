@@ -998,7 +998,9 @@ assertIncludes('commands/kaola-workflow-plan-run.md', '--forbidden-only');
 assertIncludes('commands/kaola-workflow-plan-run.md', '<!-- PIN: node-briefs-relay -->');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'carry it VERBATIM into the role dispatch');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'record a column-0 `upstream_read: <node-id> <nonce>` line');
-assertIncludes('commands/kaola-workflow-plan-run.md', "derived from each role's tool manifest");
+assertIncludes('commands/kaola-workflow-plan-run.md', 'One contract, every role, every runtime');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'is the FALLBACK channel, never the primary one');
+assertNotIncludes('commands/kaola-workflow-plan-run.md', "derived from each role's tool manifest");
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '**READ-ONLY roles**');
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '**WRITE-role agents**');
 

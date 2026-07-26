@@ -97,6 +97,9 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   // and the running set — a mutating lifecycle command like every other opener.
   'expand-open', 'expand-close',
   'reopen-node', 'revert-overflow', 'repair-node', 'route-findings', 'record-evidence',
+  // Records the dispatch-target swap into the project's .cache; a project-scoped mutation like
+  // every other, so it resolves the folder from the same worktree authority.
+  'substitute-role',
   // #439: the speculative-read discard is a mutating lifecycle transaction (ledger reset + baseline
   // drop + running-set removal) and must run from the worktree like every other mutator.
   'discard-speculative',
@@ -110,7 +113,7 @@ const REPLAN_GUARDED_SUBCOMMANDS = new Set([
   'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
   'expand-open', 'expand-close',
   'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
-  'discard-speculative', 'mirror-project',
+  'discard-speculative', 'mirror-project', 'substitute-role',
 ]);
 
 function lastReplanCas(transaction) {
@@ -2323,7 +2326,7 @@ function complianceRowExists(content, requirementCell, nodeId) {
   return false;
 }
 
-function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker, mainSessionDirect) {
+function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker, mainSessionDirect, roleSubstitution) {
   const canonicalRequirement = role + ' (' + nodeId + ')';
   // Legacy bare cells (code-reviewer / security-reviewer, emitted before the canonical-cell
   // producer fix) remain READ/match-compatible so an already-emitted row still advances in
@@ -2333,6 +2336,13 @@ function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierM
   let evidenceSummary = evidenceContent
     ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
   if (barrierMarker) evidenceSummary += '; barrier: ' + barrierMarker;
+  // A substituted node records WHAT ACTUALLY RAN and the basis that made it legal, so the divergence
+  // between the frozen `role` cell and the dispatched role is on the record by construction rather
+  // than by the orchestrator remembering to write a note.
+  if (roleSubstitution && roleSubstitution.to_role) {
+    evidenceSummary += '; role_substituted: ' + roleSubstitution.from_role + '→' +
+      roleSubstitution.to_role + ' (' + roleSubstitution.basis + ')';
+  }
   // Execution mode is the orchestrator's per-unit judgment, so the row records what actually ran
   // it: `main-session-direct` for the two NON-DELEGABLE roles — the `finalize` sink and a
   // `main-session-gate` (the validator refuses a model on either; neither is ever dispatched as a
@@ -2878,10 +2888,35 @@ function readContextPacket(planPath, readFile) {
   } catch (_) { return null; }
 }
 
+// Read the ACTIVE role substitution for the node being carded. Best-effort and fail-soft by design:
+// an absent/unreadable record means no substitution, so a card built without a project on disk (the
+// unit-test path) is byte-identical to one built before substitution existed. The record is only
+// honored when its `from_role` still matches the frozen role — a plan whose role cell no longer
+// matches what was substituted from is stale evidence, and silently redirecting on it would be the
+// exact frozen-artifact/execution divergence this channel exists to keep visible.
+function resolveRoleSubstitution(ctx, nodeInfo) {
+  if (!nodeInfo || !nodeInfo.id) return null;
+  if (ctx && ctx.role_substitution) return ctx.role_substitution;
+  const planPath = ctx && ctx.planPath;
+  if (!planPath) return null;
+  try {
+    const fsMod = require('fs');
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    const row = activeRoleSubstitution(cacheDir, (p) => fsMod.readFileSync(p, 'utf8'), nodeInfo.id);
+    if (row && row.from_role === nodeInfo.role && row.to_role) return row;
+  } catch (_) { /* no record ⇒ no substitution */ }
+  return null;
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
   const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
   const codexTaskName = codexTaskNameForNode(nodeInfo);
+  // A recorded role substitution redirects the DISPATCH TARGET only. The plan's `role` cell is what
+  // was frozen and stays the node's identity everywhere else (model tier still resolves from the
+  // plan's own `model` column, so a substitution can never lower a floor). Conditionally attached
+  // like goal_line/leg_path: with nothing on record the card stays byte-identical to before.
+  const substitution = resolveRoleSubstitution(ctx, nodeInfo);
   const d = {
     node_id:            nodeInfo.id,
     role:               nodeInfo.role,
@@ -2893,7 +2928,7 @@ function buildDispatch(nodeInfo, context) {
     required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
-    agent_type:         nodeInfo.role,
+    agent_type:         substitution ? substitution.to_role : nodeInfo.role,
     codex_dispatch_mode: codexDispatchMode,
     codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model, nodeInfo.codex_session_proof || ctx.session_proof),
@@ -2939,6 +2974,14 @@ function buildDispatch(nodeInfo, context) {
   // override fields still state the intentional null/unresolved posture explicitly.
   const nodeModelDisplay = modelDisplay(nodeInfo.model);
   if (nodeModelDisplay) d.model_display = nodeModelDisplay;
+  // A substitution states BOTH roles on the card: what to dispatch (agent_type, above) and what the
+  // frozen plan says (agent_type_frozen). Naming only the substitute would hide the divergence the
+  // record exists to make visible.
+  if (substitution) {
+    d.agent_type_frozen = nodeInfo.role;
+    d.role_substituted = true;
+    d.role_substitution_basis = substitution.basis;
+  }
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
   }
@@ -5610,7 +5653,8 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
       return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
     }
     if (closed.changed) plan = closed.content;
-    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect);
+    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect,
+      activeRoleSubstitution(path.join(path.dirname(opts.planPath), '.cache'), opts.readFile, ctx.nodeInfo.id));
     opts.writeFile(opts.planPath, plan);
     appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
     removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
@@ -5700,7 +5744,8 @@ function prepareReviewClose(opts, ctx) {
         const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
         if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
         if (closed.changed) plan = closed.content;
-        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect);
+        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect,
+      activeRoleSubstitution(path.join(path.dirname(opts.planPath), '.cache'), opts.readFile, ctx.nodeInfo.id));
         // Plan/compliance first, then replay-safe sidecars, then running-set removal. A crash after
         // any prefix is completed by the unchanged retry without duplicating durable evidence.
         opts.writeFile(opts.planPath, plan);
@@ -6598,6 +6643,8 @@ function runOpenNext(opts) {
     ...deriveDispatchChannel(planContent, targetNode, project),
     // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
     context_packet: readContextPacket(planPath, readFile),
+    // Lets the card resolve a recorded role substitution; absent record ⇒ card byte-unchanged.
+    planPath,
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -7020,7 +7067,8 @@ function runCloseAndOpenNext(opts) {
     currentPlan = closeResult.content;
   }
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
 
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
@@ -7260,6 +7308,8 @@ function runCloseAndOpenNext(opts) {
     ...deriveDispatchChannel(planForAdvance, nextNode, project),
     // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
     context_packet: readContextPacket(planPath, readFile),
+    // Lets the card resolve a recorded role substitution; absent record ⇒ card byte-unchanged.
+    planPath,
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -11595,6 +11645,8 @@ function runOpenReady(opts) {
           ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet, openIntoLeg: !!legInfo }),
           // #763: the shared context packet orient wrote — carried VERBATIM onto each co-opened member's card.
           context_packet: readContextPacket(planPath, readFile),
+          // Lets the card resolve a recorded role substitution; absent record ⇒ card byte-unchanged.
+          planPath,
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
@@ -11906,7 +11958,8 @@ function runCloseNode(opts) {
   }
   if (closeResult.changed) currentPlan = closeResult.content;
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
   writeFile(planPath, currentPlan);
@@ -12058,7 +12111,8 @@ function closeGroupMember(ctx) {
     }
     if (closeResult.changed) currentPlan = closeResult.content;
     // Compliance row carrying the literal `deferred_to_group` marker in the Evidence cell (grep/audit).
-    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group', opts.mainSessionDirect);
+    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group', opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
     writeFile(planPath, currentPlan);
     appendNodeTiming(planPath, nodeId, 'closed');
     appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -12172,7 +12226,8 @@ function closeGroupMember(ctx) {
     return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
   }
   if (closeResult.changed) currentPlan = closeResult.content;
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed', opts.mainSessionDirect);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed', opts.mainSessionDirect,
+    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
   appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -14202,6 +14257,190 @@ function routeCanonicalFindings(findings, nodes, sourceNode) {
 // @returns {{ result:'ok', count:number, file:string, findings:array }}
 //        | {{ result:'refuse', reason:string, ... }}
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ROLE SUBSTITUTION — the typed, same-kind, superset-proven dispatch remedy.
+//
+// When a frozen `role` cell turns out not to cover its node's brief, the plan itself must not be
+// rewritten: a frozen plan and its `plan_hash` are the run's identity. Substitution is DISPATCH
+// METADATA — the plan, the `## Node Ledger`, and the `plan_hash` stay byte-identical, and only the
+// card the orchestrator dispatches from changes. That keeps the remedy claim-preserving.
+//
+// "Role B's manifest covers role A's, same kind, same evidence contract" is a CHECKABLE FACT, so it
+// is decided mechanically rather than escalated: the fact-vs-value split says a machine settles it.
+// When no in-kind superset exists there is nothing to check and the existing consent valve fires.
+//
+// The record is durable (.cache/role-substitutions.json) and folds into the compliance row at close,
+// so the divergence between the frozen artifact and what actually ran is on the record BY
+// CONSTRUCTION rather than by an orchestrator remembering to annotate it.
+const ROLE_SUBSTITUTIONS_NAME = 'role-substitutions.json';
+const ROLE_SUBSTITUTION_SCHEMA_VERSION = 1;
+
+// v1 scope is producer -> producer ONLY. A gate carries a verdict contract and a write role carries
+// write-set semantics; substituting either would move a wall, not just a dispatch target, so they
+// stay out until a real incident defines what the safe check would even be.
+const SUBSTITUTABLE_KINDS = new Set(['producer']);
+
+function readRoleSubstitutions(cacheDir, readFile) {
+  try {
+    const parsed = JSON.parse(readFile(path.join(cacheDir, ROLE_SUBSTITUTIONS_NAME)));
+    if (parsed && Array.isArray(parsed.substitutions)) return parsed;
+  } catch (_) { /* absent or unreadable => no substitutions on record */ }
+  return { schema_version: ROLE_SUBSTITUTION_SCHEMA_VERSION, substitutions: [] };
+}
+
+// The ACTIVE substitution for a node (the last one recorded), or null. Consumed by buildDispatch so
+// every opener emits the same card, and by the close path so the compliance row carries the basis.
+function activeRoleSubstitution(cacheDir, readFile, nodeId) {
+  const rows = readRoleSubstitutions(cacheDir, readFile).substitutions;
+  let found = null;
+  for (const row of rows) if (row && row.node_id === nodeId) found = row;
+  return found;
+}
+
+function runSubstituteRole(opts, project) {
+  const { nodeId, toRole } = opts;
+  const fsMod = opts.fs || require('fs');
+  const readFile = opts.readFile || ((p) => fsMod.readFileSync(p, 'utf8'));
+  const writeFile = opts.writeFile || ((p, c) => fsMod.writeFileSync(p, c, 'utf8'));
+  const repoRoot = opts.repoRoot || getRoot();
+  const planPath = opts.planPath
+    || path.join(repoRoot, 'kaola-workflow', project, 'workflow-plan.md');
+  const projectDir = path.dirname(planPath);
+  const cacheDir = path.join(projectDir, '.cache');
+  const now = opts.now || (() => new Date().toISOString());
+
+  if (!nodeId) return refuse('missing_node_id', { detail: 'substitute-role requires --node-id' });
+  if (!toRole) return refuse('missing_to_role', { node_id: nodeId, detail: 'substitute-role requires --to-role' });
+
+  let planContent = '';
+  try { planContent = readFile(planPath); }
+  catch (_) { return refuse('plan_unreadable', { node_id: nodeId, detail: 'cannot read ' + planPath }); }
+
+  const nodes = parseNodesFromContent(planContent);
+  const node = nodes.find(n => n.id === nodeId);
+  if (!node) return refuse('unknown_node', { node_id: nodeId, detail: 'no node "' + nodeId + '" in the frozen plan' });
+  const fromRole = node.role;
+
+  const manifest = reviewSchema.ROLE_CAPABILITY_MANIFEST;
+  let registry = {};
+  try { ({ ROLE_TOKEN_REGISTRY: registry } = require('./kaola-gitea-workflow-plan-validator')); }
+  catch (_) { registry = {}; }
+
+  // P1 — the target must be a role the library can actually dispatch.
+  const target = manifest[toRole];
+  if (!target) {
+    return refuse('substitute_unknown_role', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      detail: 'role "' + toRole + '" is not in the installed library',
+    });
+  }
+  const source = manifest[fromRole];
+  if (!source) {
+    return refuse('substitute_unknown_role', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      detail: 'the frozen role "' + fromRole + '" has no capability manifest row',
+    });
+  }
+
+  // Idempotent replay: the same target already on record is a no-op, not a second record. A crash
+  // between the record and the dispatch therefore resumes by re-running the identical command.
+  const active = activeRoleSubstitution(cacheDir, readFile, nodeId);
+  if (active && active.to_role === toRole) {
+    return {
+      result: 'ok', node_id: nodeId, from_role: active.from_role, to_role: toRole,
+      basis: active.basis, recorded_at: active.ts, idempotent: true,
+      substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
+    };
+  }
+
+  // P2 — same kind, and only the kinds whose substitution is defined.
+  if (source.kind !== target.kind || !SUBSTITUTABLE_KINDS.has(target.kind)) {
+    return refuse('substitute_kind_mismatch', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      from_kind: source.kind, to_kind: target.kind,
+      detail: 'substitution is defined for ' + [...SUBSTITUTABLE_KINDS].join('/') +
+        ' roles of the SAME kind; got ' + source.kind + ' -> ' + target.kind,
+    });
+  }
+
+  // P3 — the target's manifest must COVER the source's. Anything the brief could already demand of
+  // the frozen role stays performable after the swap; substitution may only widen capability.
+  const missing = source.tools.filter(t => !target.tools.includes(t));
+  if (missing.length) {
+    return refuse('substitute_not_superset', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      missing_tools: missing,
+      detail: 'role "' + toRole + '" does not cover ' + fromRole + "'s manifest; missing: " + missing.join(', '),
+    });
+  }
+
+  // P4 — identical evidence contracts, so evidence-check semantics are untouched by the swap.
+  const fromTokens = Array.isArray(registry[fromRole]) ? registry[fromRole] : null;
+  const toTokens = Array.isArray(registry[toRole]) ? registry[toRole] : null;
+  if (!fromTokens || !toTokens || JSON.stringify(fromTokens) !== JSON.stringify(toTokens)) {
+    return refuse('substitute_token_contract_mismatch', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      from_tokens: fromTokens, to_tokens: toTokens,
+      detail: 'evidence token contracts differ; substituting would change what close-time evidence-check requires',
+    });
+  }
+
+  // P5 — the node must still be dispatchable. A closed row, or one whose evidence body already
+  // carries a deliverable, means the frozen role's work exists; swapping the card then would
+  // relabel completed work rather than redirect pending work.
+  const statuses = readLedgerStatuses(planContent);
+  const status = statuses[nodeId] || 'pending';
+  if (status !== 'pending' && status !== 'in_progress') {
+    return refuse('substitute_node_closed', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole, status,
+      detail: 'node status is "' + status + '"; substitution applies only to a pending/in_progress row',
+    });
+  }
+  let evidenceBody = '';
+  try { evidenceBody = readFile(path.join(cacheDir, nodeId + '.md')); } catch (_) { evidenceBody = ''; }
+  if (evidenceBody && hasEvidenceBodyBelowHeader(evidenceBody)) {
+    return refuse('substitute_node_closed', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole, status,
+      detail: 'evidence for "' + nodeId + '" already carries a recorded body; substitution applies only before a deliverable exists',
+    });
+  }
+
+  const basis = 'manifest superset (' + target.tools.join('+') + ' covers ' + source.tools.join('+') +
+    '), kind ' + target.kind + ', identical token contract [' + toTokens.join(', ') + ']';
+  const record = {
+    node_id: nodeId, from_role: fromRole, to_role: toRole, basis, ts: now(),
+  };
+  const store = readRoleSubstitutions(cacheDir, readFile);
+  store.schema_version = ROLE_SUBSTITUTION_SCHEMA_VERSION;
+  store.substitutions = store.substitutions.concat([record]);
+  try { fsMod.mkdirSync(cacheDir, { recursive: true }); } catch (_) {}
+  writeFile(path.join(cacheDir, ROLE_SUBSTITUTIONS_NAME), JSON.stringify(store, null, 2) + '\n');
+
+  return {
+    result: 'ok', node_id: nodeId, from_role: fromRole, to_role: toRole, basis,
+    recorded_at: record.ts, idempotent: false,
+    substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
+    plan_unchanged: true,
+  };
+}
+
+// True when the seeded evidence file carries a real deliverable rather than only its seeded header.
+// The seed is the `evidence-binding:` line plus the required-token scaffold the opener writes; a
+// node that has been dispatched and returned has content beyond that.
+function hasEvidenceBodyBelowHeader(content) {
+  const lines = String(content).split('\n');
+  const bindingIdx = lines.findIndex(l => /^evidence-binding:/.test(l.trim()));
+  if (bindingIdx < 0) return String(content).trim() !== '';
+  return lines.slice(bindingIdx + 1).some(l => {
+    const t = l.trim();
+    if (t === '') return false;
+    // A seeded token scaffold is `token:` with no value; a real deliverable puts a value after it.
+    const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(t);
+    if (m) return m[2].trim() !== '';
+    return true;
+  });
+}
+
 function runRouteFindings(opts, project) {
   const { nodeId } = opts;
   const fs = opts.fs || require('fs');
@@ -14306,6 +14545,7 @@ function main() {
       '  expand-open         --project P --node-id N --stdin  (compose + record + open one expansion point)\n' +
       '  expand-close        --project P --node-id N          (discharge a fully-settled expansion point)\n' +
       '  amend-surface       --project P --node-id N --files "a,b"  (attribute an out-of-surface companion file + route to re-review)\n' +
+      '  substitute-role     --project P --node-id N --to-role R  (same-kind, superset-proven dispatch swap; plan + plan_hash unchanged)\n' +
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -14647,6 +14887,18 @@ function main() {
         });
       }
     }
+  } else if (subcommand === 'substitute-role') {
+    // Redirect ONE node's dispatch target to a role whose manifest covers the frozen role's, same
+    // kind and same evidence contract. Every precondition is a checkable fact, so this decides
+    // mechanically; when nothing in-kind covers the brief there is no fact to check and the
+    // orchestrator escalates through the existing `write-halt --reason consent` valve instead.
+    const toRoleIdx = args.indexOf('--to-role');
+    result = decorateOperatorHint(runSubstituteRole({
+      planPath, project, nodeId,
+      toRole: (toRoleIdx >= 0 && toRoleIdx + 1 < args.length) ? args[toRoleIdx + 1] : null,
+      repoRoot: getRoot(), readFile, writeFile,
+      now: () => new Date().toISOString(),
+    }, project));
   } else if (subcommand === 'amend-surface') {
     // #762: attribute an out-of-surface companion file to a DISCHARGED expansion point + route it to
     // re-review. --files "a,b" names the EXACT files (dir/glob refused). An optional stdin composition
@@ -14895,6 +15147,11 @@ if (require.main === module) {
 module.exports = {
   spliceLedgerNode,
   readLedgerStatuses,
+  // The same-kind, superset-proven dispatch swap + its record readers, exported for direct coverage
+  // of the five typed refusals and the plan/plan_hash byte-identity claim.
+  runSubstituteRole,
+  readRoleSubstitutions,
+  activeRoleSubstitution,
   spliceComplianceRow,
   complianceRowExists,
   removeDurableConsentHalt,

@@ -286,6 +286,28 @@ spawning the role agent — the ledger stays authoritative; the mirror is the op
 `agent_type`, or drop the effort tier because the card was not in view — go get the card
 first (the summary line's `opened=` segment, or `.cache/<op>-envelope.json`).
 
+<!-- PIN: role-capability-coverage -->
+**If the card's role manifest cannot cover the node brief, or the role returns `capability_gap`,
+run `substitute-role`** — do NOT dispatch a role that cannot perform what the brief mandates, and
+do NOT let it improvise around the gap:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" substitute-role \
+  --project {project} --node-id {node-id} --to-role {role} --json
+```
+
+Same-kind and manifest-superset are checkable facts, so this decides mechanically — no consent stop.
+The frozen plan, its `## Node Ledger`, and `plan_hash` stay BYTE-IDENTICAL: substitution is dispatch
+metadata, recorded durably in `.cache/role-substitutions.json` and folded into the close-time
+compliance row. The re-issued card carries `agent_type` (dispatch this), `agent_type_frozen` (what
+the plan says), and `role_substituted: true`. On any typed refusal — `substitute_unknown_role`,
+`substitute_kind_mismatch`, `substitute_not_superset`, `substitute_token_contract_mismatch`,
+`substitute_node_closed` — there is no in-kind role that covers the brief, so escalate with
+`write-halt --reason consent` rather than dispatching anyway.
+
+A `capability_gap` return is **NOT evidence**: never `record-evidence` it. The node stays open;
+substitute and re-dispatch, or halt.
+
 <!-- PIN: reviewer-contract-v2-execution -->
 #### Reviewer Contract Envelope, Validation, and Convergence
 
@@ -507,22 +529,39 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
-**Evidence-persistence contract per runtime and role-kind.** The authoritative inter-node handoff is
-always the full nonce-bound `.cache/<node-id>.md` artifact. A self-writing role returns only a compact
-summary after persisting it. On runtimes that enforce a read-only role tool manifest, the role instead
-returns the full body as transport for orchestrator persistence; after that write, the cache artifact is
-again authoritative. The mechanism is derived from each role's tool manifest — no hand-list, no per-agent guesswork:
-- Any node role WITHOUT `Write` in its tool manifest CANNOT self-write `.cache` evidence — it
-  RETURNS its deliverable for orchestrator persistence via `record-evidence --stdin` (below).
-  `record-evidence` re-injects this node's `evidence-binding:` header, so persisting evidence
-  cannot strip the header — the role MUST NOT try to add or modify it. Current roster (EXAMPLES
-  only): read producers `code-explorer`, `knowledge-lookup`, `code-architect`, `planner`;
-  plus the read gates `adversarial-verifier` / `code-reviewer` / `security-reviewer`.
-- Any node role WITH `Write` in its tool manifest SELF-WRITES its `.cache` evidence, INCLUDING
-  the seeded `evidence-binding:` header (read it from the seeded file, never alter it). Current
-  roster (EXAMPLES only): `implementer`, `tdd-guide`, `metric-optimizer`, `build-error-resolver`,
-  `doc-updater`, `synthesizer`.
+**Evidence-persistence contract.** The authoritative inter-node handoff is always the full nonce-bound
+`.cache/<node-id>.md` artifact. EVERY node role — including a logically read-only research or review
+role — SELF-WRITES its FULL structured deliverable directly to the exact `dispatch.evidence_file`
+before sending its final message, then returns ONLY the compact summary
+`<node-id> <role>: <verdict|outcome>; evidence=<dispatch.evidence_file>`. One contract, every role,
+every runtime: there is no manifest branch, no hand-list, and no per-agent guesswork.
+- That one seeded workflow-cache file is the role's SOLE write exception; repository and product files
+  stay forbidden to a read role. Read-only is a CONTRACT property enforced by the per-node commit
+  barrier (a read node declares no write set; only `.cache/*.md` is exempt), never a tool-manifest
+  property — so widening the manifest removes a transport tax without moving the wall.
+- The seeded `evidence-binding: <node-id> <nonce>` header is written by the opener BEFORE dispatch.
+  Read it, preserve it byte-for-byte, and write only below it — never add, alter, or strip it.
+- The cache body must carry every required token, verdict/finding row, source, and upstream-read
+  attestation. Never retransmit the full deliverable as the only durable copy: downstream roles read
+  the cache artifact through `dispatch.upstream_evidence`, never the orchestrator's copy of a return.
 
+`record-evidence --stdin` is the FALLBACK channel, never the primary one. Use it only when a role
+returned transport anyway — a crash between the child stopping and its persist, or a role that died
+before writing. It re-injects this node's `evidence-binding:` header, so the resume path cannot strip it.
+
+After the child stops, validate the on-disk artifact before closing or opening a dependent node:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" record-evidence \
+  --project {project} --node-id {node-id} --verify --json
+```
+
+Only `result: ok` makes that artifact eligible for `dispatch.upstream_evidence`. If the parent-side
+summary is disconnected or cannot be decrypted but the child is terminal and this verification is
+green, read the compact outcome/verdict from the cache, record
+`delegation_outcome: returned_partial` plus `transport_error: encrypted_return`, and continue from the
+durable artifact. If verification is absent or red, leave the node open and route repair; a seed-only
+file never counts as completed work.
 
 <!-- CARD: metric-optimizer -->
 A `metric-optimizer` node's dispatch card carries `dispatch.optimize` (the frozen
@@ -538,15 +577,15 @@ On every return, before evidence/close bookkeeping, announce the compact outcome
 ← {node_id} · {role} returned: {verdict or one-line outcome}
 ```
 
-For a returned full body that still needs parent-side persistence, record it with stdin:
+FALLBACK ONLY — a role that returned a full body instead of persisting it (crash before the write):
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" record-evidence \
   --project {project} --node-id {node-id} --stdin --json
 ```
 
-For a self-written artifact, never overwrite it with the compact summary; use `record-evidence
---verify` as shown above.
+For the normal self-written artifact, never overwrite it with the compact summary; use
+`record-evidence --verify` as shown above.
 
 ### 4. Close and advance
 

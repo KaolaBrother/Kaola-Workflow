@@ -101,6 +101,13 @@ refusals teach the walls at freeze — author to them, never clamp around them.
 
 - **role** is in the installed library (canonical roles + maintainer-installed roles like
   `adversarial-verifier`); never `workflow-planner`/`contractor` as a node role.
+- **Match each node's brief to a role whose manifest COVERS every action the brief mandates.** A
+  brief that executes anything — build, test, capture, repro, git, network — requires a
+  Bash-holding role; a brief that only reads may use a reader. **The manifest is the oracle, never
+  the role's name**: `code-explorer` reads as right for a forensic investigation, but it cannot run
+  the commands such a brief mandates, and a role that cannot run what it was asked to run returns
+  prose where the deliverable was supposed to be measurements. Read the table before authoring
+  `## Nodes` (Method step 2a); `investigator` is the read-only role that executes.
 - **shape** is `sequence`, `fanout(<group>)` (N disjoint-write-set instances of one role), or
   `loop(<cap>)` (cap ≤ 5; `loop(0)` refused). **`FANOUT_CAP` is a runtime concurrency limit, not an
   authored-width bound** — author the fan-out as wide as the work is genuinely independent; the
@@ -469,6 +476,11 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
      (`target_occupied`, `user_target_blocked`, `target_set_mismatch`, …) is
      a determinate fail-closed fact; `escalate` (`target_indeterminate`/`target_set_indeterminate`)
      is an indeterminate verdict the orchestrator pauses on.
+2a. **Fetch the role-capability table (before authoring `## Nodes`).**
+   `node <plan-validator.js> --roles-manifest --json` — read-only, no plan required. It returns every
+   role's `tools` / `bash_capable` / `write_capable` / `kind`. Choose each node's role against THAT
+   table, not against the role's name. Audit-only: nothing blocks at freeze, so this is your judgment
+   to exercise, now informed.
 2. **Author the plan.** Write `kaola-workflow/{project}/workflow-plan.md` — `## Meta` `labels:` (so
    the validator derives sensitivity), the `## Nodes` table, `## Node Briefs`, `## Design` (the
    plan-level WHY — required, see above), and an empty

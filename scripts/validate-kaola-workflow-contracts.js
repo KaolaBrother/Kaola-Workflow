@@ -942,7 +942,7 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'current parent session');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "the sub-agent's model/reasoning effort itself");
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-session equality');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Codex 0.144 durable-result override');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'One contract, every role, every runtime');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fork_turns: "none"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Omit both `model`');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model: dispatch.codex_model');

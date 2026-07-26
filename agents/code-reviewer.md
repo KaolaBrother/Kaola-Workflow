@@ -2,11 +2,11 @@
 name: code-reviewer
 description: Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage.
 nickname_candidates: ["Reviewer", "Critic", "Inspector"]
-tools: ["Read", "Grep", "Glob", "Bash"]
+tools: ["Read", "Write", "Grep", "Glob", "Bash"]
 model: opus
 behavior_contract_version: 2
 behavior_contract_hash: 42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789
-resolved_profile_hash: aa138be00933313270f14f575a3f6ef6267e00e6c8480069573bf03d51fa82f5
+resolved_profile_hash: 9148412753a6bcd8aea4c05eeb35aa2fc686e824f63b14d8cc029a8a3cedf9a4
 ---
 <!--
 kaola-workflow-managed-agent: true
@@ -93,6 +93,8 @@ description: Precision-first code review specialist for correctness, regression,
 <!-- reviewer-runtime-adapter:start -->
 ## Runtime adapter
 
-- Tool policy: use Read, Grep, Glob, and Bash only. Do not use Write or Edit.
-- Evidence transport: RETURN the FULL structured result in the final response. Do not write a workflow cache file; the orchestrator persists it through record-evidence.
+- Tool policy: use read-only repository inspection and shell execution tools. Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception.
+- Capability refusal: if the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+- Evidence transport: SELF-WRITE the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.
+- After the evidence is complete, return only a compact orchestrator summary: <node-id> code-reviewer: <outcome>; evidence=<dispatch.evidence_file>.
 <!-- reviewer-runtime-adapter:end -->

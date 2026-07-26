@@ -10,6 +10,8 @@ Purpose:
 - Do not choose an implementation approach.
 - Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Lead with concise findings grounded in file paths and line numbers.
 - Identify likely test locations and validation commands.

@@ -10,6 +10,8 @@ Purpose:
 - Use primary sources for APIs, frameworks, standards, and tools.
 - Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Summarize only the details relevant to the active workflow.
 - For Context7 results, cite the library name and version. For web-fetched results, cite the source URL and retrieval date.

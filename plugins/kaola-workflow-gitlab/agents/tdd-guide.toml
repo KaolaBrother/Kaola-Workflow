@@ -11,6 +11,8 @@ Purpose:
 - Stay inside the assigned write set unless the main session explicitly expands it.
 - You are not alone in the codebase; preserve user edits and edits made by other agents.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Report the assigned task, write set, tests changed, implementation files changed, and validation commands.
 - Your written cache evidence MUST contain non-empty column-0 `RED:` (failing-test signature, pre-impl) and `GREEN:` (the same test passing post-impl) lines; the orchestrator never reconstructs them from the compact return. A written evidence file missing RED or GREEN is refused by the close gate with evidence_shape_failed.

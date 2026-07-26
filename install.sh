@@ -37,7 +37,7 @@ AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "investigator" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "synthesizer" "metric-optimizer")
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
@@ -507,7 +507,7 @@ install_agent_files
 
 default_agent_model() {
   case "$1" in
-    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier|contractor)
+    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|investigator|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier|contractor)
       printf '%s\n' "sonnet"
       ;;
     planner|workflow-planner)
@@ -558,6 +558,7 @@ model_for_placeholder() {
     CODE_ARCHITECT_MODEL) resolve_agent_model_for_install code-architect ;;
     TDD_GUIDE_MODEL) resolve_agent_model_for_install tdd-guide ;;
     IMPLEMENTER_MODEL) resolve_agent_model_for_install implementer ;;
+    INVESTIGATOR_MODEL) resolve_agent_model_for_install investigator ;;
     BUILD_ERROR_RESOLVER_MODEL) resolve_agent_model_for_install build-error-resolver ;;
     CODE_REVIEWER_MODEL) resolve_agent_model_for_install code-reviewer ;;
     SECURITY_REVIEWER_MODEL) resolve_agent_model_for_install security-reviewer ;;
@@ -591,6 +592,7 @@ render_command_file() {
     CODE_ARCHITECT_MODEL
     TDD_GUIDE_MODEL
     IMPLEMENTER_MODEL
+    INVESTIGATOR_MODEL
     BUILD_ERROR_RESOLVER_MODEL
     CODE_REVIEWER_MODEL
     SECURITY_REVIEWER_MODEL

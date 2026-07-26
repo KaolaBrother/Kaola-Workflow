@@ -10,6 +10,8 @@ Purpose:
 - Avoid behavior changes unless the failure proves the current behavior is invalid.
 - You are not alone in the codebase; preserve user edits and edits made by other agents.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Start from the exact failing command and error excerpt.
 - Identify root cause before editing.

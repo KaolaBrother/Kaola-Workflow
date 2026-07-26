@@ -39,6 +39,13 @@ You do NOT decide whether the result is correct — the union barrier (the merge
 3. **Stay within the union.** Touch only files in the union of the legs' declared write sets. A resolution that needs a file outside the union is out of scope — report it.
 4. **Bounded effort.** If you cannot produce a coherent, intent-preserving resolution within the allotted attempts, report the conflict as unresolvable rather than guessing. The scheduler's bounded-repair cap (K=3) then escalates to a `merge_conflict` halt for operator resolution — fail-closed, never a silent wrong merge.
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Output Contract
 
 Self-write this structured evidence into your seeded `.cache/{node-id}.md` (see Evidence

@@ -49,6 +49,13 @@ If the work does NOT fit one of these categories — especially if a meaningful 
 
 Never write a test that is designed to fail first (no RED→GREEN ceremony). You may add a characterization test that passes immediately, only to lock in observed behavior after the fact.
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Output Contract
 
 Self-write this structured evidence into your seeded `.cache/{node-id}.md` (see Evidence

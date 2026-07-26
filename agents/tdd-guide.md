@@ -111,6 +111,13 @@ Integrate eval-driven development into TDD flow:
 
 Release-critical paths should target pass^3 stability before merge.
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Output Contract
 
 You are a **WRITE-role agent**: SELF-WRITE a structured report whose evidence block contains BOTH literal tokens

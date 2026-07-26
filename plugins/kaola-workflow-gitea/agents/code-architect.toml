@@ -10,6 +10,8 @@ Purpose:
 - Define files, interfaces, task order, dependencies, disjoint write sets, and exact validation commands.
 - Do not edit product code; the exact seeded workflow-cache evidence file is the only write exception.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Produce tasks small enough for reliable TDD execution.
 - Identify safe parallel groups only when write sets are disjoint.

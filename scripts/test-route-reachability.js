@@ -587,13 +587,18 @@ for (const ed of codexEditions) {
     'carry it VERBATIM into the role dispatch',
     'record a column-0 `upstream_read: <node-id> <nonce>` line',
     're-derived from the cached `.cache/<op>-envelope.json`',
-    "derived from each role's tool manifest",
+    'One contract, every role, every runtime',
+    'is the FALLBACK channel, never the primary one',
   ];
-  // The stale exclusive-contract enumerations that the manifest-derived sentence replaced. Their
-  // bold-header framing is the signature; reintroducing either list on any surface reds here.
+  // The stale exclusive-contract enumerations that the unbranched self-write contract replaced.
+  // Reintroducing any of them on any surface reds here: the first two are the bold-header role
+  // lists; the third is the manifest BRANCH itself (a role's tool manifest no longer selects a
+  // transport); the fourth is the runtime-scoped framing of what is now the universal contract.
   const stale = [
     '**READ-ONLY roles**',
     '**WRITE-role agents**',
+    "derived from each role's tool manifest",
+    'durable-result override',
   ];
   for (const f of planRunSurfaces) {
     const content = norm(fs.readFileSync(path.join(REPO, f), 'utf8'));
@@ -1393,8 +1398,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     // T5b — plan-run skills × 3 (codex-live)
     { token: 'fork_turns: "none"', surfaces: prSkill },
     { token: 'dispatch.codex_profile_mode', surfaces: prSkill },
-    { token: 'Codex 0.144 durable-result override', surfaces: prSkill },
-    { token: 'transport_error: encrypted_return', surfaces: prSkill },
+    { token: 'transport_error: encrypted_return', surfaces: PR6 },
     { token: 'direct `agents` namespace', surfaces: prSkill },
     { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: prSkill },
     // T14 — plan-run commands × 3 (claude-live)
