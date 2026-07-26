@@ -859,19 +859,10 @@ for (const planRunSurface of [
   // #605: required progress-echo line printed after every close-and-open-next.
   assertIncludes(planRunSurface, '{node-id} → complete; opened: {next-id|—}');
 
-  // #607/#768: gate-instrumentation-provisioning block — a main-session-gate node body never
-  // instructs authoring files; instrumentation is provisioned upstream. Pinned on BOTH the command
-  // and SKILL surfaces. The KAOLA_GATE_WINDOW_FENCE runtime fence prose was retired (#768) — banned
-  // below so it cannot silently re-creep.
-  assertIncludes(planRunSurface, '<!-- PIN: gate-instrumentation-provisioning -->');
-  assertNotIncludes(planRunSurface, 'KAOLA_GATE_WINDOW_FENCE');
-
-  // #611: the Codex Join Protocol reference — dispatch-card wait budget, delegation outcome, and
-  // writer-kill-safety verdict, present on BOTH the command (runtime-appropriate equivalent) and
-  // SKILL (full A-F encoding) surfaces.
-  assertIncludes(planRunSurface, 'dispatch.wait_budget_minutes');
-  assertIncludes(planRunSurface, 'delegation_outcome');
-  assertIncludes(planRunSurface, 'writerHalt');
+  // The gate-instrumentation-provisioning anchor, the retired KAOLA_GATE_WINDOW_FENCE ban, and the
+  // Join Protocol's wait-budget / delegation-outcome / writerHalt needles are asserted on THESE
+  // SAME EDITION PATHS by the root validator's six-surface gate-fence loop and its three-command +
+  // three-SKILL join-protocol loops, in the always-selected claude chain.
 }
 
 // #611: the Codex Join Protocol's full A-F encoding is Codex-SKILL-specific (spawn_agent /
