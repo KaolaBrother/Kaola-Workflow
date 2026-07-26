@@ -942,10 +942,11 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-sessio
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'main-session-gate');
 
 // #607: gate instrumentation is provisioned upstream, never authored by the gate itself — pinned
-// on the GitLab edition planner TOML and its kaola-workflow-adapt SKILL (md↔toml parity for the
-// TOML twin is separately enforced by the shared test-agent-profile-parity.js FEATURE_TOKENS).
+// on the GitLab edition planner TOML, which no root-tree loop reads (md↔toml parity for the TOML
+// twin is separately enforced by the shared test-agent-profile-parity.js FEATURE_TOKENS).
+// The kaola-workflow-adapt SKILL twin is asserted on THIS EDITION'S OWN path by the root
+// validator's three-adapt-SKILL loop, in the always-selected claude chain.
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'the gate never authors or deletes files');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'the gate never authors or deletes files');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (GitLab edition — .toml bodies). Removing the emission section from
