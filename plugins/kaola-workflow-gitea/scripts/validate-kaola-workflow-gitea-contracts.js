@@ -68,47 +68,11 @@ function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 
-function assertBefore(file, earlier, later) {
-  const text = norm(read(file));
-  const ne = norm(earlier), nl = norm(later);
-  const ei = text.indexOf(ne), li = text.indexOf(nl);
-  assert(ei !== -1, file + ' must include: ' + earlier);
-  assert(li !== -1, file + ' must include: ' + later);
-  assert(ei < li, file + ': "' + earlier + '" must appear before "' + later + '"');
-}
-
 function assertConcept(file, concept, terms) {
   const content = norm(read(file).toLowerCase());
   const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
   assert(missing.length === 0,
     file + ' must document ' + concept + '; missing: ' + missing.join(', '));
-}
-
-// #796: a routing surface that cites a section of the workflow-planner profile must cite one that
-// EXISTS. The citation shape is `its own *<Name>* section` (a `*A* / *B*` list form is also parsed,
-// since that is the shape a stale citation took). Every extracted <Name> must resolve to an h2/h3
-// heading in the shared repo-root `agents/workflow-planner.md`, of which this edition's TOML twin is
-// a parity-checked flattening. This guards the CLASS, not a literal: these surfaces shipped green
-// for a full release citing two section names that had been deleted from the profile, because no
-// assertion ever compared the two files.
-function assertProfileSectionCitations(file, profile) {
-  const cited = [];
-  for (const run of norm(read(file)).matchAll(/its own ((?:\*[^*\n]+\*(?:\s*(?:\/|,|and)\s*)?)+)/g)) {
-    for (const name of run[1].matchAll(/\*([^*]+)\*/g)) cited.push(name[1].trim());
-  }
-  assert(cited.length > 0,
-    file + ' must cite at least one ' + profile + ' section as `its own *<Name>* section`');
-  const headings = new Set();
-  for (const line of read(profile).split('\n')) {
-    if (!/^#{2,3}\s/.test(line)) continue;
-    const text = line.replace(/^#{2,3}\s+/, '').trim();
-    headings.add(text);
-    // a heading may carry a trailing `— gloss`; the citable title is the part before it
-    headings.add(text.split(/\s+[—–-]\s+/)[0].trim());
-  }
-  for (const name of cited) {
-    assert(headings.has(name), file + ' cites a ' + profile + ' section that does not exist: ' + name);
-  }
 }
 
 function assertEveryDispatchHasModel(file) {
@@ -680,40 +644,14 @@ assertIncludes(pluginRoot + '/commands/workflow-next.md', 'Skip this entire step
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'KAOLA_PATH');
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'path_not_installed');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'path_not_installed');
-// #796: the router's issue-selection contract, pinned on both Gitea routing surfaces. Every needle
-// here was unasserted before, which is exactly how a cross-reference to two deleted profile sections
-// survived a release on this edition too: correct-looking prose with nothing checking it. The tokens
-// are forge-neutral, so the same needle set fits the command and the SKILL.
-for (const file of [pluginRoot + '/commands/workflow-next.md',
-  pluginRoot + '/skills/kaola-workflow-next/SKILL.md']) {
-  // A user-named issue outranks an active folder, and the numbered procedure must SAY so before it
-  // reaches the active-folder step. Order is half the fix; the explicit match condition is the other.
-  assertBefore(file, 'A named target is never substituted', 'if exactly one active folder is already present');
-  assertIncludes(file, 'do not read, adopt, or fall back to an active folder');
-  // The described-task branch and the guarantee that makes it worth having: no survey, so the
-  // roadmap frontier cannot outrank the work the user actually asked for.
-  assertIncludes(file, 'User described a task but named no issue');
-  assertIncludes(file, 'the backlog survey NEVER runs on this branch');
-  // The no-target entry states its default in its FIRST paragraph, not after the bundle prose.
-  assertIncludes(file, 'Single-issue is the default here');
-  // The selection-evidence sidecar has a NAMED writer, so surface prose and the claim-side probe
-  // tell one story instead of asserting a file nobody was told to write.
-  assertIncludes(file, 'The planner is that sidecar');
-  assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
-  // The two deleted section names must not return, and every cited section must resolve.
-  assertNotIncludes(file, 'Backlog Inventory');
-  assertNotIncludes(file, 'What You May Read');
-  assertProfileSectionCitations(file, 'agents/workflow-planner.md');
-}
-// #796: the adapt surfaces are the receiving end of the described-task route — they must document
-// the entry shapes, carry the planner dispatch's binding-scope field, and render a defined
-// no-target target slot instead of a placeholder literal.
-for (const file of [pluginRoot + '/commands/kaola-workflow-adapt.md',
-  pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md']) {
-  assertIncludes(file, 'Entry contract');
-  assertIncludes(file, 'Binding scope:');
-  assertIncludes(file, 'no target named; run no-target survey mode');
-}
+// The router's whole issue-selection contract — named-target precedence and its reading order, the
+// described-task branch, the single-issue default, the selection-evidence sidecar's named writer,
+// the two banned section names, and the structural profile-section-citation guard — is asserted on
+// THIS EDITION'S OWN next command and SKILL by the root validator's six-next-surface loop, with a
+// SUPERSET of needles, in the always-selected claude chain.
+// The adapt entry contract (entry shapes, the dispatch's binding-scope field, and a defined
+// no-target target slot) is asserted on THIS EDITION'S OWN adapt command and SKILL by the root
+// validator's six-adapt-surface loop, in the always-selected claude chain.
 // #277 M3: FANOUT_CAP and post-dominate relocated from commands/kaola-workflow-adapt.md
 // (dispatch-handle-only) to agents/workflow-planner.md (sole home of authoring procedure).
 // agents/workflow-planner.md is a shared repo-root file; use a root-relative path (no pluginRoot).
@@ -877,28 +815,15 @@ for (const planRunSurface of [
   // #605: required progress-echo line printed after every close-and-open-next.
   assertIncludes(planRunSurface, '{node-id} → complete; opened: {next-id|—}');
 
-  // #607/#768: gate-instrumentation-provisioning block — a main-session-gate node body never
-  // instructs authoring files; instrumentation is provisioned upstream. Pinned on BOTH the command
-  // and SKILL surfaces. The KAOLA_GATE_WINDOW_FENCE runtime fence prose was retired (#768) — banned
-  // below so it cannot silently re-creep.
-  assertIncludes(planRunSurface, '<!-- PIN: gate-instrumentation-provisioning -->');
-  assertNotIncludes(planRunSurface, 'KAOLA_GATE_WINDOW_FENCE');
-
-  // #611: the Codex Join Protocol reference — dispatch-card wait budget, delegation outcome, and
-  // writer-kill-safety verdict, present on BOTH the command (runtime-appropriate equivalent) and
-  // SKILL (full A-F encoding) surfaces.
-  assertIncludes(planRunSurface, 'dispatch.wait_budget_minutes');
-  assertIncludes(planRunSurface, 'delegation_outcome');
-  assertIncludes(planRunSurface, 'writerHalt');
+  // The gate-instrumentation-provisioning anchor, the retired KAOLA_GATE_WINDOW_FENCE ban, and the
+  // Join Protocol's wait-budget / delegation-outcome / writerHalt needles are asserted on THESE
+  // SAME EDITION PATHS by the root validator's six-surface gate-fence loop and its three-command +
+  // three-SKILL join-protocol loops, in the always-selected claude chain.
 }
 
-// #611: the Codex Join Protocol's full A-F encoding is Codex-SKILL-specific (spawn_agent /
-// wait_agent / close_agent lifecycle) — pin the anchor + the wait-budget floor rule there only.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '<!-- PIN: join-protocol -->');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'NEVER interrupted before its wait budget expires');
-// #611: the command surface's runtime-appropriate equivalent uses SendMessage vocabulary and the
-// "Writer kill-safety" heading instead of the Codex A-F lettering.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
+// The Join Protocol anchor and its wait-budget floor rule on this edition's plan-run SKILL, and the
+// "Writer kill-safety" heading on this edition's plan-run COMMAND, are asserted on THESE SAME
+// EDITION PATHS by the root validator's three-SKILL and three-command join-protocol loops.
 for (const planRunSurface of [pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/commands/kaola-workflow-plan-run.md']) {
   assertIncludes(planRunSurface, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
   assertIncludes(planRunSurface, '`planner_override` may extend but never shorten');
@@ -911,13 +836,10 @@ assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a bu
 
 // #606: teammate-mode dispatch subsection — Claude-runtime block, command surface only.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', "spawn each node's role agent as a NAMED teammate");
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'send EXACTLY ONE request for the deliverable, then wait');
-// #611: fork_turns:"none" unconditional mandate — Codex-dispatch block, SKILL surface only.
-// #775: v2-task-name is the only dispatch mode, so the "applies identically to this dispatch
-// mode" qualifier (a v1/v2 distinction) is itself retired prose.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'on EVERY role dispatch');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'the unconditional mandate applies identically to this dispatch mode');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'not a valid path for tiered nodes');
+// The one-request teammate rule on this edition's plan-run COMMAND, and the fork_turns
+// unconditional mandate plus its two retired-qualifier bans on this edition's plan-run SKILL, are
+// asserted on THESE SAME EDITION PATHS by the root validator's three-command and three-SKILL
+// plan-run loops, in the always-selected claude chain.
 
 // #775: v2-task-name is the only dispatch mode — the preflight-doctor detection step and the
 // --codex-dispatch-mode flag it used to thread into the claim are retired (warn-and-ignore shim
@@ -960,10 +882,11 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-sessio
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'main-session-gate');
 
 // #607: gate instrumentation is provisioned upstream, never authored by the gate itself — pinned
-// on the Gitea edition planner TOML and its kaola-workflow-adapt SKILL (md↔toml parity for the
-// TOML twin is separately enforced by the shared test-agent-profile-parity.js FEATURE_TOKENS).
+// on the Gitea edition planner TOML, which no root-tree loop reads (md↔toml parity for the TOML
+// twin is separately enforced by the shared test-agent-profile-parity.js FEATURE_TOKENS).
+// The kaola-workflow-adapt SKILL twin is asserted on THIS EDITION'S OWN path by the root
+// validator's three-adapt-SKILL loop, in the always-selected claude chain.
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'the gate never authors or deletes files');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'the gate never authors or deletes files');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Gitea edition — .toml bodies). Removing the emission section from
@@ -1174,19 +1097,9 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     assert(typeof planValidator[name] === 'function', pluginRoot + ' plan validator must export ' + name);
   }
 
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-adapt.md',
-    pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md',
-    pluginRoot + '/agents/workflow-planner.toml',
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-authoring -->');
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-plan-run.md',
-    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md',
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-execution -->');
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-finalize.md',
-    pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md',
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-finalization -->');
+  // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME EDITION PATHS by the root
+  // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
+  // (each also pins the contract fields) — in the always-selected claude chain.
 }
 
 // #505 ITEM 1 / #816: the foreign-archive staging guard moved from bash prose INTO the finalize
