@@ -867,13 +867,9 @@ for (const planRunSurface of [
   // three-SKILL join-protocol loops, in the always-selected claude chain.
 }
 
-// #611: the Codex Join Protocol's full A-F encoding is Codex-SKILL-specific (spawn_agent /
-// wait_agent / close_agent lifecycle) — pin the anchor + the wait-budget floor rule there only.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '<!-- PIN: join-protocol -->');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'NEVER interrupted before its wait budget expires');
-// #611: the command surface's runtime-appropriate equivalent uses SendMessage vocabulary and the
-// "Writer kill-safety" heading instead of the Codex A-F lettering.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
+// The Join Protocol anchor and its wait-budget floor rule on this edition's plan-run SKILL, and the
+// "Writer kill-safety" heading on this edition's plan-run COMMAND, are asserted on THESE SAME
+// EDITION PATHS by the root validator's three-SKILL and three-command join-protocol loops.
 for (const planRunSurface of [pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/commands/kaola-workflow-plan-run.md']) {
   assertIncludes(planRunSurface, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
   assertIncludes(planRunSurface, '`planner_override` may extend but never shorten');
