@@ -36,43 +36,6 @@ function assertConcept(file, concept, terms) {
   assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
-// #796: reading-order assertion — a procedure whose steps are correct but ordered wrong still
-// misroutes an agent reading top-to-bottom, so some pins have to check position, not presence.
-function assertBefore(file, first, second) {
-  const content = norm(read(file));
-  const nf = norm(first), ns = norm(second);
-  assert(content.indexOf(nf) >= 0, file + ' must include: ' + first);
-  assert(content.indexOf(ns) >= 0, file + ' must include: ' + second);
-  assert(content.indexOf(nf) < content.indexOf(ns), file + ' must put ' + first + ' before ' + second);
-}
-
-// #796: a routing surface that cites a section of the workflow-planner profile must cite one that
-// EXISTS. The citation shape is `its own *<Name>* section` (a `*A* / *B*` list form is also parsed,
-// since that is the shape a stale citation took). Every extracted <Name> must resolve to an h2/h3
-// heading in the profile — the canonical `agents/workflow-planner.md`, of which the packaged TOML
-// twins are parity-checked flattenings. This guards the CLASS, not a literal: the router SKILL
-// shipped green for a full release citing two section names that had been deleted from the profile,
-// because no assertion ever compared the two files.
-function assertProfileSectionCitations(file, profile) {
-  const cited = [];
-  for (const run of norm(read(file)).matchAll(/its own ((?:\*[^*\n]+\*(?:\s*(?:\/|,|and)\s*)?)+)/g)) {
-    for (const name of run[1].matchAll(/\*([^*]+)\*/g)) cited.push(name[1].trim());
-  }
-  assert(cited.length > 0,
-    file + ' must cite at least one ' + profile + ' section as `its own *<Name>* section`');
-  const headings = new Set();
-  for (const line of read(profile).split('\n')) {
-    if (!/^#{2,3}\s/.test(line)) continue;
-    const text = line.replace(/^#{2,3}\s+/, '').trim();
-    headings.add(text);
-    // a heading may carry a trailing `— gloss`; the citable title is the part before it
-    headings.add(text.split(/\s+[—–-]\s+/)[0].trim());
-  }
-  for (const name of cited) {
-    assert(headings.has(name), file + ' cites a ' + profile + ' section that does not exist: ' + name);
-  }
-}
-
 function parseJson(file) {
   return JSON.parse(read(file));
 }
