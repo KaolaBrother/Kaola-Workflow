@@ -1387,6 +1387,171 @@ if (exists(pluginRel)) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// FA — FORGE AXIS. The runtime is not a forge, but the workflow PROSE is
+// forge-shaped, so this block proves each forge renders its OWN surface and
+// nothing of any other. Three properties make it a guard rather than a
+// smoke test:
+//   (1) the forge set is DERIVED from the routing registry, so a new forge is
+//       covered the moment it exists — there is no opt-in list to forget;
+//   (2) the identity check is BIDIRECTIONAL (own marker present AND every
+//       other forge's marker absent), so both "gitlab tree is github-shaped"
+//       and "github tree leaked a gitlab token" fail;
+//   (3) the markers are DERIVED from the install manifest, so they cannot
+//       drift from the basenames the installer actually deploys.
+// ---------------------------------------------------------------------------
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const routing = require('./generate-routing-surfaces.js');
+  const { spawnSync } = require('child_process');
+  const SYNC = path.join(REPO, 'scripts', 'sync-opencode-edition.js');
+
+  // F1: ONE forge axis. The edition must not carry a second list that can drift
+  // from the registry that renders the surfaces it consumes.
+  assert(Array.isArray(routing.FORGES) && routing.FORGES.length >= 3,
+    'FA1: the routing registry exposes a forge axis of at least 3 forges');
+  assert(JSON.stringify(forgeLayout.FORGES) === JSON.stringify(routing.FORGES),
+    'FA1: runtime-edition-forge FORGES is the routing registry axis, not a copy '
+    + '(got ' + JSON.stringify(forgeLayout.FORGES) + ' vs ' + JSON.stringify(routing.FORGES) + ')');
+  assert(JSON.stringify(sync.FORGES) === JSON.stringify(routing.FORGES),
+    'FA1: sync-opencode-edition re-exports the same forge axis');
+
+  // Marker per forge: the claim-script basename the INSTALL MANIFEST resolves for
+  // that forge. Derived, so it tracks any future rename automatically.
+  const marker = f => forgeLayout.scriptName('kaola-workflow-claim.js', f);
+  const markers = forgeLayout.FORGES.map(marker);
+  assert(new Set(markers).size === markers.length,
+    'FA2: the per-forge markers are distinct (' + markers.join(', ') + ') — a shared marker '
+    + 'would make the bidirectional check below vacuous');
+
+  const walk = dir => {
+    const out = [];
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) out.push(...walk(p));
+      else out.push(p);
+    }
+    return out;
+  };
+
+  for (const forge of forgeLayout.FORGES) {
+    const tree = sync.treeLabel(forge);
+
+    // F3: every forge renders, and re-renders to byte-parity.
+    const w = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--write'], { encoding: 'utf8' });
+    assert(w.status === 0, 'FA3[' + forge + ']: sync --write exits 0 (got ' + w.status + ': '
+      + String(w.stderr || '').slice(0, 200) + ')');
+    const c = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--check'], { encoding: 'utf8' });
+    assert(c.status === 0, 'FA3[' + forge + ']: sync --check is green after --write (got ' + c.status + ': '
+      + String(c.stderr || '').slice(0, 300) + ')');
+
+    const files = walk(path.join(REPO, tree));
+    assert(files.length > 0, 'FA3[' + forge + ']: ' + tree + ' is non-empty after --write');
+    const bodies = files.map(f => fs.readFileSync(f, 'utf8'));
+
+    // F4: the ZERO-Claude-path-leak invariant holds on EVERY forge tree, not just
+    // github. A forge-blind rewrite would leak $CLAUDE_PLUGIN_ROOT here.
+    let leaks = 0;
+    const leakFiles = [];
+    for (let i = 0; i < files.length; i++) {
+      const n = (bodies[i].match(/CLAUDE_PLUGIN_ROOT/g) || []).length
+        + (bodies[i].match(/\.claude\/kaola-workflow/g) || []).length;
+      if (n > 0) { leaks += n; leakFiles.push(path.relative(REPO, files[i]) + ' (' + n + ')'); }
+    }
+    assert(leaks === 0, 'FA4[' + forge + ']: ZERO Claude path leaks across ' + tree
+      + ' — found ' + leaks + ' in: ' + leakFiles.slice(0, 6).join(', '));
+
+    // F5: forge identity, BIDIRECTIONAL.
+    const joined = bodies.join('\n');
+    assert(joined.includes(marker(forge)),
+      'FA5[' + forge + ']: ' + tree + ' carries its OWN forge marker ' + marker(forge));
+    for (const other of forgeLayout.FORGES) {
+      if (other === forge) continue;
+      assert(!joined.includes(marker(other)),
+        'FA5[' + forge + ']: ' + tree + ' must NOT carry the ' + other + ' marker '
+        + marker(other) + ' — cross-forge prose leaked into this tree');
+    }
+
+    // F6: the rendered command set IS the routing registry's command set for this
+    // forge (generated, not a hand-maintained list).
+    const expected = routing.commandSurfacesForForge(forge)
+      .map(r => path.basename(r.path)).sort();
+    const actual = fs.readdirSync(path.join(REPO, tree, 'command')).filter(f => f.endsWith('.md')).sort();
+    assert(JSON.stringify(actual) === JSON.stringify(expected),
+      'FA6[' + forge + ']: ' + tree + '/command is exactly the routing registry command set for '
+      + forge + ' (expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(actual) + ')');
+  }
+
+  // F7: an unknown forge is REFUSED, not silently defaulted to github.
+  const bad = spawnSync(process.execPath, [SYNC, '--forge=svn', '--check'], { encoding: 'utf8' });
+  assert(bad.status === 2,
+    'FA7: sync --forge=svn refuses with exit 2 rather than defaulting to github (got ' + bad.status + ')');
+}
+
+// ---------------------------------------------------------------------------
+// FA9 — the forge axis reaches the INSTALLED tree, not just the generated one.
+// This is the mechanical form of "installing against gitlab/gitea deploys
+// forge-correct scripts": for every forge, a REAL hermetic install (own temp
+// HOME + own --target + own config dir) must deploy exactly the support-script
+// basenames that forge's install manifest names, and no other forge's. It is
+// bidirectional and derived, so a hardcoded --forge=github anywhere in the
+// installer fails here.
+// ---------------------------------------------------------------------------
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, existsSync, readdirSync, rmSync } = require('fs');
+  const os = require('os');
+  const INSTALLER = path.join(REPO, 'install-opencode.sh');
+
+  for (const forge of forgeLayout.FORGES) {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-forge-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-forge-dest-'));
+    const ocCfg = path.join(home, '.config', 'opencode');
+    try {
+      const r = spawnSync('bash', [INSTALLER, '--forge=' + forge, '--target', dest, '--yes'], {
+        env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: ocCfg }),
+        encoding: 'utf8',
+      });
+      assert(r.status === 0, 'FA9[' + forge + ']: install-opencode.sh --forge=' + forge
+        + ' exits 0 (got ' + r.status + ': ' + String(r.stderr || '').split('\n')[0] + ')');
+
+      const scriptsDir = path.join(ocCfg, 'kaola-workflow', 'scripts');
+      assert(existsSync(scriptsDir), 'FA9[' + forge + ']: support scripts land in the opencode-native dir');
+      const deployed = readdirSync(scriptsDir).sort();
+      const expected = manifest.supportScripts(forge).slice().sort();
+      assert(JSON.stringify(deployed) === JSON.stringify(expected),
+        'FA9[' + forge + ']: the installed support set is EXACTLY the ' + forge
+        + ' manifest set (missing: ' + expected.filter(n => !deployed.includes(n)).join(',')
+        + ' | unexpected: ' + deployed.filter(n => !expected.includes(n)).join(',') + ')');
+
+      // Bidirectional: no OTHER forge's uniquely-named script may be present.
+      for (const other of forgeLayout.FORGES) {
+        if (other === forge) continue;
+        const ownSet = new Set(expected);
+        const strangers = manifest.supportScripts(other).filter(n => !ownSet.has(n) && deployed.includes(n));
+        assert(strangers.length === 0,
+          'FA9[' + forge + ']: the ' + forge + ' install must not deploy ' + other
+          + '-only scripts — found ' + strangers.join(', '));
+      }
+
+      // The deployed COMMANDS must resolve a claim script that was actually installed.
+      const cmd = fs.readFileSync(path.join(dest, '.opencode', 'command', 'workflow-next.md'), 'utf8');
+      const claim = forgeLayout.scriptName('kaola-workflow-claim.js', forge);
+      assert(cmd.includes(claim),
+        'FA9[' + forge + ']: the deployed workflow-next resolves ' + claim);
+      assert(deployed.includes(claim),
+        'FA9[' + forge + ']: ' + claim + ' is among the installed support scripts — the command '
+        + 'would otherwise resolve a script this install never wrote');
+    } finally {
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+}
+
 if (failed) {
   console.error('\nopencode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.');
   process.exit(1);

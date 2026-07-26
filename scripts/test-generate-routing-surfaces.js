@@ -695,6 +695,48 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   }
 }
 
+// ---------------------------------------------------------------------------
+// Forge axis as a consumable API. The registry already renders three forges; a
+// downstream runtime edition (opencode / Kimi Code) generates its own tree FROM
+// these rows instead of reading a hardcoded `commands/` directory. That only
+// holds if the axis stays DERIVED and the per-forge slice stays exact, so both
+// are asserted here rather than left to the consumer.
+// ---------------------------------------------------------------------------
+{
+  const gen = require('./generate-routing-surfaces.js');
+
+  // The axis is derived from the edition tables, not restated.
+  eq(gen.FORGES.join(','), gen.COMMAND_EDITIONS.map(e => e.forge).join(','),
+    'FORGES is the COMMAND_EDITIONS forge order');
+  eq(gen.FORGES.join(','), gen.SKILL_EDITIONS.map(e => e.forge).join(','),
+    'FORGES is also the SKILL_EDITIONS forge order (commands and skills cannot disagree)');
+  assert(Object.isFrozen(gen.FORGES), 'FORGES is frozen — a consumer cannot mutate the axis');
+
+  // Every forge slice is exactly its command rows, and the slices partition the
+  // command surfaces with nothing left over and nothing double-counted.
+  const topics = Object.keys(gen.TOPICS);
+  let sliceTotal = 0;
+  for (const forge of gen.FORGES) {
+    const rows = gen.commandSurfacesForForge(forge);
+    sliceTotal += rows.length;
+    eq(rows.length, topics.length, `commandSurfacesForForge(${forge}) covers every topic once`);
+    assert(rows.every(r => r.forge === forge && r.surface_type === 'command'),
+      `commandSurfacesForForge(${forge}) returns only that forge's COMMAND rows`);
+    eq(rows.map(r => r.topic).sort().join(','), topics.slice().sort().join(','),
+      `commandSurfacesForForge(${forge}) topic set equals the registry's topics`);
+    assert(rows.every(r => gen.GENERATED_SURFACES.includes(r)),
+      `commandSurfacesForForge(${forge}) returns the registry's own rows (same objects --check compares)`);
+  }
+  eq(sliceTotal, gen.GENERATED_SURFACES.filter(r => r.surface_type === 'command').length,
+    'the per-forge slices partition every command surface exactly once');
+
+  // An unknown forge THROWS rather than silently returning an empty tree, which a
+  // consumer would render as "zero commands" instead of failing.
+  let threw = false;
+  try { gen.commandSurfacesForForge('svn'); } catch (e) { threw = /unknown forge/.test(e.message); }
+  assert(threw, 'commandSurfacesForForge refuses an unknown forge instead of returning []');
+}
+
 if (failed > 0) {
   console.error(`\ntest-generate-routing-surfaces: ${failed} assertion(s) FAILED (${passed} passed).`);
   process.exit(1);

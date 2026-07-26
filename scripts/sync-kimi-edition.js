@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // sync-kimi-edition.js — generate the Kimi Code runtime edition from canonical.
 //
-// Kimi Code is a coding-agent RUNTIME (like Codex/opencode), not a git forge, so it
+// Kimi Code is a coding-agent RUNTIME (like Codex/opencode), not a git forge, and it
 // does NOT ride the install.sh --forge= (github/gitlab/gitea) machinery. It is
 // delivered the Kimi-native way: directory-form Skills under `.kimi/skills/<name>/
 // SKILL.md` (Kimi auto-registers each activated skill as the slash command `/<name>`,
@@ -24,7 +24,20 @@
 // plus a prompt-prefix instruction to invoke the matching role Skill. The canonical
 // `model:` tier is meaningless under inherit and is skipped entirely.
 //
-//   --write   regenerate .kimi/skills + .kimi/hooks from canonical.
+// FORGE AXIS (--forge=github|gitlab|gitea, default github). The runtime is not a
+// forge, but the workflow PROSE is forge-shaped (`gh` vs `glab` vs `tea`, PR vs
+// MR, per-forge support-script basenames), so a gitlab user must not receive
+// GitHub-shaped skills. The forge variants are GENERATED, never hand-ported: the
+// command sources come from the routing-surface registry via
+// runtime-edition-forge.js, so each forge renders from the same byte-checked
+// surfaces the Claude/Codex editions ship. github writes the historical bare
+// `.kimi/` tree; a forge edition writes the sibling `.kimi-<forge>/`. This
+// changes nothing about the edition's ADDITIVITY: it stays out of `npm test`,
+// `edition-sync.js`, `install.sh`, and the SIX routing surfaces, and keeps its
+// own suite (test-kimi-edition.js).
+//
+//   --forge=<f>  github (default) | gitlab | gitea.
+//   --write   regenerate <tree>/skills + <tree>/hooks from canonical.
 //   --check   assert the generated tree is in byte-parity with a fresh render
 //             (exit 1 on drift).
 // ---------------------------------------------------------------------------
@@ -32,13 +45,21 @@
 const fs = require('fs');
 const path = require('path');
 const reviewerGen = require('./generate-reviewer-profiles');
+const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
+const DEFAULT_FORGE = 'github';
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
-const CANON_COMMANDS_DIR = path.join(REPO, 'commands');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
-const OUT_SKILLS_DIR = path.join(REPO, '.kimi', 'skills');
-const OUT_HOOKS_DIR = path.join(REPO, '.kimi', 'hooks');
+
+// treeLabel — the repo-relative generated tree for one forge ('.kimi' /
+// '.kimi-gitlab'). github keeps the historical bare path, so its output is
+// unchanged by the forge axis.
+function treeLabel(forge) {
+  return '.kimi' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
+}
+const OUT_SKILLS_DIR = path.join(REPO, treeLabel(DEFAULT_FORGE), 'skills');
+const OUT_HOOKS_DIR = path.join(REPO, treeLabel(DEFAULT_FORGE), 'hooks');
 
 // Reviewer gate roles (code-reviewer, adversarial-verifier, security-reviewer) carry their
 // schema-2 identity through the kimi render: behavior_contract_version / behavior_contract_hash
@@ -87,8 +108,19 @@ function listCanonAgents() {
     .map(f => f.slice(0, -3));
 }
 
-function listCanonCommands() {
-  return fs.readdirSync(CANON_COMMANDS_DIR).filter(f => f.endsWith('.md'));
+// The command surfaces this edition renders FROM, for a forge. Sourced from the
+// routing-surface registry rather than a directory listing, so the forge variants
+// are the generated, byte-checked surfaces themselves — the runtime edition holds
+// no command list of its own to drift. Sorted, so the emitted order matches the
+// directory order this generator used before the forge axis.
+function listCanonCommands(forge) {
+  return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
+}
+
+function canonCommandPath(basename, forge) {
+  const src = forgeLayout.commandSources(forge || DEFAULT_FORGE).find(s => s.basename === basename);
+  if (!src) throw new Error(`no command surface "${basename}" for forge ${forge || DEFAULT_FORGE}`);
+  return src.absPath;
 }
 
 // --- role-kind resolution (read-only set computed from canonical, never hardcoded) --
@@ -117,7 +149,8 @@ function readOnlyRoles() {
 
 // --- renderers (pure; exported for parity test) ---
 
-function renderAgent(canonContent, agentName) {
+function renderAgent(canonContent, agentName, forge) {
+  forge = forge || DEFAULT_FORGE;
   const { fm, body } = parseFrontmatter(canonContent);
   const isReviewer = REVIEWER_ROLES.has(agentName);
   const lines = ['---'];
@@ -148,7 +181,7 @@ function renderAgent(canonContent, agentName) {
   // "Re-derive" prose parenthetical). The scoped `--runtime claude` → `--runtime kimi`
   // rewrite mirrors transformCommandBody: workflow-planner's claim-startup invocation
   // must stamp the kimi runtime into workflow-state.md on this edition.
-  const bodyText = rewriteClaudeScriptPaths(body)
+  const bodyText = rewriteClaudeScriptPaths(body, forge)
     .replace(/--runtime claude\b/g, '--runtime kimi')
     .trim().replace(/\s+$/, '');
   lines.push(bodyText);
@@ -176,6 +209,19 @@ function renderAgent(canonContent, agentName) {
 const KIMI_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
+// The forge's resolver. Only the SELF-DEV probe is forge-scoped: inside this
+// repository a gitlab/gitea edition's scripts live in its plugin tree, not in
+// ./scripts. The deployed dir is shared across forges on purpose — the per-forge
+// basenames are distinct, so co-installed editions resolve without collision.
+// Identity for github, which is what keeps the historical tree byte-unchanged.
+function kimiKaolaScript(forge) {
+  const selfDev = forgeLayout.selfDevScriptsDir(forge || DEFAULT_FORGE);
+  return KIMI_KAOLA_SCRIPT.split('"./scripts/$_n"').join(`"${selfDev}/$_n"`);
+}
+
+// reEsc — escape a derived token for literal use inside a RegExp.
+const reEsc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Rewrite the Claude script-path surface to kimi-native (kimi twin of the opencode
 // rewriteClaudeScriptPaths). Applied to BOTH command bodies (via transformCommandBody)
 // and agent bodies (via renderAgent) so the committed .kimi/ tree has ZERO
@@ -186,11 +232,18 @@ const KIMI_KAOLA_SCRIPT =
 //   (b) the "Re-derive your own script path(s)" prose parenthetical → the kimi list;
 //   (c) the standalone REPLAN_SCRIPT resolver (two-line fallback pair + the for-loop
 //       candidate pair) → the single kimi-native candidate.
-function rewriteClaudeScriptPaths(text) {
+function rewriteClaudeScriptPaths(text, forge) {
+  forge = forge || DEFAULT_FORGE;
+  // The forge's replan basename + Claude support-dir name. Both are DERIVED (the
+  // install manifest's rename transform and the plugin dir name), so the (c)
+  // rewrites below match the forge surface they are actually rendering rather
+  // than the github one — without them a gitlab render leaks $CLAUDE_PLUGIN_ROOT.
+  const replanJs = forgeLayout.scriptName('kaola-workflow-replan.js', forge);
+  const claudeDir = forgeLayout.pluginDirName(forge);
   // (a) Whole resolver definition line (indent-preserving). The resolver is always a
   // single line; `.*` does not cross newlines (no `s` flag), so each definition is
   // replaced independently.
-  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + KIMI_KAOLA_SCRIPT);
+  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
   // (b) The path-list parenthetical in agent prose (whitespace-flexible across the two
   // agents' line breaks). Scoped to the literal "(prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
   // then … then `./scripts`)" shape — only contractor + workflow-planner carry it.
@@ -201,19 +254,25 @@ function rewriteClaudeScriptPaths(text) {
   // (c1) The two-line REPLAN_SCRIPT fallback pair (adapt + finalize): a
   // $CLAUDE_PLUGIN_ROOT line followed by a $HOME/.claude line → ONE kimi-native line.
   text = text.replace(
-    /^([ \t]*)\[ -f "\$REPLAN_SCRIPT" \] \|\| REPLAN_SCRIPT="\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}"\n[ \t]*\[ -f "\$REPLAN_SCRIPT" \] \|\| REPLAN_SCRIPT="\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"$/gm,
-    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/kaola-workflow-replan.js"'
+    new RegExp(
+      '^([ \\t]*)\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/'
+      + reEsc(replanJs) + '\\}"\\n[ \\t]*\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$HOME/\\.claude/'
+      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"$', 'gm'),
+    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/' + replanJs + '"'
   );
   // (c2) The for-loop path list (plan-run + workflow-next): the Claude pair inside the
   // candidate list → the single kimi-native candidate.
   text = text.replace(
-    /"\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}" "\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"/g,
-    '"${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/kaola-workflow-replan.js"'
+    new RegExp(
+      '"\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/' + reEsc(replanJs) + '\\}" "\\$HOME/\\.claude/'
+      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"', 'g'),
+    '"${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/' + replanJs + '"'
   );
   return text;
 }
 
-function transformCommandBody(body) {
+function transformCommandBody(body, forge) {
+  forge = forge || DEFAULT_FORGE;
   const lines = body.split(/\r?\n/);
   const out = [];
   let i = 0;
@@ -336,11 +395,12 @@ function transformCommandBody(body) {
   // script path(s)" prose to the kimi-native path (no $CLAUDE_PLUGIN_ROOT, no
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped
   // above) is rewritten in full; the earlier transforms do not touch it.
-  text = rewriteClaudeScriptPaths(text);
+  text = rewriteClaudeScriptPaths(text, forge);
   return text;
 }
 
-function renderCommand(canonContent, commandName) {
+function renderCommand(canonContent, commandName, forge) {
+  forge = forge || DEFAULT_FORGE;
   const { fm, body } = parseFrontmatter(canonContent);
   const lines = ['---'];
   // Directory-form Kimi Skill: `name` + `description` are REQUIRED. The name MUST
@@ -350,7 +410,7 @@ function renderCommand(canonContent, commandName) {
   lines.push('description: ' + (fm.description || ''));
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -361,7 +421,11 @@ function renderCommand(canonContent, commandName) {
 // a placeholder token the installer substitutes with the real
 // ${KIMI_CODE_HOME:-$HOME/.kimi-code} path at install time; the >>> / <<<
 // marker comments delimit the managed block for idempotent merges.
-function renderKimiHooksToml() {
+function renderKimiHooksToml(forge) {
+  // The compact-context script is forge-RENAMED, so the managed block must name the
+  // basename the selected forge actually deploys; a github-shaped command would point
+  // at a file a gitlab install never writes. Hook SCRIPTS are forge-neutral.
+  const compactJs = forgeLayout.scriptName('kaola-workflow-compact-context.js', forge || DEFAULT_FORGE);
   return [
     '# >>> kaola-workflow kimi hooks',
     '[[hooks]]',
@@ -371,7 +435,7 @@ function renderKimiHooksToml() {
     '',
     '[[hooks]]',
     'event = "PostCompact"',
-    'command = "node __KIMI_HOME__/kaola-workflow/scripts/kaola-workflow-compact-context.js"',
+    'command = "node __KIMI_HOME__/kaola-workflow/scripts/' + compactJs + '"',
     'timeout = 5',
     '# <<< kaola-workflow kimi hooks',
     '',
@@ -386,8 +450,8 @@ function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function skillRel(dirName) {
-  return '.kimi/skills/' + dirName + '/SKILL.md';
+function skillRel(dirName, forge) {
+  return treeLabel(forge) + '/skills/' + dirName + '/SKILL.md';
 }
 
 // The EXACT set of skill directories a fresh render produces: one `kaola-role-<agent>`
@@ -396,59 +460,61 @@ function skillRel(dirName) {
 // / `-phase{1..5}` commands) that a deterministic, idempotent mirror must remove — the
 // generator wrote canonical surfaces but never pruned, so --check reported parity while
 // the edition suite's exact-set assertion (K1) failed on the leftovers.
-function expectedSkillDirs() {
+function expectedSkillDirs(forge) {
   const set = new Set();
   for (const name of listCanonAgents()) set.add('kaola-role-' + name);
-  for (const file of listCanonCommands()) set.add(file.slice(0, -3));
+  for (const file of listCanonCommands(forge)) set.add(file.slice(0, -3));
   return set;
 }
 
-function retiredSkillDirs() {
-  const dir = path.join(REPO, '.kimi/skills');
+function retiredSkillDirs(forge) {
+  const dir = path.join(REPO, treeLabel(forge), 'skills');
   if (!fs.existsSync(dir)) return [];
-  const expected = expectedSkillDirs();
+  const expected = expectedSkillDirs(forge);
   return fs.readdirSync(dir, { withFileTypes: true })
     .filter(e => e.isDirectory() && !expected.has(e.name))
     .map(e => e.name);
 }
 
-function pruneSkills() {
+function pruneSkills(forge) {
   let removed = 0;
-  for (const name of retiredSkillDirs()) {
-    fs.rmSync(path.join(REPO, '.kimi/skills', name), { recursive: true, force: true });
-    console.log('pruned     .kimi/skills/' + name + ' (retired surface)');
+  for (const name of retiredSkillDirs(forge)) {
+    fs.rmSync(path.join(REPO, treeLabel(forge), 'skills', name), { recursive: true, force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/skills/' + name + ' (retired surface)');
     removed++;
   }
   return removed;
 }
 
-function writeAgents() {
+function writeAgents(forge) {
   let wrote = 0;
   for (const name of listCanonAgents()) {
     const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name);
-    const dest = path.join(REPO, skillRel('kaola-role-' + name));
+    const out = renderAgent(canon, name, forge);
+    const rel = skillRel('kaola-role-' + name, forge);
+    const dest = path.join(REPO, rel);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       ensureDir(path.dirname(dest));
       fs.writeFileSync(dest, out);
-      console.log('generated  ' + skillRel('kaola-role-' + name));
+      console.log('generated  ' + rel);
       wrote++;
     }
   }
   return wrote;
 }
 
-function writeCommands() {
+function writeCommands(forge) {
   let wrote = 0;
-  for (const file of listCanonCommands()) {
+  for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
-    const canon = fs.readFileSync(path.join(CANON_COMMANDS_DIR, file), 'utf8');
-    const out = renderCommand(canon, name);
-    const dest = path.join(REPO, skillRel(name));
+    const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
+    const out = renderCommand(canon, name, forge);
+    const rel = skillRel(name, forge);
+    const dest = path.join(REPO, rel);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       ensureDir(path.dirname(dest));
       fs.writeFileSync(dest, out);
-      console.log('generated  ' + skillRel(name));
+      console.log('generated  ' + rel);
       wrote++;
     }
   }
@@ -491,65 +557,69 @@ function adaptHookForKimi(script, content) {
   return out;
 }
 
-function writeHooks() {
-  ensureDir(OUT_HOOKS_DIR);
+function writeHooks(forge) {
+  const out_dir = path.join(REPO, treeLabel(forge), 'hooks');
+  ensureDir(out_dir);
   let wrote = 0;
   for (const script of HOOK_SCRIPTS) {
     const src = path.join(CANON_HOOKS_DIR, script);
-    const dest = path.join(OUT_HOOKS_DIR, script);
+    const dest = path.join(out_dir, script);
     const content = adaptHookForKimi(script, fs.readFileSync(src, 'utf8'));
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== content) {
       fs.writeFileSync(dest, content);
       fs.chmodSync(dest, 0o755);
-      console.log((HOOK_ADAPTATIONS[script] ? 'adapted    ' : 'copied     ') + '.kimi/hooks/' + script);
+      console.log((HOOK_ADAPTATIONS[script] ? 'adapted    ' : 'copied     ') + treeLabel(forge) + '/hooks/' + script);
       wrote++;
     }
   }
-  const toml = renderKimiHooksToml();
-  const tomlDest = path.join(OUT_HOOKS_DIR, 'kimi-hooks.toml');
+  const toml = renderKimiHooksToml(forge);
+  const tomlDest = path.join(out_dir, 'kimi-hooks.toml');
   if (!fs.existsSync(tomlDest) || fs.readFileSync(tomlDest, 'utf8') !== toml) {
     fs.writeFileSync(tomlDest, toml);
-    console.log('generated  .kimi/hooks/kimi-hooks.toml');
+    console.log('generated  ' + treeLabel(forge) + '/hooks/kimi-hooks.toml');
     wrote++;
   }
   return wrote;
 }
 
-function runWrite() {
-  const a = writeAgents();
-  const c = writeCommands();
-  const h = writeHooks();
-  const p = pruneSkills();
+function runWrite(forge) {
+  forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
+  const a = writeAgents(forge);
+  const c = writeCommands(forge);
+  const h = writeHooks(forge);
+  const p = pruneSkills(forge);
   const total = a + c + h + p;
-  console.log('sync-kimi-edition: write complete (' + total + ' file(s) updated'
+  console.log('sync-kimi-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
 
-function runCheck() {
+function runCheck(forge) {
+  forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
+  const tree = treeLabel(forge);
   const mismatches = [];
   for (const name of listCanonAgents()) {
     const canon = read('agents/' + name + '.md');
-    const rel = skillRel('kaola-role-' + name);
+    const rel = skillRel('kaola-role-' + name, forge);
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing generated role skill' });
       continue;
     }
-    const expected = renderAgent(canon, name);
+    const expected = renderAgent(canon, name, forge);
     if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
-  for (const file of listCanonCommands()) {
+  for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
-    const canon = read('commands/' + file);
-    const rel = skillRel(name);
+    const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
+    const rel = skillRel(name, forge);
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing generated command skill' });
       continue;
     }
-    const expected = renderCommand(canon, name);
+    const expected = renderCommand(canon, name, forge);
     if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
   for (const script of HOOK_SCRIPTS) {
-    const rel = '.kimi/hooks/' + script;
+    const rel = tree + '/hooks/' + script;
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing hook script copy' });
       continue;
@@ -557,41 +627,53 @@ function runCheck() {
     if (read(rel) !== adaptHookForKimi(script, read('hooks/' + script))) mismatches.push({ rel, reason: 'drifted from canonical hooks/ (post-adaptation)' });
   }
   {
-    const rel = '.kimi/hooks/kimi-hooks.toml';
+    const rel = tree + '/hooks/kimi-hooks.toml';
     if (!fs.existsSync(path.join(REPO, rel))) {
       mismatches.push({ rel, reason: 'missing generated hooks fragment' });
-    } else if (read(rel) !== renderKimiHooksToml()) {
+    } else if (read(rel) !== renderKimiHooksToml(forge)) {
       mismatches.push({ rel, reason: 'stale — regenerate' });
     }
   }
-  for (const name of retiredSkillDirs()) {
-    mismatches.push({ rel: '.kimi/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
+  for (const name of retiredSkillDirs(forge)) {
+    mismatches.push({ rel: tree + '/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
   if (mismatches.length) {
-    console.error('sync-kimi-edition: PARITY FAILED (' + mismatches.length + ' file(s)):');
+    console.error('sync-kimi-edition[' + forge + ']: PARITY FAILED (' + mismatches.length + ' file(s)):');
     for (const m of mismatches) console.error('  - ' + m.rel + ' — ' + m.reason);
-    console.error('Fix: node scripts/sync-kimi-edition.js --write');
+    console.error('Fix: node scripts/sync-kimi-edition.js --forge=' + forge + ' --write');
     process.exitCode = 1;
     return;
   }
   const na = listCanonAgents().length;
-  const nc = listCanonCommands().length;
-  console.log('sync-kimi-edition: ' + na + ' role skill(s) + ' + nc + ' command skill(s) + '
+  const nc = listCanonCommands(forge).length;
+  console.log('sync-kimi-edition[' + forge + ']: ' + na + ' role skill(s) + ' + nc + ' command skill(s) + '
     + (HOOK_SCRIPTS.length + 1) + ' hook file(s) in parity with canonical.');
 }
 
 function usage() {
   process.stdout.write(
-    'usage: node scripts/sync-kimi-edition.js (--write | --check)\n'
-    + '  --write   regenerate .kimi/skills + .kimi/hooks from canonical\n'
+    'usage: node scripts/sync-kimi-edition.js (--write | --check) [--forge=github|gitlab|gitea]\n'
+    + '  --forge=<f>  which forge to render (default github). github writes .kimi/;\n'
+    + '               gitlab/gitea write .kimi-<forge>/\n'
+    + '  --write   regenerate the forge tree skills + hooks from canonical\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
   );
 }
 
 function main() {
-  const arg = process.argv[2];
-  if (arg === '--write') return runWrite();
-  if (arg === '--check') return runCheck();
+  const argv = process.argv.slice(2);
+  const forgeArg = argv.find(a => a.startsWith('--forge='));
+  const forge = forgeArg ? forgeArg.slice('--forge='.length) : DEFAULT_FORGE;
+  try {
+    forgeLayout.assertForge(forge);
+  } catch (e) {
+    console.error('sync-kimi-edition: ' + e.message);
+    process.exitCode = 2;
+    return;
+  }
+  const arg = argv.filter(a => !a.startsWith('--forge='))[0];
+  if (arg === '--write') return runWrite(forge);
+  if (arg === '--check') return runCheck(forge);
   usage();
 }
 
@@ -599,13 +681,14 @@ if (require.main === module) main();
 
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
-  rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT,
-  renderKimiHooksToml,
+  rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT, kimiKaolaScript,
+  renderKimiHooksToml, treeLabel, skillRel, canonCommandPath, runCheck, runWrite,
+  FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForKimi, HOOK_ADAPTATIONS,
   parseFrontmatter, parseTools,
   roleKindMap, readOnlyRoles,
   listCanonAgents, listCanonCommands,
-  CANON_AGENTS_DIR, CANON_COMMANDS_DIR, CANON_HOOKS_DIR,
+  CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   OUT_SKILLS_DIR, OUT_HOOKS_DIR, REPO,
   HOOK_SCRIPTS,
 };

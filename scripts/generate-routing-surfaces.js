@@ -137,6 +137,31 @@ const GENERATED_SURFACES = (() => {
   return rows;
 })();
 
+// FORGES — the forge axis, DERIVED from the edition tables rather than restated,
+// so a forge can never exist for commands but not skills (or vice versa).
+const FORGES = (() => {
+  const cmd = COMMAND_EDITIONS.map(e => e.forge);
+  const skill = SKILL_EDITIONS.map(e => e.forge);
+  if (cmd.join(',') !== skill.join(',')) {
+    throw new Error(`forge axis disagrees: commands=[${cmd}] skills=[${skill}]`);
+  }
+  return Object.freeze(cmd.slice());
+})();
+
+// commandSurfacesForForge — the command-surface rows for ONE forge, in topic
+// order. This is the forge axis as a CONSUMABLE api: a downstream runtime
+// edition (opencode / Kimi Code) renders its own tree FROM these rows instead of
+// reading a hardcoded `commands/` directory, so its forge variants are generated
+// from the same registry that renders the committed surfaces — never hand-ported.
+// Rows are the same objects `--check` byte-compares, so a topic added here
+// reaches every runtime without a second registration.
+function commandSurfacesForForge(forge) {
+  if (!FORGES.includes(forge)) {
+    throw new Error(`unknown forge "${forge}" (expected one of ${FORGES.join('/')})`);
+  }
+  return GENERATED_SURFACES.filter(r => r.surface_type === 'command' && r.forge === forge);
+}
+
 // ---------------------------------------------------------------------------
 // Render engine (pure — no fs). renderSkeleton(skeletonText, ctx, ir) -> string
 // where ctx = { surface_type, forge } and ir = { slots, splices }.
@@ -357,4 +382,6 @@ module.exports = {
   TOPICS,
   COMMAND_EDITIONS,
   SKILL_EDITIONS,
+  FORGES,
+  commandSurfacesForForge,
 };

@@ -85,7 +85,9 @@ Reinstall/refresh every Kaola-Workflow runtime edition in sequence:
   4. kimi      Kimi Code     (install-kimi.sh)
 
 Options:
-  --forge=github|gitlab|gitea   Forge for the Claude installer (default: github)
+  --forge=github|gitlab|gitea   Forge for every forge-aware runtime (default: github).
+                                Threaded to Claude, opencode, and Kimi Code. Codex
+                                selects its forge by marketplace plugin entry instead.
   --global                      Install opencode/Codex/Kimi into the global config root (default)
   --project[=DIR]               Install opencode/Codex/Kimi into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
@@ -98,7 +100,8 @@ Options:
 The Claude installer (install.sh) has no global/project concept — it installs
 its plugin regardless of scope; --global/--project apply to the other three.
 The Codex installer accepts neither --yes nor --forge, so those are
-not forwarded to it. Exit status is non-zero if ANY runtime failed
+not forwarded to it; Codex picks its forge by which marketplace plugin entry
+you add (kaola-workflow, -gitlab, -gitea). Exit status is non-zero if ANY runtime failed
 (continue-through by default; --strict aborts at the first failure).
 
 Codex is installed in two parts: the agent profiles (the installer above) and the
@@ -482,14 +485,14 @@ fi
 CLAUDE_CMD=(bash "$ROOT/install.sh" --forge="$FORGE")
 [[ "$YES" == "1" ]] && CLAUDE_CMD+=(--yes)
 
-OPENCODE_CMD=(bash "$ROOT/install-opencode.sh" "${OC_SCOPE[@]}")
+OPENCODE_CMD=(bash "$ROOT/install-opencode.sh" --forge="$FORGE" "${OC_SCOPE[@]}")
 [[ "$YES" == "1" ]] && OPENCODE_CMD+=(--yes)
 
 # Codex installer accepts neither --yes nor --forge (unknown args are
 # ignored there, but we keep the invocation to its documented flag set).
 CODEX_CMD=(node "$ROOT/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js" "${CODEX_SCOPE[@]}")
 
-KIMI_CMD=(bash "$ROOT/install-kimi.sh" "${KIMI_SCOPE[@]}")
+KIMI_CMD=(bash "$ROOT/install-kimi.sh" --forge="$FORGE" "${KIMI_SCOPE[@]}")
 [[ "$YES" == "1" ]] && KIMI_CMD+=(--yes)
 
 run_one claude   "${CLAUDE_CMD[@]}"
