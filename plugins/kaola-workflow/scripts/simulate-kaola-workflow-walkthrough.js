@@ -1144,7 +1144,7 @@ function testCodexLedgerHeaderInvalid425() {
     '| done | finalize | review | — | 1 | sequence | — | — | — | — |',
     '',
     '## Design', '', 'Decompose: impl builds lib/foo.js; review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', '',
-    '## Node Ledger', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
     '| node | status |',
     '|---|---|',
     '| impl | pending |',

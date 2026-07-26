@@ -143,6 +143,8 @@ const RUNTIME_NATIVE = Object.freeze({
     'Codex agent-profile TOML field carrying the role body; the other runtimes carry it as Markdown body text.',
   nickname_candidates:
     'Codex agent-profile TOML field; no analogue in the Markdown/Skill profile formats.',
+  inherit_session_model:
+    'Kimi subagents always inherit the session model, so Kimi surfaces carry no per-dispatch model= override and no model: frontmatter field; the other runtimes resolve a tier per dispatch.',
 });
 
 // ---------------------------------------------------------------------------
@@ -213,12 +215,12 @@ function tokenMatcher(token) {
 // Runtime source collection.
 // ---------------------------------------------------------------------------
 
-// agents/profiles/higher/ is EXCLUDED by construction, not by oversight: those
-// overrides are substituted by install.sh only at --profile=higher and are never
-// rendered into the opencode/kimi trees (their sync scripts render the 15 base
-// agents + 5 commands). Walking them would let a token that exists only in a
-// higher-profile override look claude-native and RED the always-run chain for a
-// difference that is structural rather than a drift.
+// The canonical agent tree is FLAT — one file per role, one model assignment per
+// role. `agents/profiles/` no longer exists (the install-time model axis is retired),
+// but the walk still skips any nested subtree: the sync scripts render only the
+// top-level agents + commands, so a token reachable only from a nested override would
+// look claude-native and RED the always-run chain for a structural difference rather
+// than a drift.
 const CLAUDE_EXCLUDED_SUBTREE = path.join('agents', 'profiles') + path.sep;
 
 function collectClaude(repo) {

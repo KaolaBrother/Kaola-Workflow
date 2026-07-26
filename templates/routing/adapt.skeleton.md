@@ -1,8 +1,6 @@
----
-name: kaola-workflow-adapt
-description: Use when authoring an adaptive workflow-plan.md — freely compose a task-shaped DAG of role nodes, then the validator proves it in-grammar and freezes it. Mirror of commands/kaola-workflow-adapt.md for Codex runtime.
----
+<!-- SLOT:ad-frontmatter -->
 
+<!-- REGION:skill -->
 <!-- PIN: codex-profile-preflight -->
 ## Codex Profile Freshness Gate
 
@@ -84,7 +82,19 @@ after exit 0 and parsed `status: "ok"`. Exact-byte drift such as
 profile/config drift as tool unavailability or local fallback. Re-run the gate if the installed profile set changes.
 <!-- /PIN -->
 
-# Skill: kaola-workflow-adapt
+<!-- /REGION -->
+<!-- SLOT:ad-h1 -->
+<!-- REGION:command -->
+
+Phase-0 of the adaptive path: a dedicated **`workflow-planner`** subagent (reasoning tier) settles the starting
+contract (claim + `workflow-state.md` at repo-root — the adaptive claim provisions a hidden worktree
+at `<repo-root>/.kw/worktrees/<project>/`; the planner authors + freezes at repo-root, not in the
+worktree) and **freely authors** a task-shaped DAG into `workflow-plan.md`, which the validator proves
+in-grammar. The lifecycle frame (claim → branch/worktree → this plan → Finalization sink)
+is fixed; the middle is free. The full claim + author + handoff procedure (grammar, caps, example
+<!-- SPLICE:ad-cmd-001 -->
+command holds the dispatch handle, entry guard, and handoff routing.
+<!-- /REGION -->
 
 ## In-progress re-plan control plane
 
@@ -92,21 +102,56 @@ profile/config drift as tool unavailability or local fallback. Re-run the gate i
 
 This fence outranks normal adaptive startup and authoring. Before any claim, handoff, or planner
 startup action, read the project state and transaction status. When either reports
+<!-- REGION:command -->
+`replan_in_progress`, keep the frozen parent `workflow-plan.md` authoritative; read-only orientation
+reports `replan_phase`, `transaction_id`, `parent_plan_hash`, `child_plan_hash` (or `none`), and
+`last_cas_result`. The single legal mutation while the fence is active:
+<!-- /REGION -->
+<!-- REGION:skill -->
 `replan_in_progress`, keep the frozen parent `workflow-plan.md` authoritative. Read-only
 orientation reports the exact `replan_phase`, `transaction_id`, `parent_plan_hash`,
 `child_plan_hash` (or `none`), and `last_cas_result`; never reconstruct them from memory.
 
 The single legal mutation while the fence is active is:
+<!-- /REGION -->
 
 ```bash
-REPLAN_SCRIPT="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js"
+<!-- REGION:command -->
+<!-- SPLICE:ad-cmd-002 -->
+<!-- /REGION -->
+<!-- REGION:skill -->
+<!-- SPLICE:ad-sk-001 -->
 if [ ! -f "$REPLAN_SCRIPT" ]; then
-  REPLAN_SCRIPT="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-replan.js' -print -quit 2>/dev/null)"
+<!-- SPLICE:ad-sk-002 -->
 fi
-[ -n "$REPLAN_SCRIPT" ] && [ -f "$REPLAN_SCRIPT" ] || { echo "BLOCKED: kaola-gitlab-workflow-replan.js unavailable" >&2; exit 1; }
+<!-- SPLICE:ad-sk-003 -->
+<!-- /REGION -->
 node "$REPLAN_SCRIPT" resume --project {project} --json
 ```
 
+<!-- REGION:command -->
+Do not run normal startup, ordinary handoff, scheduler, task-mirror refresh, archive, or finalize
+during an intermediate phase. `decision:ask` remains advisory and adds no gate. If resume returns
+`replan_planner_dispatch_required`, dispatch the genuine `workflow-planner` in Re-plan mode with only
+repo root, project, `transaction_id`, `dispatch_nonce`, profile identity, the exact
+`.cache/replan-planner-packet.json` path, and its reason/source evidence. No role sequence, node ids,
+dependencies, write sets, cardinality, shape, model, or exact DAG fragment may come from the
+orchestrator; that is `planner_control_boundary_violation`. The planner alone writes the seeded
+`workflow-plan.next.md` plus `.cache/replan-planner-attestation.json`, then main re-runs resume;
+missing/mismatched proof is `replan_planner_attestation_invalid`. An invalid child uses the bounded
+unfrozen child-repair loop (same planner, verbatim validator errors); the main session never repairs
+the child DAG; at the bound stop with typed evidence. A legacy-v1 parent enters its schema-2 child
+through this transaction.
+
+## Goal Contract
+
+<!-- SPLICE:ad-cmd-003 -->
+it (the script stamps `plan_hash`), record the governance decision (`auto-run` vs `ask` is audit
+metadata, NOT an approval gate — freeze and hand off either way), and hand off to
+`/kaola-workflow-plan-run`. An out-of-grammar plan earns a **typed refusal** — fix the plan, never
+clamp around the gate.
+<!-- /REGION -->
+<!-- REGION:skill -->
 Do not run normal startup, ordinary adaptive handoff, scheduler, task-mirror refresh, archive, or
 finalize during an intermediate phase. `decision:ask` remains advisory and adds no gate. If resume
 returns `replan_planner_dispatch_required`, dispatch the genuine `workflow-planner` profile in its
@@ -127,6 +172,7 @@ Phase-0 of the adaptive path: the agent **freely authors** a task-shaped DAG for
 issue — which roles, how many, in what shape — into a `workflow-plan.md`. There is no
 template library and no knob-binding ceremony. Mirror of `commands/kaola-workflow-adapt.md`
 for the Codex runtime. Reads and updates `kaola-workflow/{project}/workflow-state.md`.
+<!-- /REGION -->
 
 <!-- PIN: reviewer-contract-v2-authoring -->
 ## Reviewer Contract V2 Authoring
@@ -160,6 +206,15 @@ sets remain validator-derived. Non-gate rows leave all four gate columns empty. 
 certifier wall for every required code/security frontier; branch-local reviewers do not satisfy the
 planner-designated certifier metadata. Compact-plan and exact-file write-set rules remain binding.
 <!-- /PIN -->
+<!-- REGION:command -->
+
+## Agent Model Badge
+
+Every subagent dispatch below carries an explicit `model=` line — the installer fills each
+`model="{...}"` placeholder from the agent's frontmatter and it is what shows the model badge. You
+MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in the Agent call below exactly as shown; never omit it.
+<!-- /REGION -->
+<!-- REGION:skill -->
 
 ## The grammar (the closed envelope)
 
@@ -288,6 +343,7 @@ the example above models both.
 ### Question-shaped & bug-shaped issues
 
 When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, dispatched concurrently) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping epoch, then continues through the claim-preserving re-plan control plane into one immutable child epoch (new `plan_hash`, parent remains frozen). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
+<!-- /REGION -->
 
 ## Entry contract — what this surface receives
 
@@ -312,6 +368,21 @@ dispatch below. Resolve the shape FIRST, before the authoring guard.
 - **Empty (no target)** — dispatch in no-target survey mode: the `workflow-planner` runs the
   backlog survey itself, selects the work, and claims it in the same dispatch. Do NOT resolve or
   pre-select a target here.
+<!-- REGION:command -->
+
+## Front end: claim + author (the `workflow-planner` subagent)
+
+ONE enforced dispatch: the main session never runs the claim or authoring write but keeps every
+judgment. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
+issue a task description resolved to under the Entry contract above — or with NO target at all,
+in which case the planner selects the work itself in its no-target survey mode. The planner
+RETURNS `{project}`. **Re-entry:** a *frozen*
+plan never reaches adapt (it resumes via `/kaola-workflow-plan-run`), but an authored-but-NOT-frozen
+plan (no `plan_hash`) does — re-run the planner+handoff (it MAY overwrite an unfrozen invalid plan,
+never a frozen one) with prior validator errors; a pre-freeze exit is resumable
+<!-- SPLICE:ad-cmd-004 -->
+<!-- /REGION -->
+<!-- REGION:skill -->
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 
@@ -333,11 +404,39 @@ at all, in which case the planner selects the work itself in its no-target surve
 RETURNS the `{project}` used after. **Re-entry (unfrozen plan):** an *authored-but-NOT-frozen* plan (a prior
 governance refusal / declined ask / abort — no `plan_hash`) routes back here; SKIP the freshness gate
 + planner delegation and re-run the planner+handoff on the existing plan (the planner MAY overwrite an unfrozen plan; never a frozen one); the handoff freezes mechanically. A pre-freeze exit
-leaves a **resumable** project; `kaola-gitlab-workflow-claim.js discard --project
+<!-- SPLICE:ad-sk-004 -->
 {project}` abandons it.
+<!-- /REGION -->
 
 Resolve the entry shape first (Entry contract above) — a task description must already be a
 resolved issue number by the time this guard runs.
+<!-- REGION:command -->
+
+**Before the claim (main session):** run the authoring guard
+<!-- SPLICE:ad-cmd-005 -->
+kept for mechanical shape), then gate on a clean main — the front end claims at repo-root, so
+freshness must gate up front (nothing to orphan): run the Startup Step 1 git-freshness checks against
+the MAIN repo, `git pull --ff-only` if behind, STOP and ask if it cannot resolve cleanly (dirty
+worktree, or merge/rebase/stash/reset required). That dirty check disregards `kaola-workflow/*` and
+`.kw/*` scratch of OTHER active lanes but still fails on any uncommitted code change.
+
+**Planner-first control boundary.** Do only the allowed non-design preflight, then dispatch
+immediately. The main session MUST NOT pre-author the `## Nodes` DAG, choose
+role/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign`
+prompt — that is `planner_control_boundary_violation`. The only exception is the bounded unfrozen-plan
+repair loop (after `plan_invalid`): re-dispatch with verbatim validator errors + the prior plan.
+
+```text
+Agent(
+  subagent_type="workflow-planner",
+  model="{WORKFLOW_PLANNER_MODEL}",
+  description="Adaptive front end {issue}",
+  prompt="Repository root: {repo-root}. Selected issue/set/project: {issue-or-project}. Binding scope: {task-description-or-none}. Settle the starting contract and design the adaptive workflow per the kaola-workflow-adapt skill and workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md) — the full procedure lives there as the sole home. Return only the bounded durable handoff packet."
+)
+```
+
+<!-- /REGION -->
+<!-- REGION:skill -->
 
 **Entry guard (this session, before the delegation).** Run the **authoring guard**. It
 needs no project. Adaptive authoring is always allowed, so this returns `authoring_allowed: true`;
@@ -345,8 +444,7 @@ the call preserves the mechanical gate shape and the planner's `startup` still r
 `claimProject`:
 
 ```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-node "$(kaola_script kaola-gitlab-workflow-claim.js)" authoring-allowed
+<!-- SPLICE:ad-sk-005 -->
 ```
 
 If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP.
@@ -359,13 +457,13 @@ label is created until git is clean** (the front end claims here at repo-root �
 
 **Co-tenant clean-check.** That dirty check disregards `kaola-workflow/*` and `.kw/*` scratch of OTHER active lanes (so a co-tenant session is not falsely refused) but still fails on any uncommitted code change; this session's own in-progress state stays enforced.
 
-Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-gitlab-workflow-claim.js startup --runtime <runtime>
+<!-- SPLICE:ad-sk-006 -->
 --target-issue <issue> --attest-planner-spawn` (`--attest-planner-spawn` is REQUIRED on every planner-run startup — it back-fills the
 planner's own dispatch marker into .cache/dispatch-log.jsonl for closure attestation; only the
-dispatched workflow-planner passes it; add `--sink mr` only for a requested MR sink), authors the
+<!-- SPLICE:ad-sk-007 -->
 `## Meta` + `## Nodes` DAG +
 empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
-as a self-check (NOT `--freeze`, NOT `authoring-allowed`), then RUNS `kaola-gitlab-workflow-adaptive-handoff.js --project {project} --json` (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate), and RETURNS the handoff packet. It never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches. If the project already has a
+<!-- SPLICE:ad-sk-008 -->
 `workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). <!-- PIN: claim-escalate -->
 On a claim refusal — any `claim_verdict` that is NOT `acquired`/`owned` — no `workflow-state.md` is
 written. Surface `claim_reasoning` and classify by `result`:
@@ -388,6 +486,7 @@ agents.spawn_agent:
   fork_turns: "none"
   message: "Repository root: <absolute-root>. Selected issue/set/project: <target>. Binding scope: <task-description-or-none>. Apply the kaola-workflow-adapt skill and workflow-planner profile contract. Return only the bounded durable handoff packet."
 ```
+<!-- /REGION -->
 Render both target slots from the entry shape; never leave a placeholder literal:
 
 | Entry shape | `Selected issue/set/project:` renders | `Binding scope:` renders |
@@ -396,6 +495,107 @@ Render both target slots from the entry shape; never leave a placeholder literal
 | Issue set | the comma-separated set | `none` |
 | Task description | the issue it resolved to under the Entry contract | the user's description, verbatim, on one line |
 | No target | `none — no target named; run no-target survey mode and select the work yourself` | `none` |
+<!-- REGION:command -->
+
+This is an **isolated, self-contained control-plane brief**: never inherit the full conversation. A
+spawn **argument-shape refusal** requires correcting arguments and retrying the same planner
+role/identity/brief exactly once; never author inline.
+
+## Read the durable state, not the planner's prose
+
+<!-- PIN: claim-escalate -->
+- **Refusal — any `claim_verdict` NOT `acquired` or `owned`**: NO `workflow-state.md` was written.
+  Surface `claim_reasoning` and classify by `result`: `result: refuse` (e.g.
+  `target_occupied`, `target_unverified`, `claim: none`) → **HARD STOP**, fail closed (do not retry a
+  different issue, do not blind-read a missing state file); `result: escalate`
+  (`target_indeterminate` / `target_set_indeterminate`) → **PAUSE and ASK THE USER** (retry, pick
+  another target, go offline, or abort — this is not an adaptive-node write-halt; no plan/ledger exists
+  yet).
+- **Plan already existed** (`plan_path: null` on an `owned` claim) → route to
+  `/kaola-workflow-plan-run {project}`; never re-author over a frozen plan.
+- **Success** (`acquired` | `owned`, plan authored) → take `{project}`, re-read `workflow-state.md`
+  (`## Sink`, `workflow_path: adaptive`) and `workflow-plan.md` (internalize the `## Nodes` DAG).
+
+<!-- SPLICE:ad-cmd-006 -->
+frozen, Planning Evidence written; the handoff does NOT open node1 — plan-run owns the full node
+lifecycle including the first). `decision:ask` is audit metadata only — it freezes-and-proceeds.
+
+- **`handoff_status: ready_to_run`** → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even
+  when `decision:ask`, no approval gate).
+- **`handoff_status: plan_invalid`** (validator refused; the plan never froze and `workflow-state.md` is
+  untouched — the one write is the `.cache/acceptance-anchor.json` audit record) → bounded **repair
+  loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite
+  the UNFROZEN plan. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to
+  reach in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) or `## Acceptance`
+  (the human-values statement of what done means, which is hard-fenced) — if in-grammar is unreachable
+  without changing either, that is not repair. Retry ~2x (counter in the ORCHESTRATOR).
+  After repeated failure → **discard+restart a
+<!-- SPLICE:ad-cmd-007 -->
+  concrete blocker**. Forbidden under `replan_in_progress`.
+- **`reason: acceptance_repair_fenced`** (a repair iteration changed `## Acceptance` — usually a fresh
+  planner re-wording the same criteria, not tampering) → the refusal RETURNS the anchored surface in
+  `anchored_acceptance_surface`, and still carries the outstanding grammar errors in
+  `validator_verdict`. Re-dispatch with BOTH: restore those bytes VERBATIM under the `## Acceptance`
+  heading, and fix the grammar errors on the restored surface — a digest cannot be inverted, so the
+  returned bytes are the only copy the next iteration has. Changing what done means is a values
+  decision, not repair: NO flag on the handoff authorizes it — a genuine restatement lands as a
+  re-plan child epoch citing a consent entry bound to the new surface, or as a discard+restart. Never
+  re-anchor on your own judgement, and never edit or delete the anchor by hand.
+
+## Establish the task list, then hand off
+
+After `ready_to_run` (and ONLY then), re-read `workflow-plan.md` and create the orchestrator's task
+list with **TodoWrite** — one task per `## Nodes` row (`id · role`, in `depends_on` order). It is a
+live mirror of the `## Node Ledger` (the durable source of truth); the executor flips each task
+`in_progress` at dispatch and `completed` after close (`n/a` → skipped). Then hand off:
+
+```text
+/kaola-workflow-plan-run {project}
+```
+
+## Shaping guidance
+
+Full shaping lives in `agents/workflow-planner.md`. Author a `knowledge-lookup` node when the task
+depends on external library/API/framework behavior or open-web knowledge that the local codebase
+cannot confirm.
+
+### Question-shaped & bug-shaped issues
+
+When the issue is a **question without a settled answer**, the `workflow-planner` authors an
+**investigation**, not a build DAG around an unvalidated premise — mapped onto existing roles with
+zero new grammar: **probe → assume → adversarially critique → converge** (read-only
+`code-explorer`/`knowledge-lookup` fan-out → `planner` proposes falsifiable answers → a separate
+`adversarial-verifier` refutes the leading answer → `planner`/`synthesizer` converges). Freeze-once:
+Case A authors the whole DAG up front; Case B runs a short read-only shaping run then enters the
+claim-preserving re-plan transaction (a freshly dispatched planner authors an attested child epoch
+while the frozen parent stays authoritative — no fresh claim, restart, or in-place thaw). For a
+**bug**, the falsification criterion is the reproduction (**root cause or symptom mask?**); cannot
+reproduce after a bounded probe → the `consent`-halt valve, never a guess-fix.
+
+## Bundle Lane — Multi-Issue Adaptive Claim
+
+When the router delivers a same-scope bundle (see `workflow-next.md` Step 0), the `workflow-planner`
+runs the bundle claim (the set was already selected by the orchestrator): pass `--target-issues
+A,B,C` (sorted ascending, comma-separated) instead of `--target-issue N`.
+
+```bash
+node "$CLAIM_JS" startup --runtime claude --target-issues 42,47,53
+```
+
+`--target-issue` / `KAOLA_TARGET_ISSUE` keep one-issue behavior; `--target-issues` /
+`KAOLA_TARGET_ISSUES` are the only multi-issue path — setting both refuses with `target_ambiguity`.
+Shape: active folder + branch `bundle-42-47-53` (sorted, deduplicated); `workflow-state.md` records
+`issue_number: 42` + `issue_numbers: 42,47,53`, `bundle_id`, `closure_policy: all_or_nothing`. The
+bundle lane always runs `workflow_path: adaptive` (the set may exceed
+`KAOLA_BUNDLE_MAX_ISSUES`, default 8). The planner authors ONE implementation-lane DAG (not
+one-node-per-issue); `## Meta` carries a conservative union of labels. A bundle run ends at ONE
+finalization that closes every issue in `issue_numbers` (all-or-nothing), removes each
+`.roadmap/issue-N.md`, regenerates `ROADMAP.md` once, archives one bundle folder, and writes one
+closure receipt. On any typed bundle claim refusal (the `target_set_*` / `target_ambiguity`
+codes claim.js emits), surface the code and STOP; do not retry with a
+different set.
+<!-- /REGION -->
+<!-- REGION:skill -->
 
 Sanitize the stable task suffix to lowercase letters, digits, and underscores. With no target, use
 the literal suffix `no_target`. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
@@ -405,11 +605,11 @@ re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `work
 and `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you govern, dispatch,
 and freeze). The claim (at repo-root — the adaptive claim provisions a worktree at `<repo-root>/.kw/worktrees/<project>/`; the planner authors + freezes at repo-root) was cut from a now-clean main (git-freshness ran before the claim, above).
 
-**Read the handoff packet.** The planner RAN `kaola-gitlab-workflow-adaptive-handoff.js` and returned a checklist-backed packet (plan already frozen, Planning Evidence written; the handoff does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node). The handoff is mechanical; `decision:ask` is audit metadata only — it freezes-and-proceeds, NEVER pauses for approval.
+<!-- SPLICE:ad-sk-009 -->
 
-- **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-gitlab-workflow-adaptive-node.js`.
+- **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; the plan never froze and `workflow-state.md` is untouched — the one write is the `.cache/acceptance-anchor.json` audit record) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to reach in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) or `## Acceptance` (the human-values statement of what done means, which is hard-fenced) — if in-grammar is unreachable without changing either, that is not repair. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-gitlab-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. This fallback applies only to normal startup while the draft is unfrozen; it is forbidden under `replan_in_progress`. The only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
+<!-- SPLICE:ad-sk-010 -->
 - **`reason: acceptance_repair_fenced`** (a repair iteration changed `## Acceptance` — usually a fresh planner re-wording the same criteria, not tampering) → the refusal RETURNS the anchored surface in `anchored_acceptance_surface`, and still carries the outstanding grammar errors in `validator_verdict`. Re-dispatch with BOTH: restore those bytes VERBATIM under the `## Acceptance` heading, and fix the grammar errors on the restored surface — a digest cannot be inverted, so the returned bytes are the only copy the next iteration has. Changing what done means is a values decision, not repair: NO flag on the handoff authorizes it — a genuine restatement lands as a re-plan child epoch citing a consent entry bound to the new surface, or as a discard+restart. Never re-anchor on your own judgement, and never edit or delete the anchor by hand.
 
 After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
@@ -491,3 +691,4 @@ A bundle run ends at ONE finalization. The finalization step:
 
 On any bundle claim refusal, treat it the same as a single-issue claim refusal:
 surface the typed code and STOP; do not retry with a different issue set.
+<!-- /REGION -->

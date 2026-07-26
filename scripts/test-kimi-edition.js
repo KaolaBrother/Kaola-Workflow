@@ -84,8 +84,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 // ---------------------------------------------------------------------------
 // K1: count/structure parity — exactly 5 command Skill dirs + 15 kaola-role-*
 // Skill dirs, set-equal to the canonical commands/*.md + top-level agents/*.md
-// inventories (agents/profiles/higher/ is skipped by the generator's
-// construction — it never matches listCanonAgents). Every SKILL.md carries a
+// inventories (the canonical agent tree is flat — one file per role). Every SKILL.md carries a
 // frontmatter `name` (the dir name, so Kimi registers the canonical slash
 // command) and a non-empty `description` (required by directory-form Skills).
 // ---------------------------------------------------------------------------
@@ -155,6 +154,37 @@ for (const name of ['workflow-next', 'kaola-workflow-adapt']) {
 assert(read(skillDir('kaola-workflow-adapt')).includes(
   'Never pass a per-call model override; sub-agents inherit the session model.'),
   'K2[kaola-workflow-adapt]: carries the inherit-model guidance (the stripped "MUST pass model=" prose replacement)');
+
+// K2-declaration: the model-inheritance divergence must exist as a DECLARED EXEMPTION-TABLE ENTRY,
+// not merely as prose. "One rule, one wording" permits a runtime to diverge only where its
+// capabilities genuinely differ, and only when that divergence is declared as a named entry with a
+// one-line reason. Prose in docs/kimi-edition.md cannot satisfy that: deleting a paragraph is
+// invisible to every suite. Binding the assertion to the table makes removal fail HERE.
+{
+  const { RUNTIME_NATIVE } = require('./test-runtime-lexicon-parity.js');
+  const KEY = 'inherit_session_model';
+  const reason = RUNTIME_NATIVE[KEY];
+  assert(typeof reason === 'string' && reason.trim().length >= 20,
+    'K2-declaration: RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason — the Kimi '
+      + 'model-inheritance divergence is a DECLARED runtime difference, not an undocumented one');
+  assert(/inherit/i.test(reason) && /session model/i.test(reason),
+    'K2-declaration: the "' + KEY + '" reason must state that Kimi subagents inherit the session model');
+
+  // The declaration must describe the tree that actually ships: no generated Skill may carry a
+  // `model:` frontmatter field or a per-call `model=` override.
+  for (const name of [...canonCommandNames.map(n => n), ...roleDirNames]) {
+    const rel = skillDir(name);
+    if (!exists(rel)) continue;
+    const content = read(rel);
+    const fm = content.match(/^---\n([\s\S]*?)\n---/);
+    assert(!fm || !/^\s*model\s*:/m.test(fm[1]),
+      'K2-declaration: ' + rel + ' carries a model: frontmatter field, contradicting the declared '
+        + 'inherit_session_model divergence');
+    assert(!/\bmodel="/.test(content),
+      'K2-declaration: ' + rel + ' carries a per-call model=" override, contradicting the declared '
+        + 'inherit_session_model divergence');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // K3: byte-parity — regenerating from canonical reproduces every committed
@@ -752,9 +782,8 @@ for (const script of sync.HOOK_SCRIPTS) {
 // K11 (#812, the kimi twin of test-opencode-edition.js's A24): the generated kimi
 // workflow-init Skill carries the re-grounded adaptive ## Kaola-Workflow template —
 // phase-free (no retired numbered-phase model, no "phase file/artifact" framing) AND
-// in parity with the canonical GitHub template MODULO the DECLARED runtime-noun
-// transform (Claude Code agents → subagents; the sole template-region rewrite
-// transformCommandBody applies, see sync-kimi-edition.js).
+// BYTE-IDENTICAL to the canonical GitHub template. The template is runtime-neutral AT
+// THE SOURCE, so no template-region rewrite exists to except: parity is exact.
 //
 // This is TEMPLATE-CONTENT parity against the canonical source, which K3 structurally
 // cannot prove: this suite self-provisions .kimi/ via `sync --write`, so K3's
@@ -780,11 +809,13 @@ for (const script of sync.HOOK_SCRIPTS) {
     'K11: kimi workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
   assert(!/phase file|phase artifact/i.test(kimiTpl),
     'K11: kimi workflow-init template must not use "phase file/artifact" durable-state framing');
-  // Parity modulo the declared runtime-noun transform.
+  // EXACT parity: transformCommandBody applies zero template-region rewrites (#812).
   const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
-  const canonTplRuntime = canonTpl.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
-  assert(kimiTpl === canonTplRuntime,
-    'K11: kimi workflow-init template is in parity with the canonical GitHub template modulo the declared runtime-noun transform (Claude Code agents → subagents)');
+  assert(kimiTpl === canonTpl,
+    'K11 (#812): kimi workflow-init template is BYTE-IDENTICAL to the canonical GitHub template (no template-region rewrite exists)');
+  // Vendor/runtime leak ban at the injected-template level (the kimi twin of A24's).
+  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(canonTpl),
+    'K11 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 
 if (failed) {

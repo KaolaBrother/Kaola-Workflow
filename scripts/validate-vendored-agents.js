@@ -174,17 +174,15 @@ for (const agentName of localAgents) {
 }
 
 // Generated reviewer profiles are versioned artifacts, not provenance-exempt free-form files.
-// The generator owns all fourteen outputs; this wall binds the Claude source files to the same
+// The generator owns all twelve outputs; this wall binds the Claude source files to the same
 // behavior identity and complete-byte self-hash later consumed by both installers.
 const generatedReviewerErrors = reviewerGenerator.checkGeneratedProfiles(root);
 assert(generatedReviewerErrors.length === 0,
   'generated reviewer profiles must be current: ' + generatedReviewerErrors.join('; '));
 for (const relativePath of [
   'agents/code-reviewer.md',
-  'agents/profiles/higher/code-reviewer.md',
   'agents/adversarial-verifier.md',
   'agents/security-reviewer.md',
-  'agents/profiles/higher/security-reviewer.md',
 ]) {
   const content = read(relativePath);
   reviewerGenerator.verifyResolvedProfileHash(content);

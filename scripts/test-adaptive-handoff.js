@@ -81,8 +81,11 @@ function makeInProgressPlan() {
 }
 
 // Plan with first node already in_progress + a plan_hash (simulates re-run on frozen plan).
+// The stamped hash is the plan's OWN computed hash unless a caller pins one deliberately: a frozen
+// fixture whose stored hash contradicts its bytes is a post-freeze tamper, not a frozen plan.
 function makeFrozenInProgressPlan(planHash) {
-  const hash = planHash || ('a').repeat(64);
+  if (!planHash) return stampFrozen(h => makeFrozenInProgressPlan(h));
+  const hash = planHash;
   return [
     '# Workflow Plan — test-project',
     '',
@@ -219,6 +222,22 @@ function makeShellStub(responses) {
 
 const PLAN_HASH_64 = ('a').repeat(64);
 
+// A "frozen" fixture whose stamped plan_hash does not match its OWN bytes is a post-freeze tamper,
+// and the handoff now refuses one (plan_hash_mismatch) instead of silently re-stamping it. So a
+// fixture that means "this plan is frozen" must stamp the hash the validator actually computes for it.
+// `place(hash)` inserts the marker wherever that fixture wants it; the marker itself must land OUTSIDE
+// every hash-covered section (`## Meta` / `## Nodes` / `## Node Briefs` / `## Design` / `## Acceptance`),
+// which the self-check below asserts rather than assumes.
+const realComputePlanHash = require('./kaola-workflow-plan-validator').computePlanHash;
+function stampFrozen(place) {
+  const hash = realComputePlanHash(place(('0').repeat(64)));
+  const stamped = place(hash);
+  if (realComputePlanHash(stamped) !== hash) {
+    throw new Error('fixture error: the plan_hash marker landed inside a hash-covered section');
+  }
+  return stamped;
+}
+
 // ---------------------------------------------------------------------------
 // T1 (REGRESSION): decision:ask → ready_to_run (NOT needs_user_approval)
 // decision='ask', all checklist true, NO risk_authorized key, plan frozen.
@@ -229,7 +248,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   let writtenFiles = {};
   // readFile returns freshened plan after each call to support post-freeze re-read.
   let readCallCount = 0;
-  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const frozenPlanContent = stampFrozen(h => planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + h + ' -->\n\n# Workflow Plan'));
 
   const shellStub = makeShellStub({
     // #408 SPAWN 1: validator --freeze-checked --json (validate + governance payload, no write)
@@ -322,7 +341,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     '| explore | pending | |', '| finalize | pending | |',
   ].join('\n') + '\n';
   const runDisplay = (planContent) => {
-    const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+    const frozenPlanContent = stampFrozen(h => planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + h + ' -->\n\n# Workflow Plan'));
     let readCallCount = 0;
     const shellStub = makeShellStub({
       'kaola-workflow-plan-validator.js:--freeze-checked': {
@@ -378,7 +397,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   const stateContent = makeStateContent({ issueNumber: 10 });
   let writtenFiles = {};
   let readCallCount = 0;
-  const frozenPlanContent = planContent + '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->';
+  const frozenPlanContent = stampFrozen(h => planContent + '<!-- plan_hash: ' + h + ' -->');
 
   const shellStub = makeShellStub({
     // #408 SPAWN 1: --freeze-checked (validate, no write)
@@ -482,7 +501,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   let writtenFiles = {};
   let roadmapInitCalled = false;
   let readCallCount = 0;
-  const frozenPlanContent = planContent + '\n<!-- plan_hash: ' + PLAN_HASH_64 + ' -->';
+  const frozenPlanContent = stampFrozen(h => planContent + '\n<!-- plan_hash: ' + h + ' -->');
 
   const shellStub = function(scriptPath, args) {
     const base = path.basename(scriptPath);
@@ -546,7 +565,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
 // ---------------------------------------------------------------------------
 {
   const HASH = PLAN_HASH_64;
-  const planContent = makeFrozenInProgressPlan(HASH);
+  const planContent = makeFrozenInProgressPlan();
   // State already has Planning Evidence
   const stateContent = makeStateContent({ issueNumber: 42, hasPlanningEvidence: true });
   let writtenStateContents = [];
@@ -682,7 +701,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
 // ---------------------------------------------------------------------------
 {
   const HASH = PLAN_HASH_64;
-  const planContent = makeFrozenInProgressPlan(HASH);
+  const planContent = makeFrozenInProgressPlan();
 
   // Minimal state WITHOUT ## Last Updated or ## Sink (triggers EOF-append branch).
   const eofState = [
@@ -775,7 +794,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
 {
   const HASH = PLAN_HASH_64;
   const planContent = makeUnfrozenPlan('auto-run');
-  const frozenPlanContent = planContent + '\n<!-- plan_hash: ' + HASH + ' -->';
+  const frozenPlanContent = stampFrozen(h => planContent + '\n<!-- plan_hash: ' + h + ' -->');
 
   // State with ## Sink having extra trailing fields (pr_url, worktree_path)
   const stateContent = [
@@ -948,7 +967,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   const planContent = makeUnfrozenPlan('auto-run');
   const stateContent = makeStateContent({ issueNumber: 7 });
   let readCallCount = 0;
-  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const frozenPlanContent = stampFrozen(h => planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + h + ' -->\n\n# Workflow Plan'));
   const shelled = [];
   const inner = makeShellStub({
     'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: {} },
@@ -1012,7 +1031,7 @@ function runDecisionIdCase(planContent, opts) {
   const alreadyFrozen = /plan_hash/.test(planContent);
   const frozenPlanContent = alreadyFrozen
     ? planContent
-    : planContent + '\n<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n';
+    : stampFrozen(h => planContent + '\n<!-- plan_hash: ' + h + ' -->\n');
 
   const inner = makeShellStub({
     'kaola-workflow-plan-validator.js:--json': {
@@ -1178,7 +1197,7 @@ function runMirrorHandoffCase(mirrorResponse) {
   const planContent = makeUnfrozenPlan('auto-run');
   const stateContent = makeStateContent({ issueNumber: 99 });
   let readCallCount = 0;
-  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const frozenPlanContent = stampFrozen(h => planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + h + ' -->\n\n# Workflow Plan'));
   const order = [];
   const inner = makeShellStub({
     'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: {} },
@@ -1306,7 +1325,7 @@ function runMirrorHandoffCase(mirrorResponse) {
     const planContent = makeUnfrozenPlan('auto-run');
     const stateContent = makeStateContent({ issueNumber: null }); // no issue → roadmap stage skipped
     fs.writeFileSync(statePath, stateContent);
-    const frozenPlanContent = planContent + '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->';
+    const frozenPlanContent = stampFrozen(h => planContent + '<!-- plan_hash: ' + h + ' -->');
     let readCallCount = 0;
 
     const shellStub = makeShellStub({
@@ -1414,7 +1433,7 @@ function runMirrorHandoffCase(mirrorResponse) {
 
   // (c) ALREADY-FROZEN plan + field ABSENT → left untouched (no retroactive flip to auto).
   {
-    const frozen = '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n' + makeUnfrozenPlan('auto-run');
+    const frozen = stampFrozen(h => '<!-- plan_hash: ' + h + ' -->\n' + makeUnfrozenPlan('auto-run'));
     const { result, writtenFiles } = runMaterializeCase(frozen);
     assert(result.handoff_status === 'ready_to_run', 'T597-AC1c: ready_to_run on a re-run of a frozen plan');
     assert(writtenFiles[PLAN_KEY] === undefined, 'T597-AC1c: an already-frozen plan with an absent field is NOT materialized (no retroactive flip), got ' + JSON.stringify(writtenFiles[PLAN_KEY]));
@@ -1936,7 +1955,7 @@ function runMirrorHandoffCase(mirrorResponse) {
 // not survive a normally handed-off first plan.
 {
   const HASH = 'd'.repeat(64);
-  const planContent = makeFrozenInProgressPlan(HASH);
+  const planContent = makeFrozenInProgressPlan();
   const statePath = '/fake/kaola-workflow/test-project/workflow-state.md';
   const stateContent = makeStateContent({ issueNumber: 699, hasPlanningEvidence: true })
     .replace('plan_hash: oldHashValue', 'plan_hash: none')
@@ -2187,7 +2206,7 @@ function runMirrorHandoffCase(mirrorResponse) {
 {
   const planContent = makeUnfrozenPlan('auto-run');
   const stateContent = makeStateContent({ issueNumber: 77 });
-  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const frozenPlanContent = stampFrozen(h => planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + h + ' -->\n\n# Workflow Plan'));
   let writtenState = null;
   let readCount = 0;
 
@@ -2265,6 +2284,559 @@ function runMirrorHandoffCase(mirrorResponse) {
   });
   assert(legacyState !== null && !/plan_shape:/.test(legacyState) && !/selection_bundle:/.test(legacyState),
     'T-789: a plan_shape-less --freeze-checked payload adds NO audit/selection lines (guarded, byte-compatible)');
+}
+
+// ---------------------------------------------------------------------------
+// T-815: the `## Acceptance` repair fence. The bounded plan_invalid repair loop may fix
+// `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding, but must NOT alter the acceptance
+// surface. RED->GREEN pair on ONE anchored project: the acceptance-touching repair is refused; the
+// scaffolding-only repair over the SAME anchor proceeds. Real fs + real seams (the fence is inert
+// without a cacheExists seam, exactly like the replan fence, so a stub-only test would prove nothing).
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-accept-fence-'));
+  const projectDir = path.join(tmp, 'kaola-workflow', 'issue-815-fence');
+  fs.mkdirSync(projectDir, { recursive: true });
+  const planPath  = path.join(projectDir, 'workflow-plan.md');
+  const statePath = path.join(projectDir, 'workflow-state.md');
+  const anchorPath = path.join(projectDir, '.cache', 'acceptance-anchor.json');
+
+  // acceptance / meta / nodes / briefs / ledger are the four repair surfaces the fence discriminates.
+  const draft = (acceptance, extraMetaLabel, briefText) => [
+    '# Workflow Plan — issue-815-fence', '',
+    '## Meta', 'plan_schema_version: 2', 'plan_form: spine', 'labels: ' + extraMetaLabel,
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| explore | code-explorer | — | — | 1 | sequence |',
+    '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Node Briefs', '', '### explore', briefText, '', '### done', 'Finalize.', '',
+    '## Design', '', 'Decompose: explore then done. sequence explore→done: S1 explore feeds done.', '',
+    '## Acceptance', '', acceptance, '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| explore | pending |', '| done | pending |', '',
+  ].join('\n') + '\n';
+
+  fs.writeFileSync(statePath, ['## Project', 'name: issue-815-fence', 'status: active', '',
+    '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', ''].join('\n'));
+
+  const ORIGINAL_ACCEPTANCE = 'A1: the acceptance surface survives the repair loop untouched.\nA2: a scaffolding-only repair still reaches the validator.';
+  // Every attempt refuses at the validator (this IS the repair loop), so the ONLY thing that can
+  // change between attempts is WHICH refusal comes back — the fence's, or the grammar's.
+  const refusingShell = makeShellStub({
+    'kaola-workflow-plan-validator.js:--freeze-checked': { exitCode: 1, result: 'refuse', errors: ['G1: gate missing'] },
+  });
+  const realSeams = () => ({
+    planPath, statePath, project: 'issue-815-fence', json: true, shell: refusingShell,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+    cacheExists: fpath => fs.existsSync(fpath),
+    writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+    mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+    stateMtime: undefined,
+  });
+
+  try {
+    // Attempt 1 — first submission. The acceptance surface is anchored; the refusal is the GRAMMAR's.
+    fs.writeFileSync(planPath, draft(ORIGINAL_ACCEPTANCE, 'enhancement', 'Explore the codebase.'));
+    const first = runHandoff(realSeams());
+    assert(first.handoff_status === 'plan_invalid' && first.reason !== 'acceptance_repair_fenced',
+      'T-815: the FIRST submission is never fenced — it refuses on its own grammar error, got ' + JSON.stringify(first.reason || first.errors));
+    assert(fs.existsSync(anchorPath), 'T-815: the first submission records the acceptance anchor');
+    const anchor = JSON.parse(fs.readFileSync(anchorPath, 'utf8'));
+    assert(anchor.acceptance_digest === require('./kaola-workflow-plan-validator')
+      .acceptanceDigest(draft(ORIGINAL_ACCEPTANCE, 'enhancement', 'Explore the codebase.')),
+      'T-815: the anchor records the submitted acceptance digest');
+    assert(anchor.plan_epoch === 1, 'T-815: the anchor is epoch-keyed (a child epoch owns its own surface)');
+
+    // RED — a repair that ALTERS `## Acceptance` is refused with the typed reason, and nothing moves.
+    const stateBefore = fs.readFileSync(statePath, 'utf8');
+    const tamperedPlan = draft('A1: the acceptance surface survives the repair loop untouched.\nA2: actually, shipping is enough.',
+      'enhancement', 'Explore the codebase.');
+    fs.writeFileSync(planPath, tamperedPlan);
+    const fenced = runHandoff(realSeams());
+    assert(fenced.handoff_status === 'plan_invalid' && fenced.reason === 'acceptance_repair_fenced',
+      'T-815 RED: a repair that touches ## Acceptance refuses acceptance_repair_fenced, got ' + JSON.stringify(fenced.reason || fenced.errors));
+    assert(fenced.anchored_acceptance_digest === anchor.acceptance_digest
+      && fenced.submitted_acceptance_digest !== anchor.acceptance_digest,
+      'T-815 RED: the refusal names both digests so the operator sees WHAT changed');
+    assert(fs.readFileSync(planPath, 'utf8') === tamperedPlan && fs.readFileSync(statePath, 'utf8') === stateBefore,
+      'T-815 RED: the fenced refusal mutates neither workflow-plan.md nor workflow-state.md');
+
+    // RED — DROPPING the section entirely is the same violation (removal is a change).
+    fs.writeFileSync(planPath, draft(ORIGINAL_ACCEPTANCE, 'enhancement', 'Explore the codebase.')
+      .replace(/## Acceptance\n\n[\s\S]*?\n\n## Node Ledger/, '## Node Ledger'));
+    assert(runHandoff(realSeams()).reason === 'acceptance_repair_fenced',
+      'T-815 RED: DROPPING ## Acceptance during repair is fenced too');
+
+    // GREEN — the same repair loop, same anchor: `## Meta` + `## Nodes`-adjacent briefs + ledger
+    // scaffolding all change, `## Acceptance` does not. The fence stands aside and the validator
+    // verdict comes back instead.
+    fs.writeFileSync(planPath, draft(ORIGINAL_ACCEPTANCE, 'enhancement, area:scripts', 'Explore the codebase and report the seam list.')
+      .replace('| explore | pending |', '| explore | pending | '));
+    const repaired = runHandoff(realSeams());
+    assert(repaired.handoff_status === 'plan_invalid' && repaired.reason !== 'acceptance_repair_fenced',
+      'T-815 GREEN: a repair touching ## Meta / briefs / ledger scaffolding is NOT fenced, got ' + JSON.stringify(repaired.reason));
+    assert(Array.isArray(repaired.errors) && /G1: gate missing/.test(repaired.errors.join(' ')),
+      'T-815 GREEN: the scaffolding repair reaches the validator and returns ITS verdict, got ' + JSON.stringify(repaired.errors));
+
+    // GREEN — pure whitespace churn in the acceptance surface is not a change.
+    fs.writeFileSync(planPath, draft('   ' + ORIGINAL_ACCEPTANCE.split('\n').join('\n\n   ') + '   ', 'enhancement', 'Explore the codebase.'));
+    assert(runHandoff(realSeams()).reason !== 'acceptance_repair_fenced',
+      'T-815 GREEN: whitespace churn in ## Acceptance is not a change (digest is normalized)');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-815b: the two transitions that must NOT be fenced, or the loop wedges shut.
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-accept-fence2-'));
+  const projectDir = path.join(tmp, 'kaola-workflow', 'issue-815-wedge');
+  fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+  const planPath  = path.join(projectDir, 'workflow-plan.md');
+  const statePath = path.join(projectDir, 'workflow-state.md');
+  const anchorPath = path.join(projectDir, '.cache', 'acceptance-anchor.json');
+  fs.writeFileSync(statePath, ['## Project', 'name: issue-815-wedge', 'status: active', '',
+    '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', ''].join('\n'));
+
+  const body = acceptance => [
+    '# Workflow Plan — issue-815-wedge', '',
+    '## Meta', 'plan_schema_version: 2', 'plan_form: spine', 'labels: enhancement',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| explore | code-explorer | — | — | 1 | sequence |',
+    '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', 'Decompose: explore then done. S1: done consumes explore.', '',
+  ].concat(acceptance === null ? [] : ['## Acceptance', '', acceptance, ''])
+    .concat(['## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| explore | pending |', '| done | pending |', '']).join('\n') + '\n';
+
+  const refusingShell = makeShellStub({
+    'kaola-workflow-plan-validator.js:--freeze-checked': { exitCode: 1, result: 'refuse', errors: ['acceptance_missing'] },
+  });
+  const seams = () => ({
+    planPath, statePath, project: 'issue-815-wedge', json: true, shell: refusingShell,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+    cacheExists: fpath => fs.existsSync(fpath),
+    writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+    mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+  });
+
+  try {
+    // (a) absent -> transcribed. The acceptance_missing refusal's own repair IS authoring the section,
+    //     so nothing is anchored while the section is absent and the first transcription is admitted.
+    fs.writeFileSync(planPath, body(null));
+    const noSection = runHandoff(seams());
+    assert(noSection.reason !== 'acceptance_repair_fenced' && !fs.existsSync(anchorPath),
+      'T-815b: an ABSENT ## Acceptance anchors nothing — the acceptance_missing repair must be able to author it');
+    fs.writeFileSync(planPath, body('A1: the section now exists.'));
+    assert(runHandoff(seams()).reason !== 'acceptance_repair_fenced',
+      'T-815b: the FIRST transcription is admitted (absent -> present is not a change)');
+    assert(fs.existsSync(anchorPath), 'T-815b: ...and it is what gets anchored');
+
+    // (b) a superseded (parent-epoch) anchor is inert. A re-plan child epoch owns its own acceptance
+    //     surface — the re-plan transaction enforces preservation on its own seam — so a stale
+    //     epoch-1 anchor must never refuse an epoch-2 plan.
+    fs.writeFileSync(statePath, fs.readFileSync(statePath, 'utf8').replace('plan_epoch: 1', 'plan_epoch: 2'));
+    fs.writeFileSync(planPath, body('A1: the child epoch re-transcribed this under attestation.'));
+    assert(runHandoff(seams()).reason !== 'acceptance_repair_fenced',
+      'T-815b: an anchor recorded against the PARENT epoch is inert for the child epoch');
+    assert(JSON.parse(fs.readFileSync(anchorPath, 'utf8')).plan_epoch === 2,
+      'T-815b: ...and the child epoch re-anchors on its own surface');
+
+    // (c) an already-frozen plan with no anchor (frozen before this fence existed) is never anchored.
+    fs.rmSync(anchorPath);
+    const frozenBody = body('A1: frozen long ago.');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + 'b'.repeat(64) + ' -->\n\n' + frozenBody);
+    runHandoff(seams());
+    assert(!fs.existsSync(anchorPath),
+      'T-815b: an ALREADY-FROZEN plan is never retroactively anchored — no in-flight wedge');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-815c: THE NON-WEDGE PROOF. A fence whose repair instruction cannot be executed is a dead end, not
+// a gate: by the time the fence trips, the repairing planner has already overwritten the file that
+// held the previous surface, and the next iteration dispatches a FRESH planner with no memory of the
+// prior draft. This drives the realistic wedge — iteration 2 re-transcribes the SAME criteria in
+// slightly different words — and proves the loop can still get out:
+//   (1) the refusal HANDS BACK the anchored surface bytes (a digest cannot be inverted),
+//   (2) the refusal does NOT swallow the grammar errors the loop was actually iterating on,
+//   (3) restoring the returned bytes VERBATIM reaches the validator and FREEZES (ready_to_run),
+//   (4) and the in-epoch consent valve admits a genuine, human-attributed acceptance change instead.
+// ---------------------------------------------------------------------------
+{
+  const validatorMod = require('./kaola-workflow-plan-validator');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-accept-nonwedge-'));
+  const projectDir = path.join(tmp, 'kaola-workflow', 'issue-815-nonwedge');
+  fs.mkdirSync(projectDir, { recursive: true });
+  const planPath  = path.join(projectDir, 'workflow-plan.md');
+  const statePath = path.join(projectDir, 'workflow-state.md');
+  const anchorPath = path.join(projectDir, '.cache', 'acceptance-anchor.json');
+
+  const draft = (acceptance, gateCol) => [
+    '# Workflow Plan — issue-815-nonwedge', '',
+    '## Meta', 'plan_schema_version: 2', 'plan_form: spine', 'labels: enhancement',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| explore | code-explorer | — | — | 1 | ' + gateCol + ' |',
+    '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', 'Decompose: explore then done. sequence explore→done: S1 done consumes explore.', '',
+    '## Acceptance', '', acceptance, '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| explore | pending |', '| done | pending |', '',
+  ].join('\n') + '\n';
+
+  // The surface a HUMAN authored, transcribed at submission 1.
+  const ORIGINAL = 'A1: the acceptance surface is restorable from the refusal itself.\n'
+    + 'A2: the repair loop reaches the validator once the surface is restored.';
+  // Iteration 2's fresh planner: SAME criteria, different words. Not malice — the ordinary case.
+  const REWORDED = 'A1: the refusal itself makes the acceptance surface restorable.\n'
+    + 'A2: once the surface is restored, the repair loop reaches the validator.';
+
+  fs.writeFileSync(statePath, ['# Kaola-Workflow State', '',
+    '## Project', 'name: issue-815-nonwedge', 'status: active', '',
+    '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', '',
+    '## Sink', 'issue_number: 815', 'branch: workflow/issue-815-nonwedge', 'sink: merge', ''].join('\n'));
+
+  // The validator refuses on GRAMMAR while `mode` is 'refuse', and freezes once it flips to 'freeze'.
+  let mode = 'refuse';
+  const FROZEN_HASH = 'c'.repeat(64);
+  const flipShell = (scriptPath, scriptArgs) => {
+    const base = path.basename(scriptPath);
+    const argv = scriptArgs || [];
+    if (base === 'kaola-workflow-plan-validator.js' && argv.includes('--freeze-checked')) {
+      return mode === 'refuse'
+        ? { exitCode: 1, result: 'refuse', reason: 'plan_invalid', errors: ['G7: gate_surface missing on the gate node'] }
+        : { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: FROZEN_HASH, frozen: false,
+            governance: { decision: 'auto-run', risk: {} }, risk: {} };
+    }
+    if (base === 'kaola-workflow-plan-validator.js' && argv.includes('--freeze')) {
+      return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: FROZEN_HASH,
+        frozen: true, resumeOk: true, risk: {} };
+    }
+    return { exitCode: 0, created: true };
+  };
+  const seams = extra => Object.assign({
+    planPath, statePath, project: 'issue-815-nonwedge', json: true, shell: flipShell,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+    cacheExists: fpath => fs.existsSync(fpath),
+    writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+    mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+  }, extra || {});
+
+  try {
+    // Iteration 1 — the human-authored surface is submitted and anchored; the refusal is the GRAMMAR's.
+    fs.writeFileSync(planPath, draft(ORIGINAL, 'gate'));
+    const it1 = runHandoff(seams());
+    assert(it1.reason !== 'acceptance_repair_fenced', 'T-815c: iteration 1 refuses on grammar, not the fence');
+    const anchor = JSON.parse(fs.readFileSync(anchorPath, 'utf8'));
+    assert(anchor.acceptance_surface && anchor.acceptance_surface.includes('A1: the acceptance surface is restorable'),
+      'T-815c: the anchor persists the acceptance surface BYTES, not merely its digest');
+    assert(anchor.acceptance_digest === validatorMod.acceptanceDigest(draft(ORIGINAL, 'gate')),
+      'T-815c: ...alongside their digest');
+
+    // Iteration 2 — a FRESH planner re-transcribes the same criteria in different words, and (as in a
+    // real loop) it has already overwritten the only copy of the previous surface.
+    fs.writeFileSync(planPath, draft(REWORDED, 'gate'));
+    assert(!fs.readFileSync(planPath, 'utf8').includes('A1: the acceptance surface is restorable'),
+      'T-815c: the prior surface is GONE from the tree — this is why a digest-only refusal wedges');
+    const fenced = runHandoff(seams());
+    assert(fenced.reason === 'acceptance_repair_fenced', 'T-815c: the reworded surface is fenced');
+    assert(fenced.anchored_acceptance_surface === anchor.acceptance_surface,
+      'T-815c: the refusal RETURNS the anchored surface text — the repair instruction is executable');
+    assert(fenced.errors.join('\n').includes('A1: the acceptance surface is restorable'),
+      'T-815c: ...and the operator-facing errors carry those bytes too');
+    assert(fenced.validator_verdict && Array.isArray(fenced.validator_verdict.errors)
+      && fenced.validator_verdict.errors.join(' ').includes('G7: gate_surface missing'),
+      'T-815c: the fence does NOT swallow the grammar errors the loop was iterating on, got '
+        + JSON.stringify(fenced.validator_verdict));
+    assert(fenced.errors.join('\n').includes('G7: gate_surface missing'),
+      'T-815c: ...and they are visible to a text-only reader of errors');
+    // WHICH items moved — the answer to "re-wording or redefinition?", read through the ONE fence-aware
+    // item reader over both sets of real bytes (its production consumer).
+    assert(fenced.acceptance_item_delta
+      && fenced.acceptance_item_delta.changed.join(',') === 'A1,A2'
+      && !fenced.acceptance_item_delta.added.length && !fenced.acceptance_item_delta.removed.length,
+      'T-815c: the refusal names WHICH items moved, got ' + JSON.stringify(fenced.acceptance_item_delta));
+    assert(fenced.errors.join('\n').includes('reworded/redefined: A1, A2'),
+      'T-815c: ...and says so in the operator-facing errors');
+
+    // Iteration 3 — the loop restores the surface VERBATIM from the refusal (nothing else in the tree
+    // holds it) and fixes the grammar. The fence stands aside, the validator is reached, and it FREEZES.
+    const restored = draft(fenced.anchored_acceptance_surface.replace(/^\n+|\n+$/g, ''), 'sequence');
+    fs.writeFileSync(planPath, restored);
+    assert(validatorMod.acceptanceDigest(restored) === anchor.acceptance_digest,
+      'T-815c: the returned bytes reconstruct the anchored surface exactly');
+    mode = 'freeze';
+    const it3 = runHandoff(seams());
+    assert(it3.handoff_status === 'ready_to_run',
+      'T-815c NON-WEDGE: a fenced submission followed by a restoring one reaches the validator and FREEZES, got '
+        + JSON.stringify(it3.handoff_status) + ' ' + JSON.stringify(it3.errors || it3.reason));
+
+    // NO SELF-MINTED TOKEN OPENS THE FENCE. The process that types this command IS the process the
+    // fence binds, so any free-text string it can write is a token it hands itself — not consent. The
+    // fence has exactly one in-epoch route (restore verbatim, proven above); a change of what "done"
+    // means routes through the ONE consent mechanism the workflow already owns (a digest-chained
+    // consent-ledger entry BOUND to the new surface, cited by a re-plan child epoch), or a discard.
+    mode = 'refuse';
+    fs.writeFileSync(planPath, draft(REWORDED, 'gate'));
+    for (const selfMinted of ['the user asked for this', 'user turn: "reword A1/A2, same intent"', '   ', '']) {
+      const attempt = runHandoff(seams({ acceptanceChangeAuthorized: selfMinted }));
+      assert(attempt.reason === 'acceptance_repair_fenced',
+        'T-815c SELF-AUTH: a self-authored string ' + JSON.stringify(selfMinted)
+          + ' must NOT move the acceptance surface, got ' + JSON.stringify(attempt.reason));
+      assert(JSON.parse(fs.readFileSync(anchorPath, 'utf8')).acceptance_digest === anchor.acceptance_digest,
+        'T-815c SELF-AUTH: ...and it does not move the anchor either (' + JSON.stringify(selfMinted) + ')');
+    }
+    assert(runHandoff(seams()).errors.join('\n').includes('acceptance_change_consent'),
+      'T-815c SELF-AUTH: the refusal names the ONE route a values change takes (a bound consent entry '
+        + 'cited by a re-plan child epoch), not a flag on this command');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-815d: A POST-FREEZE TAMPER IS NEVER LAUNDERED. `plan_hash` is the frozen plan's identity, and
+// `--freeze` re-stamps whatever it is handed — so the handoff, which calls it unconditionally, is the
+// one place a tampered frozen plan could be quietly re-blessed into a self-consistent one. Three cases
+// on real fs + real hashing: an acceptance tamper, a non-acceptance (`## Design`) tamper, and the
+// control — an untampered frozen plan still re-runs idempotently.
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-accept-frozen-'));
+  const projectDir = path.join(tmp, 'kaola-workflow', 'issue-815-frozen');
+  fs.mkdirSync(projectDir, { recursive: true });
+  const planPath  = path.join(projectDir, 'workflow-plan.md');
+  const statePath = path.join(projectDir, 'workflow-state.md');
+
+  const body = (acceptance, design) => [
+    '# Workflow Plan — issue-815-frozen', '',
+    '## Meta', 'plan_schema_version: 2', 'plan_form: spine', 'labels: enhancement',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| explore | code-explorer | — | — | 1 | sequence |',
+    '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', design, '',
+    '## Acceptance', '', acceptance, '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| explore | pending |', '| done | pending |', '',
+  ].join('\n') + '\n';
+
+  const ORIGINAL_ACCEPTANCE = 'A1: the deliverable must never delete user data.';
+  const ORIGINAL_DESIGN = 'Decompose: explore then done. sequence explore→done: S1 done consumes explore.';
+  const frozen = (acceptance, design) => stampFrozen(h =>
+    body(acceptance, design).replace('# Workflow Plan — issue-815-frozen',
+      '# Workflow Plan — issue-815-frozen\n\n<!-- plan_hash: ' + h + ' -->'));
+
+  fs.writeFileSync(statePath, ['# Kaola-Workflow State', '',
+    '## Project', 'name: issue-815-frozen', 'status: active', '',
+    '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', '',
+    '## Sink', 'branch: workflow/issue-815-frozen', 'sink: merge', ''].join('\n'));
+
+  // A validator stub that would happily re-freeze anything — the point is that the handoff never
+  // reaches it on a tampered frozen plan.
+  const FRESH_HASH = 'd'.repeat(64);
+  const permissiveShell = (scriptPath, scriptArgs) => {
+    const base = path.basename(scriptPath);
+    const argv = scriptArgs || [];
+    if (base === 'kaola-workflow-plan-validator.js' && argv.includes('--freeze-checked')) {
+      return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: FRESH_HASH,
+        frozen: false, governance: { decision: 'auto-run', risk: {} }, risk: {} };
+    }
+    if (base === 'kaola-workflow-plan-validator.js' && argv.includes('--freeze')) {
+      return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: FRESH_HASH,
+        frozen: true, resumeOk: true, risk: {} };
+    }
+    return { exitCode: 0, created: true };
+  };
+  const seams = extra => Object.assign({
+    planPath, statePath, project: 'issue-815-frozen', json: true, shell: permissiveShell,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+    cacheExists: fpath => fs.existsSync(fpath),
+    writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+    mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+  }, extra || {});
+
+  try {
+    const clean = frozen(ORIGINAL_ACCEPTANCE, ORIGINAL_DESIGN);
+    const storedHash = (clean.match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/) || [])[1];
+
+    // CONTROL — an untampered frozen plan still re-runs (resume / idempotent re-freeze is unchanged).
+    fs.writeFileSync(planPath, clean);
+    assert(runHandoff(seams()).handoff_status === 'ready_to_run',
+      'T-815d CONTROL: an UNTAMPERED frozen plan still reaches ready_to_run on a re-run');
+
+    // (a) a post-freeze ACCEPTANCE edit — the values surface — stays plan_hash_mismatch, even with a
+    //     self-minted authorization string, and the stamped hash on disk does not move.
+    for (const extra of [undefined, { acceptanceChangeAuthorized: 'I decided this' }]) {
+      fs.writeFileSync(planPath, clean.replace(ORIGINAL_ACCEPTANCE,
+        'A1: deleting user data is acceptable if it simplifies the code.'));
+      const tampered = runHandoff(seams(extra));
+      assert(tampered.handoff_status === 'plan_invalid' && tampered.reason === 'plan_hash_mismatch',
+        'T-815d: a post-freeze ## Acceptance edit stays plan_hash_mismatch'
+          + (extra ? ' EVEN WITH a self-minted authorization string' : '') + ', got '
+          + JSON.stringify(tampered.reason || tampered.handoff_status));
+      assert(fs.readFileSync(planPath, 'utf8').includes('plan_hash: ' + storedHash),
+        'T-815d: ...and the frozen plan_hash is NOT re-stamped');
+    }
+
+    // (b) the same for a NON-acceptance hash-covered section: the gate is integrity, not a second
+    //     acceptance fence, so it holds where no anchor exists to catch the edit.
+    fs.writeFileSync(planPath, clean.replace(ORIGINAL_DESIGN, ORIGINAL_DESIGN + ' TAMPERED.'));
+    const designTamper = runHandoff(seams());
+    assert(designTamper.reason === 'plan_hash_mismatch',
+      'T-815d: a post-freeze ## Design edit stays plan_hash_mismatch too, got '
+        + JSON.stringify(designTamper.reason || designTamper.handoff_status));
+    assert(fs.readFileSync(planPath, 'utf8').includes('plan_hash: ' + storedHash),
+      'T-815d: ...and that plan_hash is NOT re-stamped either');
+    assert(!fs.existsSync(path.join(projectDir, '.cache', 'acceptance-anchor.json')),
+      'T-815d: an already-frozen plan is never retroactively anchored, on any branch');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-815e: A PRESENT-BUT-UNREADABLE ANCHOR REFUSES; it never degrades to first-submission.
+//
+// The fence's own record is `.cache/acceptance-anchor.json`. Reading it used to swallow every failure
+// into `anchored = null`, which put a DAMAGED anchor on the same branch as NO anchor — and that branch
+// re-anchors on whatever surface the current submission carries. So a truncated or wrong-typed anchor
+// silently moved the fence to the submitted surface with no signal. That is a fail-open DEFAULT, not
+// an adversary story: an interrupted write (crash, full disk) produces it unaided.
+//
+// Absent-and-genuinely-first must keep working — it is load-bearing (the `acceptance_missing` repair
+// authors the section) and a fence that wedges it is worse than no fence. Both halves are pinned here.
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-accept-anchor-'));
+  const projectDir = path.join(tmp, 'kaola-workflow', 'issue-815-anchor');
+  fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+  const planPath  = path.join(projectDir, 'workflow-plan.md');
+  const statePath = path.join(projectDir, 'workflow-state.md');
+  const anchorPath = path.join(projectDir, '.cache', 'acceptance-anchor.json');
+  const STATE = ['## Project', 'name: issue-815-anchor', 'status: active', '',
+    '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', ''].join('\n');
+  fs.writeFileSync(statePath, STATE);
+
+  const body = acceptance => [
+    '# Workflow Plan — issue-815-anchor', '',
+    '## Meta', 'plan_schema_version: 2', 'plan_form: spine', 'labels: enhancement',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| explore | code-explorer | — | — | 1 | sequence |',
+    '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', 'Decompose: explore then done. S1: done consumes explore.', '',
+    '## Acceptance', '', acceptance, '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| explore | pending |', '| done | pending |', '',
+  ].join('\n') + '\n';
+
+  const ORIGINAL = 'A1: the deliverable must never delete user data.';
+  const MOVED    = 'A1: deleting user data is acceptable if it simplifies the code.';
+
+  const refusingShell = makeShellStub({
+    'kaola-workflow-plan-validator.js:--freeze-checked': { exitCode: 1, result: 'refuse', errors: ['nodes_unparseable'] },
+  });
+  const seams = () => ({
+    planPath, statePath, project: 'issue-815-anchor', json: true, shell: refusingShell,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+    cacheExists: fpath => fs.existsSync(fpath),
+    writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+    mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+  });
+
+  try {
+    // GREEN HALF — absent anchor + a transcribed surface is genuinely-first: it anchors, it is never
+    // fenced, and it is never confused with the damaged case below.
+    fs.writeFileSync(planPath, body(ORIGINAL));
+    const first = runHandoff(seams());
+    assert(first.reason !== 'acceptance_repair_fenced' && first.reason !== 'acceptance_anchor_unreadable',
+      'T-815e: an ABSENT anchor is genuinely-first — it anchors rather than refusing, got ' + JSON.stringify(first.reason));
+    assert(fs.existsSync(anchorPath), 'T-815e: ...and the first transcription is what gets anchored');
+    const goodAnchor = fs.readFileSync(anchorPath, 'utf8');
+
+    // RED HALF — every way a PRESENT anchor can fail to read back refuses acceptance_anchor_unreadable
+    // and leaves the anchor, the plan, and workflow-state.md byte-untouched. Each case is submitted
+    // with a MOVED surface, so the pre-fix behaviour (re-anchor on the new surface, then continue) is
+    // exactly what a regression would restore.
+    const damaged = [
+      ['truncated mid-write (unparseable)',        '{{{not json'],
+      ['valid JSON but not an object',             '"just a string"'],
+      ['valid JSON array',                         '[]'],
+      ['valid JSON null',                          'null'],
+      ['no acceptance_digest field',               '{"schema_version":2,"plan_epoch":1}'],
+      ['non-string acceptance_digest',             '{"schema_version":2,"plan_epoch":1,"acceptance_digest":12345}'],
+      ['empty acceptance_digest',                  '{"schema_version":2,"plan_epoch":1,"acceptance_digest":"   "}'],
+      ['garbled plan_epoch (must not coerce to 1)', '{"schema_version":2,"plan_epoch":"banana","acceptance_digest":"' + 'a'.repeat(64) + '"}'],
+      ['non-string acceptance_surface',            '{"schema_version":2,"plan_epoch":1,"acceptance_digest":"' + 'a'.repeat(64) + '","acceptance_surface":{"x":1}}'],
+    ];
+    for (const [label, bytes] of damaged) {
+      fs.writeFileSync(anchorPath, bytes);
+      fs.writeFileSync(planPath, body(MOVED));
+      const r = runHandoff(seams());
+      assert(r.handoff_status === 'plan_invalid' && r.reason === 'acceptance_anchor_unreadable',
+        'T-815e RED (' + label + '): a PRESENT-but-unreadable anchor refuses acceptance_anchor_unreadable '
+          + 'instead of re-anchoring on the submitted surface, got ' + JSON.stringify(r.reason || r.handoff_status));
+      assert(typeof r.anchor_defect === 'string' && r.anchor_defect.length > 0 && r.anchor_path === anchorPath,
+        'T-815e (' + label + '): the refusal names WHICH anchor and WHAT is wrong with it');
+      assert(r.errors.join('\n').includes('Do NOT delete the anchor'),
+        'T-815e (' + label + '): the refusal forbids deleting the anchor — deletion IS the disarm');
+      assert(fs.readFileSync(anchorPath, 'utf8') === bytes,
+        'T-815e (' + label + '): the damaged anchor is NOT overwritten by the submitted surface');
+      assert(fs.readFileSync(planPath, 'utf8') === body(MOVED) && fs.readFileSync(statePath, 'utf8') === STATE,
+        'T-815e (' + label + '): the refusal mutates neither the plan nor workflow-state.md');
+    }
+
+    // COMPAT — a WELL-FORMED schema-1 anchor (digest only, no plan_epoch, no surface) is not "damaged":
+    // it still ENFORCES the fence. Refusing it as malformed would break the legacy tail.
+    const digestOnly = JSON.parse(goodAnchor).acceptance_digest;
+    fs.writeFileSync(anchorPath, JSON.stringify({ acceptance_digest: digestOnly }) + '\n');
+    fs.writeFileSync(planPath, body(MOVED));
+    assert(runHandoff(seams()).reason === 'acceptance_repair_fenced',
+      'T-815e COMPAT: a well-formed schema-1 anchor still FENCES (it is not treated as unreadable)');
+
+    // CONTROL — an intact schema-2 anchor is unchanged in both directions: the moved surface fences,
+    // and the restored surface passes the fence back to the grammar.
+    fs.writeFileSync(anchorPath, goodAnchor);
+    assert(runHandoff(seams()).reason === 'acceptance_repair_fenced',
+      'T-815e CONTROL: an INTACT anchor still fences a moved surface');
+    fs.writeFileSync(planPath, body(ORIGINAL));
+    assert(runHandoff(seams()).reason !== 'acceptance_repair_fenced',
+      'T-815e CONTROL: restoring the anchored surface still clears the fence');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // Summary

@@ -1134,7 +1134,7 @@ function testGiteaAdaptiveFreezeChecked() {
     '| r | code-reviewer | i | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| d | finalize | r | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: e explores; i builds lib/x.js; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change. Done: review clears and validation passes.', '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '', '| id | status |', '|---|---|',
     '| e | pending |', '| i | pending |', '| r | pending |', '| d | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
     '| code-explorer (e) | pending | | |', '| tdd-guide (i) | pending | | |',
@@ -1726,12 +1726,145 @@ testGiteaBundleStateIncoherent();
 // evidence seeding (D-433-01 §2) and doc-updater .md-target barrier (D-424-01 allowband).
 testGiteaBundle424432433NodeSeeding();
 
+// The `## Acceptance` surface: the freeze wall + the bounded-repair fence, driven through the REAL
+// gitea-edition CLIs.
+testGiteaAcceptanceSurface();
+
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');
 run('test-gitea-run-chains.js');  // #550: forge run-chains failing-path (isTransientFetchStderr export must be callable)
 
 console.log('Gitea workflow walkthrough simulation passed');
+
+// ---------------------------------------------------------------------------
+// `## Acceptance` — the frozen human-values surface, exercised behaviorally on the gitea port.
+//   (a) freeze wall: a code-producing schema-2 plan without the section refuses acceptance_missing;
+//       with it, in-grammar; a read-only plan is not held.
+//   (b) hash coverage: a post-freeze acceptance edit surfaces plan_hash_mismatch.
+//   (c) repair fence: the bounded plan_invalid repair loop may fix ## Meta / ## Nodes / briefs /
+//       ledger scaffolding, but a submission that ALTERS ## Acceptance refuses acceptance_repair_fenced.
+// ---------------------------------------------------------------------------
+function testGiteaAcceptanceSurface() {
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
+  const handoffScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-handoff.js');
+  const pv = require(valScript);
+  const ACCEPT = ['A1: lib/x.js exports the parsed record.', 'A2: the recorded validation passes over the candidate.'];
+  const codePlan = (acceptance, label, brief) => [
+    '# Workflow Plan', '', '## Meta',
+    'plan_form: spine', 'plan_schema_version: 2', 'labels: ' + label,
+    'code_certifier: r', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+    'validation_command: node --check lib/x.js', 'validation_timeout_minutes: 5', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    '| i | tdd-guide | — | lib/x.js | 1 | sequence | — | — | — | — |',
+    '| r | code-reviewer | i | — | 1 | sequence | review-change | code-tree | sequence | — |',
+    '| d | finalize | r | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Briefs', '', '### i', brief, '', '### r', 'Review.', '', '### d', 'Finalize.', '',
+    '## Design', '', 'Decompose: i builds lib/x.js; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change.', '',
+  ].concat(acceptance === null ? [] : ['## Acceptance', ''].concat(acceptance).concat([''])).concat([
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| i | pending |', '| r | pending |', '| d | pending |', '',
+  ]).join('\n') + '\n';
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ga-acceptance-'));
+  try {
+    // (a) the freeze wall.
+    const absent = pv.validatePlan(codePlan(null, 'enhancement', 'Build lib/x.js.'), { root: tmp });
+    assert.strictEqual(absent.reason, 'acceptance_missing',
+      'gitea acceptance (a): a code-producing plan without ## Acceptance refuses acceptance_missing, got ' + JSON.stringify(absent.reason));
+    const empty = pv.validatePlan(codePlan([''], 'enhancement', 'Build lib/x.js.'), { root: tmp });
+    assert.strictEqual(empty.reason, 'acceptance_missing',
+      'gitea acceptance (a): an EMPTY ## Acceptance refuses acceptance_missing, got ' + JSON.stringify(empty.reason));
+    const present = pv.validatePlan(codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.'), { root: tmp });
+    assert.strictEqual(present.result, 'in-grammar',
+      'gitea acceptance (a): a transcribed ## Acceptance freezes in-grammar, got ' + JSON.stringify(present.errors));
+    assert.strictEqual(pv.parseAcceptanceItems(codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.')).length, 2,
+      'gitea acceptance (a): the forge port reads the item lines through the same parser');
+    const readOnly = codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.')
+      .replace('| i | tdd-guide | — | lib/x.js | 1 | sequence | — | — | — | — |',
+        '| i | code-explorer | — | — | 1 | sequence | — | — | — | — |')
+      .replace(/^## Acceptance\n\n[\s\S]*?\n\n(?=## Node Ledger)/m, '');
+    assert.strictEqual(pv.validatePlan(readOnly, { root: tmp }).result, 'in-grammar',
+      'gitea acceptance (a): a READ-ONLY plan is not held for a missing ## Acceptance');
+
+    // (b) hash coverage — a post-freeze acceptance edit is tamper-evident.
+    const planPath = path.join(tmp, 'workflow-plan.md');
+    fs.writeFileSync(planPath, codePlan(ACCEPT, 'enhancement', 'Build lib/x.js.'));
+    const froze = spawnSync(process.execPath, [valScript, planPath, '--freeze', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.strictEqual(froze.status, 0, 'gitea acceptance (b): the plan freezes: ' + froze.stdout + froze.stderr);
+    fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace(ACCEPT[1], 'A2: good enough.'));
+    const resumed = spawnSync(process.execPath, [valScript, planPath, '--resume-check', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.ok(/plan_hash_mismatch/.test(resumed.stdout + resumed.stderr),
+      'gitea acceptance (b): a post-freeze ## Acceptance edit surfaces plan_hash_mismatch, got ' + resumed.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // (c) the bounded-repair fence, over the real gitea handoff CLI in a real repo.
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ga-acceptfence-')));
+  try {
+    spawnSync('git', ['init', '-b', 'main'], { cwd: repo, encoding: 'utf8' });
+    spawnSync('git', ['config', 'user.email', 't@example.com'], { cwd: repo, encoding: 'utf8' });
+    spawnSync('git', ['config', 'user.name', 'T'], { cwd: repo, encoding: 'utf8' });
+    const project = 'issue-acceptance-gl';
+    const dir = path.join(repo, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), ['## Project', 'name: ' + project, 'status: active', '',
+      '## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', ''].join('\n'));
+    const planPath = path.join(dir, 'workflow-plan.md');
+    // A DELIBERATELY out-of-grammar draft (the reviewer gate is missing) — this IS the repair loop.
+    const broken = (acceptance, label) => [
+      '# Workflow Plan', '', '## Meta',
+      'plan_form: spine', 'plan_schema_version: 2', 'labels: ' + label,
+      'code_certifier: none', 'security_certifier: none',
+      'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+      'validation_command: node --check lib/x.js', 'validation_timeout_minutes: 5', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| i | tdd-guide | — | lib/x.js | 1 | sequence | — | — | — | — |',
+      '| d | finalize | i | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose: i builds lib/x.js; d sinks.', '',
+      '## Acceptance', '',
+    ].concat(acceptance).concat(['',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| i | pending |', '| d | pending |', '',
+    ]).join('\n') + '\n';
+    const handoff = () => {
+      const r = spawnSync(process.execPath, [handoffScript, '--project', project, '--json'],
+        { cwd: repo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      try { return JSON.parse(r.stdout); } catch (_) { return { raw: r.stdout + r.stderr }; }
+    };
+
+    fs.writeFileSync(planPath, broken(ACCEPT, 'enhancement'));
+    const first = handoff();
+    assert.strictEqual(first.handoff_status, 'plan_invalid',
+      'gitea acceptance (c): the first submission refuses on its own grammar error');
+    assert.notStrictEqual(first.reason, 'acceptance_repair_fenced',
+      'gitea acceptance (c): the FIRST submission is never fenced');
+    assert.ok(fs.existsSync(path.join(dir, '.cache', 'acceptance-anchor.json')),
+      'gitea acceptance (c): the first submission anchors the acceptance surface');
+
+    // RED — the repair rewrote the acceptance surface.
+    fs.writeFileSync(planPath, broken([ACCEPT[0], 'A2: good enough.'], 'enhancement'));
+    const fenced = handoff();
+    assert.strictEqual(fenced.reason, 'acceptance_repair_fenced',
+      'gitea acceptance (c) RED: a repair that alters ## Acceptance refuses acceptance_repair_fenced, got ' + JSON.stringify(fenced));
+
+    // GREEN — the same loop, scaffolding-only repair: the fence stands aside.
+    fs.writeFileSync(planPath, broken(ACCEPT, 'enhancement, area:scripts'));
+    const repaired = handoff();
+    assert.notStrictEqual(repaired.reason, 'acceptance_repair_fenced',
+      'gitea acceptance (c) GREEN: a ## Meta-only repair is NOT fenced, got ' + JSON.stringify(repaired.reason));
+    assert.ok(Array.isArray(repaired.errors) && repaired.errors.join(' ').length > 0,
+      'gitea acceptance (c) GREEN: the scaffolding repair reaches the validator and returns ITS verdict');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+  console.log('testGiteaAcceptanceSurface: PASSED');
+}
 
 // ---------------------------------------------------------------------------
 // #426: verifyArchiveComplete + copy-then-verify-then-delete ordering.

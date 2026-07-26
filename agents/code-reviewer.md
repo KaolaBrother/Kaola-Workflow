@@ -3,10 +3,10 @@ name: code-reviewer
 description: Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage.
 nickname_candidates: ["Reviewer", "Critic", "Inspector"]
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 behavior_contract_version: 2
 behavior_contract_hash: 42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789
-resolved_profile_hash: 4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a
+resolved_profile_hash: aa138be00933313270f14f575a3f6ef6267e00e6c8480069573bf03d51fa82f5
 ---
 <!--
 kaola-workflow-managed-agent: true

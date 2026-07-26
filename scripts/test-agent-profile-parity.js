@@ -273,7 +273,9 @@ if (reviewerGenerator) {
   assert(repositoryErrors.length === 0,
     `tracked reviewer profiles must equal canonical generation: ${repositoryErrors.join('; ')}`);
 
-  assert(rendered.length === 14, `reviewer generator must render exactly 14 profiles, got ${rendered.length}`);
+  // 3 Claude reviewer sources + 9 Codex TOML outputs (3 roles x 3 forges). There is no
+  // second Claude variant: the install-time model axis is retired.
+  assert(rendered.length === 12, `reviewer generator must render exactly 12 profiles, got ${rendered.length}`);
   assert(JSON.stringify([...byPath.keys()].sort()) === JSON.stringify([...reviewerGenerator.EXPECTED_OUTPUT_PATHS].sort()),
     'reviewer generator output set must be complete and closed');
 

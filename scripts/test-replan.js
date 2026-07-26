@@ -86,6 +86,10 @@ function frozenPlan(project, meta, nodes, ledger) {
       ? '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
       : '| --- | --- | --- | --- | --- | --- | --- |', rows,
     '', '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.',
+    // A code-producing plan must carry the transcribed acceptance surface. The child epoch inherits
+    // these exact bytes, which is what the claim-preserving == acceptance-preserving wall checks.
+    '', '## Acceptance', '', 'A1: the declared write set lands the change the issue asked for.',
+    'A2: the recorded validation_command passes over the candidate.',
     '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows,
     '', '## Required Agent Compliance', '',
     '| Requirement | Status | Evidence | Skip Reason |',
@@ -5110,6 +5114,9 @@ const SPINE_PLAN_779 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '',
+  'A1: the reader seam lands in the core script under scripts/.',
+  'A2: the composed milestone frontier is reviewed before the sink.', '',
   '## Node Ledger', '',
   '| id | status |',
   '| --- | --- |',
@@ -5381,6 +5388,8 @@ function initExpandedFamilyFixture(opts) {
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: probe explores; m1 is a milestone composed at open time (surface lib/); wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+    '## Acceptance', '', 'A1: the milestone lands its goal on the lib/ surface.',
+    'A2: the composed frontier is reviewed before the sink.', '',
     '## Node Ledger', '', '| id | status |', '| --- | --- |',
     '| probe | complete |', '| m1 | pending |', '| wall | pending |', '| done | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
@@ -5628,6 +5637,166 @@ scenario(() => {
     ok(/const nodes = validator\.planNodesWithExpansions\(parentPlan\);/.test(caseBFn),
       '#783 :977 pin (MASKED, question/bug-shaped unshipped): verifyCaseBProof ranges the parent '
       + 'completeness gate + writer-surface whitelist over the EXECUTION view');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// Claim-preserving is ACCEPTANCE-preserving. A re-plan repairs HOW the run reaches done; it does not
+// get to redefine what done IS. The child epoch carries the parent's `## Acceptance` surface (the
+// attested child digest covers those bytes, so re-transcription travels under the attestation), and a
+// child whose acceptance surface DIFFERS is refused unless it cites a verified consent entry.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const parentPlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const parentAcceptance = validator.acceptanceDigest(parentPlan);
+    ok(parentAcceptance, 'the parent epoch carries a transcribed acceptance surface');
+
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+
+    // RED — the planner re-authors the acceptance surface while re-planning. Attested, in grammar,
+    // correctly bound on every other seam, and still refused: this is a values change.
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const rewritten = rehashPlan(faithful.text.replace(
+      'A2: the recorded validation_command passes over the candidate.',
+      'A2: shipping something plausible is enough.'));
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), rewritten.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    ok(validator.acceptanceDigest(rewritten.text) !== parentAcceptance,
+      'the rewritten child genuinely changes the acceptance surface');
+    ok(sha256(Buffer.from(rewritten.text)) !== sha256(Buffer.from(faithful.text)),
+      'the attestation path COVERS the acceptance bytes — re-transcription changes the attested child digest');
+    const refused = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refused.reason, 'replan_child_acceptance_changed',
+      'a mid-run acceptance change without consent is refused: ' + JSON.stringify(refused));
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'), parentPlan,
+      'the refused acceptance change leaves the parent plan byte-identical');
+
+    // RED — citing consent that does not exist is not a way through.
+    const forged = rehashPlan(rewritten.text.replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + 'e'.repeat(64)));
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), forged.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason, 'replan_child_acceptance_changed',
+      'a fabricated acceptance_change_consent digest does not authorize the change');
+
+    // GREEN — the child that CARRIES the parent surface (re-transcribed verbatim) activates.
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), faithful.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed', 'the acceptance-preserving child activates: ' + JSON.stringify(committed));
+    equal(validator.acceptanceDigest(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8')),
+      parentAcceptance, 'the activated child epoch CARRIES the parent acceptance surface');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// The consent valve is the ONE way an acceptance surface legitimately changes mid-run — and it is a
+// VALVE only if the gated party cannot open it by itself. RED: the lineage-wide consent-ledger digest
+// is handed to the planner in its own packet and is the same constant on any lineage where a human
+// ever extended the ceiling once, for any unrelated reason; echoing it back must NOT authorize a
+// rewrite of what "done" means.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    let state = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    state += 'automatic_review_replans: 2\nauthorized_epoch_ceiling: 2\ncase_b_exemption_consumed: false\n';
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-state.md'), state);
+    // A PLAIN ceiling extension — recorded for an unrelated reason, binding no acceptance surface.
+    const extended = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-815-ceiling', reason: 'one more automatic re-plan, please',
+      now: () => '2026-07-26T01:00:00.000Z' });
+    equal(extended.acceptance_change_digest, null,
+      'a plain ceiling extension binds no acceptance surface');
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+    const consentDigest = tx.budget.consent_ledger_digest;
+    ok(/^[0-9a-f]{64}$/.test(String(consentDigest || '')), 'the transaction carries the verified consent ledger digest');
+    ok(JSON.stringify(replan.buildPlannerPacket({ project: fx.project }, tx)).includes(consentDigest),
+      'the planner is HANDED that digest in its packet — which is exactly why it cannot be the token');
+
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const changedText = faithful.text
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: the user-restated bar is met instead.')
+      .replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + consentDigest);
+    const echoed = rehashPlan(changedText);
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), echoed.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const refusedEcho = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refusedEcho.reason, 'replan_child_acceptance_changed',
+      'RED: echoing the STALE lineage-wide consent digest does NOT authorize an acceptance rewrite: '
+        + JSON.stringify(refusedEcho));
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'),
+      Buffer.from(tx.parent.plan_bytes_base64, 'base64').toString('utf8'),
+      '...and the refused rewrite leaves the parent plan byte-identical');
+
+    // ...and a consent citation with nothing to authorize is refused, so the field cannot be carried
+    // forward as decoration that silently pre-authorizes a LATER change.
+    const idle = rehashPlan(faithful.text.replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + consentDigest));
+    const idleCheck = replan.validateChildPlan(Buffer.from(idle.text, 'utf8'), tx);
+    equal(idleCheck.reason, 'replan_child_acceptance_changed',
+      'an acceptance_change_consent citation with an UNCHANGED surface is refused, not carried forward');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// GREEN: a consent entry that BINDS the new acceptance surface's digest authorizes exactly that
+// surface. The human turn names what it is consenting to, so consent is per-change rather than
+// lineage-wide, and the entry the planner cites can only ever license the one surface it names.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    let state = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    state += 'automatic_review_replans: 2\nauthorized_epoch_ceiling: 2\ncase_b_exemption_consumed: false\n';
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-state.md'), state);
+
+    // The human decides the NEW acceptance surface first — that is the values decision — then records
+    // consent against it. `--acceptance-change-file` hands over the surface TEXT and normalizes it with
+    // the plan's own digest function, so the operator never computes a hash by hand.
+    const parentPlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const NEW_SURFACE = validator.acceptanceSection(parentPlan).body
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: the user-restated bar is met instead.');
+    const authorizedDigest = validator.acceptanceDigest('## Acceptance\n\n' + NEW_SURFACE.trim() + '\n');
+    const recorded = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-815-acceptance', reason: 'the user restated what done means',
+      acceptanceChangeSurface: NEW_SURFACE, now: () => '2026-07-26T01:00:00.000Z' });
+    equal(recorded.result, 'consent_extended', 'the bound consent entry records: ' + JSON.stringify(recorded));
+    equal(recorded.acceptance_change_digest, authorizedDigest,
+      'the entry binds the NEW surface digest (surface text → the plan\'s own normalization)');
+
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const consented = rehashPlan(faithful.text
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: the user-restated bar is met instead.')
+      .replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + recorded.entry_digest));
+    equal(validator.acceptanceDigest(consented.text), authorizedDigest,
+      'the child transcribes exactly the surface the human authorized');
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), consented.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed',
+      'GREEN: a per-change consent entry activates the acceptance change: ' + JSON.stringify(committed));
+    equal(validator.acceptanceDigest(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8')),
+      authorizedDigest, 'the activated child epoch carries the AUTHORIZED surface');
+
+    // The bound entry licenses ONE surface: a DIFFERENT rewrite citing the same entry is refused.
+    const entries = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.EPOCH_CONSENT_EXTENSIONS_NAME), 'utf8')).entries;
+    equal(entries.length, 1, 'the ledger holds the single bound entry');
+    const drifted = rehashPlan(faithful.text
+      .replace('A2: the recorded validation_command passes over the candidate.',
+        'A2: something else entirely is enough.')
+      .replace(/^## Meta$/m, '## Meta\nacceptance_change_consent: ' + recorded.entry_digest));
+    const driftCheck = replan.validateChildPlan(Buffer.from(drifted.text, 'utf8'), tx, entries);
+    equal(driftCheck.reason, 'replan_child_acceptance_changed',
+      'a bound consent entry authorizes the surface it NAMES and no other: ' + JSON.stringify(driftCheck));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 

@@ -1177,6 +1177,20 @@ function consentAuthority(paths, epochLineageId, state) {
     ledger, entries: verified.entries };
 }
 
+// The verified consent entries for this lineage, read FRESH at the seam that needs them. Deliberately
+// not snapshotted into the transaction: an acceptance-change consent entry can legitimately be recorded
+// after the transaction was prepared (the human turn happens when the human happens), and the ledger is
+// append-only + digest-chained, so re-reading can only add entries — it can never launder one in. Any
+// unreadable or unverifiable ledger returns [] (fail closed: no entry, no authorization).
+function verifiedConsentEntries(paths, epochLineageId) {
+  let ledger = null;
+  if (entryExists(paths.consentPath)) {
+    try { ledger = readAuthorityJson(paths.consentPath); } catch (_) { return []; }
+  }
+  const verified = verifyConsentLedger(ledger, epochLineageId);
+  return verified.ok && Array.isArray(verified.entries) ? verified.entries : [];
+}
+
 function ledgerDigest(planContent) {
   const ledger = validator.parseLedger(planContent);
   const rows = Array.from(ledger.entries()).map(([id, status]) => ({ id, status }))
@@ -2070,6 +2084,19 @@ function buildPlannerPacket(paths, transaction) {
         + 'finding still needing repair (suffix `@relocated` when the repair site is deliberately '
         + 'not the observation anchor, `@anchorless` when the finding declares no anchor path), '
         + 'or the literal `none` when no source finding needs one.',
+      // Claim-preserving is acceptance-preserving. Named here, in the same packet that carries the
+      // immutable claim/root/epoch bindings, so the planner reads the obligation where it is already
+      // told what it may not touch — and so re-transcription travels under the same attestation.
+      // The lineage-wide consent digest above (budget.consent_ledger_digest) is NOT an acceptance
+      // authorization and must never read as one — it is handed to the planner, so treating it as the
+      // token would make the valve self-serve. The only value that authorizes a different acceptance
+      // surface is the entry_digest of a consent entry that BINDS that surface's digest, which a human
+      // turn records; the child cites that entry_digest and nothing else works.
+      'Carry the parent `## Acceptance` surface into the child epoch unchanged (re-transcribe it '
+        + 'verbatim; whitespace is normalized). A different acceptance surface is a values change: it '
+        + 'requires a consent entry recorded against THAT surface\'s digest, cited by its `entry_digest` '
+        + 'as `acceptance_change_consent` in the child ## Meta. The lineage consent-ledger digest in '
+        + 'this packet authorizes NOTHING here.',
       'Write only the exact child output path and return the digest-bound planner attestation.',
     ],
     child_output_path: schema.REPLAN_PLAN_NEXT_NAME,
@@ -2699,7 +2726,11 @@ function childFindingCoverage(childContent, transaction) {
   return { ok: true, owners: covered, required: required.length };
 }
 
-function validateChildPlan(childBytes, transaction) {
+// @param consentEntries {Array|undefined} the VERIFIED consent-ledger entries for this lineage, read
+//   fresh at the seam (the ledger is append-only and digest-chained, so a fresh read can only ADD
+//   entries — never weaken an earlier verdict). Absent ⇒ no entry can bind an acceptance change, which
+//   is the fail-CLOSED direction: a caller that cannot prove consent does not get to grant it.
+function validateChildPlan(childBytes, transaction, consentEntries) {
   const content = Buffer.from(childBytes).toString('utf8');
   const stored = validator.readStoredHash(content);
   if (!stored || stored !== validator.computePlanHash(content)) return { ok: false, reason: 'replan_child_hash_invalid' };
@@ -2742,6 +2773,51 @@ function validateChildPlan(childBytes, transaction) {
   const nodes = validator.parseNodes(content);
   if (!nodes.length || ledger.size !== nodes.length || nodes.some(node => ledger.get(node.id) !== 'pending')) {
     return { ok: false, reason: 'replan_child_ledger_not_pending' };
+  }
+  // Claim-preserving means ACCEPTANCE-preserving. A re-plan repairs HOW the run reaches done; it does
+  // not get to redefine what done IS. The child may re-transcribe the parent's `## Acceptance` verbatim
+  // (whitespace churn is normalized away by acceptanceDigest) — and the planner attestation already
+  // covers those bytes, since the attested child digest is taken over the whole child image — but a
+  // child whose acceptance surface DIFFERS is a values change, and values changes route through the
+  // consent valve.
+  //
+  // THE CITED CONSENT ENTRY MUST BIND THIS CHANGE. Citing the lineage-wide consent-ledger TIP would be
+  // a self-serve token: that value is handed to the planner in its own packet, and it is the same
+  // constant on ANY lineage where a human ever extended the ceiling once, for any unrelated reason — so
+  // echoing it back would let the planner rewrite what "done" means for free. A token the gated party
+  // is handed is not a valve. The child must therefore cite the `entry_digest` of a verified consent
+  // entry whose `acceptance_change_digest` EQUALS the child's own acceptance digest: the human turn
+  // that recorded the entry named the exact surface it authorizes, so a stale ceiling extension
+  // authorizes nothing and an authorized entry authorizes exactly one surface and no other.
+  //
+  // A parent that never carried the section (frozen before it existed) is not a change to preserve —
+  // the child's transcription is the FIRST one, and is admitted.
+  const parentPlanContent = Buffer.from(String(transaction.parent.plan_bytes_base64 || ''), 'base64').toString('utf8');
+  const parentAcceptance = validator.acceptanceDigest(parentPlanContent);
+  const childAcceptance = validator.acceptanceDigest(content);
+  if (parentAcceptance && childAcceptance !== parentAcceptance) {
+    const cited = metaFieldOccurrences(content, 'acceptance_change_consent');
+    const entries = Array.isArray(consentEntries) ? consentEntries : [];
+    const bound = cited.length === 1 && childAcceptance
+      ? entries.find(entry => entry && entry.entry_digest === cited[0]
+        && typeof entry.acceptance_change_digest === 'string'
+        && entry.acceptance_change_digest === childAcceptance)
+      : null;
+    if (!bound) {
+      return { ok: false, reason: 'replan_child_acceptance_changed', field: 'acceptance',
+        errors: ['the child epoch changes `## Acceptance` (parent ' + parentAcceptance.slice(0, 12)
+          + '…, child ' + (childAcceptance ? childAcceptance.slice(0, 12) + '…' : 'absent')
+          + ') without citing a consent entry BOUND TO THIS CHANGE — carry the parent acceptance '
+          + 'surface forward verbatim, or record consent for the values change against the new surface '
+          + '(replan extend-consent --user-turn-reference <turn> --consent-reason <why> '
+          + '--acceptance-change-digest ' + (childAcceptance || '<new-surface-digest>')
+          + ') and cite THAT entry_digest in the child ## Meta as `acceptance_change_consent`. A '
+          + 'lineage-wide ceiling-extension digest authorizes nothing here.'] };
+    }
+  } else if (metaFieldOccurrences(content, 'acceptance_change_consent').length) {
+    return { ok: false, reason: 'replan_child_acceptance_changed', field: 'acceptance',
+      errors: ['the child epoch cites `acceptance_change_consent` but does not change `## Acceptance` '
+        + '— a consent citation with nothing to authorize is removed, not carried forward'] };
   }
   // #729 case (b): the carry-forward wall lives inside the ONE child validator every seam
   // already routes through — the freeze at planner_pending AND the re-verification at
@@ -2862,7 +2938,8 @@ function verifyFrozenChildAuthority(paths, transaction) {
   }
   const childDigest = schema.sha256Hex(childBytes);
   const storedChild = Buffer.from(transaction.child.bytes_base64 || '', 'base64');
-  const child = validateChildPlan(childBytes, transaction);
+  const child = validateChildPlan(childBytes, transaction,
+    verifiedConsentEntries(paths, transaction.epoch_lineage_id));
   const semanticAttestation = Object.assign({}, attestation);
   delete semanticAttestation.attestation_digest;
   if (!child.ok || childDigest !== transaction.child.digest
@@ -3964,7 +4041,8 @@ function resumeReplanUnlocked(paths, opts) {
     if (!handoff || handoff.result !== 'child_frozen') {
       return handoff || schema.refuse('replan_child_invalid');
     }
-    const child = validateChildPlan(handoff.child_bytes, transaction);
+    const child = validateChildPlan(handoff.child_bytes, transaction,
+      verifiedConsentEntries(paths, transaction.epoch_lineage_id));
     if (!child.ok) {
       return schema.refuse(child.reason, { field: child.field || null,
         detail: child.detail || null, errors: child.errors || [] });
@@ -4077,6 +4155,14 @@ function verifyConsentLedger(ledger, epochLineageId) {
         || entry.previous_entry_digest !== previous || userTurns.has(entry.user_turn_reference)) {
       return { ok: false, reason: 'replan_consent_ledger_invalid' };
     }
+    // `acceptance_change_digest` is OPTIONAL (a plain ceiling extension carries none) but, when
+    // present, must be a well-formed digest: it is the ONE field that turns a ceiling extension into an
+    // authorization to redefine what "done" means, so a malformed one must not sit in the chain looking
+    // like consent. Its bytes ride the entry_digest recomputation below and therefore the whole chain.
+    if (entry.acceptance_change_digest !== undefined
+        && !HEX64_RE.test(String(entry.acceptance_change_digest || ''))) {
+      return { ok: false, reason: 'replan_consent_ledger_invalid' };
+    }
     const expectedExtensionId = schema.sha256Canonical({
       schema_version: 1,
       epoch_lineage_id: epochLineageId,
@@ -4106,6 +4192,21 @@ function appendConsentExtension(opts) {
   const paths = projectPaths(repoRoot, opts.project);
   return withProjectLock(paths, 'replan extend-consent', () => {
     if (!opts.userTurnReference || !opts.reason) return schema.refuse('replan_consent_reference_required');
+    // The acceptance-change binding. The human turn names the EXACT surface it authorizes — either its
+    // digest directly, or the surface text (the same normalization the plan's own `## Acceptance`
+    // digest uses, so the operator can hand over the bytes they actually mean rather than a hash they
+    // have to compute by hand). Recorded on the entry, it makes the resulting entry_digest an
+    // authorization for that one surface and nothing else.
+    let acceptanceChangeDigest = null;
+    if (opts.acceptanceChangeSurface !== undefined && opts.acceptanceChangeSurface !== null) {
+      acceptanceChangeDigest = validator.acceptanceDigest(
+        '## Acceptance\n\n' + String(opts.acceptanceChangeSurface).replace(/^\n+|\n+$/g, '') + '\n');
+    } else if (opts.acceptanceChangeDigest !== undefined && opts.acceptanceChangeDigest !== null) {
+      acceptanceChangeDigest = String(opts.acceptanceChangeDigest).trim();
+    }
+    if (acceptanceChangeDigest !== null && !HEX64_RE.test(acceptanceChangeDigest)) {
+      return schema.refuse('replan_consent_acceptance_binding_invalid');
+    }
     const stateContent = readAuthorityText(paths.statePath);
     const state = parseStateFields(stateContent);
     const lineageId = state.epoch_lineage_id;
@@ -4130,11 +4231,18 @@ function appendConsentExtension(opts) {
     if (!verified.ok) return schema.refuse(verified.reason);
     const duplicate = verified.entries.find(entry => entry.user_turn_reference === String(opts.userTurnReference));
     if (duplicate) {
-      if (duplicate.reason !== String(opts.reason)) return schema.refuse('replan_consent_reference_reused');
+      // A replayed request is idempotent only when it is the SAME request. The acceptance binding is
+      // part of that identity: re-using one turn's reference to bind a different surface would be a
+      // second values decision wearing the first one's authorization.
+      if (duplicate.reason !== String(opts.reason)
+          || (duplicate.acceptance_change_digest || null) !== acceptanceChangeDigest) {
+        return schema.refuse('replan_consent_reference_reused');
+      }
       const repaired = schema.writeEpochStateBlock(stateContent, { authorized_epoch_ceiling: verified.ceiling });
       durableWriteFile(paths.statePath, repaired, opts, 'after_state_consent_ceiling');
       return { result: 'consent_already_extended', extension_id: duplicate.extension_id,
-        authorized_epoch_ceiling: verified.ceiling, entry_digest: duplicate.entry_digest };
+        authorized_epoch_ceiling: verified.ceiling, entry_digest: duplicate.entry_digest,
+        acceptance_change_digest: duplicate.acceptance_change_digest || null };
     }
     const cachedCeiling = Number(state.authorized_epoch_ceiling || schema.REVIEW_REPLAN_LIMIT);
     if (cachedCeiling !== verified.ceiling) return schema.refuse('replan_consent_ledger_invalid');
@@ -4162,6 +4270,7 @@ function appendConsentExtension(opts) {
       requested_at: requestedAt,
       reason: String(opts.reason),
       previous_entry_digest: verified.digest,
+      ...(acceptanceChangeDigest ? { acceptance_change_digest: acceptanceChangeDigest } : {}),
     };
     const entry = Object.assign({}, base, { entry_digest: schema.sha256Canonical(base) });
     ledger.entries.push(entry);
@@ -4169,7 +4278,8 @@ function appendConsentExtension(opts) {
     const updated = schema.writeEpochStateBlock(stateContent, { authorized_epoch_ceiling: entry.new_ceiling });
     durableWriteFile(paths.statePath, updated, opts, 'after_state_consent_ceiling');
     return { result: 'consent_extended', extension_id: entry.extension_id,
-      authorized_epoch_ceiling: entry.new_ceiling, entry_digest: entry.entry_digest };
+      authorized_epoch_ceiling: entry.new_ceiling, entry_digest: entry.entry_digest,
+      acceptance_change_digest: acceptanceChangeDigest };
   });
 }
 
@@ -4198,6 +4308,10 @@ function parseArgs(argv) {
     else if (arg === '--reason') out.transitionReason = argv[++index];
     else if (arg === '--user-turn-reference') out.userTurnReference = argv[++index];
     else if (arg === '--consent-reason') out.consentReason = argv[++index];
+    // The acceptance-change binding: the digest of the new surface this consent authorizes, or the
+    // file holding that surface's text (normalized identically to the plan's own `## Acceptance`).
+    else if (arg === '--acceptance-change-digest') out.acceptanceChangeDigest = argv[++index];
+    else if (arg === '--acceptance-change-file') out.acceptanceChangeFile = argv[++index];
     else throw new Error('unknown_arg:' + arg);
   }
   return out;
@@ -4216,8 +4330,18 @@ function main() {
   } else if (subcommand === 'status') {
     result = readStatus({ project: args.project });
   } else if (subcommand === 'extend-consent') {
+    let acceptanceChangeSurface;
+    if (args.acceptanceChangeFile) {
+      try { acceptanceChangeSurface = fs.readFileSync(path.resolve(args.acceptanceChangeFile), 'utf8'); }
+      catch (error) {
+        schema.emit(schema.refuse('replan_consent_acceptance_binding_invalid', { detail: error.message }));
+        process.exitCode = 1;
+        return;
+      }
+    }
     result = appendConsentExtension({ project: args.project, userTurnReference: args.userTurnReference,
-      reason: args.consentReason });
+      reason: args.consentReason, acceptanceChangeDigest: args.acceptanceChangeDigest,
+      acceptanceChangeSurface });
   } else if (subcommand === 'verify-snapshots') {
     const root = getRepoRoot();
     result = verifyAllEpochSnapshots(path.join(root, 'kaola-workflow', args.project));

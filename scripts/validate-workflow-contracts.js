@@ -952,9 +952,7 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'workflow_path: adaptive')
 for (const reviewerBody of [
   'agents/code-reviewer.md',
   'agents/security-reviewer.md',
-  'agents/adversarial-verifier.md',
-  'agents/profiles/higher/code-reviewer.md',
-  'agents/profiles/higher/security-reviewer.md'
+  'agents/adversarial-verifier.md'
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
 }
@@ -1404,6 +1402,105 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
         }
       }
     }
+  }
+}
+
+// VENDOR_MODEL_NOUN_BAN: no agent-facing prompt surface, in ANY edition, may name a vendor's
+// model by brand. A prompt describes the reasoning class it needs — `reasoning tier`,
+// `reasoning-floor`, `standard tier` — never "Opus"/"Sonnet"/"GPT-5". A brand noun is wrong on
+// three of the four runtimes that read the same wording, and it silently re-teaches a rule the
+// portable plan vocabulary already states.
+//
+// This is the ALWAYS-ON half of the rule. Neutral wording used to be produced by per-runtime
+// rewrite transforms applied on the way out; those are retired, because generated text must be
+// runtime-neutral AT THE SOURCE. With the transforms gone, this scan is the only thing standing
+// between a brand noun and four shipped editions, so it lives here — inside the claude chain —
+// rather than in a runtime suite that no chain runs.
+//
+// EXEMPT-LIST, NOT ALLOWLIST. Every .md/.toml under every declared root is scanned; a newly-added
+// prompt surface is guarded the moment it lands, with no registration step. Only an explicitly
+// named path with a stated reason is skipped. History is out of scope by construction — it is not
+// under these roots: docs/decisions/, docs/investigations/, docs/audits/, and CHANGELOG.md record
+// what was decided and when, and rewriting them would falsify the record.
+//
+// Lowercase `opus`/`sonnet` are DELIBERATELY not matched: they are the portable plan `model`-column
+// tier aliases (schema TIER_ALIASES), a closed machine vocabulary, not prose about a vendor.
+{
+  const VENDOR_MODEL_NOUN_BAN =
+    /\b(Opus|Sonnet|Haiku|Gemini|Llama|Mistral|Grok|Qwen|DeepSeek|GPT-[0-9][\w.-]*|GLM-[0-9][\w.-]*)\b/;
+
+  const editions = ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'];
+  const promptSurfaceRoots = [
+    { dir: 'commands' },
+    { dir: 'agents' },
+    // Shipped by install.sh into every forge's support dir; the plan-run command routes into them,
+    // so they are read as prompt text at runtime exactly like a command body.
+    { dir: 'docs/plan-run-cards' },
+    ...editions.flatMap(edition => [
+      // The github Codex plugin ships SKILL packs rather than command files; the two forge plugins
+      // ship both. A root that is absent for that structural reason is declared optional here, so
+      // a root that goes missing for ANY OTHER reason still fails closed.
+      { dir: 'plugins/' + edition + '/commands', optional: edition === 'kaola-workflow' },
+      { dir: 'plugins/' + edition + '/skills' },
+      { dir: 'plugins/' + edition + '/agents' }
+    ])
+  ];
+
+  // Paths intentionally allowed to carry a brand noun, each with the reason it must. Empty is the
+  // correct steady state: an entry here is a documented exception, never a parking spot for a
+  // surface someone did not want to fix.
+  const VENDOR_NOUN_EXEMPT = new Map([]);
+
+  const scanned = [];
+  for (const { dir, optional } of promptSurfaceRoots) {
+    const absolute = path.join(root, dir);
+    if (!fs.existsSync(absolute)) {
+      assert(optional === true,
+        'VENDOR_MODEL_NOUN_BAN — declared prompt-surface root "' + dir + '" is missing; the guard ' +
+        'cannot scan it. Restore the directory, or mark the root optional with a stated reason.');
+      continue;
+    }
+    const stack = [absolute];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) stack.push(full);
+        else if (/\.(md|toml)$/.test(entry.name)) scanned.push(path.relative(root, full));
+      }
+    }
+  }
+
+  // A guard that scans nothing passes everything. Assert the walk actually reached the surfaces.
+  assert(scanned.length >= 90,
+    'VENDOR_MODEL_NOUN_BAN — expected to scan every prompt surface across all editions, but only ' +
+    scanned.length + ' file(s) were reached; the root list or the directory walk is broken.');
+
+  for (const rel of scanned.sort()) {
+    if (VENDOR_NOUN_EXEMPT.has(rel)) continue;
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(VENDOR_MODEL_NOUN_BAN);
+      if (m) {
+        assert(false,
+          rel + ':' + (i + 1) + ': VENDOR_MODEL_NOUN_BAN — vendor model noun "' + m[0] +
+          '" must not appear in an agent-facing prompt surface. Name the reasoning class instead ' +
+          '(e.g. "reasoning tier", "reasoning-floor", "standard tier"); the lowercase `opus`/' +
+          '`sonnet` plan-column aliases are unaffected. See docs/conventions.md.');
+      }
+    }
+  }
+
+  // Stale-exemption sweep: an exemption that no longer names a real file, or names a file that no
+  // longer needs it, is deleted rather than carried. Bidirectional by construction.
+  for (const [rel, reason] of VENDOR_NOUN_EXEMPT) {
+    assert(typeof reason === 'string' && reason.trim().length > 0,
+      'VENDOR_MODEL_NOUN_BAN — exemption "' + rel + '" must state a one-line reason');
+    assert(exists(rel),
+      'VENDOR_MODEL_NOUN_BAN — exemption "' + rel + '" names a file that does not exist; delete it');
+    assert(VENDOR_MODEL_NOUN_BAN.test(read(rel)),
+      'VENDOR_MODEL_NOUN_BAN — exemption "' + rel + '" is stale: the file carries no vendor model ' +
+      'noun. Delete the exemption so the surface is guarded again.');
   }
 }
 

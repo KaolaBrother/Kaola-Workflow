@@ -55,6 +55,8 @@ Concurrency is the standing default for any frontier. Holding work serial is a p
 - **S2 — shared irreversible effect**: name the shared resource both units mutate (resource identity, not a conflict forecast).
 - **S3 — environment**: a failed worktree-support probe (a measurement).
 
+**A serializer must be one the orchestrator cannot remove.** A blocker the workflow itself created — state produced by its own commit policy rather than by the task — is a **repair obligation discharged before dispatch**, never evidence. Repair it, then co-open; where the repair cannot be *proven* sound, halt loudly rather than serialize over it, because silent serialization buries the integrity signal it should be raising. The repair belongs to the **scheduler, not the plan**: the planner authors the shape, the scheduler clears its own residue.
+
 Uncertainty is not a serializer — uncertain writes co-open in isolated legs and reconcile at the join. Rationale: wrong-parallel costs one bounded, visible synthesis pass; wrong-serial costs invisible wall-clock on every frontier, so the burden of proof sits on serial. This governs **mode** only: width stays governed by faithful decomposition, and the recorded evidence line is audit-only (the only mechanical check allowed is that it exists).
 
 ### Self-Sufficient by Default; CI/CD Is Not a Gate

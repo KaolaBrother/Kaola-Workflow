@@ -1292,7 +1292,8 @@ function enableMultiAgentV2(homeRoot) {
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
     assert.strictEqual(repaired.status, 0,
-      'normal preflight may repair the active project override before dispatch: ' + repaired.stderr);
+      'normal preflight may repair the active project override before dispatch: '
+      + repaired.stderr + repaired.stdout);
     assert.strictEqual(fs.readFileSync(profilePath, 'utf8'), canonical,
       'project override autofix restores the canonical bundled reviewer bytes');
   } finally {
@@ -3195,9 +3196,9 @@ function parseCodexAgentMetadata(pluginRoot) {
 }
 
 try {
-  const higherInstallOutput = execFileSync(
+  const installOutput = execFileSync(
     'bash',
-    ['install.sh', '--yes', '--forge=github', '--profile=higher', '--no-settings-merge'],
+    ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
     {
       cwd: root,
       env: { ...process.env, HOME: tmp },
@@ -3209,12 +3210,12 @@ try {
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
   const adapt = readInstalledCommand('kaola-workflow-adapt.md');
 
-  // The always-opus workflow-planner tier (adapt command) renders opus under the higher profile;
-  // the finalize command carries the sonnet routed-fix (tdd-guide / build-error-resolver) and
-  // doc-updater tiers. (The profile-sensitive reviewer/architect tiers are proven at the agent-model
-  // manifest level below, the surface the adaptive resolver actually reads.)
+  // The always-opus workflow-planner tier (adapt command) renders opus; the finalize command
+  // carries the sonnet routed-fix (tdd-guide / build-error-resolver) and doc-updater tiers.
+  // (Runtime role resolution is proven per role against the resolver below — the surface the
+  // adaptive dispatch path actually reads.)
   assert(adapt.includes('subagent_type="workflow-planner",\n  model="opus",'),
-    'higher profile should render the workflow-planner as opus');
+    'the workflow-planner should render as opus');
   assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
   assert(
     finalize.includes('\n\n## Steps\n\n'),
@@ -3272,73 +3273,82 @@ try {
       && /^[0-9a-f]{64}$/.test(columns[3]) && /^[0-9a-f]{64}$/.test(columns[4]),
     'Claude managed-agent manifest must record installed sha, behavior version/hash, and resolved profile hash for ' + role);
   }
-  assert(higherInstallOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
+  assert(installOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
     'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');
 
-  // Default profile is `higher`: an install with NO --profile flag must resolve the profile-sensitive
-  // reviewer/architect tier to opus (this is what locks the default). Proven via the .kaola-agent-models.json
-  // manifest — the surface the adaptive resolver actually reads — since the retired phase[1-5] command
-  // surfaces that once carried these placeholders no longer exist. The explicit --profile=common contrast
-  // is covered by the manifest section (ii) below.
+  // #794: the install-time model axis is retired. A fresh install must (a) write NO
+  // .kaola-agent-models.json, and (b) resolve EVERY registered role through the three-step chain
+  // (plan column -> frontmatter -> DEFAULT_AGENT_MODELS) to the pinned tier below — the surface the
+  // adaptive dispatch path actually reads.
+  //
+  // THE PINNED TABLE IS THE ACCEPTANCE EVIDENCE, and its required value is FIXED: it is the exact
+  // per-role resolution a default install produced BEFORE the axis was removed. Retiring a selector
+  // must not re-tier a single role, so every entry here is a behavioural pin, not a preference —
+  // the retired default was `--profile=higher`, so the three roles that had a `higher` variant
+  // (code-architect, code-reviewer, security-reviewer) pin to the reasoning tier and every other
+  // role pins to whatever its source frontmatter already declared.
+  //
+  // This table is INDEPENDENTLY DERIVED from DEFAULT_AGENT_MODELS — do not "fix" a failure here by
+  // editing this table to match the resolver. The two agreeing is the whole assertion; if they
+  // disagree, the resolver moved a role's tier and that is the bug.
+  const EXPECTED_ROLE_MODELS = {
+    'code-explorer': 'sonnet',
+    'knowledge-lookup': 'sonnet',
+    planner: 'opus',
+    'code-architect': 'opus',
+    'tdd-guide': 'sonnet',
+    implementer: 'sonnet',
+    'build-error-resolver': 'sonnet',
+    'code-reviewer': 'opus',
+    'security-reviewer': 'opus',
+    'doc-updater': 'sonnet',
+    'adversarial-verifier': 'sonnet',
+    contractor: 'sonnet',
+    'workflow-planner': 'opus',
+    synthesizer: 'opus',
+    'metric-optimizer': 'sonnet'
+  };
+  const resolveRole = (agentDir, role) => execFileSync('node',
+    [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), role, '--agent-dir', agentDir, '--raw'],
+    { cwd: root, encoding: 'utf8' }).trim();
+
   {
     const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-default-'));
     try {
       execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: dtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const manifest = JSON.parse(
-        fs.readFileSync(path.join(dtmp, '.claude', 'agents', '.kaola-agent-models.json'), 'utf8'));
-      assert(manifest['code-architect'] === 'opus',
-        'no-flag install must resolve code-architect→opus (higher is the default profile); got ' + manifest['code-architect']);
-      assert(manifest['code-reviewer'] === 'opus',
-        'no-flag install must resolve code-reviewer→opus (higher is the default profile); got ' + manifest['code-reviewer']);
+      const agentDir = path.join(dtmp, '.claude', 'agents');
+      assert(!fs.existsSync(path.join(agentDir, '.kaola-agent-models.json')),
+        'a fresh install must not write the retired .kaola-agent-models.json');
+      for (const [role, expected] of Object.entries(EXPECTED_ROLE_MODELS)) {
+        const got = resolveRole(agentDir, role);
+        assert(got === expected, 'fresh install must resolve ' + role + ' -> ' + expected + '; got ' + got);
+      }
+      // A planted manifest in the installed agent dir is INERT — precedence is provably three-step.
+      fs.writeFileSync(path.join(agentDir, '.kaola-agent-models.json'),
+        JSON.stringify({ contractor: 'opus', 'code-reviewer': 'haiku', planner: 'haiku' }));
+      for (const role of ['contractor', 'code-reviewer', 'planner']) {
+        const got = resolveRole(agentDir, role);
+        assert(got === EXPECTED_ROLE_MODELS[role],
+          'a planted .kaola-agent-models.json must not affect ' + role + ' (expected '
+            + EXPECTED_ROLE_MODELS[role] + '; got ' + got + ')');
+      }
     } finally { fs.rmSync(dtmp, { recursive: true, force: true }); }
   }
 
-  // issue #242: .kaola-agent-models.json manifest — produced by install.sh so the
-  // adaptive resolver has a profile-aware model for every agent.
-  //
-  // (i) higher-profile install: manifest exists, maps planner→opus, sonnet agents→sonnet,
-  //     and higher-profile trio (code-architect/code-reviewer/security-reviewer)→opus.
-  {
-    const htmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-manifest-higher-'));
+  // The retired flag fails LOUD at the operator's terminal on both former values.
+  for (const flag of ['--profile=higher', '--profile=common']) {
+    const ptmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-retired-profile-'));
     try {
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=higher', '--no-settings-merge'],
-        { cwd: root, env: { ...process.env, HOME: htmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const manifestPath = path.join(htmp, '.claude', 'agents', '.kaola-agent-models.json');
-      assert(fs.existsSync(manifestPath), 'higher-profile install must write .kaola-agent-models.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      assert(manifest['planner'] === 'opus', 'manifest must map planner→opus; got ' + manifest['planner']);
-      assert(manifest['code-architect'] === 'opus', 'higher manifest must map code-architect→opus; got ' + manifest['code-architect']);
-      assert(manifest['code-reviewer'] === 'opus', 'higher manifest must map code-reviewer→opus; got ' + manifest['code-reviewer']);
-      assert(manifest['security-reviewer'] === 'opus', 'higher manifest must map security-reviewer→opus; got ' + manifest['security-reviewer']);
-      assert(manifest['tdd-guide'] === 'sonnet', 'manifest must map tdd-guide→sonnet; got ' + manifest['tdd-guide']);
-      assert(manifest['code-explorer'] === 'sonnet', 'manifest must map code-explorer→sonnet; got ' + manifest['code-explorer']);
-      assert(manifest['contractor'] === 'sonnet', 'higher manifest must map contractor→sonnet');
-      assert(manifest['workflow-planner'] === 'opus', 'higher manifest must map workflow-planner→opus; got ' + manifest['workflow-planner']);
-      assert(manifest['synthesizer'] === 'opus', 'higher manifest must map synthesizer→opus; got ' + manifest['synthesizer']);
-      // All keys must be non-empty and in {opus,sonnet}
-      for (const [k, v] of Object.entries(manifest)) {
-        assert(v === 'opus' || v === 'sonnet', 'manifest value for ' + k + ' must be opus or sonnet; got ' + v);
-      }
-    } finally { fs.rmSync(htmp, { recursive: true, force: true }); }
-  }
-
-  // (ii) common-profile install: manifest maps security-reviewer→sonnet (profile-aware contrast).
-  {
-    const cmtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-manifest-common-'));
-    try {
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=common', '--no-settings-merge'],
-        { cwd: root, env: { ...process.env, HOME: cmtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const manifestPath = path.join(cmtmp, '.claude', 'agents', '.kaola-agent-models.json');
-      assert(fs.existsSync(manifestPath), 'common-profile install must write .kaola-agent-models.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      assert(manifest['security-reviewer'] === 'sonnet', 'common manifest must map security-reviewer→sonnet (no higher override); got ' + manifest['security-reviewer']);
-      assert(manifest['code-architect'] === 'sonnet', 'common manifest must map code-architect→sonnet; got ' + manifest['code-architect']);
-      assert(manifest['code-reviewer'] === 'sonnet', 'common manifest must map code-reviewer→sonnet; got ' + manifest['code-reviewer']);
-      assert(manifest['planner'] === 'opus', 'common manifest must still map planner→opus; got ' + manifest['planner']);
-      assert(manifest['contractor'] === 'sonnet', 'common manifest must map contractor→sonnet (the contractor stays sonnet under every profile); got ' + manifest['contractor']);
-      assert(manifest['workflow-planner'] === 'opus', 'common manifest must still map workflow-planner→opus (Opus under every profile); got ' + manifest['workflow-planner']);
-    } finally { fs.rmSync(cmtmp, { recursive: true, force: true }); }
+      let threw = null;
+      try {
+        execFileSync('bash', ['install.sh', '--yes', '--forge=github', flag, '--no-settings-merge'],
+          { cwd: root, env: { ...process.env, HOME: ptmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) { threw = e; }
+      assert(threw && threw.status !== 0, 'install.sh ' + flag + ' must exit non-zero');
+      assert(String(threw.stderr || '').includes('Unknown argument'),
+        'install.sh ' + flag + ' must fail via the generic unknown-argument handler; got ' + (threw.stderr || ''));
+    } finally { fs.rmSync(ptmp, { recursive: true, force: true }); }
   }
 
   // #363: forge installs must run end-to-end (HOME=tmpdir) — the prior suite only exercised
@@ -3349,9 +3359,8 @@ try {
     try {
       execFileSync('bash', ['install.sh', '--yes', '--forge=' + forge, '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: ftmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const manifestPath = path.join(ftmp, '.claude', 'agents', '.kaola-agent-models.json');
-      assert(fs.existsSync(manifestPath), forge + ' install must write the agent model manifest');
-      JSON.parse(fs.readFileSync(manifestPath, 'utf8')); // throws if invalid JSON (#363 encoder)
+      assert(!fs.existsSync(path.join(ftmp, '.claude', 'agents', '.kaola-agent-models.json')),
+        forge + ' install must not write the retired agent model manifest');
       const hooksPath = path.join(ftmp, '.claude', 'kaola-workflow-' + forge, 'hooks', 'hooks.json');
       assert(fs.existsSync(hooksPath), forge + ' install must render hooks.json');
       JSON.parse(fs.readFileSync(hooksPath, 'utf8')); // throws if the node rewrite produced invalid JSON

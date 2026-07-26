@@ -3,18 +3,30 @@
 
 // generate-routing-surfaces.js — the routing-surface render engine + CLI.
 //
-// Regenerates the 12 template-shaped surfaces (plan-run x6 + next x6) from one
-// canonical skeleton per topic. A skeleton is the UNION structure of a topic's
-// command + skill surfaces, annotated with directives on their own comment
-// lines:
+// Regenerates the 30 template-shaped surfaces (plan-run x6 + next x6 + init x6
+// + finalize x6 + adapt x6) from one canonical skeleton per topic. A skeleton is the UNION
+// structure of a topic's command + skill surfaces, annotated with directives on
+// their own comment lines:
 //
 //   <!-- SLOT:name -->            replaced by slot data resolved for the render
 //                                 context (surface_type x forge)
 //   <!-- SPLICE:name -->          replaced by a mid-paragraph variant resolved
 //                                 for the render context
 //   <!-- REGION:cond -->          keep the body only when cond matches the
-//   ...body...                    context (a '+'-joined AND of surface_type /
-//   <!-- /REGION -->              forge tags), else drop the whole region
+//   ...body...                    context, else drop the whole region. cond is
+//   <!-- /REGION -->              a ','-joined OR of '+'-joined ANDs of
+//                                 surface_type / forge tags, e.g.
+//                                 `command+github` or `gitlab,gitea`.
+//
+// REGION vs SPLICE is not a style choice. A SPLICE always emits exactly one
+// value, so its smallest possible rendering is one line — it cannot express
+// "these lines exist on some contexts and not others". Lines that are ABSENT
+// on a context must therefore be a REGION, and lines that merely READ
+// DIFFERENTLY across contexts should be a SPLICE. Body text shared by several
+// (but not all) forges belongs in ONE `gitlab,gitea`-style region rather than
+// being copied into a per-forge branch: a copy is a place two forges can
+// silently diverge, which is the whole failure class the skeleton exists to
+// close.
 //
 // After slot/splice/region resolution, forge-noun renames are applied (github
 // is the canonical namespace; gitlab/gitea rename per rename-table.js).
@@ -57,8 +69,12 @@ const SKILL_EDITIONS = [
 ];
 
 // Topic config. Basenames derive from the schema registry (the same anchor the
-// T1/T2 emitted-target set uses) for plan-run; next is ASYMMETRIC (command
-// basename workflow-next vs skill basename kaola-workflow-next).
+// T1/T2 emitted-target set uses) wherever the registry carries the topic —
+// today that is plan-run and adapt; the registry declares no init/finalize/next
+// constant, so those three name their basenames here. `next` and `init` are
+// ASYMMETRIC (command basenames workflow-next / workflow-init vs skill
+// basenames kaola-workflow-next / kaola-workflow-init); finalize and adapt are
+// symmetric.
 const TOPICS = {
   'plan-run': {
     skeleton: 'plan-run.skeleton.md',
@@ -70,6 +86,21 @@ const TOPICS = {
     command_basename: 'workflow-next',
     skill_basename: 'kaola-workflow-next',
   },
+  init: {
+    skeleton: 'init.skeleton.md',
+    command_basename: 'workflow-init',
+    skill_basename: 'kaola-workflow-init',
+  },
+  finalize: {
+    skeleton: 'finalize.skeleton.md',
+    command_basename: 'kaola-workflow-finalize',
+    skill_basename: 'kaola-workflow-finalize',
+  },
+  adapt: {
+    skeleton: 'adapt.skeleton.md',
+    command_basename: stripSlash(schema.ADAPT_COMMAND),
+    skill_basename: schema.ADAPT_SKILL,
+  },
 };
 
 // deriveSurfacePath — compute the surface path exactly as the reachability
@@ -79,7 +110,7 @@ function deriveSurfacePath(surface_type, dir, base) {
   return surface_type === 'command' ? `${dir}/${base}.md` : `${dir}/${base}/SKILL.md`;
 }
 
-// GENERATED_SURFACES — the 12 registry rows { topic, surface_type, forge, path,
+// GENERATED_SURFACES — the 30 registry rows { topic, surface_type, forge, path,
 // skeleton }. path is COMPUTED, never hand-typed.
 const GENERATED_SURFACES = (() => {
   const rows = [];
@@ -112,12 +143,16 @@ const GENERATED_SURFACES = (() => {
 // ---------------------------------------------------------------------------
 const RE_SLOT = /^<!--\s*SLOT:([A-Za-z0-9_-]+)\s*-->$/;
 const RE_SPLICE = /^<!--\s*SPLICE:([A-Za-z0-9_-]+)\s*-->$/;
-const RE_REGION_OPEN = /^<!--\s*REGION:([A-Za-z0-9_+-]+)\s*-->$/;
+const RE_REGION_OPEN = /^<!--\s*REGION:([A-Za-z0-9_+,-]+)\s*-->$/;
 const RE_REGION_CLOSE = /^<!--\s*\/REGION\s*-->$/;
 
-// condMatches — a '+'-joined AND of tags; each tag matches surface_type or forge.
+// condMatches — a ','-joined OR of '+'-joined ANDs; each tag matches
+// surface_type or forge. `command+github` is one AND clause; `gitlab,gitea` is
+// a two-clause OR, which is how a body shared by several (but not all) forges
+// is stored ONCE instead of copied per forge.
 function condMatches(cond, ctx) {
-  return cond.split('+').every(tag => tag === ctx.surface_type || tag === ctx.forge);
+  return cond.split(',').some(clause =>
+    clause.split('+').every(tag => tag === ctx.surface_type || tag === ctx.forge));
 }
 
 // resolveKeyed — descend a slot/splice value by surface_type then forge until a
@@ -198,12 +233,47 @@ function renderSkeleton(skeletonText, ctx, ir) {
 // ---------------------------------------------------------------------------
 // Surface rendering over the real template tree.
 // ---------------------------------------------------------------------------
-function loadSkeleton(skeletonFile) {
-  return fs.readFileSync(path.join(TEMPLATE_DIR, skeletonFile), 'utf8');
+
+// SKELETON_MISSING — typed failure code for "the canonical source for a topic
+// is not on disk". A skeleton is a TRACKED SOURCE FILE, not a build artifact:
+// the surfaces it renders are committed, so a skeleton that was authored but
+// never staged leaves a tree that renders fine for its author and fails for
+// everyone else. That is the case this code names explicitly, because the raw
+// ENOENT it replaces surfaced as an unhandled stack trace with no statement of
+// what was missing or what to do about it.
+const SKELETON_MISSING = 'skeleton_missing';
+
+function loadSkeleton(skeletonFile, topic) {
+  const abs = path.join(TEMPLATE_DIR, skeletonFile);
+  if (!fs.existsSync(abs)) {
+    const rel = path.relative(REPO, abs);
+    const owner = topic ? `topic '${topic}'` : 'a registered topic';
+    const surfaces = GENERATED_SURFACES.filter(r => r.skeleton === skeletonFile);
+    const err = new Error(
+      `MISSING SKELETON: ${rel}\n` +
+      `  ${owner} renders ${surfaces.length} surface(s) from this file and cannot render without it:\n` +
+      surfaces.map(r => `    ${r.path}`).join('\n') + '\n' +
+      `  A skeleton is a tracked source file, not a generated artifact. If it is present in your\n` +
+      `  working tree but missing here, you are running against a different checkout; if it is\n` +
+      `  absent everywhere it was authored but never staged. Stage it with:\n` +
+      `      git add ${rel}`);
+    err.code = SKELETON_MISSING;
+    throw err;
+  }
+  return fs.readFileSync(abs, 'utf8');
+}
+
+// reportTypedFailure — print a typed failure legibly (no stack) and return
+// true, so every entry point fails the same readable way. Anything untyped is
+// left to rethrow: an unexpected bug SHOULD keep its stack trace.
+function reportTypedFailure(e) {
+  if (!e || e.code !== SKELETON_MISSING) return false;
+  console.error(e.message);
+  return true;
 }
 
 function renderSurface(row, ir) {
-  const skeletonText = loadSkeleton(row.skeleton);
+  const skeletonText = loadSkeleton(row.skeleton, row.topic);
   return renderSkeleton(skeletonText, { surface_type: row.surface_type, forge: row.forge }, ir);
 }
 
@@ -263,8 +333,13 @@ function cmdWrite(ir) {
 function main() {
   const arg = process.argv[2] || '--check';
   const ir = { slots: SLOTS, splices: SPLICES };
-  if (arg === '--write') return cmdWrite(ir);
-  if (arg === '--check') return cmdCheck(ir);
+  try {
+    if (arg === '--write') return cmdWrite(ir);
+    if (arg === '--check') return cmdCheck(ir);
+  } catch (e) {
+    if (reportTypedFailure(e)) process.exit(1);
+    throw e;
+  }
   console.error(`usage: generate-routing-surfaces.js [--check|--write]`);
   process.exit(2);
 }
@@ -276,6 +351,9 @@ module.exports = {
   renderSkeleton,
   condMatches,
   resolveKeyed,
+  loadSkeleton,
+  reportTypedFailure,
+  SKELETON_MISSING,
   TOPICS,
   COMMAND_EDITIONS,
   SKILL_EDITIONS,

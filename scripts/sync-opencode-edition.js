@@ -16,8 +16,7 @@
 // model is pinned — both tiers inherit the model opencode is already using):
 //   掐理 (reasoning tier) → the inherited model's TOP effort variant (e.g. max).
 //   普通 (standard tier)  → the inherited model's SECOND effort variant (e.g. high).
-// The reasoning tier = the canonical `model: opus` roles PLUS the Claude Code
-// "higher" profile roles (agents/profiles/higher/*), mirroring --profile=higher;
+// The reasoning tier = the canonical `model: opus` roles;
 // all other roles run standard. Effort levels are provider-relative, so an effort
 // map (PROVIDER_EFFORT) names the top/second variant per provider:
 //   anthropic max/high · openai xhigh/high · google high/low · z.ai·zhipu max/high
@@ -160,7 +159,7 @@ function renderAgent(canonContent, agentName) {
   const isReviewer = REVIEWER_ROLES.has(agentName);
 
   const lines = ['---'];
-  lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
+  lines.push('description: ' + (fm.description || ''));
   lines.push('mode: subagent');
   // No model field: standard tier inherits opencode.json "model"; reasoning tier
   // is resolved by the opencode.json agent.<role>.model override. Keeping generated
@@ -189,9 +188,7 @@ function renderAgent(canonContent, agentName) {
   // planner ships the "Re-derive" prose only). Other agents are verbatim (rewriteClaudeScriptPaths
   // is a no-op when the patterns are absent). Applied to the RENDERED body so canonical agents/*.md
   // are never touched (additive D-530-02); A6 parity holds because both sides go through renderAgent.
-  // #609: also rewrite B2 Claude model-noun prose ("Opus"/"Sonnet" used as if they were THIS
-  // runtime's models) to neutral tier vocabulary — same additive-generation-only discipline.
-  const bodyText = rewriteClaudeModelNouns(rewriteClaudeScriptPaths(body)).trim().replace(/\s+$/, '');
+  const bodyText = rewriteClaudeScriptPaths(body).trim().replace(/\s+$/, '');
   const suffix = opencodeAgentSuffix(agentName);
   lines.push(suffix ? bodyText + '\n' + suffix.replace(/\s+$/, '') : bodyText);
   let content = lines.join('\n') + '\n';
@@ -271,43 +268,6 @@ function rewriteClaudeScriptPaths(text) {
     /"\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}" "\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"/g,
     '"${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/kaola-workflow-replan.js"'
   );
-  return text;
-}
-
-// Rewrite Claude model-NOUN prose (issue #609, the opencode twin of #537's codex companion).
-// Two vocabularies exist in canonical bodies: B1 — the closed plan `model`-column tier tokens
-// (`{opus, sonnet}`, always lowercase and backtick-wrapped, e.g. the workflow-planner's "Model
-// assignment" guidance and the frozen-plan example row) — the portable cross-edition contract,
-// untouched here. B2 — "Opus"/"Sonnet" used as descriptive prose AS IF they were this runtime's
-// actual models (e.g. "The Opus orchestrator", "a separate Sonnet role") — wrong on opencode,
-// which resolves effort centrally via reasoning-EFFORT VARIANTS (mapTier), never a Claude model
-// name. Each pattern below targets one exact B2 noun-phrase shape (never a blanket `/Opus/`
-// or `/Sonnet/`, so the lowercase B1 tokens are never at risk); replacement text never
-// reintroduces "Opus"/"Sonnet", so repeated application is a no-op (idempotent). Applied to BOTH
-// agent bodies/descriptions (via renderAgent) and command bodies (via transformCommandBody) —
-// canonical sources are NEVER touched (additive D-530-02), only the generated outputs.
-function rewriteClaudeModelNouns(text) {
-  // "Reasoning-class (Opus)" / "reasoning-class (Opus)" — synthesizer's description + floor note
-  // (case-preserving on the leading letter so both the frontmatter and body forms rewrite cleanly).
-  text = text.replace(/\b([Rr])easoning-class \(Opus\)/g, (m, first) => first + 'easoning-tier (top effort variant)');
-  // "reasoning-class **Opus**-floor `synthesizer`" — plan-run's merge-conflict repair prose
-  // (whitespace-flexible \s+ so the mid-sentence line wrap still matches).
-  text = text.replace(/reasoning-class\s+\*\*Opus\*\*-floor/g, 'reasoning-tier-floor');
-  // "Opus orchestrator" — workflow-planner + contractor both use this exact noun phrase
-  // (whitespace-flexible \s+ — canonical prose re-wraps have split it across a line break).
-  text = text.replace(/\bOpus\s+orchestrator\b/g, 'reasoning-tier orchestrator');
-  // "separate Sonnet role" — contractor's hard-boundary heading prose.
-  text = text.replace(/\bseparate Sonnet role\b/g, 'separate standard-tier role');
-  // "stay on **Sonnet** even under" / "never promoted to Opus" — contractor's floor-pin bullet.
-  text = text.replace(/\bstay on \*\*Sonnet\*\* even under\b/g, 'stay on the **standard tier** even under');
-  text = text.replace(/\bnever promoted to Opus\b/g, 'never promoted to the reasoning tier');
-  // "Opus front end" — workflow-next's router-rules prose.
-  text = text.replace(/\bOpus front end\b/g, 'reasoning-tier front end');
-  // "**`workflow-planner`** (Opus)" / "**`workflow-planner`** subagent (Opus)" — adapt's two
-  // Phase-0 mentions (one bare, one via the word "subagent" — both collapse to the same form).
-  text = text.replace(/\*\*`workflow-planner`\*\*( subagent)? \(Opus\)/g, '**`workflow-planner`**$1 (reasoning tier)');
-  // "belongs on Sonnet per CLAUDE.md model rules" — doc-updater's vendor local-override note.
-  text = text.replace(/\bbelongs on Sonnet per\b/g, 'belongs on the standard tier per');
   return text;
 }
 
@@ -399,8 +359,6 @@ function transformCommandBody(body) {
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
   // or inline `Agent(...)` code spans.
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
-  // Prose: opencode-neutral wording for subagent references (was "Claude Code agent(s)").
-  text = text.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
   // Parenthesized then bare forms — real placeholders first, then literal ellipsis.
   text = text.replace(/\s*\(\s*model="\{[A-Z_]+_MODEL\}"\s*\)/g, '');
   text = text.replace(/\s*model="\{[A-Z_]+_MODEL\}"/g, '');
@@ -438,9 +396,6 @@ function transformCommandBody(body) {
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped above) is
   // rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text);
-  // #609: rewrite B2 Claude model-noun prose ("Opus"/"Sonnet" used as if they were THIS runtime's
-  // models) to neutral tier vocabulary — the command-body twin of the renderAgent rewrite above.
-  text = rewriteClaudeModelNouns(text);
   return text;
 }
 
@@ -468,25 +423,24 @@ function reasoningRoles() {
     .sort();
 }
 
-// The Claude Code "higher" profile roles (agents/profiles/higher/*). These run on the
-// OPUS tier under --profile=higher; the opencode edition mirrors that by placing them
-// on the TOP effort variant. Derived from the dir so it stays in sync with canonical.
-function higherProfileRoles() {
-  const dir = path.join(CANON_AGENTS_DIR, 'profiles', 'higher');
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-}
-
-// Reasoning-tier roles for the opencode EFFORT design = canonical opus roles ∪ the
-// Claude Code "higher" profile roles (mirror --profile=higher). The narrower
-// reasoningRoles() (canonical opus only) stays for the opt-in MODEL-PIN path.
+// Top-tier roles for the opencode EFFORT design are exactly the canonical reasoning-tier
+// roles — ONE source, shared with the opt-in MODEL-PIN path. There is no second,
+// install-time model axis: the agent tree carries one assignment per role, and the frozen
+// plan's per-node tier column governs every workflow dispatch.
+//
+// SET MEMBERSHIP IS UNCHANGED by collapsing the two sources into one. The effort tier used to be
+// `higherProfileRoles() ∪ canonical-reasoning`; the retired install-time default selected the
+// `higher` variant, so those roles' assignments now live in the canonical agent tree and the union
+// is redundant. Both spellings yield the same six roles: code-architect, code-reviewer, planner,
+// security-reviewer, synthesizer, workflow-planner. A seventh member here means a role's canonical
+// frontmatter tier moved — fix the frontmatter, not this function (test-opencode-edition.js A12).
+//
+// The opt-in MODEL-PIN scaffold in opencode.json does gain three entries, and that is a
+// correction: it was previously derived from canonical frontmatter ALONE, so it omitted the three
+// reviewers that the default install nevertheless ran at the reasoning tier. Pinning the reasoning
+// tier to another model now lists every role that actually runs there.
 function topTierRoles() {
-  const set = new Set(higherProfileRoles());
-  for (const name of listCanonAgents()) {
-    const c = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    if (roleTier(parseFrontmatter(c).fm.model) === 'reasoning') set.add(name);
-  }
-  return [...set].sort();
+  return reasoningRoles();
 }
 
 function standardTierRoles() {
@@ -563,8 +517,8 @@ function renderAdaptiveConfig(parsed, profile) {
   lines.push('  // mapTier(tier, provider). tier → variant:');
   lines.push('  //   推理 (reasoning tier) → TOP effort variant "' + profile.top.variant + '".');
   lines.push('  //   普通 (standard tier)  → SECOND effort variant "' + profile.second.variant + '".');
-  lines.push('  // Reasoning tier = canonical opus roles + the Claude Code "higher" profile roles');
-  lines.push('  // (' + higherProfileRoles().join(', ') + '); all other roles run standard. Variants are');
+  lines.push('  // Reasoning tier = the canonical reasoning-tier roles');
+  lines.push('  // (' + topTierRoles().join(', ') + '); all other roles run standard. Variants are');
   lines.push('  // defined under provider.* and selected per-role via agent.<role>.variant.');
   lines.push('  // ⚠ SWITCHING YOUR OPENCODE MODEL? Variant definitions are model-scoped');
   lines.push('  // (provider.<id>.models.<model>.variants.*) — opencode applies them from this file, with');
@@ -921,9 +875,9 @@ if (require.main === module) main();
 
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderAdaptiveConfig, renderNeutralConfig,
-  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, rewriteClaudeModelNouns, OPENCODE_KAOLA_SCRIPT,
+  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,
-  higherProfileRoles, topTierRoles, standardTierRoles,
+  topTierRoles, standardTierRoles,
   parseModelProvider, detectInheritModel, buildAdaptOpts,
   listCanonAgents, listCanonCommands,
   ENV_STANDARD_MODEL, ENV_REASONING_MODEL,

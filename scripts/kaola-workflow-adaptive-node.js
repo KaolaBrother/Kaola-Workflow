@@ -45,7 +45,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -473,6 +473,18 @@ const OPERATOR_HINT_REGISTRY = {
     'A crashed open-ready left the running set in opening state. Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before opening more.',
   overlapping_write_sets: () =>
     'The write frontier members have overlapping declared sets — they cannot co-open as a lane group. The scheduler degrades to a serial open automatically.',
+  parallel_safe_indeterminate: () =>
+    'The disjointness prover (--parallel-safe) returned no verdict twice in a row — nothing was proven to overlap, the check itself did not complete. The scheduler fails closed to a serial open. Investigate the validator subprocess (a crash, an unreadable result, an oversized frontier) rather than treating this as a real overlap.',
+  seam_checkpoint_unattributable: (ctx) =>
+    'The parent worktree carries production change(s) (' + ((ctx.unattributed && ctx.unattributed.join(', ')) || 'see unattributed') + ') that NO closed write-capable node declared, so the serial→parallel seam checkpoint cannot vouch for them. Foreign bytes in the parent are an integrity signal: identify who wrote them (a stray edit, an escaped write), move them into a declared lane or revert them, then re-run open-ready.',
+  // The `commit` KEY's presence (not its truthiness) is the "HEAD advanced" signal: only the
+  // post-commit-fence halt sets it, and it may legitimately carry null if rev-parse could not resolve
+  // the new HEAD. Every other halt shape omits the key entirely.
+  seam_checkpoint_failed: (ctx) =>
+    'The serial→parallel seam checkpoint could not complete (' + (ctx.detail || 'see detail') + '). Nothing was co-opened and no serial degrade was substituted — the repair must positively prove success. '
+    + (Object.prototype.hasOwnProperty.call(ctx, 'commit')
+      ? 'HEAD HAS ADVANCED: the checkpoint commit ' + (ctx.commit || '(sha unresolved — see git log)') + ' already landed (' + ((ctx.committed && ctx.committed.join(', ')) || 'the attributed paths') + ') and was deliberately NOT rolled back — those paths were attributed to closed write-capable nodes, and the likeliest cause of this halt is a concurrent writer landing new bytes after the commit, which an auto-reset would destroy. Inspect the parent worktree for the NEW change the re-check tripped on (git status), attribute or remove it, then re-run open-ready — the landed checkpoint is idempotent and will not be re-made.'
+      : 'Nothing was committed and HEAD did not move. Inspect the parent worktree and the git state, resolve the failure, then re-run open-ready.'),
 
   // --- main() arg validation ---
   invalid_project: (ctx) =>
@@ -9841,6 +9853,50 @@ function laneWriteUnion(writeNodes) {
 }
 
 // ---------------------------------------------------------------------------
+// classifyParallelSafeVerdict (#804 D1) — the ONE classifier BOTH `--parallel-safe` call sites
+// (tryFormLaneGroup, selectSpeculativeWriteGroup) read, so the two can never drift again.
+//   'ok'            exitCode 0 + result 'ok' — a delivered, clean disjointness verdict.
+//   'overlap'       a non-ok verdict carrying a WELL-FORMED `overlapping` array (even empty) — a real
+//                   overlap REPORT. This is the one serializer the doctrine accepts without question
+//                   (S2 in present-tense, checkable form: the prover named the colliding pair).
+//   'indeterminate' a non-ok verdict WITHOUT one (subprocess crash, unparseable JSON, an unreachable
+//                   non-ok shape that omits the field). NOBODY proved an overlap — the prover never
+//                   delivered a verdict at all, so labelling it `overlapping_write_sets` would satisfy
+//                   the doctrine's evidence bar with a LABEL instead of evidence.
+// ---------------------------------------------------------------------------
+function classifyParallelSafeVerdict(ps) {
+  if (ps && ps.exitCode === 0 && ps.result === 'ok') return { kind: 'ok', overlapping: [] };
+  if (ps && Array.isArray(ps.overlapping)) return { kind: 'overlap', overlapping: ps.overlapping };
+  return { kind: 'indeterminate', overlapping: [] };
+}
+
+// ---------------------------------------------------------------------------
+// probeParallelSafe (#804 D2) — run the validator's `--parallel-safe` probe and classify it, with
+// EXACTLY ONE bounded re-probe on an indeterminate verdict. The probe is READ-ONLY and IDEMPOTENT
+// (it reads the frozen plan and answers a pure question about declared sets), and the plausible cause
+// class of an indeterminate verdict is transient — a signal, ENOBUFS on a huge frontier, a scheduler
+// hiccup — so re-asking once is the cheapest repair of a REMOVABLE blocker. TWO OUTCOMES, NO RETRY
+// LOOP: a second indeterminate is final and fails CLOSED at the caller, labelled.
+// A PROVEN overlap (or a clean ok) NEVER re-probes: the prover delivered a verdict, and re-asking a
+// settled question is pure waste.
+// Fail-closed stays fail-closed: an indeterminate verdict never co-opens. The doctrine's "uncertain
+// overlap co-opens under the retained net" governs a DELIVERED verdict about unresolvable write-set
+// entries; a crashed prover delivered no verdict about anything, including the retained net.
+// @returns { kind:'ok'|'overlap'|'indeterminate', overlapping:Array, probes:1|2 }
+// ---------------------------------------------------------------------------
+function probeParallelSafe(ids, planPath, shell, writeOverlapConsent) {
+  const vArgs = [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json'];
+  if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
+  let v = classifyParallelSafeVerdict(shell(validatorPath, vArgs));
+  let probes = 1;
+  if (v.kind === 'indeterminate') {
+    v = classifyParallelSafeVerdict(shell(validatorPath, vArgs));
+    probes = 2;
+  }
+  return { kind: v.kind, overlapping: v.overlapping, probes };
+}
+
+// ---------------------------------------------------------------------------
 // tryFormLaneGroup (#437 D-419 P2 §1.3) — attempt a co-open lane group from the
 // write frontier. The frontier is already a next-action ready antichain; the
 // validator's `--parallel-safe` flag re-checks pairwise disjointness AUTHORITATIVELY
@@ -9859,16 +9915,22 @@ function laneWriteUnion(writeNodes) {
 // overrides that.
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
-//        | { ok:false, reason:'overlapping_write_sets', overlapping? }
+//        | { ok:false, reason:'overlapping_write_sets'|'parallel_safe_indeterminate', overlapping, probes }
 // ---------------------------------------------------------------------------
 function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
   const ids = writeNodes.map(n => n.id);
   if (ids.length < 2) return { ok: false, reason: 'too_few_write_nodes' };
-  const vArgs = [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json'];
-  if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
-  const ps = shell(validatorPath, vArgs);
-  if (!(ps.exitCode === 0 && ps.result === 'ok')) {
-    return { ok: false, reason: 'overlapping_write_sets', overlapping: ps.overlapping || [] };
+  const v = probeParallelSafe(ids, planPath, shell, writeOverlapConsent);
+  if (v.kind !== 'ok') {
+    return {
+      ok: false,
+      // #804 (D1/D3): the classified cause, never a laundered `overlapping_write_sets` for a prover that
+      // delivered no verdict at all. A PROVEN overlap keeps the legitimate serializer label; a crashed /
+      // garbled prover is `parallel_safe_indeterminate` (fail-CLOSED all the same — see probeParallelSafe).
+      reason: v.kind === 'overlap' ? 'overlapping_write_sets' : 'parallel_safe_indeterminate',
+      overlapping: v.overlapping,
+      probes: v.probes,
+    };
   }
   const sorted = ids.slice().sort();
   return {
@@ -9876,6 +9938,7 @@ function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
     members: sorted,
     group_id: laneGroupId(ids),
     write_union: laneWriteUnion(writeNodes),
+    probes: v.probes,
   };
 }
 
@@ -9902,49 +9965,286 @@ function parentCarriesProductionDirt(planPath, project, shell) {
   return fence.exitCode !== 0 || fence.result !== 'pass';
 }
 
-// #641 (D-641-01) R2b: the consent-tier LEGLESS-co-open decision. Over a DIRTY parent, R1's leg path is
-// unsound — a leg branches off HEAD and would miss the uncommitted serial-sibling context, silently
-// degrading the writer's inputs (accuracy loss, precedence #1). The only sound co-open keeps the writer
-// LEGLESS in the parent (so it sees that context), which means the closed-work-observation invariant must
-// hold CONTRACTUALLY on the READ side. Returns the single highest-priority writer node to co-open when:
-//   (i)  EVERY live read is a freeze-validated `observes: scratch` adversarial-verifier — its verdict is
-//        rendered from .cache evidence of closed nodes + scratch, NEVER the worktree tree/diff; AND
-//   (ii) that writer's declared set is scratch-observable-safe (scratchObservableWriteSet — the docs
-//        allowband minus #547 test-consumed prose, or the writer's own .cache evidence).
-// Returns null otherwise ⇒ the caller's byte-identical parent_dirty hold. Re-reads the FROZEN plan for the
-// reads' role + observes annotation (the running-set entry carries neither); fail-closed on any parse miss.
-function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile) {
-  let parseNodes, scratchObservableWriteSet, parseValidationTestConsumes;
-  try { ({ parseNodes, scratchObservableWriteSet, parseValidationTestConsumes } = require('./kaola-workflow-plan-validator')); } catch (_) { return null; }
-  if (typeof parseNodes !== 'function' || typeof scratchObservableWriteSet !== 'function') return null;
-  // A live main-session-gate (kind:'gate') is a live observer, not a scratch reader — hold the legless
-  // co-open while a gate is running (its verdict window must not span a co-running writer's uncommitted
-  // bytes). Defensive fail-closed so the co-open precondition independently sees the gate.
-  if ((liveNodes || []).some(n => n.kind === 'gate')) return null;
-  let planNodes, planContent;
-  try { planContent = readFile(planPath); planNodes = parseNodes(planContent); } catch (_) { return null; }
+// liveReadsAllScratchGates — the READ-side precondition for attempting the seam checkpoint at the
+// write-awaits-drain seam. TRUE iff the running set is non-empty and EVERY live MEMBER is a
+// freeze-declared `observes: scratch` adversarial-verifier read: such a gate renders its verdict from
+// .cache evidence of closed nodes + scratch, NEVER the worktree tree or refs. `git commit` is
+// tree-content-NEUTRAL (it touches the index + refs, never working-tree bytes), so checkpointing under
+// exactly these observers changes no live observer's inputs.
+// MEMBER, NOT READ. The quantifier ranges over the WHOLE running set, not over its read subset. An
+// earlier shape filtered to kind:'read' and separately rejected kind:'gate', which made a live
+// kind:'write' member INVISIBLE — [{kind:'read'},{kind:'write'}] answered TRUE, i.e. the checkpoint
+// could sweep a LIVE writer's still-in-flight bytes into a commit attributed to CLOSED nodes. Any
+// member that is not a read (a live writer, a main-session gate, an unrecognized/absent kind) fails
+// closed here. The callers' own earlier guards make some of those unreachable today; this function is
+// the defensive floor its own contract promises, so it must hold on its own.
+// Re-reads the FROZEN plan for the reads' role + observes annotation (the running-set entry carries
+// neither); fail-closed on any parse miss.
+function liveReadsAllScratchGates(liveNodes, planPath, readFile) {
+  let parseNodes;
+  try { ({ parseNodes } = require('./kaola-workflow-plan-validator')); } catch (_) { return false; }
+  if (typeof parseNodes !== 'function') return false;
+  const live = liveNodes || [];
+  if (!live.length) return false;
+  if (live.some(n => !n || n.kind !== 'read')) return false;
+  let planNodes;
+  try { planNodes = parseNodes(readFile(planPath)); } catch (_) { return false; }
   const byId = new Map(planNodes.map(n => [n.id, n]));
-  const liveReads = (liveNodes || []).filter(n => n.kind === 'read');
-  // (i) every live read must be a freeze-declared observes:scratch adversarial-verifier. No live reads,
-  // or any non-scratch reader (a full-diff observer), fails closed — no legless co-open.
-  const allScratchGates = liveReads.length > 0 && liveReads.every(n => {
+  return live.every(n => {
     const pn = byId.get(n.id);
     return !!(pn && pn.role === 'adversarial-verifier' && pn.observes === 'scratch');
   });
-  if (!allScratchGates) return null;
-  // (ii) the highest-priority writer (the frontier is longest-path-to-sink ordered) must be
-  // scratch-observable-safe over its OWN declared set.
-  const writer = writeNodes[0];
-  if (!writer) return null;
-  const pn = byId.get(writer.id);
-  let ws = (pn && pn.writeSet) ? pn.writeSet : null;
-  if (!ws) { try { ws = require('./kaola-workflow-classifier').parseWriteSetCell(writer.declared_write_set); } catch (_) { ws = []; } }
-  // Widen the scratch-observable predicate with the plan's validation_test_consumes so a fork declaring a
-  // verdict-affecting prose file (e.g. a custom guide) makes that file observation-VISIBLE — a writer of
-  // it is then NOT scratch-observable-safe and stays serial (never a legless co-open over a dirty parent).
-  const testConsumedExtra = (typeof parseValidationTestConsumes === 'function') ? parseValidationTestConsumes(planContent) : [];
-  if (!scratchObservableWriteSet(ws, { project, ownerNodeId: writer.id, testConsumedExtra })) return null;
-  return writer;
+}
+
+// ---------------------------------------------------------------------------
+// SEAM_WRITE_CAPABLE_ROLES — the roles a plan may LEGALLY declare a write set on, i.e. the roles whose
+// declared set is a reviewed production lane rather than an out-of-grammar annotation. This is the
+// validator's own authoring rule restated: freezing refuses `read-only role <r> (node <id>) declares a
+// write set` for every role outside this set (the sink role is the one non-WRITE_ROLES exception the
+// same rule carves out). The validator does not export the set, so `test-adaptive-node.js` pins this
+// list against the validator's source — the duplication is mutation-proven, never silent.
+// Used ONLY by seamCheckpointAttribution: attribution is the gate on a primitive that COMMITS, so it
+// takes the positive (fail-closed) form — an unknown or absent role is NOT write-capable.
+const SEAM_WRITE_CAPABLE_ROLES = new Set([
+  'tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer',
+  'implementer', 'synthesizer', 'metric-optimizer',
+  'finalize',
+]);
+
+// ---------------------------------------------------------------------------
+// seamCheckpointAttribution (#802 D1 step 2) — the ATTRIBUTION proof. Every dirty path the fence
+// reported must fall inside the union of the declared write sets of the ledger's CLOSED
+// (status `complete`) write-capable rows. This is PROVABLE, not heuristic: each of those nodes passed
+// its OWN per-node barrier at close, so its declared writes are already proven in-lane and reviewed.
+// WRITE-CAPABLE IS CHECKED, NOT ASSUMED. A `complete` row with a non-empty declared set is not enough:
+// the row's ROLE must be one the grammar lets declare a write set (SEAM_WRITE_CAPABLE_ROLES). The
+// freeze validator already refuses a read-only role that declares one, but this function is reachable
+// over any plan text whose plan_hash matches (a recorded expansion unit, a hand-repaired plan, a future
+// caller), and it is the gate on a COMMIT — so it enforces its own stated contract rather than
+// inheriting it from an upstream check.
+// Membership is EXACT-path, mirroring the barrier's own `declared.has(p)` rule (a directory/glob-shaped
+// declared token attributes nothing — the strictly fail-closed direction), over the EXECUTION node view
+// (spine + recorded expansion units), which is the same view barrierCheck ranges over.
+// EPOCH LINEAGE: under a schema-2 CHILD epoch the parent epochs' closed rows count too (their
+// uncommitted production work is still in this worktree — replan is claim-preserving). The lineage is
+// resolved through the validator's ONE verified walker; an applicable-but-unresolvable lineage returns
+// { ok:false } so the caller halts rather than MISattributes.
+// @returns { ok:true, union:Set<string>, nodeIds:string[] } | { ok:false, reason:string }
+// ---------------------------------------------------------------------------
+function seamCheckpointAttribution(planContent, planPath) {
+  const statuses = readLedgerStatuses(planContent);
+  const nodes = parseNodesFromContent(planContent);
+  const union = new Set();
+  const nodeIds = [];
+  for (const n of nodes) {
+    if (String(statuses[n.id] || '').toLowerCase() !== 'complete') continue;
+    if (!SEAM_WRITE_CAPABLE_ROLES.has(String((n && n.role) || '').trim())) continue;
+    const paths = nodeDeclaredPaths(n);
+    if (!paths.size) continue;
+    nodeIds.push(n.id);
+    for (const p of paths) union.add(p);
+  }
+  let pv = null;
+  try { pv = require('./kaola-workflow-plan-validator'); } catch (_) { pv = null; }
+  if (pv && typeof pv.resolveEpochLineagePlans === 'function') {
+    let lineage;
+    try { lineage = pv.resolveEpochLineagePlans(planContent, planPath); }
+    catch (e) { return { ok: false, reason: 'epoch_lineage_unreadable' }; }
+    if (lineage && lineage.applicable) {
+      if (!lineage.ok) return { ok: false, reason: 'epoch_lineage_' + (lineage.reason || 'unverified') };
+      for (const lp of (lineage.lineagePlans || [])) {
+        for (const n of (lp.nodes || [])) {
+          if (!(lp.ledger && String(lp.ledger.get(n.id) || '').toLowerCase() === 'complete')) continue;
+          // Same write-capability wall as the child rows above — a sealed ancestor epoch's read-only
+          // row may not widen the attributed set either.
+          if (!SEAM_WRITE_CAPABLE_ROLES.has(String((n && n.role) || '').trim())) continue;
+          const paths = nodeDeclaredPaths(n);
+          if (!paths.size) continue;
+          nodeIds.push(n.id);
+          for (const p of paths) union.add(p);
+        }
+      }
+    }
+  }
+  return { ok: true, union, nodeIds };
+}
+
+// ---------------------------------------------------------------------------
+// SCHEDULER_COMMIT_CONFIG (#802) — the `-c` overrides EVERY scheduler-owned commit carries (the seam
+// checkpoint, the `kw-stub` evidence-stub commit, the `kw-leg` capture, the `kw-synth` merge). One
+// constant so the four sites cannot drift.
+//
+// THE CRUX — attribution is overridden, CONTENT INSPECTION IS NOT:
+//   * IDENTITY IS INJECTED (`user.email` / `user.name`). These commits are the SCHEDULER's, not the
+//     user's, so the scheduler names itself rather than inheriting an ambient identity — and a consumer
+//     repo with no `user.email`/`user.name` configured at all must not hard-refuse at a scheduling seam.
+//   * SIGNING IS DISABLED (`commit.gpgsign=false`). A signature asserts AUTHORSHIP ATTRIBUTION; it says
+//     nothing about the bytes. A missing or unusable key is therefore an attribution fact, not a content
+//     fact, and must never halt a run — and the scheduler must not sign as the human author regardless.
+//   * HOOKS ARE **NOT** BYPASSED — there is deliberately NO `--no-verify` here, at any of the four sites.
+//     A `pre-commit` / `commit-msg` hook INSPECTS CONTENT (a consumer's secret scanner, license gate,
+//     lint or policy check), and the seam checkpoint is the ONE scheduler commit that lands USER
+//     PRODUCTION SOURCE. Bypassing the hook would disarm that inspection on exactly the bytes it exists
+//     to see — and permanently, since the bytes enter history where the finalize-time commit (which does
+//     run hooks) never re-examines them. A veto is HONORED: the seam DEGRADES to the known-good serial
+//     path under a typed, visible label (`seam_checkpoint_declined`), never ignoring the hook and never
+//     wedging the run.
+// ---------------------------------------------------------------------------
+const SCHEDULER_COMMIT_CONFIG = [
+  '-c', 'user.email=kaola-workflow@local',
+  '-c', 'user.name=kaola-workflow',
+  '-c', 'commit.gpgsign=false',
+];
+
+// ---------------------------------------------------------------------------
+// runSeamCheckpoint (#802 D1) — the orchestrator-owned, attribution-proven commit at the
+// serial→parallel seam.
+//
+// PRINCIPLE: a precondition the orchestrator itself created is a REPAIR OBLIGATION, not a serializer.
+// The parent's production dirt here is the guaranteed product of the workflow's own finalize-owned-
+// commit policy — it is none of the three named serializers (S1 data dependency / S2 shared
+// irreversible effect / S3 failed environment probe), so serial-degrading over it lets a REMOVABLE
+// blocker impersonate evidence. Fail-closed-to-serial is only virtuous while no sound repair exists.
+//
+// The five steps, in order, each fail-closed:
+//   1 CLASSIFY   re-run the SAME `--parent-clean-check --json` fence and take its `dirty` array
+//                VERBATIM (the fence already classifies against barrierExemptPath with
+//                --untracked-files=all, and already normalizes renames to the NEW path and unquotes
+//                git-quoted paths) — no second classifier, no producer/consumer drift.
+//   2 ATTRIBUTE  every dirty path must be vouched for by a CLOSED write-capable row
+//                (seamCheckpointAttribution). Otherwise → `seam_checkpoint_unattributable`: foreign
+//                bytes in the parent (a user edit, an escaped write) are an INTEGRITY SIGNAL, and
+//                today's silent serialization buries it. The halt is the point.
+//   3 COMMIT     `git add -- <exact dirty paths>` (stages deletions too) then a path-SCOPED
+//                `git commit -- <same paths>`, so a pre-staged unrelated index entry can never ride
+//                along. The commit itself IS the durable journal — no new state file, no ledger row.
+//   4 RE-VERIFY  re-run the fence; ONLY a `pass` proceeds. Anything else (a second parent_dirty,
+//                cannot_prove_clean, a crashed probe) → `seam_checkpoint_failed`.
+//   5 PROCEED    the caller forms the group exactly as on a clean parent. The group baseline (parent
+//                HEAD at open) now INCLUDES the checkpoint, so the serial work sits BEFORE the baseline
+//                and outside the group diff (Horn B dissolves), and legs branch off the checkpoint so
+//                they SEE the serial context (the input-freshness unsoundness dissolves).
+//
+// THREE OUTCOMES, NO RETRY LOOP — proceed, a typed HALT, or a labeled DEGRADE; and "no proceed" is NOT
+// the same as "no mutation", so the contract says which is which:
+//   - Steps 1, 1b and 2 halt BEFORE any git write: nothing staged, nothing committed, HEAD unmoved.
+//     These are INTEGRITY signals (an unclassifiable fence, an undecodable path, foreign bytes in the
+//     parent) — they stay loud halts, because burying them is the failure mode the repair exists to end.
+//   - Step 3 DEGRADES on a git add/commit failure: the ENVIRONMENT declined (a content-inspecting hook
+//     veto, an unusable signing key, any git error). The commit did not land (git never advances the ref
+//     on a failed commit) and the index is reset for the paths it staged, so the tree is again as-is —
+//     and the caller falls back to the pre-#802 serial path under `serialDegradeReason:
+//     'seam_checkpoint_declined'`. Visible and typed, so it is a labeled degrade, not a silent serial.
+//   - Step 4 halts AFTER the commit has landed. HEAD HAS ADVANCED. The refusal therefore DISCLOSES it:
+//     `commit` (the new HEAD) and `committed` (the paths that went in) ride on the halt envelope, and
+//     the operator hint says so. Nothing is rolled back, deliberately: every committed path was already
+//     attributed to a CLOSED write-capable node in step 2, so the commit itself is sound — while the
+//     most likely cause of a non-`pass` re-fence is a CONCURRENT writer landing new bytes between the
+//     two fence spawns, and auto-resetting would destroy that writer's work. Turning a loud halt into
+//     silent data loss is the worse trade; disclosure keeps the halt loud AND the bytes safe.
+// CRASH-SAFE BY CONSTRUCTION: a crash after the commit but before the group opens leaves a CLEAN
+// parent — the next open-ready re-runs the fence, finds `pass`, and forms the group; nothing re-commits.
+// The step-4 halt lands the operator in exactly that resumable state.
+// @returns { ok:true, committed:string[], nodeIds:string[], commit:string }
+//        | { ok:false, reason:'seam_checkpoint_unattributable', unattributed:string[], dirty:string[] }
+//        | { ok:false, reason:'seam_checkpoint_failed', detail:string }
+//        | { ok:false, reason:'seam_checkpoint_failed', detail:string, commit:string, committed:string[] }
+//              — the step-4 shape ONLY: the checkpoint commit landed and HEAD advanced.
+//        | { ok:false, degrade:true, reason:'seam_checkpoint_declined', detail:string }
+//              — the step-3 shape ONLY: the environment refused the commit; nothing landed; the caller
+//                degrades to the pre-#802 serial path under this label instead of halting.
+// ---------------------------------------------------------------------------
+function runSeamCheckpoint(planPath, project, shell, readFile) {
+  // 1 CLASSIFY.
+  const fence = shell(validatorPath, [planPath, '--parent-clean-check', '--project', project, '--json']);
+  if (fence && fence.exitCode === 0 && fence.result === 'pass') {
+    return { ok: true, committed: [], nodeIds: [], commit: null };
+  }
+  const dirty = (fence && Array.isArray(fence.dirty))
+    ? fence.dirty.map(p => String(p || '').trim()).filter(Boolean) : null;
+  if (!dirty || !dirty.length) {
+    // The fence could not ENUMERATE what is dirty (root_mismatch, cannot_prove_clean, a crashed probe,
+    // or an empty report). There is nothing to attribute and nothing to commit — and "cannot prove
+    // clean" must never become "assume clean", so this is a loud stop, never a silent serial.
+    return { ok: false, reason: 'seam_checkpoint_failed',
+      detail: 'parent_clean_fence_unclassified:' + ((fence && fence.reason) || 'no_dirty_report') };
+  }
+  // 1b GIT-QUOTED PATHS ARE REFUSED, NOT GUESSED. The fence's porcelain parser strips a path's
+  // SURROUNDING double quotes but does NOT decode git's C-style escapes, so any path git had to quote
+  // (a non-ASCII byte, a tab/newline, an embedded quote or backslash) arrives here in its ESCAPED form
+  // — `src/caf\303\251.js` for `src/café.js`. That string is neither the token a node declared nor a
+  // pathspec git can match back. Left to run, `norm()` below folds every backslash to `/`, which can
+  // make such a path COMPARE EQUAL to an unrelated declared path (a tab-named `src/a\tb.js` normalizes
+  // onto a declared `src/a/tb.js`) — a misattribution the subsequent `git add` only fails to consummate
+  // because the same undecoded string matches no file on disk. Refusing the whole checkpoint HERE makes
+  // that fail-closed BY DESIGN rather than by coincidence, keeps the misattribution from ever entering
+  // the attributed set, and hands the operator a truthful reason instead of a raw git pathspec error.
+  // Git always reports separators as `/`, so a backslash in a fence-reported path is always an escape.
+  const quotedPaths = dirty.filter(p => p.indexOf('\\') !== -1);
+  if (quotedPaths.length) {
+    return { ok: false, reason: 'seam_checkpoint_failed',
+      detail: 'quoted_path_unsupported:' + quotedPaths.join(', ') };
+  }
+  // 2 ATTRIBUTE.
+  let planContent;
+  try { planContent = readFile(planPath); } catch (_) {
+    return { ok: false, reason: 'seam_checkpoint_failed', detail: 'plan_unreadable' };
+  }
+  const attribution = seamCheckpointAttribution(planContent, planPath);
+  if (!attribution.ok) {
+    return { ok: false, reason: 'seam_checkpoint_failed', detail: attribution.reason };
+  }
+  const norm = p => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
+  const unattributed = dirty.filter(p => !attribution.union.has(norm(p)));
+  if (unattributed.length) {
+    return { ok: false, reason: 'seam_checkpoint_unattributable', unattributed, dirty };
+  }
+  // 3 COMMIT.
+  let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
+  const git = (args) => execFileSync('git', ['-C', root, ...args],
+    { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] });
+  const resetIndex = () => { try { git(['reset', '-q', '--'].concat(dirty)); } catch (_) {} };
+  const message = 'kaola-checkpoint(' + project + '): serial→parallel seam — nodes '
+    + (attribution.nodeIds.length ? attribution.nodeIds.join(', ') : '(none)');
+  // This commit is scheduler bookkeeping in ORIGIN, but its CONTENT is user production source — it is
+  // the only scheduler commit that lands any. So it carries SCHEDULER_COMMIT_CONFIG (injected identity +
+  // signing off) and NOT `--no-verify`: the consumer's content-inspecting hooks must see these bytes
+  // (see the constant's header for why that distinction is the whole design). `-m` already makes
+  // `commit.template` unreachable and the path-scoped pathspec already makes a pre-staged index entry
+  // unreachable. A redirected `core.hooksPath` is honored like any other hook location. (A `post-commit`
+  // hook runs too, but git ignores its exit status, so it cannot fail the commit.)
+  const COMMIT_ARGS = [...SCHEDULER_COMMIT_CONFIG, 'commit', '-m', message, '--'];
+  try {
+    git(['add', '--'].concat(dirty));
+    git(COMMIT_ARGS.concat(dirty));
+  } catch (e) {
+    // ENVIRONMENT REFUSAL ⇒ DEGRADE, NOT HALT. A hook veto, an unusable signing key, a git error — the
+    // environment declined to take this commit. The commit did NOT land (git never advances the ref on a
+    // failed commit), so once the index is reset for the paths we staged the tree is exactly as it was,
+    // and the pre-#802 `parent_dirty` SERIAL path is still available and still correct. Wedging a run
+    // that would otherwise complete is strictly worse than completing it serially, so the caller
+    // degrades onto that path — LABELED `seam_checkpoint_declined`, which is what keeps this from being
+    // the silent serialization #802's doctrine forbids: the label says the repair was ATTEMPTED and
+    // REFUSED BY THE ENVIRONMENT, which is a checkable present-tense fact about this host, not a guess.
+    // Only environment refusal degrades. The integrity signals stay loud halts:
+    // `seam_checkpoint_unattributable` (foreign bytes in the parent) and the post-commit fence below.
+    resetIndex();
+    return { ok: false, degrade: true, reason: 'seam_checkpoint_declined',
+      detail: 'git:' + String((e && e.message) || e).split('\n')[0] };
+  }
+  // HEAD has advanced from here on. Resolve the new HEAD in its OWN try so a rev-parse hiccup can never
+  // misreport a LANDED commit as a step-3 (zero-mutation) git failure.
+  let commitSha = null;
+  try { commitSha = String(git(['rev-parse', 'HEAD']) || '').trim() || null; } catch (_) { commitSha = null; }
+  // 4 RE-VERIFY — only a `pass` proceeds. A non-`pass` here halts over a tree whose HEAD HAS ALREADY
+  // MOVED, so the refusal discloses the commit rather than implying the tree is untouched.
+  const after = shell(validatorPath, [planPath, '--parent-clean-check', '--project', project, '--json']);
+  if (!(after && after.exitCode === 0 && after.result === 'pass')) {
+    return { ok: false, reason: 'seam_checkpoint_failed',
+      detail: 'post_commit_fence:' + ((after && after.reason) || 'non_pass'),
+      commit: commitSha, committed: dirty };
+  }
+  return { ok: true, committed: dirty, nodeIds: attribution.nodeIds, commit: commitSha };
 }
 
 // ---------------------------------------------------------------------------
@@ -10129,11 +10429,15 @@ function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
 //       production paths first (the parent-clean fence) so a floated own-lane slip fails closed BEFORE
 //       this, never lost from M. A real conflict (overlapping/same-file, the deferred tier) makes octopus
 //       BAIL → `merge --abort` + return merge_conflict (the Opus resolver + K=3 repair is Slice 5).
-// Returns { ok:true, mergeCommit } | { ok:false, reason, ... }. An explicit committer identity is passed
-// so the merge/commit never depends on ambient git config. Pure git over the shared object DB.
+// Returns { ok:true, mergeCommit } | { ok:false, reason, ... }. Both git writes carry
+// SCHEDULER_COMMIT_CONFIG, so the capture/merge never depends on an ambient identity and a key-less
+// `commit.gpgsign true` cannot wedge a group that is already open (there is no serial path to degrade to
+// once legs exist — the only safe repair is not to let a signing config reach here at all). Hooks are
+// NOT bypassed: a content-inspecting veto on leg bytes is honored and surfaces as the existing
+// `leg_capture_failed` / `merge_conflict` typed refusal. Pure git over the shared object DB.
 // ---------------------------------------------------------------------------
 function synthesizeLevel(root, legs, groupId, planPath) {
-  const ID = ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow'];
+  const ID = SCHEDULER_COMMIT_CONFIG;
   const QUIET = { stdio: ['ignore', 'ignore', 'ignore'] };
   const ids = Object.keys(legs || {});
   if (!ids.length) return { ok: false, reason: 'no_leg_branches' };
@@ -10517,15 +10821,53 @@ function runOpenReady(opts) {
   // speculative fallback even fires) is the ONLY exclusivity invariant that still applies. Named ONLY
   // as an explanatory field on the response (never a hard refuse) so read speculation stays unaffected.
   let speculativeWriteExcluded = null;
-  // #616 (D-616-01): the non-speculative co-open sibling of speculativeWriteExcluded — labels WHY a
-  // normal write frontier degraded to a single serial write, so a persistently dirty parent (a stuck
-  // or misconfigured --parent-clean-check fence) is visible instead of silently serializing every write
-  // frontier forever. Set ONLY on the branch below where parentCarriesProductionDirt() is the reason the
-  // group never even attempted to form (:4335) — NOT on the pre-existing plain single-write-node case,
-  // nor on a group attempt that failed for an unrelated reason (grp.ok===false / groupCeiling<2), so the
-  // two serial-degrade causes stay distinguishable. null ⇒ no field on the response (byte-identical to
-  // pre-#616 for every other degrade cause).
+  // #616 (D-616-01) + #804 (D3): the non-speculative co-open sibling of speculativeWriteExcluded —
+  // labels WHY a normal write frontier degraded to a single serial write, so a persistent degrade is
+  // VISIBLE instead of silently serializing every write frontier forever. Set on the branches where a
+  // real DEGRADE cause exists: a PROVEN overlap (`overlapping_write_sets`), a prover that delivered no
+  // verdict twice (`parallel_safe_indeterminate`), the pre-repair `parent_dirty` fallback under the
+  // KAOLA_SEAM_CHECKPOINT=0 opt-out, and — #802 D7 repair — `seam_checkpoint_declined` when the seam
+  // repair was ATTEMPTED and this host's environment refused the commit. NOT set on the plain
+  // single-write-node case, the legs-off case, or the operator's <2 write-cap ceiling: those are
+  // ORDINARY serial, not degrades.
+  // null ⇒ no field on the response (byte-identical to pre-#616 for every non-degrade cause).
   let serialDegradeReason = null;
+  // #802: the serial→parallel seam checkpoint this call performed (null ⇒ none — the parent was already
+  // clean, or the repair is opted out). Surfaced additively on the success envelope.
+  let seamCheckpoint = null;
+  const seamCheckpointOn = seamCheckpointDefaultOn(process.env);
+  // #802: the environment's refusal of the seam-checkpoint commit, when it refused one — a hook veto, an
+  // unusable signing key, any git error. `{ reason:'seam_checkpoint_declined', detail:'git:…' }`.
+  // Surfaced additively so the operator sees WHICH refusal produced the labeled degrade.
+  let seamCheckpointDeclined = null;
+  // #802: the ONE seam-repair transaction both write sites share. Returns:
+  //   null                    — proceed (parent repaired, or already clean).
+  //   { degrade:'<reason>' }  — the ENVIRONMENT refused the commit. Nothing landed. The caller degrades
+  //                             onto the pre-#802 serial path, LABELED with this reason. Never silent.
+  //   anything else           — the TYPED HALT envelope to return verbatim (an integrity signal).
+  const repairSeamOrHalt = () => {
+    const cp = runSeamCheckpoint(planPath, project, shell, readFile);
+    if (cp.ok) {
+      seamCheckpoint = { committed: cp.committed, nodes: cp.nodeIds, commit: cp.commit };
+      return null;
+    }
+    if (cp.degrade) {
+      seamCheckpointDeclined = { reason: cp.reason, detail: cp.detail || null };
+      return { degrade: cp.reason };
+    }
+    return {
+      result: 'refuse', reason: cp.reason,
+      ...(cp.unattributed ? { unattributed: cp.unattributed } : {}),
+      ...(cp.dirty ? { dirty: cp.dirty } : {}),
+      ...(cp.detail ? { detail: cp.detail } : {}),
+      // #802 post-commit-fence halt: the checkpoint commit LANDED and HEAD advanced before the repair
+      // gave up. Forward that verbatim — a refusal that omitted it would tell the caller "nothing
+      // happened" over a moved HEAD, and the operator hint keys off `commit` to say so.
+      ...(Object.prototype.hasOwnProperty.call(cp, 'commit') && !cp.ok
+        ? { commit: cp.commit, committed: cp.committed } : {}),
+      taskTransitions: [],
+    };
+  };
   if (readOnly.length > 0) {
     // #607: a live main-session-gate (kind:'gate') is a MAIN-SESSION-run marker, NOT a subagent fan-out
     // slot occupant — exclude it from the read-slot base so speculative reads behind a gate get the full
@@ -10625,8 +10967,23 @@ function runOpenReady(opts) {
     // never attempted, so spawning the fence would be pure waste. Evaluated ONCE into parentDirty (rather
     // than inline in the `if` below) so #616's serialDegradeReason can reuse the SAME verdict instead of
     // re-spawning the fence subprocess a second time.
-    const parentDirty = (legCoupled && writeNodes.length >= 2)
+    let parentDirty = (legCoupled && writeNodes.length >= 2)
       ? parentCarriesProductionDirt(planPath, project, shell) : false;
+    // #802 (D2, normal co-open site): the dirt is a REMOVABLE BLOCKER the orchestrator itself created,
+    // not one of the three named serializers — so REPAIR it before degrading. The running set is EMPTY
+    // on this branch (no open serial node exists whose full-worktree base could straddle the
+    // checkpoint), which is exactly why the repair is sound here. Two outcomes: the seam is
+    // checkpointed and the frontier co-opens as on a clean parent, or a TYPED HALT names the offending
+    // paths. Under KAOLA_SEAM_CHECKPOINT=0 this site returns the pre-repair parent_dirty serial
+    // degrade (see the opt-out's exact scope at the write-awaits-drain site below).
+    if (parentDirty && seamCheckpointOn) {
+      const outcome = repairSeamOrHalt();
+      // ENVIRONMENT REFUSAL ⇒ leave parentDirty TRUE and fall through to the serial else-branch below,
+      // which labels it `seam_checkpoint_declined` (not `parent_dirty`): the dirt is still there, but the
+      // reason we are serial is that this host refused the repair, and the operator needs to see WHICH.
+      if (outcome && !outcome.degrade) return outcome;
+      if (!outcome) parentDirty = false;
+    }
     if (legCoupled && writeNodes.length >= 2 && !parentDirty) {
       const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {
@@ -10660,6 +11017,15 @@ function runOpenReady(opts) {
       } else {
         toOpen = [writeNodes[0]];
         openKind = 'write';
+        // #804 (D3): label the group-attempt-failed degrade with its CLASSIFIED cause. Before this,
+        // "label absent" was shared by four causes (legs off, <2 writers, a proven overlap, a crashed
+        // prover) and therefore distinguished nothing — a persistently-failing validator subprocess
+        // silently serialized every write frontier forever. `too_few_write_nodes` cannot be reached from
+        // this arm (writeNodes.length >= 2 gates it) and stays unlabeled defensively; the <2-ceiling
+        // degrade below is an operator cap, i.e. ORDINARY serial, and stays unlabeled by design.
+        if (grp.reason === 'overlapping_write_sets' || grp.reason === 'parallel_safe_indeterminate') {
+          serialDegradeReason = grp.reason;
+        }
       }
     } else {
       toOpen = [writeNodes[0]];
@@ -10667,7 +11033,14 @@ function runOpenReady(opts) {
       // #616: this else fires for THREE distinct causes (!legCoupled, writeNodes.length<2, or
       // parentDirty) — label it ONLY when parentDirty is the actual cause (the other two never even
       // evaluated the fence, so parentDirty is false there and this stays a no-op).
-      if (parentDirty) serialDegradeReason = 'parent_dirty';
+      // #802: parentDirty can still be TRUE here in exactly two cases — the KAOLA_SEAM_CHECKPOINT=0
+      // opt-out (the label is then the pre-repair `parent_dirty` serial degrade, unchanged), or the
+      // repair was ATTEMPTED and the environment REFUSED the commit (`seam_checkpoint_declined`). The two
+      // must not share a label: the first is an operator choice, the second is a checkable fact about
+      // this host that the operator would otherwise never see.
+      if (parentDirty) {
+        serialDegradeReason = seamCheckpointDeclined ? seamCheckpointDeclined.reason : 'parent_dirty';
+      }
     }
   } else {
     // Only write nodes are ready but the running set is non-empty (read-only members live).
@@ -10699,6 +11072,9 @@ function runOpenReady(opts) {
       // never reaches this branch — so labeling the KAOLA_PARALLEL_WRITES=0 hold here (AC2) does not
       // perturb the operator-recovery serial execution. null degradeReason ⇒ no field (defensive).
       ...(degradeReason ? { serialDegradeReason: degradeReason } : {}),
+      // #802 (D7 repair): when the degrade cause is `seam_checkpoint_declined`, carry WHICH refusal
+      // produced it (the first line of git's own error) so the operator can see the hook/key at fault.
+      ...(seamCheckpointDeclined ? { seamCheckpointDeclined } : {}),
       taskTransitions: [],
     });
     // A live main-session-gate (kind:'gate') is a live observer of the parent tree — HOLD the relaxed write
@@ -10708,35 +11084,48 @@ function runOpenReady(opts) {
     if (!legCoupled) return holdDrain('parallel_writes_off');
     if (liveGroupId) return holdDrain('lane_group_live');
     if (parentCarriesProductionDirt(planPath, project, shell)) {
-      // #641 R2b (consent-tier): R1's leg path is unsound over a dirty parent (a leg would miss the
-      // uncommitted context). Try a LEGLESS co-open behind an `observes: scratch` adversarial-verifier
-      // gate — legal iff EVERY live read is such a gate AND the writer's set is scratch-observable-safe.
-      // Annotation absent / non-qualifying writer ⇒ today's byte-identical parent_dirty hold.
-      const r2bWriter = tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile);
-      if (!r2bWriter) return holdDrain('parent_dirty');
-      // A single LEGLESS writer opens in the parent tree (it must SEE the uncommitted context). NO
-      // groupForm ⇒ no leg provisioning, no lane_group descriptor. The scratch gate never observes the
-      // writer's (docs-band) bytes — verdict from .cache evidence + scratch, by the pinned contract. From
-      // the NEXT tick this legless writer excludes further opens (the #588/G3 invariant for every OTHER
-      // node), deliberately relaxed ONLY for the scratch gate already co-running.
-      toOpen = [r2bWriter];
-      openKind = 'write';
-    } else {
-      // R1 leg-contained co-open. Reuse the #596 size-1-capable selection: authoritative --parallel-safe
-      // re-verification across {candidates ∪ live writes} (live writes are empty here — no legless write,
-      // no live lane_group), a lone writer forms a size-1 group. An empty `chosen` means every candidate
-      // was excluded (overlap or an indeterminate verdict) ⇒ fail-closed to today's hold with the cause.
-      const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
-      if (sel.chosen.length === 0) return holdDrain(sel.excludedReason);
-      toOpen = sel.chosen;
-      openKind = 'write';
-      laneGroupCeiling = sel.ceiling;
-      groupForm = {
-        group_id: laneGroupId(sel.chosen.map(n => n.id)),
-        members: sel.chosen.map(n => n.id).slice().sort(),
-        write_union: laneWriteUnion(sel.chosen),
-      };
+      // #802 (D2, write-awaits-drain site): REPAIR the removable blocker instead of holding on it —
+      // but only under the exact precondition the retired legless path already established: EVERY live
+      // member is a freeze-declared `observes: scratch` adversarial-verifier. Such a gate renders its
+      // verdict from .cache evidence + scratch, never the tree or refs, and `git commit` is
+      // tree-content-neutral, so no live observer's inputs change. A non-scratch live reader (a
+      // full-diff observer) or a live gate keeps the `parent_dirty` hold, as does the
+      // KAOLA_SEAM_CHECKPOINT=0 opt-out. With the parent repaired, the ordinary leg-contained (R1) group
+      // co-open below follows — strictly STRONGER than the legless single-writer exception it replaces
+      // (N writers instead of 1, leg containment instead of a contract-only observation promise).
+      //
+      // WHAT THE OPT-OUT RESTORES, PRECISELY. `KAOLA_SEAM_CHECKPOINT=0` restores the `parent_dirty`
+      // SERIAL DEGRADE — the single serial write at the normal co-open site, and this `write_awaits_drain`
+      // hold here. It does NOT resurrect the legless single-writer co-open that used to fire at this seam
+      // for a scratch-observable write set: that path is retired UNCONDITIONALLY, as a separate and
+      // deliberate tightening, and no toggle brings it back. The two changes point the same way (the
+      // opt-out is never LESS strict than the repair it replaces), so a dirty seam under the opt-out
+      // holds where it once legless-co-opened. That is the intended posture: the recovery toggle is a
+      // fail-CLOSED escape hatch, not a time machine.
+      if (!seamCheckpointOn || !liveReadsAllScratchGates(liveNodes, planPath, readFile)) {
+        return holdDrain('parent_dirty');
+      }
+      const outcome = repairSeamOrHalt();
+      if (outcome && !outcome.degrade) return outcome;
+      // ENVIRONMENT REFUSAL ⇒ fall back to this site's own pre-#802 posture (the hold), labeled with the
+      // refusal rather than with `parent_dirty` — same reasoning as the normal co-open site above.
+      if (outcome) return holdDrain(outcome.degrade);
     }
+    // R1 leg-contained co-open (the parent is clean here — either it always was, or the seam checkpoint
+    // above just made it so). Reuse the #596 size-1-capable selection: authoritative --parallel-safe
+    // re-verification across {candidates ∪ live writes} (live writes are empty here — no legless write,
+    // no live lane_group), a lone writer forms a size-1 group. An empty `chosen` means every candidate
+    // was excluded (overlap or a twice-indeterminate verdict) ⇒ fail-closed to today's hold with the cause.
+    const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
+    if (sel.chosen.length === 0) return holdDrain(sel.excludedReason);
+    toOpen = sel.chosen;
+    openKind = 'write';
+    laneGroupCeiling = sel.ceiling;
+    groupForm = {
+      group_id: laneGroupId(sel.chosen.map(n => n.id)),
+      members: sel.chosen.map(n => n.id).slice().sort(),
+      write_union: laneWriteUnion(sel.chosen),
+    };
   }
 
   if (toOpen.length === 0) {
@@ -10772,7 +11161,10 @@ function runOpenReady(opts) {
   // Session proof is valid only for this immediate parent turn. Retain it in a transient lookup for
   // card construction, but never persist it in running-set.json or reuse it during reconciliation.
   const sessionProofById = new Map(toOpen.map(n => [n.id, n.codex_session_proof || null]));
-  const newNodes = toOpen.map(n => ({
+  // #802 (D7 repair): built AFTER the group/leg phase below, not before it — the `kw-stub` degrade can
+  // still collapse a formed group back to a single serial write at that point, and `newNodes` stamps
+  // each member's `group_id`/`kind`, so building it earlier would bake in a group that no longer exists.
+  const buildNewNodes = () => toOpen.map(n => ({
     id: n.id,
     role: n.role,
     kind: openKind,
@@ -10849,6 +11241,12 @@ function runOpenReady(opts) {
   // parent-side (Slice 3 routes into legs). On any provisionLeg failure, teardown every leg already
   // provisioned THIS call (clean rollback — no partial leg set) and refuse.
   let legs = null;
+  // #802 (D7 repair): set when the ENVIRONMENT refused the `kw-stub` commit — the SECOND scheduler commit
+  // at this same seam. Non-null ⇒ the group phase is abandoned and this open degrades to a single serial
+  // write, labeled, below. (A `break groupPhase` is how the abandonment leaves the block: every other
+  // abort inside it is a hard `return`, and this one alone must fall through to the degrade.)
+  let stubDeclined = null;
+  groupPhase:
   if (groupForm && legCoupled) {
     let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
     const mainRoot = getMainRoot(root);
@@ -10881,7 +11279,7 @@ function runOpenReady(opts) {
     // flipping" was wrong: the flip is in-memory until writeFile(planPath) at the end of Phase 2.)
     // dropRecordedBaselines is called with the id list this loop has actually recorded a baseline for at
     // the moment of each abort (a prefix of `toOpen` for the mid-loop baseline_failed itself; the FULL
-    // `toOpen` set for every abort strictly after this loop completes — stub_commit_failed and both
+    // `toOpen` set for every abort strictly after this loop completes — the #802 kw-stub degrade and both
     // leg_provision_failed variants below).
     // #674/#678/#680: recordedBaselineIds + dropRecordedBaselines + dropGroupBaseline are declared at
     // runOpenReady scope (above the group-baseline record) so the Phase-2 aborts reach them too. This
@@ -10915,14 +11313,28 @@ function runOpenReady(opts) {
         // commit below) inherits it (see the #633 comment above) — an unforced add on a gitignored path
         // refuses instead, silently serial-degrading the authored parallel-write antichain.
         execFileSync('git', ['add', '-f', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
-        execFileSync('git', ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow',
+        // Scheduler bookkeeping, MID-schedule — SCHEDULER_COMMIT_CONFIG, and deliberately NO
+        // `--no-verify`. This commit's content is `.cache/*.md` evidence stubs, never production source,
+        // but the posture is uniform across all four scheduler commit sites for one reason: a consumer's
+        // hooks are the consumer's, and the engine does not get to decide which of their commits are
+        // worth inspecting. A veto here is honored and DEGRADES (below), exactly as at the checkpoint.
+        execFileSync('git', [...SCHEDULER_COMMIT_CONFIG,
           'commit', '-m', 'kw-stub: ' + groupForm.group_id, '--allow-empty'], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
       } catch (e) {
         // #674 (D-674-01 b): the loop above recorded a baseline for EVERY toOpen member — drop them all.
         dropRecordedBaselines(recordedBaselineIds);
         // #678 (R1): also drop the shared group baseline recorded before this loop started.
         dropGroupBaseline();
-        return { result: 'refuse', reason: 'stub_commit_failed', group_id: groupForm.group_id, detail: String((e && e.message) || e) };
+        // #802 (D7 repair): ENVIRONMENT REFUSAL ⇒ DEGRADE, NOT REFUSE. `stub_commit_failed` was a
+        // dead end — the next open-ready re-runs the same commit against the same hook and refuses
+        // identically, so the run could never finish. Nothing has been written to disk yet (the ledger
+        // flip is spliced in Phase 2 and written only at the end of it) and every baseline is dropped
+        // above, so abandoning the group here is a clean rollback to a state from which the ordinary
+        // SERIAL write path — which needs no scheduler commit at all — completes the run.
+        try { execFileSync('git', ['reset', '-q', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) { /* best-effort unstage */ }
+        stubDeclined = { reason: 'seam_checkpoint_declined',
+          detail: 'kw-stub:' + String((e && e.message) || e).split('\n')[0] };
+        break groupPhase;
       }
     }
 
@@ -10974,6 +11386,26 @@ function runOpenReady(opts) {
       appendNodeTiming(planPath, n.id, 'leg_opened');
     }
   }
+
+  // #802 (D7 repair): COLLAPSE the abandoned group phase to a single serial write. Reached ONLY from the
+  // `kw-stub` environment refusal above, which already dropped every baseline this call recorded (member
+  // AND group) and unstaged what it staged; no leg was provisioned (leg provisioning runs strictly after
+  // the stub commit) and nothing has been written to disk. So this is a clean rollback to the pre-group
+  // state, from which the ordinary serial write path — which makes no scheduler commit at all — runs. The
+  // degrade is LABELED, never silent: `serialDegradeReason: 'seam_checkpoint_declined'` plus the git
+  // error that caused it.
+  if (stubDeclined) {
+    groupForm = undefined;
+    legs = null;
+    laneGroupCeiling = null;
+    groupBaselineSha = null;
+    recordedBaselineIds.length = 0;
+    toOpen = [toOpen[0]];
+    openKind = 'write';
+    serialDegradeReason = stubDeclined.reason;
+    seamCheckpointDeclined = stubDeclined;
+  }
+  const newNodes = buildNewNodes();
 
   // -- Phase 1: write running-set.json in state:'opening' with the FULL intended node set
   //    BEFORE flipping any ledger row. A crash here is reconcilable (never an orphan).
@@ -11166,11 +11598,18 @@ function runOpenReady(opts) {
     // excluded this call (overlap with a live writer) — surface the explanatory field alongside the
     // success envelope so the operator sees the partial exclusion, not just the members that opened.
     ...(speculativeWriteExcluded ? { speculativeWriteExcluded } : {}),
-    // #616 (D-616-01): label a normal (non-speculative) co-open's serial degrade when
-    // parentCarriesProductionDirt() caused it, mirroring speculativeWriteExcluded's `parent_dirty` reason
-    // on this SUCCESSFUL-open path. Absent (undefined) for every other degrade cause and for a formed
-    // lane group — the pre-#616 byte-identical shape.
+    // #616 (D-616-01) + #804 (D3): label a normal (non-speculative) co-open's serial degrade with its
+    // classified cause (a proven overlap, a twice-indeterminate prover, or — under the seam-checkpoint
+    // opt-out — a dirty parent), mirroring speculativeWriteExcluded's reason on this SUCCESSFUL-open
+    // path. Absent (undefined) for every non-degrade cause and for a formed lane group.
     ...(serialDegradeReason ? { serialDegradeReason } : {}),
+    // #802: the serial→parallel seam checkpoint this open performed, when it performed one. Absent ⇒
+    // the parent was already clean (or the repair is opted out) — the pre-#802 byte-identical shape.
+    ...(seamCheckpoint ? { seamCheckpoint } : {}),
+    // #802 (D7 repair): the environment REFUSED the checkpoint commit (a content-inspecting hook veto,
+    // an unusable signing key, a git error) and this open degraded to the serial path instead of
+    // wedging. `serialDegradeReason: 'seam_checkpoint_declined'` is the label; this carries the cause.
+    ...(seamCheckpointDeclined ? { seamCheckpointDeclined } : {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -11188,7 +11627,7 @@ function runOpenReady(opts) {
 // liveNodes is defensive — the running-set "write node runs strictly alone" invariant (:3868) means no
 // OTHER write can be live while a speculative fan-out is even reachable, so liveWriteIds is normally
 // empty; the check is still applied generically so a future relaxation of that invariant stays safe.
-// @returns { chosen: Node[], excluded: string[], ceiling: number }
+// @returns { chosen: Node[], excluded: string[], ceiling: number, probes: number, excludedReason: string }
 // ---------------------------------------------------------------------------
 function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, writeOverlapConsent, max) {
   const liveWriteIds = (liveNodes || []).filter(n => n.kind === 'write').map(n => n.id);
@@ -11201,25 +11640,25 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
   // exclude-ALL branch (a validator crash / garbled result with no overlap report to act on) is a
   // `parallel_safe_indeterminate` — the disjointness verdict is unknown, not a known overlap.
   let indeterminate = false;
+  let probes = 0;
   if (allIds.length >= 2) {
-    const vArgs = [planPath, '--parallel-safe', '--nodes', allIds.join(','), '--json'];
-    if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
-    const ps = shell(validatorPath, vArgs);
-    if (!(ps.exitCode === 0 && ps.result === 'ok')) {
-      // #599: mirror tryFormLaneGroup's fail-CLOSED posture. A non-ok result carrying a WELL-FORMED
-      // `overlapping` array (even empty) is a real overlap report — keep the existing per-pair
-      // exclusion. A non-ok result WITHOUT one (subprocess crash, unparseable JSON, or an unreachable
-      // non-ok shape that omits the field) carries no overlap report to act on — exclude EVERY
-      // candidate (no speculative open) rather than fail-open by excluding nothing.
-      if (Array.isArray(ps.overlapping)) {
-        for (const o of ps.overlapping) {
-          if (candIds.includes(o.a)) excluded.add(o.a);
-          if (candIds.includes(o.b)) excluded.add(o.b);
-        }
-      } else {
-        indeterminate = true;
-        for (const id of candIds) excluded.add(id);
+    // #599/#804 (D1/D2): ONE shared classifier + ONE bounded re-probe, shared verbatim with
+    // tryFormLaneGroup (probeParallelSafe). A non-ok result carrying a WELL-FORMED `overlapping` array
+    // (even empty) is a real overlap report — keep the existing per-pair exclusion, and never re-probe a
+    // settled verdict. A non-ok result WITHOUT one (subprocess crash, unparseable JSON, or an unreachable
+    // non-ok shape that omits the field) carries no overlap report to act on — re-probe EXACTLY ONCE,
+    // and on a second indeterminate exclude EVERY candidate (no speculative open) rather than fail-open
+    // by excluding nothing.
+    const v = probeParallelSafe(allIds, planPath, shell, writeOverlapConsent);
+    probes = v.probes;
+    if (v.kind === 'overlap') {
+      for (const o of v.overlapping) {
+        if (candIds.includes(o.a)) excluded.add(o.a);
+        if (candIds.includes(o.b)) excluded.add(o.b);
       }
+    } else if (v.kind === 'indeterminate') {
+      indeterminate = true;
+      for (const id of candIds) excluded.add(id);
     }
   }
   const eligible = candidates.filter(n => !excluded.has(n.id));
@@ -11229,7 +11668,7 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
   if (Number.isInteger(max) && max >= 1) ceiling = Math.min(ceiling, max);
   const room = Math.max(0, ceiling - liveWriteIds.length);
   const chosen = eligible.slice(0, room);
-  return { chosen, excluded: Array.from(excluded), ceiling, excludedReason: indeterminate ? 'parallel_safe_indeterminate' : 'overlaps_live_writer' };
+  return { chosen, excluded: Array.from(excluded), ceiling, probes, excludedReason: indeterminate ? 'parallel_safe_indeterminate' : 'overlaps_live_writer' };
 }
 
 // ---------------------------------------------------------------------------
@@ -14537,8 +14976,19 @@ module.exports = {
   // Durable node channel: brief→goal_line + upstream_evidence derivation, and the close-time consumed-proof.
   deriveDispatchChannel,
   checkUpstreamConsumed,
-  // Scheduler legless-co-open predicate (exported for the gate-count + test-consumed-widening pins).
-  tryR2bLeglessCoopen,
+  // Scheduler seam predicates (exported for direct unit pins).
+  liveReadsAllScratchGates,
+  // #804: the ONE `--parallel-safe` verdict classifier + its single bounded re-probe, plus the normal
+  // co-open site that reads them (exported for the classification + probe-count pins).
+  classifyParallelSafeVerdict,
+  probeParallelSafe,
+  tryFormLaneGroup,
+  // #802: the serial→parallel seam checkpoint + its attribution proof. SEAM_WRITE_CAPABLE_ROLES is
+  // exported so the suite can pin it against the validator's own WRITE_ROLES + sink-role rule (the
+  // validator does not export that set, so the duplication is mutation-proven rather than trusted).
+  SEAM_WRITE_CAPABLE_ROLES,
+  seamCheckpointAttribution,
+  runSeamCheckpoint,
   // #602: --summary dispatch-segment extractor.
   dispatchSummarySegments,
   // #605: derived run-progress mirror primitives.

@@ -3,10 +3,10 @@ name: security-reviewer
 description: Security vulnerability detection specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities, then routes fixes to the appropriate role.
 nickname_candidates: ["Security", "Audit", "Threat"]
 tools: ["Read", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 behavior_contract_version: 2
 behavior_contract_hash: 1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584
-resolved_profile_hash: a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d
+resolved_profile_hash: a2512f8790eb175d14f3076317a4f15b23f5d1bd2c0bce9cf6fbffc8bfe80e54
 ---
 <!--
 kaola-workflow-managed-agent: true

@@ -404,7 +404,7 @@ write-leg level reaches after `MERGE_CONFLICT_REPAIR_LIMIT` (**K=3**) bounded re
 2. **Bounded repair (K=3)** — repair each by its *own* recovery, re-running `close-node`:
    - no-op leg → **re-dispatch** the leg's role so it writes its declared file;
    - overflow → `revert-overflow` (NEVER `drop-base`);
-   - real conflict → dispatch a reasoning-class **Opus**-floor `synthesizer` agent to resolve **by
+   - real conflict → dispatch a **reasoning-floor** `synthesizer` agent to resolve **by
      intent** (a non-reasoning tier is a dispatch refusal, never a silent downgrade; a clean agentic
      merge is a weak signal — the union barrier on M is the landing gate, not the merge succeeding).
 3. **Escalate** — on the K-th failure: `write-halt --project {project} --node-id {nodeId} --reason
@@ -446,4 +446,3 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 | `repair_writer_ownership_mismatch` | Maximal writer owns no blocking finding → `repair-node --node-id {semantic_owner}` |
 | `dependent_producer_replay_required` | Non-maximal owner with completed downstream writers → replan from `semantic_owner` (`/kaola-workflow-adapt`, #699) |
 | `repair_scope_spans_writers` | Maximal writer owns SOME but not ALL blocking findings → if `ownership_candidates` names one other writer that owns them all, `repair-node --node-id {that writer}`; otherwise `/kaola-workflow-adapt` for a plan giving each blocking finding a writer (`unowned_findings` ⇒ the plan declares no writer for that path) |
-| `plan_hash_mismatch` | Plan tampered → re-run `--freeze-checked` → `--freeze` |

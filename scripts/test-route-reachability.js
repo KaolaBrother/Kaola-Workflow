@@ -339,6 +339,38 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
+// T6b: acceptance-walk pin — all 6 finalize-route surfaces must bind their Acceptance Check to the
+// frozen plan's `## Acceptance` items. Before the section existed, "verify the deliverable matches
+// the acceptance criteria" verified against nothing; the check now has an object, and a surface that
+// still says only "the acceptance criteria" is a propagation gap. Fail-closed on all six: the two
+// forms diverge 2:1 (command prose vs SKILL numbered step), so the pin is the two invariant literals
+// both forms must carry — the section name and the item prefix — never a whole-sentence match.
+// ---------------------------------------------------------------------------
+{
+  const finalizeSurfaces = [
+    'commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+  ];
+  for (const f of finalizeSurfaces) {
+    // Hand-wrapped markdown: collapse whitespace before matching, or a re-wrap that changes nothing
+    // semantically would redden the pin (and, worse, invite someone to weaken it).
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8').replace(/\s+/g, ' ');
+    assert(content.includes('`## Acceptance`'),
+      `T6b: ${f} must bind its Acceptance Check to the frozen plan's \`## Acceptance\` section`);
+    assert(/`A1:`, `A2:`/.test(content),
+      `T6b: ${f} must instruct the walk over the \`A1:\`, \`A2:\` … items`);
+    assert(/covering test/.test(content) && /gate receipt/.test(content) && /prose evidence/.test(content),
+      `T6b: ${f} must name the three ways an item is satisfied (covering test / gate receipt / prose evidence)`);
+    assert(/judged in context/.test(content),
+      `T6b: ${f} must state that satisfaction is JUDGED in context — never a mechanical match`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // T7: <!-- PIN: claim-escalate --> comment + the `result: escalate` literal must appear in each of
 // the 12 claim/startup-refusal surfaces: adapt×6 + workflow-next×6.
 // Added by n3-result-routing-prose (#495); unconditional (n3 writes the prose AND this assertion together).

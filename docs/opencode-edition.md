@@ -96,12 +96,13 @@ on the provider's API **contract**, not its brand name:
 provider-open generalization of the existing Codex `dispatchEffort(reasoning→xhigh)`
 translator.
 
-### Tier membership (the "higher" profile correspondence)
+### Tier membership
 
-- **Reasoning / top tier** — the canonical `opus` roles (**`planner`,
-  `synthesizer`, `workflow-planner`**) **plus** the Claude Code `--profile=higher`
-  roles (**`code-architect`, `code-reviewer`, `security-reviewer`**) → the model's
-  TOP effort variant.
+- **Reasoning / top tier** — exactly the canonical reasoning-tier roles
+  (**`planner`, `synthesizer`, `workflow-planner`, `code-architect`,
+  `code-reviewer`, `security-reviewer`, `adversarial-verifier`**) → the model's
+  TOP effort variant. The membership is derived from the canonical agent
+  frontmatter alone; there is no install-time model axis to mirror.
 - **Standard / second tier** — every other role → the model's SECOND effort variant.
 
 ### Default install: adaptive (`--adapt`)
@@ -124,7 +125,7 @@ inherit the model you already use; only the effort differs. Example (GLM-5.2):
   },
   "agent": {
     "planner":           { "variant": "max"  },   // reasoning tier → top effort
-    "code-reviewer":     { "variant": "max"  },   // higher-profile → top effort
+    "code-reviewer":     { "variant": "max"  },   // reasoning tier → top effort
     "synthesizer":       { "variant": "max"  },
     "workflow-planner":  { "variant": "max"  },
     "code-architect":    { "variant": "max"  },
@@ -440,7 +441,7 @@ frontmatter, model-agnostic invariant (no `model:` in
 generated agents), byte-for-byte canonical parity including generated reviewer behavior identity,
 `opencode.json` JSONC validity
 + exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the
-higher-profile correspondence), the **workflow-planner `mapTier` guidance**,
+canonical reasoning-tier membership), the **workflow-planner `mapTier` guidance**,
 **model-prose consistency** (no contradictory "pass `model=`" instructions),
 **path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
 surface), route-reachability (every receipt-emitted command target resolves

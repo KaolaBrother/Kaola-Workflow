@@ -17,7 +17,7 @@ Everything under `.kimi/` is **generated from canonical** by
 | Canonical source | kimi edition output | Notes |
 | ---------------- | ------------------- | ----- |
 | `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (5 commands). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped (see [Path selection](#path-selection) below). |
-| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. `agents/profiles/higher/` is skipped (meaningless under inherit). |
+| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. |
 | `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 1 runtime-neutral hook script — payload-adapted at generation time where the Kimi payload field name differs (dispatch-log; see [Hooks](#hooks)). |
 | `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The two canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
 
@@ -62,16 +62,31 @@ Consequences, all enforced by the test:
 
 - Generated skills carry **no `model:` field**, and no effort-variant config is seeded
   anywhere. Model choices live only in the user's own Kimi `config.toml`.
-- The canonical `model: opus` tier markers and the four Claude Code "higher" profiles
-  (`agents/profiles/higher/`) are skipped entirely — meaningless under inherit.
+- The canonical `model:` tier markers are skipped entirely — meaningless under inherit.
 - All "You MUST pass `model=` …" dispatch instructions are rewritten to *"Never pass a
-  per-call model override; sub-agents inherit the session model."* The proper nouns
-  `Opus`/`Sonnet` never appear in the generated tree (the lowercase `opus`/`sonnet`
-  plan-ledger tier tokens are the portable cross-edition contract and remain).
+  per-call model override; sub-agents inherit the session model."* Capitalized vendor
+  model nouns never appear in the generated tree because they no longer appear in the
+  CANONICAL source either — there is no model-noun rewrite transform left to apply (the
+  lowercase `opus`/`sonnet` plan-ledger tier tokens are the portable cross-edition
+  contract and remain).
 - The adaptive planner's per-node tier (`reasoning`/`standard`) survives as **metadata
   only**: it is recorded in the dispatch packet and ledger, and `modelDisplay()` renders it
   as `parent session (<tier> tier metadata)` — the same semantics as the Codex edition. It
   maps to no variant, effort, or model at runtime.
+
+**Declared runtime divergence.** Kimi is the one runtime whose subagents cannot carry a
+per-dispatch tier: every subagent inherits the session model. That is a genuine capability
+difference, so it is *declared* rather than produced by a per-runtime rewrite rule. The
+declaration itself is the `inherit_session_model` entry in the `RUNTIME_NATIVE` exemption
+table (`scripts/test-runtime-lexicon-parity.js`), carrying its one-line reason; this
+paragraph describes it but is not it. `test-kimi-edition.js` asserts the entry exists, that
+its reason states the inheritance, and that the generated tree matches it — no `model:`
+frontmatter field and no per-call `model=` override in any generated Skill — so deleting the
+declaration turns the kimi suite red instead of passing silently.
+
+Because the tier is inert here, the canonical prose states tier rules in runtime-neutral,
+always-true form (e.g. "bookkeeping is never escalated to a higher reasoning tier"), which
+reads correctly on Kimi as written, with nothing rewritten on the way out.
 
 ## Reviewer behavior derivation
 

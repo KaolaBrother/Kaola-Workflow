@@ -41,14 +41,12 @@ REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
-# Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
-# Pass --profile=common to install the Sonnet assignments for those three agents.
-PROFILE=higher
+# There is no install-time model axis: the agent tree ships one model assignment per role
+# and the frozen plan's per-node tier column governs every workflow dispatch.
 # The install seeds ~/.config/kaola-workflow/config.json with parallel_mode.
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common]"
-  echo "  --profile defaults to 'higher' (Opus reviewers); use --profile=common for Sonnet."
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -78,19 +76,6 @@ while [[ "$#" -gt 0 ]]; do
       usage
       exit 0
       ;;
-    --profile=*)
-      PROFILE="${1#--profile=}"
-      shift
-      ;;
-    --profile)
-      if [[ -z "${2:-}" ]]; then
-        echo "--profile requires common or higher" >&2
-        usage >&2
-        exit 2
-      fi
-      PROFILE="$2"
-      shift 2
-      ;;
     --enable-adaptive|--enable-adaptive=*)
       # Warn-and-ignore: adaptive is always installed, so this flag is a no-op. Accepted
       # (exit 0) rather than rejected so callers passing it are not broken.
@@ -103,15 +88,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
-
-case "$PROFILE" in
-  common|higher) ;;
-  *)
-    echo "Unknown profile: $PROFILE (must be common or higher)" >&2
-    usage >&2
-    exit 2
-    ;;
-esac
 
 case "$FORGE" in
   github)
@@ -401,12 +377,8 @@ sweep_retired_agents() {
 }
 
 agent_source_file() {
-  local agent="$1"; local file_name="$agent.md"
-  local source_file="$SOURCE_AGENTS_DIR/$file_name"
-  if [[ "$PROFILE" == "higher" && -f "$SOURCE_AGENTS_DIR/profiles/higher/$file_name" ]]; then
-    source_file="$SOURCE_AGENTS_DIR/profiles/higher/$file_name"
-  fi
-  printf '%s\n' "$source_file"
+  local agent="$1"
+  printf '%s\n' "$SOURCE_AGENTS_DIR/$agent.md"
 }
 
 install_managed_agent() {
@@ -455,10 +427,8 @@ install_agent_files() {
 
   for agent in "${REQUIRED_AGENTS[@]}"; do
     local file_name="$agent.md"
-    local source_file="$SOURCE_AGENTS_DIR/$file_name"
-    if [[ "$PROFILE" == "higher" && -f "$SOURCE_AGENTS_DIR/profiles/higher/$file_name" ]]; then
-      source_file="$SOURCE_AGENTS_DIR/profiles/higher/$file_name"
-    fi
+    local source_file
+    source_file="$(agent_source_file "$agent")"
     local dest="$AGENTS_DIR/$file_name"
 
     if [[ ! -f "$source_file" ]]; then
@@ -597,35 +567,18 @@ model_for_placeholder() {
   esac
 }
 
-# Emit .kaola-agent-models.json so the adaptive resolver can look up
-# profile-aware models without parsing agent frontmatter at runtime.
-# Agents that resolve to empty or 'inherit' are omitted (they fall through
-# to the resolver's next precedence step).
-emit_agent_model_manifest() {
+# Disposal, not a tail: older installs wrote an agent model manifest that the runtime
+# resolver consulted ahead of the static defaults. The resolver no longer reads it, so a
+# leftover file would be inert but misleading — delete it on every upgrade.
+dispose_agent_model_manifest() {
   local manifest_file="$AGENTS_DIR/.kaola-agent-models.json"
-  local pairs=()
-  for agent in "${REQUIRED_AGENTS[@]}"; do
-    local model
-    model="$(resolve_agent_model_for_install "$agent")"
-    if [[ -z "$model" ]]; then
-      continue
-    fi
-    pairs+=("$agent" "$model")
-  done
-  # #363: encode the manifest via node (guaranteed present — the product is node scripts) so a
-  # model value containing a quote or backslash yields VALID JSON. The prior string-concat builder
-  # had no escaping, so such a value corrupted ~/.claude/agents/.kaola-agent-models.json (consumed
-  # by the runtime resolve-agent-model chain).
-  if [[ "${#pairs[@]}" -eq 0 ]]; then
-    # All agents resolved to inherit/empty — write empty object.
-    printf '{}\n' > "$manifest_file"
-  else
-    node -e 'const fs=require("fs");const out=process.argv[1];const a=process.argv.slice(2);const o={};for(let i=0;i<a.length;i+=2)o[a[i]]=a[i+1];fs.writeFileSync(out,JSON.stringify(o,null,2)+"\n");' "$manifest_file" "${pairs[@]}"
+  if [[ -f "$manifest_file" ]]; then
+    rm -f "$manifest_file"
+    echo "Removed retired agent model manifest: $manifest_file"
   fi
-  echo "Installed agent model manifest: $manifest_file"
 }
 
-emit_agent_model_manifest
+dispose_agent_model_manifest
 
 render_command_file() {
   local source_file="$1"

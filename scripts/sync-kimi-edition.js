@@ -22,8 +22,7 @@
 // rewritten to `subagent_type="coder"` (write roles) / `"explore"` (read-only
 // roles — computed from the canonical frontmatter `tools:` array, never hand-listed)
 // plus a prompt-prefix instruction to invoke the matching role Skill. The canonical
-// `model: opus` tier and the Claude "higher" profiles (agents/profiles/higher/*)
-// are meaningless under inherit and are skipped entirely.
+// `model:` tier is meaningless under inherit and is skipped entirely.
 //
 //   --write   regenerate .kimi/skills + .kimi/hooks from canonical.
 //   --check   assert the generated tree is in byte-parity with a fresh render
@@ -82,9 +81,7 @@ function lowerSet(arr) {
 }
 
 function listCanonAgents() {
-  // Top-level agents/*.md only — the profiles/ directory (agents/profiles/higher/*,
-  // the four Claude Code opus profiles) is a directory and never matches *.md here,
-  // so it is skipped by construction on the inherit-model kimi edition.
+  // Top-level agents/*.md only; the agent tree is flat (one file per role).
   return fs.readdirSync(CANON_AGENTS_DIR)
     .filter(f => f.endsWith('.md'))
     .map(f => f.slice(0, -3));
@@ -125,7 +122,7 @@ function renderAgent(canonContent, agentName) {
   const isReviewer = REVIEWER_ROLES.has(agentName);
   const lines = ['---'];
   lines.push('name: kaola-role-' + agentName);
-  lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
+  lines.push('description: ' + (fm.description || ''));
   // `tools:` and `model:` are DROPPED: a Kimi Skill is a prompt package, not an
   // agent definition, and every subagent inherits the session model (no tiers).
   lines.push('---');
@@ -143,15 +140,15 @@ function renderAgent(canonContent, agentName) {
     lines.push('<!-- kimi-reviewer-identity:end -->');
     lines.push('');
   }
-  // Same additive-generation-only discipline as the opencode renderAgent (#544/#609):
-  // the Claude→kimi script-path rewrite and the Claude model-noun rewrite apply to
-  // the RENDERED body so canonical agents/*.md are never touched (D-530-02).
+  // Same additive-generation-only discipline as the opencode renderAgent (#544):
+  // the Claude→kimi script-path rewrite applies to the RENDERED body so canonical
+  // agents/*.md are never touched (D-530-02).
   // rewriteClaudeScriptPaths is a no-op when the patterns are absent (only contractor
   // ships `kaola_script()` definitions; contractor + workflow-planner ship the
   // "Re-derive" prose parenthetical). The scoped `--runtime claude` → `--runtime kimi`
   // rewrite mirrors transformCommandBody: workflow-planner's claim-startup invocation
   // must stamp the kimi runtime into workflow-state.md on this edition.
-  const bodyText = rewriteClaudeModelNouns(rewriteClaudeScriptPaths(body))
+  const bodyText = rewriteClaudeScriptPaths(body)
     .replace(/--runtime claude\b/g, '--runtime kimi')
     .trim().replace(/\s+$/, '');
   lines.push(bodyText);
@@ -213,44 +210,6 @@ function rewriteClaudeScriptPaths(text) {
     /"\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}" "\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"/g,
     '"${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/kaola-workflow-replan.js"'
   );
-  return text;
-}
-
-// Rewrite Claude model-NOUN prose for kimi (the kimi twin of #609's opencode
-// rewriteClaudeModelNouns). Kimi has NO model tiers at dispatch time — every subagent
-// inherits the session model — so B2 prose ("Opus"/"Sonnet" used as if they were this
-// runtime's actual models) rewrites to inherit vocabulary. B1 — the lowercase,
-// backtick-wrapped plan-ledger tier tokens (`opus`/`sonnet`, `{reasoning, standard}`)
-// — is the portable cross-edition contract and is NEVER matched (each pattern below
-// targets one exact capitalized noun-phrase shape). Replacement text never
-// reintroduces "Opus"/"Sonnet", so repeated application is a no-op (idempotent).
-// Applied to BOTH agent bodies/descriptions (via renderAgent) and command
-// bodies/descriptions (via renderCommand) — canonical is never touched.
-function rewriteClaudeModelNouns(text) {
-  // "Reasoning-class (Opus)" / "reasoning-class (Opus)" — synthesizer's description +
-  // floor note (case-preserving on the leading letter so both forms rewrite cleanly).
-  text = text.replace(/\b([Rr])easoning-class \(Opus\)/g,
-    (m, first) => (first === 'R' ? 'S' : 's') + 'ession-model (inherited)');
-  // "reasoning-class **Opus**-floor `synthesizer`" — plan-run's merge-conflict repair
-  // prose (whitespace-flexible \s+ so the mid-sentence line wrap still matches).
-  text = text.replace(/reasoning-class\s+\*\*Opus\*\*-floor/g, 'session-model-floor');
-  // "Opus orchestrator" — workflow-planner + contractor both use this exact noun
-  // phrase (whitespace-flexible \s+ — canonical prose re-wraps split it across lines).
-  text = text.replace(/\bOpus\s+orchestrator\b/g, 'session-model orchestrator');
-  // "separate Sonnet role" — contractor's hard-boundary heading prose.
-  text = text.replace(/\bseparate Sonnet role\b/g, 'separate inherited-model role');
-  // "stay on **Sonnet** even under" / "never promoted to Opus" — contractor's
-  // floor-pin bullet.
-  text = text.replace(/\bstay on \*\*Sonnet\*\* even under\b/g, 'stay on the inherited session model even under');
-  text = text.replace(/\bnever promoted to Opus\b/g, 'never promoted away from the session model');
-  // "Opus front end" — workflow-next's router-rules prose.
-  text = text.replace(/\bOpus front end\b/g, 'session-model front end');
-  // "**`workflow-planner`** (Opus)" / "**`workflow-planner`** subagent (Opus)" —
-  // adapt's two Phase-0 mentions (both collapse to the same form).
-  text = text.replace(/\*\*`workflow-planner`\*\*( subagent)? \(Opus\)/g, '**`workflow-planner`**$1 (session model)');
-  // "belongs on Sonnet per CLAUDE.md model rules" — doc-updater's vendor
-  // local-override note.
-  text = text.replace(/\bbelongs on Sonnet per\b/g, 'belongs on the inherited session model per');
   return text;
 }
 
@@ -350,8 +309,6 @@ function transformCommandBody(body) {
     /For every ([^.]*?), include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
     'For every $1, never pass a per-call model override; sub-agents inherit the session model.'
   );
-  // Prose: kimi-neutral wording for subagent references (was "Claude Code agent(s)").
-  text = text.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
   // Parenthesized then bare forms — real placeholders first, then literal ellipsis
   // (same regex family as the opencode transform).
   text = text.replace(/\s*\(\s*model="\{[A-Z_]+_MODEL\}"\s*\)/g, '');
@@ -380,9 +337,6 @@ function transformCommandBody(body) {
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped
   // above) is rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text);
-  // Rewrite B2 Claude model-noun prose to inherit vocabulary — the command-body twin
-  // of the renderAgent rewrite above.
-  text = rewriteClaudeModelNouns(text);
   return text;
 }
 
@@ -393,7 +347,7 @@ function renderCommand(canonContent, commandName) {
   // stay the canonical basename so Kimi registers the same slash command
   // (`/workflow-next`, `/kaola-workflow-finalize`, …) as every other edition.
   lines.push('name: ' + commandName);
-  lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
+  lines.push('description: ' + (fm.description || ''));
   lines.push('---');
   lines.push('');
   lines.push(transformCommandBody(body).trim().replace(/\s+$/, ''));
@@ -645,7 +599,7 @@ if (require.main === module) main();
 
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
-  rewriteClaudeScriptPaths, rewriteClaudeModelNouns, KIMI_KAOLA_SCRIPT,
+  rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT,
   renderKimiHooksToml,
   adaptHookForKimi, HOOK_ADAPTATIONS,
   parseFrontmatter, parseTools,

@@ -3559,6 +3559,8 @@ const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // running-set scheduler (#377). See docs/decisions/0008-excise-write-role-batch-isolation.md.
 // #542: the env name for the parallel-writes DEFAULT-ON opt-OUT. See parallelWritesDefaultOn.
 const PARALLEL_WRITES_ENV = 'KAOLA_PARALLEL_WRITES';
+// #802: the env name for the serial→parallel SEAM-CHECKPOINT DEFAULT-ON opt-OUT. See seamCheckpointDefaultOn.
+const SEAM_CHECKPOINT_ENV = 'KAOLA_SEAM_CHECKPOINT';
 
 // Resolve the fan-out cap (env override, else default), clamped to a sane minimum.
 function resolveFanoutCap(env) {
@@ -3591,6 +3593,28 @@ function resolveFanoutCapReadonly(env) {
 // is vestigial for every relaxable class.
 function parallelWritesDefaultOn(env) {
   const raw = (env || {})[PARALLEL_WRITES_ENV];
+  if (raw === '0' || raw === 'false' || raw === 'no') return false;
+  return true;
+}
+
+// #802: seam-checkpoint-default-ON — the scheduler's REPAIR of a REMOVABLE blocker at the
+// serial→parallel seam. Uncommitted production work left in the parent worktree by already-CLOSED
+// serial siblings is the guaranteed product of the workflow's OWN finalize-owned-commit policy, not a
+// property of the task: it is none of the three named serializers (S1 data dependency, S2 shared
+// irreversible effect, S3 failed environment probe), so it must be REPAIRED before dispatch rather
+// than impersonate evidence for serial. This predicate drives that repair. Default TRUE; an operator
+// restores the `parent_dirty` SERIAL DEGRADE with KAOLA_SEAM_CHECKPOINT=0|false|no — the single serial
+// write at the normal co-open site and the `write_awaits_drain` hold at the drain site — mirroring the
+// KAOLA_PARALLEL_WRITES=0 recovery posture. The repair itself is two-outcome (commit the attributed
+// dirt, or halt on unattributable dirt / a git failure) — never a retry loop, never a silent serial.
+// SCOPE OF THE OPT-OUT (stated exactly, because "restores the prior behavior" would not be true): it
+// restores the serial degrade ONLY. It does NOT resurrect the legless single-writer co-open that used
+// to fire over a dirty parent behind a scratch-observation gate — that path is retired
+// UNCONDITIONALLY, as a separate and deliberate tightening, and no toggle brings it back. So a state
+// that once legless-co-opened now HOLDS under the opt-out. Both changes point the same way: the toggle
+// is never LESS strict than the repair it replaces. It is a fail-closed escape hatch, not a time machine.
+function seamCheckpointDefaultOn(env) {
+  const raw = (env || {})[SEAM_CHECKPOINT_ENV];
   if (raw === '0' || raw === 'false' || raw === 'no') return false;
   return true;
 }
@@ -4187,9 +4211,11 @@ module.exports = {
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
   PARALLEL_WRITES_ENV,
+  SEAM_CHECKPOINT_ENV,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   parallelWritesDefaultOn,
+  seamCheckpointDefaultOn,
   writeFileAtomicReplace,
   locateSection,
   spliceComplianceSection,

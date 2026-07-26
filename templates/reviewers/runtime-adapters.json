@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "adapters": {
-    "claude-base": {
+    "claude-standard": {
       "tools": "claude-read-shell",
       "model_policy_ref": "claude-standard",
       "evidence_transport": "return-for-recording"
     },
-    "claude-higher": {
+    "claude-reasoning": {
       "tools": "claude-read-shell",
       "model_policy_ref": "claude-reasoning",
       "evidence_transport": "return-for-recording"

@@ -112,13 +112,16 @@ const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
   ]),
 });
 
+// Adapters are named by the TIER they carry, not by an install-time selector: there is no
+// install-time model axis, so the tier a role ships with IS the tier it runs at. A role's adapter
+// therefore states its one shipped reasoning class outright.
 const ADAPTER_DEFINITIONS = Object.freeze({
-  'claude-base': Object.freeze({
+  'claude-standard': Object.freeze({
     tools: 'claude-read-shell',
     model_policy_ref: 'claude-standard',
     evidence_transport: 'return-for-recording',
   }),
-  'claude-higher': Object.freeze({
+  'claude-reasoning': Object.freeze({
     tools: 'claude-read-shell',
     model_policy_ref: 'claude-reasoning',
     evidence_transport: 'return-for-recording',
@@ -136,15 +139,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'code-reviewer',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-base',
-    format: 'markdown',
-  }),
-  Object.freeze({
-    path: 'agents/profiles/higher/code-reviewer.md',
-    role: 'code-reviewer',
-    runtime: 'claude',
-    variant: 'higher',
-    adapter: 'claude-higher',
+    adapter: 'claude-reasoning',
     format: 'markdown',
   }),
   Object.freeze({
@@ -152,7 +147,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'adversarial-verifier',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-base',
+    adapter: 'claude-standard',
     format: 'markdown',
   }),
   Object.freeze({
@@ -160,15 +155,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'security-reviewer',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-base',
-    format: 'markdown',
-  }),
-  Object.freeze({
-    path: 'agents/profiles/higher/security-reviewer.md',
-    role: 'security-reviewer',
-    runtime: 'claude',
-    variant: 'higher',
-    adapter: 'claude-higher',
+    adapter: 'claude-reasoning',
     format: 'markdown',
   }),
   ...['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'].flatMap(edition =>

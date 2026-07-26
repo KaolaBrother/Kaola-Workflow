@@ -278,6 +278,28 @@ The plan-validator's per-subcommand payloads carried a legacy `{ ok:false, … }
 - **Freeze refusals (FREEZE-ONLY).** `design_missing` when the section is absent or empty; `design_section_ambiguous` on duplicate genuine headings or malformed/unclosed fencing (mirroring `briefs_section_ambiguous`). `design_missing` is evaluated at the **END** of the freeze wall, after every structural refusal, so a plan broken for another reason surfaces THAT reason first. `revalidateForResume` deliberately refuses NEITHER — the same freeze-only precedent as `plan_form_dag_retired`, which is what keeps pre-#790 frozen plans resumable.
 - **Repair fence (prose rule, not mechanical).** The bounded `plan_invalid` repair loop may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to reach in-grammar, but must NOT alter `## Design`. If in-grammar is unreachable without changing the design, that is not repair — escalate down the adaptive recovery ladder (discard+restart → stop+ask). Enforcement is deliberately prose-only pre-freeze (post-freeze pinning is already mechanical via the hash); a design-digest ack threaded across repair iterations was explicitly declined as speculative.
 
+### The frozen `## Acceptance` section (issue #815)
+
+`## Design` froze the WHY of the decomposition; `## Acceptance` freezes the WHAT of done. It is the human-VALUES artifact of a run — what the issue body plus explicit user statements say the deliverable must satisfy — transcribed once by the `workflow-planner` at freeze, tamper-evident thereafter, and consumed only by reasoning. It is a **sibling** of `## Design`, never folded into it, and carries **no sub-grammar**: item lines (`A1:`, `A2:`, …) carrying prose, and nothing else — no types, no priorities, no verification bindings, no per-item status ledger. HOW an item is satisfied (a covering test, a gate receipt, or prose evidence) is **agent-judged in context**, never a mechanical check or a string match; a plan whose items merely look untestable is **not** refused.
+
+- **Readers.** `acceptanceSection(content)` (section-identity probe, fence-aware), `parseAcceptanceItems(content)` → `[{id,text}]` in document order (the ONE item reader; an `A1:` inside a fenced block is body text — its production consumer is the `acceptance_repair_fenced` item delta below), and `acceptanceDigest(content)` → the normalized identity (trim each line, drop blanks — exactly the plan-hash body normalization, so whitespace churn is not a change), `null` whenever the section is not cleanly PRESENT — absent **or** ambiguous — so the two fences below can distinguish "never transcribed" from "transcribed as empty". That the ambiguous case digests to `null` is load-bearing, not incidental: it is what makes an ambiguous FIRST submission anchor nothing, leaving the `acceptance_section_ambiguous` repair free to fix the heading.
+- **Hash coverage.** `computePlanHash` appends the `## Acceptance` body **conditionally, only when present** — the same pattern as `## Node Briefs` and `## Design`. A plan WITHOUT the section hashes **byte-identically to pre-#815**, so every plan frozen before this change resume-checks unchanged; when present it is covered, so a post-freeze edit surfaces `plan_hash_mismatch` on `--resume-check`. An ambiguous section contributes the `---ACCEPTANCE-AMBIGUOUS---` marker instead of a body.
+- **Freeze refusals (FREEZE-ONLY).** `acceptance_missing` when a code-producing schema-2 plan carries no non-empty section (scoped exactly like the schema-2 validation-policy wall; a read-only plan owes nothing), evaluated at the **END** of the freeze wall so a plan broken for another reason surfaces THAT reason first. `acceptance_section_ambiguous` on duplicate genuine headings or malformed/unclosed fencing, which short-circuits structurally like its `## Design` sibling. `revalidateForResume` reads neither.
+- **Repair fence (mechanical, and satisfiable).** `acceptance_repair_fenced` — the bounded `plan_invalid` repair loop may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding, but a submission that alters the acceptance surface is refused by `adaptive-handoff.js` at step 0.9, BEFORE the validator, so the change is named for what it is. Unlike the `## Design` fence — where "a design-digest ack threaded across repair iterations was explicitly declined as speculative" — the acceptance fence is mechanical *and* must be executable, because the surface is a values artifact rather than rationale: the refusal therefore RETURNS the anchored bytes in `anchored_acceptance_surface` (also inlined into `errors`), alongside `submitted_acceptance_digest` / `anchored_acceptance_digest`, an `acceptance_item_delta` (`{changed, added, removed}` item ids, computed through `parseAcceptanceItems` over both sets of real bytes — the answer to "re-wording or redefinition?"), and the still-outstanding `validator_verdict`. A digest cannot be inverted, the repairing planner has already overwritten the file that held the previous surface, and the next iteration is a fresh planner with no memory of the prior draft — a digest-only refusal would name a repair nobody in the loop could perform.
+- **`.cache/acceptance-anchor.json` (byte-carrying).** `{ schema_version: 2, plan_epoch, acceptance_digest, acceptance_surface, recorded_at }`. Written by the FIRST submission that carries a transcribed surface; a `.cache` audit artifact only — the plan and `workflow-state.md` are never touched on either branch, so the no-mutation-on-refuse contract for those two files is unchanged. **Epoch-keyed**: a re-plan child epoch owns its own surface, so a parent-epoch anchor is inert rather than a spurious refusal. Two transitions are never anchored (absent→transcribed, so the `acceptance_missing` repair can author the section; and an already-frozen plan, so no in-flight run is retroactively fenced — that second exclusion is now unconditional, since the ONE anchor-writing branch is the one guarded by it). A schema-1 anchor (digest only) still ENFORCES but cannot hand the bytes back.
+- **`acceptance_anchor_unreadable` — absent and unreadable are different states.** A PRESENT anchor that does not read back as a well-formed record refuses, carrying `anchor_path` and a `anchor_defect` phrase, and mutates nothing (not the plan, not `workflow-state.md`, not the anchor itself). The defect set is: unreadable from disk, unparseable as JSON, parsed to a non-object, no non-empty string `acceptance_digest`, a `plan_epoch` present but not a positive integer, or an `acceptance_surface` present but not a string. Before this, every one of those fell into the `catch → anchored = null` path and joined the "no anchor yet" branch — which **re-anchors on the surface the current submission carries**, so a truncated anchor moved the fence to the new surface and returned `ready_to_run` with no signal. That is a fail-open default and it needs no adversary: an interrupted write (crash, full disk) produces it unaided. The absent case is untouched, because it is load-bearing — an absent anchor is genuinely-first and must still anchor and freeze, or the `acceptance_missing` repair wedges. A well-formed schema-1 anchor is not "damaged" and still fences. Repair is restore-the-anchor (a copy, an epoch snapshot under `.cache/epochs/`, or version control), or — if it is unrecoverable — discard+restart or a re-plan child epoch under a surface-bound consent entry; deleting the anchor is the disarm the refusal exists to prevent, and the refusal says so.
+- **There is NO in-epoch flag that opens the fence.** Restoring the anchored surface is the repair loop's only route past it, and it is the route the refusal makes executable. A change of what "done" means routes through the ONE consent mechanism the workflow owns — the digest-chained, surface-bound consent-ledger entry described under re-plan preservation below — or through discard+restart. A second, weaker valve on this command line would be a token the fenced party mints for itself: the process that types the handoff command IS the process the fence binds, and a token the gated party is handed is not a valve.
+- **The HANDOFF PATH never launders a post-freeze tamper (`plan_hash_mismatch`).** `--freeze` re-stamps whatever it is handed, and the handoff calls it unconditionally, so the handoff would otherwise re-bless a tampered frozen plan into a self-consistent one. Step 0.85 (before the acceptance fence, before the validator) refuses `plan_hash_mismatch` — carrying `stored_plan_hash` / `computed_plan_hash` — whenever a plan carrying a stamped `plan_hash` no longer hashes to it, and mutates nothing. Scope is exact: an UNFROZEN draft carries no stored hash and is untouched (the repair loop is unaffected), and an untampered frozen plan still passes, so idempotent re-run and resume are unchanged. **This closes the handoff, not the tree.** `--freeze` is a directly-invokable `plan-validator.js` subcommand, so anyone who runs it by hand on a tampered frozen plan re-stamps the hash over the tampered bytes and the mismatch stops being detectable — the handoff is not the only reachable route to a re-stamp, and describing it as such would overclaim. Making `--freeze` itself refuse a tampered plan is deliberately NOT done: it would break the legitimate freeze/repair loop, which re-stamps by design. The mitigation is the `plan_hash_mismatch` operator hint, which no longer advises re-stamping as the default action. It now names both cases explicitly — an INTENDED pre-execution edit before any node opened (re-freeze is the legitimate re-issue) versus an unexplained mismatch on a run in flight (restore the bytes that hash to the stored `plan_hash`, or stop and escalate; re-stamping destroys the only evidence the bytes changed). The hint rides every `--resume-check` refusal, i.e. the exact output an orchestrator reads on resume, so its default advice is load-bearing.
+- **Re-plan preservation (`replan_child_acceptance_changed`).** Claim-preserving means acceptance-preserving. The child epoch carries the parent's surface (re-transcription travels under the planner attestation, which covers the whole child image). A child whose surface DIFFERS must cite, in `## Meta` as `acceptance_change_consent`, the `entry_digest` of a verified consent-ledger entry whose **`acceptance_change_digest` equals the child's own acceptance digest**. The lineage-wide `consent_ledger_digest` authorizes nothing here — it is handed to the planner in its own packet and is the same constant after any unrelated ceiling extension, and a token the gated party holds is not a valve. Consent is recorded per change: `replan extend-consent --user-turn-reference <turn> --consent-reason <why> (--acceptance-change-digest <hex> | --acceptance-change-file <path>)`, where the file holds the new surface TEXT and is normalized by the same `acceptanceDigest`. The optional field rides `entry_digest` (and therefore the `previous_entry_digest` chain); a malformed one refuses `replan_consent_ledger_invalid`, and re-using one turn reference to bind a different surface refuses `replan_consent_reference_reused`. A citation with an UNCHANGED surface is still refused, so the field cannot be carried forward as decoration.
+- **Consumers are all reasoning-side.** Finalize Step 2 walks the items on all six surfaces; a test author's objective is to falsify them; an `adversarial-verifier` coverage claim judges non-vacuous covering evidence. Nothing downstream diffs the list mechanically or binds an item to a named artifact.
+
+**KNOWN LIMITATIONS — the de-scoped malicious-editor class.** The acceptance fence is defense-in-depth against accidental and out-of-band edits, not an adversary-proof seal. It is stated here rather than defended, because every item below requires the agent to deliberately edit or remove the run's own state files, and that is the threat model the architecture explicitly de-scoped when interception was retired (the same boundary already recorded for `## Expansion Records`). **The residual equals the pre-existing baseline for that class** — none of these is a regression introduced by the acceptance surface — and tightening any of them is a separate, larger decision: it would mean building an adversary-proof seal on this one section while the ledger and the expansion records stay equally open. Nothing here should be read as a claim that the surface is secure against a determined editor; it is not.
+
+1. **Deleting `.cache/acceptance-anchor.json`.** Removal leaves the fence with no record, which is indistinguishable at the seam from a genuinely-first submission — the next submission anchors on whatever surface it carries. A *damaged* anchor now refuses (`acceptance_anchor_unreadable`, above), because that state also arises accidentally; a *deleted* one cannot be distinguished from never-anchored without a second durable record, which is the seal this project decided not to build.
+2. **Hand-editing `plan_epoch` in `workflow-state.md`.** The anchor is epoch-keyed on purpose — a parent-epoch anchor must be inert for a child epoch, or a re-plan would draw a spurious refusal. Bumping the field by hand therefore makes a valid anchor inert *by design*, and the next submission re-anchors on its own surface.
+3. **The composite: (1) or (2) followed by a hand-run `--freeze`.** The handoff refuses `plan_hash_mismatch` on a tampered frozen plan and never re-stamps it, but `--freeze` is a directly-invokable CLI subcommand, so a re-stamp by hand makes the tampered bytes self-consistent again. Making `--freeze` refuse would break the legitimate freeze/repair loop; the shipped mitigation is the operator hint, which no longer advises re-stamping as the default.
+4. **`--user-turn-reference` on the re-plan consent ledger is unverified free text.** Nothing proves the cited turn happened, or that a human authored it. What narrows it is real but partial: entries are digest-chained to their predecessor (an entry cannot be inserted or reordered after the fact), a new slot is admitted only when the consent ceiling is already exhausted (so slots cannot be stockpiled), reusing one turn reference to bind a different surface refuses `replan_consent_reference_reused`, and the acceptance-change authorization is bound per surface by `acceptance_change_digest` rather than lineage-wide. None of that amounts to proof of a human turn, and it is not presented as such.
+
 ### Freeze-time plan-shape telemetry and the serializer-evidence audit (issue #789)
 
 Both are **audit-only and never gate** — no mechanical pass/fail attaches to any number, and neither value feeds `result` / `errors` / `refuse` / the barrier.
@@ -1214,6 +1236,78 @@ own member's `dispatch.leg_path`/`dispatch.leg_branch`, with no need to cross-re
 `laneGroup` for routing. `laneGroup` (and its convenience `write_union`/`baseline`) is
 retained for group-level observability only.
 
+#### `open-ready` — the serial→parallel seam checkpoint (issue #802 / D-802-01)
+
+A mixed-shape plan (serial writes, then a parallel write frontier) reaches the frontier with the
+serial siblings' production writes still **uncommitted** in the parent worktree — the guaranteed
+product of the finalize-owned-commit contract. Before #802 that dirt serial-degraded the frontier
+(`serialDegradeReason: 'parent_dirty'`). It is not one of the three named serializers, and the
+orchestrator itself created it, so `open-ready` now **repairs** it: it commits the attributed serial
+dirt at the seam, then co-opens exactly as on a clean parent. `KAOLA_SEAM_CHECKPOINT=0` restores the
+pre-repair serial degrade.
+
+**Success field — `seamCheckpoint`** (additive; absent ⇒ the parent was already clean, or the repair
+is opted out, and the response is byte-identical to pre-#802):
+
+```json
+{
+  "result": "ok",
+  "seamCheckpoint": {
+    "committed": ["src/serial_a.js"],
+    "nodes": ["sA", "sB"],
+    "commit": "<sha>"
+  }
+}
+```
+
+`committed` is the exact dirty-path set the checkpoint commit recorded; `nodes` are the CLOSED
+write-capable ledger rows that vouched for those paths; `commit` is the resulting HEAD.
+
+**Typed halts** (`result: 'refuse'`; both are zero-open — no lane group, no running set, the ledger
+untouched):
+
+| reason | condition | mutation |
+|---|---|---|
+| `seam_checkpoint_unattributable` | ≥1 dirty production path that **no** CLOSED write-capable node declared. Foreign bytes in the parent (a stray edit, an escaped write) are an integrity signal; burying them in a silent serialization is the failure this halt exists to end. Carries `unattributed[]` + `dirty[]`. | none — HEAD never moved |
+| `seam_checkpoint_failed` | the repair could not positively prove success: an unclassifiable parent-clean fence (`parent_clean_fence_unclassified:<cause>`), a git-quoted/undecodable dirty path (`quoted_path_unsupported:<paths>`), an unreadable plan or unresolvable epoch lineage, or the **post-commit re-fence** not returning `pass` (`post_commit_fence:<cause>`). Carries `detail`. | none, **except** the post-commit-fence shape — see below |
+
+**Post-commit-fence disclosure.** The re-fence halt is the one that fires *after* the checkpoint
+commit has landed, so it discloses the mutation it left behind: the refusal additionally carries
+`commit` (the new HEAD; may be `null` if `rev-parse` could not resolve it) and `committed` (the paths
+that went in), and the `operator_hint` says `HEAD HAS ADVANCED` and names the commit. The presence of
+the `commit` **key** — not its truthiness — is the "HEAD advanced" signal; every other halt shape
+omits the key entirely. Nothing is rolled back deliberately: every committed path was attributed to a
+closed write-capable node, and the likeliest cause of the halt is a concurrent writer landing bytes
+between the two fence spawns, which an auto-reset would destroy.
+
+**Labeled degrade — `serialDegradeReason: 'seam_checkpoint_declined'`.** Scheduler commits carry an
+injected identity (`kaola-workflow <kaola-workflow@local>`) and `commit.gpgsign=false`, because
+identity and signing assert **authorship attribution**, not content properties — a missing key or a
+missing `user.email` must never halt a run. They do **not** carry `--no-verify`: a
+`pre-commit`/`commit-msg`/`prepare-commit-msg` hook **inspects content**, and the seam checkpoint is
+the only scheduler commit that lands user production source, so bypassing it would permanently disarm
+a consumer's secret scanner or policy gate on exactly the bytes it exists to see. A veto is therefore
+honored — and when the environment refuses the commit (a hook veto, an unusable signing key, any git
+error) the seam **degrades to the pre-#802 serial path** instead of halting:
+
+```json
+{
+  "result": "ok",
+  "opened": [{ "id": "pA", "kind": "write" }],
+  "serialDegradeReason": "seam_checkpoint_declined",
+  "seamCheckpointDeclined": { "reason": "seam_checkpoint_declined", "detail": "git:<first line of git's error>" }
+}
+```
+
+Nothing is committed (git never advances the ref on a failed commit) and the staged paths are reset,
+so the degrade is a clean fallback onto a known-good path — not a wedge, and not the silent
+serialization the doctrine forbids: the label names that the repair was **attempted and refused by
+this environment**, which is a checkable present-tense fact. The same label rides the
+`write_awaits_drain` hold at the drain site, and the same degrade covers the `kw-stub` group-formation
+commit at the same seam (a refusal there abandons group formation, drops every baseline the call
+recorded, and opens a single serial write instead — it no longer refuses `stub_commit_failed`). Only
+ENVIRONMENT refusal degrades; the two typed halts above stay halts.
+
 #### `close-node` response — `barrier` field extension
 
 For a group member, `close-node` extends the `barrier` field beyond the per-node shape:
@@ -1306,15 +1400,13 @@ Configuration files control workflow behavior and issue sorting.
 - `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
 
-### Agent model manifest (`~/.claude/agents/.kaola-agent-models.json`)
+### Agent model resolution (no install-time manifest)
 
-Written by `install.sh` at install time; removed by `uninstall.sh`. Path respects `KAOLA_AGENT_DIR` when set.
+There is **no install-written agent model manifest**. `install.sh` DELETES a pre-existing `~/.claude/agents/.kaola-agent-models.json` (an older install's residue) on upgrade, and `uninstall.sh` keeps its removal line; the file is never read. Path handling respects `KAOLA_AGENT_DIR` when set.
 
-```json
-{ "<agent-name>": "<model-string>", ... }
-```
+`resolve-agent-model` resolves in exactly three steps: **plan column (applied by the caller) → frontmatter (if not `inherit`) → `DEFAULT_AGENT_MODELS`**, falling back to `''` only when no step answers. Dynamically dispatched adaptive nodes therefore resolve deterministically and render the model badge, and a file planted in the agent directory cannot change any resolution.
 
-Maps each installed agent to the model string selected for the active profile (e.g. `"planner": "claude-opus-4-5"`). Read by `resolve-agent-model` with this precedence: **manifest → frontmatter (if not `inherit`) → `DEFAULT_AGENT_MODELS` → `''`**. Ensures dynamically dispatched adaptive nodes resolve to the correct profile-aware model and render the model badge, rather than silently inheriting the orchestrator's model.
+**For an installed agent the frontmatter step is inert.** Install rewrites every installed agent's frontmatter to `model: inherit` and the step skips `inherit`, so the effective chain for the installed agent directory is **plan column → `DEFAULT_AGENT_MODELS` → `inherit`**. The frontmatter step applies only to an ad-hoc dispatch against this repository's source `agents/` tree. Each role's source frontmatter is therefore held byte-equal to its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`) so both directories yield the same tier; with the manifest retired, `DEFAULT_AGENT_MODELS` is the only carrier of an installed role's tier.
 
 ### Project-local config
 
@@ -2122,7 +2214,7 @@ This boundary is the reason the contractor exists as a separate Sonnet role (iss
 
 ### Model
 
-`sonnet` — stays Sonnet even under `--profile=higher`. There is deliberately no `profiles/higher/contractor.md`. Mechanical transcription cannot be judgment-upgraded by installing a higher profile; only judgment roles benefit from Opus. The install-time manifest emits `contractor: sonnet`. See the Agent model manifest subsection under Configuration for the manifest format.
+`sonnet` — the standard tier, never escalated to the reasoning tier for bookkeeping. Mechanical transcription cannot be judgment-upgraded; only judgment roles benefit from the reasoning tier. The static default (`DEFAULT_AGENT_MODELS`) carries `contractor: sonnet`. See the Agent model resolution subsection under Configuration for the precedence chain.
 
 ### Tools
 

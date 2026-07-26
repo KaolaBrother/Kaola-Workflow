@@ -66,7 +66,9 @@ ignored, never refused (scripts validate, never auto-pick — #44). The agent
 
   **The durable channel is append-only and outside the frozen identity.** Composition is recorded
   in a `## Expansion Records` section of `workflow-plan.md`. `plan_hash` covers `## Meta` +
-  `## Nodes` + `## Node Briefs` only, so no record can perturb the frozen spine — the resume
+  `## Nodes` + `## Node Briefs` + `## Design` + `## Acceptance` (the last three appended
+  CONDITIONALLY, only when present, so a plan without them hashes byte-identically to the
+  pre-section formula) and nothing else, so no record can perturb the frozen spine — the resume
   contract keeps meaning exactly what it meant. Every mutation appends ONE block at the tail and
   rewrites, re-orders, and removes nothing: `record(<point>#<n>)` (the composed units plus the
   recorded derivation — grain, path, join, probe, serializer), `open(<point>#<n>)` (the positive
@@ -282,7 +284,7 @@ ignored, never refused (scripts validate, never auto-pick — #44). The agent
   touches are added. A frozen plan resumes regardless of any config change.
   **Note (issue #260):** when `KAOLA_WORKTREE_NATIVE=0` (explicit worktree opt-out), claim/startup now creates and checks out the feature branch in-place rather than leaving work on the default branch; the pre-checkout branch is recorded as `base_branch` in the Sink block and restored (with feature branch deleted) on `discard`/`release`.
 
-  **Lean-orchestrator boundary (issue #242 Part B; realigned to the original intent in v5.0.0).** The lean-orchestrator keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all **judgment**: which role runs next, whether work is correct, risk assessment, gating/consent decisions, the **sink** (merge/PR + `gh issue close` recheck), the **branch cut**, and the adaptive freeze + risk-governance decision (#44: the agent owns reasoning; the `workflow-planner` front-end subagent authors the `## Nodes` DAG, but Opus governs and decides the freeze). A separate mechanical **contractor** agent (Sonnet) owns the **Finalization** mechanical block only (the Step 8a artifact mirror, the `cmdFinalize` archive, the roadmap-mirror regen, and the `chore: finalize` staging commit) — the SOLE remaining contractor seam (ADR 0004 keeps Finalization contractor-owned pending a dedicated finalization transaction script). Every other mechanical transition is script-owned and run directly by the main session: the adaptive freeze/handoff (`kaola-workflow-adaptive-handoff.js`, #255) and the adaptive per-node lifecycle (open, record evidence, close, advance, halt — `kaola-workflow-adaptive-node.js`) run directly by the main session in `/kaola-workflow-plan-run`, with no contractor subagent needed for those mechanical transitions. The router/startup bootstrap also stays a deterministic main-session bash block: the router routes to `/kaola-workflow-adapt`, where the `workflow-planner` front end performs the claim; an existing frozen `workflow-plan.md` routes to `/kaola-workflow-plan-run` and is never re-authored. The main session always keeps the **dispatch** of role agents *and* the contractor (a subagent cannot dispatch a subagent, so the dispatch loop stays with Opus), and **hands its verdict into the transaction script** for any judgment-bearing evidence — the script (or, at Finalization, the contractor) transcribes it verbatim and never judges, dispatches, sinks, closes, or asks. For the adaptive plan, the **`workflow-planner`** front-end subagent (a locally-authored Opus agent, distinct from the vendored read-only in-plan `planner` node) owns the claim + authors the `## Nodes` table; Opus then governs the risk decision and `kaola-workflow-adaptive-handoff.js` stamps the `plan_hash` freeze (#255). The contractor is Sonnet and stays Sonnet even under `--profile=higher` (mechanical transcription cannot be judgment-upgraded; there is deliberately no `profiles/higher/contractor.md`). **Shell-var lifetime:** a subagent runs in its own shell, so the orchestrator captures sink/worktree metadata BEFORE a contractor dispatch and re-derives its own paths after; durable git/file state (worktree creation, the created `workflow-state.md`, commits, archives) persists across the boundary and is reused at the sink. The boundary in one line: **Opus decides *what* + dispatches *subagents* + owns synthesis + the sink/close + the branch cut; the contractor runs the Finalization mechanical block only; `kaola-workflow-adaptive-node.js` owns the adaptive per-node lifecycle transactions, main-session-direct; the aggregator scripts own the per-node barrier choreography.** The contractor's bookkeeping role (Finalization only) is a deliberate design to keep the main Opus context free of transcription work; the adaptive per-node loop is direct script calls, not contractor round-trips. See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
+  **Lean-orchestrator boundary (issue #242 Part B; realigned to the original intent in v5.0.0).** The lean-orchestrator keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all **judgment**: which role runs next, whether work is correct, risk assessment, gating/consent decisions, the **sink** (merge/PR + `gh issue close` recheck), the **branch cut**, and the adaptive freeze + risk-governance decision (#44: the agent owns reasoning; the `workflow-planner` front-end subagent authors the `## Nodes` DAG, but Opus governs and decides the freeze). A separate mechanical **contractor** agent (Sonnet) owns the **Finalization** mechanical block only (the Step 8a artifact mirror, the `cmdFinalize` archive, the roadmap-mirror regen, and the `chore: finalize` staging commit) — the SOLE remaining contractor seam (ADR 0004 keeps Finalization contractor-owned pending a dedicated finalization transaction script). Every other mechanical transition is script-owned and run directly by the main session: the adaptive freeze/handoff (`kaola-workflow-adaptive-handoff.js`, #255) and the adaptive per-node lifecycle (open, record evidence, close, advance, halt — `kaola-workflow-adaptive-node.js`) run directly by the main session in `/kaola-workflow-plan-run`, with no contractor subagent needed for those mechanical transitions. The router/startup bootstrap also stays a deterministic main-session bash block: the router routes to `/kaola-workflow-adapt`, where the `workflow-planner` front end performs the claim; an existing frozen `workflow-plan.md` routes to `/kaola-workflow-plan-run` and is never re-authored. The main session always keeps the **dispatch** of role agents *and* the contractor (a subagent cannot dispatch a subagent, so the dispatch loop stays with Opus), and **hands its verdict into the transaction script** for any judgment-bearing evidence — the script (or, at Finalization, the contractor) transcribes it verbatim and never judges, dispatches, sinks, closes, or asks. For the adaptive plan, the **`workflow-planner`** front-end subagent (a locally-authored Opus agent, distinct from the vendored read-only in-plan `planner` node) owns the claim + authors the `## Nodes` table; Opus then governs the risk decision and `kaola-workflow-adaptive-handoff.js` stamps the `plan_hash` freeze (#255). The contractor runs on the standard tier and is never escalated to the reasoning tier for bookkeeping (mechanical transcription cannot be judgment-upgraded). **Shell-var lifetime:** a subagent runs in its own shell, so the orchestrator captures sink/worktree metadata BEFORE a contractor dispatch and re-derives its own paths after; durable git/file state (worktree creation, the created `workflow-state.md`, commits, archives) persists across the boundary and is reused at the sink. The boundary in one line: **Opus decides *what* + dispatches *subagents* + owns synthesis + the sink/close + the branch cut; the contractor runs the Finalization mechanical block only; `kaola-workflow-adaptive-node.js` owns the adaptive per-node lifecycle transactions, main-session-direct; the aggregator scripts own the per-node barrier choreography.** The contractor's bookkeeping role (Finalization only) is a deliberate design to keep the main Opus context free of transcription work; the adaptive per-node loop is direct script calls, not contractor round-trips. See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
 
   **Review boundary.** The review mechanism on Claude Code, Codex, and opencode is the
   **adaptive** reviewer contract 2 (`code-reviewer`/`security-reviewer` post-dominance gates,
@@ -611,23 +613,86 @@ ignored, never refused (scripts validate, never auto-pick — #44). The agent
   parent copy for every non-lane-group case (byte-identical to pre-#633 behavior there). See
   `docs/workflow-state-contract.md` for the full `.cache`/evidence-seeding contract.
 
-  **Parent-cleanliness precondition on formation (D-615-01).** Lane-group formation is additionally
-  gated on the parent worktree carrying no out-of-allowband production dirt — uncommitted writes
-  left behind by already-closed SERIAL write siblings (serial nodes never commit; commits are
-  finalize-owned). Without this gate, a group formed over such dirt hits a two-horned deadlock at
-  its last-member close: the parent-clean fence refuses `parent_dirty` on the uncommitted serial
-  file, but committing that file to clear the fence lands it in the merge commit and outside the
-  group's declared union, tripping `write_set_overflow` at the commit-based group barrier.
-  `parentCarriesProductionDirt(planPath, project, shell)` (`adaptive-node.js`) shells the SAME
-  `--parent-clean-check` fence the last-member close already runs (fail-closed: any non-`pass`
-  result — dirt, an unrelated refuse, or a crash/no-JSON — is treated as dirt), so the two checks
-  can never classify a parent differently. It gates both formation sites: on dirt, the normal
-  co-open path (`liveNodes.length === 0 && writeNodes.length > 0`) degrades to opening a single
-  serial write instead of forming a group, and the speculative-write path (`openingSpeculative`)
-  excludes all write candidates from that open via `speculativeWriteExcluded: { reason:
-  'parent_dirty' }` — the write then waits for its gate normally. A pure-parallel or group-first
-  plan carries no prior production dirt at formation time, so this loses no currently-safe
-  parallelism; it bites only the genuinely-mixed serial-then-lane-group shape.
+  **Seam checkpoint at the serial→parallel seam (D-802-01, superseding the D-615-01 formation
+  gate).** The two-horned deadlock is real and unchanged: a lane group formed over uncommitted
+  production dirt — writes left behind by already-closed SERIAL write siblings (serial nodes never
+  commit; commits are finalize-owned) — cannot close, because the parent-clean fence refuses
+  `parent_dirty` on the uncommitted serial file (Horn A) while committing that file to clear the
+  fence lands it in the merge commit and outside the group's declared union, tripping
+  `write_set_overflow` at the commit-based group barrier (Horn B). What changed is the *response*.
+  D-615-01 gated formation on cleanliness (degrade to a single serial write); that treated a
+  blocker the orchestrator itself created — the guaranteed product of the workflow's own commit
+  policy, and none of the three named serializers — as if it were evidence. **The scheduler now
+  repairs the seam instead of degrading over it, and halts loudly on dirt it cannot vouch for.**
+  `runSeamCheckpoint(planPath, project, shell, readFile)` (`adaptive-node.js`) runs five
+  fail-closed steps: **classify** (re-run the SAME `--parent-clean-check --json` fence the
+  last-member close runs and take its `dirty` array verbatim — one classifier, no producer/consumer
+  drift); **attribute** (`seamCheckpointAttribution` — every dirty path must fall inside the union
+  of the declared write sets of CLOSED write-capable ledger rows, exact-path, each already proven
+  in-lane by its own per-node barrier; under a schema-2 child epoch the union extends across the
+  sealed ancestors via the validator's one `resolveEpochLineagePlans` walker, and an
+  applicable-but-unresolvable lineage halts rather than misattributes); **commit** (`git add --
+  <paths>` then a path-scoped `git commit`, message
+  `kaola-checkpoint(<project>): serial→parallel seam — nodes <ids>`; the commit IS the durable
+  journal — no state file, no ledger mutation); **re-verify** (re-run the fence, only a `pass`
+  proceeds); **proceed** (the group forms exactly as on a clean parent — the baseline now INCLUDES
+  the checkpoint, so the serial work sits before it and outside the group diff, dissolving Horn B,
+  and the legs branch off the checkpoint so they see the serial context *for every path the fence
+  classifies as dirty* — see the exempt-band residual below). Two outcomes, no retry
+  loop: `seam_checkpoint_unattributable` (a dirty path no closed node declared — foreign bytes are
+  an integrity signal, and the halt carries them; zero mutation, and critically no silent serial
+  open) and `seam_checkpoint_failed` (the fence could not enumerate the dirt, a non-`pass`
+  post-commit fence, or an unresolvable epoch lineage). No halt ever flips a ledger row, writes a running set, or leaves a
+  partial index; ONE halt shape can nevertheless leave a landed commit — the post-commit re-fence
+  refuses *after* the checkpoint has advanced HEAD, so that refusal DISCLOSES the commit (`commit`
+  + `committed` on the envelope, and an operator hint that says HEAD moved). It is deliberately not
+  rolled back: the committed paths were already attributed to closed write-capable nodes, and the
+  likeliest cause of the re-fence failing is a concurrent writer whose bytes an auto-reset would
+  destroy. **Consumer git config: attribution is overridden, content inspection is not.** All four
+  scheduler commit sites (the checkpoint, `kw-stub`, `kw-leg`, `kw-synth`) share one
+  `SCHEDULER_COMMIT_CONFIG` — injected identity (`kaola-workflow@local`) plus
+  `-c commit.gpgsign=false` — because identity and signing assert AUTHORSHIP, not content, and must
+  never halt a mid-schedule run. None carries `--no-verify`: a `pre-commit`/`commit-msg`/
+  `prepare-commit-msg` hook INSPECTS CONTENT, and the seam checkpoint is the only scheduler commit
+  that lands user production source, so bypassing it would permanently disarm a consumer's secret
+  scanner or policy gate on exactly the bytes it exists to see. A veto is honored: when the
+  ENVIRONMENT refuses a scheduler commit the seam DEGRADES to the pre-#802 serial path under
+  `serialDegradeReason: 'seam_checkpoint_declined'` (+ a `seamCheckpointDeclined` detail object) —
+  labeled, so it is not the silent serialization the doctrine forbids, and nothing lands. The
+  `kw-stub` commit degrades identically (its former `stub_commit_failed` refusal was a dead end no
+  retry could clear). Only environment refusal degrades; the two typed halts above stay halts.
+  Attribution accepts only rows whose ROLE may legally
+  declare a write set — a `complete` read-only row with a stray declared path vouches for nothing.
+  `parentCarriesProductionDirt` survives as the detection predicate.
+  The `serialDegradeReason: 'parent_dirty'` label retires at the normal co-open site, and the
+  legless `observes: scratch` single-writer co-open (D-641-01 R2b) retires in favour of
+  checkpoint + a full lane group at the write-awaits-drain seam (attempted only when every live
+  member is a freeze-declared `observes: scratch` `adversarial-verifier` read — any non-read live
+  member fails the precondition closed, since `git commit` is tree-content-neutral only for
+  observers that never read the tree or refs). The speculative-write path (`openingSpeculative`)
+  KEEPS its `speculativeWriteExcluded: { reason: 'parent_dirty' }` exclusion — a live gate's verdict
+  window may span refs and diffs — and the write waits for its gate normally.
+  `KAOLA_SEAM_CHECKPOINT=0` (default ON) restores the D-615-01 `parent_dirty` SERIAL DEGRADE (the
+  single serial write at the normal site, the `write_awaits_drain` hold at the drain site). It does
+  NOT resurrect the legless R2b co-open: that path is retired unconditionally as a separate,
+  deliberate tightening, so a seam that once legless-co-opened now holds under the opt-out. The
+  toggle is never less strict than the repair it replaces — a fail-closed escape hatch, not a time
+  machine. A pure-parallel or group-first plan carries no prior production dirt at formation time,
+  so it never reaches the checkpoint at all.
+
+  **Residual: the barrier-exempt band does not cross the seam.** The input-freshness gap dissolves
+  for the band the fence can see, and only for it. `--parent-clean-check` classifies through
+  `barrierExemptPath` (`isWorkflowArtifactPath || isBarrierInvisible || isTestLikePath`), so an
+  uncommitted change under `docs/**`, `README.md`, `CHANGELOG.md`, `kaola-workflow/**`, or any
+  test-like path never enters the fence's `dirty` array — and what the checkpoint never sees, it
+  never commits (a parent carrying only exempt-band changes re-fences `pass` and the checkpoint is a
+  no-op, `committed: []`, `commit: null`). So closed serial siblings' uncommitted docs / CHANGELOG /
+  test bytes stay in the parent and the legs branch off a HEAD without them. This is accepted, not
+  overlooked: those bytes are by the barrier's own definition the ones a node may write WITHOUT
+  declaring, so they are unattributable at the seam and committing them would be the laundering move
+  the design rejects; the exemption belongs to the shared classifier, not to this seam; and the
+  post-dominating synthesizer plus the finalize sweep reconcile what remains. Restoring test-path
+  attribution shrinks the band into the checkpoint's reach with no change to this design.
 
   **Serial opt-out invariant (INV-6, re-anchored by D-542-01).** The co-open gate is now keyed on
   `legCoupled = parallelWritesDefaultOn(process.env)` (true by default; `false` only under
@@ -946,18 +1011,27 @@ regression guard (`test-agent-profile-parity.js`) checks every pinned token agai
 expands when a new `.toml` is added to the codex tree). See
 `docs/decisions/D-422-01.md` for the full contract and consequences.
 
-## Model Resolution (Install-Time, Profile-Aware)
+## Model Resolution (Three Steps, No Install-Time Axis)
 
-**Model resolution for adaptive subagent nodes** is install-time and profile-aware. `install.sh` writes a manifest `~/.claude/agents/.kaola-agent-models.json` (path honoring `KAOLA_AGENT_DIR`) that maps each agent name to its install-selected model string (e.g. `{ "planner": "claude-opus-4-5", "code-writer": "claude-sonnet-4-5" }`). `uninstall.sh` removes the manifest.
+**Model resolution for adaptive subagent nodes has exactly one tier source at install time: the agent tree itself.** There is no install-time model axis and no install-written model manifest — one assignment per role ships with every install, and the frozen plan's per-node tier column overrides it wherever a plan says so. `install.sh` DELETES a pre-existing `~/.claude/agents/.kaola-agent-models.json` (an older install's residue) on upgrade; `uninstall.sh` keeps its removal line for the same reason.
 
 The resolver (`resolve-agent-model`) uses this precedence chain:
 
-1. **Manifest** — value from `~/.claude/agents/.kaola-agent-models.json` for the agent name (if present and non-empty).
+1. **Plan column** — the frozen plan's per-node `{reasoning|standard}` tier, applied by the caller (`next-action.js`: `node.model || resolveModel(role)`), which wins whenever a node declares one.
 2. **Frontmatter** — agent frontmatter `model:` field, when it is not `inherit` or empty.
-3. **`DEFAULT_AGENT_MODELS`** — the hardcoded per-role defaults in `kaola-workflow-adaptive-schema.js`.
-4. **`''`** — empty string, letting the orchestrator's model inherit (last resort).
+3. **`DEFAULT_AGENT_MODELS`** — the per-role static defaults in `kaola-workflow-resolve-agent-model.js` (mirrored byte-identically into the three edition trees and read standalone by the subagent-dispatch-log hook).
 
-**Effect on adaptive nodes:** Dynamically dispatched nodes now resolve to their correct profile-aware model and render the model badge in the dispatch call. Previously, agents with `model: inherit` frontmatter resolved to `''` and silently inherited Opus regardless of the installed profile. Frontmatter remains `inherit` (the install-emitted manifest is the authoritative source); the dispatch carries an explicit `model=` so the badge is always visible.
+An unresolvable role yields `''`, letting the orchestrator's model inherit (last resort).
+
+**Step 2 cannot fire for an installed agent.** `install_managed_agent()` rewrites every installed agent's frontmatter to `model: inherit`, and step 2 skips `inherit` by construction, so for anything dispatched out of the installed agent directory the chain is effectively:
+
+```
+plan column  ->  DEFAULT_AGENT_MODELS  ->  inherit
+```
+
+Step 2 governs exactly one case: an **ad-hoc direct dispatch against this repository's source tree** (`--agent-dir <repo>/agents`), where the frontmatter has not been neutralized. Because that is a real dispatch path, each role's source frontmatter is held byte-equal to its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`) — the two are one declaration read from two directories, so a role resolves to the same tier regardless of which directory it came from. With the install-time manifest retired, `DEFAULT_AGENT_MODELS` is the sole carrier of an installed role's tier; a divergence between it and the source frontmatter would silently re-tier that role on every install, which is why the equality is machine-checked rather than merely documented.
+
+**Effect on adaptive nodes:** for a workflow dispatch the static defaults answer whenever the plan column is blank, and the dispatch carries an explicit `model=` so the badge is always visible. A file dropped into the agent directory cannot influence resolution.
 
 **Runtime per-node tier:** The per-node `model` column in `workflow-plan.md` selects the portable `reasoning`/`standard` rank (or a legacy `opus`/`sonnet` alias) and is sealed at freeze. `next-action.js` surfaces it in every ready-set item; `open-next`/`open-ready` thread it into the running-set manifest for crash/reconcile re-dispatch. Claude and opencode apply that rank dynamically. Codex keeps it as declarative role/default and wait-budget metadata; Codex >=0.145.0 resolves the named child's own runtime pair independently, not a guaranteed parent-session equality. Every dispatch/handoff emission carrying a non-null `model` additionally attaches a `model_display` object (`{ claude, codex, opencode }`, via `modelDisplay(tier)`) so a narrative echo of the tier reads natively per runtime instead of surfacing a foreign vendor noun — see `docs/api.md` § "`opened` payload — `dispatch` sub-object" for the field shape.
 

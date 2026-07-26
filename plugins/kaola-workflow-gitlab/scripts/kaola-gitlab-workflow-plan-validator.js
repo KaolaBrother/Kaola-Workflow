@@ -132,7 +132,12 @@ const OPERATOR_HINT_REGISTRY = {
   // #556: package.json present but unreadable/unparseable — repo kind (self-host npm vs consumer) is INDETERMINATE.
   repo_kind_undetermined: () => 'package.json is present but UNREADABLE/unparseable, so the repo kind (self-host npm vs consumer) cannot be determined. The finalize gate refuses rather than silently using the weaker consumer gate. Fix the file permissions or the malformed JSON, or remove package.json if this is genuinely a non-npm consumer repo, then re-run.',
   plan_not_frozen: () => 'plan_hash missing — the plan is not frozen. Run --freeze to stamp the hash.',
-  plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md was modified after freeze. Re-run --freeze to re-stamp.',
+  // The hint MUST NOT advise re-stamping as the default. --freeze re-stamps whatever it is handed, so
+  // "re-run --freeze" on an unexplained mismatch makes the changed bytes self-consistent and destroys
+  // the only evidence they changed — an honest operator following the hint would launder the very
+  // change this refusal detected. Naming BOTH cases is the fix: re-freezing an intended pre-execution
+  // edit stays legitimate; an unexplained mismatch on a run in flight is investigated, never re-stamped.
+  plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md no longer hashes to the plan_hash stamped inside it, so the frozen bytes changed after freeze. Do NOT reflexively re-run --freeze: it re-stamps whatever it is handed, which would make the changed bytes self-consistent and destroy the only evidence that they changed. Decide which case this is first. (a) The edit was INTENDED and the run has not started (no node opened, no evidence recorded): re-freezing is the legitimate way to re-issue the plan — review the diff, then re-run --freeze deliberately. (b) The run is IN FLIGHT, or the change was not intended: this is an unexplained edit to the frozen authority. Restore the plan to the bytes that hash to the stored plan_hash (from version control, or from .cache/epochs/<ordinal>/ for a parent epoch) and re-run; if the change cannot be accounted for, stop and escalate rather than re-stamping. A genuine mid-run change of the plan is an epoch transition (a re-plan child), never an in-place re-stamp.',
   unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
   dangling_depends_on: (ctx) => `Node ${ctx.nodeId || '(unknown)'} depends_on a node that does not exist. Fix the depends_on reference and re-freeze.`,
   brief_unknown_node: (ctx) => `## Node Briefs names unknown node id "${ctx.nodeId || '(unknown)'}" — every brief's ### <node-id> header must match a node in the ## Nodes table. Fix the id (or add the node) and re-freeze.`,
@@ -140,6 +145,10 @@ const OPERATOR_HINT_REGISTRY = {
   briefs_section_ambiguous: () => '## Node Briefs identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
   design_missing: () => 'A frozen plan requires a non-empty ## Design section — the plan-level WHY: the decomposition rationale, the named serializer-evidence line for every `sequence` edge, why co-opened write legs are disjoint, and what "done" means beyond validation_command. Author ## Design (prose — no grammar inside it) and re-freeze. FREEZE-ONLY: a plan frozen before this section existed resumes unchanged.',
   design_section_ambiguous: () => '## Design identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
+  acceptance_missing: () => 'A code-producing plan requires a non-empty ## Acceptance section — the human-values artifact of the run: what "done" means, transcribed at freeze from the issue body plus explicit user statements, one item per line (A1:, A2:, …) as prose. It is a SIBLING of ## Design, not part of it, and carries no sub-grammar (no types, no priorities, no verification bindings) — how an item is satisfied is judged, never matched. Author ## Acceptance and re-freeze. FREEZE-ONLY: a plan frozen before this section existed resumes unchanged.',
+  acceptance_section_ambiguous: () => '## Acceptance identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
+  acceptance_anchor_unreadable: () => 'The acceptance anchor under .cache/ EXISTS but cannot be read back as a well-formed record, so the acceptance surface recorded at first submission is unavailable. A present-but-unreadable anchor refuses instead of degrading to "no anchor yet" — that branch re-anchors on whatever surface the current submission carries, which would disarm the fence exactly when its record is damaged. The ordinary cause is an interrupted write (crash, full disk), not tampering. Restore the anchor byte-for-byte from a copy, an epoch snapshot, or version control; if it cannot be recovered, discard and restart the run or carry the work into a re-plan child epoch under a surface-bound consent entry. Deleting the anchor is not a repair — it is the disarm this refusal prevents.',
+  acceptance_repair_fenced: () => 'The bounded plan_invalid repair loop may fix ## Meta / ## Nodes / ## Node Briefs / ledger scaffolding, but it MUST NOT alter ## Acceptance — the acceptance surface is a human-values artifact, and changing it is a values decision that routes through the consent valve, never through repair. Restore the acceptance surface recorded at first submission and re-run the repair, or stop and escalate the acceptance change.',
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -3483,6 +3492,43 @@ function nodeBriefsPresent(content) { return nodeBriefsSection(content).status =
 // freeze wall when absent/empty (design_missing) or ambiguous (design_section_ambiguous). FREEZE-ONLY:
 // revalidateForResume never reads it, so a plan frozen before this channel existed resumes green.
 function designSection(content) { return classifier.sectionBodyState(content, 'Design'); }
+// `## Acceptance` — the human-VALUES channel: what "done" means, transcribed once at freeze from the
+// issue body plus explicit user statements. A SIBLING of `## Design`, never folded into it (design is
+// the WHY of the decomposition; acceptance is the WHAT of done), with the same hash coverage and the
+// same freeze-only wall. Grammar is DELIBERATELY MINIMAL — item lines (`A1:`, `A2:`, …) carrying prose,
+// and nothing else: no types, no priorities, no verification bindings. HOW an item is satisfied is
+// agent-judged (a covering test, a gate receipt, or prose evidence, judged in context), never a
+// mechanical check or a string match, so the wall proves only that the section EXISTS and is non-empty
+// on a code-producing plan. A plan whose items merely look untestable is NOT refused.
+function acceptanceSection(content) { return classifier.sectionBodyState(content, 'Acceptance'); }
+// parseAcceptanceItems: the ONE reader of the item lines. Fence-aware (an `A1:` inside a fenced block
+// is body text, not an item). Returns [{ id, text }] in document order; [] when the section is absent,
+// empty, ambiguous, or carries only prose. Consumers (the finalize acceptance walk, a test author's
+// falsification objective, an adversarial coverage claim) REASON over this list — nothing downstream
+// may diff it mechanically or bind an item to a named artifact.
+function parseAcceptanceItems(content) {
+  const section = acceptanceSection(content);
+  if (section.status !== 'present' || !section.body) return [];
+  let fence = { family: '', length: 0 };
+  const out = [];
+  for (const line of section.body.split('\n')) {
+    fence = classifier.markdownFenceTransition(fence, line);
+    if (fence.family) continue;
+    const m = line.match(/^\s*(A\d+):\s*(.+?)\s*$/);
+    if (m) out.push({ id: m[1], text: m[2] });
+  }
+  return out;
+}
+// acceptanceDigest: the stable identity of the acceptance surface, normalized exactly like the hash
+// body (trim each line, drop blanks) so pure whitespace churn is not a change. `null` when the section
+// is ABSENT — the two fences that consume this (the bounded-repair anchor and the re-plan
+// acceptance-preservation wall) must distinguish "never transcribed" from "transcribed as empty".
+function acceptanceDigest(content) {
+  const section = acceptanceSection(content);
+  if (section.status !== 'present') return null;
+  const norm = section.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  return crypto.createHash('sha256').update(norm).digest('hex');
+}
 // parseNodeBriefs: parse the `## Node Briefs` section into [{ nodeId, brief }]. The section body is
 // sliced via the fence-aware classifier.sectionBody (an h3 does NOT close the h2 section); the
 // `### <node-id>` headers are scanned fence-aware (mirroring sectionBody's fenceRe) so a fenced
@@ -3533,6 +3579,17 @@ function computePlanHash(content) {
     body += '\n---DESIGN---\n' + design.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
   } else if (design.status === 'ambiguous') {
     body += '\n---DESIGN-AMBIGUOUS---';
+  }
+  // The `## Acceptance` section is hash-covered ONLY when present — an acceptance-less plan appends
+  // NOTHING and therefore produces a BYTE-IDENTICAL hash body to the pre-Acceptance formula, so every
+  // existing frozen / in-flight plan resume-checks unchanged. Same conditional-append pattern as
+  // `## Node Briefs` and `## Design`; coverage is what makes a post-freeze acceptance edit
+  // tamper-evident (plan_hash_mismatch), which is the whole point of transcribing values ONCE.
+  const acceptance = acceptanceSection(content);
+  if (acceptance.status === 'present') {
+    body += '\n---ACCEPTANCE---\n' + acceptance.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  } else if (acceptance.status === 'ambiguous') {
+    body += '\n---ACCEPTANCE-AMBIGUOUS---';
   }
   return crypto.createHash('sha256').update(body).digest('hex');
 }
@@ -3728,6 +3785,13 @@ function validatePlan(content, opts) {
   if (designSectionState.status === 'ambiguous') {
     return { result: 'refuse', reason: 'design_section_ambiguous', operator_hint: getOperatorHint('design_section_ambiguous'), errors: ['## Design section identity is ambiguous'], planHash: computePlanHash(content) };
   }
+  // `## Acceptance` mirrors its `## Design` sibling exactly: the section-IDENTITY probe is structural
+  // and short-circuits here, while the completeness wall (acceptance_missing) waits until the END of
+  // the freeze wall so an otherwise-broken plan surfaces its own reason first. Both are FREEZE-ONLY.
+  const acceptanceSectionState = acceptanceSection(content);
+  if (acceptanceSectionState.status === 'ambiguous') {
+    return { result: 'refuse', reason: 'acceptance_section_ambiguous', operator_hint: getOperatorHint('acceptance_section_ambiguous'), errors: ['## Acceptance section identity is ambiguous'], planHash: computePlanHash(content) };
+  }
   const nodes = parseNodes(content);
   const schemaVersionValues = metaFieldValues(content, 'plan_schema_version');
   if (schemaVersionValues.length > 1) {
@@ -3842,6 +3906,13 @@ function validatePlan(content, opts) {
   // OPT-1..OPT-4/OPT-6 field rules below and the OPT-5 gate rule in the gates block. plan_hash-covered.
   const optimizeContracts = parseOptimizeContracts(content);
 
+  // The "this plan produces code" predicate, computed ONCE and shared by the two walls that range over
+  // it: the schema-2 validation-policy wall below and the `## Acceptance` completeness wall at the end
+  // of the freeze wall. ONE definition on purpose — two copies would let a plan owe a verdict-of-done
+  // (validation_command) without owing a statement of done (## Acceptance), or the reverse.
+  const planProducesCode = nodes.some(producesCode)
+    || (isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE));
+
   if (planSchemaVersion === 2) {
     const validationPolicy = parseValidationPolicy(content, {
       contract: { ok: true, plan_schema_version: 2, contract_version: 2 },
@@ -3864,8 +3935,7 @@ function validatePlan(content, opts) {
     // that it will not. This deliberately does NOT read `expected_surfaces`: that contract is declared
     // advisory, and letting a coarse hint decide a gate would re-import the freeze-time commitment the
     // spine exists to defer (and would let an author dodge the rule by omitting a hint).
-    const hasCodeProducer = nodes.some(producesCode)
-      || (isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE));
+    const hasCodeProducer = planProducesCode;
     if (hasCodeProducer && (!validationPolicy.command || !validationPolicy.timeout_minutes)) {
       return { result: 'refuse', reason: 'validation_policy_required', operator_hint: getOperatorHint('plan_invalid'),
         errors: ['schema-2 code-producing plans require validation_command and validation_timeout_minutes'],
@@ -4733,6 +4803,23 @@ function validatePlan(content, opts) {
   if (designSectionState.status !== 'present' || designSectionState.body.trim() === '') {
     return { result: 'refuse', reason: 'design_missing', operator_hint: getOperatorHint('design_missing'),
       errors: ['## Design is absent or empty — author the plan-level WHY (decomposition rationale, named serializer-evidence per sequence edge, disjointness, what done means) and re-freeze'],
+      planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...(isSpine ? { plan_form: 'spine' } : {}) };
+  }
+
+  // `## Acceptance` completeness gate (FREEZE-ONLY), the sibling of the `## Design` gate above and
+  // scoped exactly like the schema-2 validation-policy wall: a CODE-PRODUCING schema-2 plan owes a
+  // statement of done, a read-only / non-code plan does not. Absent OR empty both refuse — the section
+  // is the durable landing site for the human-values artifact, so freezing without it leaves every
+  // downstream consumer (test authorship, adversarial coverage claims, the finalize acceptance walk)
+  // reasoning against air. The check is EXISTENCE ONLY: no item-shape sub-grammar, no testability
+  // judgement, no binding of an item to an artifact — a plan whose items merely look untestable
+  // freezes, because testability is a reasoning call for the planner and the gates, not a pattern here.
+  // Deliberately absent from revalidateForResume: a plan frozen before this section existed resumes.
+  if (planSchemaVersion === 2 && planProducesCode
+      && (acceptanceSectionState.status !== 'present' || acceptanceSectionState.body.trim() === '')) {
+    return { result: 'refuse', reason: 'acceptance_missing', operator_hint: getOperatorHint('acceptance_missing'),
+      errors: ['## Acceptance is absent or empty — a code-producing plan must transcribe what "done" means (A1:, A2:, … prose items) from the issue body plus explicit user statements, then re-freeze'],
       planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
       ...(isSpine ? { plan_form: 'spine' } : {}) };
   }
@@ -6504,11 +6591,21 @@ module.exports = {
   namedGateUncovered,
   resolveNamedCertifier,
   readFinalizeReplanFence,
+  // #802: the ONE epoch-lineage resolver, exported so the scheduler's seam-checkpoint attribution
+  // unions the CLOSED write-capable rows across a child epoch's sealed ancestors through the SAME
+  // verified walker the whole-plan barrier uses — never a second, unverified lineage reader.
+  resolveEpochLineagePlans,
   // `## Node Briefs` channel: the parser + presence probe (fence-aware; hash-covered when present).
   parseNodeBriefs,
   nodeBriefsPresent,
   // `## Design` channel: fence-aware section-identity probe (hash-covered when present; freeze-only wall).
   designSection,
+  // `## Acceptance` channel: the section-identity probe, the ONE item reader, and the normalized
+  // digest the repair fence + the re-plan preservation wall both compare. Exported so no consumer
+  // re-parses the acceptance surface on its own terms.
+  acceptanceSection,
+  parseAcceptanceItems,
+  acceptanceDigest,
   parseNodes,
   resolvePlanContract,
   buildPlanView,

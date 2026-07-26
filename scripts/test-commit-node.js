@@ -844,6 +844,9 @@ function assert(condition, message) {
         ...nodeRows, '',
         '## Design', '',
         'Decompose: seed explores; A and B are disjoint write legs (src/a.js vs lib/b.js) co-opened; synth unions them; review gates; finalize sinks. sequence synth→review: S1 — review consumes synth\'s merged tree. Done: CHANGELOG updated and review passes.', '',
+        '## Acceptance', '',
+        'A1: the disjoint legs land src/a.js and lib/b.js and the union carries both.',
+        'A2: the recorded validation_command passes over the merged candidate.', '',
         '## Node Ledger', '',
         '| id | status |', '| --- | --- |',
         ...ledgerRows, '',
@@ -1078,6 +1081,15 @@ function assert(condition, message) {
       ...nodeTable, '',
       '## Design', '',
       'Decompose: seed explores; impl builds src/a.js; review gates; finalize sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation_command passes and review clears.', '',
+      // A CODE-PRODUCING schema-2 plan must transcribe its acceptance surface to clear the freeze
+      // wall. Emitted for schema-2 only: the 'legacy' v1 fixture exists to prove v1 freeze/resume
+      // back-compat is byte-exact, and the wall never ranges over v1 — adding the section there
+      // would change the very bytes that assertion is about.
+      ...(shape === 'legacy' ? [] : [
+        '## Acceptance', '',
+        'A1: src/a.js carries the change the plan was frozen for.',
+        'A2: the recorded validation_command passes over the final candidate.', '',
+      ]),
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | pending |', '| impl | pending |', '| review | pending |', '| finalize | pending |', '',

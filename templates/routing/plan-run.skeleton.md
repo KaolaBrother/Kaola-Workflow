@@ -586,6 +586,25 @@ a frontier on a feeling: wrongly-parallel work costs one bounded synthesizer rec
 isolated legs, while wrongly-serial work silently costs wall-clock on every frontier — the burden
 of proof sits on serial.
 
+**A blocker the scheduler itself created is REPAIRED, not cited.** A serializer must be one the
+orchestrator CANNOT remove. Uncommitted production work left in the parent worktree by
+already-CLOSED serial write nodes is not a serializer — the workflow's own finalize-owned-commit
+policy created it, so it is a repair obligation discharged BEFORE dispatch. `open-ready` performs
+that repair itself, with no flag and nothing to approve: it commits exactly the dirty paths that
+fall inside a CLOSED write-capable node's declared write set
+(`kaola-checkpoint(<project>): serial→parallel seam — nodes <ids>`), re-verifies the parent-clean
+fence, and then co-opens the frontier as an ordinary lane group. The checkpoint lands BEFORE the
+group baseline, so the serial work sits outside the group diff and the legs branch off it. There
+is no retry loop — either the seam is repaired or the run stops loudly:
+- `seam_checkpoint_unattributable` — a dirty path NO closed write-capable node declared. Foreign
+  bytes in the parent (a stray edit, an escaped write) are an INTEGRITY signal, so this is a LOUD
+  STOP with zero mutation: no commit, no lane group, and no silent serial open either. The halt
+  names the unattributed paths — attribute each to a node or remove it, then re-run `open-ready`.
+- `seam_checkpoint_failed` — the repair could not POSITIVELY prove success: the fence could not
+  enumerate the dirt, `git add`/`git commit` failed (the index is reset for the staged paths), or
+  the post-commit fence is not `pass`. Also a LOUD STOP, tree otherwise as-is. "Cannot prove
+  clean" must never become "assume clean," and it must never become a silent serial either.
+
 <!-- CARD: speculative-open -->
 On `open-next` → `gate_not_complete` with a speculative gate (`speculative_open_policy: auto` — the
 freeze-time default — or `consent`, in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`

@@ -11106,8 +11106,9 @@ scenario(() => {
   // -------------------------------------------------------------------------
   // #674a (D-674-01 a): a consumer repo that gitignores `.cache/` (a common convention) must NOT abort
   //   the lane-group co-open. The seeded member evidence stubs are explicitly enumerated paths (never a
-  //   glob), so `git add -f` on them is safe and required — an unforced add refuses on a gitignored path
-  //   (stub_commit_failed), silently serial-degrading the authored parallel-write antichain.
+  //   glob), so `git add -f` on them is safe and required — an unforced add refuses on a gitignored
+  //   path, which since #802 D7 serial-degrades the authored parallel-write antichain
+  //   (`seam_checkpoint_declined`) rather than refusing outright. Either way the antichain is lost.
   // -------------------------------------------------------------------------
   scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ gitignoreCache: true });
@@ -13244,11 +13245,33 @@ scenario(() => {
   //     the group STILL forms (D437-OPEN-READY-DEFAULT-COOPEN above proves that path is unbroken). The
   //     degrade bites ONLY the genuinely-mixed dirty-parent shape.
   // -------------------------------------------------------------------------
-  scenario(() => {
-    // Build a mixed serial-write→parallel-write repo (mirrors makeLaneRepo's git-init + freeze pattern,
-    // but with the serial prefix makeLaneRepo's fixed DAG cannot express). sA,sB are complete; pA,pB are
-    // the ready parallel frontier; review (code-reviewer) post-dominates every write; finalize is the sink.
-    function makeMixedRepo() {
+  // Build a mixed serial-write→parallel-write repo (mirrors makeLaneRepo's git-init + freeze pattern,
+  // but with the serial prefix makeLaneRepo's fixed DAG cannot express). sA,sB are complete; pA,pB are
+  // the ready parallel frontier; review (code-reviewer) post-dominates every write; finalize is the sink.
+  // opts.extraDirty: additional {path, body} written UNCOMMITTED into the parent (the unattributable-dirt
+  // probe). opts.preCommitSeam: commit the serial dirt UP FRONT under the checkpoint's own message (the
+  // crash-between-commit-and-open resume shape).
+  // #802 (D7 repair) — the FOUR independent hostility knobs. Each models one class of consumer-owned
+  // git configuration that a scheduler commit can meet mid-schedule. They are separate because the
+  // correct response differs by class: a CONTENT-INSPECTING hook must be honored (and its veto degraded
+  // around), whereas an ATTRIBUTION config (identity, signing) must simply not be able to stop a run.
+  // opts.hostilePreCommit: a repo-local `pre-commit` hook that vetoes EVERY commit (a consumer lint /
+  //   policy gate). Content-inspecting ⇒ never bypassed; the seam DEGRADES to serial instead.
+  // opts.secretScanner: a repo-local `pre-commit` hook that greps the STAGED diff for an AWS access-key
+  //   shape and vetoes on a hit. The security probe: the checkpoint's bytes must still reach it.
+  // opts.hostilePrepareCommitMsg: a `prepare-commit-msg` hook exiting 1 — the hook class `--no-verify`
+  //   never covered in the first place. Also degrades.
+  // opts.keylessSigning: `commit.gpgsign true` with an unusable `user.signingkey`. Attribution-only ⇒
+  //   overridden by `-c commit.gpgsign=false`, so the checkpoint still lands.
+  // opts.noIdentity: the repo configures NO `user.email`/`user.name` (the fixture's own setup commits
+  //   pass an inline identity instead). Attribution-only ⇒ the scheduler injects its own identity.
+  //   Drive with NO_AMBIENT_GIT_IDENTITY so a host-global identity cannot mask the probe.
+  // opts.postCommitWriter: a `post-commit` hook that drops a foreign file into the worktree — a
+  //   deterministic stand-in for a CONCURRENT writer landing bytes between the checkpoint's two fence
+  //   spawns (git ignores a post-commit hook's exit status, so the commit still lands and only the
+  //   RE-fence fails). This is the only reachable way to drive the post-commit-fence halt end-to-end.
+  function makeMixedRepo(opts) {
+      opts = opts || {};
       const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd615-mixed-'));
       const project = 'test-project';
       const projDir = path.join(repoRoot, 'kaola-workflow', project);
@@ -13278,10 +13301,24 @@ scenario(() => {
       ].join('\n') + '\n';
       fs.writeFileSync(planPath, plan);
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
-      const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      // The fixture's OWN setup commits always carry an inline identity + signing-off, so `noIdentity`
+      // (which leaves the repo with no configured identity at all) does not break repo construction.
+      const FIXTURE_ID = ['-c', 'user.email=kw@test', '-c', 'user.name=kw', '-c', 'commit.gpgsign=false'];
+      const g = (args) => execFileSync('git',
+        ['-C', repoRoot, ...(args[0] === 'commit' ? FIXTURE_ID : []), ...args],
+        { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
       g(['init']);
-      g(['config', 'user.email', 'kw@test']);
-      g(['config', 'user.name', 'kw']);
+      if (opts.noIdentity) {
+        // `user.useConfigOnly` is git's own switch for "never guess an identity from the environment".
+        // Without it git happily synthesizes `user@host` on many boxes, so a bare missing-identity repo
+        // would not actually refuse anything and the probe would be vacuous. With it, the repo refuses
+        // every commit that does not carry a CONFIGURED identity — which is exactly the state N2 is
+        // about, and which the scheduler's own `-c user.email/-c user.name` satisfies.
+        g(['config', 'user.useConfigOnly', 'true']);
+      } else {
+        g(['config', 'user.email', 'kw@test']);
+        g(['config', 'user.name', 'kw']);
+      }
       g(['config', 'commit.gpgsign', 'false']);
       const froze = freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' });
       // The disjoint mixed plan MUST freeze cleanly (open-ready's integrity --resume-check needs it).
@@ -13292,36 +13329,1056 @@ scenario(() => {
       // The serial-accumulation state: sA ran and produced its declared file, but serial nodes never
       // commit (finalize-owned-commit contract). Leave it UNCOMMITTED in the parent worktree.
       fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
-      fs.writeFileSync(path.join(repoRoot, 'src', 'serial_a.js'), '// uncommitted serial production from sA\n');
-      return { repoRoot, project, planPath, projDir, cacheDir };
-    }
+      fs.writeFileSync(path.join(repoRoot, 'src', 'serial_a.js'),
+        '// uncommitted serial production from sA\n'
+        // The secret probe plants its payload in the ATTRIBUTED serial path — i.e. in exactly the bytes
+        // the seam checkpoint commits. Assembled from fragments so this source file itself never
+        // contains a scannable key literal.
+        + (opts.secretScanner ? 'const k = "' + 'AKIA' + 'IOSFODNN7EXAMPLE' + '";\n' : ''));
+      for (const extra of (opts.extraDirty || [])) {
+        fs.mkdirSync(path.dirname(path.join(repoRoot, extra.path)), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, extra.path), extra.body);
+      }
+      if (opts.preCommitSeam) {
+        g(['add', '--', 'src/serial_a.js']);
+        g(['commit', '-m', 'kaola-checkpoint(test-project): serial→parallel seam — nodes sA, sB', '--', 'src/serial_a.js']);
+      }
+      // Hooks are installed LAST so the fixture's own init/pre-seam commits above are unaffected.
+      const hooksDir = path.join(repoRoot, '.git', 'hooks');
+      const installHook = (name, body) => {
+        fs.mkdirSync(hooksDir, { recursive: true });
+        const hook = path.join(hooksDir, name);
+        fs.writeFileSync(hook, body);
+        fs.chmodSync(hook, 0o755);
+      };
+      if (opts.hostilePreCommit) {
+        installHook('pre-commit', '#!/bin/sh\necho "hostile repo-local pre-commit hook" >&2\nexit 1\n');
+      }
+      if (opts.secretScanner) {
+        // A minimal stand-in for a consumer's staged-content secret scanner. It reads the STAGED diff —
+        // the only way it can see what a commit is about to record — and leaves a WITNESS naming the
+        // paths it inspected, so a test can prove the scanner actually SAW the checkpoint's bytes
+        // rather than merely inferring it from a failed commit.
+        installHook('pre-commit', [
+          '#!/bin/sh',
+          'git diff --cached --name-only >> "$(git rev-parse --git-dir)/scanner-witness"',
+          'if git diff --cached -U0 | grep -Eq "AKIA[0-9A-Z]{16}"; then',
+          '  echo "secret-scanner: AWS access key id in staged content" >&2',
+          '  exit 1',
+          'fi',
+          'exit 0', '',
+        ].join('\n'));
+      }
+      if (opts.hostilePrepareCommitMsg) {
+        // The hook class `--no-verify` NEVER covered: git skips only `pre-commit` and `commit-msg`
+        // under that flag, so a `prepare-commit-msg` veto halted the seam even with the bypass in place.
+        installHook('prepare-commit-msg', '#!/bin/sh\necho "hostile prepare-commit-msg hook" >&2\nexit 1\n');
+      }
+      if (opts.keylessSigning) {
+        g(['config', 'commit.gpgsign', 'true']);
+        g(['config', 'user.signingkey', 'NOSUCHKEYEXISTS']);
+      }
+      if (opts.postCommitWriter) {
+        fs.mkdirSync(hooksDir, { recursive: true });
+        const hook = path.join(hooksDir, 'post-commit');
+        fs.writeFileSync(hook, '#!/bin/sh\nprintf "// bytes from a concurrent writer\\n" > concurrent.js\n');
+        fs.chmodSync(hook, 0o755);
+      }
+      return { repoRoot, project, planPath, projDir, cacheDir, g };
+  }
+  function headSha(repoRoot) {
+    return execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  }
+  // Commit subjects on HEAD's first-parent history, newest first.
+  function gitSubjects(repoRoot) {
+    try {
+      return execFileSync('git', ['-C', repoRoot, 'log', '--format=%s'], { encoding: 'utf8' })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch (_) { return []; }
+  }
+  function seamCommitCount(repoRoot) {
+    return gitSubjects(repoRoot).filter(s => s.startsWith('kaola-checkpoint(')).length;
+  }
 
-    // GREEN assertion (this is what FAILS pre-fix = the RED signature, and PASSES post-fix).
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-COOPEN (D1/D2 normal co-open site) — the SAME mixed shape, now REPAIRED
+  //   instead of degraded. Attributed serial dirt is a REMOVABLE BLOCKER the orchestrator itself
+  //   created — none of the three named serializers — so open-ready commits it at the seam and the
+  //   frontier co-opens. The commit lands BEFORE the group baseline, so the serial work sits outside
+  //   the group diff (Horn B dissolves) and the legs branch off it (input freshness dissolves).
+  //   RED (pre-#802): open-ready serial-degrades — opened.length===1, no laneGroup,
+  //     serialDegradeReason:'parent_dirty', and NO kaola-checkpoint commit exists.
+  //   GREEN: exactly ONE kaola-checkpoint commit whose content is EXACTLY the closed nodes' dirty
+  //     paths, a formed lane group over {pA,pB}, and a clean parent afterwards.
+  // -------------------------------------------------------------------------
+  scenario(() => {
     const { repoRoot, cacheDir, planPath } = makeMixedRepo();
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
-    assert(r.result === 'ok', '#615-MIXED: open-ready ok, got ' + JSON.stringify(r));
-    assert(!r.laneGroup,
-      '#615-MIXED: a parent carrying uncommitted serial production dirt MUST NOT co-open a lane group (it would deadlock at the last-member close) — expected serial-degrade, got laneGroup ' + JSON.stringify(r.laneGroup));
-    assert(Array.isArray(r.opened) && r.opened.length === 1,
-      '#615-MIXED: open-ready must DEGRADE to a single serial write, got opened ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
-    assert(r.opened[0].kind === 'write',
-      '#615-MIXED: the single opened node is a write, got ' + JSON.stringify(r.opened[0] && r.opened[0].kind));
-    assert(!r.opened[0].group_id,
-      '#615-MIXED: the degraded write carries NO group_id, got ' + JSON.stringify(r.opened[0].group_id));
+    assert(r.result === 'ok', '#802-SEAM-COOPEN: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.seamCheckpoint && Array.isArray(r.seamCheckpoint.committed),
+      '#802-SEAM-COOPEN: the envelope surfaces the seam checkpoint it performed, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(JSON.stringify(r.seamCheckpoint.committed.slice().sort()) === JSON.stringify(['src/serial_a.js']),
+      '#802-SEAM-COOPEN: the checkpoint committed EXACTLY the closed nodes\' dirty paths, got ' + JSON.stringify(r.seamCheckpoint.committed));
+    assert((r.seamCheckpoint.nodes || []).includes('sA'),
+      '#802-SEAM-COOPEN: the checkpoint names the closed write-capable nodes it attributed to, got ' + JSON.stringify(r.seamCheckpoint.nodes));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-SEAM-COOPEN: EXACTLY one kaola-checkpoint commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    // The checkpoint commit's content is exactly the dirty paths — nothing else rode along. (Resolve it
+    // by SUBJECT: leg provisioning commits the tracked evidence stubs afterwards, so HEAD has moved on.)
+    const seamSha = execFileSync('git', ['-C', repoRoot, 'log', '--format=%H %s'], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(s => s.indexOf(' kaola-checkpoint(') > 0)[0].split(' ')[0];
+    const touched = execFileSync('git', ['-C', repoRoot, 'show', '--name-only', '--format=', seamSha], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(Boolean).sort();
+    assert(JSON.stringify(touched) === JSON.stringify(['src/serial_a.js']),
+      '#802-SEAM-COOPEN: the checkpoint commit touches ONLY the attributed dirty paths, got ' + JSON.stringify(touched));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.length === 2,
+      '#802-SEAM-COOPEN: the repaired seam co-opens the write frontier as a lane group, got ' + JSON.stringify(r.laneGroup));
+    assert(JSON.stringify((r.opened || []).map(n => n.id).sort()) === JSON.stringify(['pA', 'pB']),
+      '#802-SEAM-COOPEN: BOTH parallel writes opened, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    assert(r.serialDegradeReason === undefined,
+      '#802-SEAM-COOPEN: NO serial degrade label — the blocker was repaired, not cited as evidence, got ' + JSON.stringify(r.serialDegradeReason));
     const rs = readRS(cacheDir);
-    assert(!rs || !rs.lane_group,
-      '#615-MIXED: running-set.json carries NO lane_group key on the degrade path, got ' + JSON.stringify(rs && rs.lane_group));
-    // Exactly one of the parallel writes is in_progress; the other stays pending (serial).
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.pA && rs.lane_group.legs.pB,
+      '#802-SEAM-COOPEN: both legs provisioned, got ' + JSON.stringify(rs && rs.lane_group));
+    assert(ledgerStatus(planPath, 'pA') === 'in_progress' && ledgerStatus(planPath, 'pB') === 'in_progress',
+      '#802-SEAM-COOPEN: both frontier members are in_progress');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-TOGGLE-OFF (AC1/AC3d) — KAOLA_SEAM_CHECKPOINT=0 restores the `parent_dirty`
+  //   SERIAL DEGRADE at this site: one serial write, no lane group, serialDegradeReason 'parent_dirty',
+  //   and NO commit of any kind. This is the operator recovery posture, mirroring KAOLA_PARALLEL_WRITES=0.
+  //   SCOPE (stated exactly, because "restores the prior behavior" would be false): the toggle restores
+  //   the serial degrade ONLY. It does NOT resurrect the legless single-writer co-open that used to fire
+  //   over a dirty parent at the write-awaits-drain seam — that path is retired UNCONDITIONALLY, as a
+  //   separate deliberate tightening. #802-DRAIN-SEAM-OFF (below, the drain site) is the pin for that
+  //   half: under the same opt-out a seam that once legless-co-opened now HOLDS.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], { KAOLA_SEAM_CHECKPOINT: '0' });
+    assert(r.result === 'ok', '#802-TOGGLE-OFF: open-ready ok, got ' + JSON.stringify(r));
+    assert(!r.laneGroup && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].kind === 'write' && !r.opened[0].group_id,
+      '#802-TOGGLE-OFF: the pre-repair single serial write returns, got ' + JSON.stringify({ laneGroup: r.laneGroup, opened: r.opened && r.opened.map(n => n.id) }));
+    assert(r.serialDegradeReason === 'parent_dirty',
+      '#802-TOGGLE-OFF: the pre-repair parent_dirty label returns under the opt-out, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(!r.seamCheckpoint, '#802-TOGGLE-OFF: no seamCheckpoint field under the opt-out, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(gitSubjects(repoRoot).length === before && seamCommitCount(repoRoot) === 0,
+      '#802-TOGGLE-OFF: NOTHING was committed, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, '#802-TOGGLE-OFF: running-set.json carries NO lane_group');
     const openedId = r.opened[0].id;
     assert((openedId === 'pA' || openedId === 'pB') && ledgerStatus(planPath, openedId) === 'in_progress',
-      '#615-MIXED: one parallel write opened serially (in_progress), got ' + openedId + '=' + ledgerStatus(planPath, openedId));
-    // #616 (D-616-01): the successful-open envelope MUST label WHY it degraded to serial — the
-    // parent-dirty fence, not an ordinary single-candidate/overlap serial choice. RED (pre-fix):
-    // serialDegradeReason is absent from a successful degrade-open even though the degrade was
-    // caused by parentCarriesProductionDirt() returning true.
-    assert(r.serialDegradeReason === 'parent_dirty',
-      '#616-SERIAL-DEGRADE-TELEMETRY: a parent-dirty-caused serial degrade must carry serialDegradeReason:"parent_dirty" on the SUCCESSFUL open, got ' + JSON.stringify(r.serialDegradeReason));
+      '#802-TOGGLE-OFF: one parallel write opened serially, got ' + openedId);
     cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-UNATTRIBUTABLE (AC2/AC3b) — a dirty PRODUCTION path that NO closed
+  //   write-capable node declared is FOREIGN (a user edit, an escaped write). The checkpoint refuses to
+  //   vouch for it: a loud typed halt naming the paths — NO commit, NO lane group, and critically NO
+  //   silent serial open (today's behavior buried the integrity signal under serialization).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ extraDirty: [{ path: 'rogue.js', body: '// foreign bytes\n' }] });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_unattributable',
+      '#802-UNATTRIBUTABLE: the halt is typed seam_checkpoint_unattributable, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(Array.isArray(r.unattributed) && r.unattributed.includes('rogue.js') && !r.unattributed.includes('src/serial_a.js'),
+      '#802-UNATTRIBUTABLE: the halt names ONLY the unattributed paths, got ' + JSON.stringify(r.unattributed));
+    assert(typeof r.operator_hint === 'string' && r.operator_hint.length > 0,
+      '#802-UNATTRIBUTABLE: the typed halt carries an operator hint, got ' + JSON.stringify(r.operator_hint));
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-UNATTRIBUTABLE: NO commit was made, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    // The zero-mutation halt shapes carry NO `commit` disclosure — the field's PRESENCE is the signal
+    // that HEAD advanced, so it must be absent exactly when it did not (the negative half of the
+    // post-commit-fence pin below).
+    assert(r.commit === undefined && r.committed === undefined,
+      '#802-UNATTRIBUTABLE: a pre-commit halt discloses NO commit (HEAD never moved), got ' + JSON.stringify({ commit: r.commit, committed: r.committed }));
+    assert(!readRS(cacheDir), '#802-UNATTRIBUTABLE: NO running set was written (zero mutation)');
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-UNATTRIBUTABLE: NO serial open either — both frontier members stay pending');
+    // The index must be left clean (a partially-staged index is reset before halting).
+    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    assert(staged === '', '#802-UNATTRIBUTABLE: the index is left unstaged, got ' + JSON.stringify(staged));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-CRASH-RESUME (AC3c) — a crash AFTER the checkpoint commit but BEFORE the
+  //   group opens leaves a CLEAN parent. The next open-ready re-runs the fence, finds `pass`, forms
+  //   the group, and re-commits NOTHING — idempotent by construction, no journal file needed.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir } = makeMixedRepo({ preCommitSeam: true });
+    assert(seamCommitCount(repoRoot) === 1, '#802-CRASH-RESUME precondition: the crashed run left exactly one checkpoint commit');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.laneGroup && r.laneGroup.members.length === 2,
+      '#802-CRASH-RESUME: the resumed open forms the group over the already-clean parent, got ' + JSON.stringify({ result: r.result, laneGroup: r.laneGroup }));
+    assert(!r.seamCheckpoint,
+      '#802-CRASH-RESUME: NO second checkpoint was performed (the fence already passes), got ' + JSON.stringify(r.seamCheckpoint));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-CRASH-RESUME: still exactly ONE checkpoint commit — nothing re-committed, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.pA && rs.lane_group.legs.pB,
+      '#802-CRASH-RESUME: both legs provisioned on the resume');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-CHECKPOINT-END-TO-END (AC3a) — the repaired group closes GREEN all the way through the
+  //   last-member octopus merge. This is the claim the two-horned deadlock said was impossible: with
+  //   the serial dirt committed BEFORE the group baseline, the last-member parent-clean fence PASSES
+  //   (Horn A gone) and the merge commit's union diff carries only the group's declared files, so the
+  //   commit-based group barrier does NOT see the serial work (Horn B gone).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.laneGroup, '#802-E2E: co-open, got ' + JSON.stringify(r));
+    const rs = readRS(cacheDir);
+    const legPA = rs.lane_group.legs.pA.legPath;
+    const legPB = rs.lane_group.legs.pB.legPath;
+    fs.writeFileSync(path.join(legPA, 'par_a.js'), '// pA leg work\n');
+    fs.writeFileSync(path.join(legPB, 'par_b.js'), '// pB leg work\n');
+    writeEvidence(cacheDir, 'pA'); writeEvidence(cacheDir, 'pB');
+    const cA = runNode(repoRoot, ['close-node', '--node-id', 'pA', '--project', 'test-project', '--json'], DEFAULT);
+    assert(cA.result === 'ok' && cA.barrier === 'deferred_to_group', '#802-E2E: pA defers to the group, got ' + JSON.stringify(cA));
+    const cB = runNode(repoRoot, ['close-node', '--node-id', 'pB', '--project', 'test-project', '--json'], DEFAULT);
+    assert(cB.result === 'ok' && cB.barrier === 'group_passed' && cB.synthesized === true,
+      '#802-E2E: the LAST-member close passes the parent-clean fence AND the commit-based group barrier and merges, got ' + JSON.stringify(cB));
+    assert(ledgerStatus(planPath, 'pA') === 'complete' && ledgerStatus(planPath, 'pB') === 'complete',
+      '#802-E2E: both members closed complete');
+    // The serial work survives on the branch (it was committed at the seam, never reverted) and BOTH
+    // legs' declared files landed in the merge.
+    for (const p of ['src/serial_a.js', 'par_a.js', 'par_b.js']) {
+      let ok = true;
+      try { execFileSync('git', ['-C', repoRoot, 'cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); }
+      catch (_) { ok = false; }
+      assert(ok, '#802-E2E: ' + p + ' is reachable from HEAD after the merge');
+    }
+    cleanup(repoRoot);
+  });
+
+  // ==========================================================================
+  // #802 AC6 — THE TERMINAL AUDITS. The seam checkpoint puts a MID-RUN commit on the feature
+  // branch, which is a new input for two terminal transitions that previously only ever saw
+  // uncommitted production dirt: FINALIZE (which must still attribute what remains on the branch)
+  // and DISCARD (which must still reset the committed work). Both are driven here through their
+  // REAL production entry points over a branch a REAL open-ready checkpointed.
+  // ==========================================================================
+
+  const CLAIM_CLI = path.join(__dirname, 'kaola-workflow-claim.js');
+
+  // Put the mixed fixture on a FEATURE branch so `git diff <base>...HEAD` is a real, non-empty
+  // branch diff (the sweep is vacuous when base === HEAD). Returns the surviving base branch name.
+  function branchOffBase(repoRoot, feature) {
+    const base = execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['-C', repoRoot, 'checkout', '-q', '-b', feature], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    return base;
+  }
+  function headBranch(repoRoot) {
+    try { return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return null; }
+  }
+  function reachableFromHead(repoRoot, p) {
+    try { execFileSync('git', ['-C', repoRoot, 'cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    catch (_) { return false; }
+  }
+  function branchNames(repoRoot) {
+    try {
+      return execFileSync('git', ['-C', repoRoot, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8' })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch (_) { return []; }
+  }
+  // Drive the whole repaired group to its last-member merge (the #802-E2E choreography, reused).
+  function driveGroupToMerge(repoRoot, cacheDir) {
+    const rs = readRS(cacheDir);
+    fs.writeFileSync(path.join(rs.lane_group.legs.pA.legPath, 'par_a.js'), '// pA leg work\n');
+    fs.writeFileSync(path.join(rs.lane_group.legs.pB.legPath, 'par_b.js'), '// pB leg work\n');
+    writeEvidence(cacheDir, 'pA'); writeEvidence(cacheDir, 'pB');
+    runNode(repoRoot, ['close-node', '--node-id', 'pA', '--project', 'test-project', '--json'], DEFAULT);
+    return runNode(repoRoot, ['close-node', '--node-id', 'pB', '--project', 'test-project', '--json'], DEFAULT);
+  }
+  // Seed the CONSUMER-mode finalize validation gate (the tmp fixture has no package.json, so
+  // --finalize-check takes the final-validation.md arm). Computed AFTER the tree settles so the
+  // recorded candidate hash binds the tree the sweep will recompute over.
+  function seedFinalValidation(repoRoot, projDir, planPath) {
+    let cand = '';
+    try {
+      cand = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--candidate-hash', '--json'],
+        { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()).validated_candidate_hash || '';
+    } catch (_) { cand = ''; }
+    fs.writeFileSync(path.join(projDir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
+  }
+  // The EXACT subprocess cmdFinalize shells before any irreversible side effect (claim.js:
+  // `[validatorScript, authorityPlanPath, '--finalize-check', '--json']`, plus the forwarded --base).
+  function finalizeCheck(repoRoot, planPath, base) {
+    try {
+      const out = execFileSync('node', [VALIDATOR, planPath, '--finalize-check', '--json', '--base', base],
+        { cwd: repoRoot, encoding: 'utf8' });
+      return JSON.parse(out.trim().split('\n').pop());
+    } catch (e) {
+      try { return JSON.parse(String(e.stdout || '').trim().split('\n').pop()); } catch (_) { return { result: 'crash' }; }
+    }
+  }
+  function setLedger(planPath, id, status) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const start = txt.indexOf('## Node Ledger');
+    const head = txt.slice(0, start), body = txt.slice(start);
+    const re = new RegExp('^(\\|\\s*' + id + '\\s*\\|\\s*)\\S+(\\s*\\|)', 'm');
+    fs.writeFileSync(planPath, head + body.replace(re, '$1' + status + '$2'));
+  }
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-FINALIZE-SWEEP-OVER-CHECKPOINT — FINALIZE MUST SWEEP WHAT REMAINS. A mid-run
+  //   checkpoint commit changes WHERE the serial work lives: before #802 it sat UNCOMMITTED and was
+  //   therefore INVISIBLE to the finalize attribution sweep (which enumerates `git diff <base>...HEAD`);
+  //   after #802 it is a real commit ON the branch and the sweep DOES range over it. That is the whole
+  //   audit: the checkpoint must not smuggle bytes past the sweep, and must not trip it either.
+  //   Driven through the EXACT `--finalize-check` subprocess cmdFinalize shells (the gate that runs
+  //   BEFORE any irreversible finalize side effect), over a branch a REAL open-ready checkpointed and a
+  //   REAL lane group merged.
+  //   GREEN: the sweep enumerates src/serial_a.js (proved directly against the branch diff) and PASSES,
+  //     because sA — the node that declared it — is `complete`. The checkpoint is attributed by exactly
+  //     the same rule that vouched for it at the seam; no new exemption, no allowband widening.
+  //   RED (the same tree, one mutation): flip sA's ledger row back to `pending` and the identical sweep
+  //     REFUSES `unattributed_change` naming src/serial_a.js. So the pass above is NOT vacuous, and a
+  //     checkpoint commit is NOT self-authorizing — had the checkpoint ever committed a path no closed
+  //     node declared, finalize would catch it here. Zero-mutation transition: nothing the sweep does
+  //     touches the tree, so the RED and GREEN runs differ only in the ledger byte.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, projDir, cacheDir, planPath } = makeMixedRepo();
+    const base = branchOffBase(repoRoot, 'workflow/seam-finalize');
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open.result === 'ok' && open.laneGroup && open.seamCheckpoint,
+      '#802-AC6-FINALIZE precondition: open-ready checkpointed and co-opened, got ' + JSON.stringify({ result: open.result, seamCheckpoint: open.seamCheckpoint }));
+    const close = driveGroupToMerge(repoRoot, cacheDir);
+    assert(close.result === 'ok' && close.barrier === 'group_passed',
+      '#802-AC6-FINALIZE precondition: the group merged green, got ' + JSON.stringify(close));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-AC6-FINALIZE precondition: the branch carries exactly one mid-run checkpoint commit');
+    // The sweep's own input: the checkpointed path IS in the branch diff (pre-#802 it was uncommitted
+    // and absent from it). Without this the pass below would prove nothing.
+    const branchDiff = execFileSync('git', ['-C', repoRoot, 'diff', base + '...HEAD', '--name-only'], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(Boolean);
+    assert(branchDiff.includes('src/serial_a.js'),
+      '#802-AC6-FINALIZE: the checkpointed serial path is IN the finalize sweep\'s branch diff, got ' + JSON.stringify(branchDiff));
+    seedFinalValidation(repoRoot, projDir, planPath);
+    const green = finalizeCheck(repoRoot, planPath, base);
+    assert(green.result === 'pass',
+      '#802-AC6-FINALIZE (GREEN): the finalize gate passes over the checkpoint-carrying branch, got ' + JSON.stringify(green));
+    // RED: the checkpoint commit is NOT self-authorizing — remove the attributing node's `complete`
+    // status and the identical sweep refuses on exactly that path.
+    setLedger(planPath, 'sA', 'pending');
+    seedFinalValidation(repoRoot, projDir, planPath);
+    const red = finalizeCheck(repoRoot, planPath, base);
+    assert(red.result === 'refuse' && red.reason === 'unattributed_change',
+      '#802-AC6-FINALIZE (RED): with sA no longer complete the sweep refuses unattributed_change, got ' + JSON.stringify(red));
+    assert(Array.isArray(red.unattributed) && red.unattributed.includes('src/serial_a.js'),
+      '#802-AC6-FINALIZE (RED): the refusal names the checkpointed path, got ' + JSON.stringify(red.unattributed));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-DISCARD-RESETS-CHECKPOINT — DISCARD MUST RESET THE COMMITTED WORK. A discard is a
+  //   user-consented abandon: nothing the run produced may survive on the surviving base branch. The
+  //   seam checkpoint is the first mechanism that COMMITS production bytes mid-run, so this is the
+  //   audit that the abandon still reverses everything — the checkpoint must ride the feature branch
+  //   to deletion, not leak onto the base. Driven through the REAL `kaola-workflow-claim.js release`
+  //   subprocess (KAOLA_WORKFLOW_OFFLINE=1 so the advisory claim-label clearing is a local no-op).
+  //   RED-then-GREEN in ONE run: the pre-discard assertions establish that the committed serial work
+  //     really IS reachable from the feature-branch HEAD (the state a broken discard would strand on
+  //     the base branch); the post-discard assertions prove the base branch carries neither the
+  //     checkpoint commit nor the file. Falsification: if release merely archived the folder and left
+  //     the branch, `src/serial_a.js` would still be reachable from HEAD after the call.
+  //   The checkpoint here is the REAL `runSeamCheckpoint` transaction (the same function open-ready
+  //   calls), driven directly rather than through `open-ready`, so the branch carries the checkpoint
+  //   commit WITHOUT a live lane group: group formation force-adds tracked evidence stubs INSIDE the
+  //   project folder, and archiving that folder then leaves tracked deletions that trip release's own
+  //   tree-dirty gate — a pre-existing property of discarding mid-group, unrelated to the checkpoint
+  //   under audit and one that would mask it.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const { repoRoot, projDir, planPath, g } = makeMixedRepo();
+    // Model an in-place run the way discard actually meets one: the run's own `kaola-workflow/`
+    // state is NOT tracked on the branch (it is committed only at finalize), so the archive move
+    // leaves no tracked deletion behind. Without this the release's own tree-dirty gate would skip
+    // the base restore for a reason that has nothing to do with the checkpoint under audit.
+    g(['rm', '-r', '-q', '--cached', 'kaola-workflow']);
+    fs.appendFileSync(path.join(repoRoot, '.gitignore'), 'kaola-workflow/\n');
+    g(['add', '.gitignore']);
+    g(['commit', '-m', 'chore: untrack run state']);
+    const base = branchOffBase(repoRoot, 'workflow/seam-discard');
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: test-project', 'status: active', '',
+      '## Sink', 'branch: workflow/seam-discard', 'base_branch: ' + base,
+      'issue_number: 802', 'sink: merge', 'run_posture: in-place', ''
+    ].join('\n'));
+    // The real repair transaction, run against this repo (it resolves its git root from cwd).
+    const prevCwd = process.cwd();
+    let cp;
+    try {
+      process.chdir(repoRoot);
+      cp = nodeMod.runSeamCheckpoint(planPath, 'test-project', nodeMod.shellNode, (p) => fs.readFileSync(p, 'utf8'));
+    } finally { process.chdir(prevCwd); }
+    assert(cp && cp.ok === true && JSON.stringify(cp.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-AC6-DISCARD precondition: the real seam checkpoint committed the attributed serial path, got ' + JSON.stringify(cp));
+    assert(seamCommitCount(repoRoot) === 1,
+      '#802-AC6-DISCARD precondition: the branch carries exactly one mid-run checkpoint commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    // PRE: the committed serial work is genuinely on the branch — this is what discard must undo.
+    assert(reachableFromHead(repoRoot, 'src/serial_a.js'),
+      '#802-AC6-DISCARD (pre): the checkpointed serial file IS reachable from the feature-branch HEAD');
+    assert(headBranch(repoRoot) === 'workflow/seam-discard',
+      '#802-AC6-DISCARD (pre): the run is on its feature branch');
+    const rel = (() => {
+      const env = Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' });
+      try {
+        return JSON.parse(execFileSync('node', [CLAIM_CLI, 'release', '--project', 'test-project'],
+          { cwd: repoRoot, encoding: 'utf8', env }).trim().split('\n').pop());
+      } catch (e) {
+        try { return JSON.parse(String(e.stdout || '').trim().split('\n').pop()); } catch (_) { return { released: false, crash: String(e && e.message) }; }
+      }
+    })();
+    assert(rel.released === true,
+      '#802-AC6-DISCARD: release succeeded over the checkpoint-carrying branch, got ' + JSON.stringify(rel));
+    // POST: the base branch survives, the feature branch (and its checkpoint commit) is gone.
+    assert(headBranch(repoRoot) === base,
+      '#802-AC6-DISCARD: the base branch was restored, got ' + JSON.stringify(headBranch(repoRoot)));
+    assert(!branchNames(repoRoot).includes('workflow/seam-discard'),
+      '#802-AC6-DISCARD: the feature branch was deleted, got ' + JSON.stringify(branchNames(repoRoot)));
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-AC6-DISCARD: NO kaola-checkpoint commit survives on the base branch, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    assert(!reachableFromHead(repoRoot, 'src/serial_a.js'),
+      '#802-AC6-DISCARD: the committed serial work is NOT reachable from the surviving base branch');
+    assert(!fs.existsSync(planPath),
+      '#802-AC6-DISCARD: the live project folder was archived away');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-EPOCH-LINEAGE-FAIL-CLOSED — EPOCH-LINEAGE ATTRIBUTION UNDER A LIVE CHILD EPOCH. A
+  //   re-plan is claim-preserving: under a schema-2 CHILD epoch the parent epochs' uncommitted
+  //   production work is still in THIS worktree, so attribution must union the SEALED ancestors'
+  //   closed rows. The safety-critical half is the failure mode: when the lineage cannot be resolved,
+  //   the checkpoint must FAIL CLOSED — never fall back to the child-only union, because that would
+  //   silently narrow the attributed set (a parent-epoch path reading as foreign) or, worse, vouch
+  //   for bytes on a lineage nothing proved.
+  //   This fixture is the SHARPEST form of that: the ONLY dirty path (src/serial_a.js) IS attributable
+  //   by the CHILD ledger alone, so a fail-OPEN implementation — one that shrugged off an unresolvable
+  //   lineage and used the child union — would happily checkpoint and co-open. It must not.
+  //   RED (fail-open): result 'ok', a kaola-checkpoint commit, a formed lane group.
+  //   GREEN: typed `seam_checkpoint_failed` whose detail names the epoch-lineage cause, zero commits,
+  //     zero mutation, and NO silent serial substitute either.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    // Promote the frozen plan to a schema-2 CHILD epoch (plan_epoch >= 2 + a parent_plan_hash makes
+    // resolveEpochLineagePlans APPLICABLE) while leaving .cache/epochs/ absent — the lineage is
+    // applicable but unresolvable, exactly the state a half-completed / tampered replan leaves behind.
+    // Re-stamp plan_hash over the edited body — the integrity prologue runs BEFORE the seam repair,
+    // so a tampered hash would refuse plan_integrity_failed and never reach the lineage at all.
+    const raw = fs.readFileSync(planPath, 'utf8');
+    const body = raw.replace(/^<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->\n\n?/, '')
+      .replace(/^## Meta$/m, '## Meta\nepoch_schema_version: 2\nplan_epoch: 2\nparent_plan_hash: ' + 'a'.repeat(64));
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n\n' + body);
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-AC6-EPOCH-FAILCLOSED: an unresolvable lineage is a typed seam_checkpoint_failed halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(typeof r.detail === 'string' && /epoch_lineage|snapshot|state_epoch/.test(r.detail),
+      '#802-AC6-EPOCH-FAILCLOSED: the halt names the LINEAGE cause (never a generic git failure), got ' + JSON.stringify(r.detail));
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-AC6-EPOCH-FAILCLOSED: NOTHING was committed — the child-only union was NOT used as a fallback, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    assert(!readRS(cacheDir), '#802-AC6-EPOCH-FAILCLOSED: no running set was written (zero mutation)');
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-AC6-EPOCH-FAILCLOSED: NO serial open either — the frontier stays pending');
+    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    assert(staged === '', '#802-AC6-EPOCH-FAILCLOSED: the index is left unstaged, got ' + JSON.stringify(staged));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-AC6-EPOCH-LINEAGE-UNION — the POSITIVE half of the same audit, pinned directly on the
+  //   exported attribution proof. The lineage WALKER itself (seals, projection, contiguity) is the
+  //   validator's own verified machinery with its own suite; what must be pinned HERE is that
+  //   seamCheckpointAttribution CONSUMES it correctly. The resolver is stubbed on the shared validator
+  //   exports (the same module object the function resolves at call time) so the three consumption
+  //   rules are isolated from snapshot-fixture mechanics:
+  //     (a) a sealed ancestor's COMPLETE write-capable row widens the union (its declared path becomes
+  //         attributable, and its id is named on the checkpoint);
+  //     (b) an ancestor row that is NOT complete does NOT widen it — unioning DECLARATIONS without
+  //         ATTRIBUTION would be a laundering primitive (a parent node that never ran carrying its
+  //         file through unreviewed);
+  //     (c) an applicable-but-unverified lineage returns ok:false, so the caller halts instead of
+  //         falling back to the child-only union.
+  //   RED for (a): without the lineage branch the parent path is absent from the union (asserted
+  //     directly by the not-applicable control below, which is the same call with the resolver off).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const pv = require('./kaola-workflow-plan-validator.js');
+    const childPlan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| c1 | tdd-guide | — | child_only.js | 1 | sequence |',
+      '| c2 | tdd-guide | c1 | later.js | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| c1 | complete |', '| c2 | pending |', '',
+    ].join('\n') + '\n';
+    const mkLineage = (ledgerRows) => ({
+      applicable: true, ok: true,
+      lineagePlans: [{
+        epoch: 1,
+        // Same shape the validator's own walker yields (parseNodes rows carry role + writeSetRaw).
+        // p3 is the WRITE-CAPABILITY probe: a CLOSED ancestor row whose role may not legally declare a
+        // write set at all, so its declaration must not widen the union either (case (d)).
+        nodes: [
+          { id: 'p1', role: 'implementer', writeSetRaw: 'parent_epoch.js' },
+          { id: 'p2', role: 'implementer', writeSetRaw: 'parent_never_ran.js' },
+          { id: 'p3', role: 'code-reviewer', writeSetRaw: 'parent_readonly_row.js' },
+        ],
+        ledger: new Map(ledgerRows),
+      }],
+    });
+    const original = pv.resolveEpochLineagePlans;
+    try {
+      // Control: lineage NOT applicable ⇒ child-only union (the pre-lineage behavior, and the RED
+      // baseline for (a) — the parent path is simply not there).
+      pv.resolveEpochLineagePlans = () => ({ applicable: false });
+      const childOnly = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(childOnly.ok && childOnly.union.has('child_only.js') && !childOnly.union.has('parent_epoch.js'),
+        '#802-AC6-EPOCH-UNION (control): a non-child plan attributes child rows ONLY, got ' + JSON.stringify([...(childOnly.union || [])]));
+      // (a) + (b): a COMPLETE ancestor row widens the union; a non-complete one never does.
+      pv.resolveEpochLineagePlans = () => mkLineage([['p1', 'complete'], ['p2', 'pending'], ['p3', 'complete']]);
+      const unioned = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(unioned.ok && unioned.union.has('parent_epoch.js'),
+        '#802-AC6-EPOCH-UNION (a): a sealed ancestor\'s COMPLETE row widens the attributed set, got ' + JSON.stringify([...(unioned.union || [])]));
+      assert(unioned.union.has('child_only.js'),
+        '#802-AC6-EPOCH-UNION (a): the child rows are still attributed alongside the lineage');
+      assert(!unioned.union.has('parent_never_ran.js'),
+        '#802-AC6-EPOCH-UNION (b): an ancestor row that is NOT complete never widens the set — declarations without attribution would be a laundering primitive');
+      assert(unioned.nodeIds.includes('p1') && !unioned.nodeIds.includes('p2'),
+        '#802-AC6-EPOCH-UNION (b): the checkpoint names only the ancestors it actually attributed to, got ' + JSON.stringify(unioned.nodeIds));
+      assert(!unioned.union.has('parent_readonly_row.js') && !unioned.nodeIds.includes('p3'),
+        '#802-AC6-EPOCH-UNION (d): a CLOSED ancestor row whose ROLE may not declare a write set widens nothing either — the write-capability wall applies across the lineage, not just to the child, got ' + JSON.stringify({ union: [...(unioned.union || [])], nodeIds: unioned.nodeIds }));
+      // (c) applicable but UNVERIFIED ⇒ ok:false, so the caller halts rather than misattributes.
+      pv.resolveEpochLineagePlans = () => ({ applicable: true, ok: false, reason: 'snapshot_manifest_invalid' });
+      const unverified = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(unverified.ok === false && /^epoch_lineage_/.test(String(unverified.reason)),
+        '#802-AC6-EPOCH-UNION (c): an unverified lineage returns a typed ok:false — never the child-only fallback, got ' + JSON.stringify(unverified));
+      // (c') a THROWING resolver is also fail-closed, not a swallowed pass.
+      pv.resolveEpochLineagePlans = () => { throw new Error('boom'); };
+      const threw = nodeMod.seamCheckpointAttribution(childPlan, '/p/workflow-plan.md');
+      assert(threw.ok === false && threw.reason === 'epoch_lineage_unreadable',
+        '#802-AC6-EPOCH-UNION (c\'): a crashing lineage resolver fails closed, got ' + JSON.stringify(threw));
+    } finally {
+      pv.resolveEpochLineagePlans = original;
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-QUOTED-PATH-NO-PARTIAL-CHECKPOINT — the git-quoted (non-ASCII) dirty path. The parent-clean
+  //   fence's porcelain parser strips a path's SURROUNDING double quotes but does NOT decode git's
+  //   C-style escapes, so `src/café.js` arrives as the literal `src/caf\303\251.js`. Two things must
+  //   hold, and only the second was ever obvious:
+  //     1. NO SILENT PARTIAL CHECKPOINT. The frontier here carries BOTH an ordinary attributable path
+  //        (src/serial_a.js) and a quoted one. A partial repair — committing the attributable half and
+  //        proceeding, or committing it and then failing — would leave the run's own bytes half-landed
+  //        with no journal saying so. Nothing may be committed and nothing may be staged.
+  //     2. NO MISATTRIBUTION. See the unit pin below for the sharp case; here the quoted path must not
+  //        be silently dropped from the dirty set either (dropping it is "assume clean" by omission).
+  //   The outcome is a LOUD typed halt naming the quoted path — acceptable per the fail-closed rule —
+  //   and emphatically NOT a serial degrade.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ extraDirty: [{ path: 'src/café.js', body: '// non-ASCII production path\n' }] });
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-QUOTED-PATH: a git-quoted dirty path is a typed seam_checkpoint_failed halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(typeof r.detail === 'string' && r.detail.indexOf('quoted_path_unsupported') === 0,
+      '#802-QUOTED-PATH: the halt says WHY in its own vocabulary (not a raw git pathspec error), got ' + JSON.stringify(r.detail));
+    assert(r.detail.indexOf('caf') !== -1,
+      '#802-QUOTED-PATH: the halt names the offending path, got ' + JSON.stringify(r.detail));
+    // 1. NO PARTIAL CHECKPOINT: the attributable sibling was NOT committed on its own.
+    assert(seamCommitCount(repoRoot) === 0 && gitSubjects(repoRoot).length === before,
+      '#802-QUOTED-PATH: NOTHING was committed — no partial checkpoint of the attributable half, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    assert(staged === '', '#802-QUOTED-PATH: the index is left unstaged, got ' + JSON.stringify(staged));
+    assert(!reachableFromHead(repoRoot, 'src/serial_a.js'),
+      '#802-QUOTED-PATH: the attributable serial path is still UNCOMMITTED (it was not half-landed)');
+    // and NOT a silent serial degrade.
+    assert(!readRS(cacheDir), '#802-QUOTED-PATH: no running set was written (zero mutation)');
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-QUOTED-PATH: NO serial open either — the frontier stays pending');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-QUOTED-PATH-NO-MISATTRIBUTION — the sharp case, pinned on the exported repair directly.
+  //   A real file named `src/a<TAB>b.js` is reported by the fence as the literal `src/a\tb.js`. The
+  //   attribution comparison normalizes every backslash to `/`, so that string COMPARES EQUAL to a
+  //   declared `src/a/tb.js` — i.e. a FOREIGN file would be vouched for by a node that never wrote it.
+  //   Before the guard, that misattribution was real and was only prevented from landing because the
+  //   same undecoded string matched no file when `git add` ran — fail-closed by coincidence, one step
+  //   downstream, with a raw git error as the operator's only signal.
+  //   RED (asserted here, not merely narrated): the normalized form IS in the attributed union, so the
+  //     attribution step alone WOULD have vouched for it.
+  //   GREEN: runSeamCheckpoint refuses at the quoted-path guard BEFORE attribution runs — a typed
+  //     `quoted_path_unsupported`, so the misattribution never enters the attributed set at all.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const planText = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| sA | tdd-guide | — | src/a/tb.js | 1 | sequence |',
+      '| pA | tdd-guide | sA | par_a.js | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| sA | complete |', '| pA | pending |', '',
+    ].join('\n') + '\n';
+    // RED: the normalization really does fold the escaped tab onto the declared path.
+    const attributed = nodeMod.seamCheckpointAttribution(planText, '/p/workflow-plan.md');
+    assert(attributed.ok && attributed.union.has('src/a/tb.js'),
+      '#802-QUOTED-MISATTR (RED): the declared path IS in the attributed union, so the escaped form would normalize onto it');
+    // GREEN: the guard refuses the whole checkpoint before attribution can vouch for it.
+    const fenceShell = () => ({ exitCode: 1, result: 'refuse', reason: 'parent_dirty', dirty: ['src/a\\tb.js'] });
+    const out = nodeMod.runSeamCheckpoint('/p/workflow-plan.md', 'test-project', fenceShell, () => planText);
+    assert(out.ok === false && out.reason === 'seam_checkpoint_failed',
+      '#802-QUOTED-MISATTR (GREEN): the repair refuses rather than vouching for a quoted path, got ' + JSON.stringify(out));
+    assert(String(out.detail).indexOf('quoted_path_unsupported') === 0,
+      '#802-QUOTED-MISATTR (GREEN): the refusal is the quoted-path guard, NOT a downstream git failure, got ' + JSON.stringify(out.detail));
+    assert(out.unattributed === undefined,
+      '#802-QUOTED-MISATTR (GREEN): the guard preempts attribution entirely — no unattributable verdict is rendered on an undecodable path, got ' + JSON.stringify(out.unattributed));
+  });
+
+  // -------------------------------------------------------------------------
+  // #802 D7 — THE SEAM MUST NOT HALT ON A CONSUMER'S GIT CONFIG, AND MUST NOT BYPASS IT EITHER.
+  //
+  // The checkpoint fires MID-SCHEDULE (unlike every finalize-time commit), so a repo-local hook or a
+  // key-less `commit.gpgsign true` could convert a routine seam repair into a hard
+  // `seam_checkpoint_failed` — a state that merely serial-degraded before the repair existed, i.e. a
+  // regression introduced by the repair itself. The FIRST attempt at this fix added `--no-verify`, on
+  // the reasoning "this is internal scheduler bookkeeping". That reasoning does not hold: the seam
+  // checkpoint is the ONLY scheduler commit that lands USER PRODUCTION SOURCE (`kw-stub` is an empty
+  // `.cache` stub commit; `kw-leg`/`kw-synth` are in-lane/merge commits), so bypassing `pre-commit`
+  // disarmed the consumer's CONTENT INSPECTION on exactly the bytes it exists to see — permanently,
+  // since nothing re-examines them once they are in history.
+  //
+  // The corrected design splits the two config classes by what they actually assert:
+  //   ATTRIBUTION (identity, signing) — overridden. `-c user.email/user.name` inject the scheduler's own
+  //     identity; `-c commit.gpgsign=false` disables signing. Neither says anything about the BYTES, so
+  //     neither may halt a run.
+  //   CONTENT INSPECTION (`pre-commit`, `commit-msg`, `prepare-commit-msg`) — honored, never bypassed.
+  //     A veto DEGRADES the seam to the pre-#802 serial path under the typed, visible label
+  //     `serialDegradeReason: 'seam_checkpoint_declined'`. A labeled degrade to a known-good path is
+  //     the fail-safe the doctrine wants; wedging a run that would otherwise complete is strictly worse.
+  //
+  // Every scenario below PROVES ITS OWN HOSTILITY FIRST (an ordinary `git commit` is shown to fail, or
+  // the absence of an identity is shown to fail a commit) before asserting how the seam behaves —
+  // without that the greens would prove nothing.
+  // -------------------------------------------------------------------------
+
+  // Strip any ambient (global/system) git identity from a driven run, so `noIdentity` is a real probe
+  // on a developer box that has one configured. GIT_CONFIG_GLOBAL=/dev/null + GIT_CONFIG_NOSYSTEM=1 is
+  // git's own supported way to say "repo config only".
+  const NO_AMBIENT_GIT_IDENTITY = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  // PROVE a fixture bites: an ordinary commit in this repo is vetoed. `--allow-empty` so the probe
+  // leaves nothing behind whichever guard trips.
+  function ordinaryCommitRefused(repoRoot, extraEnv) {
+    try {
+      execFileSync('git', ['-C', repoRoot, 'commit', '--allow-empty', '-m', 'hostility probe'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: Object.assign({}, process.env, extraEnv || {}) });
+      return false;
+    } catch (_) { return true; }
+  }
+
+  // -------------------------------------------------------------------------
+  // #802-D7-PRE-COMMIT-DEGRADES (demonstration (a); closes regression N1) — A HOSTILE `pre-commit` HOOK
+  //   DEGRADES THE SEAM, IT DOES NOT WEDGE THE RUN. Pre-#802 this mixed dirty-parent shape serial-
+  //   degraded and closed green. The `--no-verify` fix made it CO-OPEN instead, and the very next
+  //   scheduler commit inside the group (`kw-leg`, which carries no bypass) then hard-failed at the
+  //   last-member close with `leg_capture_failed` — a live lane group that can never merge. The fix had
+  //   moved the halt from the open seam to the close seam, where it is strictly worse.
+  //   RED (the `--no-verify` tree): result ok + laneGroup formed; driving the group to its last-member
+  //     close returns `leg_capture_failed` and the run is wedged.
+  //   GREEN: NO group forms at all — the checkpoint is refused by the hook, the open degrades to a
+  //     single serial write labeled `seam_checkpoint_declined`, nothing is committed, and the run
+  //     CONTINUES (the serial member closes green). `leg_capture_failed` is structurally unreachable
+  //     because no leg is ever provisioned.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ hostilePreCommit: true });
+    assert(ordinaryCommitRefused(repoRoot),
+      '#802-D7-PRE-COMMIT precondition: the fixture\'s pre-commit hook really does veto an ordinary commit');
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok',
+      '#802-D7-PRE-COMMIT: the hook veto is a DEGRADE, not a halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(r.serialDegradeReason === 'seam_checkpoint_declined',
+      '#802-D7-PRE-COMMIT: the degrade is LABELED with its own typed cause (never silent, never the bare parent_dirty), got ' + JSON.stringify(r.serialDegradeReason));
+    assert(r.seamCheckpointDeclined && typeof r.seamCheckpointDeclined.detail === 'string' && r.seamCheckpointDeclined.detail.indexOf('git:') === 0,
+      '#802-D7-PRE-COMMIT: the response names WHICH refusal produced the degrade, got ' + JSON.stringify(r.seamCheckpointDeclined));
+    assert(!r.laneGroup && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].kind === 'write' && !r.opened[0].group_id,
+      '#802-D7-PRE-COMMIT: the known-good single serial write is what we degraded ONTO, got ' + JSON.stringify({ laneGroup: r.laneGroup, opened: r.opened && r.opened.map(n => n.id) }));
+    assert(!r.seamCheckpoint,
+      '#802-D7-PRE-COMMIT: no checkpoint is claimed, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(gitSubjects(repoRoot).length === before && seamCommitCount(repoRoot) === 0,
+      '#802-D7-PRE-COMMIT: the vetoed commit did NOT land — git never advances the ref on a failed commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    const rs = readRS(cacheDir);
+    assert(rs && !rs.lane_group,
+      '#802-D7-PRE-COMMIT: no lane_group ⇒ no leg ⇒ `leg_capture_failed` is structurally unreachable, got ' + JSON.stringify(rs && rs.lane_group));
+    // THE PIN THE REGRESSION IS ABOUT: the run keeps going. Close the serial member the degrade opened.
+    const openedId = r.opened[0].id;
+    fs.writeFileSync(path.join(repoRoot, openedId === 'pA' ? 'par_a.js' : 'par_b.js'), '// ' + openedId + ' serial work\n');
+    writeEvidence(cacheDir, openedId);
+    const close = runNode(repoRoot, ['close-node', '--node-id', openedId, '--project', 'test-project', '--json'], DEFAULT);
+    assert(close.result === 'ok' && close.reason !== 'leg_capture_failed',
+      '#802-D7-PRE-COMMIT: the degraded run CONTINUES — the serial member closes green, got ' + JSON.stringify({ result: close.result, reason: close.reason }));
+    assert(ledgerStatus(planPath, openedId) === 'complete',
+      '#802-D7-PRE-COMMIT: the closed member is complete, got ' + ledgerStatus(planPath, openedId));
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-NO-IDENTITY-PROCEEDS (demonstration (b); closes regression N2) — A REPO WITH NO
+  //   `user.email`/`user.name` PROCEEDS. Identity is ATTRIBUTION, not content: the scheduler's commits
+  //   are the scheduler's, so it names itself (`kaola-workflow <kaola-workflow@local>`) exactly as every
+  //   other scheduler commit already did, instead of inheriting nothing and hard-refusing at a seam
+  //   where pre-#802 the run simply proceeded.
+  //   RED (pre-fix): the checkpoint commit inherited no identity → git's "Please tell me who you are"
+  //     → seam_checkpoint_failed, a hard halt on a repo that used to run.
+  //   GREEN: the checkpoint lands, authored/committed by the scheduler identity, and the frontier
+  //     co-opens. NON-VACUOUS: an ordinary identity-less commit in this same repo is proved to fail.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ noIdentity: true });
+    assert(ordinaryCommitRefused(repoRoot, NO_AMBIENT_GIT_IDENTITY),
+      '#802-D7-NO-IDENTITY precondition: with no repo identity and no ambient one, an ordinary commit really does fail');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'],
+      Object.assign({}, DEFAULT, NO_AMBIENT_GIT_IDENTITY));
+    assert(r.result === 'ok',
+      '#802-D7-NO-IDENTITY: a repo with no configured identity does NOT halt at the seam, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(r.seamCheckpoint && JSON.stringify(r.seamCheckpoint.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-D7-NO-IDENTITY: the checkpoint committed the attributed serial path, got ' + JSON.stringify(r.seamCheckpoint));
+    const who = execFileSync('git', ['-C', repoRoot, 'log', '-1', '--format=%an <%ae>|%cn <%ce>', r.seamCheckpoint.commit],
+      { encoding: 'utf8' }).trim();
+    assert(who === 'kaola-workflow <kaola-workflow@local>|kaola-workflow <kaola-workflow@local>',
+      '#802-D7-NO-IDENTITY: the checkpoint is attributed to the INJECTED scheduler identity, got ' + JSON.stringify(who));
+    assert(r.laneGroup && r.laneGroup.members.length === 2 && !r.serialDegradeReason,
+      '#802-D7-NO-IDENTITY: the frontier co-opens (kw-stub carries the same injected identity), got ' + JSON.stringify({ laneGroup: r.laneGroup, serialDegradeReason: r.serialDegradeReason }));
+    assert(ledgerStatus(planPath, 'pA') === 'in_progress' && ledgerStatus(planPath, 'pB') === 'in_progress',
+      '#802-D7-NO-IDENTITY: both frontier members opened');
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.pA && rs.lane_group.legs.pB,
+      '#802-D7-NO-IDENTITY: both legs provisioned');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-SECRET-SCANNER-STILL-INSPECTS (demonstration (c); closes regression N3, SECURITY) —
+  //   A CONSUMER'S `pre-commit` SECRET SCANNER STILL SEES THE CHECKPOINT'S BYTES. The seam checkpoint is
+  //   the only scheduler commit that lands user production source, so `--no-verify` there did not DEFER
+  //   the scanner, it DEFEATED it: an ordinary commit of those bytes was blocked, the checkpoint
+  //   committed the very same bytes anyway, and the key was then in `git log -p --all` forever —
+  //   `kaola-workflow-claim.js` uses no `--no-verify`, so finalize would otherwise have surfaced it.
+  //   RED (the `--no-verify` tree): result ok, the checkpoint lands, and the AKIA key is reachable from
+  //     the branch — `git log -p --branches` contains it, permanently.
+  //   GREEN: the scanner is HANDED the checkpoint's staged content (proved directly, via a witness the
+  //     hook writes naming the paths it inspected — not merely inferred from a failed commit), it
+  //     vetoes, the seam degrades to serial, and the key never reaches the branch. NON-VACUOUS on both
+  //     sides — the scanner is proved to block an ordinary commit of the same bytes first, and the key
+  //     is proved present in the WORKING TREE afterwards, so the branch assertion is about the commit
+  //     and not about a missing file.
+  //   SCOPE, stated honestly: the assertion is over BRANCH history (`--branches`), not `--all`. The
+  //     per-node barrier baseline anchors a full-worktree snapshot commit under
+  //     `refs/kaola-workflow/barrier/**` at EVERY node open — pre-#802, on the serial path, identically
+  //     — so `--all` reaches uncommitted worktree bytes by construction, for reasons that have nothing
+  //     to do with this seam and that this fix neither creates nor changes. What the checkpoint could
+  //     newly do, and must not, is put them on the BRANCH, which is what gets pushed and finalized.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir } = makeMixedRepo({ secretScanner: true });
+    const SECRET = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const witnessPath = path.join(repoRoot, '.git', 'scanner-witness');
+    // PROVE hostility on the EXACT bytes under audit: stage the attributed serial path and try to commit.
+    let scannerBlockedOrdinaryCommit = false;
+    execFileSync('git', ['-C', repoRoot, 'add', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    try {
+      execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'ordinary commit of the same bytes', '--', 'src/serial_a.js'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { scannerBlockedOrdinaryCommit = true; }
+    // Restore the untracked/uncommitted state the seam is supposed to meet, and clear the witness so
+    // whatever it records next is unambiguously the SCHEDULER's commit.
+    execFileSync('git', ['-C', repoRoot, 'reset', '-q', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    assert(scannerBlockedOrdinaryCommit,
+      '#802-D7-SECRET-SCANNER precondition: the scanner really does block an ordinary commit of these bytes');
+    assert(seamCommitCount(repoRoot) === 0,
+      '#802-D7-SECRET-SCANNER precondition: the probe committed nothing');
+    fs.writeFileSync(witnessPath, '');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    // THE PIN THE ISSUE ASKS FOR: the content-inspecting hook SAW the checkpoint's bytes.
+    const witness = fs.readFileSync(witnessPath, 'utf8').split('\n').map(s => s.trim()).filter(Boolean);
+    assert(witness.includes('src/serial_a.js'),
+      '#802-D7-SECRET-SCANNER: the repo-local pre-commit scanner was HANDED the checkpoint\'s staged content, got ' + JSON.stringify(witness));
+    assert(r.result === 'ok' && r.serialDegradeReason === 'seam_checkpoint_declined',
+      '#802-D7-SECRET-SCANNER: the scanner vetoed the checkpoint and the seam DEGRADED, got ' + JSON.stringify({ result: r.result, reason: r.reason, serialDegradeReason: r.serialDegradeReason }));
+    assert(!r.laneGroup && !r.seamCheckpoint,
+      '#802-D7-SECRET-SCANNER: nothing was checkpointed and no group formed, got ' + JSON.stringify({ laneGroup: r.laneGroup, seamCheckpoint: r.seamCheckpoint }));
+    // THE SECURITY PIN: the key is in the working tree (so the check below is not vacuous) and on NO
+    // branch — no commit, no branch tip, no leg branch.
+    assert(fs.readFileSync(path.join(repoRoot, 'src', 'serial_a.js'), 'utf8').indexOf(SECRET) !== -1,
+      '#802-D7-SECRET-SCANNER: the payload really is in the working tree');
+    const branchHistory = execFileSync('git', ['-C', repoRoot, 'log', '-p', '--branches'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    assert(branchHistory.indexOf(SECRET) === -1,
+      '#802-D7-SECRET-SCANNER: the scanner was NOT defeated — the key never reached the branch');
+    assert(!readRS(cacheDir) || !readRS(cacheDir).lane_group,
+      '#802-D7-SECRET-SCANNER: no lane group, so no leg branch carries it either');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-PREPARE-COMMIT-MSG-DEGRADES (demonstration (d); closes regression N4) — THE HOOK CLASS
+  //   `--no-verify` NEVER COVERED. `--no-verify` skips only `pre-commit` and `commit-msg`; a
+  //   `prepare-commit-msg` hook exiting 1 still halted the seam. So the in-code comment that enumerated
+  //   what was "already inert" was an OVERCLAIM, and the audit it supported was wrong. With the bypass
+  //   removed the claim is moot for bypass purposes — but the behavior still has to be right, and the
+  //   answer is the same one every environment refusal gets: DEGRADE, LABELED.
+  //   RED (the `--no-verify` tree): result refuse / seam_checkpoint_failed — the run halts even though
+  //     the bypass was supposed to have covered "the hooks".
+  //   GREEN: result ok, `serialDegradeReason: 'seam_checkpoint_declined'`, nothing committed.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, planPath } = makeMixedRepo({ hostilePrepareCommitMsg: true });
+    assert(ordinaryCommitRefused(repoRoot),
+      '#802-D7-PREPARE-MSG precondition: the prepare-commit-msg hook really does veto an ordinary commit');
+    // And it is genuinely the class `--no-verify` does not cover — prove it against git itself.
+    let survivesNoVerify = false;
+    try {
+      execFileSync('git', ['-C', repoRoot, 'commit', '--no-verify', '--allow-empty', '-m', 'bypass probe'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { survivesNoVerify = true; }
+    assert(survivesNoVerify,
+      '#802-D7-PREPARE-MSG precondition: `--no-verify` does NOT disable prepare-commit-msg (the N4 overclaim)');
+    const before = gitSubjects(repoRoot).length;
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.serialDegradeReason === 'seam_checkpoint_declined',
+      '#802-D7-PREPARE-MSG: a prepare-commit-msg veto degrades, it does not halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, serialDegradeReason: r.serialDegradeReason }));
+    assert(!r.laneGroup && r.opened.length === 1,
+      '#802-D7-PREPARE-MSG: degraded onto the single serial write, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    assert(gitSubjects(repoRoot).length === before && seamCommitCount(repoRoot) === 0,
+      '#802-D7-PREPARE-MSG: nothing landed, got ' + JSON.stringify(gitSubjects(repoRoot)));
+    assert(ledgerStatus(planPath, r.opened[0].id) === 'in_progress',
+      '#802-D7-PREPARE-MSG: the serial member really opened');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-D7-KEYLESS-SIGNING-STILL-LANDS (demonstration (e); closes the other half of N1) — SIGNING IS
+  //   ATTRIBUTION, SO IT IS OVERRIDDEN AT EVERY SCHEDULER COMMIT SITE. `commit.gpgsign true` with an
+  //   unusable key says nothing about the bytes; letting it halt a run buys no safety at all. This is
+  //   the case that proves the override reaches ALL FOUR sites, because the group runs to completion:
+  //   checkpoint → `kw-stub` → `kw-leg` (×2) → `kw-synth`. `kw-leg`/`kw-synth` carried NO override
+  //   before this fix, so the group co-opened and then died at the last-member close.
+  //   RED (the `--no-verify` tree, which hardened only the first two sites): open ok + group formed,
+  //     then the last-member close returns `leg_capture_failed` — a live group that can never merge.
+  //   GREEN: the checkpoint lands, the group co-opens, and the last-member close merges
+  //     (`barrier: 'group_passed'`). NON-VACUOUS: an ordinary commit in this repo is proved to fail.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ keylessSigning: true });
+    assert(ordinaryCommitRefused(repoRoot),
+      '#802-D7-KEYLESS precondition: key-less `commit.gpgsign true` really does veto an ordinary commit');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && !r.serialDegradeReason,
+      '#802-D7-KEYLESS: signing config never halts NOR degrades the seam, got ' + JSON.stringify({ result: r.result, reason: r.reason, serialDegradeReason: r.serialDegradeReason }));
+    assert(r.seamCheckpoint && JSON.stringify(r.seamCheckpoint.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-D7-KEYLESS: the checkpoint landed, got ' + JSON.stringify(r.seamCheckpoint));
+    assert(seamCommitCount(repoRoot) === 1 && r.laneGroup && r.laneGroup.members.length === 2,
+      '#802-D7-KEYLESS: exactly one checkpoint commit and a formed lane group, got ' + JSON.stringify({ subjects: gitSubjects(repoRoot), laneGroup: r.laneGroup }));
+    // THE N1 PIN: drive the group to its LAST-MEMBER CLOSE. This is the seam the `--no-verify` fix
+    // wedged — `kw-leg` and `kw-synth` had no signing override, so the capture died here.
+    const close = driveGroupToMerge(repoRoot, cacheDir);
+    assert(close.result === 'ok' && close.barrier === 'group_passed',
+      '#802-D7-KEYLESS: the last-member close MERGES over key-less signing, got ' + JSON.stringify(close));
+    assert(close.reason !== 'leg_capture_failed',
+      '#802-D7-KEYLESS: the close is not the leg-capture wedge, got ' + JSON.stringify(close.reason));
+    assert(ledgerStatus(planPath, 'pA') === 'complete' && ledgerStatus(planPath, 'pB') === 'complete',
+      '#802-D7-KEYLESS: both members completed');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-POST-COMMIT-FENCE-DISCLOSES-HEAD — THE ONE HALT THAT IS NOT ZERO-MUTATION. Steps 1-3 of
+  //   the repair halt before or without a landed commit; the step-4 RE-FENCE halts AFTER the checkpoint
+  //   commit is already in history. Reporting that as a bare `seam_checkpoint_failed` told the caller
+  //   "the operation refused" over a tree whose HEAD had moved — contradicting the design, the in-code
+  //   contract, the ADR and the operator hint, all of which claimed zero mutation.
+  //   Driven end-to-end through the REAL open-ready over a REAL repo. The concurrent writer is modelled
+  //   by a `post-commit` hook (git ignores its exit status, so the checkpoint commit lands normally and
+  //   only the RE-fence sees the new bytes) — the same shape as a real writer landing a file between
+  //   the two fence spawns.
+  //   RED (pre-fix): result refuse / seam_checkpoint_failed with NO `commit` field, while HEAD advanced
+  //     and a kaola-checkpoint commit exists.
+  //   GREEN: the refusal carries `commit` (= the new HEAD) and `committed` (the paths), and the operator
+  //     hint says HEAD advanced and names the commit. Still a HALT: no lane group, no running set, the
+  //     ledger untouched — and the concurrent writer's bytes are NOT destroyed (no auto-rollback).
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo({ postCommitWriter: true });
+    const before = headSha(repoRoot);
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    const after = headSha(repoRoot);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-POST-FENCE: the re-fence failure is the typed halt, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+    assert(typeof r.detail === 'string' && r.detail.indexOf('post_commit_fence:') === 0,
+      '#802-POST-FENCE: the halt names the POST-COMMIT fence (not a step-3 git failure), got ' + JSON.stringify(r.detail));
+    // The fixture really did advance HEAD — without this the disclosure below would be untested.
+    assert(after !== before && seamCommitCount(repoRoot) === 1,
+      '#802-POST-FENCE precondition: the checkpoint commit LANDED and HEAD advanced, got ' + JSON.stringify({ before, after, subjects: gitSubjects(repoRoot) }));
+    // THE PIN: the refusal discloses the mutation it left behind.
+    assert(r.commit === after,
+      '#802-POST-FENCE: the refusal carries the LANDED commit (the advanced HEAD), got ' + JSON.stringify({ commit: r.commit, head: after }));
+    assert(Array.isArray(r.committed) && JSON.stringify(r.committed) === JSON.stringify(['src/serial_a.js']),
+      '#802-POST-FENCE: the refusal names what went into that commit, got ' + JSON.stringify(r.committed));
+    assert(typeof r.operator_hint === 'string' && /HEAD HAS ADVANCED/.test(r.operator_hint) && r.operator_hint.indexOf(after) !== -1,
+      '#802-POST-FENCE: the operator hint says HEAD advanced and names the commit, got ' + JSON.stringify(r.operator_hint));
+    // Still a HALT, and still no rollback: the concurrent writer's bytes survive.
+    assert(!r.laneGroup && !readRS(cacheDir),
+      '#802-POST-FENCE: no lane group and no running set — the frontier did NOT open, got ' + JSON.stringify({ laneGroup: r.laneGroup, rs: readRS(cacheDir) }));
+    assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
+      '#802-POST-FENCE: the ledger is untouched');
+    assert(fs.existsSync(path.join(repoRoot, 'concurrent.js')),
+      '#802-POST-FENCE: the concurrent writer\'s bytes were NOT auto-reset away — disclosure, not silent data loss');
+    assert(execFileSync('git', ['-C', repoRoot, 'cat-file', '-p', after + ':src/serial_a.js'], { encoding: 'utf8' }).length > 0,
+      '#802-POST-FENCE: the attributed serial path really is inside the disclosed commit');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-ATTRIBUTION-WRITE-CAPABLE — ATTRIBUTION IS A GATE ON A PRIMITIVE THAT COMMITS, so it
+  //   enforces its OWN stated contract ("every dirty path must be vouched for by a CLOSED WRITE-CAPABLE
+  //   row") instead of inheriting it from the freeze validator. Accepting any `complete` row with a
+  //   non-empty declared set let a read-only role's stray declaration vouch for production bytes.
+  //   RED (pre-fix): a `complete` code-reviewer row declaring src/reviewer-owned.js put that path in the
+  //     attributed union, and runSeamCheckpoint reported committed:["src/reviewer-owned.js"].
+  //   GREEN: the read-only row contributes nothing (not to the union, not to nodeIds), the write-capable
+  //     sibling still does, and a dirty path vouched for only by the read-only row is a loud
+  //     seam_checkpoint_unattributable halt.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const planText = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| rv   | code-reviewer | —  | src/reviewer-owned.js | 1 | sequence |',
+      '| ex   | code-explorer | —  | src/explorer-owned.js | 1 | sequence |',
+      '| impl | implementer   | rv | src/impl-owned.js     | 1 | sequence |',
+      '| pA   | tdd-guide     | impl | par_a.js            | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| rv | complete |', '| ex | complete |', '| impl | complete |', '| pA | pending |', '',
+    ].join('\n') + '\n';
+    const a = nodeMod.seamCheckpointAttribution(planText, '/p/workflow-plan.md');
+    assert(a.ok === true, '#802-WRITE-CAPABLE: attribution resolves, got ' + JSON.stringify(a));
+    assert(!a.union.has('src/reviewer-owned.js') && !a.nodeIds.includes('rv'),
+      '#802-WRITE-CAPABLE: a COMPLETE read-only (code-reviewer) row vouches for NOTHING, got ' + JSON.stringify({ union: [...a.union], nodeIds: a.nodeIds }));
+    assert(!a.union.has('src/explorer-owned.js') && !a.nodeIds.includes('ex'),
+      '#802-WRITE-CAPABLE: the same holds for a read-PRODUCER role, got ' + JSON.stringify({ union: [...a.union], nodeIds: a.nodeIds }));
+    assert(a.union.has('src/impl-owned.js') && a.nodeIds.includes('impl'),
+      '#802-WRITE-CAPABLE: a write-capable role\'s CLOSED row still attributes normally, got ' + JSON.stringify({ union: [...a.union], nodeIds: a.nodeIds }));
+    // End-to-end: dirt vouched for ONLY by the read-only row is a loud halt, never a commit. The fence is
+    // stubbed (the halt lands at step 2, before any git write) so this needs no repo.
+    const fenceShell = () => ({ exitCode: 1, result: 'refuse', reason: 'parent_dirty', dirty: ['src/reviewer-owned.js'] });
+    const out = nodeMod.runSeamCheckpoint('/p/workflow-plan.md', 'test-project', fenceShell, () => planText);
+    assert(out.ok === false && out.reason === 'seam_checkpoint_unattributable',
+      '#802-WRITE-CAPABLE: the repair refuses to vouch for a read-only row\'s declaration, got ' + JSON.stringify(out));
+    assert(Array.isArray(out.unattributed) && out.unattributed.includes('src/reviewer-owned.js'),
+      '#802-WRITE-CAPABLE: the halt names the path it would have wrongly committed, got ' + JSON.stringify(out.unattributed));
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-SEAM-WRITE-CAPABLE-ROLES-DRIFT — the write-capability list is a RESTATEMENT of the validator's
+  //   own authoring rule ("a role outside WRITE_ROLES, other than the sink role, may not declare a write
+  //   set"), because the validator does not export WRITE_ROLES. A restatement is only safe while it is
+  //   mutation-proven, so this pin reads the validator's SOURCE and asserts set equality: adding a role
+  //   to WRITE_ROLES without adding it here (or vice versa) turns this RED. It also asserts the anchors
+  //   it reads still exist, so the pin can never pass vacuously by failing to find them.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const src = fs.readFileSync(path.join(__dirname, 'kaola-workflow-plan-validator.js'), 'utf8');
+    const m = src.match(/const WRITE_ROLES = new Set\(\[([^\]]*)\]\);/);
+    assert(m, '#802-ROLES-DRIFT: the validator still declares `const WRITE_ROLES = new Set([...]);` — the anchor this pin reads');
+    const tm = src.match(/const TERMINAL_ROLE = '([^']+)';/);
+    assert(tm, '#802-ROLES-DRIFT: the validator still declares `const TERMINAL_ROLE = \'...\';` — the sink-role anchor');
+    const rule = src.match(/if \(n\.role !== TERMINAL_ROLE && !WRITE_ROLES\.has\(n\.role\) && n\.writeSet\.size\)/);
+    assert(rule, '#802-ROLES-DRIFT: the validator still refuses a write set on a role outside WRITE_ROLES ∪ {TERMINAL_ROLE} — the RULE this list restates');
+    const expected = m[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+      .concat([tm[1]]).sort();
+    const actual = [...nodeMod.SEAM_WRITE_CAPABLE_ROLES].sort();
+    assert(JSON.stringify(actual) === JSON.stringify(expected),
+      '#802-ROLES-DRIFT: SEAM_WRITE_CAPABLE_ROLES equals the validator\'s WRITE_ROLES ∪ {TERMINAL_ROLE}, got ' + JSON.stringify({ actual, expected }));
+  });
+
+  // -------------------------------------------------------------------------
+  // #802-LIVE-SCRATCH-GATES-FAIL-CLOSED — the drain-site READ precondition quantifies over every live
+  //   MEMBER, not over the read subset. Filtering to kind:'read' and separately rejecting kind:'gate'
+  //   made a live kind:'write' member INVISIBLE, so the predicate answered TRUE for a running set
+  //   containing one — i.e. the checkpoint could have swept a LIVE writer's in-flight bytes into a
+  //   commit attributed to CLOSED nodes. Unreachable behind the callers' earlier guards today, so this
+  //   is the defensive floor the docstring promises, pinned on the predicate itself.
+  //   RED (pre-fix): liveReadsAllScratchGates([{id:'g1',kind:'read'},{id:'w9',kind:'write'}], …) === true.
+  //   GREEN: ANY non-read member ⇒ false; the all-scratch-reads control still ⇒ true.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeMod = require('./kaola-workflow-adaptive-node.js');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| g1 | adversarial-verifier | — | —          | 1 | sequence | scratch |',
+      '| g2 | adversarial-verifier | — | —          | 1 | sequence | scratch |',
+      '| gx | code-reviewer        | — | —          | 1 | sequence | —       |',
+      '| w9 | doc-updater          | — | docs/x.md  | 1 | sequence | —       |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| g1 | in_progress |', '| g2 | in_progress |', '| gx | pending |', '| w9 | pending |', '',
+    ].join('\n') + '\n';
+    const rf = () => plan;
+    const P = '/p/workflow-plan.md';
+    // Control: every live member IS a scratch-observation read ⇒ the repair may be attempted.
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'g2', kind: 'read' }], P, rf) === true,
+      '#802-SCRATCH-FAIL-CLOSED (control): an all-scratch-read running set still qualifies');
+    // RED→GREEN: a live WRITE member is no longer invisible.
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'w9', kind: 'write' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a live WRITE member fails the precondition closed');
+    // The pre-existing gate rejection still holds, and now so does anything else.
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'gx', kind: 'gate' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a live main-session gate still fails closed');
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, { id: 'g2' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a member with NO kind fails closed (unrecognized ⇒ not a read)');
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'g1', kind: 'read' }, null], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: a malformed member fails closed');
+    // A non-scratch read is still rejected (the role/annotation half of the predicate is untouched).
+    assert(nodeMod.liveReadsAllScratchGates([{ id: 'gx', kind: 'read' }], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: an un-annotated read gate still fails the precondition');
+    assert(nodeMod.liveReadsAllScratchGates([], P, rf) === false,
+      '#802-SCRATCH-FAIL-CLOSED: an EMPTY running set is not a qualifying observer set');
   });
 
   // -------------------------------------------------------------------------
@@ -17777,34 +18834,53 @@ scenario(() => {
     return { r, h };
   }
 
-  // A: observes:scratch adversarial-verifier ∥ docs/decisions/** LEGLESS writer → CO-OPEN (legless, no
-  //    leg group), even though the parent is dirty (the writer sees the uncommitted context; the scratch
-  //    gate never observes its docs-band bytes — verdict from .cache + scratch, by contract).
-  {
-    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', 'docs/decisions/D-641-01.md');
-    assert(r.result === 'ok' && r.kind === 'write' && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].id === 'w',
-      '#641-R2b-A: observes:scratch gate ∥ docs/decisions writer CO-OPENS legless over a dirty parent, got ' + JSON.stringify({ opened: r.opened && r.opened.map(n => n.id), reason: r.reason, degrade: r.serialDegradeReason }));
-    assert(!r.laneGroup, '#641-R2b-A: the co-open is LEGLESS (no lane group — the writer must see the uncommitted parent context)');
-    const set = JSON.parse(h.files[RS_SET_PATH]);
-    assert(!set.lane_group, '#641-R2b-A: running-set has NO lane_group (legless co-open)');
-    assert(set.nodes.some(n => n.id === 'gate' && n.kind === 'read') && set.nodes.some(n => n.id === 'w' && n.kind === 'write'),
-      '#641-R2b-A: MIXED running set — the scratch gate alongside the legless writer, got ' + JSON.stringify(set.nodes.map(n => ({ id: n.id, kind: n.kind }))));
-    assert(h.files[RS_PLAN_PATH].includes('| w | in_progress | |'), '#641-R2b-A: w flipped in_progress');
-    // The gate's dispatch discipline is pinned when it OPENS (a prior tick) — see #641-R2b-CARD below.
+  // A/B/E: an `observes: scratch` adversarial-verifier is live ⇒ the seam-checkpoint REPAIR is
+  //    ATTEMPTED (the READER-side precondition is the whole gate now — the retired legless path's
+  //    writer-side scratch-observable predicate is superseded by leg containment). The stubbed fence
+  //    reports a non-`pass` it cannot ENUMERATE (no `dirty` array), so the repair cannot attribute
+  //    anything and fails CLOSED with the typed `seam_checkpoint_failed` halt — never a legless
+  //    co-open, never a silent serial, and with ZERO mutation. The writer's declared set is
+  //    deliberately varied across the rows to pin that it no longer changes the outcome.
+  for (const writeSet of ['docs/decisions/D-641-01.md', 'docs/api.md', 'CHANGELOG.md', 'scripts/x.js']) {
+    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', writeSet);
+    assert(r.result === 'refuse' && r.reason === 'seam_checkpoint_failed',
+      '#802-DRAIN-SEAM[' + writeSet + ']: a scratch-gated dirty seam ATTEMPTS the repair and fails closed, got ' + JSON.stringify({ result: r.result, reason: r.reason, degrade: r.serialDegradeReason }));
+    assert(typeof r.detail === 'string' && r.detail.indexOf('parent_clean_fence_unclassified') === 0,
+      '#802-DRAIN-SEAM[' + writeSet + ']: the halt names WHY the repair could not run, got ' + JSON.stringify(r.detail));
+    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#802-DRAIN-SEAM[' + writeSet + ']: ZERO mutation — w stays pending');
+    assert(!h.files[RS_SET_PATH] || JSON.parse(h.files[RS_SET_PATH]).nodes.length === 1,
+      '#802-DRAIN-SEAM[' + writeSet + ']: the running set is untouched');
   }
 
-  // B: observes:scratch gate ∥ a TEST-CONSUMED prose writer (docs/api.md) → HOLD (the writer's set is NOT
-  //    scratch-observable-safe: a chain the gate could run reads it). Byte-identical parent_dirty hold.
-  for (const bad of ['docs/api.md', 'CHANGELOG.md']) {
-    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', bad);
-    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
-      '#641-R2b-B[' + bad + ']: a test-consumed-prose writer HOLDS behind the scratch gate, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
-    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-B[' + bad + ']: labeled parent_dirty (R2b did not apply), got ' + JSON.stringify(r.serialDegradeReason));
-    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#641-R2b-B[' + bad + ']: ZERO mutation — w stays pending');
+  // TOGGLE-OFF: with KAOLA_SEAM_CHECKPOINT=0 the scratch-gated seam returns the `parent_dirty` HOLD.
+  //    WHAT THE OPT-OUT RESTORES, PRECISELY — this is the pin for the scope claim, not a footnote.
+  //    Pre-#802 this exact state (a scratch-observation gate live, a dirty parent, a scratch-observable
+  //    declared set) CO-OPENED a legless single writer. The opt-out does NOT bring that back: the
+  //    legless path is retired UNCONDITIONALLY, as a separate deliberate tightening, so the toggle
+  //    restores the SERIAL DEGRADE and nothing else. Every row below — including the write sets that
+  //    used to qualify for the legless exception — must HOLD, with no writer opened and no lane group.
+  //    Direction check: the opt-out is never LESS strict than the repair it replaces.
+  {
+    const saved = process.env.KAOLA_SEAM_CHECKPOINT;
+    process.env.KAOLA_SEAM_CHECKPOINT = '0';
+    try {
+      for (const writeSet of ['docs/decisions/D-641-01.md', 'docs/api.md', 'CHANGELOG.md', 'scripts/x.js']) {
+        const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', writeSet);
+        assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
+          '#802-DRAIN-SEAM-OFF[' + writeSet + ']: the opt-out holds — it does NOT resurrect the legless co-open, got ' + JSON.stringify({ result: r.result, reason: r.reason, opened: r.opened }));
+        assert(r.serialDegradeReason === 'parent_dirty', '#802-DRAIN-SEAM-OFF[' + writeSet + ']: labeled parent_dirty, got ' + JSON.stringify(r.serialDegradeReason));
+        assert(!r.laneGroup, '#802-DRAIN-SEAM-OFF[' + writeSet + ']: and no lane group either, got ' + JSON.stringify(r.laneGroup));
+        assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#802-DRAIN-SEAM-OFF[' + writeSet + ']: ZERO mutation');
+      }
+    } finally {
+      if (saved === undefined) delete process.env.KAOLA_SEAM_CHECKPOINT;
+      else process.env.KAOLA_SEAM_CHECKPOINT = saved;
+    }
   }
 
   // C: an UN-annotated gate (a plain code-reviewer, no observes:scratch) ∥ a qualifying docs writer → HOLD.
-  //    A full-diff observer is perturbed by a concurrent write; only the planner-declared scratch scope unlocks R2b.
+  //    A full-diff observer is perturbed by a concurrent write AND by the checkpoint's ref motion; only the
+  //    planner-declared scratch scope unlocks the repair. Byte-identical parent_dirty hold.
   {
     const { r } = runR2b('code-reviewer', '—', 'doc-updater', 'docs/decisions/D-641-01.md');
     assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
@@ -17818,14 +18894,6 @@ scenario(() => {
     const { r } = runR2b('code-reviewer', '—', 'implementer', 'scripts/x.js');
     assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R2b-D: shared-tree writer behind an un-annotated gate HOLDS, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
     assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-D: labeled parent_dirty');
-  }
-
-  // E: even an ANNOTATED gate ∥ a SHARED-TREE (production) writer → HOLD (the annotation authorizes only a
-  //    scratch-observable-safe write set; a production path is never observation-invisible).
-  {
-    const { r } = runR2b('adversarial-verifier', 'scratch', 'implementer', 'scripts/x.js');
-    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R2b-E: a production writer HOLDS even behind a scratch gate, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
-    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-E: labeled parent_dirty (writer set not scratch-observable-safe)');
   }
 });
 
@@ -18261,37 +19329,38 @@ scenario(() => {
       'A1-merge-fence-hold: the last-member merge is held while a gate is live, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
   }
 
-  // ---- #644 A2: validation_test_consumes widens the R2b legless co-open predicate --------
+  // ---- #802 A2: the READER-side scratch-seam predicate (successor to the retired legless co-open) ----
+  //   The seam checkpoint at the write-awaits-drain site is gated on the OBSERVERS, not on the writer's
+  //   declared set (leg containment supersedes the writer-side scratch-observable predicate). Pin both
+  //   directions: every live read a freeze-declared `observes: scratch` adversarial-verifier ⇒ true; a
+  //   single non-scratch / non-adversarial live reader, a live gate, or no live read at all ⇒ false.
   {
-    if (typeof ADAPT.tryR2bLeglessCoopen !== 'function') {
-      assert(false, 'A2: tryR2bLeglessCoopen must be exported for the fork-widening pin');
-    } else {
-      const forkPlan = [
-        '# Workflow Plan — test-project', '',
-        '## Meta', 'labels: area:scripts', 'validation_test_consumes: docs/fork-guide.md', '',
-        '## Nodes', '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
-        '| --- | --- | --- | --- | --- | --- | --- |',
-        '| gate | adversarial-verifier | — | — | 1 | sequence | scratch |',
-        '| forkw | doc-updater | — | docs/fork-guide.md | 1 | sequence | — |', '',
-        '## Node Ledger', '',
-        '| id | status |', '| --- | --- |', '| gate | in_progress |', '| forkw | pending |', '',
-      ].join('\n') + '\n';
-      const files = { '/p/workflow-plan.md': forkPlan };
-      const rf = (p) => { if (p in files) return files[p]; throw new Error('ENOENT ' + p); };
-      const writeNodes = [{ id: 'forkw', role: 'doc-updater', declared_write_set: 'docs/fork-guide.md' }];
-      const liveNodes = [{ id: 'gate', role: 'adversarial-verifier', kind: 'read' }];
-      const chosen = ADAPT.tryR2bLeglessCoopen(writeNodes, liveNodes, '/p/workflow-plan.md', 'test-project', rf);
-      assert(chosen === null,
-        'A2: a validation_test_consumes doc (docs/fork-guide.md) is NOT scratch-observable-safe ⇒ NO legless co-open, got ' + JSON.stringify(chosen && chosen.id));
-      // Control: WITHOUT the widening, the same docs writer IS scratch-observable-safe (co-opens).
-      const noWiden = forkPlan.replace('validation_test_consumes: docs/fork-guide.md\n', '');
-      const files2 = { '/p/workflow-plan.md': noWiden };
-      const rf2 = (p) => { if (p in files2) return files2[p]; throw new Error('ENOENT ' + p); };
-      const chosen2 = ADAPT.tryR2bLeglessCoopen(writeNodes, liveNodes, '/p/workflow-plan.md', 'test-project', rf2);
-      assert(chosen2 && chosen2.id === 'forkw',
-        'A2-control: a plain docs writer behind a scratch gate DOES legless co-open (widening is the only difference), got ' + JSON.stringify(chosen2 && chosen2.id));
-    }
+    assert(typeof ADAPT.liveReadsAllScratchGates === 'function', 'A2: liveReadsAllScratchGates must be exported for the seam-precondition pin');
+    const seamPlan = (gateRole, gateObserves) => [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| gate | ' + gateRole + ' | — | — | 1 | sequence | ' + gateObserves + ' |',
+      '| forkw | doc-updater | — | docs/fork-guide.md | 1 | sequence | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |', '| gate | in_progress |', '| forkw | pending |', '',
+    ].join('\n') + '\n';
+    const rfFor = (content) => (p) => { if (p === '/p/workflow-plan.md') return content; throw new Error('ENOENT ' + p); };
+    const scratchLive = [{ id: 'gate', role: 'adversarial-verifier', kind: 'read' }];
+    assert(ADAPT.liveReadsAllScratchGates(scratchLive, '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', 'scratch'))) === true,
+      'A2: an all-scratch-verifier live read set unlocks the seam repair');
+    assert(ADAPT.liveReadsAllScratchGates(scratchLive, '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', '—'))) === false,
+      'A2: an UN-annotated adversarial-verifier does NOT unlock the seam repair');
+    assert(ADAPT.liveReadsAllScratchGates(scratchLive, '/p/workflow-plan.md', rfFor(seamPlan('code-reviewer', 'scratch'))) === false,
+      'A2: a non-adversarial reader does NOT unlock the seam repair even carrying the annotation');
+    assert(ADAPT.liveReadsAllScratchGates([], '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', 'scratch'))) === false,
+      'A2: NO live read fails closed (the predicate is a positive claim about the observers present)');
+    assert(ADAPT.liveReadsAllScratchGates(
+      scratchLive.concat([{ id: 'mg', role: 'main-session-gate', kind: 'gate' }]),
+      '/p/workflow-plan.md', rfFor(seamPlan('adversarial-verifier', 'scratch'))) === false,
+      'A2: a live main-session-gate fails closed (it is a live observer, not a scratch reader)');
   }
 });
 
@@ -21050,6 +22119,9 @@ scenario(() => {
       '| finalize | finalize | gateB | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '',
       'Decompose: writer builds lib/impl.js; gateA (security) then gateB (code) post-dominate it; finalize sinks. sequence writer→gateA→gateB: S1 — each gate consumes the prior change. Done: both gates clear and validation passes.', '',
+      '## Acceptance', '',
+      'A1: lib/impl.js is implemented and passes the plan\'s validation command.',
+      'A2: the security gate and the code gate both clear over the produced tree.', '',
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| gateA | pending |', '| gateB | pending |', '| finalize | pending |', '',
@@ -21358,6 +22430,9 @@ scenario(() => {
         '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
         '## Design', '',
         'Decompose: writer builds the impl; adversarial-verifier gate(s) fan out over it; codegate post-dominates; finalize sinks. sequence edges are gate/data dependencies (S1). Done: gates clear and validation passes.', '',
+        '## Acceptance', '',
+        'A1: the implementation file is produced and passes the plan\'s validation command.',
+        'A2: every adversarial-verifier gate and the code gate clear over the produced tree.', '',
         '## Node Ledger', '',
         '| id | status |', '|---|---|',
         '| writer | pending |', ...avIds.map(id => '| ' + id + ' | pending |'),
@@ -21650,6 +22725,9 @@ scenario(() => {
         '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
         '## Design', '',
         'Decompose: writer builds the impl; codegate post-dominates it; finalize sinks. sequence writer→codegate: S1 — codegate consumes the writer change. Done: gate clears and validation passes.', '',
+        '## Acceptance', '',
+        'A1: the implementation file is produced and passes the plan\'s validation command.',
+        'A2: the code gate clears over the produced tree.', '',
         '## Node Ledger', '', '| id | status |', '|---|---|',
         '| writer | pending |', '| codegate | pending |', '| finalize | pending |', '',
         '## Required Agent Compliance', '',
@@ -23068,6 +24146,192 @@ scenario(() => {
     '#783 :4706 pin (VERIFIED NOT A DEFECT): reviewJournalV2MatchesPlan STAYS the FREEZE view '
     + '(validator.parseNodes) — an execution-view swap regresses the shipped #756 re-expansion '
     + 'epoch-transition wedge (testReExpansionEpochTransition756)');
+});
+
+// ===========================================================================
+// #804 — the `--parallel-safe` verdict must never be LAUNDERED. ONE shared classifier for BOTH call
+// sites (tryFormLaneGroup / selectSpeculativeWriteGroup), EXACTLY ONE bounded re-probe on an
+// indeterminate verdict, and a CLASSIFIED serialDegradeReason on the normal site's degrade.
+// Direct unit calls against the injectable shell seam — the probe never reads the plan, so no fixture
+// repo is needed and no real git is touched.
+// ===========================================================================
+scenario(() => {
+  const ADAPT = require('./kaola-workflow-adaptive-node');
+  const P = '/p/workflow-plan.md';
+  const twoWrites = [{ id: 'w1', declared_write_set: 'a.js' }, { id: 'w2', declared_write_set: 'b.js' }];
+  // A counting shell: records every --parallel-safe invocation and replays a scripted verdict list
+  // (the last entry repeats once exhausted).
+  function scriptedShell(verdicts) {
+    const calls = [];
+    const shell = (scriptPath, args) => {
+      if ((args || []).includes('--parallel-safe')) {
+        calls.push((args || []).slice());
+        return verdicts[Math.min(calls.length - 1, verdicts.length - 1)];
+      }
+      return { exitCode: 0, result: 'ok' };
+    };
+    return { shell, calls };
+  }
+  const OK = { exitCode: 0, result: 'ok' };
+  const OVERLAP = { exitCode: 1, result: 'refuse', overlapping: [{ a: 'w1', b: 'w2' }] };
+  const CRASH = { exitCode: 1 };                       // no result, no overlapping array
+  const GARBLED = { exitCode: 0, result: 'refuse' };   // non-ok shape with no overlapping array
+
+  // ---- D1: the classifier is ONE function with three outcomes -------------------------------------
+  assert(ADAPT.classifyParallelSafeVerdict(OK).kind === 'ok', '#804-D1: a clean verdict classifies ok');
+  assert(ADAPT.classifyParallelSafeVerdict(OVERLAP).kind === 'overlap',
+    '#804-D1: a non-ok verdict carrying a well-formed overlapping array is a real overlap REPORT');
+  assert(ADAPT.classifyParallelSafeVerdict({ exitCode: 1, result: 'refuse', overlapping: [] }).kind === 'overlap',
+    '#804-D1: an EMPTY overlapping array is still a delivered report (the field presence is the signal)');
+  assert(ADAPT.classifyParallelSafeVerdict(CRASH).kind === 'indeterminate',
+    '#804-D1: a crashed prover delivered NO verdict — indeterminate, not a proven overlap');
+  assert(ADAPT.classifyParallelSafeVerdict(GARBLED).kind === 'indeterminate',
+    '#804-D1: a garbled non-ok shape without the array is indeterminate too');
+
+  // ---- D2 at tryFormLaneGroup: exactly ONE re-probe, two outcomes, no loop ------------------------
+  {
+    const { shell, calls } = scriptedShell([CRASH]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === false && grp.reason === 'parallel_safe_indeterminate',
+      '#804-D2a: a twice-indeterminate prover fails CLOSED labeled parallel_safe_indeterminate (never laundered into overlapping_write_sets), got ' + JSON.stringify(grp));
+    assert(calls.length === 2 && grp.probes === 2,
+      '#804-D2a: EXACTLY two probe invocations (one re-probe, no retry loop), got ' + calls.length);
+  }
+  {
+    // The repair is OBSERVABLE: a transient first fault + a clean second probe forms the group.
+    const { shell, calls } = scriptedShell([CRASH, OK]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === true && grp.members.join(',') === 'w1,w2',
+      '#804-D2b: a transient first fault repaired by the single re-probe forms the group, got ' + JSON.stringify(grp));
+    assert(calls.length === 2 && grp.probes === 2, '#804-D2b: exactly two probes, got ' + calls.length);
+  }
+  {
+    // A PROVEN overlap never re-probes — the prover delivered a verdict; re-asking is pure waste.
+    const { shell, calls } = scriptedShell([OVERLAP]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === false && grp.reason === 'overlapping_write_sets',
+      '#804-D2c: a proven overlap keeps the legitimate overlapping_write_sets serializer, got ' + JSON.stringify(grp));
+    assert(calls.length === 1 && grp.probes === 1, '#804-D2c: a PROVEN overlap NEVER re-probes, got ' + calls.length);
+  }
+  {
+    const { shell, calls } = scriptedShell([OK]);
+    const grp = ADAPT.tryFormLaneGroup(twoWrites, P, shell, false);
+    assert(grp.ok === true && calls.length === 1 && grp.probes === 1, '#804-D2d: a clean verdict never re-probes, got ' + calls.length);
+  }
+
+  // ---- D2 at selectSpeculativeWriteGroup: the SAME helper, so identical counts --------------------
+  {
+    const { shell, calls } = scriptedShell([CRASH]);
+    const sel = ADAPT.selectSpeculativeWriteGroup(twoWrites, [], P, shell, false, null);
+    assert(sel.excludedReason === 'parallel_safe_indeterminate' && sel.chosen.length === 0,
+      '#804-D2e: the speculative selector fails closed on a twice-indeterminate verdict, got ' + JSON.stringify({ r: sel.excludedReason, chosen: sel.chosen.length }));
+    assert(calls.length === 2 && sel.probes === 2, '#804-D2e: exactly two probes at the speculative site too, got ' + calls.length);
+  }
+  {
+    const { shell, calls } = scriptedShell([CRASH, OK]);
+    const sel = ADAPT.selectSpeculativeWriteGroup(twoWrites, [], P, shell, false, null);
+    assert(sel.chosen.length === 2 && sel.excluded.length === 0,
+      '#804-D2f: a transient fault repaired by the re-probe selects both candidates, got ' + JSON.stringify(sel.chosen.map(n => n.id)));
+    assert(calls.length === 2 && sel.probes === 2, '#804-D2f: exactly two probes, got ' + calls.length);
+  }
+  {
+    const { shell, calls } = scriptedShell([OVERLAP]);
+    const sel = ADAPT.selectSpeculativeWriteGroup(twoWrites, [], P, shell, false, null);
+    assert(sel.excludedReason === 'overlaps_live_writer' && calls.length === 1 && sel.probes === 1,
+      '#804-D2g: a proven overlap at the speculative site keeps its label and NEVER re-probes, got ' + JSON.stringify({ r: sel.excludedReason, calls: calls.length }));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #804-D3 — the NORMAL co-open site's serial degrade carries the CLASSIFIED cause. Before this,
+// "label absent" was shared by four causes and therefore distinguished nothing. Direct runOpenReady
+// unit calls with a CLEAN stubbed parent (so the seam checkpoint never fires) and no running set.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const plan = makePlan(['| w1 | pending | |', '| w2 | pending | |'], [
+    '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
+    '| w2 | implementer | — | scripts/b.js | 1 | sequence |',
+  ]);
+  const nextAction = (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+        { id: 'w1', role: 'implementer', declared_write_set: 'scripts/a.js' },
+        { id: 'w2', role: 'implementer', declared_write_set: 'scripts/b.js' },
+      ] };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse' };
+  };
+  function runWith(parallelSafeVerdicts) {
+    let psCalls = 0;
+    const validatorStub = (base, args) => {
+      if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (args.includes('--parent-clean-check')) return { exitCode: 0, result: 'pass' };
+      if (args.includes('--parallel-safe')) {
+        const v = parallelSafeVerdicts[Math.min(psCalls, parallelSafeVerdicts.length - 1)];
+        psCalls++;
+        return v;
+      }
+      return { exitCode: 0, result: 'ok' };
+    };
+    const h = rsHarness({ [RS_PLAN_PATH]: plan }, nextAction, validatorStub);
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8,
+      shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    return { r, psCalls: () => psCalls };
+  }
+  // A twice-indeterminate prover degrades to serial, LABELED, after exactly two probes.
+  {
+    const { r, psCalls } = runWith([{ exitCode: 1 }]);
+    assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup,
+      '#804-D3a: a twice-indeterminate prover degrades to a single serial write, got ' + JSON.stringify({ opened: r.opened && r.opened.map(n => n.id), laneGroup: r.laneGroup }));
+    assert(r.serialDegradeReason === 'parallel_safe_indeterminate',
+      '#804-D3a: the degrade is labeled parallel_safe_indeterminate, NOT laundered into overlapping_write_sets, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(psCalls() === 2, '#804-D3a: exactly two --parallel-safe invocations, got ' + psCalls());
+  }
+  // A PROVEN overlap degrades to serial with the legitimate serializer label, after ONE probe.
+  {
+    const { r, psCalls } = runWith([{ exitCode: 1, result: 'refuse', overlapping: [{ a: 'w1', b: 'w2' }] }]);
+    assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup, '#804-D3b: a proven overlap degrades to serial');
+    assert(r.serialDegradeReason === 'overlapping_write_sets',
+      '#804-D3b: the degrade is labeled overlapping_write_sets, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(psCalls() === 1, '#804-D3b: a PROVEN overlap NEVER re-probes, got ' + psCalls());
+  }
+  // A transient first fault + a clean second probe yields an OK verdict — the repair is observable at
+  // the scheduler level. Pinned under KAOLA_FANOUT_CAP=1 so the frontier degrades on the OPERATOR cap
+  // instead of forming a real lane group: a formed group provisions REAL leg worktrees, which a
+  // direct-call test must never do (the io-shim trap). That the group attempt SUCCEEDED is proven by
+  // the absence of any prover-caused degrade label alongside the two probe invocations; the co-open
+  // itself is covered by #804-D2b (unit) and the real-git #802 scenarios.
+  {
+    const savedCap = process.env.KAOLA_FANOUT_CAP;
+    process.env.KAOLA_FANOUT_CAP = '1';
+    try {
+      const { r, psCalls } = runWith([{ exitCode: 1 }, { exitCode: 0, result: 'ok' }]);
+      assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup,
+        '#804-D3c: the capped frontier opens serially, got ' + JSON.stringify({ result: r.result, opened: r.opened && r.opened.map(n => n.id) }));
+      assert(r.serialDegradeReason === undefined,
+        '#804-D3c: a REPAIRED transient fault leaves NO prover degrade label — the cap degraded it, not the prover, got ' + JSON.stringify(r.serialDegradeReason));
+      assert(psCalls() === 2, '#804-D3c: exactly two probes (the single re-probe fired), got ' + psCalls());
+    } finally {
+      if (savedCap === undefined) delete process.env.KAOLA_FANOUT_CAP;
+      else process.env.KAOLA_FANOUT_CAP = savedCap;
+    }
+  }
+  // The <2 write-cap ceiling is an OPERATOR cap — ordinary serial, deliberately UNLABELED.
+  {
+    const savedCap = process.env.KAOLA_FANOUT_CAP;
+    process.env.KAOLA_FANOUT_CAP = '1';
+    try {
+      const { r, psCalls } = runWith([{ exitCode: 0, result: 'ok' }]);
+      assert(r.result === 'ok' && r.opened.length === 1 && !r.laneGroup, '#804-D3d: a cap of 1 degrades to serial');
+      assert(r.serialDegradeReason === undefined,
+        '#804-D3d: the operator cap degrade stays UNLABELED (ordinary serial, not a degrade cause), got ' + JSON.stringify(r.serialDegradeReason));
+      assert(psCalls() === 1, '#804-D3d: a clean verdict never re-probes, got ' + psCalls());
+    } finally {
+      if (savedCap === undefined) delete process.env.KAOLA_FANOUT_CAP;
+      else process.env.KAOLA_FANOUT_CAP = savedCap;
+    }
+  }
 });
 
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);

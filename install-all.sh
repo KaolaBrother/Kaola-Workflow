@@ -67,7 +67,6 @@ CODEX_CONVERGENCE_NA=0
 CODEX_CONVERGENCE_NA_REASON=""
 
 FORGE="github"
-PROFILE="higher"
 SCOPE="global"        # global | project
 PROJECT_DIR=""
 YES=0
@@ -87,7 +86,6 @@ Reinstall/refresh every Kaola-Workflow runtime edition in sequence:
 
 Options:
   --forge=github|gitlab|gitea   Forge for the Claude installer (default: github)
-  --profile=higher|common       Agent profile for the Claude installer (default: higher)
   --global                      Install opencode/Codex/Kimi into the global config root (default)
   --project[=DIR]               Install opencode/Codex/Kimi into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
@@ -99,7 +97,7 @@ Options:
 
 The Claude installer (install.sh) has no global/project concept — it installs
 its plugin regardless of scope; --global/--project apply to the other three.
-The Codex installer accepts neither --yes nor --forge/--profile, so those are
+The Codex installer accepts neither --yes nor --forge, so those are
 not forwarded to it. Exit status is non-zero if ANY runtime failed
 (continue-through by default; --strict aborts at the first failure).
 
@@ -134,8 +132,6 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --forge=*) FORGE="${1#--forge=}"; shift ;;
     --forge) [[ -n "${2:-}" ]] || die_arg "--forge requires github, gitlab, or gitea"; FORGE="$2"; shift 2 ;;
-    --profile=*) PROFILE="${1#--profile=}"; shift ;;
-    --profile) [[ -n "${2:-}" ]] || die_arg "--profile requires common or higher"; PROFILE="$2"; shift 2 ;;
     --global) SCOPE="global"; PROJECT_DIR=""; shift ;;
     --project) SCOPE="project"; PROJECT_DIR="$PWD"; shift ;;
     --project=*) SCOPE="project"; PROJECT_DIR="${1#--project=}"; shift ;;
@@ -150,7 +146,6 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 case "$FORGE" in github|gitlab|gitea) ;; *) die_arg "unknown forge: $FORGE (github, gitlab, gitea)" ;; esac
-case "$PROFILE" in higher|common) ;; *) die_arg "unknown profile: $PROFILE (higher, common)" ;; esac
 
 # Forge-derived Codex plugin manifest. The plugin NAME is read out of it below
 # (codex_tree_plugin_name), never assumed from this path.
@@ -472,7 +467,7 @@ converge_codex_plugin() {
 }
 
 echo "install-all: reinstalling Kaola-Workflow runtimes from $HEAD_SHA"
-echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE profile=$PROFILE$( [[ "$YES" == "1" ]] && echo ' yes' )$( [[ "$CHECK" == "1" ]] && echo ' (dry-run)' )"
+echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] && echo ' yes' )$( [[ "$CHECK" == "1" ]] && echo ' (dry-run)' )"
 
 # Per-runtime scope flags for the three additive runtimes (install.sh has no
 # global/project concept, so it never receives them).
@@ -484,13 +479,13 @@ fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
 # optional flags are appended conditionally, never expanded from an empty array).
-CLAUDE_CMD=(bash "$ROOT/install.sh" --forge="$FORGE" --profile="$PROFILE")
+CLAUDE_CMD=(bash "$ROOT/install.sh" --forge="$FORGE")
 [[ "$YES" == "1" ]] && CLAUDE_CMD+=(--yes)
 
 OPENCODE_CMD=(bash "$ROOT/install-opencode.sh" "${OC_SCOPE[@]}")
 [[ "$YES" == "1" ]] && OPENCODE_CMD+=(--yes)
 
-# Codex installer accepts neither --yes nor --forge/--profile (unknown args are
+# Codex installer accepts neither --yes nor --forge (unknown args are
 # ignored there, but we keep the invocation to its documented flag set).
 CODEX_CMD=(node "$ROOT/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js" "${CODEX_SCOPE[@]}")
 

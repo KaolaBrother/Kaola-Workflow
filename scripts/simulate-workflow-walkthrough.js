@@ -13827,6 +13827,7 @@ function makeHandoffPlan(nodesRows, ledgerRows, labels) {
     '## Design', '',
     'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the review gate clears and validation passes.',
     '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '',
     '| id | status |',
     '|---|---|',
@@ -14351,6 +14352,7 @@ function testFreezeCheckedGovernanceAckStale() {
     '| done | finalize | rv | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '',
     'Decompose: ex explores; a builds aaa/x.js; rv gates; done sinks. sequence a→rv: S1 — rv consumes a\'s change. Done: review clears and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
     '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
@@ -16658,6 +16660,7 @@ function testReviewerContractV2Conformance() {
       '| finalize | finalize | reviewer | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '',
       'Decompose: writer builds lib/impl.js; reviewer gates it; finalize sinks. sequence writer→reviewer: S1 — reviewer consumes writer\'s change. Done: review clears and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
@@ -16927,6 +16930,7 @@ const SPINE_PLAN_758 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 and m2 are milestones whose interior frontiers are composed at open time (m2 consumes m1\'s evidence packet — S1); wall reviews both composed frontiers; done sinks. Done: both milestones land their goals reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -17224,6 +17228,7 @@ const SPINE_PLAN_759 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -18316,6 +18321,7 @@ function testReExpandCascade761() {
       '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761a', PLAN, 'workflow/issue-761a');
     try {
@@ -18356,6 +18362,7 @@ function testReExpandCascade761() {
       '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761b', PLAN, 'workflow/issue-761b');
     try {
@@ -18385,6 +18392,7 @@ function testReExpandCascade761() {
       '| wall | code-reviewer | m1, m2, m3 | — | 1 | sequence | every milestone lands its goal with no unreviewed surface | the accumulated candidate across all expansions | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose: probe explores; m1/m2/m3 are independent milestones composed at open time (disjoint surfaces scripts//docs/); wall reviews all composed frontiers; done sinks. Done: every milestone lands its goal reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| probe | complete |', '| m1 | pending |', '| m2 | pending |', '| m3 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761c', PLAN, 'workflow/issue-761c');
@@ -18454,6 +18462,7 @@ const SPINE_PLAN_760 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -18900,6 +18909,7 @@ function buildRegistry() {
   add('testDeclaredNotWalled762',                         testDeclaredNotWalled762);
   add('testReExpansionEpochTransition756',                testReExpansionEpochTransition756);
   add('testSpineAuthoringOrchestrationKeystone767',       testSpineAuthoringOrchestrationKeystone767);
+  add('testAcceptanceSurfaceEndToEnd',                    testAcceptanceSurfaceEndToEnd);
   return reg;
 }
 
@@ -21471,6 +21481,7 @@ function testDeclaredNotWalled762() {
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
 
   const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
@@ -21839,6 +21850,7 @@ function testReExpansionEpochTransition756() {
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
   const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
   const fixerComp = (writeSet) => ({ derivation: DERIV,
@@ -21984,6 +21996,7 @@ function testReExpansionEpochTransition756() {
       '| wall | code-reviewer | impl | — | 1 | sequence | the recovered companion file is correct | lib/companion.js | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
       '## Design', '', 'Decompose (epoch child): impl re-builds the recovered companion lib/companion.js; wall re-reviews it; done sinks. sequence impl→wall: S1 — wall consumes impl\'s change. Done: the companion is reviewed and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     try {
       fs.writeFileSync(planPath, childPlan);
@@ -22079,6 +22092,7 @@ const SPINE_PLAN_767 = [
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
   '## Design', '',
   'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
+  '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -22252,6 +22266,157 @@ function testSpineAuthoringOrchestrationKeystone767() {
     try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {}
   }
   console.log('testSpineAuthoringOrchestrationKeystone767: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAcceptanceSurfaceEndToEnd — the acceptance surface across a WHOLE run: transcribed at freeze,
+// carried untampered through every node close, and still the object the finalize Acceptance Check
+// walks at the sink. Before the section existed, finalize's "verify the deliverable matches the
+// acceptance criteria" had nothing to verify against; this drives the run that gives it one.
+// ---------------------------------------------------------------------------
+function testAcceptanceSurfaceEndToEnd() {
+  const validator = require('./kaola-workflow-plan-validator');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-acceptance-e2e-')));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-acceptance-e2e';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const ACCEPTANCE = [
+      'A1: lib/impl.js exports the parsed record instead of the placeholder.',
+      'A2: `node --check lib/impl.js` passes over the final candidate.',
+      'A3: the change is reviewed before it reaches the sink.',
+    ];
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — acceptance surface end to end', '',
+      '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
+      'code_certifier: reviewer', 'security_certifier: none',
+      'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+      'validation_command: node --check lib/impl.js', 'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
+      '| reviewer | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize | reviewer | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '',
+      'Decompose: writer builds lib/impl.js; reviewer gates it; finalize sinks. sequence writer→reviewer: S1 — reviewer consumes writer\'s change.', '',
+      '## Acceptance', '', ...ACCEPTANCE, '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+      '| tdd-guide (writer) | pending | | |', '| code-reviewer (reviewer) | pending | | |',
+      '| finalize (finalize) | pending | | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+
+    const freeze = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);
+    assert(freeze.status === 0, 'acceptance-e2e: the plan freezes with its acceptance surface: ' + freeze.stdout + freeze.stderr);
+    const frozenAcceptance = validator.acceptanceDigest(fs.readFileSync(planPath, 'utf8'));
+    assert(/^[0-9a-f]{64}$/.test(String(frozenAcceptance || '')),
+      'acceptance-e2e: the frozen plan carries a transcribed acceptance surface');
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['commit', '-m', 'acceptance e2e fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+
+    // Drive the run: writer produces the change, reviewer clears it, the sink opens.
+    const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = { record: true };\n');
+    const writerRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8',
+        input: 'evidence-binding: writer ' + openedWriter.nonce
+          + '\nRED: the placeholder export reproduced\nGREEN: the parsed record is exported\n'
+          + 'covers: A1 — the export now returns the parsed record (advisory hint for the judge, never diffed)\n',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(writerRecord.status === 0, 'acceptance-e2e: writer evidence records: ' + writerRecord.stdout + writerRecord.stderr);
+    const writerClose = json(runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    assert(writerClose.opened && writerClose.opened.id === 'reviewer',
+      'acceptance-e2e: the reviewer opens after the writer close: ' + JSON.stringify(writerClose));
+
+    // The acceptance surface is UNCHANGED by a node close — the plan still resume-checks, which is
+    // exactly the tamper-evidence claim, now proven across a live run rather than in isolation.
+    const midRun = fs.readFileSync(planPath, 'utf8');
+    assert(validator.acceptanceDigest(midRun) === frozenAcceptance
+      && validator.revalidateForResume(midRun, { root: tmp }).ok === true,
+      'acceptance-e2e: the acceptance surface survives node execution byte-for-byte');
+
+    // The sink's Acceptance Check finally has an OBJECT: the frozen items, read through the one
+    // parser, each satisfiable by a covering test / gate receipt / prose evidence — judged, not matched.
+    const items = validator.parseAcceptanceItems(midRun);
+    assert(items.length === 3 && items.map(i => i.id).join(',') === 'A1,A2,A3',
+      'acceptance-e2e: finalize reads the frozen items to walk, got ' + JSON.stringify(items));
+    // AC3's second clause — "finalize CITES the items" — is AGENT PROSE. The Acceptance Check is a
+    // judged walk ("a covering test, a gate receipt, or prose evidence, judged in context") that
+    // deliberately produces no machine artifact and no per-item ledger, so nothing downstream can assert
+    // the citing end to end. A test that builds a summary from the items and then asserts the summary
+    // contains the items is a tautology over data it just wrote — which is how the previous version of
+    // this block read as coverage while proving nothing (garbage item texts passed it unchanged).
+    //
+    // What IS provable, and is proven here: the walk has a real OBJECT with real BINDINGS. Every frozen
+    // item resolves against something THIS RUN declared or produced — a path in the frozen declared
+    // write set, the frozen `validation_command`, or the frozen gate declaration whose receipt the
+    // production CLI wrote to `.cache` — never against a literal constructed alongside the assertion.
+    // Replace an item's text with unrelated words and its binding disappears: this goes RED.
+    const sinkItems = items;
+    const nodes = validator.parseNodes(midRun);
+    const declaredWrites = nodes.reduce((acc, n) => acc.concat(Array.from(n.writeSet || [])), []);
+    const validationCommand = ((midRun.match(/^validation_command:\s*(.+)$/m) || [])[1] || '').trim();
+    const gateNode = nodes.find(n => n.gateClaim && n.gateClaim !== '—');
+    const writerEvidence = fs.readFileSync(path.join(projectDir, '.cache', 'writer.md'), 'utf8');
+    assert(declaredWrites.includes('lib/impl.js') && validationCommand && gateNode
+      && /^RED:/m.test(writerEvidence) && /^GREEN:/m.test(writerEvidence),
+      'acceptance-e2e: the binding SOURCES are the run\'s own frozen declarations and recorded '
+        + 'evidence, not test literals');
+    const bindings = sinkItems.map(item => ({
+      id: item.id,
+      satisfied_by:
+        declaredWrites.some(p => p && item.text.includes(p)) ? 'covering test over the declared write set'
+        : (validationCommand && item.text.includes(validationCommand)) ? 'recorded validation result'
+        : (/review/i.test(item.text) && gateNode) ? 'gate receipt'
+        : null,
+    }));
+    assert(bindings.every(b => b.satisfied_by),
+      'acceptance-e2e: every frozen acceptance item binds to a declared write path, the frozen '
+        + 'validation_command, or the frozen gate declaration — the finalize walk has a real object, got '
+        + JSON.stringify(bindings));
+
+    // ...and the object is the one the SHIPPED finalize surfaces tell the agent to walk. These are real
+    // repo files: weaken Step 2's binding on any of the six and this goes RED.
+    const repoRoot = path.resolve(__dirname, '..');
+    const finalizeSurfaces = [
+      'commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+      'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+      'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+    ];
+    for (const rel of finalizeSurfaces) {
+      const surface = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+      assert(/`## Acceptance`/.test(surface) && /`A1:`/.test(surface),
+        'acceptance-e2e: ' + rel + ' binds the Acceptance Check to the frozen `## Acceptance` items');
+    }
+    assert(sinkItems.every(i => /^A\d+$/.test(i.id)),
+      'acceptance-e2e: the ids this run froze are the `A1:`/`A2:` form those surfaces name');
+
+    // Tamper probe on the artifact finalize actually reads: corrupting an item's TEXT after freeze is
+    // caught by the hash coverage AND changes what the walk would read. Both directions, on real bytes.
+    const tampered = midRun.replace(sinkItems[0].text, 'A1 now means whatever the run felt like.');
+    assert(tampered !== midRun, 'acceptance-e2e: the tamper probe actually mutates an item');
+    assert(validator.revalidateForResume(tampered, { root: tmp }).ok !== true,
+      'acceptance-e2e: a post-freeze acceptance item edit is tamper-evident');
+    assert(!validator.parseAcceptanceItems(tampered).some(i => i.text === sinkItems[0].text),
+      'acceptance-e2e: ...and the finalize walk would read the corrupted item, not the frozen one');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testAcceptanceSurfaceEndToEnd: PASSED');
 }
 
 main().catch(err => {

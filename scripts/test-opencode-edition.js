@@ -232,12 +232,14 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A24 (#572): the generated opencode workflow-init carries the re-grounded adaptive
-// ## Kaola-Workflow template — phase-free (no retired numbered-phase model, no
-// "phase file/artifact" framing) AND in parity with the canonical GitHub template
-// MODULO the runtime-noun transform (Claude Code agents → subagents). .opencode/ is
-// fully gitignored, so the four-chain contract validators must not read it — this is
-// the opencode-edition home for the #572 ban + parity (regenerate via --write).
+// A24 (#572, tightened by #812): the generated opencode workflow-init carries the
+// re-grounded adaptive ## Kaola-Workflow template — phase-free (no retired
+// numbered-phase model, no "phase file/artifact" framing) AND BYTE-IDENTICAL to the
+// canonical GitHub template. The template is runtime-neutral AT THE SOURCE, so there is
+// no longer any template-region rewrite to except: parity is exact, not modulo.
+// .opencode/ is fully gitignored, so the four-chain contract validators must not read
+// it — this is the opencode-edition home for the #572 ban + parity (regenerate via
+// --write).
 // ---------------------------------------------------------------------------
 {
   const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
@@ -255,13 +257,15 @@ for (const file of canonCommands) {
     'A24 (#572): opencode workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
   assert(!/phase file|phase artifact/i.test(ocTpl),
     'A24 (#572): opencode workflow-init template must not use "phase file/artifact" durable-state framing');
-  // Parity modulo the runtime-noun transform: the opencode template equals the canonical
-  // GitHub template with "Claude Code agent(s)" rewritten to "subagent(s)" (the sole template-
-  // region rewrite transformCommandBody applies; see sync-opencode-edition.js).
+  // EXACT parity: transformCommandBody applies zero template-region rewrites (#812).
   const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
-  const canonTplRuntime = canonTpl.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
-  assert(ocTpl === canonTplRuntime,
-    'A24 (#572): opencode workflow-init template is in parity with the canonical GitHub template modulo the runtime-noun transform (Claude Code agents → subagents)');
+  assert(ocTpl === canonTpl,
+    'A24 (#812): opencode workflow-init template is BYTE-IDENTICAL to the canonical GitHub template (no template-region rewrite exists)');
+  // Vendor/runtime leak ban at the injected-template level: the block is written into a
+  // CONSUMER repo and read by every runtime, so it names no vendor, no model, and no
+  // command that does not resolve on the reader's runtime.
+  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(canonTpl),
+    'A24 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 
 // ---------------------------------------------------------------------------
@@ -365,19 +369,26 @@ for (const role of reasoning) {
 // A12: adaptive effort tiers (the locked-in install default). With an explicit
 // inherited model whose provider resolves under a CONTRACT_EFFORT_TABLE contract,
 // renderOpencodeJson emits the two-tier EFFORT-VARIANT config: top-tier roles
-// (canonical opus ∪ the Claude Code "higher" profile roles) get the provider's
-// TOP variant; standard roles get its SECOND variant. The per-tier variant names
-// are provider-relative (mapTier). Unknown provider → safe DEFAULT contract (NO
-// de-tier). NODE_MODEL_TIERS {opus,sonnet} stays the portable plan vocabulary;
-// this only resolves a tier.
+// (exactly the canonical reasoning-tier roles — there is no second, install-time
+// model axis) get the provider's TOP variant; standard roles get its SECOND
+// variant. The per-tier variant names are provider-relative (mapTier). Unknown
+// provider → safe DEFAULT contract (NO de-tier). NODE_MODEL_TIERS {opus,sonnet}
+// stays the portable plan vocabulary; this only resolves a tier.
 // ---------------------------------------------------------------------------
 const topRoles = sync.topTierRoles();
 const stdRoles = sync.standardTierRoles();
-assert(topRoles.length > reasoning.length,
-  'A12: topTierRoles() adds the higher-profile roles on top of the opus roles');
+assert(JSON.stringify(topRoles) === JSON.stringify(reasoning),
+  'A12: topTierRoles() is EXACTLY the canonical reasoning-tier role set (one source, no install-time axis); got ['
+    + topRoles.join(', ') + '] vs [' + reasoning.join(', ') + ']');
 for (const role of ['code-architect', 'code-reviewer', 'security-reviewer']) {
-  assert(topRoles.includes(role), 'A12: higher-profile role ' + role + ' is on the top tier');
+  assert(topRoles.includes(role), 'A12: reasoning-tier role ' + role + ' is on the top tier');
 }
+// Retiring the install-time model axis must not re-tier a role. These stay OFF the top tier:
+// `adversarial-verifier` never had a `higher` variant, so its shipped tier is standard, and
+// `build-error-resolver` is hot repair work. Both are raisable per node by the frozen plan.
+assert(!topRoles.includes('contractor') && !topRoles.includes('implementer')
+  && !topRoles.includes('adversarial-verifier') && !topRoles.includes('build-error-resolver'),
+  'A12: standard-tier roles stay off the top tier');
 
 // GLM-5.2 (zhipu): top=max, second=high.
 const glm = parseRendered({ inheritModel: 'zhipuai-coding-plan/glm-5.2' });

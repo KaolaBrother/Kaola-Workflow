@@ -5,6 +5,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// THIS MAP IS THE EFFECTIVE TIER OF EVERY INSTALLED AGENT. The installer rewrites each installed
+// agent's frontmatter to `model: inherit`, so the frontmatter step below can never fire for an
+// installed agent and resolution always lands here. Keep an entry byte-equal to its source
+// `agents/<role>.md` frontmatter: the two are one declaration seen from two sides, and a divergence
+// silently re-tiers the role on every install.
 const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
   'knowledge-lookup': 'sonnet',
@@ -14,11 +19,15 @@ const DEFAULT_AGENT_MODELS = {
   'code-architect': 'opus',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',
-  'build-error-resolver': 'opus',
+  'build-error-resolver': 'sonnet',
   'code-reviewer': 'opus',
   'security-reviewer': 'opus',
   'doc-updater': 'sonnet',
-  'adversarial-verifier': 'opus',
+  // The adversarial verifier falsifies ONE recorded claim against ONE named surface — a bounded,
+  // well-scoped read task — so its shipped tier is standard. A plan may raise it per node (the
+  // post-G1 intent-verifier on a synthesizer's merge is raised that way); it is NOT a
+  // reasoning-floor role.
+  'adversarial-verifier': 'sonnet',
   contractor: 'sonnet',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
   // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
@@ -279,32 +288,36 @@ function modelFromFile(agentName, agentDir) {
   }
 }
 
+// Resolution is a THREE-step chain, and this function owns the last two of them:
+//   plan column (the frozen plan's per-node tier, applied by the caller) -> frontmatter
+//   -> DEFAULT_AGENT_MODELS. There is no install-written model manifest and no
+//   install-time model axis; a file dropped in the agent dir cannot influence resolution.
+//
+// FOR AN INSTALLED AGENT THE FRONTMATTER STEP NEVER FIRES. The installer rewrites every installed
+// agent's frontmatter to `model: inherit`, and step 1 skips `inherit` by design, so an installed
+// agent's chain is effectively:
+//   plan column -> DEFAULT_AGENT_MODELS -> inherit (empty).
+// The frontmatter step governs exactly one case: an ad-hoc dispatch pointed at the SOURCE tree
+// (`--agent-dir <repo>/agents`), where the frontmatter has not been neutralized. That is why
+// DEFAULT_AGENT_MODELS must stay byte-equal to the source frontmatter — the two are the same
+// declaration read from two directories, and only their agreement makes the tier install-invariant.
 function resolveAgentModelRaw(name, dir, options = {}) {
-  // Keep Codex declarative role defaults independent of a co-installed Claude model manifest;
-  // otherwise a Claude `higher`/`common` choice could silently flip tier metadata and wait budgets.
+  // Keep Codex declarative role defaults independent of whatever a co-installed runtime
+  // wrote into its own agent dir: the static map alone answers for the Codex plugin.
   if (options.staticDefaults && DEFAULT_AGENT_MODELS[name]) {
     const v = DEFAULT_AGENT_MODELS[name];
     return v.toLowerCase() === 'inherit' ? '' : v;
   }
 
-  // 1. manifest: .kaola-agent-models.json in agentDir — written at install time
-  try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.kaola-agent-models.json'), 'utf8'));
-    if (manifest && Object.prototype.hasOwnProperty.call(manifest, name)) {
-      const v = String(manifest[name] || '');
-      return v.toLowerCase() === 'inherit' ? '' : v;
-    }
-  } catch { /* missing or unparseable — fall through */ }
-
-  // 2. frontmatter, only if not 'inherit'
+  // 1. frontmatter, only if not 'inherit'
   const fm = modelFromFile(name, dir);
   if (fm && fm.toLowerCase() !== 'inherit') return fm;
 
-  // 3. DEFAULT_AGENT_MODELS
+  // 2. DEFAULT_AGENT_MODELS
   const def = DEFAULT_AGENT_MODELS[name];
   if (def) return def.toLowerCase() === 'inherit' ? '' : def;
 
-  // 4. empty
+  // 3. empty
   return '';
 }
 

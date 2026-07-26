@@ -280,7 +280,7 @@ choices, or ambiguity that blocks correctness.
 
 
 - Run or cite fresh final validation before claiming completion.
-- Do not close issues until acceptance criteria pass.
+- Do not close issues until every `## Acceptance` item is satisfied.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
 - Commit And Push happens after docs, issues, roadmap, archive, and metadata are complete.
@@ -288,7 +288,7 @@ choices, or ambiguity that blocks correctness.
 ## Required Steps
 
 1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build) after all test-consumed prose/docs and code changes have landed, as the last pre-Finalization action; on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence with `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. Save output to `.cache/final-validation.md`, then bind it: record a column-0 `validated_candidate_hash:` line produced by the plan-validator's `--candidate-hash --json` as the LAST action, after every file the validation covered has landed. **State the actual validation-reuse boundary, not a false absolute:** when you cite a prior run instead of rerunning, record which node/state it covered and that later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node) are outside it — do NOT write a terminal absolute like `No files changed after those runs` when the finalize node itself changes docs/changelog afterward. Any doubt about the boundary means run the command. (At closure, `archiveProjectDir` also mechanically neutralizes that known false-absolute phrase in the archived `.cache/final-validation.md` as a backstop.)
-2. Acceptance check: verify the acceptance criteria, planned nodes, tests, review status, and absence of debug artifacts. Adaptive's `--verdict-check` barrier (see the Prerequisite gate above) is the sole compliance gate.
+2. Acceptance check: walk the frozen plan's `## Acceptance` items (`A1:`, `A2:`, …) one at a time and name what satisfies each one — a covering test, a gate receipt, or prose evidence, judged in context (never a mechanical match, never a per-item ledger); an item you cannot satisfy is a blocker, not a footnote. Then verify planned nodes, tests, review status, and absence of debug artifacts. Adaptive's `--verdict-check` barrier (see the Prerequisite gate above) is the sole compliance gate. A plan carrying no `## Acceptance` section (a read-only plan, or one frozen before the section existed) has no items to walk — verify the deliverable against the issue statement instead.
    ```bash
    ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"

@@ -209,10 +209,14 @@ output to `kaola-workflow/{project}/.cache/final-validation.md`. On failure rout
 review/security → the review/security gate), write fix output to `.cache/final-validation-fix-{n}.md`, and rerun the
 failed command.
 
-**Step 2 — Acceptance Check.** Verify the deliverable matches the acceptance criteria, all planned nodes
-complete, tests pass (per validation result, not a re-run universal suite), no type/lint errors, no
-CRITICAL/HIGH review findings, no debug statements. Adaptive's `--verdict-check` barrier is the sole
-compliance gate.
+**Step 2 — Acceptance Check.** Walk the frozen plan's `## Acceptance` items (`A1:`, `A2:`, …) one at a
+time and name what satisfies each one — a covering test, a gate receipt, or prose evidence, judged in
+context. That judgement is yours: there is no mechanical match, no string diff, and no per-item
+ledger; an item you cannot satisfy is a blocker, not a footnote. Then verify all planned
+nodes complete, tests pass (per validation result, not a re-run universal suite), no type/lint errors,
+no CRITICAL/HIGH review findings, no debug statements. Adaptive's `--verdict-check` barrier is the sole
+compliance gate. A plan carrying no `## Acceptance` section (a read-only plan, or one frozen before
+the section existed) has no items to walk — verify the deliverable against the issue statement instead.
 
 **Step 3 — Documentation Update.** Read project-root `CLAUDE.md` for the Documentation Update
 Checklist (create/append if missing). This is a required gate: invoke `doc-updater` with changed
