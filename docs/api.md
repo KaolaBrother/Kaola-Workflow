@@ -572,6 +572,52 @@ launder inherited unapproved work. Finalization recomputes role-specific current
 fresh bound certifier receipts. G4 failures are structured `g4_*` / `gate_*` families carried inside
 the ordinary `plan_invalid` freeze result.
 
+### `## Meta` field `test_custody_exemption` — the test-custody wall (issue #814 / D-814-01)
+
+**The wall (freeze-time).** A test-like path (`tests?/`, `__tests__/`, `spec/` directory forms, or a
+`*.test.*` / `*.spec.*` suffix — the same `isTestLikePath` predicate the barrier attributes with) may
+appear only in a **test-author** node's `declared_write_set`. `TEST_CUSTODY_ROLES` (exported from
+`plan-validator.js`) is the single definition of who holds custody; today it is `{'tdd-guide'}`. Any
+other role declaring such a path refuses at freeze with `test_custody_violation`. Custody governs
+**write** only — every role keeps full read and execute access to the suite, so the iterate-to-green
+signal is unchanged.
+
+**The escape hatch.** `test_custody_exemption: <node-id> <path> — <one-line reason>` (hash-covered;
+`parseTestCustodyExemptions`, read from `## Meta` only via the same `classifier.sectionBody` reader
+`parseLabels`/`parseGoal` use, so a decoy line elsewhere in the plan cannot admit a write). One line
+per (node, path) pair. The reason is REQUIRED — an unreasoned exemption is a rubber stamp, not a
+declaration — and a malformed entry refuses `test_custody_exemption_malformed`. The entry must name a
+path that node actually declares; otherwise it refuses `test_custody_exemption_unmatched`, so an
+exemption can never act as a wildcard. Because the whole `## Meta` body is hash-covered, a post-freeze
+edit to an exemption surfaces as `plan_hash_mismatch`. The exemption path is normalized through the
+SAME `classifier.parseWriteSetCell` the declared write set is built with, so the two sides can never
+canonicalize differently.
+
+**The synthesizer carve-out (derived, not blanket).** A `synthesizer` is exempt for a path at least
+one of its `depends_on` legs also declares: by contract it declares the union of its legs' write sets,
+so a leg's test path in that union is reconciliation, not authorship. A test path NO upstream leg
+declares is authorship and still refuses.
+
+**Freeze-only.** `revalidateForResume` deliberately does NOT apply the wall, so a plan frozen before
+the rule existed still resumes byte-for-byte (matching the sibling write-set shape walls). The runtime
+barrier attribution floor still catches an UNDECLARED test write in flight, so resume is not left
+without teeth.
+
+**Registry rows.** `ROLE_TOKEN_REGISTRY['tdd-guide']` is `['evidence-binding', 'RED', 'red_baseline']`
+— `GREEN` is retired (GREEN authority is gate-side) and `RED` gains the `red_baseline` receipt naming
+the baseline SHA the failure was captured on, checked by `checkEvidenceShape` against this open's
+recorded baseline (the nonce is that baseline's 12-character prefix), which makes a RED signature
+non-transferable across reopens. `ROLE_TOKEN_REGISTRY['implementer']` is `['evidence-binding',
+'tests-green|regression-green|build-green|smoke-integration']` — `non_tdd_reason` is retired with the
+dichotomy that justified it. A legacy artifact carrying the old tokens still closes (tolerated on
+read); a legacy/offline read with no expected nonce skips the baseline check entirely.
+
+**Finding routing.** `route-findings` infers `fix_role=tdd-guide` for behaviour / coverage /
+test-defect findings (the test author owns the oracle). Precedence: `security` still wins; then a
+custody-shaped finding on an owned file routes to `tdd-guide`; then an owned file routes to
+`implementer`; then an unowned file routes to `code-reviewer`. The canonical finding grammar's
+explicit `fix_role` always wins — the inference runs only on the free-prose fallback.
+
 ### `## Meta` field `optimize(<node-id>)` — the metric-optimizer contract (issue #634 / D-634-01)
 
 `metric-optimizer` is a closed-library role (`CANONICAL_ROLES`/`WRITE_ROLES`/`IMPLEMENT_ROLES`,

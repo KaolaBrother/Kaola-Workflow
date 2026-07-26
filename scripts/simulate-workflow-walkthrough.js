@@ -3299,8 +3299,12 @@ function testBundle424432433ValidatorGates() {
     const reg = pv.ROLE_TOKEN_REGISTRY;
     assert(reg && typeof reg === 'object', '#433 (5): ROLE_TOKEN_REGISTRY must be exported as an object');
     const expect = {
-      'tdd-guide':             ['evidence-binding', 'RED', 'GREEN'],
-      'implementer':          ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+      // Custody, not order: the test author keeps RED and gains its baseline receipt but loses
+      // GREEN (a passing suite grades the implementation, and the test's author is not its grader);
+      // the universal implementing role drops `non_tdd_reason` with the dichotomy that justified it
+      // and keeps a verification-tier alternation now led by the behavioral tier.
+      'tdd-guide':             ['evidence-binding', 'RED', 'red_baseline'],
+      'implementer':          ['evidence-binding', 'tests-green|regression-green|build-green|smoke-integration'],
       'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
       'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
       'adversarial-verifier': ['evidence-binding', 'verdict'],
@@ -22069,7 +22073,7 @@ function testReExpansionEpochTransition756() {
       fs.writeFileSync(path.join(repo, 'lib', 'companion.js'), '// recovered companion, now reviewed\n');
       spawnSync('git', ['-C', repo, 'add', '-A'], { encoding: 'utf8' });
       spawnSync('git', ['-C', repo, 'commit', '-m', 'impl'], { encoding: 'utf8' });
-      fs.appendFileSync(path.join(proj, '.cache', 'impl.md'), '\nnon_tdd_reason: trivial recovered file\nregression-green: ok\n');
+      fs.appendFileSync(path.join(proj, '.cache', 'impl.md'), '\nregression-green: ok\n');
       const ci = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-756c', '--node-id', 'impl', '--json'], repo);
       assert(ci.status === 0, '#756 (c): close impl + fused-advance to wall: ' + ci.stdout + ci.stderr);
       const cip = JSON.parse(ci.stdout);

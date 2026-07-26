@@ -2506,9 +2506,10 @@ function writeRunProgressMirror(mainRoot, project, planPath, readFile, op, mainR
 // ---------------------------------------------------------------------------
 // checkEvidenceShape — presence-only check for role-specific evidence tokens.
 //
-// tdd-guide:        needs BOTH 'RED' AND 'GREEN' (or 'n/a' reason).
-// implementer:      needs 'non_tdd_reason' AND one of {regression-green, build-green,
-//                   smoke-integration} (or 'n/a').
+// tdd-guide:        needs 'RED' AND a 'red_baseline' matching this open's recorded baseline
+//                   (or 'n/a'). 'GREEN' is retired — GREEN authority is gate-side.
+// implementer:      needs one of {tests-green, regression-green, build-green,
+//                   smoke-integration} (or 'n/a'). 'non_tdd_reason' is retired.
 // metric-optimizer: needs a NON-EMPTY value for each of 'metric_baseline', 'metric_final',
 //                   'iterations_used', 'regression-green' (the hollow-stub guard — token keys
 //                   alone are not enough) (or 'n/a').
@@ -2520,7 +2521,7 @@ function writeRunProgressMirror(mainRoot, project, planPath, readFile, op, mainR
 // @returns {{ ok:boolean, kind?:'absent'|'shape', missingTokenClass?:string, reason?:string, expected?:string[] }}
 //   #319: on failure, `kind` discriminates absent ('absent') vs malformed
 //   ('shape') evidence; `missingTokenClass` names the failed class
-//   ('non_tdd_reason' / 'change-type' / 'RED' / 'GREEN' / 'non-empty').
+//   ('change-type' / 'RED' / 'red_baseline' / 'non-empty').
 // ---------------------------------------------------------------------------
 function checkEvidenceShape(role, nodeId, evidence, opts) {
   const content = evidence || '';
@@ -2633,36 +2634,60 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     return { ok: true };
   }
 
+  // The TEST AUTHOR. It owns the test artifact and never writes production code, so its evidence
+  // proves ONE thing: the tests it authored FAIL on the recorded baseline. `GREEN` is retired from
+  // this contract — a passing suite is a verdict about the implementation, and the writer of the
+  // tests is not the grader of the code; GREEN authority sits gate-side (validation-vector receipts
+  // and the post-dominating review wall). In exchange RED gains its receipt: `red_baseline` must
+  // name the baseline the failing test was captured on, and the runtime checks it against THIS
+  // open's recorded barrier baseline (the nonce is that baseline's 12-char SHA prefix). That turns
+  // fail-on-baseline from a self-description into a checkable value, and makes a RED signature
+  // non-transferable across reopens. A legacy artifact still carrying GREEN closes unchanged
+  // (nothing forbids the extra token); a legacy/offline read with no expectedNonce skips the
+  // baseline check entirely, so an in-flight pre-rule artifact is never bricked.
   if (role === 'tdd-guide') {
+    const expectedTokens = ['RED', 'red_baseline'];
     if (!content) {
-      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: expectedTokens };
     }
-    // The open-time seed contains empty RED:/GREEN: keys and comments naming both tokens. Require a
-    // non-empty column-0 value so a seed-only file can never satisfy --verify or close.
-    const hasRed   = /^RED:[ \t]*(\S.*)$/m.test(content);
-    const hasGreen = /^GREEN:[ \t]*(\S.*)$/m.test(content);
+    // The open-time seed contains empty RED:/red_baseline: keys and comments naming both tokens.
+    // Require a non-empty column-0 value so a seed-only file can never satisfy --verify or close.
+    const hasRed = /^RED:[ \t]*(\S.*)$/m.test(content);
     if (!hasRed) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: expectedTokens };
     }
-    if (!hasGreen) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'GREEN', reason: 'tdd-guide ' + nodeId + ' evidence missing GREEN token', expected: ['RED', 'GREEN'] };
+    if (opts.expectedNonce) {
+      const bm = content.match(/^red_baseline:[ \t]*(\S+)[ \t]*$/m);
+      if (!bm) {
+        return { ok: false, kind: 'shape', missingTokenClass: 'red_baseline',
+          reason: 'tdd-guide ' + nodeId + ' evidence missing the column-0 `red_baseline: <baseline-sha>` receipt — RED is bound to the baseline it was captured on, not asserted',
+          expected: expectedTokens };
+      }
+      if (!String(bm[1]).startsWith(opts.expectedNonce)) {
+        return { ok: false, kind: 'shape', missingTokenClass: 'red_baseline',
+          reason: 'tdd-guide ' + nodeId + ' red_baseline "' + bm[1] + '" is not this open\'s recorded baseline (expected a sha beginning "' + opts.expectedNonce + '") — a RED signature captured on another baseline proves nothing about this one',
+          expected: ['red_baseline: ' + opts.expectedNonce + '…'] };
+      }
     }
     return { ok: true };
   }
 
+  // The UNIVERSAL implementing role. It takes over behavioral logic and keeps full read+execute
+  // access to the tests (custody governs WRITE, never read or run), so its evidence records the
+  // verification tier it actually reached — `tests-green` for behavioral work (LOCAL working
+  // evidence; the authoritative verdict is gate-side), or one of the three non-behavioral tiers.
+  // `non_tdd_reason` is retired with the test-first/no-test dichotomy that justified it; an old
+  // artifact still carrying it closes unchanged, so a legacy in-flight node is tolerated on read.
   if (role === 'implementer') {
+    const expectedTokens = ['tests-green|regression-green|build-green|smoke-integration'];
     if (!content) {
-      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: expectedTokens };
     }
-    // The open-time seed contains empty keys and a comment listing the alternation. Require actual
-    // non-empty column-0 values so encrypted-return recovery cannot accept untouched scaffolding.
-    const hasReason = /^non_tdd_reason:[ \t]*(\S.*)$/m.test(content);
-    const hasChangeType = /^(?:regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
-    if (!hasReason) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'non_tdd_reason', reason: 'implementer ' + nodeId + ' evidence missing non_tdd_reason', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
-    }
+    // The open-time seed contains an empty key and a comment listing the alternation. Require an
+    // actual non-empty column-0 value so encrypted-return recovery cannot accept untouched scaffolding.
+    const hasChangeType = /^(?:tests-green|regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
     if (!hasChangeType) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing change-type token', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing verification-tier token', expected: expectedTokens };
     }
     return { ok: true };
   }
@@ -13998,14 +14023,14 @@ function runSelfTest() {
     assert(r1.evidence_file === '.cache/n1-impl.md', 'T1 evidence_file correct path');
     assert(Array.isArray(r1.required_tokens), 'T1 required_tokens is array');
     assert(r1.required_tokens.includes('RED'), 'T1 required_tokens includes RED');
-    assert(r1.required_tokens.includes('GREEN'), 'T1 required_tokens includes GREEN');
+    assert(r1.required_tokens.includes('red_baseline'), 'T1 required_tokens includes red_baseline (GREEN retired — GREEN authority is gate-side)');
     const seededPath = tmpDir + '/.cache/n1-impl.md';
     assert(fs.existsSync(seededPath), 'T1 seeded file exists');
     const seededContent = fs.readFileSync(seededPath, 'utf8');
     const firstLine = seededContent.split('\n')[0];
     assert(firstLine === 'evidence-binding: n1-impl abc123def456', 'T1 binding header is line 1');
     assert(/RED:/.test(seededContent), 'T1 RED stub present');
-    assert(/GREEN:/.test(seededContent), 'T1 GREEN stub present');
+    assert(/red_baseline:/.test(seededContent), 'T1 red_baseline stub present');
 
     // Test 2: second call (crash-resume) does NOT overwrite the existing file.
     // Write custom content to simulate in-progress evidence.
@@ -14030,7 +14055,7 @@ function runSelfTest() {
     assert(rotatedFirstLine === 'evidence-binding: n1-impl rotated456789', 'T3 line 1 rewritten with new nonce');
     assert(!rotatedContent.includes('RED: some test output'), 'T3 stale evidence body GONE after forceRotate');
     assert(/RED:/.test(rotatedContent), 'T3 fresh RED stub present after forceRotate');
-    assert(/GREEN:/.test(rotatedContent), 'T3 fresh GREEN stub present after forceRotate');
+    assert(/red_baseline:/.test(rotatedContent), 'T3 fresh red_baseline stub present after forceRotate');
 
     // Test 4: provenance log entry appears after an open event.
     appendProvenanceLog(planPath, 'open', 'n2-check', 'deadbeef1234');
@@ -14046,13 +14071,16 @@ function runSelfTest() {
 
     // Test 5: implementer role gets correct stubs.
     const r5 = seedEvidenceFile(planPath, 'n3-impl', 'impl99999999', 'implementer', false);
-    assert(r5.required_tokens.includes('non_tdd_reason'), 'T5 implementer has non_tdd_reason token');
+    assert(r5.required_tokens.includes('tests-green|regression-green|build-green|smoke-integration'),
+      'T5 implementer has the verification-tier alternation (non_tdd_reason retired with the dichotomy that justified it)');
     const implPath = tmpDir + '/.cache/n3-impl.md';
     const implContent = fs.readFileSync(implPath, 'utf8');
     assert(implContent.split('\n')[0] === 'evidence-binding: n3-impl impl99999999', 'T5 implementer binding header');
-    assert(/non_tdd_reason:/.test(implContent), 'T5 implementer non_tdd_reason stub');
-    // The alternation class regression-green|build-green|smoke-integration seeds the FIRST alternative.
-    assert(/regression-green:/.test(implContent), 'T5 implementer regression-green stub (first alt)');
+    // The alternation class tests-green|regression-green|build-green|smoke-integration seeds the
+    // FIRST alternative, plus a comment naming every alternative.
+    assert(/tests-green:/.test(implContent), 'T5 implementer tests-green stub (first alt)');
+    assert(/<!-- tests-green\|regression-green\|build-green\|smoke-integration -->/.test(implContent),
+      'T5 implementer alternation comment names every tier');
 
     // Test 6: seedEvidenceFile is advisory — a failure must not throw.
     try {
@@ -14116,7 +14144,26 @@ function parseFindingLine(line) {
   const securityFlag = /\bsecurity\b/.test(lower);
   const status = (/\bn\/a\b/.test(lower) || /\bnon-blocking\b/.test(lower)) ? 'n/a' : 'open';
 
-  return { finding_id, file, text, securityFlag, status };
+  return { finding_id, file, text, securityFlag, custodyFlag: isTestCustodyFinding(body), status };
+}
+
+// ---------------------------------------------------------------------------
+// isTestCustodyFinding — does this finding land on the TEST ARTIFACT rather than the production
+// code? Behaviour, coverage, and test-defect findings are all statements about the oracle: the
+// suite does not pin the behaviour, does not reach the case, or asserts the wrong thing. Under
+// custody those belong to the test AUTHOR — the implementing context can read and run the suite
+// but never writes it, so routing such a finding to the implementer would either strand it or
+// invite the exact self-graded-oracle edit custody exists to prevent.
+//
+// Deliberately a NARROW vocabulary over the three concepts the routing names. `regression` is
+// excluded: a regression finding is most often a statement about the code that broke, not about the
+// test, and the reviewer can always say so explicitly with `fix_role=tdd-guide` in the canonical
+// finding grammar (which this inference never overrides).
+// ---------------------------------------------------------------------------
+const TEST_CUSTODY_FINDING_RE =
+  /\bbehaviou?r(?:al)?\b|\bcoverage\b|\buncovered\b|\buntested\b|\btest[- ]defect\b|\bdefective test\b|\btest is wrong\b|\bwrong test\b|\bmissing test\b/i;
+function isTestCustodyFinding(text) {
+  return TEST_CUSTODY_FINDING_RE.test(String(text || ''));
 }
 
 // ---------------------------------------------------------------------------
@@ -14181,10 +14228,16 @@ function routeCanonicalFindings(findings, nodes, sourceNode) {
 // over the frozen plan, infers a fix_role, and writes `.cache/findings-route.json`
 // (an array of { finding_id, file, owning_node, fix_role, status }).
 //
-// fix_role precedence (D-446-01 §2):
+// fix_role precedence (D-446-01 §2, extended by test custody):
 //   1. `security` in the finding text → 'security-reviewer'.
-//   2. else a node DECLARES the file (owning_node resolved) → 'implementer'.
-//   3. else (no producing/declaring node) → 'code-reviewer'.
+//   2. else a node DECLARES the file (owning_node resolved) AND the finding is about the test
+//      ORACLE (behaviour / coverage / test-defect, isTestCustodyFinding) → 'tdd-guide', the test
+//      author who holds custody of the test artifact.
+//   3. else a node DECLARES the file → 'implementer'.
+//   4. else (no producing/declaring node) → 'code-reviewer'.
+//
+// The CANONICAL finding grammar's explicit `fix_role` always wins — this inference runs only on the
+// free-prose fallback, where the reviewer named no role at all.
 //
 // owning_node === null is the plan-repair signal (the file no node owns).
 //
@@ -14239,7 +14292,7 @@ function runRouteFindings(opts, project) {
         const ownership_candidates = resolveOwningNodes(parsed.file, nodes);
         const owning_node = ownership_candidates.length === 1 ? ownership_candidates[0] : null;
         const fix_role = parsed.securityFlag ? 'security-reviewer'
-          : (owning_node ? 'implementer' : 'code-reviewer');
+          : (owning_node ? (parsed.custodyFlag ? 'tdd-guide' : 'implementer') : 'code-reviewer');
         findings.push({
           finding_id: parsed.finding_id,
           file: parsed.file,

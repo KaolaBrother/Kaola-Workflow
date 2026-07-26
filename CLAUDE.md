@@ -135,7 +135,7 @@ A **release receipt must use the complete tier** — `npm run test:full` — nev
 - Read before writing: inspect the target file and relevant surrounding conventions immediately before editing or creating files.
 - Keep it simple: solve the requested problem without speculative abstractions.
 - Make surgical changes: touch only what the task requires.
-- Goal-driven execution: Define verifiable success criteria before starting. Prefer write-the-failing-test-first for bugs and features. Loop until criteria pass; don't declare done on weak signals.
+- Goal-driven execution: Define verifiable success criteria before starting. Keep the tests in separate custody from the code they judge — whoever implements a behavior does not author its tests. Loop until criteria pass; don't declare done on weak signals.
 - Verify facts, don't fabricate: do not guess API/library behavior, interfaces, or signatures — confirm them against documentation, source, or a run before relying on them. Do not claim to understand code, errors, or requirements you have not verified; name what you do not know and find out.
 - Reuse before adding: before writing a new interface, search for an existing equivalent and extend it rather than duplicate functionality.
 - Escalate irreversible changes: do not unilaterally make hard-to-reverse changes or alter a user-owned contract (public API, schema or data migration, dependency or build-tooling swap, deletion of working capability); state the decision and its evidence, then get confirmation before proceeding.

@@ -120,11 +120,16 @@ refusals teach the walls at freeze — author to them, never clamp around them.
   plan).
 - **A single unique `finalize` sink** is mandatory — docs/state writes only; a non-docs write trips
   `code-reviewer`.
-- **Choose the implement role:** `tdd-guide` for test-first behavioral logic + bug fixes;
-  `implementer` for work with no natural failing-unit-test (refactors, scaffolding, config, glue) —
-  record a `non_tdd_reason`. Default `tdd-guide`; "hard to test" is not an `implementer` reason. Both
-  need G1. Use `knowledge-lookup` for external library/API/framework knowledge not confirmable
-  locally.
+- **Custody decides the implement roles, not order:** `tdd-guide` owns the test paths and authors
+  nothing else; `implementer` owns the production paths and writes every kind of change. A node
+  declaring a test-like path must therefore BE a `tdd-guide` node, or carry a declared, hash-covered
+  `## Meta` entry `test_custody_exemption: <node-id> <path> — <one-line reason>`. Both need G1.
+  Behavioral work composes the two — `sequence` when the implementer consumes the authored tests as
+  its oracle (name the test files: that IS the S1 artifact), or a `parallel_safe` pair when the
+  acceptance surface already pins the interface (test paths vs source paths are disjoint by
+  construction). A test-author node may fan out over independent lenses (`cardinality` /
+  `partitioned_all`) when the stakes justify N contexts. Use `knowledge-lookup` for external
+  library/API/framework knowledge not confirmable locally.
 - **Semantic-boundary planning for high-risk work.** Shape high-risk filesystem, concurrency,
   persistence, and provenance work around semantic dependency and verification boundaries when those
   units are independently testable — guidance, not a wall: large coherent nodes remain legal. Never
@@ -267,7 +272,8 @@ final at freeze.
   expose that, never hand-add `speculative: true`. A speculative WRITE leg is DISCARD-ONLY on a fail.
 - **Write-set completeness — declare co-moving companions up front:** the generated forge ports /
   edition aggregators a canonical edit regenerates; the CONTRACT-validator pins a change moves (the
-  assertion file is IN the write set); byte-identical SYNC-GROUP peers; the RED/GREEN test files; the
+  assertion file is IN the write set); byte-identical SYNC-GROUP peers; the test files (in the
+  test-author node's write set, or under a declared `test_custody_exemption`); the
   node's own `.cache` receipt under `kaola-workflow/{project}/.cache/`. Grep each changed symbol
   across all four trees before freezing. Adding/removing an agent profile touches the full
   **registration surface** (the other editions, codex-dispatch templates, validators, install/

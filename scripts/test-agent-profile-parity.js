@@ -126,6 +126,16 @@ const FEATURE_TOKENS = [
   // the claim. Pinning the bare verb phrase would let a full inversion of the precedence rule
   // ("always widens, narrows, or substitutes") pass, so the negation is part of the token.
   'never widens, narrows, or substitutes',
+  // #814: the test-custody authoring lever. The plan grammar used to enforce test-before-code by
+  // ORDER; it now enforces it by CUSTODY — tdd-guide owns the test paths, implementer owns the
+  // production paths, and any other node reaching a test path needs a declared, hash-covered
+  // `## Meta` exemption. Present in agents/workflow-planner.md's implement-role bullet, so this
+  // enforces all three .toml twins carry both the rule and its escape hatch. Polarity is
+  // load-bearing on the first token: the whole point is that ORDER no longer decides, so pinning a
+  // bare "custody decides the implement roles" would let the retired order framing return beside
+  // it.
+  'Custody decides the implement roles, not order',
+  'test_custody_exemption',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
@@ -227,13 +237,25 @@ for (const tree of TOML_TREES) {
 // column-zero bare-key scan. These mutations never touch tracked files.
 {
   const canonical = read(`${TOML_TREES[0]}/implementer.toml`) || '';
+  // The anchor guard: a mutation built by .replace() on a string the profile no longer contains is
+  // a no-op, and the oracle passing a no-op proves nothing. Assert the anchors exist FIRST, so a
+  // future body rewrite that drops one goes RED here (naming the anchor) instead of silently
+  // disarming the mutation coverage below.
+  for (const anchor of ['developer_instructions', 'description', 'Output contract:']) {
+    assert(canonical.includes(anchor),
+      `closed Codex role grammar mutation anchor ${JSON.stringify(anchor)} must exist in implementer.toml (an absent anchor makes its mutation a silent no-op)`);
+  }
   const mutations = [
     canonical.replace(/^developer_instructions/m, '"behavior_contract_version" = 2\ndeveloper_instructions'),
     canonical.replace(/^developer_instructions/m, '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
     canonical.replace(/^developer_instructions/m, '[shadow] # valid TOML table\ndeveloper_instructions'),
     canonical.replace(/^description/m, 'name = "implementer"\ndescription'),
-    canonical.replace('Purpose:', 'Purpose:\n- invalid TOML escape: \\q'),
-    canonical.replace('Purpose:', 'Purpose:\rX'),
+    // Anchored on a heading the profile body is guaranteed to carry (every role toml states an
+    // output contract). A mutation whose anchor is absent silently becomes a NO-OP, and a no-op
+    // "mutation" that the oracle then passes is a guard that only looks armed — so the anchor
+    // itself is asserted below before the mutations run.
+    canonical.replace('Output contract:', 'Output contract:\n- invalid TOML escape: \\q'),
+    canonical.replace('Output contract:', 'Output contract:\rX'),
     `# raw control \u0001\n${canonical}`,
   ];
   for (const [index, mutation] of mutations.entries()) {

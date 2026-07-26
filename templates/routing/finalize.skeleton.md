@@ -351,7 +351,8 @@ and ask.
 - **Delegation:** the main session may run one small focused command (classify a failure, a quick
   post-trivial-edit check, a short smoke). Delegate expensive/noisy validation (full suites, broad
   lint, long logs, repeated repro) to a fresh validation subagent or the fix agent — `tdd-guide` for
-  behavior/regression/coverage, `build-error-resolver` for build/type/lint/tooling. Raw output →
+  behavior/regression/coverage/test-defect (it holds custody of the test artifact; no other role may
+  write a test path), `build-error-resolver` for build/type/lint/tooling. Raw output →
   `kaola-workflow/{project}/.cache/final-validation.md`; record only command, result, summary,
   classification, evidence path, route, and citation boundary.
 - **De-duplication:** run each full relevant command once against the final candidate; cite a prior
@@ -362,8 +363,9 @@ and ask.
   stay fresh; a code or `README`/`CHANGELOG`/`docs/api.md` change invalidates it.
 - **Trivial Inline Edit Exception:** the main session may make a one-line/mechanically-obvious edit
   (no behavior/API/security/design judgment) that fixes finalization friction/formatting/typo/import,
-  stays in scope, is recorded in `finalization-summary.md`, and reruns affected validation. Anything
-  else routes to `tdd-guide`/`build-error-resolver` or back through the review gate.
+  stays in scope, is recorded in `finalization-summary.md`, and reruns affected validation. It is
+  **never** an edit to a test file — test custody belongs to `tdd-guide`. Anything else routes to
+  `tdd-guide`/`build-error-resolver` or back through the review gate.
 
 Routed-fix dispatches (include the `model=` line exactly):
 
@@ -391,9 +393,9 @@ Agent(
 `step: final-validation`, `main_session_role: orchestrator`, `fix_owner: tdd-guide or
 build-error-resolver`), then run the repo-kind validation from the Validation Gate above, saving raw
 output to `kaola-workflow/{project}/.cache/final-validation.md`. On failure route
-(build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage → `tdd-guide`;
-review/security → the review/security gate), write fix output to `.cache/final-validation-fix-{n}.md`, and rerun the
-failed command.
+(build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage/test-defect →
+`tdd-guide`, the role that owns the test artifact; review/security → the review/security gate), write
+fix output to `.cache/final-validation-fix-{n}.md`, and rerun the failed command.
 
 **Step 2 — Acceptance Check.** Walk the frozen plan's `## Acceptance` items (`A1:`, `A2:`, …) one at a
 time and name what satisfies each one — a covering test, a gate receipt, or prose evidence, judged in
@@ -695,6 +697,14 @@ choices, or ambiguity that blocks correctness.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
 - Commit And Push happens after docs, issues, roadmap, archive, and metadata are complete.
+- Route a validation failure by kind: build/type/lint/tooling → `build-error-resolver`;
+  behavior/regression/coverage/test-defect → `tdd-guide`, the role that owns the test artifact;
+  review/security → the review/security gate. Write fix output to
+  `.cache/final-validation-fix-{n}.md` and rerun the failed command.
+- A one-line, mechanically obvious inline edit (no behavior/API/security/design judgment) that fixes
+  finalization friction, formatting, a typo, or an import stays legal — recorded in
+  `finalization-summary.md`, with affected validation rerun. It is **never** an edit to a test file:
+  test custody belongs to `tdd-guide`, and no other role may write a test path.
 
 ## Required Steps
 

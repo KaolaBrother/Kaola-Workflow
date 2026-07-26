@@ -2464,7 +2464,7 @@ scenario(() => {
     try {
       driveMixed(f);
       const nonce = readNonce(f.planPath, 'impl', f.common.readFile);
-      const stdinContent = 'evidence-binding: impl ' + nonce + '\nRED: reproduced\nGREEN: passes\n';
+      const stdinContent = 'evidence-binding: impl ' + nonce + '\nRED: reproduced\nred_baseline: ' + nonce + '\n';
       const recorded = runRecordEvidence({ ...f.common, nodeId: 'impl', stdinContent });
       assert(recorded.result === 'ok',
         '#748: the reopened replay owner can RECORD the evidence it was reopened to produce, got '
@@ -4024,6 +4024,9 @@ function writeLegAwareEvidence(cacheDir, id, role, extraLines) {
   for (const tokenClass of (ROLE_TOKEN_REGISTRY[role] || []).filter(t => t !== 'evidence-binding')) {
     const token = tokenClass.split('|')[0];
     if (token === 'RED') lines.push('RED: fixture fails before implementation');
+    // The test author's fail-on-baseline RECEIPT: it must name THIS open's recorded baseline, so
+    // the fixture echoes the nonce (its 12-char prefix) rather than a constant.
+    else if (token === 'red_baseline') lines.push('red_baseline: ' + nonce);
     else if (token === 'GREEN') lines.push('GREEN: fixture passes after implementation');
     else if (token === 'verdict') lines.push('verdict: pass');
     else if (token === 'findings_blocking') lines.push('findings_blocking: 0');
@@ -4404,10 +4407,11 @@ scenario(() => {
   assert(r665.exit === 0 && r665.out.ok === true,
     'T6c: after open, --resume-check still passes — no plan_hash_mismatch wedge from a mis-targeted splice, got ' + JSON.stringify(r665.out));
 
-  // close: record RED/GREEN evidence for impl-core, then close-and-open-next opens review.
+  // close: record the test author's baseline-bound RED evidence for impl-core, then
+  // close-and-open-next opens review.
   const rec665 = spawn665(process.execPath, [NODE_CLI_665, 'record-evidence', '--project', project665, '--node-id', 'impl-core', '--stdin', '--json'], {
     cwd: repoRoot665, encoding: 'utf8', input: 'evidence-binding: impl-core ' + implCoreNonce665
-      + '\nRED: impl-core failed before implementation\nGREEN: impl-core passes after implementation\n',
+      + '\nRED: impl-core failed before implementation\nred_baseline: ' + implCoreNonce665 + '\n',
   });
   assert(rec665.status === 0, 'T6c: impl-core evidence records: ' + rec665.stderr + rec665.stdout);
   r665 = run665([NODE_CLI_665, 'close-and-open-next', '--project', project665, '--node-id', 'impl-core', '--json']);
@@ -4779,40 +4783,55 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
-// T6: checkEvidenceShape — tdd-guide needs BOTH RED and GREEN
+// T6: checkEvidenceShape — the TEST AUTHOR proves RED on the recorded baseline.
+// Custody, not order: this role OWNS the test artifact and never writes production code, so it
+// no longer carries GREEN (a passing suite is a verdict about the implementation, and the writer
+// of the tests is not the grader of the code). In exchange RED gains its receipt — `red_baseline`,
+// the baseline the failing test was captured on, checked against THIS open's recorded baseline.
 // ---------------------------------------------------------------------------
 scenario(() => {
-  // Missing GREEN
-  const evidenceWithOnlyRed = 'RED: test failed as expected\nSome notes about the implementation';
-  const r1 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceWithOnlyRed);
-  assert(r1.ok === false, 'T6a: tdd-guide missing GREEN → not ok');
-  assert(r1.reason && r1.reason.includes('GREEN'), 'T6a: reason mentions GREEN');
-  assert(r1.kind === 'shape' && r1.missingTokenClass === 'GREEN', 'T6a (#319): kind shape + missingTokenClass GREEN');
+  const NONCE = 'abc123def456';
+  const bound = (body) => 'evidence-binding: impl-core ' + NONCE + '\n' + body;
+  const opts = { expectedNonce: NONCE, expectedNodeId: 'impl-core' };
 
-  // Has both
-  const evidenceWithBoth = 'RED: test failed\nGREEN: test passed\n';
-  const r2 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceWithBoth);
-  assert(r2.ok === true, 'T6b: tdd-guide with both RED+GREEN → ok');
+  // RED alone, with NO GREEN, closes: GREEN authority moved to the gate side.
+  const r1 = checkEvidenceShape('tdd-guide', 'impl-core',
+    bound('RED: test failed as expected\nred_baseline: ' + NONCE + '\n'), opts);
+  assert(r1.ok === true, 'T6a: tdd-guide RED + red_baseline with no GREEN → ok (GREEN authority is gate-side), got ' + JSON.stringify(r1));
 
-  // Seed-only scaffolding names both tokens in comments and leaves both values empty.
-  const hollowSeed = 'evidence-binding: impl-core abc123\n<!-- RED: paste RED here -->\nRED: \n<!-- GREEN: paste GREEN here -->\nGREEN: \n';
+  // A missing red_baseline refuses — fail-on-baseline is a receipt, not a self-description.
+  const r1b = checkEvidenceShape('tdd-guide', 'impl-core', bound('RED: test failed as expected\n'), opts);
+  assert(r1b.ok === false && r1b.kind === 'shape' && r1b.missingTokenClass === 'red_baseline',
+    'T6a2: tdd-guide missing red_baseline → shape/red_baseline, got ' + JSON.stringify(r1b));
+
+  // A red_baseline naming ANOTHER baseline refuses — a RED signature cannot survive a reopen.
+  const r1c = checkEvidenceShape('tdd-guide', 'impl-core',
+    bound('RED: test failed\nred_baseline: 999999999999\n'), opts);
+  assert(r1c.ok === false && r1c.missingTokenClass === 'red_baseline',
+    'T6a3: tdd-guide red_baseline bound to another baseline → refused, got ' + JSON.stringify(r1c));
+
+  // A legacy artifact read with NO expected nonce (offline / pre-rule) is tolerated, GREEN and all.
+  const r2 = checkEvidenceShape('tdd-guide', 'impl-core', 'RED: test failed\nGREEN: test passed\n');
+  assert(r2.ok === true, 'T6b: a legacy tdd-guide artifact read without a nonce is tolerated');
+
+  // Seed-only scaffolding names every token in comments and leaves the values empty.
+  const hollowSeed = 'evidence-binding: impl-core abc123\n<!-- RED: paste RED here -->\nRED: \n<!-- red_baseline: paste red_baseline here -->\nred_baseline: \n';
   const rHollow = checkEvidenceShape('tdd-guide', 'impl-core', hollowSeed);
   assert(rHollow.ok === false && rHollow.missingTokenClass === 'RED',
     'T6b-seed: tdd-guide hollow seed cannot satisfy evidence verification');
 
-  // Bare colon-less RED/GREEN token-name-only lines (#652 Gap 1): the matcher's column-0 regex
-  // requires `<TOKEN>:` PLUS a non-empty value — a body carrying the BARE token name with no colon
-  // at all must still refuse. Guards against a future weakening that accepts a bare token while
-  // still refusing an empty `TOKEN: ` value (the T6b-seed case above) — the "partial-weakening hole".
-  const bareRed = 'RED\nGREEN: test passed\n';
+  // Bare colon-less token-name-only lines (#652 Gap 1): the matcher's column-0 regex requires
+  // `<TOKEN>:` PLUS a non-empty value — a body carrying the BARE token name with no colon at all
+  // must still refuse. Guards against a future weakening that accepts a bare token while still
+  // refusing an empty `TOKEN: ` value (the T6b-seed case above) — the "partial-weakening hole".
+  const bareRed = 'RED\nred_baseline: ' + NONCE + '\n';
   const rBareRed = checkEvidenceShape('tdd-guide', 'impl-core', bareRed);
   assert(rBareRed.ok === false && rBareRed.missingTokenClass === 'RED',
     'T6b-bare: tdd-guide with bare colon-less RED (no colon) → refused, missingTokenClass RED');
 
-  const bareGreen = 'RED: test failed\nGREEN\n';
-  const rBareGreen = checkEvidenceShape('tdd-guide', 'impl-core', bareGreen);
-  assert(rBareGreen.ok === false && rBareGreen.missingTokenClass === 'GREEN',
-    'T6b-bare2: tdd-guide with bare colon-less GREEN (no colon) → refused, missingTokenClass GREEN');
+  const bareBaseline = checkEvidenceShape('tdd-guide', 'impl-core', bound('RED: test failed\nred_baseline\n'), opts);
+  assert(bareBaseline.ok === false && bareBaseline.missingTokenClass === 'red_baseline',
+    'T6b-bare2: tdd-guide with bare colon-less red_baseline (no colon) → refused, missingTokenClass red_baseline');
 
   // n/a skip reason
   const evidenceNa = 'n/a: no new code paths added, only documentation changes';
@@ -4821,47 +4840,47 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
-// T7: checkEvidenceShape — implementer needs non_tdd_reason + change-type token
+// T7: checkEvidenceShape — the UNIVERSAL implementing role records a verification tier.
+// `non_tdd_reason` retires with the test-first/no-test dichotomy that justified it: the implementer
+// now takes over ALL behavioral logic, so there is no longer a category to justify. What survives is
+// the tier it actually reached — `tests-green` for behavioral work (LOCAL working evidence; the
+// authoritative verdict is gate-side) or one of the three non-behavioral tiers.
 // ---------------------------------------------------------------------------
 scenario(() => {
-  // Missing non_tdd_reason
-  const evidenceMissingReason = 'regression-green: npm test passed';
-  const r1 = checkEvidenceShape('implementer', 'impl-other', evidenceMissingReason);
-  assert(r1.ok === false, 'T7a: implementer missing non_tdd_reason → not ok');
-  assert(r1.kind === 'shape' && r1.missingTokenClass === 'non_tdd_reason', 'T7a (#319): kind shape + missingTokenClass non_tdd_reason');
+  // The tier ALONE closes — no non_tdd_reason required.
+  const r1 = checkEvidenceShape('implementer', 'impl-other', 'regression-green: npm test passed');
+  assert(r1.ok === true, 'T7a: implementer with a tier and no non_tdd_reason → ok (non_tdd_reason retired), got ' + JSON.stringify(r1));
 
-  // Has non_tdd_reason but missing change-type token
-  const evidenceMissingToken = 'non_tdd_reason: config-only change, no logic paths';
-  const r2 = checkEvidenceShape('implementer', 'impl-other', evidenceMissingToken);
-  assert(r2.ok === false, 'T7b: implementer missing change-type token → not ok');
-  assert(r2.kind === 'shape' && r2.missingTokenClass === 'change-type', 'T7b (#319): kind shape + missingTokenClass change-type');
+  // The behavioral tier is first-class for the universal implementing role.
+  const r1b = checkEvidenceShape('implementer', 'impl-other', 'tests-green: 12/12 assertions green against the authored suite');
+  assert(r1b.ok === true, 'T7a2: implementer with tests-green → ok (the behavioral tier), got ' + JSON.stringify(r1b));
 
-  // Has both: non_tdd_reason + regression-green
-  const evidenceComplete = 'non_tdd_reason: config-only\nregression-green: tests pass';
-  const r3 = checkEvidenceShape('implementer', 'impl-other', evidenceComplete);
-  assert(r3.ok === true, 'T7c: implementer with non_tdd_reason + regression-green → ok');
+  // A legacy artifact still carrying the retired non_tdd_reason closes unchanged (tolerated on read).
+  const r2 = checkEvidenceShape('implementer', 'impl-other', 'non_tdd_reason: config-only\nbuild-green: builds pass');
+  assert(r2.ok === true, 'T7b: a legacy implementer artifact (non_tdd_reason + tier) is tolerated on read');
 
-  // Has both: non_tdd_reason + build-green
-  const evidenceBuildGreen = 'non_tdd_reason: scaffolding\nbuild-green: builds pass';
-  const r4 = checkEvidenceShape('implementer', 'impl-other', evidenceBuildGreen);
-  assert(r4.ok === true, 'T7d: implementer with non_tdd_reason + build-green → ok');
+  // No tier at all still refuses — the tier is not optional.
+  const r2b = checkEvidenceShape('implementer', 'impl-other', 'non_tdd_reason: config-only change, no logic paths');
+  assert(r2b.ok === false && r2b.kind === 'shape' && r2b.missingTokenClass === 'change-type',
+    'T7b2 (#319): implementer missing the verification tier → shape/change-type, got ' + JSON.stringify(r2b));
 
-  // Has both: non_tdd_reason + smoke-integration
-  const evidenceSmoke = 'non_tdd_reason: wiring\nsmoke-integration: smoke passed';
-  const r5 = checkEvidenceShape('implementer', 'impl-other', evidenceSmoke);
-  assert(r5.ok === true, 'T7e: implementer with non_tdd_reason + smoke-integration → ok');
+  // Every surviving alternative satisfies the tier on its own.
+  for (const tier of ['tests-green', 'regression-green', 'build-green', 'smoke-integration']) {
+    const rt = checkEvidenceShape('implementer', 'impl-other', tier + ': verified');
+    assert(rt.ok === true, 'T7c: implementer with ' + tier + ' → ok');
+  }
 
-  // Seed-only scaffolding carries empty keys plus a comment naming every change-type alternative.
-  const hollowSeed = 'evidence-binding: impl-other abc123\n<!-- non_tdd_reason: paste non_tdd_reason here -->\nnon_tdd_reason: \n<!-- regression-green|build-green|smoke-integration -->\nregression-green: \n';
+  // Seed-only scaffolding carries empty keys plus a comment naming every alternative.
+  const hollowSeed = 'evidence-binding: impl-other abc123\n<!-- tests-green|regression-green|build-green|smoke-integration -->\ntests-green: \n';
   const rHollow = checkEvidenceShape('implementer', 'impl-other', hollowSeed);
-  assert(rHollow.ok === false && rHollow.missingTokenClass === 'non_tdd_reason',
+  assert(rHollow.ok === false && rHollow.missingTokenClass === 'change-type',
     'T7e-seed: implementer hollow seed cannot satisfy evidence verification');
 
   // Bare colon-less change-type token (#652 Gap 1): the alternation regex requires `<token>:` PLUS
   // a non-empty value — a body carrying the BARE token name (e.g. "build-green") with no colon at
   // all must still refuse. Guards against a future weakening that accepts a bare token while still
   // refusing an empty `<token>: ` value (the T7e-seed case above) — the "partial-weakening hole".
-  const bareChangeType = 'non_tdd_reason: config-only\nbuild-green\n';
+  const bareChangeType = 'build-green\n';
   const rBareChangeType = checkEvidenceShape('implementer', 'impl-other', bareChangeType);
   assert(rBareChangeType.ok === false && rBareChangeType.missingTokenClass === 'change-type',
     'T7e-bare: implementer with bare colon-less change-type token (no colon) → refused, missingTokenClass change-type');
@@ -5316,7 +5335,7 @@ scenario(() => {
   // (3) Control: the SAME-node binding carrying the MATCHING nonce passes — proves the refusals
   //     above are the nonce/node binding firing, not a blanket reject of every bound evidence.
   const matchOk = checkEvidenceShape('tdd-guide', thisNode,
-    'evidence-binding: ' + thisNode + ' ' + thisNonce + '\nRED: x\nGREEN: y\n',
+    'evidence-binding: ' + thisNode + ' ' + thisNonce + '\nRED: x\nred_baseline: ' + thisNonce + '\n',
     { expectedNonce: thisNonce, expectedNodeId: thisNode });
   assert(matchOk.ok === true, 'T13d: matching node+nonce binding → ok (control: binding check, not blanket reject)');
 });
@@ -5694,8 +5713,11 @@ scenario(() => {
     '| finalize | pending | |',
   ]);
 
-  // tdd-guide evidence is missing GREEN token
-  const badEvidence = 'RED: test failed as expected\nNo green yet.';
+  // tdd-guide evidence is present but carries no RED signature at all. (Deliberately a token the
+  // contract requires UNCONDITIONALLY: this harness has no barrier-base file, so readNonce yields
+  // null and the nonce-gated `red_baseline` binding check is skipped by design — a fixture resting
+  // on it would assert nothing here.)
+  const badEvidence = 'Some notes about the work.\nNo failing-test signature was captured.';
   const cacheFiles = {
     '/fake/kaola-workflow/test-project/.cache/impl-core.md': badEvidence,
   };
@@ -5719,8 +5741,8 @@ scenario(() => {
   });
 
   assert(result.result === 'refuse', 'T16: malformed evidence → refuse');
-  assert(result.reason === 'evidence_shape_failed', 'T16 (#319): present-but-malformed (tdd-guide RED without GREEN) → reason evidence_shape_failed, got ' + JSON.stringify(result.reason));
-  assert(result.missingTokenClass === 'GREEN', 'T16 (#319): missing token class GREEN surfaced, got ' + JSON.stringify(result.missingTokenClass));
+  assert(result.reason === 'evidence_shape_failed', 'T16 (#319): present-but-malformed (tdd-guide evidence with no RED) → reason evidence_shape_failed, got ' + JSON.stringify(result.reason));
+  assert(result.missingTokenClass === 'RED', 'T16 (#319): missing token class RED surfaced, got ' + JSON.stringify(result.missingTokenClass));
   assert(writeFileCalled === false, 'T16: writeFile NOT called on shape failure');
 });
 
@@ -8638,7 +8660,7 @@ scenario(() => {
   assert(open.nonce === readNonce('/p/workflow-plan.md', 'impl-core', h.readFile), 'S-RT1: returned nonce EQUALS the on-disk readNonce value (open prefix == close prefix)');
 
   // Build evidence carrying EXACTLY the returned binding header.
-  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n3 assertions';
+  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nred_baseline: ' + open.nonce + '\n3 assertions';
   h.files['/p/.cache/impl-core.md'] = evidence;
   // next-action for the close-side fused advance (impl-core complete → impl-other ready).
   const hClose = h; // reuse files
@@ -8770,7 +8792,7 @@ scenario(() => {
   // (1) open n1.
   const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
   assert(open.result === 'ok' && open.nonce && open.nonce.length === 12, 'S-RT7: open-next opens n1 with a real nonce');
-  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n3 assertions';
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nred_baseline: ' + open.nonce + '\n3 assertions';
 
   // (2) close n1 → fused advance opens n2 (impl-other). next-action now surfaces impl-other.
   const closeShell = (scriptPath, args) => {
@@ -8824,7 +8846,7 @@ scenario(() => {
   }, {
     nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' } },
   });
-  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n';
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED: failing assertion before implementation\nred_baseline: ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\n';
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(close.result === 'ok' && close.closed === 'impl-core', 'S-RT8: close ok');
   const setAfter = readRunningSet(RS, h.cacheExists, h.readFile);
@@ -9702,21 +9724,21 @@ scenario(() => {
 //   - missing header (under expectedNonce) → shape failure naming evidence-binding.
 // ---------------------------------------------------------------------------
 scenario(() => {
-  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\nthe test ran for real';
+  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED: failing assertion before implementation\nred_baseline: abc123def456\nthe test ran for real';
   // 3-arg call (no opts) — binding NOT checked (backward-compat).
-  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass').ok === true, 'S392: 3-arg call ignores binding and passes non-empty RED/GREEN');
+  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass').ok === true, 'S392: 3-arg call ignores binding and passes a legacy non-empty RED body');
   assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass', {}).ok === true, 'S392: empty opts (no expectedNonce) skips binding');
 
   // Correct nonce + node → passes (still must satisfy the role shape).
   const ok = checkEvidenceShape('tdd-guide', 'impl-x', goodTdd, { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
-  assert(ok.ok === true, 'S392: correct evidence-binding header + RED/GREEN → ok, got ' + JSON.stringify(ok));
+  assert(ok.ok === true, 'S392: correct evidence-binding header + RED/red_baseline → ok, got ' + JSON.stringify(ok));
 
   // Copied from another node → evidence_unbound.
-  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED: fail\nred_baseline: abc123def456', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(copiedNode.ok === false && copiedNode.evidenceUnbound === true && copiedNode.missingTokenClass === 'evidence_unbound', 'S392: wrong node id → evidence_unbound, got ' + JSON.stringify(copiedNode));
 
   // Stale / replayed nonce (e.g. "this was copied from another node") → evidence_stale.
-  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED: fail\nred_baseline: OLDNONCE0000', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(stale.ok === false && stale.evidenceStale === true && stale.missingTokenClass === 'evidence_stale', 'S392: wrong nonce → evidence_stale, got ' + JSON.stringify(stale));
 
   // Missing header under expectedNonce → shape failure naming evidence-binding.
@@ -9996,7 +10018,7 @@ scenario(() => {
   ]);
   const h = rtHarness({ '/p/workflow-plan.md': fusedPlan, '/p/workflow-state.md': makeState(),
     '/p/.cache/barrier-base-first': 'deadbeeffirstcafef00d1234\n',
-    '/p/.cache/first.md': 'evidence-binding: first deadbeeffirs\nRED: red\nGREEN: green\n' });
+    '/p/.cache/first.md': 'evidence-binding: first deadbeeffirs\nRED: red\nred_baseline: deadbeeffirs\n' });
   const shell = (scriptPath, args) => path.basename(scriptPath) === 'kaola-workflow-next-action.js'
     ? authoredNext(h.files['/p/workflow-plan.md']) : h.shell(scriptPath, args);
   const fused = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'first',
@@ -10113,7 +10135,7 @@ scenario(() => {
   const ctx = {
     nonce: 'abc123456789',
     evidence_file: '.cache/n2-target.md',
-    required_tokens: ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+    required_tokens: ['evidence-binding', 'tests-green|regression-green|build-green|smoke-integration'],
     working_dir: '/fake/worktree',
     forge_rider: null,
   };
@@ -10358,8 +10380,8 @@ scenario(() => {
   const nonceVA = 'abcdef123456';
   // Write barrier base file so readNonce returns the nonce
   fs.writeFileSync(path.join(cacheDirVA, 'barrier-base-n1-impl'), nonceVA + 'extra');
-  // Well-formed tdd-guide evidence with correct binding + RED + GREEN
-  const goodEvidence = 'evidence-binding: ' + nodeIdVA + ' ' + nonceVA + '\nRED: test failed\nGREEN: test passed\n';
+  // Well-formed tdd-guide evidence with correct binding + RED + the baseline receipt
+  const goodEvidence = 'evidence-binding: ' + nodeIdVA + ' ' + nonceVA + '\nRED: test failed\nred_baseline: ' + nonceVA + '\n';
   fs.writeFileSync(path.join(cacheDirVA, nodeIdVA + '.md'), goodEvidence);
   const planPathVA = path.join(tmpVA, 'workflow-plan.md');
   fs.writeFileSync(planPathVA, [
@@ -10529,7 +10551,7 @@ scenario(() => {
   const nodeIdVRT = 'n1-impl';
   const nonceVRT = 'abcdef123456';
   fs.writeFileSync(path.join(cacheDirVRT, 'barrier-base-n1-impl'), nonceVRT + 'extra');
-  // Missing GREEN token (only binding + RED)
+  // Missing the red_baseline receipt (only binding + RED)
   const badEvidence = 'evidence-binding: ' + nodeIdVRT + ' ' + nonceVRT + '\nRED: test failed\n';
   fs.writeFileSync(path.join(cacheDirVRT, nodeIdVRT + '.md'), badEvidence);
   const planPathVRT = path.join(tmpVRT, 'workflow-plan.md');
@@ -10546,13 +10568,13 @@ scenario(() => {
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     cacheExists: (p) => fs.existsSync(p),
   });
-  assert(rVRT.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: missing GREEN → refuse');
+  assert(rVRT.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: missing red_baseline → refuse');
   assert(rVRT.reason === 'evidence_shape_failed', 'D444-VERIFY-REFUSE-TOKEN: reason is evidence_shape_failed, got ' + rVRT.reason);
-  assert(rVRT.missingTokenClass === 'GREEN', 'D444-VERIFY-REFUSE-TOKEN: missingTokenClass is GREEN, got ' + rVRT.missingTokenClass);
+  assert(rVRT.missingTokenClass === 'red_baseline', 'D444-VERIFY-REFUSE-TOKEN: missingTokenClass is red_baseline, got ' + rVRT.missingTokenClass);
   try { fs.rmSync(tmpVRT, { recursive: true, force: true }); } catch (_) {}
 });
 
-// D444-VERIFY-REFUSE-TOKEN: implementer missing non_tdd_reason → evidence_shape_failed
+// D444-VERIFY-REFUSE-TOKEN: implementer missing its verification tier → evidence_shape_failed
 scenario(() => {
   const tmpVIM = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vim-'));
   const cacheDirVIM = path.join(tmpVIM, '.cache');
@@ -10560,8 +10582,9 @@ scenario(() => {
   const nodeIdVIM = 'impl-n1';
   const nonceVIM = 'deadbeef1234';
   fs.writeFileSync(path.join(cacheDirVIM, 'barrier-base-impl-n1'), nonceVIM + 'extra');
-  // Missing non_tdd_reason
-  const badEv = 'evidence-binding: ' + nodeIdVIM + ' ' + nonceVIM + '\nregression-green: tests pass\n';
+  // Missing the verification tier (`non_tdd_reason` retired with the dichotomy that justified it —
+  // the tier is what survives, and it is not optional).
+  const badEv = 'evidence-binding: ' + nodeIdVIM + ' ' + nonceVIM + '\ntask: refactored the exporter\n';
   fs.writeFileSync(path.join(cacheDirVIM, nodeIdVIM + '.md'), badEv);
   const planPathVIM = path.join(tmpVIM, 'workflow-plan.md');
   fs.writeFileSync(planPathVIM, [
@@ -10577,9 +10600,9 @@ scenario(() => {
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     cacheExists: (p) => fs.existsSync(p),
   });
-  assert(rVIM.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: implementer missing non_tdd_reason → refuse');
+  assert(rVIM.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: implementer missing the verification tier → refuse');
   assert(rVIM.reason === 'evidence_shape_failed', 'D444-VERIFY-REFUSE-TOKEN: implementer reason evidence_shape_failed, got ' + rVIM.reason);
-  assert(rVIM.missingTokenClass === 'non_tdd_reason', 'D444-VERIFY-REFUSE-TOKEN: implementer missingTokenClass non_tdd_reason, got ' + rVIM.missingTokenClass);
+  assert(rVIM.missingTokenClass === 'change-type', 'D444-VERIFY-REFUSE-TOKEN: implementer missingTokenClass change-type, got ' + rVIM.missingTokenClass);
   try { fs.rmSync(tmpVIM, { recursive: true, force: true }); } catch (_) {}
 });
 
@@ -14484,7 +14507,10 @@ scenario(() => {
     const expectedAPath = path.join(legA, 'kaola-workflow', 'test-project', '.cache', 'A.md');
     const upstreamA = open2.opened[0].dispatch && open2.opened[0].dispatch.upstream_evidence
       && open2.opened[0].dispatch.upstream_evidence.find(e => e.node_id === 'A');
-    assert(upstreamA && upstreamA.path === expectedAPath && fs.readFileSync(upstreamA.path, 'utf8').includes('GREEN:'),
+    // The needle proves the read sees A's FULL written body, not the open-time stub. `red_baseline`
+    // with a NON-EMPTY value is exactly that discriminator under test custody: the seed writes the
+    // key with an empty value, so only the test author's own write can satisfy `\S`.
+    assert(upstreamA && upstreamA.path === expectedAPath && /^red_baseline:[ \t]*\S/m.test(fs.readFileSync(upstreamA.path, 'utf8')),
       '#622-MIXED: dependent read points to A\'s full live leg evidence before group merge, got ' + JSON.stringify(upstreamA));
     assert(ledgerStatus(planPath, 'probe') === 'in_progress', '#622-MIXED: probe ledger flipped in_progress');
     const rsAfterProbeOpen = readRS(cacheDir);
@@ -14541,7 +14567,7 @@ scenario(() => {
       let nonce = '';
       try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
       fs.writeFileSync(path.join(legCacheDir, id + '.md'),
-        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' — AssertionError: expected throw (pre-impl)\nGREEN: test_' + id + ' passes; 1/1 assertions green\n');
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' — AssertionError: expected throw (pre-impl)\nred_baseline: ' + nonce + '\n');
     }
 
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
@@ -19155,7 +19181,9 @@ scenario(() => {
       // The impl node's open-time nonce = commit-node base slice(0,12).
       const IMPL_NONCE = 'aaaabbbbcccc';
       const implBinding = 'evidence-binding: impl ' + IMPL_NONCE + '\n';
-      const implBody = 'RED: t_x — AssertionError (pre-impl)\nGREEN: t_x passes; 1/1 green\n';
+      // A SHAPE-VALID test-author body, so the close reaches the consumed-proof check under test
+      // instead of short-circuiting on evidence_shape_failed. The baseline receipt echoes IMPL_NONCE.
+      const implBody = 'RED: t_x — AssertionError (pre-impl)\nred_baseline: ' + IMPL_NONCE + '\n';
 
       // ---- checkUpstreamConsumed direct: happy / neg-1 missing / advisory ----
       if (typeof ADAPT.checkUpstreamConsumed !== 'function') {
@@ -19318,7 +19346,7 @@ scenario(() => {
       { id: 'gate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' },
     ] }, null, 2);
     // w's evidence: RED/GREEN + no_op (empty declared set ⇒ vacuity guard needs a no_op declaration).
-    const wEv = 'evidence-binding: w x\nRED: t (pre)\nGREEN: t passes\nno_op: legless test member\n';
+    const wEv = 'evidence-binding: w x\nRED: t (pre)\nred_baseline: x\nno_op: legless test member\n';
     const h = rsHarness({ [RS_PLAN_PATH]: grpPlan, [RS_SET_PATH]: grpSet, ['/p/.cache/w.md']: wEv }, (base) => {
       if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] };
       if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
@@ -19474,7 +19502,7 @@ scenario(() => {
       // wa's open-time nonce + shape-valid tdd-guide evidence.
       fs.writeFileSync(path.join(cache, 'barrier-base-wa'), 'aaaabbbbcccc0000\n');
       fs.writeFileSync(path.join(cache, 'wa.md'),
-        'evidence-binding: wa aaaabbbbcccc\nRED: t (pre)\nGREEN: t passes; 1/1 green\n');
+        'evidence-binding: wa aaaabbbbcccc\nRED: t (pre)\nred_baseline: aaaabbbbcccc\n');
       // The live gate window: g1 recorded as kind:'gate' (the open-next door already recorded it).
       if (gateLiveInSet) {
         fs.writeFileSync(path.join(cache, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
@@ -19754,7 +19782,7 @@ scenario(() => {
       const legCache = path.join(leg, 'kaola-workflow', PROJECT_683, '.cache');
       fs.mkdirSync(legCache, { recursive: true });
       fs.writeFileSync(path.join(legCache, id + '.md'),
-        'evidence-binding: ' + id + ' ' + nonce + '\nRED: t_' + id + ' threw pre-impl\nGREEN: t_' + id + ' passes\n');
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: t_' + id + ' threw pre-impl\nred_baseline: ' + nonce + '\n');
     }
     const closeWa = R(['close-node', '--node-id', 'wa', ...P]);
     const closeWb = R(['close-node', '--node-id', 'wb', ...P]);
@@ -19847,7 +19875,7 @@ scenario(() => {
     // wa fixes its file and closes. Note the gate does NOT reopen yet: gb:1 is still unresolved.
     fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wa.md'),
-      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nGREEN: t_wa passes 4/4\n');
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nred_baseline: ' + nonceFor('wa') + '\n');
     assert(R(['close-node', '--node-id', 'wa', ...P]).result === 'ok' && ledger683('wa') === 'complete',
       '#683 E2E: the repaired writer\'s barrier PASSES against its re-anchored baseline and it closes');
 
@@ -19868,7 +19896,7 @@ scenario(() => {
     // wb fixes and closes; the fence lifts; both gates re-review the NEW candidate and pass.
     fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// wb v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wb.md'),
-      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nGREEN: t_wb passes 3/3\n');
+      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nred_baseline: ' + nonceFor('wb') + '\n');
     assert(R(['close-node', '--node-id', 'wb', ...P]).result === 'ok' && ledger683('wb') === 'complete',
       '#683 E2E: the second repaired writer closes against its own re-anchored baseline');
     const planBefore683 = fs.readFileSync(w.planPath, 'utf8');
@@ -19912,7 +19940,7 @@ scenario(() => {
       '#683 N11: setup — the first repair (ga:1/wa) succeeds via P3a');
     fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wa.md'),
-      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nGREEN: t_wa passes 4/4\n');
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nred_baseline: ' + nonceFor('wa') + '\n');
     R(['close-node', '--node-id', 'wa', ...P]);
     assert(ledger683('ga') === 'pending',
       '#683 N11: setup — ga stays FOLDED-PENDING while gb:1 is unresolved (its repair is still LIVE)');
@@ -19926,7 +19954,7 @@ scenario(() => {
       '#683 N11: the LEGITIMATE co-repair (gb:1 while ga folded-pending) STILL absorbs ax.js via a LIVE P3b');
     fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// wb v2 (fixed)\n');
     fs.writeFileSync(path.join(w.cacheDir, 'wb.md'),
-      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nGREEN: t_wb passes 3/3\n');
+      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nred_baseline: ' + nonceFor('wb') + '\n');
     R(['close-node', '--node-id', 'wb', ...P]);
 
     // Both gates reopen. ga PASSES on ax@v2 and goes COMPLETE (its repair is now DISCHARGED); gb FAILS
@@ -20627,7 +20655,7 @@ scenario(() => {
     fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
     fs.writeFileSync(statePath, '# State\n');
     fs.writeFileSync(path.join(cacheDir, 'writer.md'),
-      'evidence-binding: writer somenonce123\nRED: t threw pre-impl\nGREEN: t passes\n'
+      'evidence-binding: writer somenonce123\nRED: t threw pre-impl\nred_baseline: somenonce123\n'
       + '\nfailed_review_attempt: review:1\nfailed_review_gate: review\n');
     assert(!fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
       'N684-4b: setup — no review journal on disk (simulates a re-frozen plan whose prior journal was retired)');
@@ -21928,7 +21956,7 @@ scenario(() => {
   files714[planPath714] = makePlan(
     ['| impl | in_progress | |', '| rev | pending | |', '| done | pending | |'], nodes714)
     + '## Plan Notes\n\noperator notes\n';
-  files714['/fake/kaola-workflow/p714/.cache/impl.md'] = 'evidence-binding: impl implnonce001\nRED: r\nGREEN: g\n';
+  files714['/fake/kaola-workflow/p714/.cache/impl.md'] = 'evidence-binding: impl implnonce001\nRED: r\nred_baseline: implnonce001\n';
   files714['/fake/kaola-workflow/p714/.cache/rev.md'] = 'evidence-binding: rev revnonce0001\nReviewed the changes. LGTM.\n';
   files714['/fake/kaola-workflow/p714/.cache/done.md'] = 'evidence-binding: done donenonce001\nfinalization bookkeeping complete\n';
   const close714 = nodeId => runCloseAndOpenNext({
@@ -22147,7 +22175,7 @@ scenario(() => {
     let rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'writer',
       '--stdin', '--json'], tmp713,
       'evidence-binding: writer ' + lastJson713(openWriter713).nonce
-        + '\nRED: base behavior reproduced\nGREEN: base behavior passes\n');
+        + '\nRED: base behavior reproduced\nred_baseline: ' + lastJson713(openWriter713).nonce + '\n');
     assert(rec713.status === 0, '#713: writer evidence records: ' + rec713.stdout + rec713.stderr);
     const closeWriter713 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
       '--node-id', 'writer', '--json'], tmp713);
@@ -22230,7 +22258,7 @@ scenario(() => {
     rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'writer',
       '--stdin', '--json'], tmp713,
       'evidence-binding: writer ' + lastJson713(openWriter713).nonce
-        + '\nRED: gate-B regression reproduced\nGREEN: gate-B regression passes\n');
+        + '\nRED: gate-B regression reproduced\nred_baseline: ' + lastJson713(openWriter713).nonce + '\n');
     assert(rec713.status === 0, '#713: repaired writer evidence records: ' + rec713.stdout + rec713.stderr);
     const closeWriter2 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
       '--node-id', 'writer', '--json'], tmp713);
@@ -22465,7 +22493,7 @@ scenario(() => {
       fs.writeFileSync(fixture.implPath, body);
       const rec = run728(NODE_CLI_728, ['record-evidence', '--project', fixture.project,
         '--node-id', 'writer', '--stdin', '--json'],
-        'evidence-binding: writer ' + nonce + '\nRED: reproduced\nGREEN: passes\n');
+        'evidence-binding: writer ' + nonce + '\nRED: reproduced\nred_baseline: ' + nonce + '\n');
       assert(rec.status === 0, '#728: writer evidence records: ' + rec.stdout + rec.stderr);
       const closed = run728(NODE_CLI_728, ['close-and-open-next', '--project', fixture.project,
         '--node-id', 'writer', '--json']);
@@ -22753,7 +22781,7 @@ scenario(() => {
       fs.writeFileSync(path.join(tmp733, fx.implRel), 'module.exports = 1;\n');
       const rec = run733(['record-evidence', '--project', fx.project, '--node-id', 'writer',
         '--stdin', '--json'],
-      'evidence-binding: writer ' + openNonce + '\nRED: reproduced\nGREEN: passes\n');
+      'evidence-binding: writer ' + openNonce + '\nRED: reproduced\nred_baseline: ' + openNonce + '\n');
       assert(rec.status === 0, '#733: writer evidence records: ' + rec.stdout + rec.stderr);
       const closedWriter = run733(['close-and-open-next', '--project', fx.project,
         '--node-id', 'writer', '--json']);
@@ -22899,7 +22927,7 @@ scenario(() => {
     // A NON-review role is untouched — the generic stub shape is preserved everywhere else.
     seedEvidenceFile(planPath, 'w1', 'nonce727cccc', 'implementer', true);
     const implSeed = fs.readFileSync(path.join(projectDir, '.cache', 'w1.md'), 'utf8');
-    assert(/paste non_tdd_reason here/.test(implSeed),
+    assert(/<!-- tests-green\|regression-green\|build-green\|smoke-integration -->/.test(implSeed),
       '#727-B: a non-review role keeps the generic stub shape, got:\n' + implSeed);
   } finally { fs.rmSync(tmp727, { recursive: true, force: true }); }
 
@@ -23887,7 +23915,7 @@ scenario(() => {
   //     not turn every re-open into a body-destroying re-seed.
   {
     const f = mkSeedFixture('resume-node');
-    const inProgress = 'evidence-binding: resume-node keepnonce123\nRED: real red output\nGREEN: real green\n';
+    const inProgress = 'evidence-binding: resume-node keepnonce123\nRED: real red output\nred_baseline: keepnonce123\n';
     fs.writeFileSync(f.cachePath, inProgress, 'utf8');
     const r776d = seedEvidenceFile(f.planPath, 'resume-node', 'keepnonce123', 'tdd-guide', false);
     assert(r776d && r776d.nonce_rotated === false && fs.readFileSync(f.cachePath, 'utf8') === inProgress,

@@ -268,6 +268,52 @@ function sanitizeNodeId(id) {
 // G-SEL-2 (a gate can never be a select arm) for free.
 const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE]);
 
+// TEST CUSTODY. The role(s) that may declare a test-like path in `declared_write_set` — the test
+// AUTHOR, which writes tests from the acceptance surface and never writes production code. Custody
+// replaces order: the wall is not "who runs first" but "who OWNS the test artifact", so the
+// implementing context can read and run the tests it is judged by but can never write them. Any
+// other role reaching a test path needs a DECLARED, hash-covered exemption in `## Meta` (the
+// divergence-must-be-declared pattern: a named entry with a one-line reason) — see
+// parseTestCustodyExemptions. The runtime attribution floor already catches an UNDECLARED test
+// write at the barrier; this wall role-checks the DECLARED side at freeze.
+const TEST_CUSTODY_ROLES = new Set(['tdd-guide']);
+
+// The `## Meta` custody-exemption channel: `test_custody_exemption: <node-id> <path> — <reason>`.
+// One line per (node, path) pair; the reason is REQUIRED (an unreasoned exemption is a rubber stamp,
+// not a declaration). Hash-covered for free — computePlanHash normalizes the WHOLE `## Meta` body —
+// so a post-freeze edit surfaces as plan_hash_mismatch. Read is SCOPED to `## Meta` via the same
+// classifier.sectionBody reader parseLabels/parseGoal use, so a decoy line elsewhere in the plan
+// cannot admit a write. Returns { entries: [{ nodeId, file, reason, raw }], malformed: [raw, …] }.
+// Normalized through the SAME parser the declared write set is built with (classifier
+// .parseWriteSetCell), never a private second normalizer. The exemption's whole job is to name a
+// path that IS in some node's write set, so if the two sides normalized differently the wall would
+// either admit a write it should refuse or reject an exemption naming a genuinely declared path.
+// The path token cannot contain whitespace (parseTestCustodyExemptions already split the head on
+// it), so feeding one token through the cell parser yields exactly one entry.
+function normalizeExemptPath(raw) {
+  const [only] = classifier.parseWriteSetCell(String(raw || ''));
+  return only || '';
+}
+function parseTestCustodyExemptions(content) {
+  const body = classifier.sectionBody(content, 'Meta');
+  const entries = [];
+  const malformed = [];
+  for (const line of String(body || '').split(/\r?\n/)) {
+    const m = /^test_custody_exemption:[ \t]*(.*)$/.exec(line);
+    if (!m) continue;
+    const raw = m[1].trim();
+    // `<node-id> <path>` then the reason, separated by an em dash or a spaced hyphen (the same two
+    // delimiters the finding grammar accepts). Both halves must be non-empty.
+    const split = raw.split(/\s+—\s+|\s+-\s+/);
+    const head = (split[0] || '').trim();
+    const reason = split.slice(1).join(' — ').trim();
+    const parts = head.split(/\s+/).filter(Boolean);
+    if (parts.length !== 2 || !reason) { malformed.push(raw); continue; }
+    entries.push({ nodeId: parts[0], file: normalizeExemptPath(parts[1]), reason, raw });
+  }
+  return { entries, malformed };
+}
+
 // #433 (D-433-01): the SINGLE-SOURCE role-token registry. Maps each role to its required evidence
 // token CLASSES. A class containing `|` is an ALTERNATION — ANY one of the alternatives satisfies it
 // (the implementer's `regression-green|build-green|smoke-integration` is the #359 verification-tier
@@ -275,8 +321,22 @@ const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adver
 // and the open-time evidence SEED (adaptive-node.js's writer) — no second copy. Exported via
 // module.exports so adaptive-node.js imports the SAME object and the two never drift.
 const ROLE_TOKEN_REGISTRY = {
-  'tdd-guide':             ['evidence-binding', 'RED', 'GREEN'],
-  'implementer':          ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+  // Custody, not order, decides these two rows. The test-author OWNS the test artifact and never
+  // writes production code, so it keeps `RED` and LOSES `GREEN`: a passing suite is a verdict about
+  // the implementation, and a writer that grades its own output is no grader. GREEN authority moves
+  // to the gate side (validation-vector receipts / the post-dominating review wall). `RED` gains its
+  // receipt — `red_baseline`, the baseline the failing test was captured on — so fail-on-baseline
+  // stops being a self-description the agent asserts and becomes a value the runtime can check
+  // against the recorded barrier baseline. A RED signature therefore cannot survive a reopen.
+  'tdd-guide':             ['evidence-binding', 'RED', 'red_baseline'],
+  // The implementer is the UNIVERSAL implementing role: it takes over behavioral logic and has full
+  // read+execute access to the tests (the iterate-to-green reward signal is preserved — custody
+  // governs WRITE, never read or run) and zero write access to test paths. `non_tdd_reason` retires
+  // with the test-first/no-test dichotomy that justified it. The verification-tier alternation
+  // survives and now leads with `tests-green` (the behavioral tier: the authored suite green as
+  // LOCAL working evidence, never the authoritative verdict), followed by the three non-behavioral
+  // tiers for refactors, scaffolding/config, and glue.
+  'implementer':          ['evidence-binding', 'tests-green|regression-green|build-green|smoke-integration'],
   'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
   'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
   'adversarial-verifier': ['evidence-binding', 'verdict'],
@@ -4167,6 +4227,53 @@ function validatePlan(content, opts) {
     }
   }
 
+  // TEST CUSTODY at freeze (FREEZE-ONLY). A test-like path may appear only in a TEST-AUTHOR node's
+  // declared write set. Any other role needs a declared, hash-covered `## Meta` exemption naming the
+  // node, the path, and a one-line reason. Rationale: the implementing context must not be able to
+  // author, weaken, or delete the tests it will be graded by — the same principle the gate-side
+  // already enforces (a verifier never provisions its own fixtures; an inline gate never reviews its
+  // own writer-context), applied to the writer side. Custody governs WRITE only: every role keeps
+  // full read+execute access to the suite, so the iterate-to-green signal is untouched.
+  //
+  // Deliberately absent from revalidateForResume — a plan frozen before this rule existed still
+  // resumes byte-for-byte (a frozen plan that stops resuming is a silent break), exactly like the
+  // sibling write-set shape walls. The runtime attribution floor still catches an UNDECLARED test
+  // write in-flight, so the resume path is not left without teeth.
+  //
+  // The SYNTHESIZER is exempt for a path at least one of its `depends_on` legs also declares: by
+  // contract it declares the UNION of the legs' write sets, so a leg's test path in that union is
+  // reconciliation, not authorship. A test path NO upstream leg declares is authorship and refuses —
+  // the carve-out is derived, never a blanket pass.
+  {
+    const custody = parseTestCustodyExemptions(content);
+    for (const raw of custody.malformed) {
+      errors.push(`## Meta test_custody_exemption "${raw}" is malformed (test_custody_exemption_malformed) — declare exactly \`test_custody_exemption: <node-id> <path> — <one-line reason>\`; an exemption without a named reason is a rubber stamp, not a declaration`);
+    }
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    const exemptFor = new Map(); // nodeId -> Set(paths)
+    for (const e of custody.entries) {
+      const owner = byId.get(e.nodeId);
+      if (!owner || !owner.writeSet || !owner.writeSet.has(e.file)) {
+        errors.push(`## Meta test_custody_exemption names node "${e.nodeId}" and path "${e.file}" but that node does not declare that path (test_custody_exemption_unmatched) — an exemption is a declaration about a real declared write, never a wildcard; remove it or declare the path`);
+        continue;
+      }
+      if (!exemptFor.has(e.nodeId)) exemptFor.set(e.nodeId, new Set());
+      exemptFor.get(e.nodeId).add(e.file);
+    }
+    for (const n of nodes) {
+      if (TEST_CUSTODY_ROLES.has(n.role)) continue;
+      for (const p of (n.writeSet || [])) {
+        if (!isTestLikePath(p)) continue;
+        if ((exemptFor.get(n.id) || new Set()).has(p)) continue;
+        if (n.role === 'synthesizer'
+            && (n.dependsOn || []).some(up => { const u = byId.get(up); return !!(u && u.writeSet && u.writeSet.has(p)); })) {
+          continue; // union-of-legs reconciliation, not authorship
+        }
+        errors.push(`node ${n.id} (role ${n.role}) declares the test path "${p}" (test_custody_violation) — test custody belongs to the test author (${[...TEST_CUSTODY_ROLES].join(', ')}); move the path to a test-author node, or declare a hash-covered \`## Meta\` exemption: \`test_custody_exemption: ${n.id} ${p} — <one-line reason>\``);
+      }
+    }
+  }
+
   // #634 OPT-1..OPT-4 / OPT-6: the metric-optimizer freeze rules (fail-closed refusals folded into
   // `errors` ⇒ {result:'refuse',reason:'plan_invalid'}). OPT-5 (change-gate reproduction) lives in the
   // gates block below (it needs the unique sink). Each rule is checked ONLY for a contract that keys a
@@ -6696,6 +6803,12 @@ module.exports = {
   barrierCheck,
   installedRoles,
   ROLE_TOKEN_REGISTRY,
+  // Test custody: the custody-holding role set + the `## Meta` exemption reader. Exported so every
+  // consumer (the freeze wall, the routing inference, unit coverage) reads ONE definition of who
+  // owns the test artifact — a second copy is a place custody could silently diverge.
+  TEST_CUSTODY_ROLES,
+  parseTestCustodyExemptions,
+  isTestLikePath,
   // Producer/consumer role classification for the node-to-node channel's consumed-proof (the lifecycle
   // aggregator imports the SAME sets so the split never drifts).
   PRODUCER_ROLES,

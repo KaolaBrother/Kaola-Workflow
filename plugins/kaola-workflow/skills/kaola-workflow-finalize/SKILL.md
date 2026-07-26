@@ -284,6 +284,14 @@ choices, or ambiguity that blocks correctness.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
 - Commit And Push happens after docs, issues, roadmap, archive, and metadata are complete.
+- Route a validation failure by kind: build/type/lint/tooling → `build-error-resolver`;
+  behavior/regression/coverage/test-defect → `tdd-guide`, the role that owns the test artifact;
+  review/security → the review/security gate. Write fix output to
+  `.cache/final-validation-fix-{n}.md` and rerun the failed command.
+- A one-line, mechanically obvious inline edit (no behavior/API/security/design judgment) that fixes
+  finalization friction, formatting, a typo, or an import stays legal — recorded in
+  `finalization-summary.md`, with affected validation rerun. It is **never** an edit to a test file:
+  test custody belongs to `tdd-guide`, and no other role may write a test path.
 
 ## Required Steps
 
