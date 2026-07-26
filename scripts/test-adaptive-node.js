@@ -5860,7 +5860,8 @@ scenario(() => {
       assert(impl, 'T14f: ' + openSub + ' opens impl, got ' + JSON.stringify(opened.out));
       fs.writeFileSync(path.join(projDir, '.cache', 'impl.md'),
         'evidence-binding: impl ' + impl.nonce
-        + '\nRED: impl failed before implementation\nGREEN: impl passes after implementation\n');
+        + '\nRED: impl failed before implementation\nred_baseline: ' + impl.nonce
+        + '\nGREEN: impl passes after implementation\n');
 
       const closed = run([closeSub, '--project', project, '--node-id', 'impl', '--json', ...extraCloseArgs]);
       const finalPlan = fs.readFileSync(planPath, 'utf8');
@@ -25247,7 +25248,8 @@ scenario(() => {
         '#805-R1 fixture: the writer opens: ' + opened.stdout + opened.stderr);
       fs.writeFileSync(path.join(tmp805, fx.implRel), 'module.exports = 1;\n');
       const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'writer', '--stdin', '--json'],
-        'evidence-binding: writer ' + lastJson(opened).nonce + '\nRED: reproduced\nGREEN: passes\n');
+        'evidence-binding: writer ' + lastJson(opened).nonce + '\nRED: reproduced\nred_baseline: '
+        + lastJson(opened).nonce + '\nGREEN: passes\n');
       assert(rec.status === 0, '#805-R1 fixture: writer evidence records: ' + rec.stdout + rec.stderr);
       const closed = run805(['close-and-open-next', '--project', fx.project, '--node-id', 'writer', '--json']);
       assert(closed.status === 0 && lastJson(closed) && lastJson(closed).opened
@@ -25385,6 +25387,8 @@ scenario(() => {
         + 'told a change-gate routability rule');
     }
   } finally { fs.rmSync(tmp805, { recursive: true, force: true }); }
+});
+
 // substitute-role (#798) — the same-kind, superset-proven dispatch swap. Covers the happy path,
 // the plan/plan_hash byte-identity claim (substitution is dispatch metadata, never plan mutation),
 // idempotent replay across a crash between record and dispatch, the dispatch-card fold-in, and each

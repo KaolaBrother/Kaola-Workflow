@@ -401,7 +401,7 @@ function assert(condition, message) {
       'node-undeclared-tests-dir': PASS_NULL,
       'node-undeclared-__tests__': PASS_NULL,
       'node-undeclared-spec-name': PASS_NULL,
-      'node-production-control': '{"result":"refuse","reason":"write_set_overflow","operator_hint":"Node t2 wrote files outside its declared write set. Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --project <project> --node-id t2 --json","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      'node-production-control': '{"result":"refuse","reason":"write_set_overflow","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
       'node-dirgrant-test': PASS_NULL,
       'group-declared-test': PASS_NULL,
       'group-undeclared-test': PASS_NULL,
@@ -409,20 +409,33 @@ function assert(condition, message) {
       'plan-declared-test': PASS_NULL,
       'plan-undeclared-test': PASS_NULL,
       'plan-na-owner-test': PASS_NULL,
-      'plan-production-control': '{"result":"refuse","reason":"write_set_overflow","operator_hint":"Node (unknown) wrote files outside its declared write set. Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --project <project> --node-id <node-id> --json","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      'plan-production-control': '{"result":"refuse","reason":"write_set_overflow","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
       'leg-declared-test': PASS_NULL,
       'leg-undeclared-test': PASS_NULL,
       'sens-declared-test-login': PASS_NULL,
-      'sens-production-auth': '{"result":"refuse","reason":"sensitive_write_unreviewed","operator_hint":"A sensitive file was written without a completed security-reviewer node. Add a security-reviewer gate to the plan.","errors":["actual writes touch a Phase-5 sensitive area (src/auth/session.js) but the plan has no security-reviewer node — revoke and escalate (G2)","actual writes outside the declared allowlist (src/auth/session.js) — overflow beyond the frozen write set"],"sensitiveHits":["src/auth/session.js"],"outOfAllow":["src/auth/session.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      'sens-production-auth': '{"result":"refuse","reason":"sensitive_write_unreviewed","errors":["actual writes touch a Phase-5 sensitive area (src/auth/session.js) but the plan has no security-reviewer node — revoke and escalate (G2)","actual writes outside the declared allowlist (src/auth/session.js) — overflow beyond the frozen write set"],"sensitiveHits":["src/auth/session.js"],"outOfAllow":["src/auth/session.js"],"foreignArchiveHits":[],"unattributed":[]}',
       'workflow-artifact': PASS_NULL,
       'docs-allowband': PASS_NULL,
     };
 
-    // (i-1) BYTE-IDENTITY: toggle OFF reproduces the pre-change bytes for EVERY corpus case.
+    // The toggle's contract is to restore prior ATTRIBUTION behaviour, not to freeze operator_hint
+    // PROSE — the hint is regenerated at emit time from OPERATOR_HINT_REGISTRY (D-445-01) and is free
+    // to reword (e.g. write_set_overflow now names BOTH revert-overflow and amend-surface) without
+    // that being an attribution regression. So the byte-identity comparison below is scoped to the
+    // DECISION fields the toggle actually governs; a dedicated substring check further down covers
+    // hint content without re-freezing its prose (full hint-presence coverage also lives independently
+    // in test-adaptive-node.js's T-445-A corpus).
+    const decisionOnly = (r) => JSON.stringify({
+      result: r.result, reason: r.reason, errors: r.errors, sensitiveHits: r.sensitiveHits,
+      outOfAllow: r.outOfAllow, foreignArchiveHits: r.foreignArchiveHits, unattributed: r.unattributed,
+    });
+
+    // (i-1) BYTE-IDENTITY (decision fields only): toggle OFF reproduces the pre-change decision for
+    // EVERY corpus case.
     let offMismatch = 0;
     withToggle('0', () => {
       for (const [key, plan, actual, opts] of CORPUS) {
-        const got = JSON.stringify(planValidator.barrierCheck(plan, actual, opts));
+        const got = decisionOnly(planValidator.barrierCheck(plan, actual, opts));
         if (got !== LEGACY_GOLDEN[key]) {
           offMismatch++;
           console.error('  6T-i byte-diff [' + key + ']\n    want: ' + LEGACY_GOLDEN[key] + '\n    got:  ' + got);
@@ -432,12 +445,22 @@ function assert(condition, message) {
     assert(offMismatch === 0, '6T-i-1 (AC3): KAOLA_TEST_ATTRIBUTION=0 must reproduce the PRE-CHANGE barrier byte-identically — '
       + offMismatch + ' of ' + CORPUS.length + ' corpus cases diverged');
 
+    // (i-1b) HINT CONTENT — separate from byte-identity and substring-based (not byte-frozen) so an
+    // unrelated wording revision does not re-break this corpus: the write_set_overflow hint must still
+    // name its recovery primitive with the toggle off.
+    for (const key of ['node-production-control', 'plan-production-control']) {
+      const entry = CORPUS.find((c) => c[0] === key);
+      const r = withToggle('0', () => planValidator.barrierCheck(entry[1], entry[2], entry[3]));
+      assert(r.operator_hint && r.operator_hint.includes('revert-overflow'),
+        '6T-i-1b hint [' + key + ']: operator_hint still names revert-overflow, got ' + JSON.stringify(r.operator_hint));
+    }
+
     // (i-2) NON-VACUITY: with the toggle at its shipped default the corpus MUST diverge from the
-    // legacy bytes on the test-path cases — otherwise (i-1) proves nothing.
+    // legacy decision on the test-path cases — otherwise (i-1) proves nothing.
     let onDiff = 0;
     withToggle(null, () => {
       for (const [key, plan, actual, opts] of CORPUS) {
-        if (JSON.stringify(planValidator.barrierCheck(plan, actual, opts)) !== LEGACY_GOLDEN[key]) onDiff++;
+        if (decisionOnly(planValidator.barrierCheck(plan, actual, opts)) !== LEGACY_GOLDEN[key]) onDiff++;
       }
     });
     assert(onDiff >= 8, '6T-i-2 (AC3 non-vacuity): the corpus must actually exercise the changed path — '
