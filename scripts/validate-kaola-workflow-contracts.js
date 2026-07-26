@@ -373,20 +373,9 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Codex init d
   '## Node Ledger',
   '.cache/{node-id}.md'
 ]);
-assertConcept('docs/workflow-state-contract.md', 'durable sources and generated mirrors', [
-  'durable sources',
-  'kaola-workflow/.roadmap/issue-*.md',
-  'workflow-state.md',
-  'generated mirrors',
-  'fast-summary.md'
-]);
-assertConcept('docs/workflow-state-contract.md', 'legacy coordination as transitional only', [
-  'legacy or transitional',
-  '.locks/',
-  '.sessions/',
-  '.tickers/',
-  'not document legacy coordination folders as permanent'
-]);
+// Both docs/workflow-state-contract.md concepts (durable sources / generated mirrors, and legacy
+// coordination as transitional only) are asserted with these exact term lists by
+// scripts/validate-workflow-contracts.js on the same repo-root path.
 assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '## Closure Contract',
   'closure invariants',
