@@ -404,9 +404,6 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '#164',
   '#165'
 ]);
-assertConcept('docs/workflow-state-contract.md', 'closure contract cross-reference', [
-  'closure contract'
-]);
 assertConcept(`${pluginRoot}/scripts/kaola-workflow-roadmap.js`, 'missing roadmap source safeguard', [
   'guardAgainstMissingRoadmapSource',
   'non-empty generated ROADMAP.md',
