@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
 const classifier = require('./kaola-gitlab-workflow-classifier');
 // issue #227 (adaptive path): forge-neutral constants + toggle resolution.
@@ -2627,28 +2627,64 @@ function mergeCopyDir(src, dest, keepExisting) {
 // least as complete), which is a stronger check than skip-if-present.
 const FINALIZE_MIRROR_DEST_OWNED = new Set(['workflow-state.md', 'workflow-tasks.json']);
 
+// Finalization residue the orchestrator authored OUTSIDE kaola-workflow/ in the main checkout
+// (CHANGELOG, docs, .env.example …) belongs on the branch too, so the commit gate can hand it to the
+// sink. Copies main's dirty non-`kaola-workflow/` files into the linked worktree and returns the
+// relative paths it AUTHORED. That list is machinery-manufactured state: a caller that probes the
+// worktree for operator dirt must subtract it, or the transaction reads its own mirror as proof the
+// operator failed to commit something (see probeImplementationCommit).
+function mirrorResidueOutsideProject(mainRoot, root) {
+  const authored = [];
+  try {
+    const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    for (const rel of parsePorcelainPaths(status)) {
+      if (rel.startsWith('kaola-workflow/')) continue;
+      const from = path.join(mainRoot, rel);
+      let st = null;
+      try { st = fs.lstatSync(from); } catch (_) { continue; }
+      if (!st.isFile()) continue;
+      const to = path.join(root, rel);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+      authored.push(rel);
+    }
+  } catch (_) { /* no git / unreadable status — the project-dir mirror above still stands */ }
+  return authored;
+}
+
 // Step 8a — artifact mirror. Direction is ALWAYS main checkout → linked worktree: the worktree
 // holds the complete ledger and the main copy is the one carrying the Finalization artifacts the
 // orchestrator just authored. Before copying, the ledger-regression guard refuses to push a STALER
 // main plan over a MORE-COMPLETE worktree ledger — a refusal means sync worktree→main first, never
 // bypass. Returns one of:
-//   { mirror: 'not_needed' | 'source_absent' | 'mirrored', ledger_compare: <token> }
+//   { mirror: 'not_needed' | 'source_absent' | 'skipped_post_archive' | 'mirrored',
+//     ledger_compare: <token>, mirrored_paths: [<rel>…] }
 //   { refused: true, inner_reason: 'ledger_regression', detail }
+// `mirrored_paths` names ONLY the non-`kaola-workflow/` residue this function authored in the
+// worktree — the caller must treat those paths as its own, never as operator dirt.
 function mirrorFinalizationArtifacts(root, project) {
   let mainRoot = null;
   try {
     mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', ledger_compare: 'not_needed' };
-  } catch (_) { return { mirror: 'not_needed', ledger_compare: 'not_needed' }; }
+    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', ledger_compare: 'not_needed', mirrored_paths: [] };
+  } catch (_) { return { mirror: 'not_needed', ledger_compare: 'not_needed', mirrored_paths: [] }; }
   const srcDir = path.join(mainRoot, 'kaola-workflow', project);
   const destDir = path.join(root, 'kaola-workflow', project);
   // Crash-resume: once the archive step has run, the live folder is GONE on purpose. Re-mirroring
   // would resurrect it from a main copy the archive already superseded, and the transaction would
   // re-enter at the wrong step. A re-entry past the archive skips straight to the commit gate.
+  // The residue OUTSIDE kaola-workflow/ is a SEPARATE obligation the commit gate still owes the
+  // sink, and the archive never superseded it — so it is mirrored on this path too. Skipping it
+  // silently dropped the orchestrator's CHANGELOG/doc edits from every crash-resumed run.
   if (!fs.existsSync(destDir) && findArchiveAuthorities(root, project).length > 0) {
-    return { mirror: 'skipped_post_archive', ledger_compare: 'not_needed' };
+    return {
+      mirror: 'skipped_post_archive',
+      ledger_compare: 'not_needed',
+      mirrored_paths: mirrorResidueOutsideProject(mainRoot, root)
+    };
   }
-  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', ledger_compare: 'not_needed' };
+  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', ledger_compare: 'not_needed', mirrored_paths: [] };
   // Ledger-regression guard (fail-open on a first sync — the compare module owns that semantics).
   let ledgerCompare = 'skipped_no_plan';
   const srcPlan = path.join(srcDir, adaptiveSchema.PLAN_FILE);
@@ -2675,23 +2711,11 @@ function mirrorFinalizationArtifacts(root, project) {
     }
   }
   mergeCopyDir(srcDir, destDir, FINALIZE_MIRROR_DEST_OWNED);
-  // Finalization residue the orchestrator authored OUTSIDE kaola-workflow/ in the main checkout
-  // (CHANGELOG, docs, .env.example …) belongs on the branch too. Mirror those dirty files as well.
-  try {
-    const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
-    for (const rel of parsePorcelainPaths(status)) {
-      if (rel.startsWith('kaola-workflow/')) continue;
-      const from = path.join(mainRoot, rel);
-      let st = null;
-      try { st = fs.lstatSync(from); } catch (_) { continue; }
-      if (!st.isFile()) continue;
-      const to = path.join(root, rel);
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.copyFileSync(from, to);
-    }
-  } catch (_) { /* no git / unreadable status — the project-dir mirror above still stands */ }
-  return { mirror: 'mirrored', ledger_compare: ledgerCompare };
+  return {
+    mirror: 'mirrored',
+    ledger_compare: ledgerCompare,
+    mirrored_paths: mirrorResidueOutsideProject(mainRoot, root)
+  };
 }
 
 // The machinery NEVER authors the implementation commit — that is the operator/orchestrator's job.
@@ -2701,12 +2725,19 @@ function mirrorFinalizationArtifacts(root, project) {
 // NO committed non-`kaola-workflow/` change is a missing implementation commit. Anything the probe
 // cannot determine reads `indeterminate` and never refuses.
 // Returns { state: 'committed' | 'missing' | 'indeterminate' | 'not_applicable', paths }.
-function probeImplementationCommit(root, baseBranch) {
+// `machineryAuthoredPaths` names worktree dirt the TRANSACTION ITSELF manufactured (the Step 8a
+// residue mirror). It is subtracted before anything is read as operator dirt: state the workflow
+// produced by its own commit policy is a repair obligation it already discharged, never evidence
+// against the operator — reading it back as proof manufactured `implementation_commit_missing` on
+// runs where there was nothing left to author.
+function probeImplementationCommit(root, baseBranch, machineryAuthoredPaths) {
+  const authored = new Set(Array.isArray(machineryAuthoredPaths) ? machineryAuthoredPaths : []);
   let dirty = [];
   try {
     const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
-    dirty = parsePorcelainPaths(status).filter(p => !p.startsWith('kaola-workflow/'));
+    dirty = parsePorcelainPaths(status)
+      .filter(p => !p.startsWith('kaola-workflow/') && !authored.has(p));
   } catch (_) { return { state: 'indeterminate', paths: [] }; }
   if (dirty.length === 0) return { state: 'not_applicable', paths: [] };
   const base = (baseBranch || '').trim() || 'main';
@@ -2717,7 +2748,20 @@ function probeImplementationCommit(root, baseBranch) {
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
     committed = diff.split('\n').map(s => s.trim()).filter(Boolean);
   } catch (_) { return { state: 'indeterminate', paths: dirty }; }
-  const implCommitted = committed.some(p => !p.startsWith('kaola-workflow/'));
+  let implCommitted = committed.some(p => !p.startsWith('kaola-workflow/'));
+  if (!implCommitted) {
+    // The NET diff is blind to work that was committed and then undone: a branch carrying
+    // `feat: impl` followed by `revert: drop impl` nets to an empty non-`kaola-workflow/` diff
+    // while plainly carrying implementation commits. "No implementation commit" is a claim about
+    // the branch's HISTORY, so ask the history before asserting it. Widening-only — a branch the
+    // net diff already proves implemented never re-reads as missing.
+    try {
+      const touched = execFileSync('git', ['-C', root, 'log', '--name-only', '--pretty=format:', base + '..HEAD'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+      implCommitted = touched.split('\n').map(s => s.trim())
+        .some(p => p && !p.startsWith('kaola-workflow/'));
+    } catch (_) { return { state: 'indeterminate', paths: dirty }; }
+  }
   return { state: implCommitted ? 'committed' : 'missing', paths: dirty.slice(0, 20) };
 }
 
@@ -2754,6 +2798,53 @@ function checkFinalizeStagingGuard(root, project) {
   return { ok: true };
 }
 
+// The transaction's OWN bookkeeping commits. `git commit` is not a safe assumption: a commit hook
+// can reject the tree and signing can fail, and an unwrapped throw here escapes as a raw stack
+// trace — destroying the one thing the transaction ledger exists to provide, a re-entry that is
+// readable from the emit alone. Never `--no-verify`: a hook is content inspection and must run, so
+// a hook rejection is a REAL failure that surfaces typed rather than being bypassed.
+// Returns { ok: true } or { ok: false, status, stderr }.
+function commitFinalizeStep(root, message) {
+  try {
+    // stderr is PIPED (not inherited) so a rejection message can ride along in the typed refusal
+    // instead of scrolling past; on success it is written straight back through, so hook advisory
+    // output the operator would otherwise have seen is not swallowed.
+    const r = spawnSync('git', ['-C', root, 'commit', '-m', message],
+      { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+    if (r.error) return { ok: false, status: null, stderr: String(r.error.message || r.error).slice(0, 1000) };
+    if (r.status !== 0) {
+      return { ok: false, status: r.status, stderr: String(r.stderr || '').trim().slice(0, 1000) };
+    }
+    if (r.stderr) process.stderr.write(String(r.stderr));
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      status: (e && e.status != null) ? e.status : null,
+      stderr: String((e && e.stderr) || (e && e.message) || '').trim().slice(0, 1000)
+    };
+  }
+}
+
+// A failed bookkeeping commit is a typed refusal CARRYING the transaction ledger, so the operator
+// (and a resumed run) can read exactly which step stopped and what is already durable.
+function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
+  output({
+    result: 'refuse',
+    reason: 'finalize_commit_failed',
+    step: step,
+    project: project,
+    exit_status: committed.status,
+    detail: committed.stderr || null,
+    finalize_transaction: finalizeTx,
+    operator_hint: 'The `chore: ' + step + '` commit was rejected (commit hook or signing). Resolve '
+      + 'the rejection, then re-run finalize — the transaction resumes at the step the '
+      + 'finalize_transaction ledger reports. Nothing is bypassed: the hook is content inspection '
+      + 'and must pass.',
+    errors: ['finalize_commit_failed']
+  }, 1);
+}
+
 function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
@@ -2764,11 +2855,15 @@ function cmdFinalize() {
   const finalizeTx = {
     mirror: 'not_needed',
     ledger_compare: 'not_needed',
+    residue_mirrored: 0,
     impl_commit: 'not_checked',
     roadmap_staged: false,
     archive_commit: 'skipped',
     finalize_commit: 'skipped'
   };
+  // Worktree dirt this transaction manufactured (Step 8a residue mirror) — subtracted from the
+  // implementation probe so the machinery never reads its own mirror as operator dirt.
+  let mirroredResiduePaths = [];
   // Step 8a — artifact mirror, BEFORE any gate reads the authority and before any side effect.
   // A ledger regression is a typed refusal: the transaction never overwrites a complete worktree
   // ledger with a staler main copy.
@@ -2789,6 +2884,8 @@ function cmdFinalize() {
     }
     finalizeTx.mirror = mirror.mirror;
     finalizeTx.ledger_compare = mirror.ledger_compare;
+    mirroredResiduePaths = Array.isArray(mirror.mirrored_paths) ? mirror.mirrored_paths : [];
+    finalizeTx.residue_mirrored = mirroredResiduePaths.length;
   }
   const folder = activeByProject(root, args.project);
   const finalizeLiveDir = projectDir(root, args.project);
@@ -2927,7 +3024,8 @@ function cmdFinalize() {
     try { linkedForImplProbe = fs.realpathSync(mainRootFromCoord(getCoordRoot(root))) !== fs.realpathSync(root); }
     catch (_) { linkedForImplProbe = false; }
     if (linkedForImplProbe) {
-      const implProbe = probeImplementationCommit(root, field(finalizeAuthorityState, 'base_branch'));
+      const implProbe = probeImplementationCommit(root, field(finalizeAuthorityState, 'base_branch'),
+        mirroredResiduePaths);
       finalizeTx.impl_commit = implProbe.state;
       if (implProbe.state === 'missing') {
         output({
@@ -3394,8 +3492,12 @@ function cmdFinalize() {
       try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
       catch (e) { if (e && e.status === 1) hasStaged = true; }
       if (hasStaged) {
-        execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
-          { encoding: 'utf8', stdio: 'inherit' });
+        const committed = commitFinalizeStep(root, 'chore: archive ' + args.project);
+        if (!committed.ok) {
+          finalizeTx.archive_commit = 'failed';
+          emitFinalizeCommitFailure(args.project, 'archive', committed, finalizeTx);
+          return;
+        }
         finalizeTx.archive_commit = 'committed';
       } else {
         finalizeTx.archive_commit = 'nothing_to_commit';
@@ -3450,8 +3552,12 @@ function cmdFinalize() {
       try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
       catch (e) { if (e && e.status === 1) hasFinalStaged = true; }
       if (hasFinalStaged) {
-        execFileSync('git', ['-C', root, 'commit', '-m', 'chore: finalize ' + args.project],
-          { encoding: 'utf8', stdio: 'inherit' });
+        const committed = commitFinalizeStep(root, 'chore: finalize ' + args.project);
+        if (!committed.ok) {
+          finalizeTx.finalize_commit = 'failed';
+          emitFinalizeCommitFailure(args.project, 'finalize', committed, finalizeTx);
+          return;
+        }
         finalizeTx.finalize_commit = 'committed';
       } else {
         // Nothing left to commit — the branch already carries the final candidate commit.

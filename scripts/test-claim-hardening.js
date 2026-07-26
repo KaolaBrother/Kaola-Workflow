@@ -1765,6 +1765,66 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fx); }
   }
 
+  // --- T4b: a branch whose implementation was committed and then REVERTED is NOT "missing" ------
+  // Two independent false-refusal sources meet on this shape, and BOTH must be closed:
+  //   (1) the Step 8a mirror copies main's dirty CHANGELOG.md into the worktree, and the probe then
+  //       read that machinery-authored dirt back as uncommitted implementation — the transaction
+  //       manufacturing the very evidence it refuses on;
+  //   (2) `git diff base...HEAD` is a NET diff, so `feat: impl` + `revert: drop impl` nets to an
+  //       empty non-`kaola-workflow/` diff even though the branch plainly carries implementation
+  //       commits.
+  // Together they told the operator "Author the implementation commit yourself" when there was
+  // nothing to author — and CHANGELOG.md is exactly what the commit gate exists to commit.
+  {
+    const fx = mk816('issue-816p');
+    try {
+      // Revert the implementation: two REAL commits, net-empty non-kaola diff.
+      fs.unlinkSync(path.join(fx.wtRoot, 'impl.txt'));
+      g816(fx.wtRoot, ['add', '-A']);
+      g816(fx.wtRoot, ['commit', '-m', 'revert: drop impl.txt']);
+      const head = gOut816(fx.wtRoot, ['rev-parse', 'HEAD']);
+      fs.writeFileSync(path.join(fx.wtCacheDir, 'chain-receipt.json'), JSON.stringify({
+        headSha: head,
+        chains: [
+          { name: 'claude', exitCode: 0, accepted_red: false },
+          { name: 'codex', exitCode: 0, accepted_red: false },
+          { name: 'gitlab', exitCode: 0, accepted_red: false },
+          { name: 'gitea', exitCode: 0, accepted_red: false }
+        ]
+      }) + '\n');
+      // The net diff carries NO non-kaola path — the precondition that made the probe refuse.
+      const netDiff = gOut816(fx.wtRoot, ['diff', '--name-only', 'main...HEAD'])
+        .split('\n').map(s => s.trim()).filter(Boolean);
+      assert(netDiff.length > 0 && netDiff.every(p => p.startsWith('kaola-workflow/')),
+        '#816(T4b) precondition: the reverted branch must have a net-empty NON-kaola diff, got ' + JSON.stringify(netDiff));
+      // Finalization residue authored in MAIN — the mirror pulls it into the worktree.
+      fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      // ...and the worktree itself carries NO implementation-shaped dirt beforehand.
+      const preDirty = gOut816(fx.wtRoot, ['status', '--porcelain'])
+        .split('\n').map(s => s.trim()).filter(Boolean)
+        .filter(l => !/\skaola-workflow\//.test(l));
+      assert(preDirty.length === 0,
+        '#816(T4b) precondition: the worktree must carry no non-kaola dirt before finalize, got ' + JSON.stringify(preDirty));
+
+      const r = runFinalize816(fx);
+      assert(r.status === 0,
+        '#816(T4b): a revert-to-empty branch must NOT refuse implementation_commit_missing (the mirror '
+        + 'manufactures the dirt and the net diff hides the commits), got status=' + r.status
+        + ' json=' + JSON.stringify(r.json));
+      const tx = r.json && r.json.finalize_transaction;
+      assert(tx && tx.impl_commit === 'not_applicable',
+        '#816(T4b): mirror-authored residue must not read as operator dirt, got ' + JSON.stringify(tx));
+      assert(tx && tx.residue_mirrored >= 1,
+        '#816(T4b): the receipt must record the mirrored residue, got ' + JSON.stringify(tx));
+      assert(tx && tx.finalize_commit === 'committed',
+        '#816(T4b): the residue the probe mistook for a missing implementation must land in `chore: finalize`, got '
+        + JSON.stringify(tx));
+      const changelogCommit = gOut816(fx.wtRoot, ['log', '--format=%s', '-1', '--', 'CHANGELOG.md']);
+      assert(changelogCommit === 'chore: finalize ' + fx.project,
+        '#816(T4b): CHANGELOG.md must be carried by the finalize commit, got ' + JSON.stringify(changelogCommit));
+    } finally { cleanup816(fx); }
+  }
+
   // --- T5: the single-project staging rule is a TYPED refusal inside the transaction -----------
   {
     const fx = mk816('issue-816e');
@@ -1837,34 +1897,23 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       try { rjc = JSON.parse(String(resumeC.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
       assert(rjc && rjc.reason === 'already_finalized',
         '#816(T6c): post-commit re-entry must report already_finalized, got ' + JSON.stringify(rjc));
-      // Re-running the transaction itself is idempotent: the commit step finds nothing to commit
-      // (the receipt is re-bound to the post-commit HEAD, exactly as a real re-entry would be).
+      // Re-running the transaction itself is idempotent — and must be so UNASSISTED. The receipt is
+      // left EXACTLY as the run left it: still pinned to the pre-archive commit, because the only
+      // thing that advanced HEAD past it is the transaction's OWN `chore: archive` / `chore:
+      // finalize` bookkeeping. Hand-regenerating the receipt here (as this test used to) would have
+      // proved only that a repaired receipt unblocks the gate, never that the re-entry is
+      // recoverable without one — which is the property the transaction actually claims.
       const archCache = path.join(fxc.wtRoot, 'kaola-workflow', 'archive', fxc.project, '.cache');
-      fs.writeFileSync(path.join(archCache, 'chain-receipt.json'), JSON.stringify({
-        headSha: headAfterFirst,
-        chains: [
-          { name: 'claude', exitCode: 0, accepted_red: false },
-          { name: 'codex', exitCode: 0, accepted_red: false },
-          { name: 'gitlab', exitCode: 0, accepted_red: false },
-          { name: 'gitea', exitCode: 0, accepted_red: false }
-        ]
-      }) + '\n');
-      g816(fxc.wtRoot, ['add', '-A']);
-      g816(fxc.wtRoot, ['commit', '-m', 'chore: rebind receipt']);
-      const headRebound = gOut816(fxc.wtRoot, ['rev-parse', 'HEAD']);
-      fs.writeFileSync(path.join(archCache, 'chain-receipt.json'), JSON.stringify({
-        headSha: headRebound,
-        chains: [
-          { name: 'claude', exitCode: 0, accepted_red: false },
-          { name: 'codex', exitCode: 0, accepted_red: false },
-          { name: 'gitlab', exitCode: 0, accepted_red: false },
-          { name: 'gitea', exitCode: 0, accepted_red: false }
-        ]
-      }) + '\n');
+      const carried = JSON.parse(fs.readFileSync(path.join(archCache, 'chain-receipt.json'), 'utf8'));
+      assert(String(carried.headSha || '').trim() === fxc.headSha
+        && String(carried.headSha || '').trim() !== headAfterFirst,
+        '#816(T6c) precondition: the carried receipt must still be pinned to the PRE-archive commit '
+        + '(no hand-repair) — got ' + JSON.stringify(carried.headSha) + ', head after first run ' + headAfterFirst);
       const second = runFinalize816(fxc);
       assert(second.status === 0,
-        '#816(T6c): a settled post-commit re-entry must be a clean no-op, got ' + second.status
-        + ' json=' + JSON.stringify(second.json));
+        '#816(T6c): a settled post-commit re-entry must be a clean no-op with the receipt UNTOUCHED '
+        + '— the workflow\'s own bookkeeping commits must never dead-end the resume behind '
+        + 'chains_stale, got ' + second.status + ' json=' + JSON.stringify(second.json));
       assert(second.json && second.json.finalize_transaction
         && second.json.finalize_transaction.mirror === 'skipped_post_archive',
         '#816(T6c): the mirror must not resurrect an archived live folder, got ' +
@@ -1874,6 +1923,72 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         '#816(T6c): the receipt must say so explicitly, got ' +
         JSON.stringify(second.json && second.json.finalize_transaction));
     } finally { cleanup816(fxc); }
+
+    // (d) crash AFTER the `chore: archive` commit, BEFORE `chore: finalize` — the re-entry that had
+    // no unassisted route. `chore: archive` is the transaction's OWN bookkeeping commit: it advances
+    // HEAD past the chain receipt while touching nothing a chain verdict depends on, so refusing the
+    // resume as `chains_stale` made the workflow cite a blocker it created itself. Two properties:
+    //   1. the resume completes with the receipt UNTOUCHED (no hand-authored receipt);
+    //   2. the main-authored Finalization residue still reaches the branch — the post-archive mirror
+    //      must skip only the archived PROJECT folder, never the residue the commit gate owes the sink.
+    const fxd = mk816('issue-816q');
+    try {
+      fs.writeFileSync(path.join(fxd.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      // Simulate the crash: archive the folder terminal-stamped, and COMMIT it exactly as the
+      // transaction's archive step does — then stop, as a crash would.
+      const dest = path.join(fxd.wtRoot, 'kaola-workflow', 'archive', fxd.project);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(fxd.wtProjDir, dest);
+      const stD = path.join(dest, 'workflow-state.md');
+      fs.writeFileSync(stD, fs.readFileSync(stD, 'utf8').replace('status: active', 'status: closed'));
+      g816(fxd.wtRoot, ['add', '-A']);
+      g816(fxd.wtRoot, ['commit', '-m', 'chore: archive ' + fxd.project]);
+      const headAfterArchive = gOut816(fxd.wtRoot, ['rev-parse', 'HEAD']);
+      assert(headAfterArchive !== fxd.headSha,
+        '#816(T6d) precondition: the archive commit must advance HEAD past the receipt');
+
+      const r = runFinalize816(fxd);
+      assert(r.status === 0,
+        '#816(T6d): a crash-resumed run must complete with the receipt UNTOUCHED — the workflow\'s own '
+        + '`chore: archive` commit is a repair obligation it already discharged, never evidence of drift; '
+        + 'got status=' + r.status + ' json=' + JSON.stringify(r.json));
+      const tx = r.json && r.json.finalize_transaction;
+      assert(tx && tx.mirror === 'skipped_post_archive',
+        '#816(T6d): the archived project folder must NOT be resurrected, got ' + JSON.stringify(tx));
+      assert(tx && tx.residue_mirrored >= 1,
+        '#816(T6d): the residue mirror must still run past the archive — skipping it silently dropped '
+        + 'the orchestrator\'s CHANGELOG/doc edits from every resumed run; got ' + JSON.stringify(tx));
+      assert(tx && tx.finalize_commit === 'committed',
+        '#816(T6d): the resumed run must land the `chore: finalize` commit, got ' + JSON.stringify(tx));
+      const changelogCommit = gOut816(fxd.wtRoot, ['log', '--format=%s', '-1', '--', 'CHANGELOG.md']);
+      assert(changelogCommit === 'chore: finalize ' + fxd.project,
+        '#816(T6d): the residue must land in `chore: finalize`, not a second `chore: archive`, got '
+        + JSON.stringify(changelogCommit));
+      const leftover = gOut816(fxd.wtRoot, ['status', '--porcelain'])
+        .split('\n').map(s => s.trim()).filter(Boolean);
+      assert(leftover.length === 0,
+        '#816(T6d): the sink must receive only committed work after the resume, got ' + JSON.stringify(leftover));
+    } finally { cleanup816(fxd); }
+  }
+
+  // --- T6e: a GENUINELY stale receipt still refuses — the resume relief is not a gate hole -------
+  // The bookkeeping-advance allowance is scoped to advancement no chain verdict can see. A commit
+  // touching a real code path between the receipt and HEAD must still refuse chains_stale.
+  {
+    const fx = mk816('issue-816m');
+    try {
+      fs.writeFileSync(path.join(fx.wtRoot, 'impl.txt'), 'implementation CHANGED after the chains ran\n');
+      g816(fx.wtRoot, ['add', '-A']);
+      g816(fx.wtRoot, ['commit', '-m', 'feat: more implementation']);
+      const r = runFinalize816(fx);
+      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_gate_unverified'
+        && r.json.inner_reason === 'chains_stale',
+        '#816(T6e): a receipt left behind by a REAL code commit must still refuse chains_stale, got status='
+        + r.status + ' json=' + JSON.stringify(r.json));
+      const log = gOut816(fx.wtRoot, ['log', '--format=%s', '-5']);
+      assert(!/^chore: (finalize|archive) /m.test(log),
+        '#816(T6e): the stale gate must refuse BEFORE any commit, got log:\n' + log);
+    } finally { cleanup816(fx); }
   }
 
   // --- T7: attestation inversion — the contractor field/warning are gone, legacy is tolerated ---
@@ -1935,6 +2050,41 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       const archivedLog = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, '.cache', 'dispatch-log.jsonl');
       assert(!fs.existsSync(archivedLog) || !/"agent_type":"contractor"/.test(fs.readFileSync(archivedLog, 'utf8')),
         '#816(T8): no contractor dispatch marker may be back-filled');
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T9: a REJECTED bookkeeping commit is a typed refusal, never a raw stack trace ------------
+  // `git commit` is not a safe assumption: a commit hook can reject the tree and signing can fail.
+  // Unwrapped, that throw escaped cmdFinalize as a stack trace with NO finalize_transaction object
+  // — falsifying the whole claim that a crash-resumed run is readable from the emit alone, at
+  // exactly the moment the operator most needs to know which steps already committed.
+  // The hook is NOT bypassed (never --no-verify): a hook is content inspection and must run, so a
+  // rejection is a REAL failure that has to surface typed.
+  {
+    const fx = mk816('issue-816n');
+    try {
+      fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      // Linked worktrees share the main repo's hooks dir, so this hook governs the worktree's commits.
+      const hooksDir = path.join(fx.mainRoot, '.git', 'hooks');
+      fs.mkdirSync(hooksDir, { recursive: true });
+      const hook = path.join(hooksDir, 'pre-commit');
+      fs.writeFileSync(hook, '#!/bin/sh\necho "hook: rejected" >&2\nexit 1\n');
+      fs.chmodSync(hook, 0o755);
+
+      const r = runFinalize816(fx);
+      assert(r.status !== 0,
+        '#816(T9): a rejected bookkeeping commit must exit non-zero, got ' + r.status);
+      assert(r.json && r.json.reason === 'finalize_commit_failed',
+        '#816(T9): a rejected commit must be a TYPED refusal, not a raw throw, got '
+        + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 300));
+      assert(r.json && r.json.finalize_transaction
+        && typeof r.json.finalize_transaction === 'object',
+        '#816(T9): the typed refusal must CARRY the transaction ledger so the re-entry point is '
+        + 'readable from the emit alone, got ' + JSON.stringify(r.json));
+      assert(r.json && typeof r.json.step === 'string' && r.json.step.length > 0,
+        '#816(T9): the refusal must name which commit step was rejected, got ' + JSON.stringify(r.json));
+      assert(!/at .*kaola-workflow-claim\.js:\d+/.test(String(r.stderr || '')),
+        '#816(T9): no raw stack trace may escape, got stderr=' + String(r.stderr || '').slice(0, 400));
     } finally { cleanup816(fx); }
   }
 }

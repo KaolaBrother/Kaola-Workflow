@@ -583,9 +583,10 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN"
 assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --barrier-check');
 assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --verdict-check');
 assertNotIncludes('commands/kaola-workflow-finalize.md', 'node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check');
-// #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
-// 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
-// cross-file ordering is not expressible via assertBefore (single-file only).
+// assertBefore calls for 'commit -m "chore: finalize {project}"' and 'node "$CLAIM_JS" finalize'
+// DROPPED: the finalize commit is no longer a prompt-authored bash step whose ORDER a command file
+// could express. `cmdFinalize` owns it inside the one mechanical transaction, so the ordering is
+// enforced by the code path (and its suite), not by token order in a command surface.
 
 const packageJson = JSON.parse(read('package.json'));
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package files must include hooks/');

@@ -5191,11 +5191,25 @@ function computeCodeTreeHash(root, project, testConsumedExtra, opts) {
 }
 
 const STALE_PATHS_LIMIT = 20;
-function computeChainsStaleDiagnostics(root, project, receipt) {
-  if (!receipt || typeof receipt !== 'object') return null;
-  const stampedHead = String(receipt.headSha || '').trim();
-  if (!stampedHead || receipt.workTreeHash !== 'clean') return null;
-  const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+// ONE visibility filter behind both readers below, so the stale-culprit diagnostics and the
+// bookkeeping-advance predicate can never disagree about which paths a verdict depends on.
+// Drops everything isValidationInvisible() classifies as inert; returns a sorted, de-duped array.
+function filterVisiblePaths(rawLines, project, extra) {
+  const seen = new Set();
+  const paths = [];
+  for (const raw of rawLines) {
+    const rel = String(raw || '').trim().replace(/^\.\//, '');
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    if (!isValidationInvisible(rel, project, extra)) paths.push(rel);
+  }
+  paths.sort();
+  return paths;
+}
+
+// Culprit hints: the stamped COMMIT vs the TREE IN FRONT OF US (uncommitted edits + untracked
+// files included) — a diagnostic, so it casts the widest net. null on ANY git failure.
+function visibleChangedPathsSince(root, project, stampedHead, extra) {
   let diffOut = '';
   let untrackedOut = '';
   try {
@@ -5204,16 +5218,44 @@ function computeChainsStaleDiagnostics(root, project, receipt) {
   } catch (_) {
     return null;
   }
-  const seen = new Set();
-  const paths = [];
-  for (const raw of (diffOut + '\n' + untrackedOut).split('\n')) {
-    const rel = String(raw || '').trim().replace(/^\.\//, '');
-    if (!rel || seen.has(rel)) continue;
-    seen.add(rel);
-    if (!isValidationInvisible(rel, project, extra)) paths.push(rel);
-  }
-  if (!paths.length) return null;
-  paths.sort();
+  return filterVisiblePaths((diffOut + '\n' + untrackedOut).split('\n'), project, extra);
+}
+
+// A LEGACY (headSha-only) receipt pins the gate to an exact COMMIT, so ANY new commit reads as
+// stale — including the finalize transaction's OWN `chore: archive` bookkeeping commit, which the
+// transaction authors BEFORE this gate re-runs on a crash-resumed re-entry. That dead-ends the
+// resume behind a receipt only a hand re-run could refresh: a blocker the workflow itself created,
+// which is a repair obligation, never evidence. Resolve it with the SAME visibility predicate the
+// codeTreeHash arm already uses: the advance is inert iff every path differing between the two
+// COMMITS is validation-invisible.
+//
+// Deliberately commit-to-commit, NOT tree-to-commit. This arm is a statement about the receipt's
+// binding to a commit and has never considered working-tree dirt (a sha match passes today no
+// matter how dirty the tree is), so widening it to the worktree here would make a RESUME stricter
+// than the first-pass run it resumes — the Step 8a residue mirror alone would trip it.
+//
+// Not a loosening for genuine drift: one visible path (code, or test-consumed prose) still
+// refuses, and any git failure or unresolvable sha reads false. Modern receipts never reach here.
+function headAdvanceIsValidationInvisible(root, project, receipt, currentHead) {
+  const stampedHead = String((receipt && receipt.headSha) || '').trim();
+  const head = String(currentHead || '').trim();
+  if (!stampedHead || !head) return false;
+  const extra = Array.isArray(receipt && receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  let diffOut = '';
+  try {
+    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, head, '--name-only'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+  } catch (_) { return false; }
+  return filterVisiblePaths(diffOut.split('\n'), project, extra).length === 0;
+}
+
+function computeChainsStaleDiagnostics(root, project, receipt) {
+  if (!receipt || typeof receipt !== 'object') return null;
+  const stampedHead = String(receipt.headSha || '').trim();
+  if (!stampedHead || receipt.workTreeHash !== 'clean') return null;
+  const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  const paths = visibleChangedPathsSince(root, project, stampedHead, extra);
+  if (!paths || !paths.length) return null;
   const proseCount = paths.filter(p => testConsumes(p, extra)).length;
   const staleKind = proseCount === paths.length ? 'prose-only' : (proseCount === 0 ? 'code' : 'mixed');
   const out = { stale_paths: paths.slice(0, STALE_PATHS_LIMIT), stale_kind: staleKind };
@@ -6268,9 +6310,14 @@ function main() {
         try { headRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { headRoot = root; }
         const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', headRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
         if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
-          const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }, headRoot, projTag, receipt);
-          process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
-          process.exitCode = 1; return;
+          // A sha mismatch alone cannot tell "the code advanced" from "the workflow advanced HEAD
+          // past its own receipt with a bookkeeping commit". Ask which paths actually moved before
+          // refusing; an inert advance is not staleness.
+          if (!headAdvanceIsValidationInvisible(headRoot, projTag, receipt, currentHead)) {
+            const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }, headRoot, projTag, receipt);
+            process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+            process.exitCode = 1; return;
+          }
         }
       }
       chains = Array.isArray(receipt.chains) ? receipt.chains : [];
