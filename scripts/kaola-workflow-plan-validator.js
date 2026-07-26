@@ -491,6 +491,14 @@ function foreignArchivePath(p, project) {
 function isWorkflowArtifactPath(p, project) {
   return /^kaola-workflow\//.test(String(p || '')) && !foreignArchivePath(p, project);
 }
+// SCOPE, decided rather than incidental: this predicate matches ZERO files in Kaola-Workflow's own
+// tree, because this repo names its tests `scripts/test-*.js` and `scripts/simulate-*.js`. So test
+// attribution and the custody wall are live for consumer repos with conventional layouts — the target —
+// and inert here. Widening the pattern to catch our own 59 test files was considered and REJECTED: it
+// buys little where independent adversarial verification already runs, and costs a declaration
+// obligation on every node that touches a test file plus a custody exemption whenever an implementer
+// edits one. Do not "fix" this by widening without first establishing that the verification mitigation
+// has gone away.
 function isTestLikePath(p) {
   const s = String(p || '');
   return /(^|\/)(tests?|__tests__|spec)\//i.test(s) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(s);
