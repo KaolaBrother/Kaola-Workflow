@@ -24385,6 +24385,210 @@ scenario(() => {
 });
 
 // ===========================================================================
+// CLUSTER #807-F — NO LEDGER ROW MOVES UNANNOUNCED.
+//
+// The #807 shape channel fixed expand-open/expand-close, but three sibling paths still moved rows the
+// presented task list never heard about — and the FIRST of them is a defect the #807 fix itself created:
+//
+//   F1 reexpand-open's `_reactivate` cascade flips the OWNER milestone, its post-dominating review
+//      wall, any re-verified downstream milestone, and the sink from `complete` -> `pending`, and built
+//      a transition for NONE of them. Pre-#807 the milestone was never marked completed in the first
+//      place, so the cascade could not contradict the list; post-#807 the operator marks it completed at
+//      discharge and the re-open silently un-completes it in the LEDGER ONLY. A list reading
+//      "milestone done, review passed" over a run that has re-opened both is worse than a stale list.
+//   F2 the DOCUMENTED crash recovery (reconcile-running-set -> re-orient) announced nothing:
+//      rollForwardExpansions re-opened the frontier through runOpenReady — which builds real
+//      `in_progress` transitions — and every reconcile arm then threw them away with taskTransitions: [].
+//   F4 every plan-run surface says to insert a newly-announced unit "in record order", which no runtime
+//      could follow from a frontier-order-first array.
+//
+// The F1/F2 assertions are written as a LEDGER DIFF, not a hand-listed expectation: read the ledger
+// before and after, and require that every row that MOVED is named in taskTransitions. That is the
+// property, and it cannot rot as the cascade grows new arms.
+// ===========================================================================
+scenario(() => {
+  const { runReExpandOpen, runExpandOpen, runReconcileRunningSet } = require('./kaola-workflow-adaptive-node');
+
+  const DERIV = { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none' };
+  // m1 (owner, discharged) -> m2 (downstream milestone, discharged) -> wall (review, complete) -> done
+  // (sink, complete). Re-opening m1 must move m1, m2, wall and done — four rows, zero of them announced
+  // before this fix.
+  const PLAN807F = (rows, tail) => ['# Plan — 807F', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g1', '  expected_surfaces: scripts/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m2):', '  milestone_goal: g2', '  expected_surfaces: scripts/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |',
+    '| m2 | expansion-point | m1 | — | 1 | sequence |',
+    '| wall | code-reviewer | m1, m2 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', ...rows, '',
+    ...(tail || [])].join('\n');
+
+  const RECORD = (id, point, units) => ['record(' + id + '):', '  point: ' + point,
+    '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    ...units.map(u => '  unit: ' + u + ' | code-explorer | — | — | co_open | —')];
+
+  const mk = (planText, readyIds) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-807f-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-807f');
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), 'project: issue-807f\nbranch: wf/807f\n');
+    return {
+      tmp, planPath, projectDir,
+      opts: {
+        planPath, project: 'issue-807f',
+        shell: (scriptPath, args) => {
+          const base = path.basename(String(scriptPath));
+          if (base === 'kaola-workflow-next-action.js') {
+            return { exitCode: 0, result: 'ok', allDone: false,
+              readyPending: (readyIds || []).map(id => ({ id, role: 'code-explorer',
+                declared_write_set: '—', model: 'standard', kind: 'read' })) };
+          }
+          if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, result: 'ok' };
+          return { exitCode: 0, ok: true, result: 'ok', recordBase: { base: 'b'.repeat(40) } };
+        },
+        readFile: p => fs.readFileSync(p, 'utf8'),
+        writeFile: (p, c) => fs.writeFileSync(p, c),
+        cacheExists: p => fs.existsSync(p),
+        mkdirp: d => { try { fs.mkdirSync(d, { recursive: true }); } catch (_) {} },
+        unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+        now: () => 'T',
+        sinkProgressProbe: () => ({ state: 'pristine', evidence: 'test' }),
+      },
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }),
+    };
+  };
+
+  // movedRows(before, after) — the ids whose ledger status CHANGED. The authority both F1 and F2 are
+  // judged against; a hand-listed expectation would go stale the moment the cascade grows an arm.
+  const movedRows = (before, after) => {
+    const b = readLedgerStatuses(before);
+    const a = readLedgerStatuses(after);
+    return Object.keys(a).filter(id => b[id] !== a[id]).sort();
+  };
+
+  // --- F1: the re-open cascade announces EVERY row it moves. ---
+  {
+    const SETTLED = ['| m1 | complete |', '| m2 | complete |', '| wall | complete |', '| done | complete |',
+      '| m1-r1-a | complete |', '| m2-r1-a | complete |'];
+    const TAIL = ['## Expansion Records', '',
+      ...RECORD('m1#1', 'm1', ['a']), '', 'open(m1#1):', '  at: T', '',
+      ...RECORD('m2#1', 'm2', ['a']), '', 'open(m2#1):', '  at: T', ''];
+    const f = mk(PLAN807F(SETTLED, TAIL), ['m1-r2-fix']);
+    try {
+      const before = fs.readFileSync(f.planPath, 'utf8');
+      const r = runReExpandOpen({ ...f.opts, nodeId: 'm1',
+        composition: { derivation: { ...DERIV }, units: [
+          { name: 'fix', role: 'code-explorer', model: 'standard', write_set: 'scripts/a.js', mode: 'co_open' }] } });
+      assert(r.result === 'ok' && r.reopened === true,
+        '#807-F1 PRECONDITION: the re-open must commit, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
+      const after = fs.readFileSync(f.planPath, 'utf8');
+      const moved = movedRows(before, after);
+      // PRECONDITION: the cascade really did un-complete the owner + its wall (the rows the operator's
+      // list is asserting are done). If this ever stops being true the test below proves nothing.
+      for (const id of ['m1', 'wall']) {
+        assert(moved.includes(id),
+          '#807-F1 PRECONDITION: the cascade must move ' + id + ' off complete, moved=' + JSON.stringify(moved));
+      }
+      const announced = new Set((r.taskTransitions || []).map(t => t.id));
+      const silent = moved.filter(id => !announced.has(id));
+      assert(silent.length === 0,
+        '#807-F1: every ledger row the re-open cascade MOVES must be announced through taskTransitions — '
+        + 'moved ' + JSON.stringify(moved) + ' but announced ' + JSON.stringify(Array.from(announced))
+        + ', so ' + JSON.stringify(silent) + ' moved silently');
+      // And the announcement must carry the row's REAL new status, not merely name the id.
+      const st = readLedgerStatuses(after);
+      for (const t of (r.taskTransitions || [])) {
+        if (!Object.prototype.hasOwnProperty.call(st, t.id)) continue;
+        assert(t.ledger_status === st[t.id],
+          '#807-F1: transition for ' + t.id + ' claims ' + t.ledger_status + ' but the ledger says '
+          + st[t.id]);
+      }
+      // The newly composed fixer unit is still announced (the #807 shape channel is intact).
+      assert(announced.has('m1-r2-fix'),
+        '#807-F1 CONTROL: the composed fixer unit is still announced, got ' + JSON.stringify(Array.from(announced)));
+    } finally { f.cleanup(); }
+  }
+
+  // --- F2: crash recovery announces the frontier it rolls forward. ---
+  // A record appended by Phase 1 whose `open()` proof never landed, and NO running set at all — the
+  // `no_running_set` arm, the most common shape of that crash.
+  {
+    const ROWS = ['| m1 | pending |', '| m2 | pending |', '| wall | pending |', '| done | pending |',
+      '| m1-r1-a | pending |', '| m1-r1-b | pending |'];
+    const TAIL = ['## Expansion Records', '', ...RECORD('m1#1', 'm1', ['a', 'b']), ''];
+    const f = mk(PLAN807F(ROWS, TAIL), ['m1-r1-a']);
+    try {
+      const before = fs.readFileSync(f.planPath, 'utf8');
+      const r = runReconcileRunningSet({ ...f.opts });
+      assert(r.result === 'ok' && JSON.stringify(r.expansionsRolledForward) === '["m1#1"]',
+        '#807-F2 PRECONDITION: the unproven record must roll forward, got ' + JSON.stringify({ result: r.result, reason: r.reason, rolled: r.expansionsRolledForward }));
+      const after = fs.readFileSync(f.planPath, 'utf8');
+      const moved = movedRows(before, after);
+      assert(moved.includes('m1-r1-a'),
+        '#807-F2 PRECONDITION: the roll-forward must open a unit, moved=' + JSON.stringify(moved));
+      const announced = new Set((r.taskTransitions || []).map(t => t.id));
+      const silent = moved.filter(id => !announced.has(id));
+      assert(silent.length === 0,
+        '#807-F2: reconcile-running-set is the DOCUMENTED crash recovery, so the units its roll-forward '
+        + 're-opens must be announced — moved ' + JSON.stringify(moved) + ', announced '
+        + JSON.stringify(Array.from(announced)));
+      // The composed-but-unopened sibling is a `pending` INSERT, exactly as a first-try expand-open emits.
+      const byId = new Map((r.taskTransitions || []).map(t => [t.id, t]));
+      assert(byId.get('m1-r1-a') && byId.get('m1-r1-a').ledger_status === 'in_progress',
+        '#807-F2: the re-opened unit is announced in_progress, got ' + JSON.stringify(byId.get('m1-r1-a')));
+      assert(byId.get('m1-r1-b') && byId.get('m1-r1-b').ledger_status === 'pending',
+        '#807-F2: the composed-but-unopened sibling is announced as a pending INSERT (recovery presents '
+        + 'the same SHAPE a first-try expansion does), got ' + JSON.stringify(byId.get('m1-r1-b')));
+    } finally { f.cleanup(); }
+  }
+
+  // --- F2b: a stable plan still emits nothing (the roll-forward is a no-op ⇒ no phantom transitions). ---
+  {
+    const ROWS = ['| m1 | complete |', '| m2 | pending |', '| wall | pending |', '| done | pending |',
+      '| m1-r1-a | complete |'];
+    const TAIL = ['## Expansion Records', '', ...RECORD('m1#1', 'm1', ['a']), '', 'open(m1#1):', '  at: T', ''];
+    const f = mk(PLAN807F(ROWS, TAIL), []);
+    try {
+      const r = runReconcileRunningSet({ ...f.opts });
+      assert(r.result === 'ok' && JSON.stringify(r.taskTransitions) === '[]',
+        '#807-F2b: a fully-proven, stable plan rolls nothing forward, so it must announce NOTHING, got '
+        + JSON.stringify(r.taskTransitions));
+    } finally { f.cleanup(); }
+  }
+
+  // --- F4: the unit transitions arrive IN RECORD ORDER, so "insert in record order" is followable. ---
+  // The frontier opens u2 and u3 while u1 waits behind an unmet edge; frontier order would be
+  // [u2, u3, u1], which no runtime can turn into a record-ordered insert.
+  {
+    const ROWS = ['| m1 | pending |', '| m2 | pending |', '| wall | pending |', '| done | pending |'];
+    const f = mk(PLAN807F(ROWS, ['## Expansion Records', '']), ['m1-r1-u2', 'm1-r1-u3']);
+    try {
+      const r = runExpandOpen({ ...f.opts, nodeId: 'm1', composition: { derivation: { ...DERIV }, units: [
+        { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'serial', depends_on: ['u2'] },
+        { name: 'u2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        { name: 'u3', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+      ] } });
+      assert(r.result === 'ok', '#807-F4 PRECONDITION: the expansion must commit, got ' + JSON.stringify(r.reason));
+      assert(JSON.stringify((r.opened || []).map(n => n.id)) === JSON.stringify(['m1-r1-u2', 'm1-r1-u3']),
+        '#807-F4 PRECONDITION: the frontier opens u2/u3 and leaves u1 behind, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+      assert(JSON.stringify((r.taskTransitions || []).map(t => t.id))
+        === JSON.stringify(['m1-r1-u1', 'm1-r1-u2', 'm1-r1-u3']),
+      '#807-F4: every plan-run surface tells the operator to insert a newly-announced unit "in record '
+        + 'order", so the emitted unit transitions must BE in record order — got '
+        + JSON.stringify((r.taskTransitions || []).map(t => t.id)));
+    } finally { f.cleanup(); }
+  }
+});
+
+// ===========================================================================
 // T-SEED-ATOMIC (#776): seedEvidenceFile's durable writes are crash-atomic AND
 // the forceRotate path FAILS LOUD instead of returning success-shaped metadata.
 //

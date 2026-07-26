@@ -278,17 +278,28 @@ node scripts/kaola-workflow-adaptive-node.js revert-overflow \
 **`revert-overflow` DISCARDS the out-of-set writes — read this before running it.** If the
 out-of-surface files are junk (a stray build artifact, a debug edit), that is exactly what you
 want. If they are *real companion work* the node legitimately needed to touch, reverting throws
-that work away and the node will likely reproduce it on the next attempt. In that case the right
-move is to widen the declared write set — re-freeze via plan-repair so the surface legitimately
-covers those paths — and only then re-run the node.
+that work away and the node will likely reproduce it on the next attempt.
 
-> **Dormant alternative — `amend-surface`.** The aggregator also implements an `amend-surface`
-> transaction (append-only surface amendment + attribution + mandatory re-review) intended to
-> preserve companion work instead of discarding it. It is **not wired into any routed recovery
-> path in this release**: no operator hint, selector, or card routes to it, and it has never run
-> in a production loop. Treat it as an advanced, manually-invoked primitive (see
-> `node scripts/kaola-workflow-adaptive-node.js --help`), not a supported recovery step. The
-> fail-closed floor is unaffected either way — an unamended out-of-surface write still refuses.
+> **Preserve alternative — `amend-surface`.** On a `plan_form: spine` plan, out-of-set files that are
+> genuine companion work of a **discharged expansion point** are kept rather than discarded:
+>
+> ```bash
+> node scripts/kaola-workflow-adaptive-node.js amend-surface \
+>   --project {project} --node-id {expansion-point} --files "{exact,paths}" --json
+> ```
+>
+> One atomic transaction: it appends an `amend({point}):` block attributing those EXACT files
+> (append-only, outside the `plan_hash` body, so the frozen spine identity is untouched) and routes the
+> point back through `reexpand-open` — re-opening it, its post-dominating review wall and the sink — so
+> the work is KEPT **and re-reviewed**, never silently widened. Exact file paths only; a directory or
+> glob token refuses `amend_surface_not_exact_file` with no write.
+>
+> The `write_set_overflow` hint names both primitives and neither is routed for you: **stray artifacts
+> you want gone are `revert-overflow`; companion work you want kept is `amend-surface`.** Outside a
+> spine plan (or where the file belongs to no milestone) the answer is still to widen the declared write
+> set — re-freeze via plan-repair — and only then re-run the node. The fail-closed floor is unaffected
+> either way: an unamended out-of-surface write still refuses, and an amended file attributes at the
+> barrier only once its point RE-discharges.
 
 **NEVER use `--drop-base`.** `--drop-base` drops the barrier baseline, laundering the node's
 accumulated work. This is explicitly banned by D-424-01. The `operator_hint` vocabulary
@@ -451,7 +462,7 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 
 | `reason` | Recovery |
 |---|---|
-| `write_set_overflow` (+ subtypes) | `revert-overflow` (NEVER `drop-base`) |
+| `write_set_overflow` (+ subtypes) | `revert-overflow` to DISCARD stray files; `amend-surface` to KEEP companion work owned by a discharged spine milestone (NEVER `drop-base`) |
 | `sensitive_write_unreviewed` | Remove the sensitive write OR planner-owned re-plan with a real security certifier path |
 | `unattributed_write` | `owning_node: null` in route-findings → settle attempt → planner-owned re-plan |
 | `barrier_failed` | Read `findings-route.json` → dispatch fix agent → close repair loop |

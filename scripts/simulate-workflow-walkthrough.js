@@ -21913,6 +21913,97 @@ function testDeclaredNotWalled762() {
     } finally { cleanup(); }
   }
 
+  // ---- (#792) REACHABLE, NOT ROUTED. The transaction above was production-unreachable BY INSTRUCTION:
+  //      every instructed recovery from `write_set_overflow` named `revert-overflow` — the primitive that
+  //      DISCARDS exactly the companion work amend-surface exists to preserve — and no operator hint,
+  //      card or surface mentioned the preserve half at all. The fix is to NAME it, not to route it: the
+  //      hint lists both primitives and one line on when each fits, and nothing selects between them.
+  //
+  //      This case is the reachability proof and it never hand-authors the command. It reproduces the
+  //      real wedge, reads the hint the PRODUCTION refusal emits, EXTRACTS the amend-surface invocation
+  //      from that hint text, runs it, and drives the result to a cleared barrier. If the hint stops
+  //      naming amend-surface, the extraction finds nothing and this goes RED — which is the only way a
+  //      "reachable" claim can be held honest.
+  {
+    const { repo, proj, planPath, ledgerOf, driveMilestone, driveWall, cleanup } = mkHarness('issue-792');
+    try {
+      fs.writeFileSync(planPath, mkRunPlan());
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#792: spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+      driveMilestone('m1');
+      driveWall('wall');
+
+      // THE WEDGE: a required companion file lands outside every declared surface.
+      const wedged = fs.readFileSync(planPath, 'utf8');
+      const bWedge = validator.barrierCheck(wedged, ['lib/companion.js'], { project: 'issue-792' });
+      assert(bWedge.result === 'refuse' && bWedge.reason === 'write_set_overflow',
+        '#792 PRECONDITION: the barrier must reproduce the out-of-surface wedge, got ' + bWedge.result + ' ' + bWedge.reason);
+
+      // (1) REACHABILITY — the emitted hint names BOTH primitives, so the preserve option is no longer
+      //     hidden. Same obligation on the per-node close path's own registry.
+      const hint = String(bWedge.operator_hint || '');
+      assert(/revert-overflow/.test(hint) && /amend-surface/.test(hint),
+        '#792: the write_set_overflow hint must name BOTH the discard primitive and the preserve '
+        + 'primitive — an operator who is only told about revert-overflow will discard companion work '
+        + 'it was supposed to keep. Got: ' + JSON.stringify(hint));
+      const nodeHint = String(adaptiveNode.getOperatorHint('write_set_overflow', { nodeId: 'n4' }));
+      assert(/revert-overflow/.test(nodeHint) && /amend-surface/.test(nodeHint),
+        '#792: the per-node close path emits its own write_set_overflow hint and owes the same pair, got '
+        + JSON.stringify(nodeHint));
+      // NOT ROUTED: naming both is the whole change — nothing decides for the agent.
+      assert(!/\bmust run\b|\brequired\b/i.test(hint),
+        '#792: the hint NAMES the options; it must not mandate one, got ' + JSON.stringify(hint));
+
+      // (2) END TO END FROM THE HINTED PATH — extract the invocation the hint printed and run THAT.
+      const m = /(amend-surface[^\n]*?--json)/.exec(hint);
+      assert(m, '#792: the hint must print a runnable amend-surface invocation, got ' + JSON.stringify(hint));
+      const argv = m[1].split(/\s+/).map(tok => tok
+        .replace('<project>', 'issue-792').replace('<P>', 'issue-792')
+        .replace('<expansion-point>', 'm1')
+        .replace('"<paths>"', 'lib/companion.js').replace('<paths>', 'lib/companion.js'));
+      assert(argv.indexOf('m1') > 0 && argv.indexOf('lib/companion.js') > 0,
+        '#792: the extracted invocation must carry the point + files slots, got ' + JSON.stringify(argv));
+      const am = runNode(adaptiveNodeScript, argv, repo);
+      assert(am.status === 0, '#792: the invocation the hint printed must RUN, got ' + am.status + '\n' + am.stdout + am.stderr);
+      const ap = JSON.parse(am.stdout);
+      assert(ap.amended === true && ap.reopened === true && JSON.stringify(ap.amended_surface) === '["lib/companion.js"]',
+        '#792: the hinted invocation runs the real attribute→amend→re-review transaction, got '
+        + JSON.stringify({ a: ap.amended, r: ap.reopened, s: ap.amended_surface }));
+      assert(ledgerOf().m1 === 'pending' && ledgerOf().wall === 'pending',
+        '#792: the hinted path routes the owner + its wall to RE-REVIEW, got ' + JSON.stringify(ledgerOf()));
+
+      // (3) …and the preserved work actually lands: re-discharge the point, and the barrier CLEARS the
+      //     file revert-overflow would have thrown away, while an unamended write still refuses.
+      // The hint's bare invocation composes the DEFAULT fixer unit (`implementer` over the attributed
+      // files), so its evidence carries the implementer token classes AND the upstream-consumption echo
+      // the production close demands — another way this case exercises the hinted path rather than a
+      // hand-tuned composition.
+      const upstreamEchoes = fs.readdirSync(path.join(proj, '.cache'))
+        .filter(n => /^m1-r1-.*\.md$/.test(n))
+        .map(n => /^evidence-binding:\s*(\S+)\s+(\S+)/m.exec(fs.readFileSync(path.join(proj, '.cache', n), 'utf8')))
+        .filter(Boolean)
+        .map(m => 'upstream_read: ' + m[1] + ' ' + m[2] + '\n').join('');
+      for (const u of (ap.opened || []).map(n => n.id)) {
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'),
+          '\nnon_tdd_reason: re-run over the attributed companion surface\nregression-green: walkthrough\n'
+          + upstreamEchoes + 'findings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-792', '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#792: close re-opened unit ' + u + ': ' + c.stdout + c.stderr);
+      }
+      const d2 = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-792', '--node-id', 'm1', '--json'], repo);
+      assert(d2.status === 0, '#792: re-discharge m1, got ' + d2.stdout + d2.stderr);
+      const cleared = fs.readFileSync(planPath, 'utf8');
+      assert(validator.barrierCheck(cleared, ['lib/companion.js'], { project: 'issue-792' }).result === 'pass',
+        '#792: end to end from the hint, the companion work is KEPT and the barrier clears');
+      const bStill = validator.barrierCheck(cleared, ['lib/companion.js', 'lib/tamper.js'], { project: 'issue-792' });
+      assert(bStill.result === 'refuse' && bStill.reason === 'write_set_overflow',
+        '#792: the fail-closed floor is unchanged — an UNAMENDED write still refuses, got ' + bStill.reason);
+    } finally { cleanup(); }
+  }
+
   console.log('testDeclaredNotWalled762: PASSED');
 }
 
