@@ -160,9 +160,23 @@ wasted epoch:
 | `no_node_declares_the_anchor_path` | The anchors do name paths, but no node declares them and no milestone surface covers them. | A genuine scope expansion: `amend-surface` if the file belongs to a milestone, else a replacement plan. |
 | `writer_not_graph_maximal` | Ownership resolved, but this node is not the unique graph-maximal producer. | Re-run `repair-node` naming the finding's semantic owner. |
 
-The first row is now unreachable on a **change gate**: `review_finding_anchor_unroutable` refuses that
-finding at record time, before an attempt exists (see `docs/api.md` § Findings). It survives here for
-legacy journals and investigation-mode gates.
+The first row is narrowed, not retired. On a **failing change gate** — every gate role, read from the
+derived gate effect rather than any one role's outcome vocabulary — a path-less primary anchor on a
+finding the repair would be obliged to fix is refused at record time by
+`review_finding_anchor_unroutable`, before an attempt exists (see `docs/api.md` § Findings), so the
+must-fix population can no longer reach this table. Three live paths remain, and the row still means
+what it says on each:
+
+- **legacy journals** — attempts recorded before that gate existed, whose rows still hold
+  `ownership_candidates: []`;
+- **investigation-mode gates** — no repair obligation, so the record-time gate deliberately does not
+  fire and an `evidence_observation` anchor is entirely proper there;
+- **non-blocking rows on a change gate** — a `deferred`, out-of-scope, or non-`fix` finding may
+  legally anchor on `evidence_observation`, and the diagnosis reads the whole still-open set. So a
+  change-gate attempt in which *no* open finding resolved to an owner can still report this cause off
+  a non-blocking row while the actual blocker is `no_node_declares_the_anchor_path`. Read
+  `unowned_findings` before acting: if the uid named there is not the one carrying the path-less
+  anchor, the next step is that second row's, not this one's.
 
 ### The repair brief handed to the reopened writer
 

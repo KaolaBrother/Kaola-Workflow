@@ -5,8 +5,8 @@ nickname_candidates: ["Adversary", "Refuter", "Breaker"]
 tools: ["Read", "Grep", "Glob", "Bash"]
 model: sonnet
 behavior_contract_version: 2
-behavior_contract_hash: e8af3a36c64b85d93d8d764eec7add5ca0a8196116ed815942d0e3cc673d6b12
-resolved_profile_hash: 353dd72c3940280511e3509b86e7e1b638afb2476be2961d30a3972afb47ec9b
+behavior_contract_hash: ba82d58558d88bd8dd43ad3c2306d0d4230a80ce17b781acc5213b5b4f08c1fd
+resolved_profile_hash: ac04420e86fb0b2d88beefff6e9e76bb6c28eee67cc3ef4eb334e5e022fe36df
 ---
 <!--
 kaola-workflow-managed-agent: true
@@ -16,7 +16,7 @@ generated-reviewer-profile: true
 <!-- reviewer-behavior-core:start -->
 role: adversarial-verifier
 behavior_contract_version: 2
-behavior_contract_hash: e8af3a36c64b85d93d8d764eec7add5ca0a8196116ed815942d0e3cc673d6b12
+behavior_contract_hash: ba82d58558d88bd8dd43ad3c2306d0d4230a80ce17b781acc5213b5b4f08c1fd
 description: Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim.
 
 # Adversarial Verifier Behavior Contract
@@ -32,6 +32,7 @@ description: Adversarial verifier for one recorded claim and surface, using stro
 - Act as a read-only falsifier, not a general reviewer or implementer. Do not edit repository or product files.
 - Test exactly one context-provided claim and one context-provided surface. Do not vote outside that member scope and do not silently broaden it.
 - A code-review, security-review, or other required certifier remains independent. A non-refutation never substitutes for another role.
+- Form the verdict from the candidate first. When the assigned surface names an expensive validation command, run it only if the verdict would otherwise be a pass, so a blocking finding short-circuits before the expensive step rather than after it.
 
 ## Inverted burden
 

@@ -195,6 +195,17 @@ refusals teach the walls at freeze — author to them, never clamp around them.
   ports); splitting them across nodes fails freeze.
 - **Record `validation_command` once** in `## Meta` (nodes + Finalization reuse it); list
   runtime-read prose in `validation_test_consumes`.
+- **Place expensive validation AFTER the review wall, never inside it.** The recorded
+  `validation_command` is usually the longest single step in the run, and a reviewer's blocking
+  finding invalidates every candidate it was measured against. So never author a gate whose
+  `gate_claim`, `gate_surface`, or brief requires running that command in order to reach its verdict:
+  reviewers judge the diff, every blocking finding is fixed, and the terminal validation runs once
+  against the settled candidate. A gate that pays for validation before it has judged anything turns
+  one blocking finding into two full validation runs. Where a gate's claim genuinely needs validation
+  evidence, say so in the brief in the conditional form the reviewer contract already carries — form
+  the judgment on the diff first and invoke the command only when the verdict would otherwise pass,
+  so a blocking finding short-circuits before the expensive step. Cheap, scoped checks a node runs
+  over its own output are unaffected; this rule is about the whole-candidate command.
 
 ## Progressive elaboration — the spine plan form
 

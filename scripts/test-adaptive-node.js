@@ -22599,15 +22599,22 @@ scenario(() => {
     {
       const fx = setup728('issue-728-canonical', 'sequence');
       const gate = openGate728(fx, 'module.exports = 1;\n');
-      const writerEvidenceDigest = reviewSchema728.sha256Hex(
-        fs.readFileSync(path.join(fx.cacheDir, 'writer.md'), 'utf8'));
+      // The anchor is PATH-BEARING on purpose. A BLOCKING (in_scope / fix / open) finding at a
+      // FAILING change gate must name a repository path or the record seam refuses it
+      // (review_finding_anchor_unroutable) — a path-less blocking finding could commit an attempt no
+      // repair route can place. That gate is orthogonal to what these blocks pin (the frontier must
+      // be non-empty behind a failing aggregate), so the fixture uses an anchor that satisfies both.
+      const objectFormat728 = String(spawn728('git', ['-C', tmp728, 'rev-parse', '--show-object-format'],
+        { encoding: 'utf8', env: env728 }).stdout).trim();
+      const objectId728 = String(spawn728('git', ['-C', tmp728, 'hash-object', fx.implPath],
+        { encoding: 'utf8', env: env728 }).stdout).trim();
       const finding728 = {
         failure_class: 'correctness',
         trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
           expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
-        primary_anchor: { kind: 'evidence_observation',
-          producer_evidence_digest: writerEvidenceDigest,
-          observation_key: 'writer:issue-728-regression' },
+        primary_anchor: { kind: 'candidate_range', path: fx.project + '-impl.js',
+          object_format: objectFormat728, tree_mode: '100644', object_id: objectId728,
+          start: 0, end: 1, blob_length: fs.readFileSync(fx.implPath).length },
         secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
         status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
       };
@@ -24675,6 +24682,235 @@ scenario(() => {
       else process.env.KAOLA_FANOUT_CAP = savedCap;
     }
   }
+});
+
+// ===========================================================================
+// #805 R1 — THE ROUTABILITY GATE IS KEYED ON GATE FAILURE, NOT ON ONE ROLE'S OUTCOME TOKEN.
+//
+// The shipped guard read `gateMode === 'change_gate' && domainOutcome === 'changes_requested'`.
+// `changes_requested` belongs to APPROVAL_OUTCOMES; an adversarial-verifier speaks
+// ADVERSARIAL_OUTCOMES (refuted | not_refuted | indeterminate), so the second conjunct was
+// UNSATISFIABLE for it and an AV change gate carrying a blocking, path-less finding sailed straight
+// past the guard into the exact dead end #805 exists to close (`ownership_candidates: []`,
+// `owning_node: null`; repair-node → repair_requires_replan, reopen-node → review_attempt_unresolved,
+// re-record → evidence_generation_stale). The guard now reads the DERIVED gate effect, which is the
+// one place (role, mode, outcome) is mapped to pass/fail/none — so it is role-agnostic by
+// construction and an approval gate's behavior is byte-unchanged.
+//
+// These blocks drive the PRODUCTION CLI end to end. Block A must be RED before the fix (the AV close
+// succeeds and commits a receipt + a settled journal attempt) and GREEN after.
+// ===========================================================================
+scenario(() => {
+  const { spawnSync: spawn805 } = require('child_process');
+  const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_CLI = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const schema805r1 = require('./kaola-workflow-adaptive-schema');
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_')));
+  const env805 = { ...baseEnv, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    KAOLA_WORKFLOW_OFFLINE: '1' };
+  const lastJson = result => {
+    const line = String(result.stdout || '').trim().split('\n').filter(row => row.trim().startsWith('{')).pop();
+    return line ? JSON.parse(line) : null;
+  };
+  const tmp805 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-805r1-')));
+  const run805 = (args, input) => spawn805(process.execPath, [NODE_CLI, ...args],
+    { cwd: tmp805, encoding: 'utf8', env: env805, input, timeout: 120000 });
+  try {
+    spawn805('git', ['init', '-b', 'main'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+    spawn805('git', ['config', 'user.email', 'kw@test'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+    spawn805('git', ['config', 'user.name', 'kw'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+
+    // One frozen schema-2 project per scenario, all in one repo: a serial writer certified by a
+    // SEQUENCE adversarial-verifier CHANGE gate (it `certifies` the writer, which is what makes
+    // deriveGateMode resolve change_gate), then the code certifier and the sink.
+    const setup = (project) => {
+      const projectDir = path.join(tmp805, 'kaola-workflow', project);
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const implRel = project + '-impl.js';
+      fs.writeFileSync(path.join(tmp805, implRel), 'module.exports = 0;\n');
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — ' + project, '',
+        '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
+        'code_certifier: codegate', 'security_certifier: none',
+        'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+        'validation_command: node --check ' + implRel, 'validation_timeout_minutes: 5', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '|---|---|---|---|---|---|---|---|---|---|',
+        '| writer | tdd-guide | — | ' + implRel + ' | 1 | sequence | — | — | — | — |',
+        '| av-a | adversarial-verifier | writer | — | 1 | sequence | change is sound | code-tree | sequence | writer |',
+        '| codegate | code-reviewer | av-a | — | 1 | sequence | review-change | code-tree | sequence | — |',
+        '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
+        '## Design', '',
+        'Decompose: writer builds the impl; av-a falsifies it as a change gate; codegate post-dominates; '
+          + 'finalize sinks. sequence edges are gate/data dependencies (S1). Done: gates clear and validation passes.', '',
+        '## Acceptance', '',
+        'A1: the implementation file is produced and passes the recorded validation command.',
+        'A2: the adversarial change gate and the code gate both clear over the produced tree.', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| writer | pending |', '| av-a | pending |', '| codegate | pending |', '| finalize | pending |', '',
+        '## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+        '| tdd-guide (writer) | pending | | |', '| adversarial-verifier (av-a) | pending | | |',
+        '| code-reviewer (codegate) | pending | | |', '| finalize (finalize) | pending | | |', '',
+      ].join('\n'));
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+      const freeze = spawn805(process.execPath, [VALIDATOR_CLI, planPath, '--freeze', '--json'],
+        { cwd: tmp805, encoding: 'utf8', env: env805 });
+      assert(freeze.status === 0 && lastJson(freeze) && lastJson(freeze).frozen === true,
+        '#805-R1 fixture: the AV change-gate plan freezes: ' + freeze.stdout + freeze.stderr);
+      spawn805('git', ['add', '-A'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+      spawn805('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp805, encoding: 'utf8', env: env805 });
+      return { project, projectDir, cacheDir, planPath, implRel };
+    };
+
+    // Drives the writer and returns the opened AV gate payload.
+    const openGate = (fx) => {
+      const opened = run805(['open-next', '--project', fx.project, '--json']);
+      assert(opened.status === 0 && lastJson(opened) && lastJson(opened).nonce,
+        '#805-R1 fixture: the writer opens: ' + opened.stdout + opened.stderr);
+      fs.writeFileSync(path.join(tmp805, fx.implRel), 'module.exports = 1;\n');
+      const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'writer', '--stdin', '--json'],
+        'evidence-binding: writer ' + lastJson(opened).nonce + '\nRED: reproduced\nGREEN: passes\n');
+      assert(rec.status === 0, '#805-R1 fixture: writer evidence records: ' + rec.stdout + rec.stderr);
+      const closed = run805(['close-and-open-next', '--project', fx.project, '--node-id', 'writer', '--json']);
+      assert(closed.status === 0 && lastJson(closed) && lastJson(closed).opened
+        && lastJson(closed).opened.id === 'av-a',
+        '#805-R1 fixture: the AV change gate opens off the writer close: ' + closed.stdout + closed.stderr);
+      return lastJson(closed).opened;
+    };
+
+    const gateEvidence = (opened, domainOutcome, extraRows) => [
+      'evidence-binding: av-a ' + opened.nonce,
+      'contract_version: 2',
+      'review_context_hash: ' + opened.dispatch.review_context_hash,
+      'behavior_contract_hash: ' + opened.dispatch.behavior_contract_hash,
+      'resolved_profile_hash: ' + opened.dispatch.resolved_profile_hash,
+      'candidate_digest: ' + opened.dispatch.candidate_digest,
+      'domain_outcome: ' + domainOutcome,
+      'claim_outcome: ' + domainOutcome,
+      'gate_mode: change_gate',
+      'gate_claim: change is sound',
+      'gate_surface: code-tree',
+      'gate_aggregation: sequence',
+      ...(extraRows || []), '',
+    ].join('\n');
+
+    const anchorlessFinding = (cacheDir, key) => ({
+      failure_class: 'correctness',
+      trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+        expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+      primary_anchor: { kind: 'evidence_observation',
+        producer_evidence_digest: schema805r1.sha256Hex(fs.readFileSync(path.join(cacheDir, 'writer.md'), 'utf8')),
+        observation_key: key },
+      secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
+      status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+    });
+
+    const journalOf = fx => {
+      const file = path.join(fx.cacheDir, 'review-attempts.json');
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { attempts: [] };
+    };
+
+    // -- Block A (THE DEFECT) — `refuted` is a gate FAILURE and must be gated ------------------
+    // RED at the old predicate: `refuted` is not `changes_requested`, so the guard never fired, the
+    // close SUCCEEDED (result review_failed), and a receipt + a settled, unrepairable attempt landed.
+    for (const outcome of ['refuted', 'indeterminate']) {
+      const fx = setup('issue-805r1-' + outcome);
+      const opened = openGate(fx);
+      const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence(opened, outcome,
+          ['finding_json: ' + JSON.stringify(anchorlessFinding(fx.cacheDir, 'writer:805r1-' + outcome))]));
+      assert(rec.status === 0,
+        '#805-R1A: record-evidence stays a verbatim transport for the unroutable bytes: ' + rec.stdout + rec.stderr);
+      const close = run805(['close-node', '--project', fx.project, '--node-id', 'av-a', '--json']);
+      const payload = lastJson(close) || {};
+      assert(close.status !== 0 && payload.reason === 'review_finding_anchor_unroutable',
+        '#805-R1A: an adversarial-verifier CHANGE gate settling ' + outcome + ' on a BLOCKING finding '
+        + 'whose primary anchor carries no path must refuse review_finding_anchor_unroutable — keying '
+        + 'the guard on the APPROVAL token made it unsatisfiable for this role, got ' + JSON.stringify(payload));
+      assert(JSON.stringify(payload.anchor_kinds) === JSON.stringify(['evidence_observation'])
+        && Array.isArray(payload.routable_anchor_kinds)
+        && !payload.routable_anchor_kinds.includes('evidence_observation'),
+      '#805-R1A: the refusal names the offending kind and the routable set, got ' + JSON.stringify(payload));
+      assert(typeof payload.operator_hint === 'string' && /re-anchor/i.test(payload.operator_hint)
+        && !/requested changes/i.test(payload.operator_hint),
+      '#805-R1A: the hint is worded off the derived gate FAILURE, not the approval vocabulary this '
+        + 'role does not speak, got ' + JSON.stringify(payload.operator_hint));
+      assert(!fs.existsSync(path.join(fx.cacheDir, 'review-receipts'))
+        && !fs.existsSync(path.join(fx.cacheDir, 'review-attempts.json')),
+      '#805-R1A: refused BEFORE any receipt or journal attempt exists, so the unrepairable-attempt '
+        + 'cycle can never form (' + outcome + ')');
+    }
+
+    // -- Block B — the SAME gate is admitted once the blocking finding names a path ---------------
+    // Also pins the population scoping: a NON-blocking (deferred) row may still anchor on
+    // evidence_observation, exactly as the reviewer contract promises.
+    {
+      const fx = setup('issue-805r1-admitted');
+      const opened = openGate(fx);
+      const objectFormat = String(spawn805('git', ['-C', tmp805, 'rev-parse', '--show-object-format'],
+        { encoding: 'utf8', env: env805 }).stdout).trim();
+      const objectId = String(spawn805('git', ['-C', tmp805, 'hash-object', fx.implRel],
+        { encoding: 'utf8', env: env805 }).stdout).trim();
+      const implBytes = fs.readFileSync(path.join(tmp805, fx.implRel));
+      const routable = { ...anchorlessFinding(fx.cacheDir, 'writer:805r1-unused'),
+        primary_anchor: { kind: 'candidate_range', path: fx.implRel, object_format: objectFormat,
+          tree_mode: '100644', object_id: objectId, start: 0, end: 1, blob_length: implBytes.length } };
+      const deferred = { ...anchorlessFinding(fx.cacheDir, 'writer:805r1-observation'),
+        severity: 'low', status: 'deferred' };
+      const rec = run805(['record-evidence', '--project', fx.project, '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence(opened, 'refuted', ['finding_json: ' + JSON.stringify(routable),
+          'finding_json: ' + JSON.stringify(deferred)]));
+      assert(rec.status === 0, '#805-R1B: the mixed evidence records: ' + rec.stdout + rec.stderr);
+      const close = run805(['close-node', '--project', fx.project, '--node-id', 'av-a', '--json']);
+      const payload = lastJson(close) || {};
+      assert(payload.result === 'review_failed',
+        '#805-R1B: a refuted AV change gate whose BLOCKING finding names a path settles normally — the '
+        + 'guard must narrow to the repair-responsible population, never to every open row, got '
+        + JSON.stringify(payload));
+      const attempt = journalOf(fx).attempts[0];
+      assert(attempt && attempt.outcome === 'fail' && attempt.current_findings.length === 2,
+        '#805-R1B: both rows persist on the settled attempt, got '
+        + JSON.stringify(attempt && { o: attempt.outcome, n: attempt.current_findings.length }));
+      assert(attempt.current_findings.some(f => f.primary_anchor.kind === 'evidence_observation'),
+        '#805-R1B: evidence_observation stays LEGAL on a non-blocking row at a change gate — nothing '
+        + 'was removed from the reviewer vocabulary, got '
+        + JSON.stringify(attempt.current_findings.map(f => f.primary_anchor.kind)));
+    }
+
+    // -- Block C (R1.3) — the open-time stub states the anchor-kind rule to THIS reviewer too -----
+    // The note used to ride on the `finding_json|findings_none` token class, and requiredReviewTokens
+    // never asks an adversarial-verifier for one — so the single role whose change gate most naturally
+    // anchors on producer evidence was the only role never shown the rule it would be judged by.
+    {
+      const fx = setup('issue-805r1-stub');
+      const opened = openGate(fx);
+      assert(!opened.required_tokens.some(t => String(t).startsWith('finding_json')),
+        '#805-R1C PRECONDITION: an AV gate carries NO findings token class, got '
+        + JSON.stringify(opened.required_tokens));
+      const seeded = fs.readFileSync(path.join(fx.cacheDir, 'av-a.md'), 'utf8');
+      assert(/PATH-BEARING primary_anchor\.kind/.test(seeded),
+        '#805-R1C: the AV change-gate stub must state the routability rule it will be judged by, got:\n' + seeded);
+      for (const kind of schema805r1.ROUTABLE_FINDING_ANCHOR_KINDS) {
+        assert(seeded.includes(kind), '#805-R1C: the AV stub must name the routable kind "' + kind + '"');
+      }
+      assert(!/^finding_json:/m.test(seeded),
+        '#805-R1C: stating the rule must NOT seed a findings token the AV contract does not require '
+        + '(that would change required_tokens and the close-time shape check), got:\n' + seeded);
+      // CONTROL — investigation mode produces no repair obligation, so the rule does not bind there
+      // and printing it would be false guidance.
+      const investigation = path.join(fx.cacheDir, 'investigation-probe.md');
+      fs.rmSync(investigation, { force: true });
+      seedEvidenceFile(fx.planPath, 'investigation-probe', 'abcdef123456', 'adversarial-verifier', false,
+        { required_tokens: opened.required_tokens, review_gate: true, gate_mode: 'investigation' });
+      assert(!/PATH-BEARING/.test(fs.readFileSync(investigation, 'utf8')),
+        '#805-R1C CONTROL: an INVESTIGATION-mode gate carries no repair obligation, so it must not be '
+        + 'told a change-gate routability rule');
+    }
+  } finally { fs.rmSync(tmp805, { recursive: true, force: true }); }
 });
 
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);

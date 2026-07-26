@@ -496,7 +496,10 @@ const OPERATOR_HINT_REGISTRY = {
   review_finding_anchor_unroutable: (ctx) => {
     const kinds = Array.isArray(ctx.anchor_kinds) ? ctx.anchor_kinds : [];
     const routable = Array.isArray(ctx.routable_anchor_kinds) ? ctx.routable_anchor_kinds : [];
-    return 'This change gate requested changes on ' + ((ctx.unroutable_findings || []).length || 'one or more')
+    // Worded off the derived gate EFFECT, not an outcome token: the same refusal is reachable from
+    // `changes_requested` on an approval gate and from `refuted` / `indeterminate` on an
+    // adversarial-verifier, and a hint naming only the approval spelling would misdescribe half of them.
+    return 'This change gate FAILED, carrying ' + ((ctx.unroutable_findings || []).length || 'one or more')
       + ' blocking finding(s) whose primary anchor kind (' + (kinds.join(', ') || 'see anchor_kinds')
       + ') carries no repository path, so no in-plan repair could ever place them — the attempt would '
       + 'commit and then dead-end. Re-anchor each BLOCKING finding on a path-bearing kind ('
@@ -2028,15 +2031,38 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
   // fix in one line; admitting it costs an epoch.
   //
   // SCOPE — deliberately the NARROWEST predicate that closes the cycle:
-  //   - CHANGE GATES only. An investigation-mode adversarial gate produces no repair obligation.
-  //   - `changes_requested` only. An approval carries no findings to route.
+  //   - CHANGE GATES only. An investigation-mode adversarial gate produces no repair obligation
+  //     (deriveGateEffect returns 'none' there, never 'fail'), so the mode test is already folded in.
+  //   - GATE FAILURE only, read from the DERIVED gate effect — never from a role's outcome token.
+  //     `changes_requested` belongs to APPROVAL_OUTCOMES; an adversarial-verifier speaks
+  //     ADVERSARIAL_OUTCOMES, so keying on that literal made the predicate UNSATISFIABLE for the one
+  //     role whose change gate most often anchors on producer evidence — an AV `refuted` sailed
+  //     straight into the dead end this guard exists to close. `deriveGateEffect` is the single place
+  //     that maps (role, mode, outcome) → pass/fail/none, so reading it here makes the guard
+  //     ROLE-AGNOSTIC by construction: a future gate role with a fourth vocabulary is covered the day
+  //     its outcomes are added there, with no second token list to remember. For an approval role the
+  //     two predicates are EQUIVALENT at this point in the function (`approved` with open findings is
+  //     already refused above as `review_approval_has_findings`, so `approved` ⇒ zero blockers ⇒
+  //     'pass', and `changes_requested` ⇒ 'fail'), which is what keeps this a pure EXTENSION rather
+  //     than a behavior change for code/security/main-session gates.
+  //   - `indeterminate` IS included, deliberately. Its derived effect on a change gate is 'fail', so
+  //     it settles the attempt as a failure and carries the same repair obligation as `refuted`. That
+  //     does NOT re-open the trap the settlement invariant avoids: an honest abstention carries no
+  //     repair-responsible finding, so `repairResponsibleFindings` is empty and this guard never
+  //     fires — an absorbed minority replica still closes normally. The only thing refused is a
+  //     finding the reviewer DID author, whose anchor cannot be placed; fixing it is a one-line
+  //     re-anchor, never the fabrication of evidence for a defect nobody could determine.
   //   - REPAIR-RESPONSIBLE findings only — the SAME `repairResponsibleFindings` population repair-node
   //     partitions on, so exactly what is admitted here is what can be routed there. A deferred,
   //     out-of-scope, or non-`fix` finding obliges nobody, so it may observe producer evidence freely.
   //   - PRIMARY anchor only, matching computeFindingUid's scoping and the routers' own lookup.
   // Nothing is removed from the reviewer's vocabulary: `evidence_observation` stays legal as a
   // SECONDARY anchor, as the primary anchor of a non-blocking finding, and on an investigation gate.
-  if (gateMode === 'change_gate' && domainOutcome === 'changes_requested') {
+  //
+  // Computed ONCE and reused by the receipt below, so the effect the guard judged and the effect the
+  // receipt records can never be two different derivations of the same inputs.
+  const gateEffect = reviewSchema.deriveGateEffect(nodeInfo.role, gateMode, domainOutcome, openFindings.length);
+  if (gateEffect === 'fail') {
     const unroutable = reviewSchema.repairResponsibleFindings(openFindings)
       .filter(finding => !(finding.primary_anchor && finding.primary_anchor.path));
     if (unroutable.length) {
@@ -2062,7 +2088,7 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
     candidate_digest: dispatch.candidate_digest,
     execution_status: 'complete',
     domain_outcome: domainOutcome,
-    gate_effect: reviewSchema.deriveGateEffect(nodeInfo.role, gateMode, domainOutcome, openFindings.length),
+    gate_effect: gateEffect,
     surface: String(nodeInfo.gateSurface || ''),
     findings: normalized.findings,
     resolutions: resolutions.resolutions,
@@ -2136,28 +2162,40 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
 
     const bindingLine = 'evidence-binding: ' + nodeId + ' ' + (nonce || '');
 
+    // State which primary-anchor kinds are ROUTABLE, the same way the outcome enum is already
+    // surfaced. The close-time gate refuses a BLOCKING finding whose primary anchor names no
+    // repository path, because no in-plan repair route can place it; a reviewer that learned this
+    // only at close had already spent the whole review. The routable set is read from the ONE
+    // derived constant the validator reads, so the two can never disagree. Kept — like the
+    // domain_outcome note — as a single `<!-- ... -->` line that is NOT column-0 anchored on a token
+    // key, so the hollow-seed and finding-parsing guards are unchanged.
+    const routableAnchorNote = () =>
+      '<!-- a BLOCKING finding (scope in_scope, action fix, status open) must use a '
+      + 'PATH-BEARING primary_anchor.kind — one of '
+      + reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.join(' | ')
+      + ' — so the repair transaction can place it in a milestone surface / write set; '
+      + 'evidence_observation carries no path and is admitted only as a secondary anchor or on a '
+      + 'non-blocking (deferred / out-of-scope / non-fix) finding -->\n';
+    // WHICH reviewers must be told. The rule binds every CHANGE GATE, but the note used to ride on
+    // the `finding_json|findings_none` token class — and an adversarial-verifier is never asked for
+    // one (its contract tokens are the claim/gate identity, not a findings key). It can still emit
+    // canonical `finding_json:` rows, which the close-time parser reads and the routability gate
+    // judges, so the one role whose change gate most naturally anchors on producer evidence was the
+    // only role never shown the anchor-kind rule. Render it for a change gate that carries no
+    // findings token class too, so the reviewer contract is stated to EVERY reviewer it binds.
+    // Investigation mode is excluded on purpose: it produces no repair obligation, so the rule does
+    // not apply there and printing it would be false guidance.
+    const changeGateWithoutFindingToken = reviewOpen && reviewOpen.review_gate === true
+      && reviewOpen.gate_mode === 'change_gate'
+      && !stubTokens.some(tokenClass => tokenClass.startsWith('finding_json'));
+
     const freshSeed = () => {
       let freshContent = bindingLine + '\n';
       for (const tokenClass of stubTokens) {
         const firstAlt = tokenClass.split('|')[0];
         if (tokenClass.includes('|')) {
           freshContent += '<!-- ' + tokenClass + ' -->\n';
-          // State which primary-anchor kinds are ROUTABLE, the same way the outcome enum is already
-          // surfaced. The close-time gate refuses a BLOCKING finding whose primary anchor names no
-          // repository path, because no in-plan repair route can place it; a reviewer that learned this
-          // only at close had already spent the whole review. The routable set is read from the ONE
-          // derived constant the validator reads, so the two can never disagree. Rendered only for the
-          // findings token class (the sole alternative class a gate stub carries) and, like the
-          // domain_outcome note, kept as a `<!-- ... -->` line that is NOT column-0 anchored on a token
-          // key, so the hollow-seed and finding-parsing guards are unchanged.
-          if (tokenClass.startsWith('finding_json')) {
-            freshContent += '<!-- a BLOCKING finding (scope in_scope, action fix, status open) must use a '
-              + 'PATH-BEARING primary_anchor.kind — one of '
-              + reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.join(' | ')
-              + ' — so the repair transaction can place it in a milestone surface / write set; '
-              + 'evidence_observation carries no path and is admitted only as a secondary anchor or on a '
-              + 'non-blocking (deferred / out-of-scope / non-fix) finding -->\n';
-          }
+          if (tokenClass.startsWith('finding_json')) freshContent += routableAnchorNote();
           freshContent += firstAlt + ': \n';
         } else if (tokenClass === 'domain_outcome') {
           // #727: the reviewer-contract `domain_outcome` vocabulary is ROLE-KIND-dependent, and the
@@ -2174,6 +2212,7 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
           freshContent += tokenClass + ': \n';
         }
       }
+      if (changeGateWithoutFindingToken) freshContent += routableAnchorNote();
       for (const upId of upstreamStubIds) {
         freshContent += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
         freshContent += 'upstream_read: ' + upId + '\n';
