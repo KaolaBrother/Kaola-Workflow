@@ -895,13 +895,10 @@ assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a bu
 
 // #606: teammate-mode dispatch subsection — Claude-runtime block, command surface only.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', "spawn each node's role agent as a NAMED teammate");
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'send EXACTLY ONE request for the deliverable, then wait');
-// #611: fork_turns:"none" unconditional mandate — Codex-dispatch block, SKILL surface only.
-// #775: v2-task-name is the only dispatch mode, so the "applies identically to this dispatch
-// mode" qualifier (a v1/v2 distinction) is itself retired prose.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'on EVERY role dispatch');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'the unconditional mandate applies identically to this dispatch mode');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'not a valid path for tiered nodes');
+// The one-request teammate rule on this edition's plan-run COMMAND, and the fork_turns
+// unconditional mandate plus its two retired-qualifier bans on this edition's plan-run SKILL, are
+// asserted on THESE SAME EDITION PATHS by the root validator's three-command and three-SKILL
+// plan-run loops, in the always-selected claude chain.
 
 // #775: v2-task-name is the only dispatch mode — the preflight-doctor detection step and the
 // --codex-dispatch-mode flag it used to thread into the claim are retired (warn-and-ignore shim
