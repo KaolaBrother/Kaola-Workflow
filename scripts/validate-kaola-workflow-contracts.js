@@ -967,36 +967,11 @@ for (const planRunSurface of [
   assertIncludes(planRunSurface, 'the runtime mode-refuses the spawn');
 }
 
-// #611: fork_turns:"none" is now mandated for EVERY role dispatch (not only tiered nodes) — pin
-// the unconditional mandate and ban the retired tiered-only qualifier on the Codex SKILL surface
-// (Codex-runtime-only; this validator's Claude command surface never carries this dispatch mode).
-// #775: v2-task-name is the only dispatch mode, so the "applies identically to this dispatch
-// mode" qualifier (a v1/v2 distinction) is itself retired prose.
-for (const planRunSurface of [
-  `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`
-]) {
-  assertIncludes(planRunSurface, 'on EVERY role dispatch');
-  assertNotIncludes(planRunSurface, 'the unconditional mandate applies identically to this dispatch mode');
-  assertNotIncludes(planRunSurface, 'not a valid path for tiered nodes');
-}
-
-// #611: the Codex Join Protocol — full A-F encoding lives in the Codex SKILL pack; the root
-// Claude command mirror carries the runtime-appropriate equivalent (SendMessage vocabulary).
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '<!-- PIN: join-protocol -->');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'dispatch.wait_budget_minutes');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'NEVER interrupted before its wait budget expires');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'delegation_outcome');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'writerHalt');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'dispatch.wait_budget_minutes');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'writerHalt');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'delegation_outcome');
-for (const file of [`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'commands/kaola-workflow-plan-run.md']) {
-  assertIncludes(file, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
-  assertIncludes(file, '`planner_override` may extend but never shorten');
-  assertIncludes(file, 'must not interrupt or re-nudge before that floor expires');
-  assertIncludes(file, 'complete governed deliverable');
-}
+// The fork_turns unconditional mandate and its two retired-qualifier bans on the Codex plan-run
+// SKILL, the Join Protocol anchor and its wait-budget / delegation-outcome / writerHalt needles on
+// BOTH the Codex SKILL and the root Claude command, and the whole wait-budget-floor band, are all
+// asserted on THESE SAME PATHS by the root validator's three-SKILL and three-command plan-run
+// loops, in the always-selected claude chain.
 for (const file of ['agents/workflow-planner.md', `${pluginRoot}/agents/workflow-planner.toml`]) {
   assertIncludes(file, 'planner_override');
   assertIncludes(file, 'difficulty alone is not evidence');
