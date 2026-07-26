@@ -240,6 +240,34 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    // The execution-mode judgment grant: dispatch-vs-inline is the orchestrator's
+    // per-unit economic call, and NO justifier, evidence line, or approval attaches
+    // to it. This is a SUBTRACTION made durable — the grant is the only thing standing
+    // between the six plan-run surfaces and a re-introduced spawn mandate, so its
+    // wording is obligated on all six rather than left to survive by habit. Raw
+    // skeleton text (REGION-neutral, no SLOT/SPLICE divergence). The tokens are
+    // distinctive interior prose, never a marker substring.
+    //
+    // SCOPE, decided rather than incidental: this pin catches DELETION and abridgement
+    // of the grant. It does NOT catch a mandate re-ADDED alongside a grant left
+    // nominally intact. A paired absence audit was built for that case and REJECTED —
+    // deciding whether prose binds an obligation needs to know who the obligation
+    // binds, and a keyword filter cannot: the prototype passed five natural dispatch
+    // mandates while convicting seven of nine faithful renditions of the rules it was
+    // required to leave alone. Both errors pointed away from the philosophy it guarded.
+    // Do not "fix" this by adding a vocabulary scan; a real structural check
+    // (subject-of-obligation extraction) or nothing.
+    block_id: 'pr-execution-mode-judgment',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'Everywhere else execution mode is your judgment, per unit — dispatch production, keep decisions.',
+      'Delegating discretionary production is the default;',
+      'and interpretation/adjudication may run inline, closed with `--main-session-direct`.',
+    ],
+  },
+  {
     block_id: 'pr-replan-control-plane',
     topic: 'plan-run',
     runtime_tag: 'both',

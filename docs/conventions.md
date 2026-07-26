@@ -429,6 +429,31 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
 
 **Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
 
+## Execution mode is orchestrator judgment (#817)
+
+`CLAUDE.md` § *Maximize Workflow Efficiency* states it: **dispatch production; keep decisions** — delegating discretionary production is the default, what stays inline is the deciding itself, and *no justifier, evidence line, or approval attaches to the choice*. This section is that principle's home; the six plan-run surfaces carry the operative sentence for the deciding agent, and the six workflow-init CLAUDE.md templates carry the design principle for consumer repos. It is **not** restated on the other surfaces — one rule, one wording.
+
+**What it means.** Dispatch-vs-inline is a per-unit economic call the orchestrator makes with its own judgment. Delegation is the default for discretionary production because a handoff costs once while inline residue taxes every later decision. Mechanical execution, a fully-specified small write, and interpretation/adjudication routinely do not repay a spawn; a node the orchestrator ran inline closes with `--main-session-direct`, which is a **record, never a gate**.
+
+**What it forbids.** Three shapes, all of them regulation this project deliberately subtracted:
+
+- **A dispatch mandate** — prose making dispatch the only sanctioned execution mode, or obliging a spawn for every node / each unit / any composed unit. Width is already governed by faithful decomposition; boundary count is not a separate rule.
+- **A justifier** — any reason token, justification, excuse, or evidence line the orchestrator must produce *because* it ran a unit inline. `local-fallback-tool-unavailable` keeps only its literal meaning (the dispatch tool was genuinely unavailable) and is not the record for a judged inline run.
+- **An approval gate on the choice** — routing the inline/dispatch decision to consent, an operator sign-off, or a checker. Adding a validator for a judgment call recreates the mandate one layer up; that is explicitly out of scope.
+
+**What it does NOT relax.** The judgment grant is bounded by rules that are still absolute, and none of them is an exception the guard has to tolerate — each is *role-scoped* or *availability-scoped*, never a claim about the node population:
+
+- **Non-delegable roles must run inline.** The `finalize` sink and `main-session-gate` are a mandate in the opposite direction; their compliance row is unconditionally `main-session-direct`.
+- **The gate-independence fence.** For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`, an inline gate reviewing its own writer-context is no gate: route through `write-halt --reason consent`, never a self-issued `verdict: pass`.
+- **The mode-refused / unavailable-dispatch notice.** A genuinely absent agent tool or a runtime that mode-refuses the spawn still fires the prominent run-start notice and still records `local-fallback-tool-unavailable`.
+- **The planner seam.** The starting contract and the DAG authoring are delegated to `workflow-planner`; this session never claims or authors inline.
+- **The user's standing.** `delegation_policy: local-authorized` / `local-fallback-explicit` remain the user's channel to direct local execution. Humans decide values (axiom 4); the subtraction removed a *workflow-imposed* justifier, not the user's.
+- **Every fail-closed anchor.** The seeded `evidence-binding` nonce, `record-evidence --verify`, the exact-path write-set barrier, and the post-dominating gate nodes bind identically whichever mode ran the unit — which is exactly why the mandate guarded nothing.
+
+**Enforcement — presence only, mutation-proven, and that limit is deliberate.** `templates/routing/required-blocks.js` block `pr-execution-mode-judgment` obligates the grant's wording on all six plan-run surfaces through the derived-universe checker, so it cannot be quietly deleted or shortened on 4-of-6.
+
+There is **no absence audit**, and the gap is stated rather than hidden: nothing mechanically detects a mandate re-*added* alongside a grant left nominally intact. That case is caught by review, not by a check. One was built and rejected on measurement — a clause scanner keyed on obligation modals, role backticks, and justifier vocabulary passed five natural dispatch mandates on all six surfaces with every chain green, while convicting seven of nine faithful renditions of the not-relaxed rules above, including the plan-run skill's own `description:` frontmatter. Drawing the line between a mandate and a role-scoped rule requires knowing *who the obligation binds*; a word list keys on incidental surface features instead, and both of its error directions point away from the philosophy it exists to protect. A guard whose green is misleading is worse than an acknowledged gap, and shipping one would itself have added to the system this principle subtracts from. Either build a real structural check or leave this to review.
+
 ## Two validation tiers — the fast gate is SAMPLED (#801)
 
 `npm run test:kaola-workflow:claude` is the **fast gate**: a hard 10-minute budget, bought by sampling, measured at 391s. `npm run test:kaola-workflow:claude:full` is the **complete gate**, and it is what a release receipt requires. `npm run test:full` chains the complete gate with the other three editions.
