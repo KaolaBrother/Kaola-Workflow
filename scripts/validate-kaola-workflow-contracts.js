@@ -361,13 +361,8 @@ for (const edition of ['claude', 'codex', 'gitlab', 'gitea']) {
 }
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
 assert(read('CLAUDE.md').split(/\r?\n/).length < 200, 'CLAUDE.md must stay below the 200-line target');
-assertConcept('CLAUDE.md', 'compact durable state contract', [
-  'kaola-workflow/.roadmap/issue-*.md',
-  'do not purge',
-  'kaola-workflow/{project}/',
-  'workflow-state.md',
-  '.cache/'
-]);
+// The repo-root CLAUDE.md durable-state concept is asserted with this exact term list by
+// scripts/validate-workflow-contracts.js; only the Codex-surface twin below is edition-specific.
 assertConcept(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Codex init durable state contract', [
   'kaola-workflow/.roadmap/issue-*.md',
   'do not purge',
