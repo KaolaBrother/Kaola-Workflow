@@ -6,7 +6,7 @@ Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, G
 ## Durable State Contract
 
 - `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `.roadmap/_rules.md` appended under `### Project rules`); do not hand-edit the mirror.
-- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
+- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file. A source file left behind after closure is silent — the mirror still reads correct until the next `generate` publishes its dead row — and nothing invokes the detector automatically, so check it by hand with `node scripts/kaola-workflow-roadmap.js validate-remote` (exit 1 = drift; `skipped: offline` under `KAOLA_WORKFLOW_OFFLINE=1`).
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
 - Active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and per-node `.cache/{node-id}.md` evidence.
 - Re-plan is claim-preserving and epoch-scoped: the planner authors an attested child `workflow-plan.next.md`, and every committed parent epoch is retained under `.cache/epochs/{ordinal}/`. The parent plan and its Ledger stay byte-identical — never rewrite a frozen plan in place.
@@ -88,7 +88,7 @@ The workflow runs one path; the orchestrator does not spend tokens or wall-clock
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, authoring-allowed, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize, sink-fallback, verify-sink, stale-worktree-check/-cleanup, legacy-worktree-cleanup, audit-labels, repair-labels, barrier-ref-sweep subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
-- `scripts/kaola-workflow-roadmap.js` — roadmap generation from GitHub issues
+- `scripts/kaola-workflow-roadmap.js` — roadmap mirror generation. `generate` composes the mirror from `kaola-workflow/.roadmap/issue-*.md` alone and makes no remote call; `validate-remote` is the only subcommand that touches the forge (closed-remote drift). Also `validate`, `init-issue`, `project-name`, `migrate`. Ported per forge (GitLab/Gitea swap `migrate` for `refresh`).
 - `scripts/kaola-workflow-plan-validator.js` — adaptive-path plan validator: closed-library + four-shape grammar (`sequence`, fan-out over pairwise-disjoint write sets, bounded loop, `select(<group>)`) + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`/`--freeze-checked`/`--governance-ack`); `plan_hash` lives inside `workflow-plan.md`. Emits a typed `reason` field in `barrierCheck` output (the emit envelope — precedence-ordered failure family so callers classify structurally, never by string-match).
 - `scripts/kaola-workflow-adaptive-schema.js` — adaptive-path forge-neutral constants + toggle resolution; byte-identical across all four editions (cross-edition drift anchor).
 - `scripts/kaola-workflow-next-action.js` — adaptive aggregator: ready-set / next node / resolved model from a frozen `workflow-plan.md` (n/a-aware; typed refusal on a stalled/corrupt DAG). Shelled by `kaola-workflow-adaptive-node.js`.
