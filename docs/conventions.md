@@ -6,15 +6,15 @@ Document coding style, testing rules, Git practices, naming, and review expectat
 
 The lean-orchestrator boundary is enforced through role-profile placement, not agent willpower.
 
-- **Procedure lives in agent profiles.** The complete Finalization procedure (scripts, bookkeeping, archive, roadmap regen) lives solely in the `contractor` agent profile. The claim + author + adaptive-handoff procedure lives solely in the `workflow-planner` profile. Orchestrator command files (`finalize.md`, `kaola-workflow-adapt.md`) keep only thin dispatch handles — they invoke the contractor or planner subagent and wait for their result; they do not duplicate bookkeeping inline.
+- **Procedure lives in agent profiles — where a profile still owns one.** The claim + author + adaptive-handoff procedure lives solely in the `workflow-planner` profile, and `kaola-workflow-adapt.md` keeps only a thin dispatch handle. Finalization is the counter-case (issue #816): its mechanical residue is not prose at all but ONE `cmdFinalize` transaction the orchestrator runs directly, so there is no bookkeeping profile to place it in and no dispatch handle to keep.
 - **Main runs dispatch handles, the per-node loop, and the sink.** The main Opus session dispatches subagents and judges their output. It also owns the adaptive per-node lifecycle transactions (`kaola-workflow-adaptive-node.js`, main-direct by design) and the Finalization sink (merge/PR + issue close). These two are explicitly out of attestation scope.
-- **Script-side enforcement.** `validate-workflow-contracts.js` text-locks the contractor dispatch handle on all four editions. A contractor-reference removal from an orchestrator command file fails the contract gate.
+- **Script-side enforcement, both directions.** `validate-workflow-contracts.js` and the three edition twins text-lock the planner dispatch handle, and lock the finalize seam's inversion in BOTH directions: a re-introduced bookkeeping-role dispatch on any finalize surface fails the contract gate, and so does a dropped one-call transaction.
 
 ## Codex Subagent Dispatch (issue #266)
 
 Codex subagent dispatch uses a **native role-dispatch packet**, not a Claude `Agent(subagent_type=..., model=...)` call. When the main Codex session invokes a Kaola subagent, it names the installed agent role and passes a dispatch packet:
 
-- `role` — the installed agent role name (e.g. `workflow-planner`, `contractor`)
+- `role` — the installed agent role name (e.g. `workflow-planner`, `code-reviewer`)
 - `prompt` — the task prompt
 - `cwd` — the working directory
 - `expected_cache` — the expected evidence-cache path(s)
@@ -551,10 +551,10 @@ Plans may include an optional `goal: <text>` prose line in `## Meta`. Key proper
 
 Prose assertions ("chains passed", "npm test is green") are insufficient evidence of test-chain greenness at Finalization. The `--finalize-check` gate is **dual-mode by repo kind (#475)**, auto-detected by whether `package.json` declares any `test:kaola-workflow:*` script.
 
-**Self-host (npm).** The contractor MUST:
+**Self-host (npm).** The orchestrator MUST:
 
 1. Run `node scripts/kaola-workflow-run-chains.js --project <P>` to produce `.cache/chain-receipt.json`.
-2. Cite the receipt path as evidence in the contractor summary.
+2. Cite the receipt path as evidence in the finalization summary.
 3. Never record a `chains_passed: true` prose attestation without the receipt artifact.
 
 **Per-chain kill ceiling and timeout observability (#608).** The `spawnSync`/`spawn` kill ceiling
@@ -582,7 +582,7 @@ manual retry, an environmental flake) by appending a `gap: <class> — <text>` l
 `.cache/run-gaps-manual.md` (issue #653 / D-653-01) — the reverse-containment check in step 3
 below refuses a `## Run gaps` entry with no matching seeded or scanned source.
 
-The contractor MUST:
+The orchestrator MUST:
 
 1. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --json` to produce
    `.cache/run-gaps.json`. The scanner reads only `kaola-workflow/<P>/.cache/` (scope guard —
@@ -619,7 +619,7 @@ The contractor MUST:
    paren-bearing sample now parses (issue #726), a hand-typed row whose sample contains `)` is
    subject to reverse containment like any other — previously such a row never parsed, so it fell
    through to the both-sides-empty vacuous pass and escaped the check entirely.
-4. Cite the gate exit code as evidence in the contractor summary. Never record a
+4. Cite the gate exit code as evidence in the finalization summary. Never record a
    `gaps_addressed: true` prose attestation without a passing `--check` invocation.
 
 The `--check` gate is the ONLY valid run-gap evidence; classify its result structurally by the

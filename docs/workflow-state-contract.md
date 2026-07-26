@@ -445,8 +445,11 @@ here for the full contract.
   remains the backstop for verified legacy state whose hash pointer predates that contract); and the
   `## Last Updated` line refreshed to the archive timestamp. After the rename, a compact `## Closure`
   block is appended recording `archived_at`, `issue_disposition`, `claim_label_removed`,
-  `worktree_removed`, `closure_invariants`, and (issue #653 / D-653-01) `claim_planner_attested` /
-  `finalize_contractor_attested` (presence-guarded / idempotent). `issue_disposition`
+  `worktree_removed`, `closure_invariants`, and (issue #653 / D-653-01) `claim_planner_attested`
+  (presence-guarded / idempotent). Issue #816 retired the finalize-seam attestation field: the
+  finalize seam is orchestrator-owned by design, so inline execution there is no longer suspect.
+  A LEGACY archive that already carries `finalize_contractor_attested` is read and kept verbatim —
+  the presence guard means nothing rewrites it. `issue_disposition`
   enum: `kept-open | close-pending | closed | unknown`. On the `cmdFinalize` lane disposition is
   DECISION-derived — the default merge lane is honestly `close-pending` because the orchestrator
   closes the issue AFTER sink-merge, and `--keep-open` records `kept-open` + `last_result:
@@ -461,11 +464,13 @@ here for the full contract.
   none (archived)` only ever appears under `kaola-workflow/archive/`; `resume`/`status`/`repair-state`
   read active folders only and never see it.
 - **Attestation persistence (issue #653 / D-653-01):** independently of the `## Closure` block's
-  `claim_planner_attested`/`finalize_contractor_attested` fields above, `cmdFinalize` also appends
-  a script-owned, presence-guarded `## Attestation` section to the archived
-  `finalization-summary.md` — the same two status fields plus every non-empty `ATTESTATION
-  WARNING`/`attestation:` warning, verbatim — so a warning that fired during the run survives the
-  archive even if a summary is otherwise read as clean. See `docs/api.md` § Closure Contract.
+  `claim_planner_attested` field above, `cmdFinalize` also appends a script-owned,
+  presence-guarded `## Attestation` section to the archived `finalization-summary.md` — the same
+  status field plus every non-empty `ATTESTATION WARNING`/`attestation:` warning, verbatim — so a
+  warning that fired during the run survives the archive even if a summary is otherwise read as
+  clean. The presence guard is also the legacy-tolerance rule: an archived section carrying the
+  retired `finalize_contractor_attested` field is left byte-identical, never rewritten. See
+  `docs/api.md` § Closure Contract.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),
@@ -685,9 +690,9 @@ compliance ledgers (it is reached through `unresolvedCompliance`, which the adap
 of its `DELEGATION_CONTROLLED_REQUIREMENTS` patterns. It is
 deliberately NOT `local-fallback-*`: inline execution is a designed mode, not a fallback —
 `local-fallback-tool-unavailable` keeps only its literal meaning, that the dispatch tool was
-genuinely unavailable. These rows are distinct from the Finalization-phase mechanical bookkeeping,
-which is delegated to the `contractor` and attested separately via the closure receipt's
-`finalize_contractor_attested` field.
+genuinely unavailable. The Finalization-phase mechanical bookkeeping is likewise
+main-session-direct: one `cmdFinalize` transaction the orchestrator runs, with no dispatched
+role and no separate attestation.
 
 **Freeze pre-seeds the compliance set (schema 2).** The producer completes this artifact at its
 authoring boundary: freezing a `plan_schema_version: 2` plan that carries no
@@ -990,19 +995,19 @@ See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `l
 ## Script-Owned Mechanical Transitions (issue #272)
 
 Every mechanical transition that mutates `workflow-state.md` is owned by a typed
-transaction script the main session runs directly (ADR 0004) — the `contractor` subagent
-is not in the per-node loop. Each writes in crash-safe order (`.cache` first, the
+transaction script the main session runs directly (ADR 0004, ADR 0006) — there is no
+bookkeeping subagent anywhere in the loop. Each writes in crash-safe order (`.cache` first, the
 `workflow-state.md` pointer last), is idempotent on resume, and preserves any `## Sink`
 block byte-for-byte.
 
 | Path | Script | Owns |
 |------|--------|------|
 | Adaptive per-node | `kaola-workflow-adaptive-node.js` (#272) | the `## Node Ledger` per-node lifecycle |
-| Finalization | `contractor` subagent | the archive, roadmap-mirror regen, `chore: finalize` staging commit (SOLE remaining contractor-owned transition) |
+| Finalization | `cmdFinalize` (`kaola-workflow-claim.js`, #816) | the artifact mirror + ledger-regression guard, archive + status close, roadmap staging, and the `chore: finalize` commit gate — ONE resumable transaction |
 
-Adaptive per-node evidence lives in `.cache/{node-id}.md`. The
-`#459` contract validators forbid a contractor dispatch from returning to any
-migrated surface.
+Adaptive per-node evidence lives in `.cache/{node-id}.md`. The contract validators
+forbid a bookkeeping-role dispatch from returning to any finalize surface, in both
+directions: a re-introduced dispatch reds the chain, and so does a dropped transaction call.
 
 ### Recovering a project ALREADY wedged by a stranded settled row
 
@@ -1093,8 +1098,8 @@ residual limitations (#691).
 - **Single-owner finalize invariant**: during issue finalize, the per-issue source
   removal (`kaola-workflow/.roadmap/issue-N.md`) and `ROADMAP.md` regeneration are
   performed exactly once by `cmdFinalize` / `archiveProjectDir` (Finalization Step 8b).
-  The Mechanical-Finalization Step 7 (in `agents/contractor.md`) only stages
-  the result with `git add`; it does not re-run the rm or the regenerate.
+  The transaction's Step 7 only stages the result with `git add`; it does not re-run
+  the rm or the regenerate.
 - `kaola-workflow-roadmap.js generate` must not replace a generated roadmap that
   still lists active issues with `none` solely because `.roadmap/` is missing.
 - An **optional** project-local file `kaola-workflow/.roadmap/_rules.md` may carry

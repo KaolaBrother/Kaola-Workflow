@@ -1255,7 +1255,7 @@ function deriveSinkKeepOpen(mainRoot, args, receipt) {
 
 // #700: persist the SAME terminal metadata cmdFinalize writes — the ## Closure state block +
 // the ## Attestation summary block — into the archive dest, for a --sink that is the SOLE archiver.
-// Attestation reflects the REAL dispatch-log probe (no fabricated contractor attestation for inline
+// Attestation reflects the REAL dispatch-log probe of the claim/author seam (no fabrication for inline
 // execution). Presence-guarded/idempotent; disposition/label/invariant fields are honestly PENDING
 // here (the sink's own closure + verify steps perform the real close). Fail-soft; only a missing
 // export (the #550 cross-edition drift class) rethrows.
@@ -1281,8 +1281,7 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
       claimLabelRemoved: 'close-pending',
       worktreeRemoved: 'removed',
       closureInvariants: 'pending',
-      claimPlannerAttested: closureReceipt.claim_planner_attested,
-      finalizeContractorAttested: closureReceipt.finalize_contractor_attested
+      claimPlannerAttested: closureReceipt.claim_planner_attested
     });
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;

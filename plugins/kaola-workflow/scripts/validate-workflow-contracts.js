@@ -552,13 +552,19 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'final_validation_unverifi
 // #653: the consumer candidate binding (validated_candidate_hash) — the plan-run All-done consumer
 // block must instruct recording the hash so the verdict is bound to the exact validated tree.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'validated_candidate_hash');
-// #277 M3: --keep-worktree procedure relocated from phase6 inline body to agents/contractor.md;
-// still asserted in the dispatch prompt string inside finalize.md (pass-through reference).
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
 assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata captured before Step 8b');
-// #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
-// agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
-assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+// #816: ownership-inversion lock — the finalize seam is orchestrator-owned and the mechanical
+// residue is ONE script transaction, so the command must carry NO dispatchable bookkeeping role
+// and MUST carry the one-call transaction. Both directions are pinned: re-introducing a dispatch
+// reds the chain, and dropping the transaction call reds it too.
+assertNotIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+assertNotIncludes('commands/kaola-workflow-finalize.md', 'contractor');
+assertIncludes('commands/kaola-workflow-finalize.md', 'ONE resumable script transaction');
+assertIncludes('commands/kaola-workflow-finalize.md', 'node "$CLAIM_JS" finalize \\\n  --project {project} --keep-worktree $SINK_KEEP_OPEN_FLAG');
+assertIncludes('commands/kaola-workflow-finalize.md', 'implementation_commit_missing');
+assertIncludes('commands/kaola-workflow-finalize.md', 'staging_guard_multi_project');
+assertIncludes('commands/kaola-workflow-finalize.md', 'finalize_mirror_refused');
 
 // #336: keep-open partial-close sink lane — pin the durable field, the sink-merge flag, and the
 // merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard is shell prose no walkthrough
@@ -577,9 +583,10 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN"
 assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --barrier-check');
 assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --verdict-check');
 assertNotIncludes('commands/kaola-workflow-finalize.md', 'node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check');
-// #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
-// 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
-// cross-file ordering is not expressible via assertBefore (single-file only).
+// assertBefore calls for 'commit -m "chore: finalize {project}"' and 'node "$CLAIM_JS" finalize'
+// DROPPED: the finalize commit is no longer a prompt-authored bash step whose ORDER a command file
+// could express. `cmdFinalize` owns it inside the one mechanical transaction, so the ordering is
+// enforced by the code path (and its suite), not by token order in a command surface.
 
 const packageJson = JSON.parse(read('package.json'));
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package files must include hooks/');
@@ -736,15 +743,14 @@ assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan valida
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
 assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progress'); // #343 mid-gate reopen
-// #338: anti-drift pins — the finalize sink row is main-session-direct (not subagent-invoked),
-// and the contractor self-attest back-fill flag is wired through claim.js + the contractor profile.
+// #338: anti-drift pin — the finalize sink row is main-session-direct (not subagent-invoked).
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'main-session-direct');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
 // #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
 // DEFINED via the kaola_script() resolver before its first use — an undefined handle is
 // MODULE_NOT_FOUND in a consumer plugin install (no local scripts dir). Pin the resolver + the
 // assignment so removing either regresses the chain.
-// #360: the consent-halt clear path is the script-owned `clear-halt` subcommand, not a contractor
+// #360: the consent-halt clear path is the script-owned `clear-halt` subcommand, not an agent
 // lockstep — pin its presence in the prose + the script so the prose mutation cannot return.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'clear-halt');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
@@ -786,7 +792,11 @@ assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'findings-route.json'
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'VERDICT_ROLES');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
-assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
+// #816: the finalize seam records no attestation — the field, the back-fill, and the inline-suspect
+// warning are retired. Pinned as an ABSENCE so a revival reds the chain, alongside the POSITIVE pin
+// on the folded transaction below (the two directions of the same invariant).
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'finalize_contractor_attested');
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'attestContractorSpawn');
 // #347: pin the planner self-attest back-fill flag (the #280 producer) so the forge-port asymmetry
 // it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
@@ -794,14 +804,27 @@ assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes('agents/workflow-planner.md', '--attest-planner-spawn');
 // persistence lock: a non-empty attestation warning must be transcribed into the durable summary.
 assertIncludes('scripts/kaola-workflow-claim.js', '## Attestation');
-assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
-// #399: the Step-8a artifact mirror must run the ledger-regression guard (forge-neutral
-// kaola-workflow-ledger-compare.js) BEFORE its `cp -R`, and the finalization preamble must
-// carry the sync-order recovery phrase (worktree->main BEFORE the mirror). Pin both so a prose
-// mutation that drops the guard or the recovery note cannot silently return — the 2026-06-11
-// audit reproduced the clobber live.
-assertIncludes('agents/contractor.md', 'kaola-workflow-ledger-compare.js');
-assertIncludes('agents/contractor.md', 'sync worktree->main FIRST');
+// #816: the retired bookkeeping role must not come back as a file on any runtime.
+assert(!exists('agents/contractor.md'), 'agents/contractor.md must be retired');
+for (const forge of ['', '-gitlab', '-gitea']) {
+  assert(!exists('plugins/kaola-workflow' + forge + '/agents/contractor.toml'),
+    'plugins/kaola-workflow' + forge + '/agents/contractor.toml must be retired');
+}
+// #399/#816: the Step-8a artifact mirror now lives INSIDE cmdFinalize and must still run the
+// ledger-regression guard BEFORE the copy, still refusing with the sync-order recovery phrase.
+// Pin both so a change that drops the guard or the recovery note cannot silently return — the
+// 2026-06-11 audit reproduced the clobber live.
+assertIncludes('scripts/kaola-workflow-claim.js', 'kaola-workflow-ledger-compare.js');
+assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'finalize_mirror_refused',");
+assertIncludes('scripts/kaola-workflow-claim.js', 'if (!verdict.safe) {');
+assertIncludes('scripts/kaola-workflow-claim.js', 'worktree→main FIRST, then re-run finalize');
+// #816: the folded transaction — mirror, archive/close, roadmap staging, commit gate — plus the
+// two typed guardrails that carry over. Dropping any of them reds the chain.
+assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'implementation_commit_missing',");
+assertIncludes('scripts/kaola-workflow-claim.js', 'staging_guard_foreign_archive');
+assertIncludes('scripts/kaola-workflow-claim.js', 'staging_guard_multi_project');
+assertIncludes('scripts/kaola-workflow-claim.js', "'chore: finalize ' + args.project");
+assertIncludes('scripts/kaola-workflow-claim.js', 'finalize_transaction');
 // #353: durable-state writes must route through the crash-safe atomic replace (no torn
 // workflow-plan.md/workflow-state.md/active-batch.json). Pin the helper + its adoption.
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileAtomicReplace');
@@ -1191,11 +1214,12 @@ for (const file of [...codexJoinProtocolSurfaces611, ...claudeJoinProtocolSurfac
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
-// #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the finalize command so a silent drop
-// (the #294 fail-open class) turns the chain RED. npm test never executes the bash prose;
-// these pins are its only mechanical enforcement (the bash-block-guards Test E covers runtime).
-assertIncludes('commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');
-assertIncludes('commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
+// #505 ITEM 1 / #816: the foreign-archive staging guard is no longer bash prose — it moved INTO
+// the finalize transaction as a typed refusal. Pin the refusal in the producer script (a silent
+// drop is the #294 fail-open class) and the surviving pointer in the finalize command, so neither
+// half can vanish unnoticed.
+assertIncludes('scripts/kaola-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
+assertIncludes('commands/kaola-workflow-finalize.md', 'staging_guard_foreign_archive');
 assertIncludes('commands/kaola-workflow-finalize.md', '## Staging Guard');
 
 // n5 (#653 finding D): selection-evidence docking + run-gap manual-seed prose must reach the

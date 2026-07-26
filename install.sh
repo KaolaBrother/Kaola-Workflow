@@ -37,7 +37,7 @@ AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "workflow-planner" "synthesizer" "metric-optimizer")
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
@@ -507,7 +507,7 @@ install_agent_files
 
 default_agent_model() {
   case "$1" in
-    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier|contractor)
+    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier)
       printf '%s\n' "sonnet"
       ;;
     planner|workflow-planner)
@@ -562,7 +562,6 @@ model_for_placeholder() {
     CODE_REVIEWER_MODEL) resolve_agent_model_for_install code-reviewer ;;
     SECURITY_REVIEWER_MODEL) resolve_agent_model_for_install security-reviewer ;;
     DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
-    CONTRACTOR_MODEL) resolve_agent_model_for_install contractor ;;
     WORKFLOW_PLANNER_MODEL) resolve_agent_model_for_install workflow-planner ;;
   esac
 }
@@ -595,7 +594,6 @@ render_command_file() {
     CODE_REVIEWER_MODEL
     SECURITY_REVIEWER_MODEL
     DOC_UPDATER_MODEL
-    CONTRACTOR_MODEL
     WORKFLOW_PLANNER_MODEL
   )
 

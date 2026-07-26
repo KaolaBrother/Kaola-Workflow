@@ -2066,13 +2066,13 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('[agents.code-explorer]'), 'fresh install should include managed [agents.*] entries');
     // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
     // this dir, so count TOML entries only (raw readdir includes the manifest dotfile).
-    // #451: 13 base role profiles (the <role>-max effort variants are retired; issue-scout
-    // retired #789).
+    // #451/#816: 12 base role profiles (the <role>-max effort variants are retired; issue-scout
+    // retired #789; the bookkeeping role retired #816).
     const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      15,
-      'should install 15 agent TOML files (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789)'
+      14,
+      'should install 14 agent TOML files (12 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, contractor retired #816)'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
@@ -3877,7 +3877,7 @@ function testInstallSchemaPruneManifest332Gitlab() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = gitlabListTomls(agentsDir);
-    assert.strictEqual(tomls.length, 15, '#463 gl AC: fresh install must place 15 *.toml (13 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789)');
+    assert.strictEqual(tomls.length, 14, '#463 gl AC: fresh install must place 14 *.toml (12 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789, contractor retired #816)');
     assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gl AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -3886,7 +3886,7 @@ function testInstallSchemaPruneManifest332Gitlab() {
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gl AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, 15, '#463 gl AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
+    assert.strictEqual(manifest.roles.length, 14, '#463 gl AC: manifest must list 14 roles (12 base + synthesizer + metric-optimizer)');
     for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(gitlabPluginRoot, 'agents', file));
@@ -4614,10 +4614,10 @@ function testForbiddenOnly341() {
       '#341 gl: forbidden-only must report "contains forbidden reference"');
 
     // clean file → exit 0, sentinel. issue-scout.toml (the original #328 leak regression
-    // lock) is retired (#789); contractor.toml is an equally permanent, GitHub-vocabulary-free
+    // lock) is retired (#789); metric-optimizer.toml is an equally permanent, GitHub-vocabulary-free
     // agent profile. Root-relative path resolves from any cwd.
     const cleanRun = spawnSync(process.execPath,
-      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitlab/agents/contractor.toml'],
+      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitlab/agents/metric-optimizer.toml'],
       { encoding: 'utf8' });
     assert.strictEqual(cleanRun.status, 0,
       '#341 gl: clean file must exit 0 (stderr: ' + (cleanRun.stderr || '') + ')');

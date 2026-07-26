@@ -162,8 +162,8 @@ function main() {
 
   // #336: keep-open is merge-sink-only — the PR body 'Closes #N' would auto-close the
   // kept-open issue, and watch-pr's archive-on-merge would delete the preserved roadmap source.
-  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the contractor
-  // finalize archives the project BEFORE the sink runs, so the live state file is already gone);
+  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the finalize
+  // transaction archives the project BEFORE the sink runs, so the live state file is already gone);
   // the LIVE path covers a sink: pr project that gained issue_action by mistake. Guard sits
   // BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
   const keepOpenRe = /^issue_action:\s*comment_keep_open\s*$/m;

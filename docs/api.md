@@ -684,7 +684,7 @@ Runs all four edition test chains via `spawnSync` with real process exit codes (
 node scripts/kaola-workflow-run-chains.js [--accept-known-red <name>:<issue>] --project <P>
 ```
 
-`--accept-known-red` may be repeated; each value registers a named chain as waived with a tracking issue reference. The contractor runs this at Finalization Step 8c and cites the receipt path as evidence.
+`--accept-known-red` may be repeated; each value registers a named chain as waived with a tracking issue reference. The orchestrator runs this at Finalization Step 8c and cites the receipt path as evidence.
 
 **Output artifact:** `.cache/chain-receipt.json`
 
@@ -743,7 +743,7 @@ alter refusal precedence, `operator_hint`, chain decision semantics, or the attr
 
 **Dual-mode finalize gate (#475) — self-host vs consumer.** `--finalize-check` auto-detects the repo kind (by whether `package.json` declares any `test:kaola-workflow:*` script) and gates accordingly. `kaola-workflow-run-chains.js` is **self-host-only**:
 
-1. **Self-host (npm)** — `package.json` declares `test:kaola-workflow:*` scripts. The contractor runs `run-chains.js` to produce `.cache/chain-receipt.json`, and `--finalize-check` enforces the chain-receipt gate (`chains_unverified` > `chains_stale` > `chains_red`). `run-chains.js` resolves only the built-in npm edition chains; with no such scripts it refuses `chains_config_missing` and writes no receipt.
+1. **Self-host (npm)** — `package.json` declares `test:kaola-workflow:*` scripts. The orchestrator runs `run-chains.js` to produce `.cache/chain-receipt.json`, and `--finalize-check` enforces the chain-receipt gate (`chains_unverified` > `chains_stale` > `chains_red`). `run-chains.js` resolves only the built-in npm edition chains; with no such scripts it refuses `chains_config_missing` and writes no receipt.
 2. **Consumer (non-npm)** — a product repo whose validation is not npm-based (a Swift/Xcode app, a Makefile project) does **NOT** run `run-chains.js`. The agent **owns verification** ("Agent Owns Reasoning; Scripts Own Atomicity", #44): it records `.cache/final-validation.md` with a column-0 `verdict: pass`, and `--finalize-check` (consumer mode) gates on that file — `final_validation_unverified` (absent/empty) > `final_validation_failed` (no `verdict: pass`). When a terminal change-gate validation run is cited instead of rerun, agent-facing workflow prose requires column-0 citation lines `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`; these lines document the reuse boundary for humans and later agents. The machine gate does not parse those citation fields.
 3. The **attribution sweep** (every `git diff <base>...HEAD` change must be in the `.md` allowband or a `complete` node's declared write set, else `unattributed_change`) runs for **both** modes — the allowband-aware freshness check, so an un-attributed code change is caught regardless of repo kind.
 
@@ -2153,7 +2153,7 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --json
 
 ## Selector routing — orchestrator contract
 
-When a `selector_source` node completes, the contractor reads `selectorCheck` from the per-node `commit-node --json` output and routes unselected arms before the fused advance.
+When a `selector_source` node completes, the orchestrator reads `selectorCheck` from the per-node `commit-node --json` output and routes unselected arms before the fused advance.
 
 ### Fields (per-node mode only; `null` in `per-node-start` and `whole-plan`)
 
@@ -2210,46 +2210,67 @@ is an **unconditional typed refusal**, placed before any archive/close side effe
 Finalization with no frozen plan is always a refusal. The `finalize_gate_unverified` reason and
 `--finalize-check` gate machinery gate the plan-absent branch.
 
-## Contractor Agent (issue #242 Part B; scope is Finalization-only)
+## Finalize Transaction (issue #816; the retired Contractor Agent's replacement)
 
-The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the
-bookkeeper half of the lean-orchestrator design. **Its scope is Finalization only.** The adaptive
-per-node loop (`kaola-workflow-adaptive-node.js`, #272) is the only other main-session-direct
-mechanical transition family. The contractor is dispatched at exactly one seam:
+There is no mechanical-bookkeeper agent. The finalize seam is **orchestrator-owned by design**, and
+its mechanical residue is ONE resumable script transaction: `cmdFinalize` in
+`kaola-workflow-claim.js`. The principle it installs is *judgment-adjacent seams ride the
+orchestrator; mechanical floors ride scripts — no judgment-forbidden agent in between*.
 
-- **Finalization** (Stage C): Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance. This is the **SOLE remaining contractor-owned transition** (ADR 0004 keeps Finalization contractor-owned as a temporary exception, pending a dedicated finalization transaction script).
+### What the transaction owns, in order
 
-The per-node executor loop does **not** go through the contractor — see § Adaptive Executor Aggregators above.
+1. **Step 8a — artifact mirror.** Copies the main checkout's `kaola-workflow/{project}/` and its
+   dirty non-`kaola-workflow/` Finalization residue into the linked worktree. Direction is always
+   main → linked worktree. Before copying, the **ledger-regression guard** (`compareLedgers` from
+   `kaola-workflow-ledger-compare.js`) refuses to push a STALER main plan over a MORE-COMPLETE
+   worktree ledger. `workflow-state.md` and `workflow-tasks.json` are DEST-OWNED: an existing
+   worktree copy is never overwritten (the worktree holds the complete run authority).
+2. **Step 8b — archive + status close.** The pre-existing `--finalize-check` gate, archive rename,
+   roadmap closure, claim-label removal, and closure receipt.
+3. **Step 7 — roadmap staging.** `kaola-workflow/.roadmap` + `ROADMAP.md`, staged with the archive.
+4. **Step 8 — commit gate.** Stages this project's approved bookkeeping plus the Finalization
+   residue and authors `chore: finalize {project}`. Never a blind `git add -A`: a foreign project's
+   paths are never staged by the transaction.
 
-### Role
+### Typed refusals (each with no further side effect)
 
-The contractor runs the Finalization workflow scripts, parses the `.cache` evidence and verdicts the Opus orchestrator hands it, and **authors the durable finalization bookkeeping**: the archive, the roadmap-mirror regen, and the `chore: finalize` staging commit. It returns a compact summary. It is deterministic plumbing, not a decision-maker.
+| reason | meaning |
+|--------|---------|
+| `finalize_mirror_refused` (`inner_reason: ledger_regression`) | the main copy carries a staler ledger than the worktree — sync worktree→main FIRST, never bypass |
+| `implementation_commit_missing` | implementation-shaped changes are uncommitted and the branch carries no implementation commit. The machinery **never authors the implementation commit** — it surfaces and stops |
+| `staging_guard_foreign_archive` / `staging_guard_multi_project` | the single-project staging rule (moved here from command prose) — split the commit |
+| `finalize_gate_unverified` | the pre-existing dual-mode validation gate |
+| `archive_incomplete` | the archive copy dropped evidence the live source held |
 
-### Hard boundary — never dispatch, never judge, never gate
+### `finalize_transaction` receipt object
 
-This boundary is the reason the contractor exists as a separate Sonnet role (issue #44: the agent owns reasoning; scripts own atomicity):
+Emitted alongside `closure_receipt`, so a crash-resumed run is readable from the emit alone:
 
-- **Never dispatches a role.** Choosing which subagent runs next is the orchestrator's decision. The contractor does not spawn, fan out, or route.
-- **Never judges, assesses risk, or grades.** The contractor does not decide whether a change is correct, complete, or regression-free. It does not assess severity.
-- **Never acts as a gate.** The contractor does not halt a plan, ask the user a question, or surface a risk escalation. Those are orchestrator responsibilities.
+```json
+{
+  "mirror": "not_needed|source_absent|skipped_post_archive|mirrored",
+  "ledger_compare": "not_needed|pass|skipped_no_plan|skipped_no_script",
+  "impl_commit": "not_checked|not_applicable|committed|indeterminate",
+  "roadmap_staged": true,
+  "archive_commit": "skipped|nothing_to_commit|committed",
+  "finalize_commit": "skipped|nothing_to_commit|committed"
+}
+```
 
-### Model
+### Crash-resume re-entry points
 
-`sonnet` — the standard tier, never escalated to the reasoning tier for bookkeeping. Mechanical transcription cannot be judgment-upgraded; only judgment roles benefit from the reasoning tier. The static default (`DEFAULT_AGENT_MODELS`) carries `contractor: sonnet`. See the Agent model resolution subsection under Configuration for the precedence chain.
+- **pre-archive** — nothing has happened; the whole transaction runs.
+- **post-archive / pre-commit** — `resume --project X --json` reports `finalize_incomplete`; re-run
+  the SAME one-call transaction and it resumes at the commit step. The mirror deliberately does NOT
+  resurrect an archived live folder (`mirror: skipped_post_archive`).
+- **post-commit** — `resume` reports `already_finalized`; re-running the transaction is a clean
+  no-op (`finalize_commit: nothing_to_commit`).
 
-### Tools
+### Retired flag
 
-`Read, Write, Edit, Bash, Grep, Glob` — Write and Edit author the durable bookkeeping files; Bash runs the workflow scripts.
-
-### Registration (all four editions)
-
-The contractor is registered in all four editions identically:
-
-- **`agents/contractor.md`** — canonical Claude Code agent file (`model: sonnet`, `locally-authored: true`; provenance-exempt in `validate-vendored-agents.js` `localAgents` because it is not vendored upstream).
-- **`install.sh`** — listed in `REQUIRED_AGENTS`; `default_agent_model` entry maps to sonnet; `model_for_placeholder` maps to `CONTRACTOR_MODEL`; `render_command_file` emits the model placeholder.
-- **`uninstall.sh`** — listed in `REQUIRED_AGENTS` for clean removal.
-- **`kaola-workflow-resolve-agent-model.js`** — `DEFAULT_AGENT_MODELS` includes `contractor: 'sonnet'`; four byte-identical copies (canonical `scripts/` + Codex + GitLab + Gitea plugins).
-- **Codex `.toml` agent profile** — `agents/contractor.toml` (three byte-identical copies across the Codex, GitLab, and Gitea plugin editions; Claude uses `agents/contractor.md`). Like every current Codex role profile, contractor omits top-level `model` and `model_reasoning_effort` and inherits both values from the parent session; its standard class remains declarative metadata. Standalone TOMLs carry `description` and `nickname_candidates` metadata matching `config/agents.toml`. Per-edition `config/agents.toml` also carries a `[agents.contractor]` block (three byte-identical copies across all Codex editions).
+`--attest-contractor-spawn` is a **warn-and-ignore shim** (the `--workflow-path` precedent): a stale
+caller passing it is never hit with an `unknown_flag` refusal, and the flag selects, validates, and
+records nothing.
 
 ---
 
@@ -2270,8 +2291,8 @@ judgment.
 
 ### Tools and model
 
-`Read, Write, Bash, Grep, Glob`; model **Opus** (fixed — profile-invariant, like the contractor's
-fixed Sonnet). `Write` authors `workflow-plan.md`; `Bash` runs the claim/startup and the validator
+`Read, Write, Bash, Grep, Glob`; model **Opus** (fixed — profile-invariant). `Write` authors
+`workflow-plan.md`; `Bash` runs the claim/startup and the validator
 self-check.
 
 ### Ordered contract
@@ -2855,7 +2876,7 @@ run /hooks once in Codex to review and trust these command hooks (or codex exec 
   marks it untrusted again. For automation use `codex exec --dangerously-bypass-hook-trust`.
 - **`multi_agent` precondition (AC5):** `SubagentStart` requires Codex `multi_agent`
   enabled. With it off the hook never fires and `checkDispatchAttestations` reads
-  `claim_planner_attested: missing` / `finalize_contractor_attested: missing` —
+  `claim_planner_attested: missing` —
   non-fatal, WARN-first (closure still succeeds).
 - **Matcher caveat:** the `PreToolUse`/`PostToolUse` matchers (`Bash`, `Write|Edit`)
   follow Claude Code tool names. If a Codex build uses different tool-event names the
@@ -3299,24 +3320,22 @@ For a completed linked issue N:
 
 **Keep-open inversion (issue #336).** A tenth invariant, `keep-open-roadmap-preserved`, applies ONLY when the receipt carries `remote_issue_closed: kept_open` (a keep-open partial-close finalize). On a keep-open run, `checkClosureInvariants` REPLACES invariants 1 and 2 with their inverse: `kaola-workflow/.roadmap/issue-N.md` MUST be preserved and the regenerated `ROADMAP.md` MUST still list `#N`. A missing source or a mirror that dropped `#N` is the violation. Invariants 3, 4, 6, 7 apply unchanged (the project folder is still archived `status: closed`; only the issue-close step differs).
 
-**WARN-FIRST detection invariants (issue #277 M2):** The following two invariants are recorded in the receipt but do NOT affect `closure_invariants.ok`. Missing attestation adds a warning and sets the receipt field to `missing`; it never blocks closure. The detector is log-gated: if no `dispatch-log.jsonl` is found in the project `.cache/`, both fields are set to `missing` and a warning `'attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive'` is added — closure is not blocked.
+**WARN-FIRST detection invariant (issue #277 M2, narrowed to the claim/author seam by #816):** The following invariant is recorded in the receipt but does NOT affect `closure_invariants.ok`. Missing attestation adds a warning and sets the receipt field to `missing`; it never blocks closure. The detector is log-gated: if no `dispatch-log.jsonl` is found in the project `.cache/`, the field is set to `missing` and a warning `'attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive'` is added — closure is not blocked. The **finalize seam has no attestation at all**: it is orchestrator-owned by design, so inline execution there is the design, not a bypass.
 
 8. `claim-planner-attested` — A workflow-planner subagent spawn is recorded in the dispatch log (`.cache/dispatch-log.jsonl`) BEFORE the plan was frozen.
-9. `finalize-contractor-attested` — A contractor subagent spawn is recorded in the dispatch log during the finalize window.
 
-**Dual-root producer + contractor self-attest (issue #338).** The dispatch-log producer
+**Dual-root producer (issue #338).** The dispatch-log producer
 (`hooks/kaola-workflow-subagent-dispatch-log.sh`) resolves BOTH the hook's own cwd toplevel and
 the dispatched agent's `cwd` (`AGENT_CWD`) toplevel, appending to each distinct active project —
-so a contractor dispatched into a linked **worktree** is logged where `cmdFinalize` (run in the
-worktree) reads its `.cache/`. In-place runs are unchanged (one root, one append). Independently,
-`cmdFinalize --attest-contractor-spawn` back-fills a `contractor`/`finalize-backfill` entry into
-the archived `.cache/dispatch-log.jsonl` (mirror of the `--attest-planner-spawn` flag at the
-claim seam); the contractor profile's Step 8b passes it so `finalize_contractor_attested` reads
-`attested` even on hookless harnesses. The flag is gated: an inline main-session finalize that
-omits it still reads `missing` (the inline-bypass detector fires). On a **pr** sink the contractor
-skips Step 8b, so a pr-sink receipt may legitimately read `missing` — expected and non-blocking
-(warn-first). The flag was added ONLY to the contractor seam in the gitlab/gitea claim ports; the
-planner-flag parity gap in those ports is a separate follow-up.
+so an agent dispatched into a linked **worktree** is logged where the closure path (run in the
+worktree) reads its `.cache/`. In-place runs are unchanged (one root, one append).
+
+**Finalize-seam attestation retired (issue #816).** `finalize_contractor_attested`, the
+`--attest-contractor-spawn` back-fill, and the "finalize seam may have been run inline by main
+session" warning all treated inline execution as suspect. Inline is now the design, so the field,
+the flag's effect, and the warning are gone. The flag itself survives as a warn-and-ignore shim.
+**Legacy tolerance on read is mandatory:** a closure receipt or archived `## Attestation` section
+carrying the retired field is read and kept VERBATIM — nothing rewrites one.
 
 ### Closure receipt schema
 
@@ -3352,7 +3371,6 @@ unpopulated receipt reads as total failure, never silent success) and
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
   "claim_planner_attested": "attested|missing|failed",
-  "finalize_contractor_attested": "attested|missing|failed",
   "selection_evidence": "present|absent",
   "warnings": []
 }
@@ -3376,7 +3394,7 @@ unpopulated receipt reads as total failure, never silent success) and
 - `close_disposition: close_pending` — set ONLY by `cmdFinalize` on the merge lane. `checkClosureInvariants` SKIPS the `remote-members-closed` invariant when this is `close_pending` (the members WILL close at sink), defusing the pre-sink alarm that fired on every happy-path bundle finalize (#396.4). `sink-merge` / `watch-pr` (post-sink) leave `close_disposition` unset, so the invariant fires there truthfully on a genuine partial close.
 - `keep_open_requested: true|false` — records the keep-open INTENT. `checkClosureInvariants` keys the keep-open inversion on this recorded intent, NOT on the mutable `remote_issue_closed` token (which flips to `already_closed` when the issue was auto-closed on the forge, wrongly flipping the checker into the close branch; #396.3).
 
-**Opt-in exit gate (issue #395.5, D1).** `cmdFinalize` always emits the receipt JSON and exits 0 by default (the contractor choreography + tests read the JSON, not `$?`). Pass `--strict` to additionally make the exit code reflect the invariant verdict: **exit 4** when `closure_invariants.ok === false`. No existing caller passes `--strict`, so the default behavior is byte-compatible.
+**Opt-in exit gate (issue #395.5, D1).** `cmdFinalize` always emits the receipt JSON and exits 0 by default (the orchestrator + tests read the JSON, not `$?`). Pass `--strict` to additionally make the exit code reflect the invariant verdict: **exit 4** when `closure_invariants.ok === false`. No existing caller passes `--strict`, so the default behavior is byte-compatible.
 
 **Durable-state field guards (issue #398).** `writeState` / `patch-branch` refuse a newline/CR in any durable field value (typed throw — a `branch: $'main\nworktree_path: /tmp/EVIL'` would otherwise inject a forged field). Branch creation sites (`provisionWorktree`, the in-place `checkout -b`, `patch-branch`) guard the branch with `assertSafeBranchArg` (throws on a `-`-leading / NUL / newline branch) — not just `removeBranch` at teardown. A raw worktree error is collapsed to one line and accompanied by a classified `worktree_error_class` token (#403.8).
 
@@ -3409,18 +3427,17 @@ unpopulated receipt reads as total failure, never silent success) and
   close trips the `remote-members-closed` closure invariant (warn-first-but-VISIBLE), so a partial
   bundle close is never reported as a clean success.
 
-`claim_planner_attested` and `finalize_contractor_attested` are WARN-FIRST detection fields (issue #277 M2). Both default to `'failed'` in `emptyReceipt()`. `checkDispatchAttestations` (called from the closure path in `kaola-workflow-claim.js`) reads `.cache/dispatch-log.jsonl`, sets each field to `attested` or `missing`, and pushes any warnings. It never modifies `closure_invariants.violations` — missing attestation is advisory only.
+`claim_planner_attested` is a WARN-FIRST detection field (issue #277 M2). It defaults to `'failed'` in `emptyReceipt()`. `checkDispatchAttestations` (called from the closure path in `kaola-workflow-claim.js`) reads `.cache/dispatch-log.jsonl`, sets the field to `attested` or `missing`, and pushes any warnings. It never modifies `closure_invariants.violations` — missing attestation is advisory only. Issue #816 removed the finalize-seam counterpart; a legacy receipt carrying it is tolerated on read and never re-emitted.
 
 **Attestation warning persistence to the archive (issue #653 / D-653-01).** The receipt fields above are otherwise ephemeral — recorded only in the finalize CLI's JSON stdout and the mutable `.cache/dispatch-log.jsonl`. `persistAttestationToSummary(destDir, receipt)` (`kaola-workflow-claim.js` + byte-identical Codex copy) durably appends a script-owned, presence-guarded (`/^## Attestation$/m`, create-if-absent) `## Attestation` section to the archived `finalization-summary.md`:
 
 ```
 ## Attestation
 claim_planner_attested: <value>
-finalize_contractor_attested: <value>
 <every receipt.warnings entry starting with 'ATTESTATION WARNING' or 'attestation:', verbatim, one per line>
 ```
 
-Both column-0 status fields are always written, even when both are `attested` — a clean result is a positive statement, not an absence. Called in `cmdFinalize` immediately after `checkDispatchAttestations`, before `computeGoalCheck`. `appendClosureBlock`'s field set independently gains the same two attestation fields in the archived `workflow-state.md`'s `## Closure` block (see `docs/workflow-state-contract.md`), so the archive carries two durable, mutually-reinforcing copies of the attestation outcome. **Known residual:** a contractor-authored summary that pre-seeds a column-0 `## Attestation` heading before finalize suppresses the append (the presence guard exists for crash-resume idempotence, not tamper-resistance) — fenced by the `## Closure` block + stdout receipt still carrying the true fields in the same run, and by finalize prose forbidding removal/summarization of the section; see `docs/decisions/D-653-01.md`.
+The column-0 status field is always written, even when `attested` — a clean result is a positive statement, not an absence. Called in `cmdFinalize` immediately after `checkDispatchAttestations`, before `computeGoalCheck`. `appendClosureBlock`'s field set independently carries the same attestation field in the archived `workflow-state.md`'s `## Closure` block (see `docs/workflow-state-contract.md`), so the archive carries two durable, mutually-reinforcing copies of the attestation outcome. The presence guard is ALSO the legacy-tolerance rule (#816): an archived section carrying the retired finalize-seam field is left byte-identical. **Known residual:** a summary that pre-seeds a column-0 `## Attestation` heading before finalize suppresses the append (the presence guard exists for crash-resume idempotence, not tamper-resistance) — fenced by the `## Closure` block + stdout receipt still carrying the true field in the same run, and by finalize prose forbidding removal/summarization of the section; see `docs/decisions/D-653-01.md`.
 
 **`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since the no-target survey only runs on the auto-bundle branch. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
 

@@ -71,21 +71,25 @@ const RETIRED_PROFILE_FILES = [
   'code-reviewer-max.toml',
   'security-reviewer-max.toml',
   'adversarial-verifier-max.toml',
+  // The finalize seam is orchestrator-owned: the mechanical residue folded into the finalize
+  // transaction, so the bookkeeping role retired. Pruned on upgrade so a previously-installed
+  // profile cannot linger and shadow.
+  'contractor.toml',
 ];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'code-explorer', 'knowledge-lookup', 'tdd-guide', 'implementer',
-  'doc-updater', 'contractor', 'metric-optimizer',
+  'doc-updater', 'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',
   'security-reviewer', 'adversarial-verifier', 'workflow-planner', 'synthesizer',
 ]);
-// Workflow-planner and contractor are dispatched outside the adaptive Node Ledger. Their
-// workflow/plan/finalization artifacts are the authoritative durable result, with an additional
+// The workflow-planner is dispatched outside the adaptive Node Ledger. Its
+// workflow/plan artifacts are the authoritative durable result, with an additional
 // cache mirror only when a caller supplies a seeded evidence file. All other profiles are DAG node
 // roles and must self-write the exact seeded cache artifact before returning a compact summary.
-const CODEX_ORCHESTRATION_ROLES = Object.freeze(['contractor', 'workflow-planner']);
+const CODEX_ORCHESTRATION_ROLES = Object.freeze(['workflow-planner']);
 const CODEX_STANDARD_MODEL = 'gpt-5.6-sol';
 const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';

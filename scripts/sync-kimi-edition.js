@@ -176,8 +176,7 @@ function renderAgent(canonContent, agentName, forge) {
   // Same additive-generation-only discipline as the opencode renderAgent (#544):
   // the Claude→kimi script-path rewrite applies to the RENDERED body so canonical
   // agents/*.md are never touched (D-530-02).
-  // rewriteClaudeScriptPaths is a no-op when the patterns are absent (only contractor
-  // ships `kaola_script()` definitions; contractor + workflow-planner ship the
+  // rewriteClaudeScriptPaths is a no-op when the patterns are absent (workflow-planner ships the
   // "Re-derive" prose parenthetical). The scoped `--runtime claude` → `--runtime kimi`
   // rewrite mirrors transformCommandBody: workflow-planner's claim-startup invocation
   // must stamp the kimi runtime into workflow-state.md on this edition.
@@ -195,12 +194,12 @@ function renderAgent(canonContent, agentName, forge) {
 
 // kimi-native `kaola_script()` shell resolver (the kimi twin of #544's opencode
 // resolver). The canonical resolver ships a Claude search path verbatim —
-// `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow` (contractor's copy ALSO adds
+// `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow` (a plugin-resident copy may ALSO add
 // the gitlab/gitea forge dirs). On the kimi edition that is a Claude-path leak: kimi
 // resolves scripts via the kimi home dir honoring `$KIMI_CODE_HOME` (default
 // `~/.kimi-code`), which is where install-kimi.sh deploys the support scripts. This
 // constant is the wholesale replacement for every `kaola_script(){ ... return 1; }`
-// definition line (both the 3-path command form and the 5-path contractor form
+// definition line (both the 3-path command form and the 5-path plugin form
 // collapse to this single kimi form — kimi is runtime-only, no forge axis). The
 // self-repo priority rule is preserved: inside the kaola-workflow repo itself,
 // `./scripts` wins; anywhere else the installed copy wins. Single-quoted JS literal:
@@ -246,7 +245,7 @@ function rewriteClaudeScriptPaths(text, forge) {
   text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
   // (b) The path-list parenthetical in agent prose (whitespace-flexible across the two
   // agents' line breaks). Scoped to the literal "(prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
-  // then … then `./scripts`)" shape — only contractor + workflow-planner carry it.
+  // then … then `./scripts`)" shape — only workflow-planner carries it.
   text = text.replace(
     /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
     '(prefer `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, then `./scripts`)'

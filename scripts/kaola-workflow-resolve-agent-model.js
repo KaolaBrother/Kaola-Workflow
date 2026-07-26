@@ -28,7 +28,6 @@ const DEFAULT_AGENT_MODELS = {
   // post-G1 intent-verifier on a synthesizer's merge is raised that way); it is NOT a
   // reasoning-floor role.
   'adversarial-verifier': 'sonnet',
-  contractor: 'sonnet',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
   // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
   // A plan may raise it per node; it is NOT a reasoning-floor role.

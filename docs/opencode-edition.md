@@ -155,7 +155,7 @@ inherit the model you already use; only the effort differs. Example (GLM-5.2):
     "workflow-planner":  { "variant": "max"  },
     "code-architect":    { "variant": "max"  },
     "security-reviewer": { "variant": "max"  },
-    "contractor":        { "variant": "high" }    // standard tier → second effort
+    "implementer":       { "variant": "high" }    // standard tier → second effort
     // … 9 standard roles on "high"
   }
 }

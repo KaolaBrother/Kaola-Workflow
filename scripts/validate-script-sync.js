@@ -70,7 +70,7 @@ const COMMON_SCRIPTS = [
   // #266 AC-C: workflow-tasks.json generator (base-named claude↔codex pair; gitlab/gitea
   // are edition-named ports — kaola-{forge}-workflow-task-mirror.js — NOT byte-synced)
   'kaola-workflow-task-mirror.js',
-  // NOTE (#399): the contractor Step-8a ledger-regression guard (kaola-workflow-ledger-compare.js)
+  // NOTE (#399): the Step-8a ledger-regression guard (kaola-workflow-ledger-compare.js)
   // is FORGE-NEUTRAL but ALSO shell-resolved by the gitlab/gitea finalize SKILLs (whose contract
   // validators forbid a `plugins/kaola-workflow/scripts/` cross-tree reference), so it must ship to
   // ALL FOUR trees. It lives in the 4-tree BYTE_IDENTICAL_GROUPS below (closure-contract pattern),
@@ -113,7 +113,7 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
-    // #399: the contractor Step-8a ledger-regression guard is forge-neutral (no rename) but the
+    // #399: the Step-8a ledger-regression guard is forge-neutral (no rename) but the
     // gitlab/gitea finalize SKILLs shell-resolve it from their OWN tree (their contract validators
     // forbid a base-tree `plugins/kaola-workflow/scripts/` reference), so it byte-ships to all four.
     label: 'ledger-compare module copies',

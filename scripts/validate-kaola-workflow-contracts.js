@@ -196,17 +196,25 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'run-gap
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'metadata captured before archive');
-// #336: keep-open partial-close sink lane (codex SKILL.md is the contractor seam — no command file).
+// #336: keep-open partial-close sink lane (codex SKILL.md is the finalize seam — no command file).
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_action');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-issue-open');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'merge-sink-only');
-// #277 M3: contractor-dispatch HANDLE lock (Codex edition). Codex has no command file — the
-// finalize SKILL.md is the contractor seam. The node-4 rewrite made the contractor the SOLE HOME
-// of the mechanical finalization and requires the session to delegate it (inline only on a logged
-// local-fallback-tool-unavailable escape). Lock the delegation clause so the seam cannot drift back
-// to inline-by-preference.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'local-fallback-tool-unavailable');
+// #816: ownership-inversion lock (Codex edition). Codex has no command file — the finalize SKILL.md
+// IS the finalize seam. The seam is orchestrator-owned and the mechanical residue is ONE script
+// transaction, so the surface must carry NO dispatchable bookkeeping role and MUST carry the
+// one-call transaction. Both directions are pinned: re-introducing a dispatch reds the chain, and
+// dropping the transaction call reds it too.
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'agent_type="contractor"');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'contractor');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'ONE resumable script transaction');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'finalize \\\n       --project "$KAOLA_PROJECT"');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'implementation_commit_missing');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'staging_guard_multi_project');
+// #816: the crash-resume vocabulary relocates here from the retired role profile — the typed codes
+// a finalize surface documents must stay documented on every runtime (runtime-lexicon parity).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'finalize_incomplete');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'already_finalized');
 
 // Issue #77: typed-acknowledgement delegation gate — remove ungated fallback language (the
 // research/ideation/plan/execute/review/fast SKILLs are retired; only surviving gate SKILLs remain).
@@ -653,7 +661,7 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'plan_inval
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`), '#255 adaptive handoff aggregator missing from Codex plugin');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`), '#272 adaptive node aggregator missing from Codex plugin');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'would_orphan_in_progress'); // #343 mid-gate reopen
-// #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
+// #338: anti-drift pin — the finalize sink row is main-session-direct.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'main-session-direct');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-direct');
 // #344: the Codex plan-run SKILL references $KAOLA_SCRIPTS for every lifecycle call; it must
@@ -661,7 +669,7 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-se
 // this repo. Pin the assignment + the cache probe so removal regresses the chain.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '*/kaola-workflow/*/scripts/kaola-workflow-adaptive-node.js'");
-// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
+// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the agent lockstep.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'clear-halt');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "subcommand === 'clear-halt'");
 for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
@@ -693,14 +701,16 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'route-
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'--summary'");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'findings-route.json'");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'VERDICT_ROLES');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
+// #816: the finalize seam records no attestation — the field, the back-fill, and the inline-suspect
+// warning are retired. Pinned as an ABSENCE so a revival reds the chain.
+assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'finalize_contractor_attested');
+assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'attestContractorSpawn');
 // #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
 // claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-planner-spawn');
 // the planner startup surfaces themselves must instruct the flag, not just the producer script.
 assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, '--attest-planner-spawn');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--attest-planner-spawn');
-assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
 // #359: producer-attested evidence-token vocabulary in the codex agent profiles.
 assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');
 assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'non-empty column-0 `RED:`');
@@ -708,11 +718,11 @@ assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'non-empty column-0 `RED:`
 assertIncludes(`${pluginRoot}/agents/metric-optimizer.toml`, 'iterations_used');
 
 // Codex 0.144 durable-result wall. Every DAG node profile writes its complete result directly to
-// the exact seeded cache path, including roles that are logically read-only. Workflow-planner and
-// contractor run outside the Node Ledger, so their canonical workflow artifacts are the durable
+// the exact seeded cache path, including roles that are logically read-only. The workflow-planner
+// runs outside the Node Ledger, so its canonical workflow artifacts are the durable
 // full result (and they mirror into a seeded cache when supplied). Every parent-facing return is compact.
 {
-  const orchestrationRoles = new Set(['contractor', 'workflow-planner']);
+  const orchestrationRoles = new Set(['workflow-planner']);
   const roleTomls = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
     .filter(file => file.endsWith('.toml'))
     .map(file => file.slice(0, -'.toml'.length))

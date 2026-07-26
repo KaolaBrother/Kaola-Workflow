@@ -220,11 +220,14 @@ assert(read('.opencode/agent/workflow-planner.md').includes('mapTier'),
   'A13: workflow-planner opencode body carries the mapTier effort-tier guidance');
 assert(/effort[- ]tier/i.test(read('.opencode/agent/workflow-planner.md')),
   'A13: workflow-planner opencode body names the effort tiers');
-assert(!read('.opencode/agent/contractor.md').includes('mapTier'),
+assert(!read('.opencode/agent/implementer.md').includes('mapTier'),
   'A13: non-planner agents stay verbatim (no mapTier guidance)');
 assert(sync.opencodeAgentSuffix('workflow-planner').includes('mapTier')
-  && sync.opencodeAgentSuffix('contractor') === '',
+  && sync.opencodeAgentSuffix('implementer') === '',
   'A13: opencodeAgentSuffix is non-empty only for workflow-planner');
+// #816: the retired bookkeeping role must not be regenerated onto this runtime.
+assert(!fs.existsSync(path.join(REPO, '.opencode', 'agent', 'contractor.md')),
+  'A13: the retired bookkeeping role must not ship on the opencode edition');
 for (const file of canonCommands) {
   const expected = sync.renderCommand(read('commands/' + file));
   assert(read('.opencode/command/' + file) === expected,
@@ -386,7 +389,7 @@ for (const role of ['code-architect', 'code-reviewer', 'security-reviewer']) {
 // Retiring the install-time model axis must not re-tier a role. These stay OFF the top tier:
 // `adversarial-verifier` never had a `higher` variant, so its shipped tier is standard, and
 // `build-error-resolver` is hot repair work. Both are raisable per node by the frozen plan.
-assert(!topRoles.includes('contractor') && !topRoles.includes('implementer')
+assert(!topRoles.includes('implementer')
   && !topRoles.includes('adversarial-verifier') && !topRoles.includes('build-error-resolver'),
   'A12: standard-tier roles stay off the top tier');
 
@@ -457,7 +460,7 @@ for (const role of stdRoles) {
 const oai = parseRendered({ inheritModel: 'openai/gpt-5' });
 assert(Object.keys(oai.provider.openai.models['gpt-5'].variants).sort().join('/') === 'high/xhigh',
   'A12: openai maps top=xhigh, second=high');
-assert(oai.agent.planner.variant === 'xhigh' && oai.agent.contractor.variant === 'high',
+assert(oai.agent.planner.variant === 'xhigh' && oai.agent.implementer.variant === 'high',
   'A12: openai top-tier → xhigh, standard-tier → high');
 
 // A12 (FLIPPED #544): unknown provider NO LONGER degrades — it gets the safe-DEFAULT
@@ -468,8 +471,8 @@ assert(unk.provider !== undefined && unk.agent !== undefined,
 assert(unk.provider.acme.models['unknown-model'].variants.high
   && unk.provider.acme.models['unknown-model'].variants.medium,
   'A12: unknown provider gets default-contract high/medium variants');
-assert(unk.agent.planner.variant === 'high' && unk.agent.contractor.variant === 'medium',
-  'A12: unknown provider → default contract (planner=high, contractor=medium)');
+assert(unk.agent.planner.variant === 'high' && unk.agent.implementer.variant === 'medium',
+  'A12: unknown provider → default contract (planner=high, implementer=medium)');
 
 // ---------------------------------------------------------------------------
 // A9: route-reachability — every receipt-emitted command target resolves to an
@@ -1174,7 +1177,7 @@ if (exists(pluginRel)) {
   // A (folded #544) — ZERO Claude path leaks across the ENTIRE deployed .opencode/
   // tree. Today kaola_script()'s search path ships the Claude env var
   // ($CLAUDE_PLUGIN_ROOT) + the Claude home dir ($HOME/.claude/kaola-workflow)
-  // verbatim in EVERY command AND in the contractor + workflow-planner agents.
+  // verbatim in EVERY command AND in the workflow-planner agent.
   // The opencode edition must resolve scripts via an opencode-native path (no
   // Claude env vars, no .claude/ dir). This greps command/*.md + agent/*.md +
   // plugins/*.js + hooks/*.sh on a FRESHLY-installed hermetic tree (the same

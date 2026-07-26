@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 // kaola-gitlab-workflow-adaptive-handoff.js (issue #255, updated #272)
 //
-// Aggregator: collapses the contractor classify/freeze/orient steps into
+// Aggregator: collapses the classify/freeze/orient steps into
 // ONE mechanical transition. The workflow-planner RUNS this (never judges);
 // the orchestrator drives the bounded repair loop on plan_invalid.
 // After #272, /kaola-workflow-plan-run owns the entire node lifecycle (incl. the

@@ -135,6 +135,11 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
+# Role skills this edition deployed on a PREVIOUS release and no longer generates. The install
+# prune is namespace-wide (kaola-role-*), so install already self-heals; uninstall removes by
+# source-tree name and needs the retired names listed here.
+RETIRED_ROLE_SKILLS=("kaola-role-contractor")
+
 # Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
 # Single source of truth for the deploy set (used by copy_skills).
@@ -343,6 +348,14 @@ uninstall_edition() {
   for src_dir in "$SOURCE_TREE/skills/"*/; do
     [[ -d "$src_dir" ]] || continue
     rm -rf "$skills_dest/$(basename "$src_dir")"
+  done
+  # Uninstall removes by SOURCE-TREE name, so a role skill RETIRED since the deployed install is
+  # absent from the source tree and would linger forever. Remove the retired names explicitly.
+  local retired
+  for retired in "${RETIRED_ROLE_SKILLS[@]}"; do
+    [[ -d "$skills_dest/$retired" ]] || continue
+    rm -rf "$skills_dest/$retired"
+    echo "Removed retired role skill: $skills_dest/$retired"
   done
   rmdir "$skills_dest" 2>/dev/null || true
   if [[ "$GLOBAL" -ne 1 ]]; then rmdir "${TARGET:-$PWD}/.kimi-code" 2>/dev/null || true; fi
