@@ -535,6 +535,23 @@ recomputes the structured trigger digest, and assigns
 and secondary anchors do not define identity. Conflicting immutable records for one UID refuse
 `finding_uid_collision`.
 
+Of those five kinds only `evidence_observation` carries no repository path, and every in-plan repair
+route resolves its fixer FROM that path. A **change gate whose derived effect is `fail`** therefore
+requires a path-bearing primary anchor on every finding the repair contract obliges a writer to fix
+(`repairResponsibleFindings` — open, `scope: in_scope`, `action: fix`); one that does not refuses
+`review_finding_anchor_unroutable`, naming the offending kinds and the routable set
+(`ROUTABLE_FINDING_ANCHOR_KINDS`, derived from the anchor-kind vocabulary through the single
+`findingAnchorCarriesPath` predicate). The trigger is the effect `deriveGateEffect` computes, never a
+role's outcome token: an approval gate reaches it through `changes_requested` and an
+`adversarial-verifier` through `refuted` or `indeterminate`, and a gate role added later is covered
+the day its outcomes join that one function. The refusal lands before any receipt or journal attempt
+is written, so an unplaceable finding cannot commit an attempt no route can act on.
+`evidence_observation` stays legal as a secondary anchor, on a non-blocking (deferred /
+out-of-scope / non-`fix`) finding, and on an investigation-mode gate — an `indeterminate` verdict that
+authors no finding at all is untouched, since there is nothing to route. The open-time reviewer stub
+states the rule to every reviewer it binds, including the gate roles whose contract asks for no
+findings token.
+
 The first attempt in a scope lineage is `discovery`; later attempts are `closure`. Closure must
 classify every prior UID as open or resolved, bind a new blocker to the repair delta, provide
 current-candidate resolution evidence for removed UIDs, strictly shrink the open set, and retain a

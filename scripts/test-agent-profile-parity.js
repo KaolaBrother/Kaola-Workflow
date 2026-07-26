@@ -126,6 +126,15 @@ const FEATURE_TOKENS = [
   // the claim. Pinning the bare verb phrase would let a full inversion of the precedence rule
   // ("always widens, narrows, or substitutes") pass, so the negation is part of the token.
   'never widens, narrows, or substitutes',
+  // #805 D2: validation ORDERING. A plan that executes the whole-candidate validation_command inside
+  // a review gate pays for the full suite against a candidate the gate may then reject, so a single
+  // blocking finding costs two validation runs instead of one. The planner authors the ordering, so
+  // the rule lives in agents/workflow-planner.md and must reach the three .toml twins the codex/forge
+  // planners actually read. Both halves are pinned: the placement rule and the conditional form a
+  // gate uses when its claim genuinely needs validation evidence. Polarity is load-bearing in the
+  // first token ("AFTER ... never inside it") — the bare phrase would let an inversion pass.
+  'Place expensive validation AFTER the review wall, never inside it',
+  'short-circuits before the expensive step',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
