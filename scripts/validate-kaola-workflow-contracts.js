@@ -614,12 +614,8 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_sc
   assertNotIncludes(nextSkill796, 'Backlog Inventory');
   assertNotIncludes(nextSkill796, 'What You May Read');
   assertProfileSectionCitations(nextSkill796, 'agents/workflow-planner.md');
-  // The adapt SKILL is the receiving end of the described-task route: it must document the entry
-  // shapes, carry the dispatch's binding-scope field, and render a defined no-target target slot.
-  const adaptSkill796 = `${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`;
-  assertIncludes(adaptSkill796, 'Entry contract');
-  assertIncludes(adaptSkill796, 'Binding scope:');
-  assertIncludes(adaptSkill796, 'no target named; run no-target survey mode');
+  // The adapt entry contract is asserted on THIS SAME Codex adapt SKILL path by the root
+  // validator's six-adapt-surface loop, in the always-selected claude chain.
 }
 // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
 // the project-local needle above GREEN (add, never remove) and pin the global path alongside it.

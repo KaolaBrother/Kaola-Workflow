@@ -697,15 +697,9 @@ for (const file of [pluginRoot + '/commands/workflow-next.md',
   assertNotIncludes(file, 'What You May Read');
   assertProfileSectionCitations(file, 'agents/workflow-planner.md');
 }
-// #796: the adapt surfaces are the receiving end of the described-task route — they must document
-// the entry shapes, carry the planner dispatch's binding-scope field, and render a defined
-// no-target target slot instead of a placeholder literal.
-for (const file of [pluginRoot + '/commands/kaola-workflow-adapt.md',
-  pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md']) {
-  assertIncludes(file, 'Entry contract');
-  assertIncludes(file, 'Binding scope:');
-  assertIncludes(file, 'no target named; run no-target survey mode');
-}
+// The adapt entry contract (entry shapes, the dispatch's binding-scope field, and a defined
+// no-target target slot) is asserted on THIS EDITION'S OWN adapt command and SKILL by the root
+// validator's six-adapt-surface loop, in the always-selected claude chain.
 // #277 M3: FANOUT_CAP and post-dominate relocated from commands/kaola-workflow-adapt.md
 // (dispatch-handle-only) to agents/workflow-planner.md (sole home of authoring procedure).
 // agents/workflow-planner.md is a shared repo-root file; use a root-relative path (no pluginRoot).
