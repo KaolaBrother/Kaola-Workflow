@@ -8261,6 +8261,19 @@ function runRevertOverflow(opts) {
   const barrierRoot = getRoot();
 
   // (2) Restore each outOfAllow path to its baseline state.
+  //
+  // KNOWN GAP, recorded where it bites rather than filed: `git checkout <baseSha> -- <path>`
+  // cannot restore a path that did not exist at baseSha. A NEWLY-CREATED undeclared file has no
+  // blob at the baseline, so git exits non-zero and the whole revert refuses `git_checkout_failed`
+  // — including for the siblings that would have reverted cleanly, since the paths are passed in
+  // one invocation. The operator is then holding an overflow this primitive cannot clear.
+  //
+  // This matters more than it reads. Since test writes became attributable, newly-created files
+  // are the DOMINANT overflow class, so the discard primitive fails on exactly the case it is now
+  // most often reached for. The preserve primitive (`amend-surface`) is the working recovery for
+  // companion work owned by a discharged milestone, which is why the `write_set_overflow` hint
+  // names both. A correct fix here would partition outOfAllow into paths present at baseSha
+  // (checkout) and paths absent from it (delete), and report the two sets separately.
   const revertedPaths = [];
   if (gitCheckoutSeam) {
     const r = gitCheckoutSeam(barrierRoot, baseSha, outOfAllow);
@@ -12788,6 +12801,16 @@ function runReconcileRunningSet(opts) {
   }
   // Reset the ledger row for each gate-check rollback BEFORE the survivors/leg-teardown logic runs below
   // (mirrors discard-speculative's ordering: ledger reset first, --drop-base is not #424 window-locked).
+  //
+  // KNOWN GAP, recorded where it bites rather than filed: these resets move ledger rows
+  // `in_progress → pending` and announce NOTHING. The expansion roll-forward on this same command
+  // was fixed to return a `taskTransitions` entry for every row it moves, precisely so the
+  // presented task list cannot contradict the ledger — but the running-set repair's OWN rollbacks
+  // (this `specWriteGateRollback` set, and the `cappedOut` set below) were not part of that fix.
+  // Same species, different mechanism: after a crash recovery that rolls back a speculative write
+  // leg or caps re-opens at the ceiling, the operator's task list still shows those units running.
+  // The fix is the same shape — build the transitions through the shared announce helper and fold
+  // them into the same returned channel.
   if (specWriteGateRollback.length) {
     let planContentForReset = readFile(planPath);
     let changedAny = false;
@@ -14250,6 +14273,24 @@ function isExactFileToken(tok) {
 function runAmendSurface(opts) {
   // No writeFile here by design: this command validates and composes, then hands the whole mutation —
   // amend block INCLUDED — to the single atomic re-open transaction below.
+  //
+  // KNOWN GAP, recorded where it bites rather than filed. This primitive widens a milestone's
+  // attributed surface after the fact, and in doing so it steps around two fences that bind
+  // everywhere else:
+  //
+  //   1. The test-custody wall. A node declaring a test-like path must BE a test-owning node or
+  //      carry a declared, hash-covered `## Meta test_custody_exemption`. An amendment attributes
+  //      arbitrary exact files to an already-discharged milestone WITHOUT re-running that check,
+  //      so a test path can enter a production node's surface through this door alone.
+  //   2. `plan_hash`. The amend block is composed into the plan, but the amended surface is not
+  //      folded back into the frozen digest, so the plan a run is judged against can widen while
+  //      its hash stays constant.
+  //
+  // Both are narrow in practice — amend-surface is operator-invoked from a refusal hint, never
+  // reached autonomously, and the barrier still attributes every write. But "narrow" is not
+  // "closed", and the honest reading is that this is the one seam where the custody wall is
+  // advisory. Do not widen its reach (routing it, or invoking it from an automated recovery)
+  // without first making it re-run the custody check and re-stamp the digest.
   const { planPath, nodeId, readFile } = opts;
   if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point whose surface to amend' });
   const rawFiles = Array.isArray(opts.files) ? opts.files : [];
