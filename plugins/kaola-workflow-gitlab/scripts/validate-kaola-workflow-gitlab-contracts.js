@@ -1141,19 +1141,9 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     assert(typeof planValidator[name] === 'function', pluginRoot + ' plan validator must export ' + name);
   }
 
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-adapt.md',
-    pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md',
-    pluginRoot + '/agents/workflow-planner.toml',
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-authoring -->');
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-plan-run.md',
-    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md',
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-execution -->');
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-finalize.md',
-    pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md',
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-finalization -->');
+  // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME EDITION PATHS by the root
+  // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
+  // (each also pins the contract fields) — in the always-selected claude chain.
 }
 
 // #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the GitLab finalize command so a silent

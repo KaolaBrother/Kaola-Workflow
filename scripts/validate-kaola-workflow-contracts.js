@@ -1226,14 +1226,9 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
       assert(typeof schema[name] === 'function', edition + ' adaptive schema must export ' + name);
     }
   }
-  for (const file of [
-    `${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`,
-    `${pluginRoot}/agents/workflow-planner.toml`,
-  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-authoring -->');
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`,
-    '<!-- PIN: reviewer-contract-v2-execution -->');
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`,
-    '<!-- PIN: reviewer-contract-v2-finalization -->');
+  // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME Codex paths by the root
+  // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
+  // (each also pins the contract fields) — in the always-selected claude chain.
 }
 
 // PROVENANCE_BAN: Codex prompt surfaces (agents/*.toml, skills/*/SKILL.md) must not embed
