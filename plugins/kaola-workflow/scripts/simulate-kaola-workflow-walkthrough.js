@@ -1290,7 +1290,7 @@ function testCodexPreflight266() {
   try {
     trustCodexProject(emptyHome266, root266);
     enableMultiAgentV2(emptyHome266);
-    // Install all 16 profiles into the fixture (14 base + synthesizer #463 + metric-optimizer #634; issue-scout retired #789, investigator added #798)
+    // Install all 15 profiles into the fixture (13 base + synthesizer #463 + metric-optimizer #634; issue-scout retired #789, investigator added #798)
     const installResult = spawnSync(process.execPath, [installProfilesScript, root266], {
       cwd: repoRoot, encoding: 'utf8'
     });
@@ -1744,9 +1744,9 @@ function testInstallSchemaPruneManifest332() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = listTomls(agentsDir);
-    // #451: 14 base role profiles (the <role>-max effort variants are retired; issue-scout
-    // retired #789; investigator added #798).
-    assert(tomls.length === 15, '#463 AC: fresh install must place exactly 15 *.toml (14 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789, investigator added #798), got ' + tomls.length);
+    // #451: 13 base role profiles (the <role>-max effort variants are retired; issue-scout
+    // retired #789; investigator added #798; contractor retired #816).
+    assert(tomls.length === 15, '#463 AC: fresh install must place exactly 15 *.toml (13 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789, investigator added #798), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     const profilePolicy = require(installProfilesScript);
     for (const f of tomls) {
@@ -1764,10 +1764,10 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 15, '#463 AC: manifest must list 15 roles (14 base + synthesizer + metric-optimizer)');
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 15, '#463 AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
     assert(manifest.files && Object.keys(manifest.files).length === 15
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
-      '#463 AC: manifest.files must carry 16 sha256 entries (14 base + synthesizer + metric-optimizer)');
+      '#463 AC: manifest.files must carry 15 sha256 entries (13 base + synthesizer + metric-optimizer)');
     for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(pluginRoot, 'agents', file));
@@ -2771,17 +2771,24 @@ function testCodexBundle424432433NodeSeeding() {
       assert(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
         'codex #433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
 
-      // (6c) tdd-guide role stubs present.
+      // (6c) tdd-guide role stubs follow CUSTODY: the seed carries BOTH `RED` and its `red_baseline`
+      // receipt, and must NOT carry `GREEN` — GREEN authority is gate-side, and asserting its ABSENCE
+      // is what keeps the seed from quietly re-acquiring the retired self-grading token.
       assert(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
         'codex #433 (6c): tdd-guide stub must contain RED token');
-      assert(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
-        'codex #433 (6c): tdd-guide stub must contain GREEN token');
+      assert(/^red_baseline: /m.test(evidenceContent) || /^<!-- red_baseline/.test(evidenceContent),
+        'codex #433 (6c): tdd-guide stub must contain the red_baseline receipt token');
+      assert(!/^GREEN\b/m.test(evidenceContent) && !/^<!-- GREEN/m.test(evidenceContent),
+        'codex #433 (6c): tdd-guide stub must NOT seed a GREEN token');
 
       // (6d) JSON response carries evidence_file + required_tokens.
       assert(onOut.opened.evidence_file === '.cache/n1.md',
         'codex #433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
-      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
-        'codex #433 (6d): required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED')
+        && onOut.opened.required_tokens.includes('red_baseline')
+        && !onOut.opened.required_tokens.includes('GREEN'),
+        'codex #433 (6d): required_tokens must be the custody set for tdd-guide — RED + red_baseline, no GREEN, got '
+          + JSON.stringify(onOut.opened.required_tokens));
 
       // (6e) Crash-resume: a second open-next must not overwrite the evidence file.
       const contentBefore = fs.readFileSync(evidencePath, 'utf8');

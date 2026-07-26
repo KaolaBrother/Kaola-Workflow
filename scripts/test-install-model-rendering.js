@@ -3083,8 +3083,9 @@ function enableMultiAgentV2(homeRoot) {
     ordinary.replace(/^developer_instructions/m, '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
     ordinary.replace(/^developer_instructions/m, '[shadow] # valid TOML table\ndeveloper_instructions'),
     ordinary.replace(/^description/m, 'name = "implementer"\ndescription'),
-    ordinary.replace('Purpose:', 'Purpose:\n- invalid TOML escape: \\q'),
-    ordinary.replace('Purpose:', 'Purpose:\rX'),
+    ordinary.replace('Your role -- the implementing role:',
+      'Your role -- the implementing role:\n- invalid TOML escape: \\q'),
+    ordinary.replace('Your role -- the implementing role:', 'Your role -- the implementing role:\rX'),
     `# raw control \u0001\n${ordinary}`,
   ];
   for (const [index, mutation] of ordinaryMutations.entries()) {

@@ -362,7 +362,7 @@ Three-part machine-enforced contract:
 
 1. **`.toml` triple byte-identity** — `validate-script-sync.js` `BYTE_IDENTICAL_GROUPS`
    includes a programmatic entry for every `plugins/kaola-workflow/agents/*.toml` file
-   (built via `readdirSync`), covering all 16 base-role profiles.
+   (built via `readdirSync`), covering all 15 base-role profiles.
    Any byte divergence between the three plugin-tree copies of a `.toml` reds the validation
    run. A new profile added to the codex tree is auto-covered.
 

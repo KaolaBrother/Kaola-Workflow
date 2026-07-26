@@ -168,9 +168,9 @@ assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea phantom-advisor hook must be removed (#372)');
-// #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired; issue-scout
-// retired #789; investigator added #798). #463: +synthesizer = 15. #634: +metric-optimizer = 15.
-assert(agentFiles.length === 15, 'expected 15 Gitea agent profiles (14 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, investigator added #798), got ' + agentFiles.length);
+// #451: 13 base role profiles (the 6 <role>-max xhigh effort variants are retired; issue-scout
+// retired #789; investigator added #798; contractor retired #816). #463: +synthesizer = 14. #634: +metric-optimizer = 15.
+assert(agentFiles.length === 15, 'expected 15 Gitea agent profiles (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, investigator added #798, contractor retired #816), got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
