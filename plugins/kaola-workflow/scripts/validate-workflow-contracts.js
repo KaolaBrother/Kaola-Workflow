@@ -1059,7 +1059,7 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'Every spawn parameter com
 assertIncludes('commands/kaola-workflow-plan-run.md', 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
 assertIncludes('commands/kaola-workflow-plan-run.md', '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
 assertIncludes('commands/kaola-workflow-plan-run.md', '← {node_id} · {role} returned: {verdict or one-line outcome}');
-assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline (…reason token…)');
+assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline');
 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes('commands/kaola-workflow-plan-run.md', '{node-id} → complete; opened: {next-id|—}');

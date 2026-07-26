@@ -5626,6 +5626,82 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
+// T14d (#817): execution mode is the orchestrator's per-unit judgment, so the
+// compliance row must be able to record `main-session-direct` for ANY node the
+// orchestrator ran inline — not only the finalize sink. Bidirectional by
+// construction: the SAME close runs twice, once with the flag and once without,
+// and the two runs must disagree. Without the second half the assertion would
+// still pass if the producer hardcoded main-session-direct for every node.
+// The flag is a RECORD, never a gate: both runs close ok, and neither refuses.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const nodes = [
+    '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+  const basePlan = makePlan([
+    '| impl-core | in_progress | |',
+    '| review | pending | |',
+    '| done | pending | |',
+  ], nodes);
+
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing test\nGREEN: test passes\n',
+  };
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core',
+        overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const closeOnce = (mainSessionDirect) => {
+    let planContent = basePlan;
+    const written = {};
+    const result = runCloseAndOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      nodeId: 'impl-core',
+      mainSessionDirect,
+      shell: shellStub,
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return makeState();
+        if (cacheFiles[fpath]) return cacheFiles[fpath];
+        throw new Error('ENOENT: ' + fpath);
+      },
+      writeFile: (fpath, content) => {
+        written[fpath] = content;
+        if (fpath.endsWith('workflow-plan.md')) planContent = content;
+      },
+      cacheExists: (fpath) => !!cacheFiles[fpath],
+    });
+    return { result, plan: written['/fake/kaola-workflow/test-project/workflow-plan.md'] };
+  };
+
+  const inline = closeOnce(true);
+  assert(inline.result.result === 'ok', 'T14d: an inline-run node closes ok (a record, not a gate)');
+  assert(inline.plan.includes('| tdd-guide (impl-core) | main-session-direct |'),
+    'T14d: a non-finalize node the orchestrator ran inline records main-session-direct');
+  assert(!inline.plan.includes('| tdd-guide (impl-core) | subagent-invoked'),
+    'T14d: the inline close does NOT falsely certify a delegation that never happened');
+
+  const dispatched = closeOnce(false);
+  assert(dispatched.result.result === 'ok', 'T14d: the dispatched close still closes ok');
+  assert(dispatched.plan.includes('| tdd-guide (impl-core) | subagent-invoked |'),
+    'T14d (mutation proof): without the flag the SAME node still records subagent-invoked');
+});
+
+// ---------------------------------------------------------------------------
 // T15: runCloseAndOpenNext — barrier exit1 → refuse, NO close/advance
 // ---------------------------------------------------------------------------
 scenario(() => {

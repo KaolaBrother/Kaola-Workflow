@@ -224,7 +224,8 @@ live mirror of the `## Node Ledger` (the durable source of truth); the executor 
 
 Full shaping lives in `agents/workflow-planner.md`. Author a `knowledge-lookup` node when the task
 depends on external library/API/framework behavior or open-web knowledge that the local codebase
-cannot confirm.
+cannot confirm. A composed unit is a paid dispatch boundary — fold mechanical follow-ons (a rerun,
+a re-verify, an evidence write) into the unit that owns them.
 
 ### Question-shaped & bug-shaped issues
 

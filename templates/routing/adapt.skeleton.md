@@ -307,7 +307,8 @@ under different top-level directories.
 The validator enforces only the **walls** — the unique `finalize` sink, G1
 (`code-reviewer` post-dominates code-producing nodes), G2 (`security-reviewer` post-dominates
 sensitive nodes). Everything below is author judgment the grammar will **not** refuse;
-the example above models both.
+the example above models both. A composed unit is a paid dispatch boundary — fold mechanical
+follow-ons (a rerun, a re-verify, an evidence write) into the unit that owns them.
 
 - **Plan before you build.** For a non-trivial implement, consider a `planner` (or
   `code-architect`) **node** that precedes — and so dominates — the implement nodes (the
@@ -557,7 +558,8 @@ live mirror of the `## Node Ledger` (the durable source of truth); the executor 
 
 Full shaping lives in `agents/workflow-planner.md`. Author a `knowledge-lookup` node when the task
 depends on external library/API/framework behavior or open-web knowledge that the local codebase
-cannot confirm.
+cannot confirm. A composed unit is a paid dispatch boundary — fold mechanical follow-ons (a rerun,
+a re-verify, an evidence write) into the unit that owns them.
 
 ### Question-shaped & bug-shaped issues
 

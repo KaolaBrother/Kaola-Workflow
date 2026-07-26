@@ -758,7 +758,7 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Every s
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '← {node_id} · {role} returned: {verdict or one-line outcome}');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ running {node_id} · {role} inline (…reason token…)');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ running {node_id} · {role} inline');
 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');

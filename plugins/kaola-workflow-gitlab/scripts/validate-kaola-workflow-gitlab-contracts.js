@@ -854,7 +854,7 @@ for (const planRunSurface of [
   assertIncludes(planRunSurface, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
   assertIncludes(planRunSurface, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
   assertIncludes(planRunSurface, '← {node_id} · {role} returned: {verdict or one-line outcome}');
-  assertIncludes(planRunSurface, '→ running {node_id} · {role} inline (…reason token…)');
+  assertIncludes(planRunSurface, '→ running {node_id} · {role} inline');
 
   // #605: required progress-echo line printed after every close-and-open-next.
   assertIncludes(planRunSurface, '{node-id} → complete; opened: {next-id|—}');

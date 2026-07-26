@@ -489,8 +489,8 @@ for (const ed of codexEditions) {
       `T12: ${f} must carry the pre-spawn announcement format (#604)`);
     assert(content.includes('← {node_id} · {role} returned: {verdict or one-line outcome}'),
       `T12: ${f} must carry the on-return announcement format (#604)`);
-    assert(content.includes('→ running {node_id} · {role} inline (…reason token…)'),
-      `T12: ${f} must carry the inline-fallback announcement format (#604)`);
+    assert(content.includes('→ running {node_id} · {role} inline'),
+      `T12: ${f} must carry the inline-run announcement format (#604/#817)`);
     assert(content.includes('{node-id} → complete; opened: {next-id|—}'),
       `T12: ${f} must carry the required close-echo progress line (#605)`);
   }

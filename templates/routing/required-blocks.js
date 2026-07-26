@@ -121,7 +121,7 @@ const REQUIRED_BLOCKS = [
       'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.',
       '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})',
       '← {node_id} · {role} returned: {verdict or one-line outcome}',
-      '→ running {node_id} · {role} inline (…reason token…)',
+      '→ running {node_id} · {role} inline',
       '{node-id} → complete; opened: {next-id|—}',
     ],
   },

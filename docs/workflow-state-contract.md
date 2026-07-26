@@ -664,15 +664,26 @@ ledgers before crossing a phase boundary. Codex role rows must match the policy:
 non-Codex-role workflow gates such as advisor review, final validation,
 documentation docking, roadmap refresh, archive, and final commit.
 
-**Adaptive `finalize` sink row — `main-session-direct` (issue #338).** The adaptive plan's
+**Adaptive inline rows — `main-session-direct` (issues #338, #817).** The adaptive plan's
 mandatory `finalize` DAG sink node is, by the plan-run contract, executed by the main session
-directly (no `Agent()` dispatch). Its Required Agent Compliance row therefore carries the status
-`main-session-direct` — a sink-node-only token that sits OUTSIDE the four-token delegation
-vocabulary above and is NOT delegation-controlled (a `finalize (<node>)` requirement matches none
-of repair-state's `DELEGATION_CONTROLLED_REQUIREMENTS`, so the token never trips a delegation
-check). It is deliberately NOT `local-fallback-*`: inline sink execution is the designed behavior,
-not a fallback. This row is distinct from the Finalization-phase mechanical bookkeeping, which is
-delegated to the `contractor` and attested separately via the closure receipt's
+directly (no `Agent()` dispatch), so its Required Agent Compliance row always carries the status
+`main-session-direct`. Execution mode for every OTHER node is the orchestrator's per-unit
+judgment, and the same status records it: passing `--main-session-direct` to `close-node` /
+`close-and-open-next` writes `main-session-direct` for that node instead of the default
+`subagent-invoked`. The flag is a **record, never a gate** — nothing validates, justifies, or
+refuses on the choice, and the fail-closed anchors (the seeded `evidence-binding` nonce,
+`record-evidence --verify`, the exact-path write-set barrier) are author-agnostic and bind
+identically either way.
+
+The token sits OUTSIDE the four-token delegation vocabulary above and never trips a delegation
+check: repair-state's `delegationPolicyCompliance` cross-check runs only over the legacy **phase**
+compliance ledgers (it is reached through `unresolvedCompliance`, which the adaptive
+`routeAdaptive` path never calls), and a `finalize (<node>)` requirement additionally matches none
+of its `DELEGATION_CONTROLLED_REQUIREMENTS` patterns. It is
+deliberately NOT `local-fallback-*`: inline execution is a designed mode, not a fallback —
+`local-fallback-tool-unavailable` keeps only its literal meaning, that the dispatch tool was
+genuinely unavailable. These rows are distinct from the Finalization-phase mechanical bookkeeping,
+which is delegated to the `contractor` and attested separately via the closure receipt's
 `finalize_contractor_attested` field.
 
 **Freeze pre-seeds the compliance set (schema 2).** The producer completes this artifact at its
