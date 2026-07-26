@@ -91,6 +91,13 @@ A follow-up record on the SAME point is the SAME command, once every prior unit 
 (`readyToExpand` stays true after a record fully closes). Records are numbered monotonically per
 point (`m1#1`, `m1#2`, …). A re-expansion over a still-live frontier refuses `expansion_not_settled`.
 
+`reexpand-open` (re-opening an already-DISCHARGED point) additionally un-completes rows the presented
+list is currently showing as done — the owner milestone, any re-verified downstream milestone, their
+review walls, and the sink. Every one of those flips comes back as a `pending` transition alongside the
+composed units' own, and they are applied by the same rule: a named id the list already holds is a
+status move, not an insert. Apply them, or the list keeps asserting "milestone done, review passed"
+about work the run has re-opened.
+
 ---
 
 ## 4. `expand-close` — discharge the milestone
@@ -133,6 +140,12 @@ shapes, and every one reaches the roll-forward:
 
 Run `reconcile-running-set` whenever `openIncomplete` is non-empty, BEFORE any further `expand-open`
 / `expand-close`. A fully-proven, stable plan is a no-op (`reconciled: false, reason: 'not_opening'`).
+
+**Recovery re-shapes the task list too.** A roll-forward RE-OPENS units, so `reconcile-running-set`
+returns the same `taskTransitions` channel §2 describes — `in_progress` for the units it re-opened,
+`pending` for the composed-but-unopened rest — and the same INSERT rule applies. Apply them; a
+recovery that repairs the ledger silently leaves the operator's list describing a run that no longer
+exists. A stable-plan no-op rolls nothing forward and correctly emits nothing.
 
 ---
 

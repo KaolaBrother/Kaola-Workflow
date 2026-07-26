@@ -65,7 +65,8 @@ try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user
 
 // #445 (D-445-01): per-aggregator operator hint registry. One entry per typed reason this
 // script can emit; generated at emit time (never stored). Forge-neutral: refer only to the forge CLI.
-// Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow (the laundering anti-pattern is excluded);
+// Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow, plus amend-surface where the
+// out-of-set files may be preservable companion work (the laundering anti-pattern is excluded);
 // crash-repair → repair-node; no forge CLI tokens in any hint.
 const OPERATOR_HINT_REGISTRY = {
   nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
@@ -81,7 +82,9 @@ const OPERATOR_HINT_REGISTRY = {
   too_few_nodes: () => '--parallel-safe needs >= 2 node IDs.',
   drop_base_window_open: (ctx) => `Cannot drop baseline for in_progress node "${ctx.nodeId || '(unknown)'}". Reset the node to pending first (ledger-reset → pending → drop → fresh open).`,
   root_mismatch: () => 'Run the barrier from the repo root so write-set paths and the baseline diff measure against one root.',
-  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set. Run: node scripts/kaola-gitea-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
+  // NAMED, not routed: both primitives are listed with one line on when each fits, and nothing selects
+  // between them — the caller owns that judgment; this only stops hiding the preserve option.
+  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: node scripts/kaola-gitea-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: node scripts/kaola-gitea-workflow-adaptive-node.js amend-surface --project <project> --node-id <expansion-point> --files "<paths>" --json`,
   write_set_granularity: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set (granularity). Run: node scripts/kaola-gitea-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
   lockfile_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a lockfile outside its declared write set. Add the lockfile to the write set or run revert-overflow.`,
   mirror_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a mirror file outside its declared write set. Add the mirror to the write set or run revert-overflow.`,

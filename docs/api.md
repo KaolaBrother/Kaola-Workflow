@@ -227,12 +227,12 @@ The adaptive scripts share a framed-output + refusal contract so a caller can al
   {
     "result": "refuse",
     "reason": "write_set_overflow",
-    "operator_hint": "Node n4 wrote outside its declared set. Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --node-id n4",
+    "operator_hint": "Node n4 wrote outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --node-id n4 --project <P> --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: node scripts/kaola-workflow-adaptive-node.js amend-surface --node-id <expansion-point> --files \"<paths>\" --project <P> --json.",
     "nodeId": "n4"
   }
   ```
 
-  **Vocabulary contract (D-445-01 §3):** `write_set_overflow` family hints MUST reference `revert-overflow`, NEVER `drop-base`. A crash-repair / reopen-writer hint MUST reference `repair-node`. NO hint string in any aggregator contains a forge CLI token (`gh` / `glab` / `tea`) — hints are forge-neutral and ship in all four editions. The three aggregators hosting `OPERATOR_HINT_REGISTRY` are `adaptive-node.js`, `commit-node.js`, and `plan-validator.js`; the registry lives INSIDE each script (co-located with its emit sites, no shared import). The human channel (`operator_hint`) and the machine channel (`proposed_repair`, D-440-01) name the SAME #424/#434 primitives.
+  **Vocabulary contract (D-445-01 §3):** `write_set_overflow` family hints MUST reference `revert-overflow`, NEVER `drop-base`. The `write_set_overflow` hint additionally NAMES `amend-surface` as the preserve half of the pair, with one line on when each fits (stray artifacts you want gone ⇒ discard; genuine companion work owned by a discharged spine milestone ⇒ attribute + re-review). Naming is all it does: no branch, gate, reason code, or justifier selects between them — the caller owns the judgment, and the hint's only job is to stop hiding one of the two options. A crash-repair / reopen-writer hint MUST reference `repair-node`. NO hint string in any aggregator contains a forge CLI token (`gh` / `glab` / `tea`) — hints are forge-neutral and ship in all four editions. The three aggregators hosting `OPERATOR_HINT_REGISTRY` are `adaptive-node.js`, `commit-node.js`, and `plan-validator.js`; the registry lives INSIDE each script (co-located with its emit sites, no shared import). The human channel (`operator_hint`) and the machine channel (`proposed_repair`, D-440-01) name the SAME #424/#434 primitives.
 
   **`--summary` mode (issue #446 / D-446-01 §4).** When `--summary` is passed to `adaptive-node.js`, the subcommand prints ONE line instead of full JSON:
 

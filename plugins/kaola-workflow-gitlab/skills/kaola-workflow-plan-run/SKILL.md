@@ -374,7 +374,9 @@ step is a no-op — run the normal loop.)
   units this open started, `pending` for the ones still ahead of the frontier. A transition naming an
   id the visible list does not hold is an INSERT: add a task for that unit, in record order, after the
   milestone's own task. Applying only the status flips leaves the operator looking at the frozen
-  spine, which no longer describes the run.
+  spine, which no longer describes the run. A RE-open of a discharged milestone also returns a
+  `pending` transition for every row it un-completes — the milestone, its review wall, the sink — so
+  apply those too, or the list keeps claiming work is done that the run has re-opened.
 - **Never compose a gate role inside an expansion** (`code-reviewer`, `security-reviewer`,
   `adversarial-verifier`, `main-session-gate`): a composed gate unit is refused
   `expansion_unit_role_gate_unsupported` with ZERO mutation. The milestone is reviewed by the
@@ -394,7 +396,8 @@ step is a no-op — run the normal loop.)
   `open-next` / `close-and-open-next` cycle every dag node uses.
 - **`openIncomplete` non-empty** — a record was appended but its frontier open never proved (a
   crash in the expand-open window); run `reconcile-running-set` to roll it forward BEFORE any
-  further `expand-open` / `expand-close`.
+  further `expand-open` / `expand-close`. Its roll-forward RE-OPENS units, so it returns the same
+  `taskTransitions` channel — apply them exactly as above.
 
 <!-- CARD: expansion -->
 On the spine expansion lifecycle: `docs/plan-run-cards/expansion.md`

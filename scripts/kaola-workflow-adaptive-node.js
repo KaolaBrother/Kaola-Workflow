@@ -71,8 +71,10 @@ function allowedDomainOutcomes(role) {
 //
 // VOCABULARY CONTRACT (D-445-01 §3, binding):
 //   - the write_set_overflow family (write_set_overflow / write_set_granularity /
-//     lockfile_write / mirror_write / count_bump) references `revert-overflow`,
-//     NEVER `drop-base` (the D-424-01 laundering anti-pattern).
+//     lockfile_write / mirror_write / count_bump) references `revert-overflow`
+//     (and, where the out-of-set files may be preservable companion work,
+//     `amend-surface` alongside it), NEVER `drop-base` (the D-424-01 laundering
+//     anti-pattern).
 //   - a crash-repair / reopen-writer situation references `repair-node` (the
 //     anti-laundering primitive that keeps the original baseline).
 //   - No forge-specific CLI token appears in any hint — the hints
@@ -296,8 +298,11 @@ const OPERATOR_HINT_REGISTRY = {
   // --- write-set overflow family (#424/#434 / D-434-01 §1) — ALWAYS revert-overflow, NEVER
   //     drop-base. These are the narrowed barrier subtypes that can surface as a top-level reason
   //     (e.g. when a caller drills the nested barrierCheck.reason out of a barrier_failed envelope). ---
+  // NAMED, not routed: the hint lists BOTH primitives and one line on when each fits, and nothing here
+  // selects between them — no branch, no gate, no reason code, no justifier. The orchestrator already
+  // owns the execution judgment; this only stops hiding the option that PRESERVES the out-of-set work.
   write_set_overflow: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set. Run: ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json.',
   write_set_granularity: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' wrote at a coarser granularity than its declared set allows. Narrow the write set (re-freeze) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
   lockfile_write: (ctx) =>
@@ -12630,7 +12635,9 @@ function runReconcileRunningSet(opts) {
       ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
       ...(rolled.rolledForward.length ? { expansionsRolledForward: rolled.rolledForward } : {}),
       ...(rolled.refusals.length ? { expansionRefusals: rolled.refusals } : {}),
-      taskTransitions: [] };
+      // A roll-forward RE-OPENED units: announce them, or the documented recovery repairs the ledger
+      // and leaves the operator's list describing a run that no longer exists.
+      taskTransitions: rolled.taskTransitions };
   }
 
   const wholeOpening = running.state === 'opening';
@@ -12690,7 +12697,9 @@ function runReconcileRunningSet(opts) {
       ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
       ...(rolledAny ? { expansionsRolledForward: stableRoll.rolledForward } : {}),
       ...(stableRoll.refusals.length ? { expansionRefusals: stableRoll.refusals } : {}),
-      taskTransitions: [] };
+      // Same obligation as the no_running_set arm: a stable-plan no-op emits nothing, a real
+      // roll-forward emits the shape it just re-opened.
+      taskTransitions: stableRoll.taskTransitions };
   }
 
   // In a rolling top-up crash, state:'opening' covers the transaction but only
@@ -12958,7 +12967,10 @@ function runReconcileRunningSet(opts) {
     writerReconciliation,
     writerHalt,
     state: 'open',
-    taskTransitions: [],
+    // The third crash arm owes the same announcement as the other two — the running-set repair above is
+    // silent by design (it moves nothing the operator's list holds), but the expansion roll-forward that
+    // follows it re-opens real units.
+    taskTransitions: expansionRoll.taskTransitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
 }
@@ -13173,6 +13185,41 @@ function validateComposition(composition, ctx) {
   return { ok: true, units, derivation };
 }
 
+// appendShapeTransitions — the ONE place a composed frontier's transition channel is assembled, shared
+// by the expand-open transaction and the reconcile roll-forward so a crash-recovered expansion presents
+// the SAME shape a first-try one does. Appends into `acc` (dedup keyed by `covered`, FIRST wins):
+//
+//   1. every transition the frontier open itself produced that names a NON-unit node (another spine
+//      node the same open-ready call happened to start) — kept, never dropped;
+//   2. one transition per COMPOSED unit, IN RECORD ORDER: the open's own entry when it opened that unit
+//      (`in_progress`), otherwise a `pending` INSERT for a unit that exists but is still behind the
+//      frontier.
+//
+// RECORD ORDER is load-bearing, not cosmetic: every plan-run surface instructs the operator to insert a
+// newly-announced unit's task "in record order", and a raw frontier-order array cannot be followed —
+// a frontier that opens u2/u3 while u1 waits would arrive as [u2, u3, u1]. Ordering the unit entries
+// here makes the emitted array something the shipped rule can actually be applied to.
+function appendShapeTransitions(acc, covered, base, unitIds, reason) {
+  const ids = Array.isArray(unitIds) ? unitIds.map(String) : [];
+  const unitSet = new Set(ids);
+  const byId = new Map();
+  const nonUnit = [];
+  for (const t of (Array.isArray(base) ? base : [])) {
+    const key = (t && t.id != null) ? String(t.id) : null;
+    if (key !== null && unitSet.has(key)) { if (!byId.has(key)) byId.set(key, t); }
+    else nonUnit.push(t);
+  }
+  const add = (t) => {
+    const key = (t && t.id != null) ? String(t.id) : null;
+    if (key === null || covered.has(key)) return;
+    covered.add(key);
+    acc.push(t);
+  };
+  for (const t of nonUnit) add(t);
+  for (const id of ids) add(byId.get(id) || buildTransition(id, 'pending', reason));
+  return acc;
+}
+
 // runExpandOpen — MUTATES the plan (record block + unit ledger rows + open proof block), the
 // baselines and the running set. See the transaction header above for the phase order.
 function runExpandOpen(opts) {
@@ -13275,10 +13322,17 @@ function runExpandOpen(opts) {
   const block = renderExpansionRecord(recordId, nodeId, planHash, composed.derivation, composed.units);
   let baseForRecord = content;
   let reactivation = null;
+  // The cascade moves rows OTHER than the composed units (the owner milestone, re-verified downstream
+  // milestones, their review walls, the sink) — every one of them a ledger flip the presented task list
+  // must be told about. `_reactivate` therefore hands back a transition per row it actually MOVED; a
+  // cascade that flips `complete` -> `pending` in the ledger while the list still reads "milestone done,
+  // review passed" is a worse lie than the stale list the shape channel exists to fix.
+  let reactivationTransitions = [];
   if (typeof opts._reactivate === 'function') {
     const ra = opts._reactivate(content);
     baseForRecord = ra.content;
     reactivation = ra.reactivation;
+    if (Array.isArray(ra.transitions)) reactivationTransitions = ra.transitions;
   }
   const withRecord = appendExpansionBlock(baseForRecord, block);
   const led = appendLedgerRows(withRecord, unitIds);
@@ -13326,13 +13380,12 @@ function runExpandOpen(opts) {
   // turn a committed expansion into a refusal.
   let shapeTransitions = Array.isArray(rolled && rolled.taskTransitions) ? rolled.taskTransitions : [];
   try {
-    const emitted = shapeTransitions.slice();
-    const covered = new Set(emitted.map(t => (t && t.id != null) ? String(t.id) : null));
-    for (const id of unitIds) {
-      if (!covered.has(id)) emitted.push(buildTransition(id, 'pending', 'expand-open'));
-    }
-    shapeTransitions = emitted;
+    shapeTransitions = appendShapeTransitions([], new Set(), shapeTransitions, unitIds, 'expand-open');
   } catch (_) { /* fail-open: keep whatever the frontier open already reported */ }
+  // The cascade's flips are PREPENDED, never merged into the dedup above: they happened in Phase 1,
+  // BEFORE the open, so emitting them first is the true sequential history — and if the open later
+  // re-touched one of those ids, its own entry follows and supersedes on application.
+  if (reactivationTransitions.length) shapeTransitions = reactivationTransitions.concat(shapeTransitions);
 
   return {
     ...rolled,
@@ -13376,23 +13429,41 @@ function openExpansionFrontier(opts, recordId) {
 //
 // Never rolls BACK. A record is the durable statement that this frontier was composed; discarding it
 // would lose the composition and the derivation with no operator signal, and re-opening is cheap.
+//
+// It also carries the SHAPE back out. A roll-forward re-opens units through the same scheduler, so
+// runOpenReady builds real `in_progress` transitions — and the recovery path used to drop every one of
+// them on the floor, so the DOCUMENTED crash recovery (`reconcile-running-set` -> re-orient) repaired
+// the ledger while leaving the presented task list still showing the frozen spine. Reusing
+// appendShapeTransitions gives recovery the identical channel a first-try expand-open emits, including
+// the `pending` INSERT for a composed unit still behind the frontier. `covered` spans ALL records
+// (FIRST wins): one runOpenReady call can legitimately open units belonging to a LATER record, and
+// without the shared set that record's top-up would contradict its own `in_progress` with a `pending`.
 function rollForwardExpansions(opts) {
   const { planPath, readFile } = opts;
+  const empty = { rolledForward: [], refusals: [], taskTransitions: [] };
   let content;
-  try { content = readFile(planPath); } catch (_) { return { rolledForward: [], refusals: [] }; }
+  try { content = readFile(planPath); } catch (_) { return empty; }
   const validator = require('./kaola-workflow-plan-validator');
-  if (validator.parsePlanForm(content).form !== 'spine') return { rolledForward: [], refusals: [] };
+  if (validator.parsePlanForm(content).form !== 'spine') return empty;
   const parsed = validator.parseExpansionRecords(content);
   const rolledForward = [];
   const refusals = [];
+  const taskTransitions = [];
+  const covered = new Set();
   for (const r of parsed.records) {
     if (r.malformed.length) { refusals.push({ expansion_id: r.id, reason: 'expansion_records_malformed', detail: r.malformed.join('; ') }); continue; }
     if (validator.expansionRecordOpened(parsed, r.id)) continue;
     const out = openExpansionFrontier(opts, r.id);
-    if (out && out.result === 'refuse') refusals.push({ expansion_id: r.id, reason: out.reason || 'open_failed' });
-    else rolledForward.push(r.id);
+    if (out && out.result === 'refuse') { refusals.push({ expansion_id: r.id, reason: out.reason || 'open_failed' }); continue; }
+    rolledForward.push(r.id);
+    // Fail-OPEN like every other mirror/transition emission: the roll-forward has already committed, so
+    // a presentation fault must never turn a completed recovery into a refusal.
+    try {
+      appendShapeTransitions(taskTransitions, covered, out && out.taskTransitions,
+        (r.units || []).map(u => u && u.id).filter(Boolean), 'reconcile-running-set');
+    } catch (_) { /* keep whatever was already accumulated */ }
   }
-  return { rolledForward, refusals };
+  return { rolledForward, refusals, taskTransitions };
 }
 
 // runExpandClose — MUTATES the ledger (the expansion point row) + appends the `discharge()` block
@@ -14022,6 +14093,13 @@ function runReExpandOpen(opts) {
   const reactivationLog = { owner: nodeId, walls_reactivated: [], downstream_reverified: [], downstream_untouched: [] };
   const _reactivate = (planContent) => {
     let c = planContent;
+    // ONE transition per row this cascade actually MOVES. A re-open un-completes the owner milestone,
+    // any re-verified downstream milestone, their review walls and the sink — so a channel that
+    // announced only the newly composed fixer units would leave the presented list asserting
+    // "milestone done, review passed" about a run that has re-opened both. Built from the splice's own
+    // `changed` flag, so an already-pending row (an idempotent re-entry) announces nothing.
+    const transitions = [];
+    const announce = (id) => transitions.push(buildTransition(id, 'pending', 'reexpand-open'));
     // The DURABLE surface amendment (when this re-open is the re-review half of an amend-surface
     // transaction) is folded into THIS SAME atomic Phase-1 write. The block is what makes the barrier
     // attribute the amended file, and it attributes while the owning point reads `complete` — so
@@ -14040,7 +14118,7 @@ function runReExpandOpen(opts) {
     // in_progress would make the running-set scheduler treat it as a live serial node and refuse the
     // fan-out). Its review wall, re-activated in (c), stays withheld until the milestone re-discharges.
     const ro = spliceLedgerNode(c, nodeId, 'pending', { allowFrom: ['complete'] });
-    if (ro.found) c = ro.content;
+    if (ro.found) { c = ro.content; if (ro.changed) announce(nodeId); }
     // (b) SELECTIVE re-verify of the other milestones (forced-by-dependency OR surface-intersection).
     for (const d of otherPoints) {
       const dStatus = String(ledger[d] || '').toLowerCase();
@@ -14050,7 +14128,7 @@ function runReExpandOpen(opts) {
       const surfaces = declared.concat(amendedSurfacesFor(d, amendedSurfaces));
       const intersects = fixFiles.some(f => surfaces.some(s => surfaceCoversFile(s, f)));
       if (dependents.has(d) || intersects) {
-        flipToPending(d);
+        if (flipToPending(d)) announce(d);
         resetMilestones.push(d);
         reactivationLog.downstream_reverified.push(d);
       } else {
@@ -14063,16 +14141,16 @@ function runReExpandOpen(opts) {
     // its DIRECT review-class dependents.
     const walls = new Set();
     for (const m of resetMilestones) for (const w of wallsOfMilestone(m, contracts, nodes)) walls.add(w);
-    for (const w of Array.from(walls).sort()) if (flipToPending(w)) reactivationLog.walls_reactivated.push(w);
+    for (const w of Array.from(walls).sort()) if (flipToPending(w)) { reactivationLog.walls_reactivated.push(w); announce(w); }
     // (d) the sink: a re-expansion invalidates any in-flight or (locally) settled sink attempt — GATE 3
     // has PROVEN no irreversible step ran (pristine), so resetting it is safe. Reset it to pending so it
     // re-runs AFTER the re-expansion, and so the fan-out is never refused over a live serial sink.
     const sink = nodes.find(n => n && n.role === 'finalize');
     if (sink) {
       const rs = spliceLedgerNode(c, sink.id, 'pending', { allowFrom: ['complete', 'in_progress'] });
-      if (rs.found && rs.changed) { c = rs.content; reactivationLog.sink_reset = sink.id; }
+      if (rs.found && rs.changed) { c = rs.content; reactivationLog.sink_reset = sink.id; announce(sink.id); }
     }
-    return { content: c, reactivation: reactivationLog };
+    return { content: c, reactivation: reactivationLog, transitions };
   };
 
   // Delegate to the PROVEN expand-open transaction with the re-open shape enabled. runExpandOpen runs
