@@ -1732,6 +1732,18 @@ const APPROVAL_OUTCOMES = Object.freeze(['approved', 'changes_requested']);
 const FINDING_ANCHOR_KINDS = Object.freeze([
   'candidate_range', 'deleted_base_range', 'tree_entry_change', 'required_absence', 'evidence_observation',
 ]);
+// findingAnchorCarriesPath — THE single predicate for "does this anchor kind name a repository PATH?".
+// normalizeFindingAnchor branches on it, ROUTABLE_FINDING_ANCHOR_KINDS is DERIVED from it, and the
+// record-time routability gate plus the open-time seeded reviewer stub both read that derived constant.
+// One predicate, so the kinds a reviewer is SHOWN as routable, the kinds a change gate ADMITS as
+// blocking, and the kinds ownership resolution can actually resolve can never drift apart.
+//
+// WHY IT MATTERS: every downstream router keys on the path — the write-set owner lookup
+// (declared_write_set -> owning writer) and the spine milestone lookup (expected_surfaces -> owning
+// expansion point). An anchor with no path resolves to NEITHER, so a blocking finding carrying one has
+// no in-plan repair target at all.
+function findingAnchorCarriesPath(kind) { return String(kind || '') !== 'evidence_observation'; }
+const ROUTABLE_FINDING_ANCHOR_KINDS = Object.freeze(FINDING_ANCHOR_KINDS.filter(findingAnchorCarriesPath));
 const FINDING_FAILURE_CLASSES = Object.freeze([
   'correctness', 'security', 'data_loss', 'concurrency', 'persistence', 'compatibility',
   'contract', 'validation', 'test_coverage', 'scope_regression', 'performance_regression',
@@ -2015,8 +2027,8 @@ function normalizeFindingAnchor(input, options) {
   const kind = String(value.kind || '');
   const opts = isPlainObject(options) ? options : {};
   if (!FINDING_ANCHOR_KINDS.includes(kind)) return { ok: false, reason: 'finding_anchor_kind_invalid' };
-  const path = kind === 'evidence_observation' ? null : normalizeFindingPath(value.path);
-  if (kind !== 'evidence_observation' && !path) return { ok: false, reason: 'finding_anchor_path_invalid' };
+  const path = findingAnchorCarriesPath(kind) ? normalizeFindingPath(value.path) : null;
+  if (findingAnchorCarriesPath(kind) && !path) return { ok: false, reason: 'finding_anchor_path_invalid' };
   let anchor;
   if (kind === 'candidate_range') {
     const oid = normalizeObjectId(value.object_format, value.object_id);
@@ -2097,7 +2109,7 @@ function normalizeFindingAnchor(input, options) {
         || canonicalJson(anchor.candidate) !== canonicalJson(project(candidateExpected))) {
         return { ok: false, reason: 'finding_anchor_tree_change_mismatch' };
       }
-    } else if (kind !== 'evidence_observation' && (!expected
+    } else if (findingAnchorCarriesPath(kind) && (!expected
       || expected.object_format !== anchor.object_format || expected.tree_mode !== anchor.tree_mode
       || expected.object_id !== anchor.object_id
       || (Number.isInteger(expected.blob_length) && anchor.end > expected.blob_length))) {
@@ -4170,6 +4182,8 @@ module.exports = {
   ADVERSARIAL_OUTCOMES,
   APPROVAL_OUTCOMES,
   FINDING_ANCHOR_KINDS,
+  ROUTABLE_FINDING_ANCHOR_KINDS,
+  findingAnchorCarriesPath,
   FINDING_FAILURE_CLASSES,
   canonicalJson,
   sha256Hex,

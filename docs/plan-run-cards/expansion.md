@@ -73,6 +73,16 @@ The `## Expansion Records` channel lives OUTSIDE the `plan_hash` body, so append
 perturbs the frozen spine identity — the review-journal binding is `(spine plan_hash, record id)`,
 which is what lets a later re-expansion never orphan a completed journal.
 
+**Re-shape the presented task list from the returned `taskTransitions`.** Expansion is the one
+lifecycle step that changes the run's SHAPE rather than only a status, so the transition channel
+carries one entry per COMPOSED unit of the record — `in_progress` for the units this open started,
+`pending` for the ones still behind the frontier. A transition naming an id the visible list does not
+hold is an INSERT: add that unit's task, in record order, after the milestone's own task. `pending`
+entries appear on the very first `expand-open` of a multi-unit interior DAG, and the same rule
+applies verbatim to `reexpand-open` (it delegates to this same transaction). Applying only the status
+flips leaves the operator's list showing the frozen spine, which no longer describes the run — the
+durable `workflow-tasks.json` already lists the composed units, and this is what makes the two agree.
+
 ---
 
 ## 3. Re-expansion — a second record on the same point
@@ -97,6 +107,11 @@ point's own `.cache/<point>.md`:
 ```
 expansion <point>: width=<total units> mode=<co_open|serial|mixed> serializer=<none|S1|S2|S3> rework=<records-1>
 ```
+
+It is a ledger-mutating subcommand, so it honors the mutation-time task-mirror contract like every
+other one: it returns the point's own `complete` `taskTransitions` entry and a `taskMirror` refresh
+result. Apply the transition so the milestone's task closes at discharge. (The `alreadyDischarged`
+short-circuit returns NEITHER — nothing was mutated, so there is nothing to present.)
 
 The spine then advances to its next node — through the concrete review wall (opened + closed via the
 normal `open-next` / `close-and-open-next` gate lifecycle) to the `finalize` sink. Discharging a

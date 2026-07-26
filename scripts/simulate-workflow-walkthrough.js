@@ -16731,7 +16731,16 @@ function testReviewerContractV2Conformance() {
       && !fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
     'review-v2 stale candidate refuses before finding parsing, receipt creation, or journal creation: '
       + staleClose.stdout + staleClose.stderr);
-    const discoveryFinding = {
+    // #805 D1 — A CHANGE GATE'S BLOCKING FINDINGS MUST BE ROUTABLE, PROVEN AT THE RECORD SEAM.
+    //
+    // Every in-plan repair route keys on the finding's primary-anchor PATH (the spine router places it
+    // in a milestone surface; the write-set router resolves the owning writer). An
+    // `evidence_observation` anchor carries none, so a BLOCKING finding anchored that way used to
+    // commit a receipt + journal attempt that no route could ever act on: repair-node degraded to
+    // `repair_requires_replan`, reopen-node then refused `review_attempt_unresolved`, and re-recording
+    // the gate refused `evidence_generation_stale` — a closed cycle whose only exits were a re-plan
+    // epoch or a manual fix. Refuse it HERE, before the attempt exists, so the cycle cannot form.
+    const unroutableFindingBase = {
       failure_class: 'correctness',
       trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
         expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
@@ -16740,6 +16749,49 @@ function testReviewerContractV2Conformance() {
         observation_key: 'writer:review-v2-regression' },
       secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
       status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+    };
+    const unroutableRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, dispatch.candidate_digest,
+          'changes_requested', ['finding_json: ' + JSON.stringify(unroutableFindingBase)]),
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(unroutableRecord.status === 0,
+      '#805: record-evidence stays a verbatim transport for the unroutable-anchor bytes: '
+      + unroutableRecord.stdout + unroutableRecord.stderr);
+    const unroutableClose = runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp);
+    const unroutableOut = JSON.parse(unroutableClose.stdout);
+    assert(unroutableClose.status !== 0 && unroutableOut.reason === 'review_finding_anchor_unroutable',
+      '#805: a change gate requesting changes on a BLOCKING finding whose primary anchor carries no '
+      + 'path must refuse review_finding_anchor_unroutable, got ' + unroutableClose.stdout + unroutableClose.stderr);
+    assert(JSON.stringify(unroutableOut.anchor_kinds) === JSON.stringify(['evidence_observation'])
+      && Array.isArray(unroutableOut.routable_anchor_kinds)
+      && !unroutableOut.routable_anchor_kinds.includes('evidence_observation')
+      && unroutableOut.routable_anchor_kinds.length === schema.FINDING_ANCHOR_KINDS.length - 1,
+    '#805: the refusal must NAME the offending anchor kind and the routable set (derived from the ONE '
+      + 'anchor-kind vocabulary), got ' + JSON.stringify({ k: unroutableOut.anchor_kinds, r: unroutableOut.routable_anchor_kinds }));
+    assert(typeof unroutableOut.operator_hint === 'string' && /re-anchor/i.test(unroutableOut.operator_hint),
+      '#805: the refusal carries an operator hint that says how to fix it, got ' + JSON.stringify(unroutableOut.operator_hint));
+    assert(!fs.existsSync(path.join(cacheDir, 'review-receipts'))
+      && !fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
+    '#805: the unroutable finding is refused BEFORE any receipt or journal attempt exists — so the '
+      + 'unrepairable-attempt cycle can never form');
+
+    // The SAME finding re-anchored on a path-bearing kind is admitted. `candidate_range` binds to the
+    // real candidate blob, so the anchor index (which is what makes an anchor trustworthy) validates it.
+    const implBytes = fs.readFileSync(path.join(tmp, 'lib', 'impl.js'));
+    const objectFormat805 = String(spawnSync('git', ['-C', tmp, 'rev-parse', '--show-object-format'],
+      { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
+    const implObjectId = String(spawnSync('git', ['-C', tmp, 'hash-object', 'lib/impl.js'],
+      { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
+    assert(/^[0-9a-f]{40,64}$/.test(implObjectId),
+      '#805 fixture: the candidate blob id resolves, got ' + JSON.stringify(implObjectId));
+    const discoveryFinding = {
+      ...unroutableFindingBase,
+      primary_anchor: { kind: 'candidate_range', path: 'lib/impl.js',
+        object_format: objectFormat805, tree_mode: '100644', object_id: implObjectId,
+        start: 0, end: 1, blob_length: implBytes.length },
     };
     const reviewRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
@@ -16752,11 +16804,36 @@ function testReviewerContractV2Conformance() {
       ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
     assert(discoveryClose.result === 'review_failed' && discoveryClose.attempt_id,
       'review-v2 discovery failure persists a repairable schema-v2 attempt');
+
+    // #805 D1 — THE CYCLE IS BROKEN, END TO END. The path-bearing anchor RESOLVES the finding to its
+    // owning writer: `ownership_candidates` / `owning_node` are exactly the fields the dead-end run
+    // reported as `[]` / `null`, and they are what every in-plan repair route reads.
+    const attemptJournal805 = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    const failedAttempt805 = attemptJournal805.attempts.find(a => a.attempt_id === discoveryClose.attempt_id);
+    assert(failedAttempt805 && (failedAttempt805.route_candidates || []).length > 0
+      && failedAttempt805.route_candidates.every(r =>
+        JSON.stringify(r.ownership_candidates) === JSON.stringify(['writer']) && r.owning_node === 'writer'),
+    '#805: the finding\'s anchor PATH must resolve ownership to the writer — this is the literal '
+      + 'ownership_candidates:[] / owning_node:null the unrepairable dead end reported, got '
+      + JSON.stringify(failedAttempt805 && failedAttempt805.route_candidates));
+    // …and the writer whose row this finding lands on is already COMPLETE — the precondition of the
+    // whole dead end (a gate finding raised after its producer closed).
+    assert(/^\| writer \| complete \|$/m.test(fs.readFileSync(planPath, 'utf8')),
+      '#805 PRECONDITION: the finding\'s writer is COMPLETE at repair time');
     const repair = json(runNode(adaptiveNodeScript,
       ['repair-node', '--project', project, '--attempt-id', discoveryClose.attempt_id,
         '--node-id', 'writer', '--json'], tmp));
     assert(repair.result === 'ok' && repair.consumed_by === 'writer' && repair.baselineReused === true,
       'review-v2 failed attempt is consumed through the unchanged anti-laundering repair path');
+    assert(repair.result !== 'repair_requires_replan'
+      && !fs.existsSync(path.join(cacheDir, 'replan-source.json')),
+    '#805: a gate finding on a COMPLETE writer reaches its repair with ZERO re-plan epochs — no '
+      + 'replan source is ever prepared');
+    assert(repair.repair_brief && repair.repair_brief.scope === 'assigned_findings'
+      && repair.repair_brief.assigned_uids.length === 1
+      && repair.repair_brief.findings[0].anchor_path === 'lib/impl.js',
+    '#805: the reopened writer receives a brief that NAMES the anchored file, got '
+      + JSON.stringify(repair.repair_brief && { s: repair.repair_brief.scope, u: repair.repair_brief.assigned_uids }));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
     const repairedWriterRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
@@ -18340,6 +18417,13 @@ function testReExpandCascade761() {
         '#761 (a): re-open appends monotonic m1#2 at a pristine sink, got ' + JSON.stringify({ r: p.reopened, id: p.expansion_id, s: p.sink_progress }));
       assert(ledgerOf(ctx.planPath).m1 === 'pending',
         '#761 (a): the re-opened owner returns to its un-discharged (pending) state, got ' + ledgerOf(ctx.planPath).m1);
+      // #807 D1 — a RE-expansion is the same transaction, so it presents the composed shape too: the
+      // newly composed unit is announced through the transition channel (an id the visible list does
+      // not hold is an INSERT), not silently added to the ledger alone.
+      assert((p.units || []).length > 0 && p.units.every(u =>
+        (p.taskTransitions || []).some(t => t.id === u.id)),
+      '#807: reexpand-open must announce every unit of the new record through taskTransitions, got '
+        + JSON.stringify({ units: (p.units || []).map(u => u.id), t: p.taskTransitions }));
       // APPEND-ONLY on the records channel + the spine hash is invariant + resume-check green.
       const recSec = (t) => t.slice(t.indexOf('## Expansion Records'));
       const now = fs.readFileSync(ctx.planPath, 'utf8');

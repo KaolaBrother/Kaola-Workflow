@@ -368,6 +368,13 @@ step is a no-op — run the normal loop.)
   disjoint write frontier) — dispatch each unit's role agent and `close-node` it exactly like any
   frontier member. A re-expansion (a second record on the SAME point) is the SAME command once
   every prior unit is settled.
+
+  **Re-shape the task list from the returned `taskTransitions`.** Expansion changes the run's SHAPE,
+  not just a status: `expand-open` returns one transition per COMPOSED unit — `in_progress` for the
+  units this open started, `pending` for the ones still ahead of the frontier. A transition naming an
+  id the visible list does not hold is an INSERT: add a task for that unit, in record order, after the
+  milestone's own task. Applying only the status flips leaves the operator looking at the frozen
+  spine, which no longer describes the run.
 - **Never compose a gate role inside an expansion** (`code-reviewer`, `security-reviewer`,
   `adversarial-verifier`, `main-session-gate`): a composed gate unit is refused
   `expansion_unit_role_gate_unsupported` with ZERO mutation. The milestone is reviewed by the
@@ -381,8 +388,10 @@ step is a no-op — run the normal loop.)
     --project {project} --node-id {point-id} --json
   ```
 
-  The spine then advances to its next node — ultimately through the concrete review wall to the
-  `finalize` sink, the same `open-next` / `close-and-open-next` cycle every dag node uses.
+  `expand-close` returns the milestone's own `complete` transition — apply it so the milestone's task
+  closes at discharge instead of staying visibly open for the rest of the run. The spine then advances
+  to its next node — ultimately through the concrete review wall to the `finalize` sink, the same
+  `open-next` / `close-and-open-next` cycle every dag node uses.
 - **`openIncomplete` non-empty** — a record was appended but its frontier open never proved (a
   crash in the expand-open window); run `reconcile-running-set` to roll it forward BEFORE any
   further `expand-open` / `expand-close`.
@@ -411,6 +420,9 @@ then route to finalize.
 
 The fused `close-and-open-next` (step 4) opens every subsequent node. Re-run `open-next` only
 when no node is `in_progress`.
+
+Apply returned `taskTransitions` to the task list after every ledger-mutating call.
+
 
 ### 3. Dispatch the role agent
 

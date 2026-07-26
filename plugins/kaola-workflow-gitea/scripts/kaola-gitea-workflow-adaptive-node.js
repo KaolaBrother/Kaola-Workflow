@@ -464,6 +464,46 @@ const OPERATOR_HINT_REGISTRY = {
       + 'Activate a replacement plan (/kaola-workflow-adapt) that gives each finding a writer'
       + ((ctx.owners && ctx.owners.length) ? ' (the open frontier spans ' + ctx.owners.join(', ') + ')' : '') + '.';
   },
+  // --- the ownership-unresolved replan, named by its ACTUAL cause ---
+  // A bare `repair_requires_replan` used to send the operator toward a whole re-plan epoch even when a
+  // one-line anchor change would have sufficed. Three distinguishable causes, three distinct next steps.
+  repair_ownership_unresolved: (ctx) => {
+    const d = (ctx && ctx.diagnosis) || {};
+    const kinds = Array.isArray(d.unroutable_anchor_kinds) ? d.unroutable_anchor_kinds : [];
+    const routable = Array.isArray(d.routable_anchor_kinds) ? d.routable_anchor_kinds : [];
+    const head = 'repair-node ' + (ctx.nodeId || '<id>') + ' cannot repair this attempt in place: ';
+    if (d.cause === 'anchor_kind_carries_no_path') {
+      return head + 'no ownership candidates — the finding\'s primary anchor kind ('
+        + kinds.join(', ') + ') carries no path, so no milestone surface or declared write set can claim it. '
+        + 'This is a REVIEWER-EVIDENCE defect, not a plan defect: re-anchor the blocking finding on a '
+        + 'path-bearing kind (' + routable.join(' | ') + ') and re-run the gate. A re-plan epoch would spend '
+        + 'a whole plan on a one-line anchor change.';
+    }
+    if (d.cause === 'no_node_declares_the_anchor_path') {
+      return head + 'no ownership candidates — the finding\'s anchors DO name paths, but no node declares '
+        + 'them and no milestone surface covers them. That is a genuine scope expansion: activate a '
+        + 'replacement plan (/kaola-workflow-adapt) that gives the finding a writer, or amend the owning '
+        + 'expansion point\'s surface (amend-surface) if the file belongs to a milestone already.';
+    }
+    return head + 'it is not the unique graph-maximal executed producer of this gate'
+      + ((Array.isArray(ctx.producer_slice) && ctx.producer_slice.length)
+        ? ' (the slice is ' + ctx.producer_slice.join(', ') + ')' : '')
+      + ((Array.isArray(d.ownership_candidates) && d.ownership_candidates.length)
+        ? ', and the findings are owned by ' + d.ownership_candidates.join(', ') : '')
+      + '. Re-run repair-node naming the finding\'s semantic owner, or activate a replacement plan.';
+  },
+  // The record-time twin of the hint above: refuse the unplaceable anchor BEFORE the receipt exists.
+  review_finding_anchor_unroutable: (ctx) => {
+    const kinds = Array.isArray(ctx.anchor_kinds) ? ctx.anchor_kinds : [];
+    const routable = Array.isArray(ctx.routable_anchor_kinds) ? ctx.routable_anchor_kinds : [];
+    return 'This change gate requested changes on ' + ((ctx.unroutable_findings || []).length || 'one or more')
+      + ' blocking finding(s) whose primary anchor kind (' + (kinds.join(', ') || 'see anchor_kinds')
+      + ') carries no repository path, so no in-plan repair could ever place them — the attempt would '
+      + 'commit and then dead-end. Re-anchor each BLOCKING finding on a path-bearing kind ('
+      + (routable.join(' | ') || 'see routable_anchor_kinds') + ') and re-record the gate evidence. '
+      + 'An evidence_observation anchor stays legal as a secondary anchor, and on a non-blocking '
+      + '(deferred / out-of-scope / non-fix) finding.';
+  },
   dependent_producer_replay_required: (ctx) =>
     'The semantic owner ' + (ctx.semantic_owner || '<writer>') + ' is a NON-maximal upstream writer whose completed downstream writer(s)'
     + ((ctx.blocking_descendants && ctx.blocking_descendants.length) ? ' (' + ctx.blocking_descendants.join(', ') + ')' : '')
@@ -1787,6 +1827,25 @@ function buildReviewAnchorIndex(opts, context, candidateDigest, rawFindings, nod
   } };
 }
 
+// reviewRefusalDiagnostics — the WHITELIST of structured diagnosis fields a schema-2 review-validation
+// refusal is allowed to carry onto the close envelope. The close sites used to flatten every validator
+// refusal to `{reason, detail, missingTokenClass}`, so a typed refusal that had already computed the
+// operator's next step (which findings, which anchor kind, which kinds would work) arrived as a bare
+// token. A whitelist rather than a spread: the validator's OK return also carries the whole prepared
+// review (receipt, context, plan view), and spreading would make a refusal's shape depend on how far
+// validation happened to get. Absent fields are omitted, so every other refusal stays byte-identical.
+const REVIEW_REFUSAL_DIAGNOSTIC_FIELDS = Object.freeze([
+  'unroutable_findings', 'anchor_kinds', 'routable_anchor_kinds',
+]);
+function reviewRefusalDiagnostics(review) {
+  const out = {};
+  if (!review || typeof review !== 'object') return out;
+  for (const field of REVIEW_REFUSAL_DIAGNOSTIC_FIELDS) {
+    if (review[field] !== undefined) out[field] = review[field];
+  }
+  return out;
+}
+
 function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceContent) {
   const validator = require('./kaola-gitea-workflow-plan-validator');
   if (reviewMetaValue(planContent, 'plan_schema_version') === null) {
@@ -1953,6 +2012,41 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
       return { ok: false, reason: 'review_changes_missing_findings' };
     }
   }
+  // A CHANGE GATE's BLOCKING findings must be ROUTABLE, and that is decided HERE — at record time —
+  // not discovered at repair time.
+  //
+  // THE DEAD END THIS CLOSES. Every in-plan repair route keys on the finding's primary-anchor PATH: the
+  // spine router places the finding inside an expansion point's declared surface (the local
+  // re-expansion that is the primary repair today), and the write-set router resolves the owning
+  // writer. An `evidence_observation` anchor carries NO path (see findingAnchorCarriesPath), so a
+  // blocking finding anchored that way places NOWHERE — `ownership_candidates` is [], the local route
+  // returns nothing, and `repair-node` degrades to `repair_requires_replan` even though the defect sits
+  // squarely inside one node's declared write set. By then the attempt is committed and unresolved, so
+  // `reopen-node` refuses `review_attempt_unresolved` and re-recording the gate refuses
+  // `evidence_generation_stale`: a closed cycle whose only exits are a re-plan epoch or a manual fix.
+  // Refusing the malformed anchor before the receipt exists costs one typed refusal the reviewer can
+  // fix in one line; admitting it costs an epoch.
+  //
+  // SCOPE — deliberately the NARROWEST predicate that closes the cycle:
+  //   - CHANGE GATES only. An investigation-mode adversarial gate produces no repair obligation.
+  //   - `changes_requested` only. An approval carries no findings to route.
+  //   - REPAIR-RESPONSIBLE findings only — the SAME `repairResponsibleFindings` population repair-node
+  //     partitions on, so exactly what is admitted here is what can be routed there. A deferred,
+  //     out-of-scope, or non-`fix` finding obliges nobody, so it may observe producer evidence freely.
+  //   - PRIMARY anchor only, matching computeFindingUid's scoping and the routers' own lookup.
+  // Nothing is removed from the reviewer's vocabulary: `evidence_observation` stays legal as a
+  // SECONDARY anchor, as the primary anchor of a non-blocking finding, and on an investigation gate.
+  if (gateMode === 'change_gate' && domainOutcome === 'changes_requested') {
+    const unroutable = reviewSchema.repairResponsibleFindings(openFindings)
+      .filter(finding => !(finding.primary_anchor && finding.primary_anchor.path));
+    if (unroutable.length) {
+      return { ok: false, reason: 'review_finding_anchor_unroutable',
+        unroutable_findings: unroutable.map(finding => String(finding.uid)).sort(),
+        anchor_kinds: [...new Set(unroutable.map(finding =>
+          String((finding.primary_anchor && finding.primary_anchor.kind) || 'unknown')))].sort(),
+        routable_anchor_kinds: reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.slice() };
+    }
+  }
   const logicalGate = reviewLogicalGate(reviewNodes, nodeInfo);
   const receipt = {
     schema_version: 2,
@@ -2048,6 +2142,22 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
         const firstAlt = tokenClass.split('|')[0];
         if (tokenClass.includes('|')) {
           freshContent += '<!-- ' + tokenClass + ' -->\n';
+          // State which primary-anchor kinds are ROUTABLE, the same way the outcome enum is already
+          // surfaced. The close-time gate refuses a BLOCKING finding whose primary anchor names no
+          // repository path, because no in-plan repair route can place it; a reviewer that learned this
+          // only at close had already spent the whole review. The routable set is read from the ONE
+          // derived constant the validator reads, so the two can never disagree. Rendered only for the
+          // findings token class (the sole alternative class a gate stub carries) and, like the
+          // domain_outcome note, kept as a `<!-- ... -->` line that is NOT column-0 anchored on a token
+          // key, so the hollow-seed and finding-parsing guards are unchanged.
+          if (tokenClass.startsWith('finding_json')) {
+            freshContent += '<!-- a BLOCKING finding (scope in_scope, action fix, status open) must use a '
+              + 'PATH-BEARING primary_anchor.kind — one of '
+              + reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.join(' | ')
+              + ' — so the repair transaction can place it in a milestone surface / write set; '
+              + 'evidence_observation carries no path and is admitted only as a secondary anchor or on a '
+              + 'non-blocking (deferred / out-of-scope / non-fix) finding -->\n';
+          }
           freshContent += firstAlt + ': \n';
         } else if (tokenClass === 'domain_outcome') {
           // #727: the reviewer-contract `domain_outcome` vocabulary is ROLE-KIND-dependent, and the
@@ -3567,7 +3677,39 @@ function findingOwnershipSummary(attempt, nodeId) {
     unownedBlockingFindingIds, ambiguousBlockingFindingIds, foreignOwnedBlockingFindingIds,
     spansForeignWriters,
     ownsWholeBlockingFrontier: blockingFindings.length > 0 && !spansForeignWriters,
+    unroutableAnchorKinds: unroutableAnchorKindsOf(attempt),
   };
+}
+
+// unroutableAnchorKindsOf — WHY ownership came back empty, in the finding's own vocabulary. Joins the
+// attempt's still-open route rows that resolved to NO writer against their canonical finding records
+// (by uid — the SAME join buildRepairBrief performs) and reports the distinct primary-anchor kinds that
+// carry no repository path. This is the difference between two situations a bare
+// `repair_requires_replan` used to conflate:
+//   - kinds returned  ⇒ the anchor STRUCTURALLY cannot be placed; the reviewer's evidence is the fix,
+//                       and a re-plan epoch would be spent on a one-line anchor change.
+//   - kinds empty     ⇒ the anchors DO carry paths but no node declares them (a genuine scope
+//                       expansion), which really is a plan-shape problem.
+// PURE, total, never throws — it only ever decorates a refusal that is already decided.
+function unroutableAnchorKindsOf(attempt) {
+  try {
+    const canonicalByUid = new Map();
+    for (const finding of (Array.isArray(attempt && attempt.findings) ? attempt.findings : [])) {
+      if (!finding || typeof finding !== 'object') continue;
+      const key = finding.uid != null ? String(finding.uid)
+        : (finding.id != null ? String(finding.id) : null);
+      if (key != null && !canonicalByUid.has(key)) canonicalByUid.set(key, finding);
+    }
+    const kinds = new Set();
+    for (const row of stillOpenRouteCandidates(attempt)) {
+      if (Array.isArray(row.ownership_candidates) && row.ownership_candidates.length) continue;
+      const uid = String(row.finding_id != null ? row.finding_id : (row.id != null ? row.id : ''));
+      const anchor = (canonicalByUid.get(uid) || {}).primary_anchor;
+      const kind = anchor && anchor.kind ? String(anchor.kind) : null;
+      if (kind && !reviewSchema.findingAnchorCarriesPath(kind)) kinds.add(kind);
+    }
+    return Array.from(kinds).sort();
+  } catch (_) { return []; }
 }
 
 // ---------------------------------------------------------------------------
@@ -6886,7 +7028,8 @@ function runCloseAndOpenNext(opts) {
     : { ok: true, review_gate: false };
   if (!schema2Review.ok) {
     return { result: 'refuse', reason: schema2Review.reason, detail: schema2Review.detail || null,
-      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role };
+      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
+      ...reviewRefusalDiagnostics(schema2Review) };
   }
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, {
     expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes, reviewV2: schema2Review,
@@ -8459,6 +8602,32 @@ function runRepairNodeCore(opts) {
       // ownership is unresolvable (anchor-less findings / a pre-fix journal) so it never falsely accuses a
       // maximal writer that simply has no routable owner — those defer to the unchanged proof below.
       const own = findingOwnershipSummary(repairAttempt, nodeId);
+      // A BARE `repair_requires_replan` is a token, not a diagnosis: it reads as "this needs a re-plan
+      // epoch" whether the cause is a structurally unplaceable anchor (a one-line reviewer fix) or a
+      // genuine multi-writer / scope-expansion frontier (a real plan-shape problem). Decorate the two
+      // bare arms below with an `ownership_diagnosis` + an `operator_hint` that names the ACTUAL cause.
+      //
+      // DELIBERATELY NOT a `reason` field. `reason` is lifted verbatim into the digest-bound
+      // `replan-source.json` authority payload, so typing it here would change a committed transport
+      // record to carry an operator-diagnostic string — a semantic widening of an authority artifact for
+      // a purely human-facing benefit. `operator_hint` and the diagnosis are envelope-only (the payload
+      // is built from an explicit key list), so this stays additive and byte-neutral on that seam.
+      const bareReplan = () => {
+        const kinds = own.unroutableAnchorKinds;
+        const diagnosis = {
+          cause: !own.anyOwned
+            ? (kinds.length ? 'anchor_kind_carries_no_path' : 'no_node_declares_the_anchor_path')
+            : 'writer_not_graph_maximal',
+          unowned_findings: own.unownedBlockingFindingIds.slice(),
+          unroutable_anchor_kinds: kinds.slice(),
+          routable_anchor_kinds: reviewSchema.ROUTABLE_FINDING_ANCHOR_KINDS.slice(),
+          ownership_candidates: own.ownersUnionSorted.slice(),
+        };
+        return { result: 'repair_requires_replan', attempt_id: attemptId,
+          producer_slice: proof.producer_slice, ownership_diagnosis: diagnosis,
+          operator_hint: getOperatorHint('repair_ownership_unresolved',
+            { nodeId, diagnosis, producer_slice: proof.producer_slice }) };
+      };
       if (!proof.ok) {
         // nodeId is NOT the unique graph-maximal executed producer (the #682/#684 antichain refusal). When
         // the operator named the true SEMANTIC OWNER instead — a non-maximal upstream writer that UNIQUELY
@@ -8499,10 +8668,10 @@ function runRepairNodeCore(opts) {
                   { semantic_owner: nodeId, blocking_descendants: blocking }) };
             }
           } else {
-            return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
+            return bareReplan();
           }
         } else {
-          return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
+          return bareReplan();
         }
       }
       // proof.ok — nodeId is graph-maximal. When ownership is RESOLVABLE (≥1 open finding routed to a
@@ -11792,7 +11961,8 @@ function runCloseNode(opts) {
     : { ok: true, review_gate: false };
   if (!schema2Review.ok) {
     return { result: 'refuse', reason: schema2Review.reason, detail: schema2Review.detail || null,
-      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role };
+      missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
+      ...reviewRefusalDiagnostics(schema2Review) };
   }
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, {
     expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes, reviewV2: schema2Review,
@@ -13088,8 +13258,37 @@ function runExpandOpen(opts) {
 
   // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
   const rolled = openExpansionFrontier(opts, recordId);
+
+  // THE TRANSITION CHANNEL MUST PRESENT THE COMPOSED **SHAPE**, NOT ONLY THE STATUS FLIPS.
+  //
+  // Expansion is the one lifecycle step that changes the run's SHAPE: units that did not exist a
+  // moment ago now do. `rolled` carries only what the FIRST frontier opened, so a unit further down
+  // the interior DAG emitted nothing at all — and a `taskTransitions` entry for an id the visible list
+  // has never heard of is, by definition, an INSERT. Emitting one transition per unit of THIS record
+  // (`in_progress` for the units this open started, `pending` for the composed-but-unopened rest) is
+  // what lets the presented task list stop showing the frozen spine and start showing the run.
+  // The durable mirror already lists the same unit ids; this makes the two channels agree.
+  //
+  // UNION, never a replacement: `rolled.taskTransitions` may legitimately also name non-unit nodes the
+  // same open-ready call started, and dropping those would lose real information. Composed units the
+  // frontier did not open are APPENDED, in record order, after whatever the open already reported.
+  //
+  // FAIL-OPEN, like every other mirror emission: this runs strictly after the committed Phase-1 ledger
+  // write, so any throw falls back to exactly what `rolled` carried. A presentation detail must never
+  // turn a committed expansion into a refusal.
+  let shapeTransitions = Array.isArray(rolled && rolled.taskTransitions) ? rolled.taskTransitions : [];
+  try {
+    const emitted = shapeTransitions.slice();
+    const covered = new Set(emitted.map(t => (t && t.id != null) ? String(t.id) : null));
+    for (const id of unitIds) {
+      if (!covered.has(id)) emitted.push(buildTransition(id, 'pending', 'expand-open'));
+    }
+    shapeTransitions = emitted;
+  } catch (_) { /* fail-open: keep whatever the frontier open already reported */ }
+
   return {
     ...rolled,
+    taskTransitions: shapeTransitions,
     expansion_id: recordId,
     expansion_point: nodeId,
     ordinal,
@@ -13155,8 +13354,16 @@ function rollForwardExpansions(opts) {
 // unit's `close-node`, because close-node must stay unchanged: it closes ONE running-set member and
 // knows nothing about milestones. Discharging is gated by the same fail-closed settled predicate the
 // re-expansion gate uses, so a point can never go terminal over a unit that is merely missing a row.
+//
+// It is a LEDGER-MUTATING subcommand and therefore owes the mutation-time task-mirror contract every
+// other one honors: return the machine-readable transition for the row it moved, and refresh the
+// durable `workflow-tasks.json` after the final stable plan write. Without both, the milestone's task
+// stays visibly open forever after its discharge — the run's last shape change is the one the operator
+// never sees — and the durable mirror stays stale until some unrelated mutation happens to refresh it.
+// The `alreadyDischarged` early return below stays EMPTY on purpose: nothing was mutated, so there is
+// no transition to report and nothing to re-derive.
 function runExpandClose(opts) {
-  const { planPath, nodeId, readFile, writeFile, now } = opts;
+  const { planPath, project, nodeId, shell, readFile, writeFile, now } = opts;
 
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'] });
   if (guard) return guard;
@@ -13218,7 +13425,12 @@ function runExpandClose(opts) {
     writeFile(evidencePath, evidence.replace(/\s*$/, '\n') + line + '\n');
   } catch (_) { /* advisory-only — the discharge above already committed */ }
 
-  return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id), taskTransitions: [] };
+  // The mutation-time mirror sync, AFTER the final stable plan write above (the efficiency line lands in
+  // .cache, which the mirror does not read). Fail-open by contract: a mirror-refresh failure is reported
+  // in `taskMirror` and never rolls back the committed discharge.
+  return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id),
+    taskTransitions: [buildTransition(nodeId, 'complete', 'expand-close')],
+    taskMirror: refreshTaskMirror(project, shell) };
 }
 
 // ===========================================================================
@@ -13933,6 +14145,16 @@ function findingFilesFromAttempt(attempt) {
   const files = new Set();
   let rows = [];
   try { rows = stillOpenRouteCandidates(attempt); } catch (_) { rows = []; }
+  // DELIBERATELY row-only, and NOT joined to the attempt's canonical findings. A schema-2 ROUTE row is
+  // an ownership projection that carries no anchors, so this returns [] for every schema-2 attempt and
+  // the spine local-re-expansion precheck passes through to the replan family. That looks like a bug and
+  // is a KNOWN, deliberate hold: joining the canonical findings here does make the paths reach the
+  // router — but the resulting `route_local_reexpansion` directive is not executable while the attempt
+  // is unresolved (`reexpand-open` half-appends its record and ledger row, then the review-journal
+  // fence refuses `review_attempt_unresolved`, leaving the plan wedged). Settling the attempt from the
+  // re-expansion side needs a `repair.selected_writer` / `consumed_by` pair the journal validator
+  // requires and an expansion point cannot supply — the inline repair lane, not this seam. Until that
+  // lands, falling through to the (working, if expensive) replan family is strictly the safer exit.
   for (const row of rows) for (const f of findingFilesFromIndexRow(row)) files.add(f);
   return Array.from(files).sort();
 }

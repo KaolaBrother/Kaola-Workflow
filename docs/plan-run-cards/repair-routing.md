@@ -150,7 +150,19 @@ never assigned to a fixer.
 When ownership is unresolvable — an anchor-less finding (e.g. an `evidence_observation` anchor carries
 no path) or a legacy attempt whose rows still hold `ownership_candidates: []` — the bridge stays inert:
 it never falsely accuses a maximal writer of a mismatch, and a non-maximal request simply degrades to
-the generic `repair_requires_replan`.
+`repair_requires_replan`. That degrade is no longer a bare token: it carries an `ownership_diagnosis`
+plus an `operator_hint` naming the ACTUAL cause, which is the difference between a one-line fix and a
+wasted epoch:
+
+| `ownership_diagnosis.cause` | What it means | The next step |
+| --- | --- | --- |
+| `anchor_kind_carries_no_path` | The finding's primary anchor kind names no path, so nothing can place it. | Re-anchor the blocking finding on a path-bearing kind and re-run the gate — NOT a re-plan. |
+| `no_node_declares_the_anchor_path` | The anchors do name paths, but no node declares them and no milestone surface covers them. | A genuine scope expansion: `amend-surface` if the file belongs to a milestone, else a replacement plan. |
+| `writer_not_graph_maximal` | Ownership resolved, but this node is not the unique graph-maximal producer. | Re-run `repair-node` naming the finding's semantic owner. |
+
+The first row is now unreachable on a **change gate**: `review_finding_anchor_unroutable` refuses that
+finding at record time, before an attempt exists (see `docs/api.md` § Findings). It survives here for
+legacy journals and investigation-mode gates.
 
 ### The repair brief handed to the reopened writer
 
