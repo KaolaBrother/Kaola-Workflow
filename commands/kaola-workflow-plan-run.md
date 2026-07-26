@@ -130,24 +130,24 @@ source described by the metric-optimizer card.
 ## Gate-Role Degradation Notice
 
 Determine runtime Agent/teammate availability before opening the first node and re-check if it
-changes mid-run. Only a genuinely unavailable agent tool or a runtime mode-refused spawn qualifies.
-When that dispatch capability is unavailable, post a PROMINENT run-start notice — before
-dispatching any node — naming every gate role the plan would otherwise have dispatched:
-`adversarial-verifier`, `code-reviewer`, `security-reviewer`.
+changes mid-run.
+Unavailable means the agent tool is genuinely absent or the runtime mode-refuses the spawn. When that
+dispatch capability is unavailable, post a PROMINENT run-start notice — before dispatching any node —
+naming every gate role the plan would otherwise have dispatched: `adversarial-verifier`,
+`code-reviewer`, `security-reviewer`. `local-fallback-tool-unavailable` records exactly that.
 
-For `adversarial-verifier` and `code-reviewer`, an inline gate reviewing its own writer-context is
-no gate: do NOT dispatch the gate node inline and silently record a self-issued `verdict: pass`.
-Instead route through the consent-halt valve (`write-halt --reason consent`) and await operator
-resolution before the gate node is considered satisfied. Forward roles — `code-explorer`,
-`knowledge-lookup`, `implementer`, `tdd-guide`, `metric-optimizer`, `doc-updater`, and
-`security-reviewer` when it runs as a forward check — may still record the documented local fallback
-(`local-fallback-tool-unavailable`) and proceed inline.
+For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`, an inline gate reviewing its
+own writer-context is no gate: do NOT dispatch the gate node inline and silently record a self-issued
+`verdict: pass`. Instead route through the consent-halt valve (`write-halt --reason consent`) and
+await operator resolution before the gate node is considered satisfied.
 
-When a node runs inline under this degradation notice, announce it instead of the pre-spawn
-format above:
+Everywhere else execution mode is your judgment, per unit — dispatch production, keep decisions.
+Delegating discretionary production is the default; mechanical execution, a fully-specified small
+write, and interpretation/adjudication may run inline, closed with `--main-session-direct`.
+Announce an inline node instead of the pre-spawn format above:
 
 ```text
-→ running {node_id} · {role} inline (…reason token…)
+→ running {node_id} · {role} inline
 ```
 
 ## Loop Skeleton
@@ -213,7 +213,7 @@ step is a no-op — run the normal loop.)
   passing the composition on stdin as `{derivation:{grain,path,join,probe,serializer},
   units:[{name,role,model,write_set,mode}]}`. `expand-open` appends the record and OPENS the
   composed units through the running-set scheduler (a read fan-out, or co-open isolated legs for a
-  disjoint write frontier) — dispatch each unit's role agent and `close-node` it exactly like any
+  disjoint write frontier) — run each unit's role and `close-node` it exactly like any
   frontier member. A re-expansion (a second record on the SAME point) is the SAME command once
   every prior unit is settled.
 - **Never compose a gate role inside an expansion** (`code-reviewer`, `security-reviewer`,
@@ -384,7 +384,6 @@ Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
   card never carries it).
 - Fill in token stubs from its work; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.
-  Record compliance as `main-session-direct` for the `finalize` sink node.
 - Gate roles must `post-dominate` every code/sensitive node in the `## Node Ledger`; emit
   `verdict: pass|fail` + `findings_blocking: N`. Run `--forbidden-only` for forge-touching
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.

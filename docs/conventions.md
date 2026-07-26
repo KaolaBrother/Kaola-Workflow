@@ -26,6 +26,7 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 **No-silent-inline-fallback rule (hard gate):** Before any `subagent-invoked` compliance row is written, `kaola-workflow-codex-preflight.js` MUST return `status:"ok"` (exit 0). A non-ok preflight result is a STOP — the caller records a typed refusal, not an inline execution. There is no silent fallback when role profiles are absent or stale; the preflight gate is the enforcement point for the `delegation_policy: delegate` / `subagent-invoked` contract (see `docs/workflow-state-contract.md` § Workflow State Fields). Specifically:
 
 - `subagent-invoked` — only valid after preflight passes.
+- `main-session-direct` — the node ran in the main session, not as a subagent. Unconditional for the two non-delegable roles (the `finalize` sink and a `main-session-gate`); otherwise recorded when the orchestrator judged the unit worth running inline and closed it with `--main-session-direct`. A record, never a gate: nothing refuses on it, and the fail-closed anchors (evidence-binding nonce, `record-evidence --verify`, the exact-path write-set barrier) bind identically either way. It is not a fallback token and never substitutes for the two below.
 - `local-fallback-tool-unavailable` — only valid when subagent tooling is genuinely unavailable (runtime detection, not a silent config-drift shortcut).
 - `local-fallback-explicit` — only valid when the user explicitly set `delegation_policy: local-authorized`.
 

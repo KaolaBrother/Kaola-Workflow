@@ -758,7 +758,7 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Every s
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '← {node_id} · {role} returned: {verdict or one-line outcome}');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ running {node_id} · {role} inline (…reason token…)');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ running {node_id} · {role} inline');
 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');
@@ -975,6 +975,15 @@ for (const planRunSurface of [
   assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
   assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
   assertIncludes(planRunSurface, 'write-halt --reason consent');
+  // #817: the fence's ROLE LIST is itself the contract — every REVIEW_GATE_ROLES member that
+  // reviews someone else's work must sit inside it. `main-session-gate` is deliberately absent:
+  // it is non-delegable and REQUIRED to run inline, so fencing it would be a contradiction.
+  // Pinning the exact list is bidirectional — dropping a role, or adding `main-session-gate`,
+  // breaks this needle.
+  assertIncludes(planRunSurface, 'For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`,');
+  // #817: the mode-refused-spawn trigger must stay NAMED. Without it a runtime that refuses every
+  // spawn is reclassified as ordinary judged-inline and the prominent run-start notice never fires.
+  assertIncludes(planRunSurface, 'the runtime mode-refuses the spawn');
 }
 
 // #611: fork_turns:"none" is now mandated for EVERY role dispatch (not only tiered nodes) — pin

@@ -2323,7 +2323,7 @@ function complianceRowExists(content, requirementCell, nodeId) {
   return false;
 }
 
-function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker) {
+function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker, mainSessionDirect) {
   const canonicalRequirement = role + ' (' + nodeId + ')';
   // Legacy bare cells (code-reviewer / security-reviewer, emitted before the canonical-cell
   // producer fix) remain READ/match-compatible so an already-emitted row still advances in
@@ -2333,7 +2333,17 @@ function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierM
   let evidenceSummary = evidenceContent
     ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
   if (barrierMarker) evidenceSummary += '; barrier: ' + barrierMarker;
-  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+  // Execution mode is the orchestrator's per-unit judgment, so the row records what actually ran
+  // it: `main-session-direct` for the two NON-DELEGABLE roles — the `finalize` sink and a
+  // `main-session-gate` (the validator refuses a model on either; neither is ever dispatched as a
+  // subagent, so `subagent-invoked` would be a false delegation claim on a GATE) — and for ANY node
+  // the caller says it ran inline (`--main-session-direct`). A record, never a gate — the status is
+  // already in the validator's accepted vocabulary, nothing refuses on it, and the fail-closed
+  // anchors (the seeded evidence-binding nonce, `record-evidence --verify`, the exact-path write-set
+  // barrier) are author-agnostic and bind identically either way. Absent flag ⇒ `subagent-invoked`.
+  const complianceStatus =
+    (role === 'finalize' || role === 'main-session-gate' || mainSessionDirect === true)
+      ? 'main-session-direct' : 'subagent-invoked';
 
   // Schema-2 plans pre-seed the exact one-row-per-node compliance set at
   // freeze time.  Presence is therefore not proof of completion: advance the
@@ -5600,7 +5610,7 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
       return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
     }
     if (closed.changed) plan = closed.content;
-    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent);
+    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect);
     opts.writeFile(opts.planPath, plan);
     appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
     removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
@@ -5690,7 +5700,7 @@ function prepareReviewClose(opts, ctx) {
         const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
         if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
         if (closed.changed) plan = closed.content;
-        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent);
+        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect);
         // Plan/compliance first, then replay-safe sidecars, then running-set removal. A crash after
         // any prefix is completed by the unchanged retry without duplicating durable evidence.
         opts.writeFile(opts.planPath, plan);
@@ -7010,7 +7020,7 @@ function runCloseAndOpenNext(opts) {
     currentPlan = closeResult.content;
   }
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect);
 
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
@@ -11896,7 +11906,7 @@ function runCloseNode(opts) {
   }
   if (closeResult.changed) currentPlan = closeResult.content;
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent);
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect);
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
   writeFile(planPath, currentPlan);
@@ -12048,7 +12058,7 @@ function closeGroupMember(ctx) {
     }
     if (closeResult.changed) currentPlan = closeResult.content;
     // Compliance row carrying the literal `deferred_to_group` marker in the Evidence cell (grep/audit).
-    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group');
+    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group', opts.mainSessionDirect);
     writeFile(planPath, currentPlan);
     appendNodeTiming(planPath, nodeId, 'closed');
     appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -12162,7 +12172,7 @@ function closeGroupMember(ctx) {
     return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
   }
   if (closeResult.changed) currentPlan = closeResult.content;
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed');
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed', opts.mainSessionDirect);
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
   appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -14304,7 +14314,8 @@ function main() {
       '  repair-node         --project P --attempt-id A --node-id N\n' +
       '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
       '\n' +
-      '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n'
+      '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n' +
+      '  --main-session-direct  (close-node / close-and-open-next) record this node as main-session-direct\n'
     );
     return;
   }
@@ -14575,6 +14586,7 @@ function main() {
     } else {
       result = runCloseNode({
         planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        mainSessionDirect: args.includes('--main-session-direct'),
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
       });
     }
@@ -14706,6 +14718,7 @@ function main() {
       // #607: mkdirp + now let the fused-advance gate state-channel write stamp openedAt / ensure .cache.
       result = runCloseAndOpenNext({
         planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode,
+        mainSessionDirect: args.includes('--main-session-direct'),
         mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
         now: () => new Date().toISOString(),
       });

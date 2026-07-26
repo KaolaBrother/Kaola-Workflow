@@ -1081,6 +1081,27 @@ New READ-ONLY mode of the `record-evidence` subcommand. Verifies on-disk `.cache
 
 `--verify` uses `checkEvidenceShape` (the same checker the `close-node` / `close-and-open-next` gate uses), so the two cannot drift. `--verify` writes nothing. `--stdin` and `--verify` are mutually exclusive.
 
+### `--main-session-direct` — recording an inline execution mode (issue #817)
+
+**CLI:** `node kaola-workflow-adaptive-node.js close-node|close-and-open-next --project P --node-id N --main-session-direct --json`
+
+Execution mode — dispatch a role agent versus run the unit inline — is the orchestrator's per-unit
+judgment, not a contract. The optional boolean `--main-session-direct` records that judgment: the
+node's `## Required Agent Compliance` row is written `main-session-direct` instead of the default
+`subagent-invoked`. The two **non-delegable** roles — the `finalize` sink and a `main-session-gate`
+— are `main-session-direct` unconditionally, with or without the flag: the plan-validator refuses to
+let either carry a model precisely because neither is ever dispatched as a subagent, so recording
+`subagent-invoked` for them would be a false delegation claim.
+
+It is a **record, never a gate**. There is no new reason token, refusal, justifier field, or
+approval attached to it; omitting it on an inline run is untidy bookkeeping, not an error; and the
+fail-closed anchors that actually protect the run — the seeded `evidence-binding` nonce,
+`record-evidence --verify`, the exact-path write-set barrier, and the gate-independence fence
+(an inline gate reviewing its own writer-context is no gate, so a gate node routes through
+`write-halt --reason consent` instead) — are author-agnostic and bind identically either way.
+`local-fallback-tool-unavailable` keeps only its literal meaning: the dispatch tool was genuinely
+unavailable.
+
 ### Lane-group co-open and group-scoped close barrier (issue #437, D-419 P2)
 
 By default (`KAOLA_PARALLEL_WRITES` unset or not `0`/`false`/`no` — D-542-01),
