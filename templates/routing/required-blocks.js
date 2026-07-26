@@ -164,15 +164,48 @@ const REQUIRED_BLOCKS = [
       'fork_turns: "none"',
       'dispatch.codex_profile_mode',
       'Omit both `model`',
-      'Codex 0.144 durable-result override',
-      'dispatch.evidence_file',
-      'record-evidence',
-      '--verify --json',
-      'delegation_outcome: returned_partial',
-      'transport_error: encrypted_return',
       'direct `agents` namespace',
       'never dispatch through `functions.exec` or Code Mode',
       'agents.spawn_agent',
+    ],
+  },
+  {
+    // The role-substitution channel is only worth having if routed prose REACHES it: a remedy no
+    // surface names is dead weight. Pin the trigger, the command, the claim-preserving guarantee,
+    // and the consent fallback on all six surfaces.
+    block_id: 'pr-role-capability-coverage',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: role-capability-coverage -->',
+      'cannot cover the node brief',
+      'capability_gap',
+      'substitute-role',
+      'BYTE-IDENTICAL',
+      'write-halt --reason consent',
+      'is **NOT evidence**',
+    ],
+  },
+  {
+    // The evidence-persistence contract is RUNTIME-INVARIANT: every role, on every runtime,
+    // self-persists its full deliverable to the seeded evidence file and returns a compact
+    // summary. It used to live inside the codex-only dispatch block because only that runtime
+    // enforced self-write; now that the contract is universal, it is a 6-surface block of its
+    // own — keeping it under a runtime-scoped block would let the two halves silently diverge.
+    block_id: 'pr-evidence-persistence',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'One contract, every role, every runtime',
+      'dispatch.evidence_file',
+      'SOLE write exception',
+      'record-evidence',
+      '--verify --json',
+      'is the FALLBACK channel, never the primary one',
+      'delegation_outcome: returned_partial',
+      'transport_error: encrypted_return',
     ],
   },
   {

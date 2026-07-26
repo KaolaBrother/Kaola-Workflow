@@ -169,9 +169,9 @@ assert(exists(pluginRoot + '/hooks/hooks.json'), 'GitLab hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab phantom-advisor hook must be removed (#372)');
-// #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired). #463: +synthesizer = 15.
-// #634: +metric-optimizer = 16.
-assert(agentFiles.length === 14, 'expected 14 GitLab agent profiles (12 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, contractor retired #816)');
+// #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired; issue-scout
+// retired #789; investigator added #798). #463: +synthesizer = 15. #634: +metric-optimizer = 15.
+assert(agentFiles.length === 15, 'expected 15 GitLab agent profiles (14 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, investigator added #798)');
 assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -853,7 +853,7 @@ assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_tu
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'current parent session');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', "the sub-agent's model/reasoning effort itself");
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-session equality');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Codex 0.144 durable-result override');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'One contract, every role, every runtime');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'dispatch.codex_profile_mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Omit both `model`');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model: dispatch.codex_model');

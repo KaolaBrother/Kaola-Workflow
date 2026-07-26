@@ -91,12 +91,13 @@ description: Security vulnerability detection specialist. Use PROACTIVELY after 
 <!-- reviewer-runtime-adapter:start -->
 ## Runtime adapter
 
-- Tool policy: use read-only repository inspection and shell execution tools. Do not edit product files; the exact seeded evidence file is the only write exception.
-- Evidence transport: write the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.
+- Tool policy: use read-only repository inspection and shell execution tools. Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception.
+- Capability refusal: if the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+- Evidence transport: SELF-WRITE the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.
 - After the evidence is complete, return only a compact orchestrator summary: <node-id> security-reviewer: <outcome>; evidence=<dispatch.evidence_file>.
 <!-- reviewer-runtime-adapter:end -->
 
 <!-- reviewer-profile-identity:start -->
-resolved_profile_hash: 01788b8e3e1cdeb0d685e6b2c1e6d4964c7eda1345c403ea8abf89286d21a12e
+resolved_profile_hash: 44fd5c4b03cbffedba1c84b1854f607c06382661eaa64bc56301a3c6422c5884
 <!-- reviewer-profile-identity:end -->
 """

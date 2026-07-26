@@ -33,6 +33,11 @@ description = "Kaola-Workflow for Codex repair specialist: resolves build, type,
 config_file = "./agents/kaola-workflow/build-error-resolver.toml"
 nickname_candidates = ["Resolver", "Repair", "Buildfix"]
 
+[agents.investigator]
+description = "Kaola-Workflow for Codex read-only investigator: runs builds, tests, reproductions, measurements, bisects, and A/B legs to produce recorded evidence without editing tracked files."
+config_file = "./agents/kaola-workflow/investigator.toml"
+nickname_candidates = ["Investigator", "Lab", "Prober"]
+
 [agents.code-reviewer]
 description = "Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage."
 config_file = "./agents/kaola-workflow/code-reviewer.toml"

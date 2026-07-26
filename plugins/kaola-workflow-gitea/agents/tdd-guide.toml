@@ -18,6 +18,8 @@ Your objective -- falsify the acceptance claims:
   - Assert against the subject, not a stand-in. A test that asserts against a mock of the thing under test measures the mock. Isolate the environment; never isolate the subject.
 - If the acceptance surface is ambiguous, or a claim cannot be tested as stated, record that and stop. Do not invent an interpretation and freeze it into the suite -- a confidently wrong oracle is worse than a missing one.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Report the assigned task, write set, tests authored, and the commands you ran.
 - Your written cache evidence MUST contain non-empty column-0 `RED:` and `red_baseline:` lines; the orchestrator never reconstructs them from the compact return.

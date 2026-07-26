@@ -1290,7 +1290,7 @@ function testCodexPreflight266() {
   try {
     trustCodexProject(emptyHome266, root266);
     enableMultiAgentV2(emptyHome266);
-    // Install all 15 profiles into the fixture (13 base + synthesizer #463 + metric-optimizer #634; issue-scout retired #789)
+    // Install all 16 profiles into the fixture (14 base + synthesizer #463 + metric-optimizer #634; issue-scout retired #789, investigator added #798)
     const installResult = spawnSync(process.execPath, [installProfilesScript, root266], {
       cwd: repoRoot, encoding: 'utf8'
     });
@@ -1744,9 +1744,9 @@ function testInstallSchemaPruneManifest332() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = listTomls(agentsDir);
-    // #451: 13 base role profiles (the <role>-max effort variants are retired; issue-scout
-    // retired #789).
-    assert(tomls.length === 14, '#463 AC: fresh install must place exactly 14 *.toml (12 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789), got ' + tomls.length);
+    // #451: 14 base role profiles (the <role>-max effort variants are retired; issue-scout
+    // retired #789; investigator added #798).
+    assert(tomls.length === 15, '#463 AC: fresh install must place exactly 15 *.toml (14 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789, investigator added #798), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     const profilePolicy = require(installProfilesScript);
     for (const f of tomls) {
@@ -1764,10 +1764,10 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#463 AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
-    assert(manifest.files && Object.keys(manifest.files).length === 14
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 15, '#463 AC: manifest must list 15 roles (14 base + synthesizer + metric-optimizer)');
+    assert(manifest.files && Object.keys(manifest.files).length === 15
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
-      '#463 AC: manifest.files must carry 15 sha256 entries (13 base + synthesizer + metric-optimizer)');
+      '#463 AC: manifest.files must carry 16 sha256 entries (14 base + synthesizer + metric-optimizer)');
     for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(pluginRoot, 'agents', file));

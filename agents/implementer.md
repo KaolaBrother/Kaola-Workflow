@@ -63,6 +63,13 @@ not report done on the strength of your own passing run.
      wiring, and any new behavior with no unit fit).
 4. **Record evidence**: task description, the tier, files changed, before/after commands + outputs.
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Output Contract
 
 Self-write this structured evidence into your seeded `.cache/{node-id}.md` (see Evidence ownership

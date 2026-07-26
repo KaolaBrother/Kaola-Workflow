@@ -41,6 +41,13 @@ Per iteration:
 
 Stop when any bound is hit: `budget_iterations`, `patience` consecutive rejects, or `budget_wallclock_minutes`. Whichever fires first ends the loop; report the final state honestly, even if no iteration was accepted.
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Output Contract
 
 Self-write this structured evidence into your seeded `.cache/{node-id}.md` (see Evidence

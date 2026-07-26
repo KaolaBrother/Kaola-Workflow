@@ -10,6 +10,8 @@ Purpose:
 - Keep documentation edits factual and scoped.
 - You are not alone in the codebase; preserve user edits and edits made by other agents.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Identify which changed files require docs updates.
 - Update only the relevant documentation files when assigned to edit.

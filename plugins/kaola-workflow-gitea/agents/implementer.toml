@@ -24,6 +24,8 @@ Verification protocol:
    - smoke-integration: a type-appropriate executable smoke or integration check (migrations, glue, wiring, and any new behavior with no unit fit).
 4. Record evidence: task description, the tier, files changed, before/after commands + outputs.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Report the assigned task, the verification_tier token from step 3, write set, files changed, and verification commands with exit codes.
 - Show before and after verification results.

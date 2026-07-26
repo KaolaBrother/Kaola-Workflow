@@ -10,6 +10,8 @@ Purpose:
 - Compare user value, complexity, risk, reversibility, test burden, and out-of-scope work.
 - Do not edit implementation files; the exact seeded workflow-cache evidence file is the only write exception.
 
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or simulate the result -- stop and return `capability_gap: <missing capability> -- <required action>` as your compact summary. A deliverable produced by working around a missing tool is a defect, not a best effort.
+
 Output contract:
 - Present options with clear tradeoffs.
 - Recommend one approach and explain why it fits the evidence.

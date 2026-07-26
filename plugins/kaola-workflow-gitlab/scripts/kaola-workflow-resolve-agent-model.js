@@ -12,6 +12,7 @@ const path = require('path');
 // silently re-tiers the role on every install.
 const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
+  'investigator': 'sonnet',
   'knowledge-lookup': 'sonnet',
   planner: 'opus',
   // These defaults preserve each role's declarative reasoning/wait-budget class. Codex named

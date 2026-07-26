@@ -156,6 +156,7 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | Agent | Role kind | Tier |
 |-------|-----------|------|
 | `code-explorer` | Read — code-fact discovery | standard |
+| `investigator` | Read — investigations that must RUN: builds, tests, reproductions, measurements, bisects, A/B legs (executes, never edits tracked files) | standard |
 | `knowledge-lookup` | Read — external docs (when needed) | standard |
 | `planner` | Planning — plan authoring | reasoning |
 | `code-architect` | Planning — design | reasoning |
@@ -811,6 +812,7 @@ mirror the Claude workflow roles:
 
 ```text
 code-explorer
+investigator
 knowledge-lookup
 planner
 code-architect

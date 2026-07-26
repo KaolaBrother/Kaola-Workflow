@@ -2,7 +2,7 @@
 name: code-explorer
 description: Deeply analyzes existing codebase features by tracing execution paths, mapping architecture layers, and documenting dependencies to inform new development.
 model: sonnet
-tools: [Read, Grep, Glob]
+tools: [Read, Write, Grep, Glob]
 ---
 <!--
 kaola-workflow-managed-agent: true
@@ -84,6 +84,13 @@ copyright: Copyright (c) 2026 Affaan Mustafa
 - Avoid [...]
 ```
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Evidence Contract
 
-Evidence contract — you are a READ-ONLY role. You CANNOT self-write `.cache` evidence. RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to `kaola-workflow/{project}/.cache/{node-id}.md` via `record-evidence --stdin`, which re-injects this node's `evidence-binding: <node-id> <nonce>` header — never add, alter, or strip that header yourself. Include every content-bearing token your role produces (`findings`) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.
+Evidence contract — SELF-WRITE your evidence directly into your seeded `.cache/{node-id}.md` (the exact `dispatch.evidence_file`). Do not edit repository or product files; the exact seeded workflow-cache evidence file is the only write exception. The seeded file already carries an `evidence-binding: <node-id> <nonce>` header line — read it, preserve it verbatim, never add/alter/strip it, and write your content below it. Include every content-bearing token your role produces (`findings`) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close. Return only a compact summary — `<node-id> code-explorer: <outcome>; evidence=<dispatch.evidence_file>` — never retransmit the full deliverable as your durable copy.

@@ -86,6 +86,7 @@ function dispatchModelCodex(tier) {
 // pair. The historical standard/reasoning classes remain declarative metadata and wait defaults.
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'code-explorer',
+  'investigator',
   'knowledge-lookup',
   'tdd-guide',
   'implementer',
@@ -1474,6 +1475,59 @@ function readDurableConsentHalt(planContent) {
 // membership (the main session cannot run concurrently with itself); carries its own
 // freeze-time post-dominance gate (G3) and runtime execution check.
 const MAIN_SESSION_GATE_ROLE = 'main-session-gate';
+
+// The ROLE-CAPABILITY MANIFEST — the declared role -> capability table the planner is served at
+// author time, so the `role` column of a frozen plan is chosen against what a role CAN DO rather
+// than against what its NAME suggests. A role name is not a capability: "code-explorer" reads as
+// exactly right for a forensic investigation whose brief happens to run a build, and the closed-
+// library check only proves the role EXISTS, never that its manifest covers what the brief demands.
+//
+// DECLARED, not parsed. Only the Claude profiles carry a `tools:` front-matter field at all — the
+// Codex/opencode/Kimi profile files have no tools key — so installed-profile parsing cannot be the
+// source of truth on three of the four runtimes. The table is pinned to the canonical profiles by a
+// bidirectional drift wall in validate-vendored-agents.js (a role added to `agents/` without a row,
+// a row without a profile, or any tools/bash/write divergence reds the chain), which is what makes
+// a declared constant safe rather than a second copy that silently rots.
+//
+// Rows:
+//   tools          the exact tool manifest, byte-equal to the profile front matter (as a SET)
+//   bash_capable   Bash ∈ tools — the one capability that separates "can report on" from "can run"
+//   write_capable  Write ∈ tools
+//   kind           the role's slot in the library (see ROLE_KINDS)
+//
+// Evidence transport is deliberately NOT a field: every role self-persists its deliverable to the
+// seeded evidence file, so a per-role evidence mode would be a constant wearing a variable's clothes.
+//
+// Built-in role tokens (finalize / main-session-gate / expansion-point) are declared with an empty
+// tool manifest: they are plan vocabulary the main session performs itself, never dispatched as a
+// subagent and never backed by a profile on disk.
+const ROLE_KINDS = Object.freeze(['producer', 'implement', 'write', 'gate', 'orchestration', 'built-in']);
+const ROLE_CAPABILITY_MANIFEST = Object.freeze({
+  // Read producers — investigate and report; their deliverable is findings, not edits.
+  'code-explorer':        Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob']), bash_capable: false, write_capable: true, kind: 'producer' }),
+  'planner':              Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob']), bash_capable: false, write_capable: true, kind: 'producer' }),
+  'knowledge-lookup':     Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'mcp__context7__resolve-library-id', 'mcp__context7__query-docs', 'WebSearch', 'WebFetch']), bash_capable: false, write_capable: true, kind: 'producer' }),
+  'code-architect':       Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'producer' }),
+  'investigator':         Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'producer' }),
+  // Implement roles — originate code against a declared write set.
+  'tdd-guide':            Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  'implementer':          Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  'build-error-resolver': Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  'metric-optimizer':     Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'implement' }),
+  // Write roles — mutate tracked files without originating a feature.
+  'doc-updater':          Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']), bash_capable: true, write_capable: true, kind: 'write' }),
+  'synthesizer':          Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Edit', 'Bash', 'Grep']), bash_capable: true, write_capable: true, kind: 'write' }),
+  // Gates — render a verdict on a recorded claim; never originate the evidence they judge.
+  'code-reviewer':        Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'gate' }),
+  'security-reviewer':    Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'gate' }),
+  'adversarial-verifier': Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Grep', 'Glob', 'Bash']), bash_capable: true, write_capable: true, kind: 'gate' }),
+  // Orchestration roles — never authored as plan nodes; they drive the run, not a node in it.
+  'workflow-planner':     Object.freeze({ tools: Object.freeze(['Read', 'Write', 'Bash', 'Grep', 'Glob']), bash_capable: true, write_capable: true, kind: 'orchestration' }),
+  // Built-in plan vocabulary — performed by the main session, never dispatched, no profile on disk.
+  'finalize':             Object.freeze({ tools: Object.freeze([]), bash_capable: false, write_capable: false, kind: 'built-in' }),
+  'main-session-gate':    Object.freeze({ tools: Object.freeze([]), bash_capable: false, write_capable: false, kind: 'built-in' }),
+  'expansion-point':      Object.freeze({ tools: Object.freeze([]), bash_capable: false, write_capable: false, kind: 'built-in' }),
+});
 
 // #251: the mechanical verdict vocabulary a gate/skeptic role emits into its `.cache` evidence file.
 const VERDICT_PASS = 'pass';
@@ -4165,6 +4219,8 @@ module.exports = {
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
   MAIN_SESSION_GATE_ROLE,
+  ROLE_KINDS,
+  ROLE_CAPABILITY_MANIFEST,
   VERDICT_PASS,
   VERDICT_FAIL,
   VERDICT_VOCABULARY,

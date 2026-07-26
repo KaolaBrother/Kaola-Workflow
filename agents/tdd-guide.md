@@ -62,6 +62,13 @@ If the acceptance surface is ambiguous, or a claim cannot be tested as stated, r
 Do not invent an interpretation and freeze it into the suite — a confidently wrong oracle is worse
 than a missing one.
 
+## Capability Refusal
+
+If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
+simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
+your compact summary. A deliverable produced by working around a missing tool is a defect, not a
+best effort.
+
 ## Output Contract
 
 You are a **WRITE-role agent**: SELF-WRITE a structured report whose evidence block contains BOTH

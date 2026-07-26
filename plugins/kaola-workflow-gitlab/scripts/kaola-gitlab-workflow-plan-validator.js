@@ -229,6 +229,12 @@ const CANONICAL_ROLES = [
   'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
   'adversarial-verifier', 'implementer',
+  // The investigator executes read-only investigations that must RUN to be known — builds, test
+  // matrices, reproductions, measurements, bisects, A/B legs. It closes the gap between the pure
+  // readers (which cannot execute) and the write roles (which mutate tracked files): a brief whose
+  // deliverable is MEASUREMENTS has a home that is neither a blueprint role improvising as a lab
+  // tech nor a gate producing the evidence it is supposed to judge.
+  'investigator',
   // #634: metric-optimizer runs a bounded metric-ratchet loop for direction-not-destination work (make
   // it faster / smaller / less flaky). It is a WRITE + IMPLEMENT role (its per-iteration accepted commits
   // ARE code), so G1/G3 post-dominance is inherited for free; its optimize(<id>) Meta contract + OPT-1..6
@@ -256,7 +262,7 @@ const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implement
 // that depends_on a producer must prove it actually read that producer's evidence (the close-time
 // consumed-proof). Distinct from IMPLEMENT_ROLES (the consumer side). Exported via module.exports so
 // the per-node lifecycle aggregator imports the SAME set and the producer/consumer split never drifts.
-const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'synthesizer']);
+const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'synthesizer', 'investigator']);
 // #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
 // cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)
 // so the freeze-time sanitize-collision check sees the SAME collisions the barrier keys do
@@ -353,6 +359,7 @@ const ROLE_TOKEN_REGISTRY = {
   // (the future-agent wall's floor — no presence-only exception needed).
   'code-architect':       ['evidence-binding', 'files_to_create|files_to_modify', 'build_sequence'],
   'code-explorer':        ['evidence-binding', 'findings'],
+  'investigator':         ['evidence-binding', 'findings'],
   'knowledge-lookup':     ['evidence-binding', 'findings', 'sources'],
   'planner':              ['evidence-binding', 'recommendation'],
   'build-error-resolver': ['evidence-binding', 'build-green'],
@@ -611,6 +618,55 @@ function installedRoles(root) {
     }
   } catch (_) { /* no agents dir (e.g. test fixture) => baseline only */ }
   return roles;
+}
+
+// The role-capability table SERVED to the planner before it authors `## Nodes`. This validator
+// already owns installedRoles(), so it is the natural server: the declared manifest is the
+// authority, unioned with any maintainer-added `agents/*.md` the declared table cannot know about
+// (those rows are front-matter-parsed and marked `declared: false`, so a reader can tell a
+// vendored guarantee from a local discovery). Read-only, plan-independent, no mutation.
+//
+// `source` per row:
+//   declared  — a vendored ROLE_CAPABILITY_MANIFEST row, drift-walled against its profile
+//   local     — a maintainer-added agents/*.md, parsed from its own front matter
+function rolesManifest(root) {
+  const declared = schema.ROLE_CAPABILITY_MANIFEST;
+  const rows = {};
+  for (const role of Object.keys(declared)) {
+    const r = declared[role];
+    rows[role] = {
+      tools: r.tools.slice(),
+      bash_capable: r.bash_capable,
+      write_capable: r.write_capable,
+      kind: r.kind,
+      source: 'declared',
+    };
+  }
+  let localNames = [];
+  try {
+    localNames = fs.readdirSync(path.join(root, 'agents')).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3));
+  } catch (_) { localNames = []; }
+  for (const role of localNames) {
+    if (Object.prototype.hasOwnProperty.call(rows, role)) continue;
+    let tools = [];
+    try {
+      const content = fs.readFileSync(path.join(root, 'agents', `${role}.md`), 'utf8');
+      const fmEnd = content.indexOf('\n---\n', 4);
+      const fm = fmEnd > 0 ? content.slice(0, fmEnd) : '';
+      const m = /^tools:\s*\[(.*)\]\s*$/m.exec(fm);
+      tools = m ? m[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean) : [];
+    } catch (_) { tools = []; }
+    rows[role] = {
+      tools,
+      bash_capable: tools.includes('Bash'),
+      write_capable: tools.includes('Write'),
+      // A local agent's slot in the library is not declared anywhere, and guessing it would be the
+      // same name-over-manifest error this table exists to prevent. `unknown` is the honest value.
+      kind: 'unknown',
+      source: 'local',
+    };
+  }
+  return { result: 'ok', roles: rows, role_kinds: schema.ROLE_KINDS.slice() };
 }
 
 // --- parsing ----------------------------------------------------------------
@@ -5584,6 +5640,10 @@ function printHelp() {
     '                 chains_stale (with stale_paths/stale_kind culprit hints) > chains_empty > repo_kind_undetermined\n' +
     '                 (unresolvable chain set) > chains_incomplete > chains_red > chains_waived.\n' +
     '                 [--candidate SHA (default HEAD)] [--receipt PATH] [--json]\n' +
+    '  --roles-manifest  the ROLE-CAPABILITY table (check-only, PLAN-INDEPENDENT — no plan path). Emits every role\'s\n' +
+    '                 tools / bash_capable / write_capable / kind, so a node brief is matched to a role by what it CAN\n' +
+    '                 DO rather than by what its name suggests. Vendored rows are source:declared; a maintainer-added\n' +
+    '                 agents/*.md is source:local with kind:unknown. Read-only, no mutation. [--json]\n' +
     '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
     '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
@@ -5608,6 +5668,24 @@ function main() {
   // #651: --release-check is PLAN-INDEPENDENT (at release time the run is archived — there is no
   // active workflow-plan.md), so intercept BEFORE the plan read; no plan path is required.
   if (args.includes('--release-check')) { releaseCheck(args); return; }
+  // --roles-manifest is PLAN-INDEPENDENT: the planner asks for the capability table BEFORE it has
+  // authored a plan at all, so intercept before the plan read and require no plan path.
+  if (args.includes('--roles-manifest')) {
+    const out = rolesManifest(findRepoRoot(process.cwd()));
+    if (args.includes('--json')) {
+      process.stdout.write(JSON.stringify(out) + '\n');
+    } else {
+      for (const role of Object.keys(out.roles).sort()) {
+        const r = out.roles[role];
+        process.stdout.write(
+          role.padEnd(22) + ' kind=' + String(r.kind).padEnd(13) +
+          ' bash=' + (r.bash_capable ? 'yes' : 'no ') +
+          ' write=' + (r.write_capable ? 'yes' : 'no ') +
+          ' tools=[' + r.tools.join(', ') + ']\n');
+      }
+    }
+    return;
+  }
   const planPath = args[0];
   const json = args.includes('--json');
   const root = findRepoRoot(path.dirname(path.resolve(planPath)));
