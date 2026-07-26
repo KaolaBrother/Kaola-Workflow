@@ -276,7 +276,7 @@ sink may only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the si
 ## A complete example (`workflow-plan.md`)
 
 Minimal in-grammar plan to copy and adapt — explore, a `planner` node that shapes and
-dominates the implements, two parallel `tdd-guide` implements over **disjoint top-level
+dominates the implements, two parallel `implementer` writes over **disjoint top-level
 directories**, a `code-reviewer` that post-dominates both, a `doc-updater` for the changed
 docs, and the unique `finalize` sink. Being a write-role fan-out it routes to **ask**.
 
@@ -292,8 +292,8 @@ labels: enhancement
 |-----------|---------------|---------------------|--------------------|-------------|--------------|
 | explore   | code-explorer | —                   | —                  | 1           | sequence     |
 | plan      | planner       | explore             | —                  | 1           | sequence     |
-| impl-csv  | tdd-guide     | plan                | exporter/csv.js    | 1           | fanout(impl) |
-| impl-html | tdd-guide     | plan                | renderer/html.js   | 1           | fanout(impl) |
+| impl-csv  | implementer   | plan                | exporter/csv.js    | 1           | fanout(impl) |
+| impl-html | implementer   | plan                | renderer/html.js   | 1           | fanout(impl) |
 | review    | code-reviewer | impl-csv, impl-html | —                  | 1           | sequence     |
 | docs      | doc-updater   | review              | docs/api.md        | 1           | sequence     |
 | finalize  | finalize      | review, docs        | CHANGELOG.md       | 1           | sequence     |
@@ -317,18 +317,18 @@ follow-ons (a rerun, a re-verify, an evidence write) into the unit that owns the
 - **Update the docs you changed.** When the change touches README / API docs /
   architecture / a public interface, consider a `doc-updater` node before `finalize` — the
   sink only does CHANGELOG / state bookkeeping.
-- **Choose the right implement role.** Default to `tdd-guide`; pick `implementer` ONLY
-  for an enumerated non-test-first category — behavior-preserving refactor; scaffolding /
-  boilerplate / wiring; config / IaC / scripts; UI / markup; migrations / fixtures;
-  integration glue — and RECORD which one (`non_tdd_reason`). Asymmetric tie-breaker: if
-  a meaningful failing unit test CAN be written for the work, use `tdd-guide`; when in
-  doubt, use `tdd-guide`. "Hard to test" is NOT a valid `non_tdd_reason`; bug fixes are
-  ALWAYS `tdd-guide`. A mixed node (some sub-tasks test-first, some not) should be split
-  into separate nodes by lane, or routed to the stricter role (`tdd-guide`). Both
-  `tdd-guide` and `implementer` require `code-reviewer` post-dominance (G1); `implementer`
-  is equal-burden, different-shape — it swaps RED→GREEN for change-type-appropriate
-  verification (regression-green / build-green / executable smoke-integration), NOT a
-  lighter path.
+- **Custody decides the implement roles, not order.** `tdd-guide` owns the test paths and
+  authors nothing else; `implementer` owns the production paths and writes every kind of
+  change. A node declaring a test-like path must therefore be a `tdd-guide` node — or carry a
+  declared, hash-covered exemption in `## Meta`:
+  `test_custody_exemption: <node-id> <path> — <one-line reason>` (a named entry with a real
+  reason, e.g. a `build-error-resolver` repairing a suite-breaking test). Both roles require
+  `code-reviewer` post-dominance (G1). Behavioral work composes the two: `sequence` when the
+  implementer consumes the authored tests as its oracle — that IS the S1 artifact, so name the
+  test files — or a `parallel_safe` pair when the acceptance surface already pins the public
+  interface, since then the write sets are disjoint by construction (test paths vs source
+  paths). A test-author node may itself fan out over independent lenses
+  (`cardinality` / `partitioned_all`) when the stakes justify N separate contexts.
 - Author a `knowledge-lookup` node when the task depends on external library or API
   behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed
   from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
