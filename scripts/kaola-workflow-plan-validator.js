@@ -475,7 +475,12 @@ function scratchObservableWriteSet(writeSet, opts) {
 // must reuse the allowband, not a hand-rolled copy, or it ships inert tripping on every plan/ledger
 // churn). foreignArchivePath: a write to ANOTHER project's archive band (not exempt — it must block).
 // isWorkflowArtifactPath: the whole `kaola-workflow/` band EXCEPT a foreign archive. isTestLikePath:
-// tests/spec (never need the code/security gate). barrierExemptPath unions them with isBarrierInvisible.
+// tests/spec — the SENSITIVITY shield ONLY (#813: a declared test write never demands a security-
+// reviewer by pattern match, but it IS attributable; barrierCheck applies isTestLikePath to arm (a)
+// and NOT to the allowlist arms). barrierExemptPath unions them with isBarrierInvisible; it backs the
+// --parent-clean-check dirty fence (an ORDERING check over the parent worktree, not an attribution
+// check over a node's diff), which keeps the full union deliberately — plan/ledger/.cache/test churn
+// must not false-trip the pre-merge fence. Attribution teeth live in barrierCheck.
 function foreignArchivePath(p, project) {
   const m = /^kaola-workflow\/archive\/([^/]+)\//.exec(String(p || ''));
   if (!m) return false;
@@ -3279,8 +3284,9 @@ function classifyOverflowSubtype(outOfAllow) {
 //   (a) a SENSITIVITY hit — an actual write matches a Phase-5 SENSITIVE_PATTERN — when the frozen
 //       plan has NO security-reviewer node at all (H1: a `labels: refactor` plan that auto-ran with
 //       no security gate must not silently merge a write into src/auth/session.js); and
-//   (b) an out-of-ALLOWLIST production write — an actual non-docs, non-test, non-workflow-artifact
-//       write not in the union of the frozen declared write sets (H3 overflow).
+//   (b) an out-of-ALLOWLIST write — an actual non-docs, non-workflow-artifact write not in the union
+//       of the frozen declared write sets (H3 overflow). TEST-LIKE PATHS ARE INCLUDED HERE (#813):
+//       they are exempt from (a) only, so an undeclared test write is an ordinary overflow.
 // declared is the UNION over ALL nodes (prefer-fewer-false-refusals; the sensitivity scan is the
 // teeth). Toggle-agnostic; never reads the install switch.
 function barrierCheck(content, actualPaths, opts) {
@@ -3374,8 +3380,29 @@ function barrierCheck(content, actualPaths, opts) {
   // The GROUP/union barrier (opts.groupMembers) and the WHOLE-PLAN barrier (no legScoped) are unchanged:
   // docs stay exempt there (they back every serial close + finalize check).
   const legScoped = !!opts.legScoped;
-  const isExempt = p => isWorkflowArtifact(p) || (isBarrierInvisible(p, archiveProj) && !(legScoped && isAllowbandDocsSurface(p))) || isTestPath(p);
+  // #813: the test exemption SPLITS. isTestPath keeps its SENSITIVITY reach (arm (a) below: a declared
+  // `test/login.test.js` must never demand a security-reviewer by pattern match — the v3.20.1 motive,
+  // preserved verbatim) and LOSES its ATTRIBUTION reach (arms (b) and (c): the allowlist and the
+  // unattributed floor). A test-like path is therefore a first-class attributable write in EVERY scope
+  // — per-node (ownNode), lane-group (opts.groupMembers), whole-plan (neither), and leg (opts.legScoped)
+  // — so an undeclared test write lands in the EXISTING write_set_overflow / unattributed_write families
+  // and is NAMED in the returned outOfAllow / unattributed arrays. No fifth refusal family; the
+  // precedence contract below is unchanged. Rationale: tests are the artifact the rest of the machinery
+  // treats as ground truth (validation vectors, gate verdicts, RED/GREEN evidence), so a class the
+  // barrier cannot see is a verification oracle outside attribution. Recovery is the existing
+  // choreography — overflow ⇒ revert-overflow — with no new subcommand.
+  // KAOLA_TEST_ATTRIBUTION=0 (schema.testAttributionDefaultOn, DEFAULT ON) collapses the two predicates
+  // back into one, so the toggle-off barrier is BYTE-IDENTICAL to the pre-split behavior — the bridge
+  // for plans frozen before this rule and for runs already in flight. The escape hatch is an env toggle
+  // and NOT a tolerance band inside the barrier: a hidden allowband would recreate the hole by another name.
+  const attributeTests = schema.testAttributionDefaultOn(process.env);
+  const isExemptBand = p => isWorkflowArtifact(p) || (isBarrierInvisible(p, archiveProj) && !(legScoped && isAllowbandDocsSurface(p)));
+  const isExempt = p => isExemptBand(p) || isTestPath(p);
+  const isAttributionExempt = p => isExemptBand(p) || (!attributeTests && isTestPath(p));
   const production = real.filter(p => !isExempt(p) && !foreignArchive(p));
+  // The ATTRIBUTION scope: `production` plus every test-like write (identical to `production` when the
+  // toggle is off — same source array, same filter order, so the derived arrays compare byte-for-byte).
+  const attributable = real.filter(p => !isAttributionExempt(p) && !foreignArchive(p));
   // (AC3) foreign-archive refusal: a write to another project's archive band must be blocked.
   const foreignArchiveHits = real.filter(foreignArchive);
   if (foreignArchiveHits.length) {
@@ -3387,8 +3414,8 @@ function barrierCheck(content, actualPaths, opts) {
   if (sensitiveHits.length && !hasSecReviewer) {
     errors.push(`actual writes touch a Phase-5 sensitive area (${sensitiveHits.join(', ')}) but the plan has no security-reviewer node — revoke and escalate (G2)`);
   }
-  // (b) allowlist (H3): a production write not in the union of declared write sets.
-  const outOfAllow = production.filter(p => !declared.has(p));
+  // (b) allowlist (H3): an attributable write not in the union of declared write sets.
+  const outOfAllow = attributable.filter(p => !declared.has(p));
   if (outOfAllow.length) {
     errors.push(`actual writes outside the declared allowlist (${outOfAllow.join(', ')}) — overflow beyond the frozen write set`);
   }
@@ -3427,7 +3454,7 @@ function barrierCheck(content, actualPaths, opts) {
         if (lp.ledger && lp.ledger.get(n.id) === 'complete') anyCompleteOwner.set(p, true);
       }
     }
-    unattributed = production.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
+    unattributed = attributable.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
     if (unattributed.length) {
       errors.push(`actual writes (${unattributed.join(', ')}) are declared only by non-complete (n/a/pending) node(s) — the producing node claims it did not run, so the write is unreviewed`);
     }

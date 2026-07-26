@@ -537,7 +537,47 @@ function testGitlabAdaptive() {
     const naT = mkL(['| imp | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | imp | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |'], ['| imp | n/a |', '| sec | n/a |', '| done | complete |'], 'security');
     assert.strictEqual(fv.barrierCheck(naT, ['src/auth/session.js'], {}).result, 'refuse', 'gitlab v3.20.1 #1: n/a-target sensitive write must refuse');
     const cleanL = mkL(['| imp | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
-    assert.strictEqual(fv.barrierCheck(cleanL, ['test/login.test.js'], {}).result, 'pass', 'gitlab v3.20.1 #2: tests-only sensitive-named path must NOT refuse');
+    // #813 narrowed the test exemption to SENSITIVITY only, so v3.20.1 #2 (no security-reviewer
+    // demanded for a `test/login.test.js` write) is asserted where attribution is satisfied.
+    const cleanT = mkL(['| imp | tdd-guide | — | lib/foo.js test/login.test.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert.strictEqual(fv.barrierCheck(cleanT, ['test/login.test.js'], {}).result, 'pass', 'gitlab v3.20.1 #2: a DECLARED tests-only sensitive-named path must NOT refuse');
+    // #813 on the FORK validator: test-like paths join ALLOWLIST attribution in all three scopes
+    // (per-node, lane-group, whole-plan), landing in the EXISTING write_set_overflow /
+    // unattributed_write families — no fifth family — while the sensitivity arm still skips them.
+    {
+      const t813 = mkL([
+        '| t1 | tdd-guide | — | test/login.test.js | 1 | sequence |',
+        '| t2 | tdd-guide | — | src/app.js | 1 | sequence |',
+        '| t3 | tdd-guide | — | spec/orphan.spec.ts | 1 | sequence |',
+        '| rv | code-reviewer | t1,t2,t3 | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |',
+      ], ['| t1 | complete |', '| t2 | complete |', '| t3 | n/a |', '| rv | complete |', '| done | complete |'], 'refactor');
+      assert.strictEqual(fv.barrierCheck(t813, ['test/login.test.js'], { nodeId: 't1' }).result, 'pass',
+        'gitlab #813: a DECLARED test write passes with no security-reviewer');
+      const perNode813 = fv.barrierCheck(t813, ['test/rogue.test.js'], { nodeId: 't1' });
+      assert.strictEqual(perNode813.reason, 'write_set_overflow', 'gitlab #813: per-node undeclared test write => write_set_overflow');
+      assert.ok(perNode813.outOfAllow.indexOf('test/rogue.test.js') >= 0, 'gitlab #813: per-node outOfAllow NAMES the test path');
+      assert.strictEqual(perNode813.sensitiveHits.length, 0, 'gitlab #813: the sensitivity shield still skips test-like paths');
+      assert.strictEqual(fv.barrierCheck(t813, ['test/login.test.js', 'src/app.js', 'tests/stray.js'], { groupMembers: ['t1', 't2'] }).reason,
+        'write_set_overflow', 'gitlab #813: lane-group undeclared test write => write_set_overflow');
+      assert.strictEqual(fv.barrierCheck(t813, ['__tests__/stray.js'], {}).reason,
+        'write_set_overflow', 'gitlab #813: whole-plan undeclared test write => write_set_overflow');
+      assert.strictEqual(fv.barrierCheck(t813, ['spec/orphan.spec.ts'], {}).reason,
+        'unattributed_write', 'gitlab #813: a test path owned only by an n/a node => unattributed_write');
+      // KAOLA_TEST_ATTRIBUTION=0 restores the pre-change exemption on the fork port too.
+      const prev813 = process.env.KAOLA_TEST_ATTRIBUTION;
+      process.env.KAOLA_TEST_ATTRIBUTION = '0';
+      try {
+        assert.strictEqual(fv.barrierCheck(t813, ['test/rogue.test.js'], { nodeId: 't1' }).result, 'pass',
+          'gitlab #813: KAOLA_TEST_ATTRIBUTION=0 restores the legacy exemption');
+      } finally {
+        if (prev813 === undefined) delete process.env.KAOLA_TEST_ATTRIBUTION;
+        else process.env.KAOLA_TEST_ATTRIBUTION = prev813;
+      }
+      const schema813 = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js'));
+      assert.strictEqual(schema813.testAttributionDefaultOn({}), true, 'gitlab #813: the forge schema copy defaults attribution ON');
+      assert.strictEqual(schema813.testAttributionDefaultOn({ KAOLA_TEST_ATTRIBUTION: '0' }), false, 'gitlab #813: the forge schema copy honours the opt-out');
+    }
 
     // v3.21.0 #238: the FORK classifier carries the curated-root claim-overlap (yellow) + ./ canon.
     const fcl = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-classifier.js'));

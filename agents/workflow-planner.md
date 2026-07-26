@@ -109,6 +109,8 @@ refusals teach the walls at freeze — author to them, never clamp around them.
   freeze, and a bare token that becomes a directory by write-time dies at the barrier
   (`write_set_granularity`); enumerate the files a staged node creates. No file-count ceiling: keep a
   cohesive cross-edition/aggregator write set in ONE node; fan out only for genuinely-disjoint work.
+  **Test files a node authors are declared like any other file** — the barrier attributes a test path
+  exactly as it attributes a production path, so an undeclared test write is a write-set overflow.
 - **Gates are walls the validator finds in the graph:** `code-reviewer` must post-dominate every
   code-producing node (G1); `security-reviewer` every sensitive node (G2); a `main-session-gate`
   (built-in, read-only, `sequence`-only) post-dominates every code node (G3) for a non-delegable

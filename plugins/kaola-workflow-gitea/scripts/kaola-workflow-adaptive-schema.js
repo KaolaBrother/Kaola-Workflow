@@ -3562,6 +3562,9 @@ const PARALLEL_WRITES_ENV = 'KAOLA_PARALLEL_WRITES';
 // #802: the env name for the serial→parallel SEAM-CHECKPOINT DEFAULT-ON opt-OUT. See seamCheckpointDefaultOn.
 const SEAM_CHECKPOINT_ENV = 'KAOLA_SEAM_CHECKPOINT';
 
+// #813: the env name for the test-attribution DEFAULT-ON opt-OUT. See testAttributionDefaultOn.
+const TEST_ATTRIBUTION_ENV = 'KAOLA_TEST_ATTRIBUTION';
+
 // Resolve the fan-out cap (env override, else default), clamped to a sane minimum.
 function resolveFanoutCap(env) {
   const raw = (env || {})[FANOUT_CAP_ENV];
@@ -3615,6 +3618,23 @@ function parallelWritesDefaultOn(env) {
 // is never LESS strict than the repair it replaces. It is a fail-closed escape hatch, not a time machine.
 function seamCheckpointDefaultOn(env) {
   const raw = (env || {})[SEAM_CHECKPOINT_ENV];
+  if (raw === '0' || raw === 'false' || raw === 'no') return false;
+  return true;
+}
+
+// #813: test-attribution-default-ON — the barrier's ALLOWLIST ranges over test-like paths exactly as
+// it ranges over production paths, so a test file a node creates/edits/deletes must be DECLARED in
+// that node's write set or it lands in the existing write_set_overflow / unattributed_write families.
+// A verification oracle outside attribution is not an oracle: tests are what the rest of the machinery
+// treats as ground truth, so they are the class whose integrity the barrier must guard hardest.
+// This governs ATTRIBUTION only — test-like paths remain excluded from SENSITIVITY classification, so
+// a declared `test/login.test.js` never demands a security-reviewer by pattern match.
+// Default TRUE; an operator restores the pre-attribution exemption BYTE-IDENTICALLY with
+// KAOLA_TEST_ATTRIBUTION=0|false|no — the bridge for plans frozen before this rule and for runs
+// already in flight. The escape hatch is deliberately an ENV TOGGLE, not a tolerance band inside the
+// barrier: a hidden allowband would recreate the same hole under a different name.
+function testAttributionDefaultOn(env) {
+  const raw = (env || {})[TEST_ATTRIBUTION_ENV];
   if (raw === '0' || raw === 'false' || raw === 'no') return false;
   return true;
 }
@@ -4212,10 +4232,12 @@ module.exports = {
   FANOUT_CAP_READONLY_ENV,
   PARALLEL_WRITES_ENV,
   SEAM_CHECKPOINT_ENV,
+  TEST_ATTRIBUTION_ENV,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   parallelWritesDefaultOn,
   seamCheckpointDefaultOn,
+  testAttributionDefaultOn,
   writeFileAtomicReplace,
   locateSection,
   spliceComplianceSection,

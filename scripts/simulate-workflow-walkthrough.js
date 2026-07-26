@@ -2610,16 +2610,34 @@ function testAdaptiveGateBarrierEnforcement() {
       'control: declared sensitive write WITH a security-reviewer must pass');
     assert(planValidator.barrierCheck(noSec, ['src/surprise.js'], {}).result === 'refuse',
       'H3: out-of-allowlist production write must refuse');
-    assert(planValidator.barrierCheck(noSec, ['lib/foo.js', 'docs/x.md', 'CHANGELOG.md', 'test/foo.test.js', 'kaola-workflow/p/workflow-plan.md'], {}).result === 'pass',
-      'control: declared + docs + tests + workflow-artifact writes must pass');
+    // #813: a test file a node authors is DECLARED like any other file, so the all-bands control
+    // declares its test path. Docs / CHANGELOG / workflow-artifact stay allowband-exempt.
+    const noSecT = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js test/foo.test.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert(planValidator.barrierCheck(noSecT, ['lib/foo.js', 'docs/x.md', 'CHANGELOG.md', 'test/foo.test.js', 'kaola-workflow/p/workflow-plan.md'], {}).result === 'pass',
+      'control: declared code + declared test + docs + workflow-artifact writes must pass');
+    // #813: the SAME test path UNDECLARED is now an ordinary overflow — the exemption no longer
+    // hides it from the allowlist. RED before the split (this passed vacuously).
+    const undeclaredTest = planValidator.barrierCheck(noSec, ['lib/foo.js', 'test/foo.test.js'], {});
+    assert(undeclaredTest.result === 'refuse' && undeclaredTest.reason === 'write_set_overflow'
+      && undeclaredTest.outOfAllow.indexOf('test/foo.test.js') >= 0,
+      '#813: an UNDECLARED test write is attributable — write_set_overflow naming the path, got ' + JSON.stringify(undeclaredTest));
 
-    // --- v3.20.1 Fix #2 (false-refusal): the sensitivity scan must EXEMPT docs / tests /
+    // --- v3.20.1 Fix #2 (false-refusal): the SENSITIVITY scan must EXEMPT docs / tests /
     // workflow-artifacts — a docs/test path whose NAME matches a Phase-5 pattern is not production
-    // code and must NOT refuse even with no security-reviewer node.
-    assert(planValidator.barrierCheck(noSec, ['test/login.test.js'], {}).result === 'pass',
-      'Fix#2: a tests-only path matching a sensitive pattern must NOT refuse');
+    // code and must NOT demand a security-reviewer. #813 narrowed this exemption to sensitivity ONLY,
+    // so the shield is now asserted on a DECLARED test path (attribution satisfied) and, separately,
+    // on `sensitiveHits` staying empty when attribution refuses.
+    const noSecLogin = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js test/login.test.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert(planValidator.barrierCheck(noSecLogin, ['test/login.test.js'], {}).result === 'pass',
+      'Fix#2: a DECLARED tests-only path matching a sensitive pattern must NOT refuse');
     assert(planValidator.barrierCheck(noSec, ['docs/auth.md'], {}).result === 'pass',
       'Fix#2: a docs-only path matching a sensitive pattern must NOT refuse');
+    // #813: an UNDECLARED sensitive-NAMED test path refuses on ATTRIBUTION, never on sensitivity —
+    // the two arms are independent. sensitiveHits stays empty (the shield), reason is the overflow family.
+    const shielded = planValidator.barrierCheck(noSec, ['test/login.test.js'], {});
+    assert(shielded.reason === 'write_set_overflow' && shielded.sensitiveHits.length === 0,
+      '#813: the sensitivity shield survives the attribution split — an undeclared test path refuses as '
+      + 'overflow with NO sensitivity hit, got ' + JSON.stringify(shielded));
     // control: a real PRODUCTION sensitive write with no security-reviewer still refuses.
     assert(planValidator.barrierCheck(noSec, ['src/auth/login.js'], {}).result === 'refuse',
       'Fix#2 control: a production sensitive write with no security-reviewer must still refuse');
@@ -18476,19 +18494,26 @@ function testSerializationInversion760() {
   const wrepo = adaptiveTmp('serialization-760');
   initGitRepoWithBareRemote(wrepo);
   spawnSync('git', ['-C', wrepo, 'checkout', '-b', 'workflow/issue-760'], { encoding: 'utf8' });
-  // The seed file BOTH legs will independently edit — a common ancestor so the octopus merge has a
-  // real 3-way base. `.kw/` is gitignored (leg worktrees live there) mirroring #759 (e)'s fixture.
+  // `.kw/` is gitignored (leg worktrees live there) mirroring #759 (e)'s fixture.
   fs.mkdirSync(path.join(wrepo, 'lib'), { recursive: true });
-  // shared.test.js (not shared.js): the barrier's isTestLikePath allowband exempts a test-like path
-  // from the declared-write-set allowlist ENTIRELY (both the per-leg AND the group barrier), which is
-  // what makes it possible for a genuinely directory-shaped (uncertain) declaration to co-open AND
-  // actually complete: a non-test concrete file always overflows its OWN leg's exact-path barrier the
-  // instant it is produced (declared vs. actual is a strict Set membership check, prefix declarations
-  // included), regardless of co-open vs. serial — that failure mode is orthogonal to this inversion.
-  fs.writeFileSync(path.join(wrepo, 'lib', 'shared.test.js'), 'line 2\nline 3\nline 4\n');
+  // A pre-existing library file so `lib/` is a real, tracked directory in every provisioned leg —
+  // the directory-shaped grant w2 declares below is a grant over existing code, not over nothing.
+  fs.writeFileSync(path.join(wrepo, 'lib', 'base.js'), '// pre-existing\n');
   fs.writeFileSync(path.join(wrepo, '.gitignore'), '.kw/\n');
   const proj = path.join(wrepo, 'kaola-workflow', 'issue-760');
   fs.mkdirSync(proj, { recursive: true });
+  // The seed file BOTH legs will independently edit — a common ancestor so the octopus merge has a
+  // real 3-way base. It lives in the WORKFLOW-ARTIFACT band, which is the only band two legs may
+  // legitimately co-write: it is barrier-exempt in every scope BY DESIGN (per-leg state legitimately
+  // differs leg to leg), so a genuine same-file overlap can materialize and reach the synthesizer.
+  // A shared PRODUCTION file cannot: declared-vs-actual is a strict Set membership check, so a
+  // concrete file only one leg declares overflows the OTHER leg's exact-path barrier the instant it is
+  // produced — and a shared TEST file now does exactly the same, since test-like paths are attributable
+  // (the earlier fixture named this file `lib/shared.test.js` precisely to buy the blanket exemption
+  // that no longer exists). Each leg's PRODUCTION write therefore stays inside its own declared lane
+  // below, while the shared ancestor carries the same-file 3-way merge this scenario is about.
+  const sharedAncestor = path.join(proj, 'shared-ancestor.md');
+  fs.writeFileSync(sharedAncestor, 'line 2\nline 3\nline 4\n');
   const planPath = path.join(proj, 'workflow-plan.md');
   const readPlan = () => fs.readFileSync(planPath, 'utf8');
   const expandOpen = (nodeId, composition) => runNode(adaptiveNodeScript,
@@ -18517,12 +18542,15 @@ function testSerializationInversion760() {
         join: 'mechanical — a merge, not the synthesizer agent',
         probe: 'no unit outcome reshapes the other',
         serializer: 'none present — no S1 artifact, no S2 shared resource, worktrees available; '
-          + 'exact-path disjointness between lib/shared.test.js and lib/ is unprovable (uncertain, not '
+          + 'exact-path disjointness between lib/w1.js and lib/ is unprovable (uncertain, not '
           + 'proven), so this is not a named serializer and the frontier co-opens',
       },
       units: [
-        { name: 'w1', role: 'tdd-guide', model: 'standard', write_set: 'lib/shared.test.js', mode: 'co_open' },
-        { name: 'w2', role: 'tdd-guide', model: 'standard', write_set: 'lib/', mode: 'co_open' },
+        // w2 carries BOTH an exact file (the concrete write its own leg barrier attributes) and the
+        // directory-shaped `lib/` token that makes exact-path disjointness against w1 UNPROVABLE —
+        // the kind:'coarse' unresolvable shape this inversion is about.
+        { name: 'w1', role: 'tdd-guide', model: 'standard', write_set: 'lib/w1.js', mode: 'co_open' },
+        { name: 'w2', role: 'tdd-guide', model: 'standard', write_set: 'lib/w2.js lib/', mode: 'co_open' },
       ],
     };
     const e = expandOpen('m1', composition);
@@ -18538,18 +18566,38 @@ function testSerializationInversion760() {
     assert(rs.lane_group && Object.keys(rs.lane_group.legs || {}).length === 2,
       '#760: the co-open must provision an isolated leg per unit, got ' + JSON.stringify(rs.lane_group));
 
-    // ---- both legs ACTUALLY touch the same file (the uncertainty materializes as a real, but
-    //      non-conflicting, overlap) — non-overlapping edits so the mechanical merge is clean. ----
-    const legW1 = path.join(wrepo, '.kw', 'legs', 'issue-760', 'm1-r1-w1', 'lib', 'shared.test.js');
-    const legW2 = path.join(wrepo, '.kw', 'legs', 'issue-760', 'm1-r1-w2', 'lib', 'shared.test.js');
-    fs.writeFileSync(legW1, 'line 2\nline 3\nline 4\nline 5 (from w1)\n');   // w1 appends
-    fs.writeFileSync(legW2, 'line 1 (from w2)\nline 2\nline 3\nline 4\n');  // w2 prepends
+    // ---- each leg writes its OWN declared production file, and BOTH legs additionally edit the one
+    //      shared ancestor (the uncertainty materializes as a real, but non-conflicting, same-file
+    //      overlap) — non-overlapping edits so the mechanical merge is clean. ----
+    const legRoot = id => path.join(wrepo, '.kw', 'legs', 'issue-760', id);
+    fs.writeFileSync(path.join(legRoot('m1-r1-w1'), 'lib', 'w1.js'), '// w1\n');
+    fs.writeFileSync(path.join(legRoot('m1-r1-w2'), 'lib', 'w2.js'), '// w2\n');
+    const legShared = id => path.join(legRoot(id), 'kaola-workflow', 'issue-760', 'shared-ancestor.md');
+    fs.writeFileSync(legShared('m1-r1-w1'), 'line 2\nline 3\nline 4\nline 5 (from w1)\n');   // w1 appends
+    fs.writeFileSync(legShared('m1-r1-w2'), 'line 1 (from w2)\nline 2\nline 3\nline 4\n');  // w2 prepends
     // #633: a write-role lane-group member SELF-WRITES its evidence INSIDE its own leg (never synced
     // back to the parent) — resolveEvidenceCachePath prefers the leg's own copy over the parent's.
     for (const id of ['m1-r1-w1', 'm1-r1-w2']) {
-      const evPath = path.join(wrepo, '.kw', 'legs', 'issue-760', id, 'kaola-workflow', 'issue-760', '.cache', id + '.md');
+      const evPath = path.join(legRoot(id), 'kaola-workflow', 'issue-760', '.cache', id + '.md');
       fs.appendFileSync(evPath, '\nRED: a failing test named the shared helper first\nGREEN: the implementation makes it pass\n');
     }
+
+    // ---- #813 (the loophole this fixture used to depend on, now proven CLOSED): a stray TEST file
+    //      that no unit declared is attributable exactly like a stray production file, so it refuses
+    //      at w1's OWN per-leg barrier before any ledger advance. Removing it lets the close proceed —
+    //      the existing revert-overflow choreography, no new refusal family, no new subcommand. ----
+    const strayTest = path.join(legRoot('m1-r1-w1'), 'lib', 'stray.test.js');
+    fs.writeFileSync(strayTest, '// undeclared test file\n');
+    {
+      const blocked = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-760', '--node-id', 'm1-r1-w1', '--json'], wrepo);
+      assert(blocked.status === 1, '#813: an UNDECLARED test write in a leg must refuse the close, got exit ' + blocked.status + '\n' + blocked.stdout + blocked.stderr);
+      const bp = JSON.parse(blocked.stdout);
+      assert(bp.result === 'refuse' && bp.legBarrier && bp.legBarrier.outOfAllow.indexOf('lib/stray.test.js') >= 0,
+        '#813: the per-leg barrier must NAME the undeclared test path in outOfAllow, got ' + JSON.stringify(bp));
+      assert(/\| m1-r1-w1 \| in_progress \|/.test(readPlan()),
+        '#813: the refusal precedes any ledger advance — the member row must still be in_progress');
+    }
+    fs.rmSync(strayTest);
 
     // ---- close both units: the non-last DEFERS to the group; the last runs the group barrier — the
     //      octopus merge (the synthesizer) reconciles the two non-conflicting edits into ONE commit. ----
@@ -18559,10 +18607,15 @@ function testSerializationInversion760() {
     assert(c2.result === 'ok' && c2.barrier === 'group_passed' && c2.synthesized === true && typeof c2.mergeCommit === 'string' && c2.mergeCommit.length >= 7,
       '#760: the last close must run the group barrier and report a synthesizer merge commit — the '
       + 'reconciliation this inversion relies on, got ' + JSON.stringify(c2));
-    const merged = execFileSync('git', ['-C', wrepo, 'show', 'HEAD:lib/shared.test.js'], { encoding: 'utf8' });
+    const merged = execFileSync('git', ['-C', wrepo, 'show', 'HEAD:kaola-workflow/issue-760/shared-ancestor.md'], { encoding: 'utf8' });
     assert(merged.includes('line 5 (from w1)') && merged.includes('line 1 (from w2)'),
-      '#760: the merged lib/shared.test.js on HEAD must carry BOTH legs\' edits (the synthesizer '
-      + 'reconciled the real same-file overlap, not just declared it away), got:\n' + merged);
+      '#760: the merged shared ancestor on HEAD must carry BOTH legs\' edits — a REAL 3-way octopus '
+      + 'base (a wrong/empty base would drop one side or conflict), not a declared-away overlap, got:\n' + merged);
+    // Each leg's own declared production file also lands in the SAME merge commit.
+    for (const f of ['lib/w1.js', 'lib/w2.js']) {
+      assert(execFileSync('git', ['-C', wrepo, 'cat-file', '-e', 'HEAD:' + f], { encoding: 'utf8' }) === '',
+        '#760: ' + f + ' (the leg\'s own in-lane write) must be present on the synthesized merge commit');
+    }
 
     // ---- discharge the milestone; the spine advances to the review wall. ----
     const dc = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-760', '--node-id', 'm1', '--json'], wrepo);
