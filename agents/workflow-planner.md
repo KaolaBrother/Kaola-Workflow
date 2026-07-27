@@ -560,6 +560,13 @@ normal Method, and **never mutate the frozen parent `workflow-plan.md`** or its 
   `## Meta` as `acceptance_change_consent: <digest>`, and cite it ONLY when the surface actually
   changes — an idle citation is refused too. Your attestation covers the whole child image, so the
   re-transcription travels signed.
+- **Shape-refutation dispatches (`transition_reason: shape_refutation`).** The packet's source is
+  a sealed `.cache/shape-refutation.md` refutation packet: the orchestrator recorded the flipping
+  premise, the concrete mismatch, and digest-bound evidence — read them as the semantic brief for
+  WHY the parent shape no longer holds, never as plan rows. The frontier is empty: declare
+  `finding_owners: none`, cite the packet's `source_evidence_digest` in `## Meta` exactly as any
+  other authority, and author the reshaped spine yourself. Every other re-plan wall is unchanged —
+  lineage preserved, ledger all `pending`, `## Acceptance` re-transcribed verbatim.
 - Provenance is mandatory: append the dispatch record to `.cache/dispatch-log.jsonl`; write
   `.cache/replan-planner-attestation.json` (schema 1, canonical `attestation_digest`); run the
   edition-local `kaola-workflow-replan.js` `resume --project {project} --json`. Missing/mismatched

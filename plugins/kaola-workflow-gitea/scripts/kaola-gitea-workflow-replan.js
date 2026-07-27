@@ -14,6 +14,15 @@ const { runReplanHandoff } = require('./kaola-gitea-workflow-adaptive-handoff');
 const MAX_BUFFER = 64 * 1024 * 1024;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const OBJECT_ID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+// #824: the third re-plan authority. `shape_refutation` is the orchestrator-initiated,
+// quiescent-only entry for evidence that refutes a spine-level plan assumption mid-run.
+const SHAPE_REFUTATION_KIND = 'shape_refutation';
+const SHAPE_REFUTATION_PACKET_NAME = 'shape-refutation.md';
+// Consent-ledger entries may record which authority the human turn extended. Absent means the
+// original behavior: the extension raises the shared automatic-transition ceiling (the review
+// authority's allowance). A scoped entry additionally counts toward that scope's per-authority
+// allowance without changing the chain arithmetic (every entry still raises the ceiling by one).
+const CONSENT_AUTHORITY_SCOPES = Object.freeze(['review', SHAPE_REFUTATION_KIND]);
 
 function nowIso(opts) {
   return opts && typeof opts.now === 'function' ? opts.now() : new Date().toISOString();
@@ -51,6 +60,7 @@ function projectPaths(repoRoot, project) {
     packetPath: path.join(cacheDir, schema.REPLAN_PLANNER_PACKET_NAME),
     attestationPath: path.join(cacheDir, schema.REPLAN_PLANNER_ATTESTATION_NAME),
     consentPath: path.join(cacheDir, schema.EPOCH_CONSENT_EXTENSIONS_NAME),
+    shapeRefutationPath: path.join(cacheDir, SHAPE_REFUTATION_PACKET_NAME),
     lockPath: path.join(cacheDir, schema.SCHEDULER_LOCK_NAME),
     epochsDir: path.join(cacheDir, 'epochs'),
     transactionHistoryDir: path.join(cacheDir, 'committed-transactions'),
@@ -1090,6 +1100,279 @@ function verifyCaseBProof(paths, parentPlan, source, transitionReason, lineageIn
     } };
 }
 
+// ---------------------------------------------------------------------------
+// #824 — the `shape_refutation` authority: an orchestrator-initiated, quiescent-only re-plan
+// entry for the case where accumulated node evidence refutes a SPINE-LEVEL assumption of the
+// frozen parent plan while no gate has failed. The orchestrator decides and records the premise
+// (never the rows); the planner authors the attested child exactly as in every other authority.
+//
+// The sealed packet `.cache/shape-refutation.md` is a canonical-JSON document carrying:
+//   * `premise`  — the frozen-plan assumption the evidence refuted (non-empty);
+//   * `mismatch` — the concrete mismatch between the parent shape and the findings (non-empty);
+//   * `evidence` — one `{path, digest}` row per existing receipt (node `.cache/*.md` evidence
+//     and/or recon evidence), each resolvable inside the project directory and re-hashed at
+//     verification time. At least one row with a verifiable digest is required.
+// The proof payload binds those rows to the exact parent plan bytes, the completed-ledger view,
+// and the epoch lineage — the same binding pattern as the Case B proof.
+// ---------------------------------------------------------------------------
+
+// Resolve an orchestrator-supplied evidence path to an absolute path inside the project
+// directory. Accepts a project-relative token (`.cache/n1.md`) or the repo-relative form
+// (`kaola-workflow/<project>/.cache/n1.md`); absolute paths and `..` escapes refuse (null).
+function resolveShapeEvidencePath(paths, input) {
+  const raw = String(input || '').trim();
+  if (!raw || path.isAbsolute(raw)) return null;
+  const projectPrefix = 'kaola-workflow/' + paths.project + '/';
+  const token = raw.startsWith(projectPrefix) ? raw.slice(projectPrefix.length) : raw;
+  const resolved = path.resolve(paths.projectDir, token);
+  if (resolved !== paths.projectDir && !resolved.startsWith(paths.projectDir + path.sep)) return null;
+  return { abs: resolved, rel: path.relative(paths.projectDir, resolved).replace(/\\/g, '/') };
+}
+
+function verifyShapeRefutationPacket(paths, parentPlan, lineageInput) {
+  let packet;
+  try { packet = readAuthorityJson(paths.shapeRefutationPath); }
+  catch (_) { return { ok: false, reason: 'shape_refutation_evidence_missing', detail: 'packet_unreadable' }; }
+  if (!packet || packet.schema_version !== 1 || packet.kind !== SHAPE_REFUTATION_KIND
+      || typeof packet.premise !== 'string' || !packet.premise.trim()
+      || typeof packet.mismatch !== 'string' || !packet.mismatch.trim()
+      || !Array.isArray(packet.evidence) || !packet.evidence.length) {
+    return { ok: false, reason: 'shape_refutation_evidence_missing' };
+  }
+  const evidence = [];
+  const seenPaths = new Set();
+  for (const row of packet.evidence) {
+    if (!row || typeof row.path !== 'string' || !row.path
+        || !HEX64_RE.test(String(row.digest || '').toLowerCase()) || seenPaths.has(row.path)) {
+      return { ok: false, reason: 'shape_refutation_evidence_missing' };
+    }
+    seenPaths.add(row.path);
+    const resolved = resolveShapeEvidencePath(paths, row.path);
+    if (!resolved || resolved.rel !== row.path) {
+      return { ok: false, reason: 'shape_refutation_evidence_path_invalid', detail: row.path };
+    }
+    let digest;
+    try { digest = exactDigest(resolved.abs); }
+    catch (_) { return { ok: false, reason: 'shape_refutation_evidence_missing', detail: row.path }; }
+    if (digest !== String(row.digest).toLowerCase()) {
+      return { ok: false, reason: 'shape_refutation_evidence_mismatch', detail: row.path };
+    }
+    evidence.push({ path: row.path, digest });
+  }
+  let lineage = lineageInput || null;
+  if (!lineage) {
+    try {
+      const state = parseStateFields(readAuthorityText(path.join(paths.projectDir, 'workflow-state.md')));
+      lineage = { epoch_lineage_id: state.epoch_lineage_id,
+        claim_identity_digest: state.claim_identity_digest, claim_root_base_digest: state.claim_root_base_digest };
+    } catch (_) { lineage = {}; }
+  }
+  const ledger = validator.parseLedger(parentPlan);
+  const ledgerRows = Array.from(ledger.entries()).map(([id, status]) => ({ id, status }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  let packetDigest;
+  try { packetDigest = exactDigest(paths.shapeRefutationPath); }
+  catch (_) { return { ok: false, reason: 'shape_refutation_evidence_missing', detail: 'packet_unreadable' }; }
+  const payload = {
+    schema_version: 1,
+    transition_reason: SHAPE_REFUTATION_KIND,
+    parent_plan_hash: validator.readStoredHash(parentPlan),
+    parent_plan_exact_digest: schema.sha256Hex(Buffer.from(parentPlan, 'utf8')),
+    completed_ledger: ledgerRows,
+    packet_digest: packetDigest,
+    premise: packet.premise,
+    mismatch: packet.mismatch,
+    evidence,
+    epoch_lineage_id: lineage.epoch_lineage_id,
+    claim_identity_digest: lineage.claim_identity_digest,
+    claim_root_base_digest: lineage.claim_root_base_digest,
+  };
+  if (![payload.epoch_lineage_id, payload.claim_identity_digest, payload.claim_root_base_digest]
+    .every(value => HEX64_RE.test(String(value || '')))) {
+    return { ok: false, reason: 'shape_refutation_lineage_invalid' };
+  }
+  return { ok: true, payload, proof_digest: schema.sha256Canonical(payload),
+    request: { transition_reason: SHAPE_REFUTATION_KIND } };
+}
+
+// Quiescence probe for the shape_refutation entry predicate: an open speculative leg is a
+// `speculative: true` member (or a mid-transaction `opening` set) in the scheduler's
+// `.cache/running-set.json`. An absent set is quiescent; an unreadable one fails closed (the
+// run cannot prove it is quiet, and `reconcile-running-set` owns that repair). Live
+// non-speculative members imply `in_progress` ledger rows, which the caller's ledger probe
+// already catches.
+function openSpeculativeLegs(paths) {
+  const runningSetPath = path.join(paths.cacheDir, schema.RUNNING_SET_NAME);
+  if (!entryExists(runningSetPath)) return { open: false, speculative: [], state: null };
+  let parsed;
+  try { parsed = readAuthorityJson(runningSetPath); }
+  catch (_) { return { open: true, speculative: [], state: 'unreadable' }; }
+  const nodes = Array.isArray(parsed && parsed.nodes) ? parsed.nodes : [];
+  const speculative = nodes.filter(node => node && node.speculative === true)
+    .map(node => String(node.id || '')).sort();
+  const opening = (parsed && parsed.state === 'opening') || nodes.some(node => node && node.opening === true);
+  return { open: speculative.length > 0 || opening, speculative, state: parsed && parsed.state || null };
+}
+
+// A live halt is readable from two durable markers replan.js already parses: the plan ledger's
+// `consent_halt: pending` row and the state file's `escalated_to_full:` cause line. Either one
+// present means the run is stopped at a human valve, not quiescent. Fail closed on an
+// unreadable state file.
+function liveHaltPresent(paths, parentPlan) {
+  if (schema.readDurableConsentHalt(parentPlan)) return true;
+  let content;
+  try { content = readAuthorityText(paths.statePath); }
+  catch (_) { return true; }
+  return /^escalated_to_full:/m.test(content);
+}
+
+// An UNSETTLED review attempt (a gate in flight, yet to record findings) refuses
+// `shape_refutation_review_pending`: this authority must never be usable to dodge a gate about
+// to settle. Returns true/false on a readable journal, null when the journal cannot be parsed
+// (the caller then fails closed to `shape_refutation_review_authority_present`).
+function hasUnsettledReviewAttempt(journalPath) {
+  if (!entryExists(journalPath)) return false;
+  let journal;
+  try { journal = readAuthorityJson(journalPath); }
+  catch (_) { return null; }
+  if (!journal || !Array.isArray(journal.attempts)) return null;
+  return journal.attempts.some(attempt => attempt && attempt.lifecycle_settled !== true);
+}
+
+function readShapeRefutationAuthority(paths, parentPlan, parentPlanHash, lineage) {
+  const ledger = validator.parseLedger(parentPlan);
+  const openNodes = Array.from(ledger.entries())
+    .filter(([, status]) => status === 'in_progress').map(([id]) => id).sort();
+  const legs = openSpeculativeLegs(paths);
+  const liveHalt = liveHaltPresent(paths, parentPlan);
+  if (openNodes.length || legs.open || liveHalt) {
+    return { ok: false, reason: 'shape_refutation_not_quiescent', detail: {
+      open_nodes: openNodes, speculative_legs: legs.speculative,
+      running_set_state: legs.state, live_halt: liveHalt } };
+  }
+  const proof = verifyShapeRefutationPacket(paths, parentPlan, lineage);
+  if (!proof.ok) return proof;
+  const attemptId = 'shape-refutation:' + proof.proof_digest;
+  // The transaction rides the schema's diagnosis tier (`authority_kind: 'diagnosis_to_build'`):
+  // it is the one non-review tier the cross-edition transaction validator admits (null
+  // journal/handoff digests, no rotated review source), and this authority shares all three
+  // properties. The kind is distinguished everywhere it matters — `source_reason`,
+  // `transition_reason`, and the dedicated verifySourceAuthority branch below.
+  const source = {
+    authority_kind: 'diagnosis_to_build',
+    attempt_id: attemptId,
+    source_attempt_ids: [attemptId],
+    source_reason: SHAPE_REFUTATION_KIND,
+    producer_slice: [],
+    findings: [],
+    route_candidates: [],
+    rebind: [],
+    case_b_evidence: null,
+    shape_refutation: {
+      packet_path: '.cache/' + SHAPE_REFUTATION_PACKET_NAME,
+      packet_digest: proof.payload.packet_digest,
+      premise: proof.payload.premise,
+      mismatch: proof.payload.mismatch,
+      evidence: proof.payload.evidence,
+    },
+    scope_lineage_id: null,
+    legacy_candidate_digest: null,
+    legacy_candidate_residue_digest: null,
+    journal_digest: null,
+    handoff_digest: null,
+    proof_digest: proof.proof_digest,
+  };
+  source.source_evidence_digest = proof.proof_digest;
+  return {
+    ok: true,
+    source,
+    attempt: { attempt_id: attemptId, validation_obligations: [], findings: [], rebind: [] },
+    journal: null,
+    transition_reason: SHAPE_REFUTATION_KIND,
+    case_b: null,
+    shape_refutation: proof,
+  };
+}
+
+// #824 — the per-authority allowance, derived from durable receipts rather than a new state
+// field (the epoch state block's field set is owned by the cross-edition schema module). Every
+// committed shape_refutation transition left a receipt: the live committed transaction (until
+// the next prepare rotates it) plus the `.cache/committed-transactions/` history. De-duplicated
+// by transaction_id so a receipt visible in both places counts once.
+function countShapeRefutationTransitions(paths, lineageId) {
+  const seen = new Set();
+  let count = 0;
+  const consider = candidate => {
+    if (!candidate || candidate.schema_version !== 2
+        || candidate.epoch_lineage_id !== lineageId
+        || candidate.transition_reason !== SHAPE_REFUTATION_KIND
+        || candidate.phase !== 'committed' || candidate.outcome !== 'committed'
+        || seen.has(candidate.transaction_id)) return;
+    seen.add(candidate.transaction_id);
+    count += 1;
+  };
+  let live = null;
+  try { live = readAuthorityJsonOrNull(paths.transactionPath); } catch (_) { live = null; }
+  consider(live);
+  let names = [];
+  try { names = fs.readdirSync(paths.transactionHistoryDir).sort(); } catch (_) { names = []; }
+  for (const name of names) {
+    if (!name.endsWith('.json') || !HEX64_RE.test(name.slice(0, -'.json'.length))) continue;
+    let candidate = null;
+    try { candidate = JSON.parse(readAuthorityBytes(path.join(paths.transactionHistoryDir, name)).toString('utf8')); }
+    catch (_) { continue; }
+    consider(candidate);
+  }
+  return count;
+}
+
+// Two autonomous shape_refutation transitions per run (the same REVIEW_REPLAN_LIMIT floor every
+// authority starts from); each consent entry scoped `shape_refutation` raises that allowance by
+// one. The shared ceiling machinery is untouched — this is a per-authority draw on it, not a
+// replacement ledger.
+function shapeRefutationAllowance(paths, lineageId, entries) {
+  const grants = (Array.isArray(entries) ? entries : [])
+    .filter(entry => entry && entry.authority_scope === SHAPE_REFUTATION_KIND).length;
+  return { count: countShapeRefutationTransitions(paths, lineageId),
+    ceiling: schema.REVIEW_REPLAN_LIMIT + grants };
+}
+
+// Seal `.cache/shape-refutation.md` from the fast path's premise/evidence inputs. One atomic
+// replace, no transaction state: the packet is crash-idempotent (a re-run with the same inputs
+// writes the same canonical bytes) and is rebound into the transaction at prepare time.
+function sealShapeRefutationPacket(paths, opts) {
+  const premise = String(opts.premise || '').trim();
+  const mismatch = String(opts.mismatch || '').trim() || premise;
+  const inputs = [];
+  for (const value of Array.isArray(opts.evidence) ? opts.evidence : []) {
+    for (const piece of String(value || '').split(',')) {
+      const token = piece.trim();
+      if (token) inputs.push(token);
+    }
+  }
+  if (!premise || !inputs.length) return { ok: false, reason: 'shape_refutation_evidence_missing' };
+  const rows = new Map();
+  for (const input of inputs) {
+    const resolved = resolveShapeEvidencePath(paths, input);
+    if (!resolved) return { ok: false, reason: 'shape_refutation_evidence_path_invalid', detail: input };
+    let digest;
+    try { digest = exactDigest(resolved.abs); }
+    catch (_) { return { ok: false, reason: 'shape_refutation_evidence_missing', detail: input }; }
+    if (rows.has(resolved.rel) && rows.get(resolved.rel) !== digest) {
+      return { ok: false, reason: 'shape_refutation_evidence_mismatch', detail: resolved.rel };
+    }
+    rows.set(resolved.rel, digest);
+  }
+  const evidence = Array.from(rows.entries()).map(([rel, digest]) => ({ path: rel, digest }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const packet = { schema_version: 1, kind: SHAPE_REFUTATION_KIND, premise, mismatch, evidence };
+  // The sealed refutation packet IS the prepare-seam packet of this authority, so it classifies
+  // under the one packet-write label the (cross-edition pinned) durable-write inventory already
+  // owns — no new label, no raw write outside the durable wrappers.
+  durableWriteJson(paths.shapeRefutationPath, packet, opts, 'after_packet_written');
+  return { ok: true, packet };
+}
+
 function readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage) {
   const journalPath = path.join(paths.cacheDir, 'review-attempts.json');
   const outcomePath = path.join(paths.cacheDir, 'replan-source.json');
@@ -1098,10 +1381,22 @@ function readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage) {
     if (opts.transitionReason === 'diagnosis_to_build') {
       return { ok: false, reason: 'case_b_review_authority_present' };
     }
+    // #824 precedence, mirroring case_b_review_authority_present: a review authority wins over
+    // the shape_refutation entry. An UNSETTLED attempt refuses with its own reason — this
+    // authority must never be usable to dodge a gate about to record findings.
+    if (opts.transitionReason === SHAPE_REFUTATION_KIND) {
+      if (hasUnsettledReviewAttempt(journalPath) === true) {
+        return { ok: false, reason: 'shape_refutation_review_pending' };
+      }
+      return { ok: false, reason: 'shape_refutation_review_authority_present' };
+    }
     const review = readSource(paths, parentPlanHash, opts.sourceAttemptId,
       { verifyCandidate: true, planContent: parentPlan, lineage });
     if (!review.ok) return review;
     return Object.assign(review, { transition_reason: 'review_repair_requires_replan', case_b: null });
+  }
+  if (opts.transitionReason === SHAPE_REFUTATION_KIND) {
+    return readShapeRefutationAuthority(paths, parentPlan, parentPlanHash, lineage);
   }
   if (opts.transitionReason !== 'diagnosis_to_build') {
     return { ok: false, reason: 'replan_source_journal_missing' };
@@ -1147,18 +1442,39 @@ function evaluateTransitionBudget(state, request, authority) {
     return { ok: false, reason: 'replan_consent_ledger_invalid', count, ceiling, cost: 1,
       case_b_exemption: false };
   }
+  // #824: a shape_refutation transition is admitted on its OWN per-authority allowance (two
+  // autonomous transitions per run, plus one per shape-scoped consent entry), never on the
+  // shared automatic-transition counter — a run that spent its review budget on failed gates
+  // still gets its two free reshapes, and vice versa. The transition still COSTS one shared
+  // slot of bookkeeping (count_before/count_after flow unchanged below), so the committed
+  // receipt and promoted state stay byte-compatible with every existing authority check.
+  const shape = request && request.transition_reason === SHAPE_REFUTATION_KIND
+    ? authority && authority.shape_refutation_allowance : null;
+  if (shape) {
+    if (!Number.isSafeInteger(shape.count) || shape.count < 0
+        || !Number.isSafeInteger(shape.ceiling) || shape.ceiling < schema.REVIEW_REPLAN_LIMIT) {
+      return { ok: false, reason: 'replan_consent_ledger_invalid', count, ceiling, cost: 1,
+        case_b_exemption: false };
+    }
+    if (shape.count >= shape.ceiling) {
+      return { ok: false, reason: 'replan_consent_required', count, ceiling, cost: 1,
+        shape_refutation_replans: shape.count, shape_refutation_ceiling: shape.ceiling,
+        case_b_exemption: false };
+    }
+  }
   const consumed = state && (state.case_b_exemption_consumed === true
     || String(state.case_b_exemption_consumed) === 'true');
   const caseB = !consumed && authority && authority.case_b_verified === true
     && validCaseBEvidence(request);
   const cost = caseB ? 0 : 1;
-  if (!caseB && count >= ceiling) {
+  if (!caseB && !shape && count >= ceiling) {
     return { ok: false, reason: 'replan_consent_required', count, ceiling, cost, case_b_exemption: false };
   }
   return { ok: true, count_before: count, count_after: count + cost, ceiling, cost,
     consent_ledger_digest: authority && authority.consent_ledger_digest || null,
     case_b_proof: authority && authority.case_b_proof || null,
-    case_b_exemption: caseB, case_b_exemption_consumed_after: consumed || caseB };
+    case_b_exemption: caseB, case_b_exemption_consumed_after: consumed || caseB,
+    shape_refutation_allowance: shape ? { count_before: shape.count, ceiling: shape.ceiling } : null };
 }
 
 function consentAuthority(paths, epochLineageId, state) {
@@ -1609,6 +1925,8 @@ function buildTransaction(paths, opts, parentPlan, parentState, lineage, source,
       case_b_exemption_consumed_after: budget.case_b_exemption_consumed_after,
       consent_ledger_digest: budget.consent_ledger_digest || null,
       case_b_proof: budget.case_b_proof || null,
+      ...(budget.shape_refutation_allowance
+        ? { shape_refutation_allowance: budget.shape_refutation_allowance } : {}),
     },
     planner: {
       packet_path: '.cache/' + schema.REPLAN_PLANNER_PACKET_NAME,
@@ -1684,6 +2002,19 @@ function verifySourceAuthority(paths, transaction) {
   // either. Without this the empty array survives the whole transaction unexamined.
   if (!reviewSourceCarriesFrontier(transaction.source)) {
     return { ok: false, reason: 'replan_source_findings_missing', detail: 'stored_frontier_empty' };
+  }
+  // #824: the shape_refutation source re-proves the sealed packet against the STORED parent
+  // bytes (premise/mismatch non-empty, every evidence digest re-hashed, lineage intact) and
+  // pins the resulting proof digest — the same re-verification posture as the Case B branch.
+  if (transaction.source.source_reason === SHAPE_REFUTATION_KIND) {
+    const parentPlan = Buffer.from(transaction.parent.plan_bytes_base64, 'base64').toString('utf8');
+    const proof = verifyShapeRefutationPacket(paths, parentPlan, {
+      epoch_lineage_id: transaction.epoch_lineage_id,
+      claim_identity_digest: transaction.parent.claim_identity_digest,
+      claim_root_base_digest: transaction.parent.claim_root_base_digest,
+    });
+    return proof.ok && proof.proof_digest === transaction.source.source_evidence_digest
+      ? { ok: true } : { ok: false, reason: proof.reason || 'replan_source_changed' };
   }
   if (transaction.source.authority_kind === 'diagnosis_to_build') {
     const parentPlan = Buffer.from(transaction.parent.plan_bytes_base64, 'base64').toString('utf8');
@@ -1897,6 +2228,19 @@ function prepareReplanUnlocked(paths, opts) {
           requestedAttempt = handoff && handoff.attempt_id || null;
         } catch (_) {}
       }
+      // #824: a shape_refutation request carries no review attempt id; its identity is the
+      // sealed packet. Re-sealing the SAME packet after commit replays as already_committed
+      // (the review path's same-source semantics); a NEW packet — or a first packet after a
+      // non-shape epoch — is a new transition and proceeds below.
+      if (!requestedAttempt && opts.transitionReason === SHAPE_REFUTATION_KIND) {
+        let currentPacketDigest = null;
+        try { currentPacketDigest = exactDigest(paths.shapeRefutationPath); } catch (_) {}
+        const priorPacketDigest = existing.source && existing.source.shape_refutation
+          && existing.source.shape_refutation.packet_digest;
+        if (currentPacketDigest && currentPacketDigest !== priorPacketDigest) {
+          requestedAttempt = 'shape-refutation:packet:' + currentPacketDigest;
+        }
+      }
       if (!requestedAttempt || existing.source.source_attempt_ids.includes(requestedAttempt)) {
         return { result: 'already_committed', transaction_id: existing.transaction_id };
       }
@@ -1953,7 +2297,7 @@ function prepareReplanUnlocked(paths, opts) {
       const findingFiles = an.findingFilesFromAttempt(sourceResult.attempt);
       const localFirst = an.spineReExpansionFirst(parentPlan, findingFiles);
       if (localFirst) return schema.refuse('replan_superseded_by_local_reexpansion', {
-        detail: localFirst.operator_hint, owners: localFirst.owners });
+        detail: localFirst.operator_hint, owners: localFirst.owners, route: 'reexpand-open' });
     }
   } catch (_) { /* precheck must never block a legitimate replan */ }
   const observation = deriveCandidateObservation(paths, lineage, sourceResult.attempt, opts);
@@ -1966,6 +2310,8 @@ function prepareReplanUnlocked(paths, opts) {
   const budgetAuthority = Object.assign({}, consent, {
     case_b_verified: caseB.ok,
     case_b_proof: caseB.ok ? { payload: caseB.payload, proof_digest: caseB.proof_digest } : null,
+    shape_refutation_allowance: sourceResult.transition_reason === SHAPE_REFUTATION_KIND
+      ? shapeRefutationAllowance(paths, lineage.epoch_lineage_id, consent.entries) : null,
   });
   const budget = evaluateTransitionBudget(state, request, budgetAuthority);
   if (!budget.ok && budget.reason === 'replan_consent_ledger_invalid') {
@@ -1978,6 +2324,10 @@ function prepareReplanUnlocked(paths, opts) {
     return schema.refuse('replan_consent_required', {
       automatic_review_replans: Number(state.automatic_review_replans || 0),
       authorized_epoch_ceiling: Number(state.authorized_epoch_ceiling || schema.REVIEW_REPLAN_LIMIT),
+      ...(budget.shape_refutation_replans !== undefined ? {
+        shape_refutation_replans: budget.shape_refutation_replans,
+        shape_refutation_ceiling: budget.shape_refutation_ceiling,
+      } : {}),
     });
   }
   // Placed AFTER the consent/budget block so a consent refusal keeps its zero
@@ -2017,6 +2367,36 @@ function prepareReplanUnlocked(paths, opts) {
     'after_state_prepared_fence');
   return { result: 'prepared', transaction_id: transaction.transaction_id,
     epoch_lineage_id: transaction.epoch_lineage_id, phase: transaction.phase };
+}
+
+// #824 — the one-command fast path: `shape-refutation --project X --premise "..." --evidence
+// <paths>` fuses packet seal + prepare + fence + planner packet into a single locked
+// transaction when the run is quiescent. Target cost: one planner dispatch — on success the
+// result IS the dispatch request (`planner_dispatch_required` with the same fields the resume
+// path's `replan_planner_dispatch_required` carries), ready to hand to a Re-plan dispatch-mode
+// workflow-planner. Every entry-predicate refusal (not quiescent / review authority present or
+// pending / evidence missing / consent required) propagates unchanged with zero side effects
+// beyond the idempotent packet seal.
+function prepareShapeRefutation(opts) {
+  const repoRoot = fs.realpathSync(opts.repoRoot || getRepoRoot());
+  const paths = projectPaths(repoRoot, opts.project);
+  return withProjectLock(paths, 'replan shape-refutation', () => {
+    const sealed = sealShapeRefutationPacket(paths, opts);
+    if (!sealed.ok) {
+      return schema.refuse(sealed.reason, sealed.detail !== undefined ? { detail: sealed.detail } : {});
+    }
+    const prepared = prepareReplanUnlocked(paths, Object.assign({}, opts, {
+      transitionReason: SHAPE_REFUTATION_KIND,
+    }));
+    if (prepared.result !== 'prepared') return prepared;
+    const advanced = resumeReplanUnlocked(paths, opts);
+    if (advanced && advanced.result === 'refuse' && advanced.reason === 'replan_planner_dispatch_required') {
+      const dispatch = Object.assign({}, advanced, { result: 'planner_dispatch_required' });
+      delete dispatch.reason;
+      return dispatch;
+    }
+    return advanced;
+  });
 }
 
 function buildPlannerPacket(paths, transaction) {
@@ -2072,6 +2452,8 @@ function buildPlannerPacket(paths, transaction) {
       case_b_exemption: transaction.budget.case_b_exemption,
       case_b_proof: transaction.budget.case_b_proof,
       consent_ledger_digest: transaction.budget.consent_ledger_digest,
+      ...(transaction.budget.shape_refutation_allowance
+        ? { shape_refutation_allowance: transaction.budget.shape_refutation_allowance } : {}),
     },
     acceptance_requirements: [
       'Preserve the claim, branch, worktree, claim root, and epoch lineage.',
@@ -4163,7 +4545,14 @@ function verifyConsentLedger(ledger, epochLineageId) {
         && !HEX64_RE.test(String(entry.acceptance_change_digest || ''))) {
       return { ok: false, reason: 'replan_consent_ledger_invalid' };
     }
-    const expectedExtensionId = schema.sha256Canonical({
+    // #824: `authority_scope` is OPTIONAL (an unscoped entry is the original shared-ceiling
+    // extension). When present it names the per-authority allowance the human turn extended;
+    // it rides the extension_id/entry_digest recomputation like every other identity field.
+    if (entry.authority_scope !== undefined
+        && !CONSENT_AUTHORITY_SCOPES.includes(entry.authority_scope)) {
+      return { ok: false, reason: 'replan_consent_ledger_invalid' };
+    }
+    const expectedExtensionId = schema.sha256Canonical(Object.assign({
       schema_version: 1,
       epoch_lineage_id: epochLineageId,
       prior_ceiling: ceiling,
@@ -4171,7 +4560,7 @@ function verifyConsentLedger(ledger, epochLineageId) {
       increment: 1,
       user_turn_reference: entry.user_turn_reference,
       previous_entry_digest: previous,
-    });
+    }, entry.authority_scope !== undefined ? { authority_scope: entry.authority_scope } : {}));
     if (entry.extension_id !== expectedExtensionId) {
       return { ok: false, reason: 'replan_consent_ledger_invalid' };
     }
@@ -4192,6 +4581,14 @@ function appendConsentExtension(opts) {
   const paths = projectPaths(repoRoot, opts.project);
   return withProjectLock(paths, 'replan extend-consent', () => {
     if (!opts.userTurnReference || !opts.reason) return schema.refuse('replan_consent_reference_required');
+    // #824: an OPTIONAL per-authority scope. Absent = the original shared-ceiling extension
+    // (the review authority's allowance, gate unchanged). `shape_refutation` records that the
+    // human turn extends THAT authority's allowance, and the "consent was actually requested"
+    // gate is judged on the shape allowance rather than the shared counter.
+    const authorityScope = opts.authorityScope == null ? null : String(opts.authorityScope);
+    if (authorityScope !== null && !CONSENT_AUTHORITY_SCOPES.includes(authorityScope)) {
+      return schema.refuse('replan_consent_authority_scope_invalid');
+    }
     // The acceptance-change binding. The human turn names the EXACT surface it authorizes — either its
     // digest directly, or the surface text (the same normalization the plan's own `## Acceptance`
     // digest uses, so the operator can hand over the bytes they actually mean rather than a hash they
@@ -4264,9 +4661,11 @@ function appendConsentExtension(opts) {
     if (duplicate) {
       // A replayed request is idempotent only when it is the SAME request. The acceptance binding is
       // part of that identity: re-using one turn's reference to bind a different surface would be a
-      // second values decision wearing the first one's authorization.
+      // second values decision wearing the first one's authorization. The authority scope is part of
+      // the identity for the same reason.
       if (duplicate.reason !== String(opts.reason)
-          || (duplicate.acceptance_change_digest || null) !== acceptanceChangeDigest) {
+          || (duplicate.acceptance_change_digest || null) !== acceptanceChangeDigest
+          || (duplicate.authority_scope || null) !== authorityScope) {
         return schema.refuse('replan_consent_reference_reused');
       }
       const repaired = schema.writeEpochStateBlock(stateContent, { authorized_epoch_ceiling: verified.ceiling });
@@ -4277,15 +4676,21 @@ function appendConsentExtension(opts) {
       reFenceCommittedReceipt(verified.ceiling);
       return { result: 'consent_already_extended', extension_id: duplicate.extension_id,
         authorized_epoch_ceiling: verified.ceiling, entry_digest: duplicate.entry_digest,
+        authority_scope: duplicate.authority_scope || null,
         acceptance_change_digest: duplicate.acceptance_change_digest || null };
     }
     const cachedCeiling = Number(state.authorized_epoch_ceiling || schema.REVIEW_REPLAN_LIMIT);
     if (cachedCeiling !== verified.ceiling) return schema.refuse('replan_consent_ledger_invalid');
-    if (Number(state.automatic_review_replans || 0) < cachedCeiling) {
+    if (authorityScope === SHAPE_REFUTATION_KIND) {
+      const allowance = shapeRefutationAllowance(paths, lineageId, verified.entries);
+      if (allowance.count < allowance.ceiling) {
+        return schema.refuse('replan_consent_not_requested');
+      }
+    } else if (Number(state.automatic_review_replans || 0) < cachedCeiling) {
       return schema.refuse('replan_consent_not_requested');
     }
     const requestedAt = nowIso(opts);
-    const extensionId = schema.sha256Canonical({
+    const extensionId = schema.sha256Canonical(Object.assign({
       schema_version: 1,
       epoch_lineage_id: lineageId,
       prior_ceiling: verified.ceiling,
@@ -4293,7 +4698,7 @@ function appendConsentExtension(opts) {
       increment: 1,
       user_turn_reference: String(opts.userTurnReference),
       previous_entry_digest: verified.digest,
-    });
+    }, authorityScope ? { authority_scope: authorityScope } : {}));
     const base = {
       schema_version: 1,
       extension_id: extensionId,
@@ -4305,6 +4710,7 @@ function appendConsentExtension(opts) {
       requested_at: requestedAt,
       reason: String(opts.reason),
       previous_entry_digest: verified.digest,
+      ...(authorityScope ? { authority_scope: authorityScope } : {}),
       ...(acceptanceChangeDigest ? { acceptance_change_digest: acceptanceChangeDigest } : {}),
     };
     const entry = Object.assign({}, base, { entry_digest: schema.sha256Canonical(base) });
@@ -4315,6 +4721,7 @@ function appendConsentExtension(opts) {
     reFenceCommittedReceipt(entry.new_ceiling);
     return { result: 'consent_extended', extension_id: entry.extension_id,
       authorized_epoch_ceiling: entry.new_ceiling, entry_digest: entry.entry_digest,
+      authority_scope: authorityScope,
       acceptance_change_digest: acceptanceChangeDigest };
   });
 }
@@ -4344,6 +4751,12 @@ function parseArgs(argv) {
     else if (arg === '--reason') out.transitionReason = argv[++index];
     else if (arg === '--user-turn-reference') out.userTurnReference = argv[++index];
     else if (arg === '--consent-reason') out.consentReason = argv[++index];
+    else if (arg === '--authority-scope') out.authorityScope = argv[++index];
+    // #824 shape-refutation fast path: the flipping premise (and optionally a distinct
+    // concrete mismatch statement) plus the evidence receipts the packet binds.
+    else if (arg === '--premise') out.premise = argv[++index];
+    else if (arg === '--mismatch') out.mismatch = argv[++index];
+    else if (arg === '--evidence') (out.evidence = out.evidence || []).push(argv[++index]);
     // The acceptance-change binding: the digest of the new surface this consent authorizes, or the
     // file holding that surface's text (normalized identically to the plan's own `## Acceptance`).
     else if (arg === '--acceptance-change-digest') out.acceptanceChangeDigest = argv[++index];
@@ -4361,6 +4774,9 @@ function main() {
   if (subcommand === 'prepare') {
     result = prepareReplan({ project: args.project, sourceAttemptId: args.sourceAttemptId,
       transitionReason: args.transitionReason || 'review_repair_requires_replan' });
+  } else if (subcommand === 'shape-refutation') {
+    result = prepareShapeRefutation({ project: args.project, premise: args.premise,
+      mismatch: args.mismatch, evidence: args.evidence });
   } else if (subcommand === 'resume') {
     result = resumeReplan({ project: args.project });
   } else if (subcommand === 'status') {
@@ -4377,7 +4793,7 @@ function main() {
     }
     result = appendConsentExtension({ project: args.project, userTurnReference: args.userTurnReference,
       reason: args.consentReason, acceptanceChangeDigest: args.acceptanceChangeDigest,
-      acceptanceChangeSurface });
+      acceptanceChangeSurface, authorityScope: args.authorityScope });
   } else if (subcommand === 'verify-snapshots') {
     const root = getRepoRoot();
     result = verifyAllEpochSnapshots(path.join(root, 'kaola-workflow', args.project));
@@ -4415,6 +4831,13 @@ module.exports = {
   validateChildHandoffAuthority,
   buildPlannerPacket,
   buildFindingIndex,
+  // #824: the shape_refutation authority — packet verification, the fused fast path, and the
+  // per-authority allowance accounting, exported for direct unit coverage.
+  verifyShapeRefutationPacket,
+  prepareShapeRefutation,
+  sealShapeRefutationPacket,
+  countShapeRefutationTransitions,
+  shapeRefutationAllowance,
   // #729 case (b): the child carry-forward wall + the fail-CLOSED obligation predicate it
   // rests on, exported so both can be driven directly instead of only through a transaction.
   childFindingCoverage,

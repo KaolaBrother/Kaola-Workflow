@@ -5837,5 +5837,517 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// ---------------------------------------------------------------------------
+// #824 — the third re-plan authority: `shape_refutation`. Mid-run, with no failed gate, the
+// orchestrator may re-plan ONLY on a sealed, digest-bound refutation packet while the run is
+// quiescent. These scenarios pin the entry predicate (quiescence / review-authority precedence /
+// verifiable evidence), the sealed packet's tamper wall, the one-command fast path, the
+// per-authority autonomy allowance (two free, then a recorded consent turn), and the unchanged
+// downstream invariants (completed-claim preservation, the acceptance wall, the typed route
+// field on out-of-shape refusals).
+// ---------------------------------------------------------------------------
+
+// A fixture with NO review authority on disk: the shape_refutation entry refuses on precedence
+// whenever `review-attempts.json` or `replan-source.json` exists, so every shape scenario starts
+// from a project that carries neither (mirroring installTypedCaseBParent's teardown).
+function initShapeFixture(options = {}) {
+  const fx = initFixture(Object.assign({}, options, { seedSource: false }));
+  for (const name of ['review-attempts.json', 'replan-source.json', 'review.md']) {
+    try { fs.unlinkSync(path.join(fx.cacheDir, name)); } catch (_) {}
+  }
+  return fx;
+}
+
+// The production `projectPaths` view the #824 exports consume, rebuilt from a fixture (the
+// module keeps projectPaths private; every field is derivable from the fixture root).
+function shapePaths(fx) {
+  return {
+    repoRoot: fx.root,
+    project: fx.project,
+    projectDir: fx.projectDir,
+    cacheDir: fx.cacheDir,
+    planPath: path.join(fx.projectDir, 'workflow-plan.md'),
+    statePath: path.join(fx.projectDir, 'workflow-state.md'),
+    childPath: path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME),
+    transactionPath: path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME),
+    packetPath: path.join(fx.cacheDir, 'replan-planner-packet.json'),
+    consentPath: path.join(fx.cacheDir, schema.EPOCH_CONSENT_EXTENSIONS_NAME),
+    shapeRefutationPath: path.join(fx.cacheDir, 'shape-refutation.md'),
+    epochsDir: path.join(fx.cacheDir, 'epochs'),
+    transactionHistoryDir: path.join(fx.cacheDir, 'committed-transactions'),
+  };
+}
+
+// Drive the one-command fast path through the planner seam to activation — the shape_authority
+// analogue of driveReplanToCommit. `request` is the fast-path input ({premise, mismatch,
+// evidence}); the child epoch is authored by the same writePlannerResult helper every other
+// authority uses.
+function driveShapeRefutationToCommit(fx, request) {
+  const common = { repoRoot: fx.root, project: fx.project, now: () => '2026-07-16T03:00:00.000Z' };
+  let result = replan.prepareShapeRefutation(Object.assign({}, common, request));
+  for (let turn = 0; turn < 20; turn++) {
+    if (result && ['committed', 'already_committed'].includes(result.result)) return result;
+    if (result && (result.result === 'planner_dispatch_required'
+        || result.reason === 'replan_planner_dispatch_required')) {
+      const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+      const childPath = path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME);
+      if (!fs.existsSync(childPath) || fs.statSync(childPath).size === 0) writePlannerResult(fx, tx);
+    }
+    result = replan.resumeReplan(common);
+  }
+  throw new Error('shape_refutation_driver_did_not_converge:' + JSON.stringify(result));
+}
+
+// #824 entry precedence: a review authority — settled, merely PRESENT, or in flight — always
+// wins over the shape_refutation entry. The authority must never be usable to dodge a gate.
+scenario(() => {
+  const fx = initFixture(); // settled FAILED attempt + replan-source.json, the review authority present
+  try {
+    const prepare = () => replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      transitionReason: 'shape_refutation' });
+    const present = prepare();
+    equal(present.reason, 'shape_refutation_review_authority_present',
+      '#824: a settled review authority wins over the shape_refutation entry: ' + JSON.stringify(present));
+
+    // An UNSETTLED attempt (a gate in flight, yet to record findings) gets its own refusal.
+    const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    journal.attempts[0].lifecycle_settled = false;
+    fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
+    const pending = prepare();
+    equal(pending.reason, 'shape_refutation_review_pending',
+      '#824: an UNSETTLED review attempt refuses shape_refutation_review_pending (no gate-dodging): '
+        + JSON.stringify(pending));
+
+    // The handoff alone (journal rotated away) is still a present review authority.
+    fs.unlinkSync(journalPath);
+    const sourceOnly = prepare();
+    equal(sourceOnly.reason, 'shape_refutation_review_authority_present',
+      '#824: a replan-source.json handoff alone is still a present review authority: '
+        + JSON.stringify(sourceOnly));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #824 entry quiescence: no OPEN ledger row, no open speculative leg, no live halt — each arm
+// refuses shape_refutation_not_quiescent with the offending state named in `detail`.
+scenario(() => {
+  // The open-ledger-row arm, via REAL fixture state: a frozen plan row flipped back to in_progress.
+  const fxRow = initShapeFixture();
+  try {
+    const planPath = path.join(fxRow.projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8')
+      .replace('| review | complete |', '| review | in_progress |'));
+    const refused = replan.prepareReplan({ repoRoot: fxRow.root, project: fxRow.project,
+      transitionReason: 'shape_refutation' });
+    equal(refused.reason, 'shape_refutation_not_quiescent',
+      '#824: an OPEN ledger row refuses the quiescent-only entry: ' + JSON.stringify(refused));
+    deepEqual(refused.detail.open_nodes, ['review'],
+      '...and names the open node: ' + JSON.stringify(refused.detail));
+  } finally { fs.rmSync(fxRow.root, { recursive: true, force: true }); }
+
+  // The open-speculative-leg arm: a live `speculative: true` member of the scheduler running set.
+  const fxLeg = initShapeFixture();
+  try {
+    fs.writeFileSync(path.join(fxLeg.cacheDir, 'running-set.json'), JSON.stringify({
+      schema_version: 1, state: 'open', nodes: [{ id: 'n-spec', speculative: true }] }) + '\n');
+    const refused = replan.prepareReplan({ repoRoot: fxLeg.root, project: fxLeg.project,
+      transitionReason: 'shape_refutation' });
+    equal(refused.reason, 'shape_refutation_not_quiescent',
+      '#824: an open speculative leg refuses the quiescent-only entry: ' + JSON.stringify(refused));
+    deepEqual(refused.detail.speculative_legs, ['n-spec'],
+      '...and names the speculative leg: ' + JSON.stringify(refused.detail));
+  } finally { fs.rmSync(fxLeg.root, { recursive: true, force: true }); }
+
+  // The live-halt arm: the state file's escalated_to_full marker means a human valve is open.
+  const fxHalt = initShapeFixture();
+  try {
+    fs.appendFileSync(path.join(fxHalt.projectDir, 'workflow-state.md'),
+      'escalated_to_full: consent valve open\n');
+    const refused = replan.prepareReplan({ repoRoot: fxHalt.root, project: fxHalt.project,
+      transitionReason: 'shape_refutation' });
+    equal(refused.reason, 'shape_refutation_not_quiescent',
+      '#824: a live halt refuses the quiescent-only entry: ' + JSON.stringify(refused));
+    equal(refused.detail.live_halt, true,
+      '...and names the live halt: ' + JSON.stringify(refused.detail));
+  } finally { fs.rmSync(fxHalt.root, { recursive: true, force: true }); }
+});
+
+// #824 entry evidence: the sealed packet demands a non-empty premise and at least one verifiable
+// evidence digest; unverifiable or out-of-project evidence refuses at the seal.
+scenario(() => {
+  // The direct prepare arm: no sealed packet on disk at all.
+  const fxBare = initShapeFixture();
+  try {
+    const refused = replan.prepareReplan({ repoRoot: fxBare.root, project: fxBare.project,
+      transitionReason: 'shape_refutation' });
+    equal(refused.reason, 'shape_refutation_evidence_missing',
+      '#824: prepare with no sealed packet refuses shape_refutation_evidence_missing: ' + JSON.stringify(refused));
+  } finally { fs.rmSync(fxBare.root, { recursive: true, force: true }); }
+
+  // The fast-path seal arms, on one quiescent fixture (every refusal precedes any transaction).
+  const fx = initShapeFixture();
+  try {
+    const common = { repoRoot: fx.root, project: fx.project };
+    const emptyPremise = replan.prepareShapeRefutation(Object.assign({}, common,
+      { premise: '   ', evidence: ['.cache/impl.md'] }));
+    equal(emptyPremise.reason, 'shape_refutation_evidence_missing',
+      '#824: an empty premise refuses at the seal: ' + JSON.stringify(emptyPremise));
+    const noEvidence = replan.prepareShapeRefutation(Object.assign({}, common,
+      { premise: 'the spine assumed a single writer' }));
+    equal(noEvidence.reason, 'shape_refutation_evidence_missing',
+      '#824: zero evidence rows refuses at the seal: ' + JSON.stringify(noEvidence));
+    const ghost = replan.prepareShapeRefutation(Object.assign({}, common,
+      { premise: 'the spine assumed a single writer', evidence: ['.cache/ghost.md'] }));
+    equal(ghost.reason, 'shape_refutation_evidence_missing',
+      '#824: an unverifiable evidence digest (missing receipt) refuses at the seal: ' + JSON.stringify(ghost));
+    const absolute = replan.prepareShapeRefutation(Object.assign({}, common,
+      { premise: 'p', evidence: [path.join(fx.cacheDir, 'impl.md')] }));
+    equal(absolute.reason, 'shape_refutation_evidence_path_invalid',
+      '#824: an absolute evidence path refuses (project-relative only): ' + JSON.stringify(absolute));
+    const escape = replan.prepareShapeRefutation(Object.assign({}, common,
+      { premise: 'p', evidence: ['../outside.md'] }));
+    equal(escape.reason, 'shape_refutation_evidence_path_invalid',
+      '#824: a `..` escape refuses (evidence must resolve inside the project): ' + JSON.stringify(escape));
+    ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      '#824: every refused seal leaves no transaction behind');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #824 fast path, GREEN: on a quiescent run the ONE command seals the packet, prepares the
+// transaction, fences the run, and emits the planner dispatch request.
+scenario(() => {
+  const fx = initShapeFixture();
+  try {
+    const stateBefore = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    const premise = 'the frozen spine assumed product.js stays a single-writer surface; '
+      + 'completed-node evidence shows two independent writers';
+    const result = replan.prepareShapeRefutation({ repoRoot: fx.root, project: fx.project,
+      premise, evidence: ['.cache/impl.md'], now: () => '2026-07-16T03:00:00.000Z' });
+    equal(result.result, 'planner_dispatch_required',
+      '#824: the quiescent fast path fuses prepare+fence+packet into ONE planner dispatch request: '
+        + JSON.stringify(result));
+    ok(/^[0-9a-f]{64}$/.test(String(result.transaction_id || '')),
+      '...carrying the transaction id: ' + JSON.stringify(result));
+    equal(result.phase, 'planner_pending', '...at the planner seam: ' + JSON.stringify(result));
+    equal(result.packet_path, '.cache/replan-planner-packet.json', '...naming the packet path');
+    equal(result.child_path, 'workflow-plan.next.md', '...naming the child output path');
+    ok(result.dispatch_nonce, '...carrying the dispatch nonce the child must cite');
+    equal(result.planner_profile_identity, 'workflow-planner-replan-v1',
+      '...naming the digest-bound planner profile: ' + JSON.stringify(result));
+
+    // The sealed packet landed on disk, digest-bound to the evidence receipt.
+    const packetBytes = fs.readFileSync(path.join(fx.cacheDir, 'shape-refutation.md'));
+    const packet = JSON.parse(packetBytes.toString('utf8'));
+    equal(packet.kind, 'shape_refutation', 'the sealed packet names its kind');
+    equal(packet.premise, premise, '...and records the flipping premise verbatim');
+    equal(packet.evidence.length, 1, '...binding exactly the handed evidence rows');
+    equal(packet.evidence[0].path, '.cache/impl.md', '...as a project-relative path');
+    ok(/^[0-9a-f]{64}$/.test(String(packet.evidence[0].digest || '')),
+      '...with a verifiable sha256 digest');
+
+    // The fused planner packet carries the authority and the per-authority allowance.
+    const plannerPacket = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8'));
+    equal(plannerPacket.transition_reason, 'shape_refutation',
+      'the planner packet names the shape_refutation transition');
+    deepEqual(plannerPacket.budget.shape_refutation_allowance, { count_before: 0, ceiling: 2 },
+      '...and shows the planner the untouched per-authority allowance: '
+        + JSON.stringify(plannerPacket.budget));
+
+    // The fence and the transaction landed in the SAME command — one dispatch, no second step.
+    const stateAfter = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    ok(stateAfter !== stateBefore && /replan_status: in_progress/.test(stateAfter),
+      '#824: the ONE command fenced the run (replan_status: in_progress)');
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(tx.phase, 'planner_pending', 'the transaction waits at the planner seam');
+    equal(tx.transition_reason, 'shape_refutation', '...under the shape_refutation reason');
+    equal(tx.source.source_reason, 'shape_refutation', '...with the source marked shape_refutation');
+    equal(tx.source.shape_refutation.packet_digest, sha256(packetBytes),
+      '...binding the sealed packet by digest');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #824 fast path, non-quiescent: the fused command refuses with zero writes beyond the
+// idempotent packet seal — no transaction, no planner packet, plan/state byte-identical.
+scenario(() => {
+  const fx = initShapeFixture();
+  try {
+    const planPath = path.join(fx.projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8')
+      .replace('| finalize | pending |', '| finalize | in_progress |'));
+    const planBefore = fs.readFileSync(planPath, 'utf8');
+    const stateBefore = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    const refused = replan.prepareShapeRefutation({ repoRoot: fx.root, project: fx.project,
+      premise: 'the spine assumed a single writer', evidence: ['.cache/impl.md'] });
+    equal(refused.result, 'refuse', '#824: a non-quiescent fast path refuses: ' + JSON.stringify(refused));
+    equal(refused.reason, 'shape_refutation_not_quiescent',
+      '...with the quiescence refusal: ' + JSON.stringify(refused));
+    deepEqual(refused.detail.open_nodes, ['finalize'],
+      '...naming the open node: ' + JSON.stringify(refused.detail));
+    ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      '#824: the refusal writes NO transaction');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json')),
+      '#824: the refusal writes NO planner packet');
+    equal(fs.readFileSync(planPath, 'utf8'), planBefore,
+      '#824: the refusal leaves the plan byte-identical');
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), stateBefore,
+      '#824: the refusal leaves the state byte-identical (no fence)');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #824 sealed-packet tamper wall: the packet is digest-bound into the transaction, so a tamper
+// after the fast path refuses the resume; a tampered evidence receipt refuses the entry.
+scenario(() => {
+  // Arm 1: rewrite the sealed packet's premise after the dispatch — the resume re-proves the
+  // packet against the stored parent bytes and the pinned proof digest no longer matches.
+  const fx = initShapeFixture();
+  try {
+    const dispatch = replan.prepareShapeRefutation({ repoRoot: fx.root, project: fx.project,
+      premise: 'the recorded premise', evidence: ['.cache/impl.md'],
+      now: () => '2026-07-16T03:00:00.000Z' });
+    equal(dispatch.result, 'planner_dispatch_required',
+      '#824 tamper fixture reaches the planner seam: ' + JSON.stringify(dispatch));
+    const parentBefore = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const packetPath = path.join(fx.cacheDir, 'shape-refutation.md');
+    const packet = JSON.parse(fs.readFileSync(packetPath, 'utf8'));
+    packet.premise = 'a substituted premise the orchestrator never recorded';
+    fs.writeFileSync(packetPath, schema.canonicalJson(packet) + '\n');
+    const refused = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refused.reason, 'replan_source_changed',
+      '#824: a tampered sealed packet refuses at the resume re-proof: ' + JSON.stringify(refused));
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'), parentBefore,
+      '...and the parent plan stays byte-identical (no epoch spent)');
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(tx.phase, 'planner_pending', '...with the transaction unmoved at the planner seam');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+
+  // Arm 2: tamper an evidence RECEIPT between seal and prepare — the recorded digest no longer
+  // matches the re-hashed receipt and the entry refuses shape_refutation_evidence_mismatch.
+  const fx2 = initShapeFixture();
+  try {
+    const sealed = replan.sealShapeRefutationPacket(shapePaths(fx2),
+      { premise: 'the spine assumed a single writer', evidence: ['.cache/impl.md'] });
+    ok(sealed.ok, '#824: the packet seals against the live receipt: ' + JSON.stringify(sealed));
+    fs.appendFileSync(path.join(fx2.cacheDir, 'impl.md'), 'tampered after the seal\n');
+    const refused = replan.prepareReplan({ repoRoot: fx2.root, project: fx2.project,
+      transitionReason: 'shape_refutation' });
+    equal(refused.reason, 'shape_refutation_evidence_mismatch',
+      '#824: a digest-tampered evidence receipt refuses at the entry: ' + JSON.stringify(refused));
+    ok(!fs.existsSync(path.join(fx2.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      '...with no transaction written');
+  } finally { fs.rmSync(fx2.root, { recursive: true, force: true }); }
+});
+
+// #824 downstream invariants: the shape_refutation child rides the unchanged machinery — the
+// completed-ledger binding, the acceptance wall, the parent epoch snapshot, the journaled
+// activation, and the per-authority allowance recorded on the committed receipt.
+scenario(() => {
+  const fx = initShapeFixture();
+  try {
+    const premise = 'the frozen spine assumed one writer owns product.js; completed-node evidence refutes it';
+    const dispatch = replan.prepareShapeRefutation({ repoRoot: fx.root, project: fx.project,
+      premise, evidence: ['.cache/impl.md'], now: () => '2026-07-16T03:00:00.000Z' });
+    equal(dispatch.result, 'planner_dispatch_required',
+      '#824: the downstream fixture reaches the planner seam: ' + JSON.stringify(dispatch));
+
+    // Completed-claim preservation at the authority layer: the proof payload binds the parent's
+    // completed-ledger view, and the child is frozen against that digest.
+    const proof = replan.verifyShapeRefutationPacket(shapePaths(fx),
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'), null);
+    ok(proof.ok, '#824: the sealed packet verifies against the live parent: ' + JSON.stringify(proof));
+    deepEqual(proof.payload.completed_ledger, [
+      { id: 'finalize', status: 'pending' },
+      { id: 'impl', status: 'complete' },
+      { id: 'review', status: 'complete' },
+    ], '#824: the proof carries the parent completed ledger rows forward (completed-claim preservation)');
+
+    // The acceptance wall is authority-agnostic: this authority repairs HOW, never WHAT.
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    const faithful = childFor(tx, fx.project, fx.sameGateChild, fx.changedOriginChild);
+    const changed = rehashPlan(faithful.text.replace(
+      'A2: the recorded validation_command passes over the candidate.',
+      'A2: whatever the orchestrator says is enough.'));
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.next.md'), changed.text);
+    writePlannerAttestationForExistingChild(fx, tx);
+    const refusedChild = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refusedChild.reason, 'replan_child_acceptance_changed',
+      '#824: replan_child_acceptance_changed stays armed under the shape_refutation authority: '
+        + JSON.stringify(refusedChild));
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'), fx.parent.text,
+      '...and the refused child leaves the parent byte-identical');
+
+    // The bounded repair loop: the faithful child re-attests inside the same transaction and commits.
+    writePlannerResult(fx, tx);
+    let result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project, now: () => '2026-07-16T03:00:00.000Z' });
+    for (let turn = 0; turn < 20 && result && !['committed', 'already_committed'].includes(result.result); turn++) {
+      result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project, now: () => '2026-07-16T03:00:00.000Z' });
+    }
+    equal(result.result, 'committed',
+      '#824: the faithful shape_refutation child commits: ' + JSON.stringify(result));
+
+    const state = replan.parseStateFields(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'));
+    equal(String(state.plan_epoch), '2', '#824: the child epoch activates');
+    equal(state.epoch_lineage_id, fx.lineage.epoch_lineage_id,
+      '#824: claim-preserving — the epoch lineage is untouched');
+    equal(String(state.automatic_review_replans), '1',
+      '#824: the transition costs one shared bookkeeping slot, like every authority');
+
+    // The parent epoch — completed rows and all — is retained byte-identical under .cache/epochs/.
+    const snapshotParent = fs.readFileSync(path.join(fx.cacheDir, 'epochs', '1', 'files', 'workflow-plan.md'), 'utf8');
+    equal(snapshotParent, fx.parent.text,
+      '#824: the parent epoch snapshot retains the completed ledger rows byte-identical');
+    ok(snapshotParent.includes('| impl | complete |') && snapshotParent.includes('| review | complete |'),
+      '...completed claims preserved and auditable in the retained epoch');
+
+    // The committed receipt records the allowance draw and the shape source bindings.
+    const receipt = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(receipt.outcome, 'committed', '#824: the receipt is the committed transaction');
+    equal(receipt.transition_reason, 'shape_refutation', '...under the shape_refutation reason');
+    deepEqual(receipt.budget.shape_refutation_allowance, { count_before: 0, ceiling: 2 },
+      '#824: the receipt records the per-authority allowance draw: ' + JSON.stringify(receipt.budget));
+    equal(receipt.source.shape_refutation.premise, premise,
+      '#824: the receipt binds the recorded premise');
+    equal(receipt.source.shape_refutation.packet_digest,
+      sha256(fs.readFileSync(path.join(fx.cacheDir, 'shape-refutation.md'))),
+      '#824: the receipt binds the sealed packet digest');
+    equal(replan.countShapeRefutationTransitions(shapePaths(fx), fx.lineage.epoch_lineage_id), 1,
+      '#824: one committed shape_refutation transition is counted against the allowance');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #824 per-authority autonomy allowance on a REAL lineage (the #828 pattern: real driven
+// commits, never a hand-written budget): TWO autonomous shape_refutation transitions succeed,
+// the third demands a recorded consent turn, an UNSCOPED (shared-ceiling) turn does NOT extend
+// the shape allowance, and a shape-scoped turn admits exactly one more.
+scenario(() => {
+  const fx = initShapeFixture();
+  try {
+    // Consent must actually be requested: a scoped extension before exhaustion refuses.
+    const premature = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-824-premature', reason: 'extend before the allowance is spent',
+      authorityScope: 'shape_refutation', now: () => '2026-07-27T02:00:00.000Z' });
+    equal(premature.reason, 'replan_consent_not_requested',
+      '#824: a shape-scoped consent turn before exhaustion refuses replan_consent_not_requested: '
+        + JSON.stringify(premature));
+
+    // Two autonomous transitions commit on the live lineage.
+    const first = driveShapeRefutationToCommit(fx, {
+      premise: 'first refutation: the spine assumed one writer; evidence shows two',
+      evidence: ['.cache/impl.md'] });
+    equal(first.result, 'committed',
+      '#824: the first autonomous shape_refutation commits: ' + JSON.stringify(first));
+    equal(replan.countShapeRefutationTransitions(shapePaths(fx), fx.lineage.epoch_lineage_id), 1,
+      '#824: one committed transition counted');
+
+    fs.writeFileSync(path.join(fx.cacheDir, 'recon-2.md'), 'recon evidence for the second refutation\n');
+    const second = driveShapeRefutationToCommit(fx, {
+      premise: 'second refutation: the rebuilt spine assumed a frozen surface; recon shows churn',
+      evidence: ['.cache/recon-2.md'] });
+    equal(second.result, 'committed',
+      '#824: the second autonomous shape_refutation commits: ' + JSON.stringify(second));
+    equal(replan.countShapeRefutationTransitions(shapePaths(fx), fx.lineage.epoch_lineage_id), 2,
+      '#824: two committed transitions counted — the free allowance is spent');
+    const secondReceipt = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    deepEqual(secondReceipt.budget.shape_refutation_allowance, { count_before: 1, ceiling: 2 },
+      '#824: the second receipt shows the allowance half-spent: ' + JSON.stringify(secondReceipt.budget));
+
+    // The third autonomous transition demands a recorded consent turn — and spends nothing.
+    fs.writeFileSync(path.join(fx.cacheDir, 'recon-3.md'), 'recon evidence for the third refutation\n');
+    const sealed3 = replan.sealShapeRefutationPacket(shapePaths(fx), {
+      premise: 'third refutation: the second child still misshapes the join', evidence: ['.cache/recon-3.md'] });
+    ok(sealed3.ok, '#824: the third packet seals: ' + JSON.stringify(sealed3));
+    const halted = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      transitionReason: 'shape_refutation' });
+    equal(halted.reason, 'replan_consent_required',
+      '#824: the third shape_refutation consent-halts: ' + JSON.stringify(halted));
+    equal(halted.shape_refutation_replans, 2, '...naming the spent count: ' + JSON.stringify(halted));
+    equal(halted.shape_refutation_ceiling, 2, '...naming the allowance ceiling: ' + JSON.stringify(halted));
+    equal(JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8')).transaction_id,
+      second.transaction_id, '#824: the consent refusal is prospective — the committed receipt is unmoved');
+
+    // Per-authority separation: an UNSCOPED turn extends only the shared ceiling; the shape
+    // allowance stays exhausted.
+    const shared = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-824-shared', reason: 'authorize one more shared transition',
+      now: () => '2026-07-27T03:00:00.000Z' });
+    equal(shared.result, 'consent_extended', '#824: the unscoped turn records: ' + JSON.stringify(shared));
+    equal(shared.authority_scope, null, '...and it is unscoped: ' + JSON.stringify(shared));
+    const stillHalted = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      transitionReason: 'shape_refutation' });
+    equal(stillHalted.reason, 'replan_consent_required',
+      '#824: an unscoped consent turn does NOT extend the shape allowance: ' + JSON.stringify(stillHalted));
+    equal(stillHalted.shape_refutation_ceiling, 2,
+      '...the per-authority ceiling is unmoved: ' + JSON.stringify(stillHalted));
+
+    // A shape-scoped consent turn admits exactly one more transition.
+    const scoped = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-824-shape', reason: 'authorize one more reshape',
+      authorityScope: 'shape_refutation', now: () => '2026-07-27T04:00:00.000Z' });
+    equal(scoped.result, 'consent_extended', '#824: the shape-scoped turn records: ' + JSON.stringify(scoped));
+    equal(scoped.authority_scope, 'shape_refutation', '...scoped to the shape authority: ' + JSON.stringify(scoped));
+    ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok,
+      '#824: the shared current-authority gate accepts the state the consent turn itself produced');
+    const third = driveShapeRefutationToCommit(fx, {
+      premise: 'third refutation: the second child still misshapes the join',
+      evidence: ['.cache/recon-3.md'] });
+    equal(third.result, 'committed',
+      '#824: the consented third shape_refutation commits: ' + JSON.stringify(third));
+    equal(replan.countShapeRefutationTransitions(shapePaths(fx), fx.lineage.epoch_lineage_id), 3,
+      '#824: three committed transitions counted');
+    const thirdReceipt = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    deepEqual(thirdReceipt.budget.shape_refutation_allowance, { count_before: 2, ceiling: 3 },
+      '#824: the third receipt shows the consented allowance: ' + JSON.stringify(thirdReceipt.budget));
+    const state = replan.parseStateFields(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'));
+    equal(String(state.plan_epoch), '4', '#824: three child epochs activated on the one lineage');
+    equal(state.epoch_lineage_id, fx.lineage.epoch_lineage_id, '#824: still the one claim lineage');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #824 deviation routes, never traps: a barrier/ledger refusal that fires because the intended
+// action falls outside the frozen shape carries a typed `route:` field naming the legal verb.
+// The epoch-replan path proves it on `replan_superseded_by_local_reexpansion`: a review finding
+// whose files lie inside a declared expansion surface is routed to `reexpand-open`, not an epoch.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    // Re-author the parent as a spine plan whose expansion point m1 declares product.js in its
+    // expected surfaces (same producers/gate as the base fixture; the contract block is Meta,
+    // so the plan is re-hashed after the injection).
+    const expanded = frozenPlan(fx.project, {}, [
+      { id: 'impl', role: 'tdd-guide', write_set: 'product.js' },
+      { id: 'm1', role: 'expansion-point', depends_on: 'impl' },
+      { id: 'review', role: 'code-reviewer', depends_on: 'impl', model: 'reasoning' },
+      { id: 'finalize', role: 'finalize', depends_on: 'review', model: '—' },
+    ], {});
+    const rehashed = rehashPlan(expanded.text.replace('validation_command: node scripts/test-replan.js', [
+      'validation_command: node scripts/test-replan.js',
+      'expansion(m1):',
+      '  milestone_goal: grow the product surface in bounded steps',
+      '  expected_surfaces: product.js',
+      '  join_constraints: none',
+      '  review_class: code-reviewer',
+    ].join('\n')));
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-plan.md'), rehashed.text);
+    let state = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    state = state.replace(/^plan_hash:[ \t]*.*$/m, 'plan_hash: ' + rehashed.hash);
+    state = state.replace(/^first_node_id:[ \t]*.*$/m, 'first_node_id: impl');
+    state = state.replace(/^first_node_role:[ \t]*.*$/m, 'first_node_role: tdd-guide');
+    state = schema.writeEpochStateBlock(state, { active_plan_hash: rehashed.hash });
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-state.md'), state);
+    // Re-seat the settled review authority against the re-authored parent.
+    installCurrentReviewSource(fx, SOURCE_ATTEMPT_ID);
+
+    const refused = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    equal(refused.reason, 'replan_superseded_by_local_reexpansion',
+      '#824: an interior-owned finding supersedes the epoch replan: ' + JSON.stringify(refused));
+    equal(refused.route, 'reexpand-open',
+      '#824: the out-of-shape refusal carries the typed route naming the legal verb: ' + JSON.stringify(refused));
+    deepEqual(refused.owners, ['m1'],
+      '#824: ...and names the owning milestone: ' + JSON.stringify(refused));
+    ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      '#824: the routed refusal writes no transaction');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
 console.log(`test-replan: PASSED (${passed} assertions)`);

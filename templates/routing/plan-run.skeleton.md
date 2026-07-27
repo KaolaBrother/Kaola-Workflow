@@ -790,6 +790,33 @@ refuse with `review_attempt_unresolved`. Five consumed repairs are allowed per c
 gate; the sixth returns `repair_limit_reached`. Zero candidates and multiple candidates leave
 `owning_node: null`; multiple owners never imply selection.
 
+**Spine-level reshape at quiescence (`shape_refutation`).** When accumulated node evidence
+refutes a frozen SPINE-level plan assumption mid-run — no gate failed, and the refuted surface
+is not an expansion interior — the legal entry is the shape-refutation re-plan authority. Resolve
+the edition-local re-plan script exactly as the re-plan control plane above (`$REPLAN_SCRIPT`),
+then one command while the run is quiescent:
+
+```bash
+node "$REPLAN_SCRIPT" shape-refutation \
+  --project {project} --premise "<the frozen-plan assumption the evidence refuted>" \
+  --evidence .cache/<node-id>.md[,<more project-relative evidence paths>] --json
+```
+
+It seals `.cache/shape-refutation.md` (premise + concrete mismatch + digest-bound evidence),
+prepares and fences the epoch, and returns the planner dispatch request — dispatch the genuine
+`workflow-planner` in Re-plan dispatch mode exactly as the re-plan control plane above describes.
+You decide and record the premise; the planner authors every plan row, and the child carries the
+parent `## Acceptance` forward unchanged. Entry is mechanically gated, and every refusal is a
+route, not a trap: `shape_refutation_not_quiescent` (an `in_progress` ledger row, an open
+speculative leg, or a live halt — settle them first), `shape_refutation_review_pending` (a gate
+is in flight — let it settle), `shape_refutation_review_authority_present` (a review authority
+exists — consume it through the review re-plan), `shape_refutation_evidence_missing` (the premise
+is empty or no evidence digest verifies), `replan_superseded_by_local_reexpansion` with
+`route: reexpand-open` (the refuted surface is an expansion interior — reshape it locally, no
+epoch spent), and `replan_consent_required` after two autonomous shape transitions per run —
+record the human turn via `extend-consent --authority-scope shape_refutation`, then re-run the
+same command.
+
 On barrier refusal / `route-findings` result: `docs/plan-run-cards/repair-routing.md`
 (covers `write_set_granularity` / `write_set_overflow` / `sensitive_write_unreviewed` /
 `foreign_archive` / `unattributed_write`; `revert-overflow` vs `repair-node`; `halt for consent`;
