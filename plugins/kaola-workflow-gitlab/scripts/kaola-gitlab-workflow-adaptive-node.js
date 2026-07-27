@@ -5085,10 +5085,17 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
     // bindingKeys still matches while those descendants sit at pending mid-replay.
     const replayCheck = validatedReplayExempt(attempt, nodes);
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
+    // #759-gap: a SPINE review wall certifying an EXPANSION milestone binds the milestone's COMPOSED
+    // UNITS as its producers at settle time (the settle path records them from the execution node
+    // view). The freeze view above under-derives that slice to [] and wedges the read with
+    // review_journal_repair_identity_mismatch. The freeze-view invariant this function's header
+    // defends covers REPAIR WRITERS (always spine writers), never the pass-attempt producer slice.
+    // Recompute the slice from the same execution view the settle used (spine + composed units).
+    const execViewNodes = parseNodesFromContent(planContent);
     const expectedBindings = expectedGate.certified_producers.length
       ? expectedGate.certified_producers.slice().sort()
       // #748: the journal-global set is statusRelief (admission only), never merged into replayExempt.
-      : uniqueMaximalReviewProducer(nodes, expectedGate.members,
+      : uniqueMaximalReviewProducer(execViewNodes, expectedGate.members,
         (attempt.repair && attempt.repair.selected_writer) || attempt.consumed_by || '',
         ledger, bindingKeys.concat([...relief.preserved]),
         replayCheck.replayExempt || [], relief.exempt).producer_slice.sort();
@@ -11058,7 +11065,25 @@ function runOpenReady(opts) {
   // tamper + cycle + unique-sink + role-library + depends_on resolvability. Any non-ok refuses with
   // zero mutation. (Without this, an emptied write node's declared_write_set is reclassified read-only
   // by isReadOnlyNode and fans out concurrently — the #387 repro.)
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'] });
+  // serialExclude: honored when a caller (runExpandOpen) names ids whose in_progress state is the
+  // transaction's own container, never a peer serial node — any OTHER live serial node still refuses.
+  // #759-gap (2/2): an expansion point whose frontier is ALREADY composed+opened is the container of
+  // THIS running set, not a peer — its in_progress row must not fence the frontier's own
+  // open/top-up lifecycle (close-node carries no coordination refusal, so only this site needs it).
+  let openReadySerialExclude = opts._serialExclude;
+  try {
+    const v = require('./kaola-gitlab-workflow-plan-validator');
+    const c = readFile(planPath);
+    if (v.parsePlanForm(c).form === 'spine') {
+      const ledger = readLedgerStatuses(c);
+      const recs = v.parseExpansionRecords(c);
+      const points = new Set(parseNodesFromContent(c).filter(n => n.role === v.SPINE_EXPANSION_ROLE).map(n => n.id));
+      const containers = Object.keys(ledger).filter(id => ledger[id] === 'in_progress' && points.has(id)
+        && recs.records.some(r => r.point === id && v.expansionRecordOpened(recs, r.id)));
+      if (containers.length) openReadySerialExclude = (openReadySerialExclude || []).concat(containers);
+    }
+  } catch (_) { /* fail-closed: no exclusion */ }
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: openReadySerialExclude });
   if (guard) return guard;
 
   const reviewOpen = reviewFanoutTopUpAllowance(opts, readFile(planPath));
@@ -13380,6 +13405,13 @@ function runExpandOpen(opts) {
   // excl-scheduler: like open-ready, this command OWNS the running-set open. ==
   // #761: the RE-OPEN path forwards `_serialExclude` (only ever the sink id) so the guard does not
   // refuse over the live sink the re-open is invalidating. Absent for every expand-open caller.
+  // #759-gap: the serial open path (runOpenNext / the fused advance) leaves the expansion POINT
+  // itself in_progress when the orchestrator is about to compose its frontier (readySet keeps
+  // SPINE_EXPANSION_ROLE for stall/terminal derivation). The point is the container being expanded,
+  // never a peer serial node its own expansion would race — exclude exactly that one id from the
+  // serial surface (any OTHER live serial node still refuses), and carry it on opts so the Phase-2
+  // open-ready inside this same transaction honors it too.
+  opts._serialExclude = (opts._serialExclude || []).concat(nodeId ? [nodeId] : []);
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
@@ -13630,11 +13662,17 @@ function rollForwardExpansions(opts) {
 // stays visibly open forever after its discharge — the run's last shape change is the one the operator
 // never sees — and the durable mirror stays stale until some unrelated mutation happens to refresh it.
 // The `alreadyDischarged` early return below stays EMPTY on purpose: nothing was mutated, so there is
-// no transition to report and nothing to re-derive.
+// no transition to report and nothing to re-derive. Its single sanctioned exception is the #759-gap
+// compliance repair — flipping a legacy pending row left by a pre-fix discharge — which moves no
+// ledger row and therefore still reports no transition and refreshes no mirror.
 function runExpandClose(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, now } = opts;
 
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'] });
+  // #759-gap: the serial open path leaves the expansion POINT itself in_progress while its frontier
+  // settles (see runExpandOpen). The point is the container being discharged, never a peer serial
+  // node — exclude exactly that one id (any OTHER live serial node still refuses).
+  opts._serialExclude = (opts._serialExclude || []).concat(nodeId ? [nodeId] : []);
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
   if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point to discharge' });
@@ -13652,6 +13690,28 @@ function runExpandClose(opts) {
 
   const ledger = readLedgerStatuses(content);
   if (String(ledger[nodeId] || '').toLowerCase() === 'complete') {
+    // #759-gap: a discharge that landed before the discharge-time compliance flip existed leaves the
+    // milestone's row pending forever (the archive authority refuses state_compliance_progress_invalid).
+    // Repair EXACTLY that shape here, idempotently: flip only an EXISTING pending row — the early
+    // return never appends structure, so a healthy re-entry (row already advanced, or a plan with no
+    // compliance table) stays byte-zero-mutation with no transition and no mirror refresh.
+    const canonicalRow = validator.SPINE_EXPANSION_ROLE + ' (' + nodeId + ')';
+    const sec = locateSection(content, 'Required Agent Compliance');
+    const hasPendingRow = sec.start >= 0 && content
+      .slice(sec.start, sec.next >= 0 ? sec.next : content.length).split('\n').some(line => {
+        const cells = line.trim().startsWith('|') ? line.split('|').slice(1, -1).map(c => c.trim()) : [];
+        return cells[0] === canonicalRow && cells[1] === 'pending';
+      });
+    if (hasPendingRow) {
+      let repaired;
+      try {
+        const pointEvidence = readFile(path.join(path.dirname(planPath), '.cache', nodeId + '.md'));
+        repaired = addCloseCompliance(content, nodeId, validator.SPINE_EXPANSION_ROLE, pointEvidence, null, true);
+      } catch (_) {
+        repaired = addCloseCompliance(content, nodeId, validator.SPINE_EXPANSION_ROLE, null, null, true);
+      }
+      if (repaired !== content) writeFile(planPath, repaired);
+    }
     return { result: 'ok', expansion_point: nodeId, alreadyDischarged: true, taskTransitions: [] };
   }
   const parsed = validator.parseExpansionRecords(content);
@@ -13676,7 +13736,20 @@ function runExpandClose(opts) {
   const stamp = (typeof now === 'function') ? now() : new Date().toISOString();
   const withDischarge = appendExpansionBlock(spliced.content,
     'discharge(' + nodeId + '):\n  at: ' + stamp + '\n  records: ' + recs.map(r => r.id).join(', ') + '\n');
-  writeFile(planPath, withDischarge);
+  // #759-gap: the milestone's `## Required Agent Compliance` row must flip at discharge exactly like
+  // a normal close flips its node's row — otherwise the archive authority reads a `complete` ledger
+  // row against a `pending` compliance row and refuses state_compliance_progress_invalid. The point
+  // is composed + discharged by the executor, so main-session-direct is the honest status (matches
+  // the archived shape of a serially-opened point closing through the normal path).
+  let dischargedContent = withDischarge;
+  try {
+    const pointEvidence = readFile(path.join(path.dirname(planPath), '.cache', nodeId + '.md'));
+    dischargedContent = addCloseCompliance(withDischarge, nodeId, validator.SPINE_EXPANSION_ROLE, pointEvidence, null, true);
+  } catch (_) { /* evidence file absent — addCloseCompliance still flips with a generic summary */ }
+  if (dischargedContent === withDischarge) {
+    dischargedContent = addCloseCompliance(withDischarge, nodeId, validator.SPINE_EXPANSION_ROLE, null, null, true);
+  }
+  writeFile(planPath, dischargedContent);
 
   // #763: EFFICIENCY EVIDENCE LINE — ONE line appended to the point's OWN evidence file, created
   // here if absent (an expansion point is never opened/seeded through the normal node lifecycle —

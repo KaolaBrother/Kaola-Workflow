@@ -3157,7 +3157,11 @@ function verifyVerdictBlock(content, opts) {
     }
     const currentCandidate = currentSchema2Candidate();
     const wholeStale = !currentCandidate || receipts.some(receipt => receipt.candidate_digest !== currentCandidate);
-    if (wholeStale && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
+    // An investigation-mode gate certifies NOTHING (certified_producers empty by construction,
+    // deriveGateEffect maps every outcome to 'none', and it post-dominates no producer) — its
+    // receipt binds the pre-write tree by design, so whole-candidate freshness has no launderable
+    // meaning and would wedge any run whose writes legitimately touched surfaces the gate read.
+    if (wholeStale && gateMode !== 'investigation' && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
       return { ok: false, nodeId: node.id, role: node.role, found: true,
         reason: 'schema-2 certifier receipt is stale for the current candidate' };
     }
