@@ -45,7 +45,7 @@ process.env.KAOLA_CODEX_VERSION = '0.145.0';
 // preflight would otherwise refuse codex_multi_agent_v2_required (exit 7) before reaching any of
 // the profile-freshness checks the tests below that reuse kwSandboxHome are actually about.
 fs.mkdirSync(path.join(kwSandboxHome, '.codex'), { recursive: true });
-fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[agents]\nenabled = true\n\n');
+fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[features.multi_agent_v2]\nenabled = true\n\n');
 
 const forge = require('./kaola-gitea-forge');
 const active = require('./kaola-gitea-workflow-active-folders');
@@ -201,7 +201,7 @@ function enableMultiAgentV2(homeRoot) {
   const configPath = path.join(homeRoot, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
-  fs.writeFileSync(configPath, '[agents]\nenabled = true\n\n' + existing);
+  fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled = true\n\n' + existing);
 }
 
 function runNode(args, cwd) {
@@ -3403,7 +3403,7 @@ function testGiteaPreflight266() {
         // PREPENDS a user-owned [agents] table (TOML forbids re-declaring [agents] once the managed
         // block's [agents.<role>] sub-tables have already opened it).
         function configWithAgentsEnabled(extraLines) {
-          return '[agents]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
+          return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
         }
         // #775: dispatch mode is binary now — the whole 0.142/0.144 transport-mode grammar
         // (tool_namespace / hide_spawn_agent_metadata / non_code_mode_only, the dotted/quoted/
@@ -3445,11 +3445,11 @@ function testGiteaPreflight266() {
         // does NOT set `enabled` inherits HOME's true; only an EXPLICIT project-layer
         // `enabled = false` can override it back off.
         assertDispatchModeForConfig(origConfig, true, '#775 gt no project-layer [agents] table -> inherits enabled=true from HOME', false);
-        assertDispatchModeForConfig('[agents]\nenabled = false\n\n' + origConfig, false, '#775 gt project layer explicitly overrides enabled=false', false);
+        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, false, '#775 gt project layer explicitly overrides enabled=false', false);
         assertDispatchModeForConfig(configWithAgentsEnabled(), true, '#775 gt [agents]\\nenabled = true', true);
-        assertDispatchModeForConfig('[agents]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
+        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
           '#775 gt warning suppression alone must not enable v2', false);
-        assertDispatchModeForConfig('[agents]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
+        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
           '#775 gt a retired top-level multi_agent_v2 key is not read (no more [features] grammar)', false);
 
         // #598 AC2 gt: effort-gated MultiAgentMode dispatch-POSTURE (distinct from dispatch_mode
@@ -3594,7 +3594,7 @@ function testGiteaDispatchPosture598() {
 
     const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
     const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
-    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[agents]\nenabled = true\n\n' + beforeUltra);
+    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
     const reinstalled = spawnSync(process.execPath, [installProfilesScript, postureProj],
       { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
     assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with [agents] enabled + effort=ultra must still exit 0: ' + reinstalled.stderr);

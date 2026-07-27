@@ -158,13 +158,12 @@ node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project
 ```
 
 Read the doctor JSON's `codex_version` field first — it gates everything else.
-Codex >=0.145.0 unified multi-agent settings under a top-level `[agents]` table
-and stabilized MultiAgentV2 as the only dispatch path; an unsupported version
-returns a typed `codex_version_unsupported` refusal (repair: upgrade Codex)
-before any profile/config check runs. Current Codex releases enable general
-subagent workflows by default; Kaola's explicit `agents.enabled = true`
-requirement is a stricter V2 task-name attestation, not a general Codex
-prerequisite. Once the version floor is met, read the
+Codex >=0.145.0 stabilized MultiAgentV2, but it stays **opt-in and off by
+default** — only V1 `multi_agent` is on by default — so
+`features.multi_agent_v2.enabled = true` must be written for Codex to expose the
+V2 task-name spawn tools at all; an unsupported version returns a typed
+`codex_version_unsupported` refusal (repair: upgrade Codex) before any
+profile/config check runs. Once the version floor is met, read the
 per-scope `dispatch_posture` field alongside the existing checks — it is the
 effort-gated Kaola dispatch posture, distinct from Codex's general default:
 `none` (Kaola's explicit V2 attestation is absent-or-false), `explicitRequestOnly`
@@ -172,9 +171,9 @@ effort-gated Kaola dispatch posture, distinct from Codex's general default:
 explicitly asks), or `proactive` (`model_reasoning_effort = "ultra"` — the
 runtime accepts a spawn with no per-session ask). Classify the result:
 
-- `ok`: `multi_agent_v2_enabled` reads `true` (`agents.enabled = true` in the
-  top-level `[agents]` table), generated role profiles are fresh, agent limits
-  are absent or sufficient, AND `dispatch_posture` reads `proactive`.
+- `ok`: `multi_agent_v2_enabled` reads `true` (`features.multi_agent_v2.enabled
+  = true`), generated role profiles are fresh, agent limits are absent or
+  sufficient, AND `dispatch_posture` reads `proactive`.
 - `explicit_request_only`: `multi_agent_v2_enabled` reads `true` and profiles
   are fresh, but `dispatch_posture` reads `explicitRequestOnly` — report the
   doctor's `dispatch_posture_warning` remediation verbatim (leads with an
@@ -186,24 +185,25 @@ runtime accepts a spawn with no per-session ask). Classify the result:
   NEVER report this state as `ok` — enablement alone is not dispatch-ready.
 - `warning_only`: only `[notice].suppress_unstable_features_warning = true`
   differs; this is optional warning posture, not dispatch proof.
-- `needs_update`: Kaola's required explicit `agents.enabled = true` attestation
-  is missing or false, or `dispatch_posture` reads `none`. Preserve the typed
+- `needs_update`: `features.multi_agent_v2.enabled` is missing or false, or
+  `dispatch_posture` reads `none`. Preserve the typed
   `codex_multi_agent_v2_required` refusal and show its repair diff verbatim —
   Kaola does not write this flag for you.
 - `blocked`: config is malformed, policy-managed, or conflicts with a
   user/admin constraint.
 
-The supported form is a top-level `[agents]` table — `[agents]\nenabled = true`
-— with `agents.max_concurrent_threads_per_session` (canonical; its
-`agents.max_threads` alias resolves to the same value) governing sub-agent
-concurrency: the cap is inclusive of the root session, so sub-agent width is
-the configured cap minus one. A legacy `[features.multi_agent_v2]` table, a
-top-level `[features] multi_agent` flag, or the retired `tool_namespace` /
-`hide_spawn_agent_metadata` / `non_code_mode_only` sub-fields have no effect
-under Codex >=0.145.0 and are not read by this gate. Warning suppression is
+The switch is `features.multi_agent_v2.enabled`, accepted in three shapes: a
+`[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled =
+true, ... }` under `[features]`, and a bare `multi_agent_v2 = true`. A
+top-level `[agents] enabled = true` does NOT enable it — `[agents]` configures
+roles and limits and has no `enabled` key, so Codex parses it and applies
+nothing. `features.multi_agent_v2.max_concurrent_threads_per_session` governs
+sub-agent concurrency: the cap is inclusive of the root session, so sub-agent
+width is the configured cap minus one. Do NOT also set `agents.max_threads` —
+Codex rejects that key once MultiAgentV2 is enabled. Warning suppression is
 independent: never treat `[notice].suppress_unstable_features_warning = true`
 as evidence that MultiAgentV2 is enabled. Kaola does not silently edit
-`~/.codex/config.toml`'s `[agents]` table on the user's behalf — satisfying
+`~/.codex/config.toml`'s `[features]` table on the user's behalf — satisfying
 Kaola's explicit V2 attestation is a hand edit the user makes from the
 `codex_multi_agent_v2_required` refusal's diff; Kaola also never writes or
 overrides `agents.default_subagent_model` /

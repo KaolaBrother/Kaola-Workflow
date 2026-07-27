@@ -2561,12 +2561,51 @@ function splitInlineTomlFields(body) {
 // wait-timeout fields from the same table. multi_agent_v2 stays a CHECKED required engine feature
 // (codex_multi_agent_v2_required refuses when it is absent/false) — see the preflight gate this
 // installer keeps byte-in-lock-step with.
+function parseInlineTomlTableAssignments(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) return [];
+  const assignments = [];
+  for (const field of splitInlineTomlFields(body)) {
+    const assignment = parseTomlAssignment(field);
+    if (!assignment || assignment.key.length !== 1) return null;
+    assignments.push(assignment);
+  }
+  return assignments;
+}
+
+function parseMultiAgentV2Value(value) {
+  const trimmed = String(value || '').trim();
+  const bool = parseTomlBoolean(trimmed);
+  if (bool !== null) return { valid: true, enabled: bool };
+
+  const fields = parseInlineTomlTableAssignments(trimmed);
+  if (fields === null) return { valid: false, enabled: false };
+
+  const enabledFields = fields.filter(field => field.key[0].value === 'enabled');
+  if (enabledFields.length !== 1) return { valid: false, enabled: false };
+  const parsed = parseTomlBoolean(enabledFields[0].value);
+  if (parsed === null) return { valid: false, enabled: false };
+  return { valid: true, enabled: parsed };
+}
+
 function detectCodexDispatchMode(configContent) {
   const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
   let ambiguous = false;
+
+  function record(parsed) {
+    if (!parsed.valid || seen) {
+      ambiguous = true;
+      enabled = false;
+      return;
+    }
+    seen = true;
+    enabled = parsed.enabled;
+  }
 
   for (const rawLine of lines) {
     const line = stripTomlComment(rawLine).trim();
@@ -2579,21 +2618,35 @@ function detectCodexDispatchMode(configContent) {
     }
 
     const assignment = parseTomlAssignment(line);
-    if (!tomlAssignmentPathMatches(table, assignment, ['agents', 'enabled'])) continue;
-    const value = parseTomlBoolean(assignment.value);
-    if (value === null || seen) {
-      ambiguous = true;
-      enabled = false;
-    } else {
-      seen = true;
-      enabled = value;
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      // Root-level `features = { multi_agent_v2 = ... }`.
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) {
+        ambiguous = true;
+        enabled = false;
+        continue;
+      }
+      const v2Fields = featureFields.filter(field => field.key[0].value === 'multi_agent_v2');
+      if (v2Fields.length > 1) {
+        ambiguous = true;
+        enabled = false;
+      } else if (v2Fields.length === 1) {
+        record(parseMultiAgentV2Value(v2Fields[0].value));
+      }
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      record(parseMultiAgentV2Value(assignment.value));
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'enabled'])) {
+      const value = parseTomlBoolean(assignment.value);
+      record({ valid: value !== null, enabled: value === true });
     }
   }
 
   const v2Enabled = seen && !ambiguous && enabled;
   return {
     // #775: the single legal dispatch mode once V2 is enabled — no more v1-thread-id fallback.
-    // null (not a fabricated 'v1-thread-id') when V2 is not enabled.
+    // null (not a fabricated 'v1-thread-id') when V2 is not enabled; runPreflight refuses
+    // codex_multi_agent_v2_required in that case rather than silently exiting ok.
     dispatch_mode: v2Enabled ? 'v2-task-name' : null,
     multi_agent_v2_enabled: v2Enabled,
   };
@@ -2637,9 +2690,9 @@ function parseTopLevelModelReasoningEffort(configContent) {
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because explicit '
-      + '[agents] enabled = true is absent or false. Current Codex releases enable general subagent workflows '
-      + 'by default; this explicit value is a Kaola preflight requirement, not a general Codex prerequisite. '
+    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because '
+      + 'features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in '
+      + 'Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. '
       + 'Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work '
       + 'in-session; or, if your Codex '
       + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
@@ -2692,20 +2745,17 @@ function deriveDispatchPosture(configContent) {
 // ---------------------------------------------------------------------------
 const OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION = 4;
 
-const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [agents] config for Kaola-Workflow dispatch: set '
-  + 'max_concurrent_threads_per_session (or its back-compat alias max_threads) high enough for the '
-  + 'intended fan-out width plus 1 (the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms '
-  + 'near the longest expected node runtime so long-poll joins are not capped short. Example:\n'
-  + '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 5\nmax_wait_timeout_ms = 1800000\n'
+const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config for Kaola-Workflow '
+  + 'dispatch: set max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 '
+  + '(the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms near the longest expected node '
+  + 'runtime so long-poll joins are not capped short. Example:\n'
+  + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n'
+  + 'max_wait_timeout_ms = 1800000\n'
   + 'Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session '
   + 'is absent are documented Codex >=0.145.0 behavior (rust-v0.145.0, PR #19792); the wait-timeout bounds '
-  + 'have no independently verified default and are read only when explicitly configured.';
-
-// #775: max_threads is a back-compat alias for the canonical max_concurrent_threads_per_session —
-// both resolve to the SAME numeric field under the unified [agents] table. The FIRST occurrence of
-// either name (in document order) wins; a later occurrence of either name is ignored (mirrors the
-// existing first-match convention for these fields).
-const MULTI_AGENT_V2_MAX_THREADS_ALIAS = 'max_threads';
+  + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
+  + 'agents.max_threads alongside it: Codex rejects that key once multi_agent_v2 is enabled '
+  + '("agents.max_threads cannot be set when multi_agent_v2 is enabled").';
 
 const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'max_concurrent_threads_per_session',
@@ -2728,13 +2778,17 @@ function parseMultiAgentV2NumericFields(configContent) {
     default_wait_timeout_ms: null,
   };
 
-  function recordField(rawKey, rawValue) {
-    const key = rawKey === MULTI_AGENT_V2_MAX_THREADS_ALIAS
-      ? 'max_concurrent_threads_per_session' : rawKey;
+  function recordField(key, rawValue) {
     if (!MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key) || fields[key] !== null) return;
     const m = String(rawValue).trim().match(/^-?\d+$/);
     if (!m) return;
     fields[key] = parseInt(m[0], 10);
+  }
+
+  function recordInlineFields(value) {
+    const inline = parseInlineTomlTableAssignments(value);
+    if (inline === null) return;
+    for (const field of inline) recordField(field.key[0].value, field.value);
   }
 
   const lines = tomlStructuralLines(configContent);
@@ -2748,11 +2802,26 @@ function parseMultiAgentV2NumericFields(configContent) {
       table = tableName;
       continue;
     }
-    if (!tomlTableNameMatches(table, 'agents')) continue;
 
     const assignment = parseTomlAssignment(line);
-    if (assignment && assignment.key.length === 1) {
+    if (!assignment) continue;
+
+    // [features.multi_agent_v2] sub-table (or the dotted root equivalent): plain scalars.
+    if (tomlTableNameMatches(table, 'features.multi_agent_v2') && assignment.key.length === 1) {
       recordField(assignment.key[0].value, assignment.value);
+      continue;
+    }
+    // [features] multi_agent_v2 = { ... } — settings live inside the inline table.
+    if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      recordInlineFields(assignment.value);
+      continue;
+    }
+    // Dotted form: features.multi_agent_v2.<field> = <n>.
+    for (const key of MULTI_AGENT_V2_NUMERIC_FIELDS) {
+      if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2', key])) {
+        recordField(key, assignment.value);
+        break;
+      }
     }
   }
 
@@ -2985,5 +3054,4 @@ module.exports = {
   deriveMultiAgentV2Bounds,
   OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION,
   MULTI_AGENT_V2_BOUNDS_NOTE,
-  MULTI_AGENT_V2_MAX_THREADS_ALIAS,
 };

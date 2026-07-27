@@ -727,21 +727,75 @@ function splitInlineTomlFields(body) {
   return fields.filter(Boolean);
 }
 
-// #775 (Codex 0.145 re-baseline): multi_agent_v2 settings moved from [features.multi_agent_v2]
-// (0.142/0.144) to the unified top-level [agents] table, and V1 (the [features] multi_agent flag,
-// the scalar/inline-object multi_agent_v2 shapes, and the non_code_mode_only / hide_spawn_agent_metadata
-// / tool_namespace transport sub-grammar) is retired — there is no V1 fallback and no transport-mode
-// gate anymore. [agents] is a genuine top-level TOML table (never a [features] scalar/inline-object),
-// so this is a plain table/assignment scan with none of the old dual-shape ambiguity tracking.
-// Reads ONLY the `enabled` flag; parseMultiAgentV2NumericFields below reads the concurrency/
-// wait-timeout fields from the same table. multi_agent_v2 stays a CHECKED required engine feature
-// (codex_multi_agent_v2_required refuses when it is absent/false) — see runPreflight.
+// Parses an inline TOML table (`{ a = 1, b = true }`) into single-key assignments.
+// Returns null when the value is not an inline table or any field fails to parse —
+// callers treat null as "unsafe to interpret" and fail closed.
+function parseInlineTomlTableAssignments(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) return [];
+  const assignments = [];
+  for (const field of splitInlineTomlFields(body)) {
+    const assignment = parseTomlAssignment(field);
+    if (!assignment || assignment.key.length !== 1) return null;
+    assignments.push(assignment);
+  }
+  return assignments;
+}
+
+// Resolves a `multi_agent_v2` VALUE to its enablement. Codex accepts either a bare boolean
+// (`multi_agent_v2 = true`) or an inline table carrying `enabled` plus settings
+// (`multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 5 }`).
+// `{ valid: false }` means the shape could not be read and the caller must fail closed.
+function parseMultiAgentV2Value(value) {
+  const trimmed = String(value || '').trim();
+  const bool = parseTomlBoolean(trimmed);
+  if (bool !== null) return { valid: true, enabled: bool };
+
+  const fields = parseInlineTomlTableAssignments(trimmed);
+  if (fields === null) return { valid: false, enabled: false };
+
+  const enabledFields = fields.filter(field => field.key[0].value === 'enabled');
+  if (enabledFields.length !== 1) return { valid: false, enabled: false };
+  const parsed = parseTomlBoolean(enabledFields[0].value);
+  if (parsed === null) return { valid: false, enabled: false };
+  return { valid: true, enabled: parsed };
+}
+
+// multi_agent_v2 is the feature flag that selects the V2 (task-name) subagent system. It is
+// OPT-IN and OFF BY DEFAULT in Codex 0.145 — verified against codex 0.145.0 with an empty
+// CODEX_HOME config, where the enabled-flag list omits multi_agent_v2 while V1 `multi_agent`
+// is present. It therefore has to be written into config.toml for Codex to expose the V2
+// spawn tools at all; nothing else turns it on.
+//
+// It lives under `[features]`, NOT in the top-level `[agents]` table. `[agents]` is a
+// different surface (documented keys: agents.<name>.*, job_max_runtime_seconds, max_depth,
+// max_threads) and carries no `enabled` key at all, so a top-level `[agents] enabled = true`
+// parses cleanly and configures NOTHING — Codex reports 0 overrides for it.
+//
+// Three legal shapes are accepted, mirroring what Codex itself parses:
+//   [features]                 multi_agent_v2 = { enabled = true, ... }   (inline table)
+//   [features]                 multi_agent_v2 = true                      (bare boolean)
+//   [features.multi_agent_v2]  enabled = true                             (sub-table)
+// plus the equivalent dotted root forms. Repeated or unreadable declarations are ambiguous
+// and fail closed rather than being guessed at.
 function detectCodexDispatchMode(configContent) {
   const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
   let ambiguous = false;
+
+  function record(parsed) {
+    if (!parsed.valid || seen) {
+      ambiguous = true;
+      enabled = false;
+      return;
+    }
+    seen = true;
+    enabled = parsed.enabled;
+  }
 
   for (const rawLine of lines) {
     const line = stripTomlComment(rawLine).trim();
@@ -754,14 +808,27 @@ function detectCodexDispatchMode(configContent) {
     }
 
     const assignment = parseTomlAssignment(line);
-    if (!tomlAssignmentPathMatches(table, assignment, ['agents', 'enabled'])) continue;
-    const value = parseTomlBoolean(assignment.value);
-    if (value === null || seen) {
-      ambiguous = true;
-      enabled = false;
-    } else {
-      seen = true;
-      enabled = value;
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      // Root-level `features = { multi_agent_v2 = ... }`.
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) {
+        ambiguous = true;
+        enabled = false;
+        continue;
+      }
+      const v2Fields = featureFields.filter(field => field.key[0].value === 'multi_agent_v2');
+      if (v2Fields.length > 1) {
+        ambiguous = true;
+        enabled = false;
+      } else if (v2Fields.length === 1) {
+        record(parseMultiAgentV2Value(v2Fields[0].value));
+      }
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      record(parseMultiAgentV2Value(assignment.value));
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'enabled'])) {
+      const value = parseTomlBoolean(assignment.value);
+      record({ valid: value !== null, enabled: value === true });
     }
   }
 
@@ -833,9 +900,9 @@ function parseTopLevelModelReasoningEffort(configContent) {
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because explicit '
-      + '[agents] enabled = true is absent or false. Current Codex releases enable general subagent workflows '
-      + 'by default; this explicit value is a Kaola preflight requirement, not a general Codex prerequisite. '
+    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because '
+      + 'features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in '
+      + 'Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. '
       + 'Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work '
       + 'in-session; or, if your Codex '
       + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
@@ -888,20 +955,17 @@ function deriveDispatchPosture(configContent) {
 // ---------------------------------------------------------------------------
 const OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION = 4;
 
-const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [agents] config for Kaola-Workflow dispatch: set '
-  + 'max_concurrent_threads_per_session (or its back-compat alias max_threads) high enough for the '
-  + 'intended fan-out width plus 1 (the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms '
-  + 'near the longest expected node runtime so long-poll joins are not capped short. Example:\n'
-  + '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 5\nmax_wait_timeout_ms = 1800000\n'
+const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config for Kaola-Workflow '
+  + 'dispatch: set max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 '
+  + '(the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms near the longest expected node '
+  + 'runtime so long-poll joins are not capped short. Example:\n'
+  + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n'
+  + 'max_wait_timeout_ms = 1800000\n'
   + 'Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session '
   + 'is absent are documented Codex >=0.145.0 behavior (rust-v0.145.0, PR #19792); the wait-timeout bounds '
-  + 'have no independently verified default and are read only when explicitly configured.';
-
-// #775: max_threads is a back-compat alias for the canonical max_concurrent_threads_per_session —
-// both resolve to the SAME numeric field under the unified [agents] table. The FIRST occurrence of
-// either name (in document order) wins; a later occurrence of either name is ignored (mirrors the
-// existing first-match convention for these fields).
-const MULTI_AGENT_V2_MAX_THREADS_ALIAS = 'max_threads';
+  + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
+  + 'agents.max_threads alongside it: Codex rejects that key once multi_agent_v2 is enabled '
+  + '("agents.max_threads cannot be set when multi_agent_v2 is enabled").';
 
 const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'max_concurrent_threads_per_session',
@@ -924,13 +988,17 @@ function parseMultiAgentV2NumericFields(configContent) {
     default_wait_timeout_ms: null,
   };
 
-  function recordField(rawKey, rawValue) {
-    const key = rawKey === MULTI_AGENT_V2_MAX_THREADS_ALIAS
-      ? 'max_concurrent_threads_per_session' : rawKey;
+  function recordField(key, rawValue) {
     if (!MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key) || fields[key] !== null) return;
     const m = String(rawValue).trim().match(/^-?\d+$/);
     if (!m) return;
     fields[key] = parseInt(m[0], 10);
+  }
+
+  function recordInlineFields(value) {
+    const inline = parseInlineTomlTableAssignments(value);
+    if (inline === null) return;
+    for (const field of inline) recordField(field.key[0].value, field.value);
   }
 
   const lines = tomlStructuralLines(configContent);
@@ -944,11 +1012,26 @@ function parseMultiAgentV2NumericFields(configContent) {
       table = tableName;
       continue;
     }
-    if (!tomlTableNameMatches(table, 'agents')) continue;
 
     const assignment = parseTomlAssignment(line);
-    if (assignment && assignment.key.length === 1) {
+    if (!assignment) continue;
+
+    // [features.multi_agent_v2] sub-table (or the dotted root equivalent): plain scalars.
+    if (tomlTableNameMatches(table, 'features.multi_agent_v2') && assignment.key.length === 1) {
       recordField(assignment.key[0].value, assignment.value);
+      continue;
+    }
+    // [features] multi_agent_v2 = { ... } — settings live inside the inline table.
+    if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      recordInlineFields(assignment.value);
+      continue;
+    }
+    // Dotted form: features.multi_agent_v2.<field> = <n>.
+    for (const key of MULTI_AGENT_V2_NUMERIC_FIELDS) {
+      if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2', key])) {
+        recordField(key, assignment.value);
+        break;
+      }
     }
   }
 
@@ -1025,16 +1108,46 @@ function parseRuntimeLayerOverrides(configContent) {
       record('model_reasoning_effort', value, value !== null);
       continue;
     }
-    if (!assignment || assignment.key.length !== 1 || !tomlTableNameMatches(table, 'agents')) continue;
-    const key = assignment.key[0].value;
-    const raw = assignment.value;
-    if (key === 'enabled') recordBoolean('v2_enabled', raw);
-    else if (key === MULTI_AGENT_V2_MAX_THREADS_ALIAS) {
-      recordInteger('v2_max_concurrent_threads_per_session', raw);
-    } else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) {
-      recordInteger(`v2_${key}`, raw);
+    if (!assignment) continue;
+
+    // [features.multi_agent_v2] sub-table: plain scalar keys.
+    if (tomlTableNameMatches(table, 'features.multi_agent_v2') && assignment.key.length === 1) {
+      recordV2Field(assignment.key[0].value, assignment.value);
+      continue;
+    }
+    // [features] multi_agent_v2 = { ... } (or the dotted root equivalent).
+    if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      const bool = parseTomlBoolean(assignment.value);
+      if (bool !== null) {
+        record('v2_enabled', bool);
+        continue;
+      }
+      const inline = parseInlineTomlTableAssignments(assignment.value);
+      if (inline === null) {
+        record('v2_enabled', null, false);
+        continue;
+      }
+      for (const field of inline) recordV2Field(field.key[0].value, field.value);
+      continue;
+    }
+    // Dotted form: features.multi_agent_v2.<field> = <value>.
+    if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2', 'enabled'])) {
+      recordBoolean('v2_enabled', assignment.value);
+      continue;
+    }
+    for (const numericKey of MULTI_AGENT_V2_NUMERIC_FIELDS) {
+      if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2', numericKey])) {
+        recordInteger(`v2_${numericKey}`, assignment.value);
+        break;
+      }
     }
   }
+
+  function recordV2Field(key, raw) {
+    if (key === 'enabled') recordBoolean('v2_enabled', raw);
+    else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) recordInteger(`v2_${key}`, raw);
+  }
+
   return overrides;
 }
 
@@ -1059,7 +1172,7 @@ function deriveEffectiveRuntime(configLayers) {
 
   const v2Keys = Object.keys(effective).filter(key => key.startsWith('v2_'));
   if (v2Keys.length > 0) {
-    lines.push('[agents]');
+    lines.push('[features.multi_agent_v2]');
     const enabled = effective.v2_enabled;
     if (enabled && enabled.present) {
       lines.push(`enabled = ${enabled.valid ? enabled.value : 'true'}`);
@@ -2331,26 +2444,26 @@ function codexVersionUnsupportedRemediation(detected) {
     + 'version explicitly.';
 }
 
-// #775 (owner decision D2): the exact minimal paste-able config diff + migration report for the
-// codex_multi_agent_v2_required refusal. Kaola does NOT write [agents] enabled = true into the
-// user's config.toml itself (canonicalManagedBlockBodies splits the managed-block template at a bare
-// [agents] header, and a user-owned top-level [agents] table would otherwise TOML-duplicate-table
-// error) — Kaola's preflight refuses until the user edits config.toml by hand; this remediation
-// string explains the Kaola-specific requirement without misdescribing Codex's general default.
-const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Kaola-Workflow requires an explicit MultiAgentV2 '
-  + 'attestation, but [agents] enabled = true is absent or false. Current Codex releases enable general '
-  + 'subagent workflows by default; this explicit value is a stricter Kaola V2 task-name preflight requirement. '
-  + 'Kaola-Workflow does not write this flag for you (see docs/decisions for the D2 config posture) — '
-  + 'add it to ~/.codex/config.toml (or a trusted project .codex/config.toml) by hand, ABOVE the '
-  + '"# BEGIN kaola-workflow agents" managed block (TOML forbids re-declaring [agents] once an '
-  + '[agents.<role>] sub-table inside that block has already opened it), then start a fresh Codex '
-  + 'session:\n\n[agents]\nenabled = true\n\n'
-  + 'Migration note: Codex >=0.145.0 unified multi-agent settings under the top-level [agents] table and '
-  + 'stabilized MultiAgentV2 as the only supported dispatch path. A legacy [features.multi_agent_v2] table, '
-  + 'a top-level [features] multi_agent flag, or the retired non_code_mode_only / hide_spawn_agent_metadata / '
-  + 'tool_namespace sub-fields have no effect under Codex >=0.145.0 and are not read by this gate — remove '
-  + 'them at your convenience. Kaola never writes or overrides agents.default_subagent_model / '
-  + 'agents.default_subagent_reasoning_effort; Codex resolves the sub-agent model/reasoning independently.';
+// Owner decision D2: the exact minimal paste-able config diff for the codex_multi_agent_v2_required
+// refusal. multi_agent_v2 is opt-in and OFF by default in Codex 0.145, so it must be written for
+// Codex to expose the V2 spawn tools at all. Kaola does NOT write it for the user — config.toml is
+// user-owned — so the preflight refuses until it is added by hand. It targets [features], which
+// never collides with the "# BEGIN kaola-workflow agents" managed [agents.<role>] block.
+const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Kaola-Workflow requires MultiAgentV2, but '
+  + 'features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is OPT-IN and off by default in '
+  + 'Codex >=0.145.0 — only V1 multi_agent is on by default — so it has to be set explicitly for Codex to '
+  + 'expose the V2 task-name spawn tools. Kaola-Workflow does not write this flag for you (see '
+  + 'docs/decisions for the D2 config posture) — add it to ~/.codex/config.toml (or a trusted project '
+  + '.codex/config.toml) by hand, then start a fresh Codex session:\n\n'
+  + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n\n'
+  + 'The equivalent inline form under [features] (multi_agent_v2 = { enabled = true, ... }) and a bare '
+  + 'multi_agent_v2 = true are both accepted. Do NOT set agents.max_threads alongside it — Codex rejects '
+  + 'that key once multi_agent_v2 is enabled ("agents.max_threads cannot be set when multi_agent_v2 is '
+  + 'enabled"); the concurrency budget now lives at features.multi_agent_v2.max_concurrent_threads_per_session '
+  + '(PR #19792). A top-level [agents] enabled = true does NOT enable MultiAgentV2: [agents] has no '
+  + '"enabled" key, so Codex parses it and applies nothing. Kaola never writes or overrides '
+  + 'agents.default_subagent_model / agents.default_subagent_reasoning_effort; Codex resolves the '
+  + 'sub-agent model/reasoning independently.';
 
 const CODEX_MULTI_AGENT_V2_REQUIRED_STATUS = 'codex_multi_agent_v2_required';
 
@@ -3996,5 +4109,4 @@ module.exports = {
   codexVersionUnsupportedRemediation,
   CODEX_MULTI_AGENT_V2_REQUIRED_STATUS,
   CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION,
-  MULTI_AGENT_V2_MAX_THREADS_ALIAS,
 };

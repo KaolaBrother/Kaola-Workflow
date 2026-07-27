@@ -77,7 +77,7 @@ function enableMultiAgentV2(homeRoot) {
   const configPath = path.join(homeRoot, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
-  fs.writeFileSync(configPath, '[agents]\nenabled = true\n\n' + existing);
+  fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled = true\n\n' + existing);
 }
 
 // Install targets are authority boundaries, not merely output paths. Refuse every
@@ -1651,7 +1651,7 @@ function enableMultiAgentV2(homeRoot) {
       { cwd: pluginRoot, encoding: 'utf8' });
     assert.strictEqual(JSON.parse(result.stdout).multi_agent_v2_enabled, true,
       "an absent project-layer [agents] table never resets the global layer's enabled=true");
-    fs.writeFileSync(projectConfig, '[agents]\nenabled = false\n');
+    fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nenabled = false\n');
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1663,8 +1663,8 @@ function enableMultiAgentV2(homeRoot) {
     // #775: numeric bounds fields also overlay per-field from a single effective merged [agents]
     // table (the same overlay-per-key discipline as `enabled` above) — a higher layer configuring
     // only max_concurrent_threads_per_session combines with a lower layer's max_wait_timeout_ms.
-    fs.writeFileSync(globalConfigPath, '[agents]\nenabled = true\nmax_wait_timeout_ms = 1800000\n\n' + globalCanonical);
-    fs.writeFileSync(projectConfig, '[agents]\nmax_concurrent_threads_per_session = 6\n');
+    fs.writeFileSync(globalConfigPath, '[features.multi_agent_v2]\nenabled = true\nmax_wait_timeout_ms = 1800000\n\n' + globalCanonical);
+    fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 6\n');
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -2636,7 +2636,7 @@ function enableMultiAgentV2(homeRoot) {
       trustCodexProject(homeRoot, projectRoot, 'untrusted');
       const projectCodex = path.join(projectRoot, '.codex');
       fs.mkdirSync(projectCodex, { recursive: true });
-      fs.writeFileSync(path.join(projectCodex, 'config.toml'), '[agents]\nenabled = true\n');
+      fs.writeFileSync(path.join(projectCodex, 'config.toml'), '[features.multi_agent_v2]\nenabled = true\n');
 
       const normal = invoke(projectRoot, homeRoot);
       assert.strictEqual(normal.status, 7,
@@ -2686,7 +2686,7 @@ function enableMultiAgentV2(homeRoot) {
       // #775: prepend (never append) — a bare [agents] header cannot follow the managed block's
       // [agents.<role>] sub-tables (TOML forbids re-declaring [agents] once a sub-table has
       // already opened it; the same rule the codex_multi_agent_v2_required remediation states).
-      fs.writeFileSync(projectConfig, '[agents]\nenabled = true\n\n' + fs.readFileSync(projectConfig, 'utf8'));
+      fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nenabled = true\n\n' + fs.readFileSync(projectConfig, 'utf8'));
 
       let normal = invoke(nestedRoot, homeRoot);
       assert.notStrictEqual(normal.status, 0,
@@ -2741,7 +2741,7 @@ function enableMultiAgentV2(homeRoot) {
       }
       const nestedCodex = path.join(nestedRoot, '.codex');
       fs.mkdirSync(nestedCodex, { recursive: true });
-      fs.writeFileSync(path.join(nestedCodex, 'config.toml'), '[agents]\nenabled = false\n');
+      fs.writeFileSync(path.join(nestedCodex, 'config.toml'), '[features.multi_agent_v2]\nenabled = false\n');
       normal = invoke(nestedRoot, homeRoot);
       assert.strictEqual(normal.status, 0,
         'exact nested untrusted excludes only that layer while trusted root remains active: '
@@ -3506,7 +3506,7 @@ try {
       // remediation's exact placement (TOML forbids re-declaring [agents] once an
       // [agents.<role>] sub-table inside the managed block has already opened it).
       function configWithAgentsEnabled(extraLines) {
-        return '[agents]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + configText;
+        return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + configText;
       }
 
       function runPreflightForConfig(body) {
@@ -3557,12 +3557,14 @@ try {
       assert.strictEqual(noV2Json.max_concurrent_threads_per_session, null, '#775: refusal reports null concurrency bounds (not_applicable)');
       assert.strictEqual(noV2Json.max_concurrent_threads_per_session_source, 'not_applicable', '#775: refusal reports not_applicable bounds source');
       assert.strictEqual(noV2Json.effective_subagent_width, null, '#775: refusal reports null effective_subagent_width');
-      assert(noV2Json.repair.includes('[agents]\nenabled = true'), '#775: refusal repair carries the exact minimal [agents] enabled=true diff: ' + noV2Json.repair);
+      assert(noV2Json.repair.includes('[features.multi_agent_v2]\nenabled = true'), '#775: refusal repair carries the exact minimal [agents] enabled=true diff: ' + noV2Json.repair);
       assert(noV2Json.repair.includes('does not write this flag for you'), '#775: refusal repair states Kaola never writes this flag for the user');
       assert(!/tool_namespace\s*=|hide_spawn_agent_metadata\s*=|non_code_mode_only\s*=/.test(noV2Json.repair),
         '#775: refusal repair must not prescribe the retired 0.142/0.144 transport fields as an active directive: ' + noV2Json.repair);
-      assert(noV2Json.repair.includes('retired'),
-        '#775: refusal repair frames the 0.142/0.144 transport fields as retired (informational only), not required');
+      assert(/opt-?in/i.test(noV2Json.repair) && /off by default/i.test(noV2Json.repair),
+        'refusal repair states the load-bearing fact: multi_agent_v2 is opt-in and off by default, so it must be written: ' + noV2Json.repair);
+      assert(!/\[agents\]\nenabled = true/.test(noV2Json.repair),
+        'refusal repair must NOT prescribe [agents] enabled = true — [agents] has no enabled key and does not turn MultiAgentV2 on: ' + noV2Json.repair);
       assert(noV2Json.repair.includes('default_subagent_model') && noV2Json.repair.includes('default_subagent_reasoning_effort'),
         '#775: refusal repair states Kaola never writes/overrides the sub-agent model/effort defaults');
 
@@ -3644,7 +3646,7 @@ try {
         assert.strictEqual(json.multi_agent_v2_enabled, true, label + ': multi_agent_v2_enabled');
       }
       assertDispatchModeForConfig(configText, false, '#775 no [agents] table at all');
-      assertDispatchModeForConfig('[agents]\nenabled = false\n\n' + configText, false, '#775 [agents] table present but enabled=false');
+      assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + configText, false, '#775 [agents] table present but enabled=false');
       assertDispatchModeForConfig(configWithAgentsEnabled(), true, '#775 [agents]\\nenabled = true');
       assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + configText, false,
         '#775 warning suppression alone must not enable v2');
@@ -3705,10 +3707,16 @@ try {
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
       }, '#775 configured threads=6 -> config source, width = threads-1');
+      // max_threads is NOT an alias for max_concurrent_threads_per_session. It is a separate
+      // top-level [agents] key, and Codex REJECTS it once multi_agent_v2 is enabled
+      // ("agents.max_threads cannot be set when multi_agent_v2 is enabled"), so the V2 budget
+      // must come from features.multi_agent_v2.max_concurrent_threads_per_session alone. A
+      // stray max_threads therefore leaves the cap at the observed default rather than
+      // silently setting it.
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled('max_threads = 6'), {
-        max_concurrent_threads_per_session: 6,
-        max_concurrent_threads_per_session_source: 'config',
-        effective_subagent_width: 5,
+        max_concurrent_threads_per_session: 4,
+        max_concurrent_threads_per_session_source: 'observed_default',
+        effective_subagent_width: 3,
         min_wait_timeout_ms: null,
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
@@ -3752,20 +3760,20 @@ try {
         assert(/0\.145\.0/.test(freshInstall.stdout), '#775 AC1: report must carry the version-guard note (0.145.0): ' + freshInstall.stdout);
         assert(!/effective subagent width/.test(freshInstall.stdout),
           '#775 AC1: v2 not enabled -> must NOT print a concrete effective-width line: ' + freshInstall.stdout);
-        assert(/Recommended \[agents\] config for Kaola-Workflow dispatch/.test(freshInstall.stdout),
-          '#775 AC1: fresh install must document the recommended [agents] config: ' + freshInstall.stdout);
+        assert(/Recommended \[features\.multi_agent_v2\] config for Kaola-Workflow dispatch/.test(freshInstall.stdout),
+          'AC1: fresh install must document the recommended [features.multi_agent_v2] config: ' + freshInstall.stdout);
         assert(/max_concurrent_threads_per_session/.test(freshInstall.stdout) && /max_wait_timeout_ms/.test(freshInstall.stdout),
           '#775 AC1: recommended config note must name both knobs: ' + freshInstall.stdout);
-        assert(/back-compat alias max_threads/.test(freshInstall.stdout),
-          '#775 AC1: note must document max_threads as the back-compat alias (no longer invalid under v2): ' + freshInstall.stdout);
-        assert(!/cannot be set/.test(freshInstall.stdout),
-          '#775 AC1: the retired "agents.max_threads cannot be set" claim must not appear (max_threads is now a valid alias): ' + freshInstall.stdout);
+        assert(/agents\.max_threads/.test(freshInstall.stdout) && /reject/i.test(freshInstall.stdout),
+          'AC1: note must warn that Codex rejects agents.max_threads once multi_agent_v2 is enabled: ' + freshInstall.stdout);
+        assert(/cannot be set when multi_agent_v2 is enabled/.test(freshInstall.stdout),
+          'AC1: note must quote the real Codex constraint verbatim ("agents.max_threads cannot be set when multi_agent_v2 is enabled"): ' + freshInstall.stdout);
 
         // Enable [agents] with effort=ultra ahead of the managed block, then re-run (idempotent
         // update) — the posture must flip to 'proactive' and multi_agent_v2 must report enabled.
         const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
         const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
-        fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[agents]\nenabled = true\n\n' + beforeUltra);
+        fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
         const reinstall = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           env: { ...process.env, HOME: postureHome },
@@ -3784,8 +3792,8 @@ try {
         // Configure explicit bounds under the SAME unified [agents] table, re-install (idempotent
         // update) — the report must now print the concrete width + every configured bound.
         const beforeBounds = fs.readFileSync(postureConfigPath, 'utf8');
-        fs.writeFileSync(postureConfigPath, beforeBounds.replace('[agents]\nenabled = true\n',
-          '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\n'
+        fs.writeFileSync(postureConfigPath, beforeBounds.replace('[features.multi_agent_v2]\nenabled = true\n',
+          '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\n'
           + 'max_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n'));
         const v2Install = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
@@ -3867,14 +3875,14 @@ try {
 
     const postureFixtures = [
       { label: 'no agents table at all', cfg: '', expected: 'none' },
-      { label: '[agents] enabled=true, no effort', cfg: '[agents]\nenabled = true\n', expected: 'explicitRequestOnly' },
-      { label: '[agents] enabled=false, no effort', cfg: '[agents]\nenabled = false\n', expected: 'none' },
-      { label: '[agents] enabled=true, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[agents]\nenabled = true\n', expected: 'proactive' },
-      { label: '[agents] enabled=true, effort=xhigh (below ultra)', cfg: 'model_reasoning_effort = "xhigh"\n\n[agents]\nenabled = true\n', expected: 'explicitRequestOnly' },
-      { label: '[agents] enabled=false + effort=ultra (enabled gate wins)', cfg: 'model_reasoning_effort = "ultra"\n\n[agents]\nenabled = false\n', expected: 'none' },
+      { label: '[agents] enabled=true, no effort', cfg: '[features.multi_agent_v2]\nenabled = true\n', expected: 'explicitRequestOnly' },
+      { label: '[agents] enabled=false, no effort', cfg: '[features.multi_agent_v2]\nenabled = false\n', expected: 'none' },
+      { label: '[agents] enabled=true, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n', expected: 'proactive' },
+      { label: '[agents] enabled=true, effort=xhigh (below ultra)', cfg: 'model_reasoning_effort = "xhigh"\n\n[features.multi_agent_v2]\nenabled = true\n', expected: 'explicitRequestOnly' },
+      { label: '[agents] enabled=false + effort=ultra (enabled gate wins)', cfg: 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = false\n', expected: 'none' },
       // TOML root-key rule: model_reasoning_effort placed AFTER the first [table] header is NOT
       // a root key (it would belong to that table), so it must not gate the posture.
-      { label: 'effort after first table is not a root key (ignored)', cfg: '[agents]\nenabled = true\nmodel_reasoning_effort = "ultra"\n', expected: 'explicitRequestOnly' },
+      { label: 'effort after first table is not a root key (ignored)', cfg: '[features.multi_agent_v2]\nenabled = true\nmodel_reasoning_effort = "ultra"\n', expected: 'explicitRequestOnly' },
     ];
     for (const mod of [preflightMod, installerMod]) {
       for (const f of postureFixtures) {
@@ -3907,19 +3915,19 @@ try {
     const boundsFixtures = [
       { label: 'no agents table at all', cfg: '', v2Enabled: false,
         expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'not_applicable', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'v2 enabled, no bounds configured', cfg: '[agents]\nenabled = true\n', v2Enabled: true,
+      { label: 'v2 enabled, no bounds configured', cfg: '[features.multi_agent_v2]\nenabled = true\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'v2 enabled, threads configured', cfg: '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 6\n', v2Enabled: true,
+      { label: 'v2 enabled, threads configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 6\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 5, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'v2 enabled, max_threads back-compat alias configured', cfg: '[agents]\nenabled = true\nmax_threads = 6\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 5, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'v2 enabled, all four numeric fields configured', cfg: '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n', v2Enabled: true,
+      { label: 'v2 enabled, stray max_threads is NOT an alias (Codex rejects agents.max_threads under v2)', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'v2 enabled, all four numeric fields configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 2, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 1, min_wait_timeout_ms: 1000, max_wait_timeout_ms: 1800000, default_wait_timeout_ms: 60000 } },
-      { label: 'unrelated table after [agents] does not over-collect bounds', cfg: '[agents]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
+      { label: 'unrelated table after [agents] does not over-collect bounds', cfg: '[features.multi_agent_v2]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'non-integer configured threads value falls back to observed default', cfg: '[agents]\nenabled = true\nmax_concurrent_threads_per_session = "six"\n', v2Enabled: true,
+      { label: 'non-integer configured threads value falls back to observed default', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = "six"\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'zero configured threads value falls back to observed default (Codex itself rejects < 1)', cfg: '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 0\n', v2Enabled: true,
+      { label: 'zero configured threads value falls back to observed default (Codex itself rejects < 1)', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 0\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
     ];
     for (const mod of [preflightMod, installerMod]) {
@@ -3938,8 +3946,8 @@ try {
       '#611: installer and preflight multi_agent_v2 bounds notes must match verbatim');
     assert(/0\.145\.0/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
       '#775: multi_agent_v2 bounds note must name the verified Codex CLI version');
-    assert(/back-compat alias max_threads/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
-      '#775: bounds note must document max_threads as the back-compat alias (no longer invalid under v2)');
+    assert(/agents\.max_threads/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      'bounds note must warn against setting agents.max_threads alongside multi_agent_v2 (Codex rejects it)');
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by

@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **The Codex MultiAgentV2 gate read the wrong config key and refused working configurations.** `detectCodexDispatchMode` looked for `enabled = true` in the top-level `[agents]` table. That is not where the switch lives, and `[agents]` has no `enabled` key at all — Codex parses such a block and applies nothing. The effect was an inverted gate: a config with MultiAgentV2 genuinely enabled was refused `codex_multi_agent_v2_required`, while the config the guide told users to write would have passed the gate with V2 actually off.
+
+  Verified against codex 0.145.0 directly rather than from documentation. With an empty `CODEX_HOME`, `codex doctor --all` lists `multi_agent` among the enabled flags but **not** `multi_agent_v2` — V2 is opt-in and off by default, so it must be written for Codex to expose the V2 task-name spawn tools. A config containing only `[agents] enabled = true` parses (`config.toml parse ok`) and yields `0 overridden`; `[features] multi_agent_v2 = { enabled = true }` yields `1 overridden` and V2 on.
+
+  Detection now reads `features.multi_agent_v2.enabled` across the three shapes Codex accepts — the `[features.multi_agent_v2]` sub-table, the inline `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare `multi_agent_v2 = true` — restoring the inline-table parsing that had been deleted. `parseMultiAgentV2NumericFields` and `parseRuntimeLayerOverrides` were reading the concurrency and wait-timeout fields from `[agents]` too, and now read them from the same feature table.
+
+- **`max_threads` is no longer treated as a back-compat alias.** It is a separate top-level `[agents]` key, and Codex *rejects* it once MultiAgentV2 is enabled (`agents.max_threads cannot be set when multi_agent_v2 is enabled`); the V2 budget lives at `features.multi_agent_v2.max_concurrent_threads_per_session` (openai/codex PR #19792, issue #33447). The prior alias would have steered users into a config Codex errors on. A test asserting that the real Codex constraint must *not* be mentioned has been inverted to require it verbatim.
+
+- **Documentation corrected on every surface that carried the claim.** The statement that the legacy `[features.multi_agent_v2]` table and the `[features] multi_agent` flag "have no effect" was false — they have full effect on Codex, and only no effect on Kaola's gate. Likewise the claim that settings "moved from `[features.multi_agent_v2]` to the unified top-level `[agents]` table" reversed the actual direction of travel: PR #19792 moved the thread cap *into* the feature table and removed its alias to `agents.max_threads`. Fixed in `templates/routing/init.skeleton.md` (regenerated into the four `workflow-init` surfaces), `README.md`, and `docs/api.md`.
+
 ## [8.0.1] - 2026-07-27
 
 

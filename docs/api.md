@@ -2605,16 +2605,16 @@ Codex version (`--codex-version` > `KAOLA_CODEX_VERSION` > live `codex --version
 `KAOLA_CODEX_VERSION` attestation escape hatch for a sandbox with no `codex` binary on `PATH`).
 
 **`codex_multi_agent_v2_required` (issue #775, owner decision D2):** returned when the version
-floor is met but the effective `[agents].enabled` (overlaying HOME then every trusted project
-layer) is absent or `false` — MultiAgentV2 is Codex >=0.145.0's only dispatch path, and there is
-no V1 fallback. Kaola-Workflow deliberately does **not** write `[agents]\nenabled = true` into the
-user's `config.toml` itself (a fresh install therefore always needs this one manual step) —
-the `repair` string carries the exact minimal paste-able diff, instructs placing it ABOVE the
-`# BEGIN kaola-workflow agents` managed block (TOML forbids re-declaring a bare `[agents]` header
-once an `[agents.<role>]` sub-table inside that block has already opened it), and notes that the
-legacy `[features.multi_agent_v2]` table, a top-level `[features] multi_agent` flag, and the
-retired `non_code_mode_only`/`hide_spawn_agent_metadata`/`tool_namespace` sub-fields have no effect
-under Codex >=0.145.0. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
+floor is met but the effective `features.multi_agent_v2.enabled` (overlaying HOME then every
+trusted project layer) is absent or `false`. MultiAgentV2 is **opt-in and off by default** in
+Codex >=0.145.0 — only V1 `multi_agent` is on by default — so it must be written explicitly for
+Codex to expose the V2 task-name spawn tools. Kaola-Workflow deliberately does **not** write it
+into the user's `config.toml` itself (a fresh install therefore always needs this one manual
+step) — the `repair` string carries the exact minimal paste-able diff. Three shapes are read: a
+`[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled = true, ... }` under
+`[features]`, and a bare `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does NOT
+enable MultiAgentV2 — `[agents]` has no `enabled` key — and `agents.max_threads` must not be set
+alongside it, because Codex rejects that key once MultiAgentV2 is enabled. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
 V2 transport-safety gate (`codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe`),
 which Codex >=0.145.0's stabilized MultiAgentV2 no longer needs.
 
@@ -2778,7 +2778,7 @@ Default-on validate → authority check → install → prune → manifest → p
 6. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, reviewer `profile_contracts` carrying `behavior_contract_version`, `behavior_contract_hash`, and `resolved_profile_hash`, and `retired_files_removed`).
 7. **Post-verify** — re-reads every installed profile, requires exact bundled-source bytes, revalidates reviewer profile identities, and requires the exact canonical managed block; on failure prints `post_verify_failed: ...` and exits 1.
 8. Prints `Kaola-Workflow Codex dispatch posture: <posture>` (+ warning + version-guard caveat) and
-   `Kaola-Workflow Codex multi_agent_v2: enabled ([agents] enabled = true)` or `NOT enabled (see
+   `Kaola-Workflow Codex multi_agent_v2: enabled (features.multi_agent_v2.enabled = true)` or `NOT enabled (see
    codex_multi_agent_v2_required at preflight)` plus the concurrency/wait-timeout bounds report,
    then `status: ok` as the machine-checkable final sentinel.
 

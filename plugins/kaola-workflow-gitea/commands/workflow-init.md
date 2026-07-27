@@ -186,11 +186,16 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 > Audit Codex config before claiming role dispatch readiness: Codex >=0.145.0 is required
 > (`kaola-workflow-codex-preflight.js` refuses `codex_version_unsupported` below that floor), and
-> `kaola-workflow-codex-preflight.js --doctor --json` must show the top-level `[agents]` table's
-> `enabled = true` — the sole supported form (the legacy `[features.multi_agent_v2]`
-> table and a top-level `[features] multi_agent` flag have no effect and are not read by this
-> gate). Current Codex releases enable general subagent workflows by default; this explicit value
-> is a stricter Kaola V2 task-name attestation, not a general Codex prerequisite. Kaola never
+> `kaola-workflow-codex-preflight.js --doctor --json` must show `features.multi_agent_v2.enabled`
+> true. MultiAgentV2 is **opt-in and off by default** — only V1 `multi_agent` is on by default —
+> so it has to be written into `config.toml` for Codex to expose the V2 task-name spawn tools at
+> all. Three shapes are accepted: `[features.multi_agent_v2]` with `enabled = true`, the inline
+> `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
+> `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not** enable it: `[agents]`
+> configures roles and limits (`agents.<name>.*`, `max_depth`, `max_threads`) and has no `enabled`
+> key, so Codex parses it and applies nothing. Put the concurrency budget at
+> `features.multi_agent_v2.max_concurrent_threads_per_session` and do **not** also set
+> `agents.max_threads` — Codex rejects that key once MultiAgentV2 is on. Kaola never
 > writes this flag for you; if it is not explicitly true, preflight refuses
 > `codex_multi_agent_v2_required` and its diff must be applied by hand with user authorization —
 > never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone

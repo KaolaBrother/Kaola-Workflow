@@ -645,17 +645,21 @@ to configure this machine or explicitly approves the change.
 The audit must keep these facts separate:
 
 - `codex features list` should report `multi_agent_v2` as enabled.
-- Current Codex releases enable general subagent workflows by default. Kaola's
-  requirement for an explicit `[agents].enabled = true` is a stricter V2
-  dispatch attestation enforced by Kaola's preflight, not Codex's general
-  subagent default.
-- Codex >=0.145.0 unified multi-agent settings under a top-level `[agents]`
-  table and stabilized MultiAgentV2 as the only supported dispatch path. The
-  legacy `[features.multi_agent_v2]` table, a top-level `[features] multi_agent`
-  flag, and the retired `tool_namespace` / `hide_spawn_agent_metadata` /
-  `non_code_mode_only` sub-fields have no effect and are not read by this gate.
-- `[agents].enabled = true` is the only explicit V2 attestation Kaola's gate
-  reads. Kaola-Workflow does **not** write it for you (owner decision D2) — a
+- MultiAgentV2 is **opt-in and off by default** in Codex >=0.145.0 — only V1
+  `multi_agent` is on by default — so `features.multi_agent_v2.enabled = true`
+  must be written for Codex to expose the V2 task-name spawn tools at all.
+- Three shapes are accepted: a `[features.multi_agent_v2]` table, the inline
+  `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
+  `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not**
+  enable it — `[agents]` configures roles and limits (`agents.<name>.*`,
+  `max_depth`, `max_threads`) and has no `enabled` key, so Codex parses it and
+  applies nothing.
+- Put the concurrency budget at
+  `features.multi_agent_v2.max_concurrent_threads_per_session`, and do **not**
+  also set `agents.max_threads` — Codex rejects that key once MultiAgentV2 is
+  enabled.
+- `features.multi_agent_v2.enabled` is what Kaola's gate reads.
+  Kaola-Workflow does **not** write it for you (owner decision D2) — a
   fresh Kaola install refuses at preflight (`codex_multi_agent_v2_required`)
   until you add it by hand,
   ABOVE the `# BEGIN kaola-workflow agents` managed block (TOML forbids
@@ -742,7 +746,7 @@ effort-gated MultiAgentMode the Codex runtime will actually enforce, plus whethe
 ```text
 Kaola-Workflow Codex multi_agent_v2: NOT enabled (see codex_multi_agent_v2_required at preflight)
 Kaola-Workflow Codex dispatch posture: none (model_reasoning_effort unset)
-Kaola-Workflow Codex dispatch posture: Kaola-Workflow cannot attest its required V2 task-name dispatch path because explicit [agents] enabled = true is absent or false. Current Codex releases enable general subagent workflows by default; this explicit value is a Kaola preflight requirement, not a general Codex prerequisite. Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
+Kaola-Workflow Codex dispatch posture: Kaola-Workflow cannot attest its required V2 task-name dispatch path because features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
 Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.
 status: ok
 ```

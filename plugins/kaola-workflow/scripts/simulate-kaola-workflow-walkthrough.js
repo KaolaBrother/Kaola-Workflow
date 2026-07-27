@@ -34,7 +34,7 @@ process.env.KAOLA_CODEX_VERSION = '0.145.0';
 // preflight would otherwise refuse codex_multi_agent_v2_required (exit 7) before reaching any of
 // the profile-freshness checks the tests below that reuse kwSandboxHome are actually about.
 fs.mkdirSync(path.join(kwSandboxHome, '.codex'), { recursive: true });
-fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[agents]\nenabled = true\n\n');
+fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[features.multi_agent_v2]\nenabled = true\n\n');
 
 const pluginRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(pluginRoot, '..', '..');
@@ -137,7 +137,7 @@ function enableMultiAgentV2(homeRoot) {
   const configPath = path.join(homeRoot, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
-  fs.writeFileSync(configPath, '[agents]\nenabled = true\n\n' + existing);
+  fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled = true\n\n' + existing);
 }
 
 function runClaim(args, cwd) {
@@ -1314,7 +1314,7 @@ function testCodexPreflight266() {
         // PREPENDS a user-owned [agents] table (TOML forbids re-declaring [agents] once the managed
         // block's [agents.<role>] sub-tables have already opened it).
         function configWithAgentsEnabled(extraLines) {
-          return '[agents]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
+          return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
         }
         // #775: dispatch mode is binary now — the whole 0.142/0.144 transport-mode grammar
         // (tool_namespace / hide_spawn_agent_metadata / non_code_mode_only, the dotted/quoted/
@@ -1359,11 +1359,11 @@ function testCodexPreflight266() {
         // project, key-by-key, so a project layer that does NOT set `enabled` inherits HOME's true;
         // only an EXPLICIT project-layer `enabled = false` can override it back off.
         assertDispatchModeForConfig(origConfig, true, '#775 no project-layer [agents] table -> inherits enabled=true from HOME', false);
-        assertDispatchModeForConfig('[agents]\nenabled = false\n\n' + origConfig, false, '#775 project layer explicitly overrides enabled=false', false);
+        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, false, '#775 project layer explicitly overrides enabled=false', false);
         assertDispatchModeForConfig(configWithAgentsEnabled(), true, '#775 [agents]\\nenabled = true', true);
-        assertDispatchModeForConfig('[agents]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
+        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
           '#775 warning suppression alone must not enable v2', false);
-        assertDispatchModeForConfig('[agents]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
+        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
           '#775 a retired top-level multi_agent_v2 key is not read (no more [features] grammar)', false);
 
         // #598 AC2: effort-gated MultiAgentMode dispatch-POSTURE (distinct from dispatch_mode
@@ -1508,7 +1508,7 @@ function testCodexDispatchPosture598() {
     // update) — the posture must flip to proactive and the non-proactive remediation must disappear.
     const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
     const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
-    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[agents]\nenabled = true\n\n' + beforeUltra);
+    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
     const reinstalled = runInstallProfiles(postureProj, { HOME: postureHome });
     assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
       '#775 AC1: [agents] enabled=true + effort=ultra must report proactive posture: ' + reinstalled.stdout);
@@ -1527,10 +1527,10 @@ function testCodexDispatchPosture598() {
     // Pure-function unit coverage on the exported deriveDispatchPosture (same module the
     // installer's REPORT step calls).
     const mod = require(installProfilesScript);
-    const none = mod.deriveDispatchPosture('[agents]\nenabled = false\n');
+    const none = mod.deriveDispatchPosture('[features.multi_agent_v2]\nenabled = false\n');
     assert(none.dispatch_posture === 'none', '#775: [agents] enabled=false must derive none, got ' + JSON.stringify(none));
     assert(none.dispatch_posture_warning !== null, '#598: a non-proactive posture must carry a remediation string');
-    const proactive = mod.deriveDispatchPosture('model_reasoning_effort = "ultra"\n\n[agents]\nenabled = true\n');
+    const proactive = mod.deriveDispatchPosture('model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n');
     assert(proactive.dispatch_posture === 'proactive', '#775: effort=ultra + [agents] enabled=true must derive proactive, got ' + JSON.stringify(proactive));
     assert(proactive.dispatch_posture_warning === null, '#598: a proactive posture must carry NO remediation');
 
@@ -1561,21 +1561,21 @@ function testCodexMultiAgentV2Bounds611() {
     assert(/status: ok/.test(fresh.stdout), '#611 AC6: existing "status: ok" output must be unchanged: ' + fresh.stdout);
     // v2 not enabled by default (Kaola never writes [agents] enabled=true) -> the recommended-config
     // note (documentation) is always printed, but no concrete width line (nothing to report yet).
-    assert(/multi_agent_v2:.*Recommended \[agents\] config/.test(fresh.stdout),
-      '#775 AC6: fresh install must document the recommended [agents] config: ' + fresh.stdout);
+    assert(/multi_agent_v2:.*Recommended \[features\.multi_agent_v2\] config/.test(fresh.stdout),
+      'AC6: fresh install must document the recommended [features.multi_agent_v2] config: ' + fresh.stdout);
     assert(!/effective subagent width/.test(fresh.stdout),
       '#611 AC6: v2 not enabled -> must NOT print a concrete effective-width line: ' + fresh.stdout);
     assert(/0\.145\.0/.test(fresh.stdout), '#775 AC6: report must carry the version-guard note (0.145.0): ' + fresh.stdout);
-    assert(/back-compat alias max_threads/.test(fresh.stdout),
-      '#775 AC6: note must document max_threads as the back-compat alias (no longer invalid under v2): ' + fresh.stdout);
-    assert(!/cannot be set/.test(fresh.stdout),
-      '#775 AC6: the retired "agents.max_threads cannot be set" claim must not appear (max_threads is now a valid alias): ' + fresh.stdout);
+    assert(/agents\.max_threads/.test(fresh.stdout),
+      'AC6: note must name agents.max_threads as the key to avoid under v2: ' + fresh.stdout);
+    assert(/cannot be set when multi_agent_v2 is enabled/.test(fresh.stdout),
+      'AC6: note must quote the real Codex constraint verbatim: ' + fresh.stdout);
 
     // Enable [agents] with explicit bounds ahead of the managed block, re-install (idempotent
     // update) — the report must now print the concrete width + every configured bound.
     const boundsConfigPath = path.join(boundsProj, '.codex', 'config.toml');
     const beforeV2 = fs.readFileSync(boundsConfigPath, 'utf8');
-    fs.writeFileSync(boundsConfigPath, '[agents]\nenabled = true\n'
+    fs.writeFileSync(boundsConfigPath, '[features.multi_agent_v2]\nenabled = true\n'
       + 'max_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\n'
       + 'default_wait_timeout_ms = 60000\n\n' + beforeV2);
     const v2Install = runInstallProfiles(boundsProj, { HOME: boundsHome });
@@ -1585,24 +1585,26 @@ function testCodexMultiAgentV2Bounds611() {
     assert(/max_wait_timeout_ms=1800000/.test(v2Install.stdout), '#611 AC6: must report configured max_wait_timeout_ms: ' + v2Install.stdout);
     assert(/default_wait_timeout_ms=60000/.test(v2Install.stdout), '#611 AC6: must report configured default_wait_timeout_ms: ' + v2Install.stdout);
 
-    // Re-install with max_threads (the back-compat alias) instead of max_concurrent_threads_per_session.
-    fs.writeFileSync(boundsConfigPath, '[agents]\nenabled = true\nmax_threads = 6\n\n' + beforeV2);
+    // max_threads is NOT an alias: it is a separate top-level [agents] key that Codex REJECTS once
+    // multi_agent_v2 is enabled ("agents.max_threads cannot be set when multi_agent_v2 is enabled"),
+    // so a stray one must leave the cap at the observed default rather than silently setting it.
+    fs.writeFileSync(boundsConfigPath, '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n\n' + beforeV2);
     const aliasInstall = runInstallProfiles(boundsProj, { HOME: boundsHome });
-    assert(/effective subagent width 5 \(max_concurrent_threads_per_session=6 \[config\]\)/.test(aliasInstall.stdout),
-      '#775 AC6: max_threads alias must resolve to the same field as max_concurrent_threads_per_session: ' + aliasInstall.stdout);
+    assert(/effective subagent width 3 \(max_concurrent_threads_per_session=4 \[observed_default\]\)/.test(aliasInstall.stdout),
+      'AC6: stray max_threads must NOT set the v2 cap — it falls back to the observed default: ' + aliasInstall.stdout);
 
     // Pure-function unit coverage on the exported deriveMultiAgentV2Bounds (same module the
     // installer's REPORT step calls) — the observed default (absent key) case.
     const mod = require(installProfilesScript);
-    const notApplicable = mod.deriveMultiAgentV2Bounds('[agents]\nenabled = false\n', false);
+    const notApplicable = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = false\n', false);
     assert(notApplicable.max_concurrent_threads_per_session === null,
       '#611: v2 disabled must derive max_concurrent_threads_per_session null, got ' + JSON.stringify(notApplicable));
-    const observedDefault = mod.deriveMultiAgentV2Bounds('[agents]\nenabled = true\n', true);
+    const observedDefault = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\n', true);
     assert(observedDefault.max_concurrent_threads_per_session === 4 && observedDefault.effective_subagent_width === 3,
       '#611: absent threads value must derive the observed default 4 (width 3), got ' + JSON.stringify(observedDefault));
-    const aliasField = mod.deriveMultiAgentV2Bounds('[agents]\nenabled = true\nmax_threads = 6\n', true);
-    assert(aliasField.max_concurrent_threads_per_session === 6 && aliasField.effective_subagent_width === 5,
-      '#775: max_threads back-compat alias must resolve to the same field, got ' + JSON.stringify(aliasField));
+    const strayMaxThreads = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', true);
+    assert(strayMaxThreads.max_concurrent_threads_per_session === 4 && strayMaxThreads.effective_subagent_width === 3,
+      'max_threads is NOT an alias (Codex rejects agents.max_threads under v2) — must stay at the observed default, got ' + JSON.stringify(strayMaxThreads));
 
     console.log('testCodexMultiAgentV2Bounds611 (#611 AC6 installer report): PASSED');
   } finally {
