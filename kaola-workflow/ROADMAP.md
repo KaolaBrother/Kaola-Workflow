@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| none | No active work | — | — | — |
+| #819 | capability_gap recovery is unreachable | open | — | adaptive |
 
 ## Rules
 
