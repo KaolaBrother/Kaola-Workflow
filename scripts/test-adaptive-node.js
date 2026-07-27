@@ -12915,6 +12915,98 @@ scenario(() => {
     cleanup(repoRoot);
   });
 
+  // #820-TELEMETRY-EXCLUDED-OCTOPUS (the original add/add defect, real-git two-leg reproduction): run
+  //   telemetry (.cache/node-timings.jsonl) is PARENT-OWNED — a leg-side invocation dirties the leg's
+  //   OWN copy, and the per-leg capture sweep must EXCLUDE it. Pre-fix each leg's `add -A` swept it in,
+  //   so BOTH leg branches ADDed the same path independently and the octopus merge failed add/add on
+  //   scheduler residue (the #819 group needed hand repair). Post-fix the sweep still captures every
+  //   real write, the merge is clean, and the parent copy takes its leg_committed appends untracked.
+  //   (RED-provable: pre-fix synthesizeLevel returns {ok:false, reason:'merge_conflict'} here.)
+  scenario(() => {
+    const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
+    const telRel = 'kaola-workflow/test-project/.cache/node-timings.jsonl';
+    // Leg-side telemetry residue in BOTH legs (untracked in each — the legs branched off the kw-stub
+    // commit, which tracks only the evidence seeds, never the run telemetry).
+    fs.appendFileSync(path.join(legA, telRel), JSON.stringify({ node: 'A', event: 'opened', ts: '2026-01-01T00:00:00.000Z' }) + '\n');
+    fs.appendFileSync(path.join(legB, telRel), JSON.stringify({ node: 'B', event: 'opened', ts: '2026-01-01T00:00:01.000Z' }) + '\n');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A uncommitted\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B uncommitted\n');
+    const synth = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B', planP(repoRoot));
+    assert(synth && synth.ok === true && typeof synth.mergeCommit === 'string',
+      '#820-TELEMETRY-EXCLUDED: leg-side telemetry residue no longer fails the octopus merge add/add (pre-fix: merge_conflict), got ' + JSON.stringify(synth));
+    assert(gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':' + telRel]) === '',
+      '#820-TELEMETRY-EXCLUDED: the telemetry path is ABSENT from the merge commit tree (parent-owned, never leg-carried)');
+    assert(gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':by.js']) !== '',
+      '#820-TELEMETRY-EXCLUDED: both legs\' REAL writes are still captured into M');
+    const legATree = gitOut(repoRoot, ['ls-tree', '-r', '--name-only', 'kw/legs/test-project/A']);
+    const legBTree = gitOut(repoRoot, ['ls-tree', '-r', '--name-only', 'kw/legs/test-project/B']);
+    assert(legATree.split('\n').indexOf(telRel) === -1 && legBTree.split('\n').indexOf(telRel) === -1,
+      '#820-TELEMETRY-EXCLUDED: NEITHER leg branch tracks the telemetry path (the add/add vector itself is gone)');
+    // The parent-owned copy is where the run's telemetry lives: the capture's leg_committed appends
+    // land there, and it stays UNTRACKED — the merge never carries a path that would collide with it.
+    assert(timingsHas(cacheDir, 'A', 'leg_committed') && timingsHas(cacheDir, 'B', 'leg_committed'),
+      '#820-TELEMETRY-EXCLUDED: leg_committed appends land in the PARENT-owned telemetry copy');
+    assert(gitOut(repoRoot, ['status', '--porcelain', '--', telRel]) === '?? ' + telRel,
+      '#820-TELEMETRY-EXCLUDED: the parent telemetry copy stays UNTRACKED after the merge, got '
+      + JSON.stringify(gitOut(repoRoot, ['status', '--porcelain', '--', telRel])));
+    cleanup(repoRoot);
+  });
+
+  // #820-SKIP-EMPTY-CAPTURE: when the member committed its own work and the ONLY leg residue is the
+  //   excluded telemetry sidecar, the excluded sweep leaves NOTHING staged — pre-fix the capture swept
+  //   the sidecar in (the add/add vector, branch head advanced with scheduler residue); post-fix it
+  //   SKIPS the empty commit (the leg is, correctly, already fully committed) and the merge stays clean.
+  scenario(() => {
+    const { repoRoot, legA, legB, rs } = provisionedRepo();
+    const telRel = 'kaola-workflow/test-project/.cache/node-timings.jsonl';
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    const headA = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']);
+    const headB = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/B']);
+    // ONLY the excluded telemetry residue remains uncommitted in each leg.
+    fs.appendFileSync(path.join(legA, telRel), JSON.stringify({ node: 'A', event: 'closed', ts: '2026-01-01T00:01:00.000Z' }) + '\n');
+    fs.appendFileSync(path.join(legB, telRel), JSON.stringify({ node: 'B', event: 'closed', ts: '2026-01-01T00:01:01.000Z' }) + '\n');
+    const synth = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B', planP(repoRoot));
+    assert(synth && synth.ok === true && typeof synth.mergeCommit === 'string',
+      '#820-SKIP-EMPTY-CAPTURE: telemetry-only residue still merges clean (pre-fix: the swept sidecar failed add/add), got ' + JSON.stringify(synth));
+    assert(gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']) === headA && gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/B']) === headB,
+      '#820-SKIP-EMPTY-CAPTURE: NO residue-only capture commit lands on either leg branch (skip-empty-commit), heads unchanged');
+    assert(gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':' + telRel]) === '',
+      '#820-SKIP-EMPTY-CAPTURE: the telemetry path is ABSENT from the merge commit tree');
+    assert(gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':by.js']) !== '',
+      '#820-SKIP-EMPTY-CAPTURE: the pre-committed leg work still merges');
+    cleanup(repoRoot);
+  });
+
+  // #820-CLOSE-NODE-E2E (the full reported path): close-node's last-member synthesis no longer blocks
+  //   on telemetry — neither the add/add between leg branches nor the untracked parent copy the merge
+  //   would have overwritten. Both legs carry real work + evidence + leg-side telemetry residue; the
+  //   parent copy holds the run's appends untracked. Pre-fix the last-member close refused
+  //   merge_conflict; post-fix the group closes group_passed and the merged tree carries NO telemetry.
+  scenario(() => {
+    const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
+    const telRel = 'kaola-workflow/test-project/.cache/node-timings.jsonl';
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B leg work\n');
+    fs.appendFileSync(path.join(legA, telRel), JSON.stringify({ node: 'A', event: 'opened', ts: '2026-01-01T00:02:00.000Z' }) + '\n');
+    fs.appendFileSync(path.join(legB, telRel), JSON.stringify({ node: 'B', event: 'opened', ts: '2026-01-01T00:02:01.000Z' }) + '\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#820-CLOSE-E2E: A deferred, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
+      '#820-CLOSE-E2E: the last-member close synthesizes + advances despite leg-side telemetry residue (pre-fix: merge_conflict refuse), got ' + JSON.stringify(rB));
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD:' + telRel]) === '',
+      '#820-CLOSE-E2E: the merged HEAD tree carries NO telemetry path (parent-owned, never leg-carried)');
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD:ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', 'HEAD:by.js']) !== '',
+      '#820-CLOSE-E2E: both legs\' real work merged');
+    assert(ledgerStatus(planP(repoRoot), 'A') === 'complete' && ledgerStatus(planP(repoRoot), 'B') === 'complete',
+      '#820-CLOSE-E2E: both members closed complete');
+    cleanup(repoRoot);
+  });
+
   // S5-IDEMPOTENT-RESUME (codifies the spike; S4 carry-over): re-running synthesizeLevel over the SAME
   //   already-merged disjoint legs (a crash after M committed but before the ledger advanced) is a NO-OP —
   //   it returns the SAME mergeCommit with a STABLE HEAD, never a spurious second merge or merge_conflict.

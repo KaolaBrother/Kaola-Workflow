@@ -10781,7 +10781,9 @@ function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
 // :disjoint) → a MECHANICAL octopus merge, NO agent (do not inflate the clean win). Steps:
 //   (1) SCRIPT-OWNED CAPTURE: commit each leg's uncommitted work on its own branch (the merge only sees
 //       commits; robust even if the agent forgot to commit — `add -A` then commit, mirroring the leg
-//       barrier's snapshotWorktree capture semantics).
+//       barrier's snapshotWorktree capture semantics). The sweep EXCLUDES the parent-owned run-telemetry
+//       sidecar (.cache/node-timings.jsonl): a leg must never ADD that path, or every leg branch adds it
+//       independently and the octopus merge fails add/add on scheduler residue.
 //   (2) OCTOPUS MERGE the leg branches into HEAD (`merge --no-ff` → one commit M, parents = HEAD + every
 //       leg head; the spike proved this for disjoint legs). The caller asserts the parent is CLEAN of
 //       production paths first (the parent-clean fence) so a floated own-lane slip fails closed BEFORE
@@ -10799,6 +10801,22 @@ function synthesizeLevel(root, legs, groupId, planPath) {
   const QUIET = { stdio: ['ignore', 'ignore', 'ignore'] };
   const ids = Object.keys(legs || {});
   if (!ids.length) return { ok: false, reason: 'no_leg_branches' };
+  // Run telemetry (.cache/node-timings.jsonl) is PARENT-OWNED: the parent worktree copy is the one
+  // deriveMaxSimultaneousOpen reads, and a leg must never ADD it. When a leg-side invocation dirties
+  // the leg's own copy, sweeping it into the capture commit makes EVERY leg branch ADD the same path
+  // independently — the octopus merge then fails add/add on workflow-generated residue, and the
+  // parent-owned `leg_committed` append below writes a file the merge is about to carry (git refuses
+  // an untracked-over-tracked overwrite). The legs are checkouts of the same tree, so the repo-relative
+  // path resolves identically inside each leg; exclude it from the sweep and neither failure mode can
+  // arise. Derivation is fail-open (a planPath outside root yields no exclusion) because the merge-side
+  // guards below stay the enforcement of last resort.
+  let telemetryRel = null;
+  if (planPath) {
+    const rel = path.relative(root, path.join(path.dirname(planPath), '.cache', 'node-timings.jsonl'));
+    if (rel && !path.isAbsolute(rel) && rel !== '..' && rel.indexOf('..' + path.sep) !== 0) {
+      telemetryRel = rel.split(path.sep).join('/');
+    }
+  }
   // (1) script-owned capture. Emits `leg_committed` per leg (AC17 telemetry: the leg-lifecycle event
   // leg_opened → leg_committed → level_merged) when planPath is supplied — symmetric with leg_opened. A leg
   // with work committed by its own agent (not dirty) still records the lifecycle event; an empty leg never
@@ -10819,8 +10837,16 @@ function synthesizeLevel(root, legs, groupId, planPath) {
     }
     if (dirty) {
       try {
-        execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
-        execFileSync('git', ['-C', leg.legPath, ...ID, 'commit', '-m', 'kw-leg: ' + id], QUIET);
+        // `add -A` MINUS the parent-owned run-telemetry sidecar (see the exclusion above) — the sweep
+        // still captures every real write, evidence file included.
+        if (telemetryRel) execFileSync('git', ['-C', leg.legPath, 'add', '-A', '--', '.', ':(exclude)' + telemetryRel], QUIET);
+        else execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
+        // The excluded sweep can leave NOTHING staged — the member committed its own work and the only
+        // residue was the excluded telemetry sidecar. Committing an empty stage would fail the capture
+        // for a leg that is, correctly, already fully committed; skip the commit instead.
+        let staged = true;
+        try { execFileSync('git', ['-C', leg.legPath, 'diff', '--cached', '--quiet'], QUIET); staged = false; } catch (_) { staged = true; }
+        if (staged) execFileSync('git', ['-C', leg.legPath, ...ID, 'commit', '-m', 'kw-leg: ' + id], QUIET);
       } catch (e) { return { ok: false, reason: 'leg_capture_failed', nodeId: id, leg: id, detail: String((e && e.message) || e) }; }
     }
     if (planPath) { try { appendNodeTiming(planPath, id, 'leg_committed'); } catch (_) { /* telemetry is best-effort */ } }
