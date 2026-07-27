@@ -476,14 +476,23 @@ uses a stricter, fail-closed V2 task-name dispatch contract, so it additionally
 requires this explicit setting in `~/.codex/config.toml`:
 
 ```toml
-[agents]
+[features.multi_agent_v2]
 enabled = true
+max_concurrent_threads_per_session = 5
 ```
 
-This explicit value is a Kaola preflight requirement, not a claim that general
-Codex subagents are disabled when the key is absent. If a
-`# BEGIN kaola-workflow agents` managed block already exists, place the bare
-`[agents]` table above it. See the official
+MultiAgentV2 is **opt-in and off by default** — only V1 `multi_agent` is on by
+default — so this has to be written for Codex to expose the V2 task-name spawn
+tools at all. The inline `multi_agent_v2 = { enabled = true, ... }` under
+`[features]` and a bare `multi_agent_v2 = true` are equally accepted. A
+top-level `[agents] enabled = true` does **not** enable it: `[agents]`
+configures roles and limits and has no `enabled` key.
+
+`multi_agent_v2` is not carried in the public Codex configuration reference,
+which documents `[features] multi_agent` for enabling subagents and `[agents]`
+only for role/limit settings (`max_threads`, `max_depth`). The V2 flag and its
+bounds are verified behavior on Codex >=0.145.0 rather than published defaults,
+and may change in a future release. See the official
 [Subagents guide](https://learn.chatgpt.com/docs/agent-configuration/subagents#global-settings)
 for Codex's defaults.
 
@@ -650,7 +659,7 @@ The audit must keep these facts separate:
   must be written for Codex to expose the V2 task-name spawn tools at all.
 - Three shapes are accepted: a `[features.multi_agent_v2]` table, the inline
   `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
-  `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not**
+  `multi_agent_v2 = true`. A top-level `features.multi_agent_v2.enabled = true` does **not**
   enable it — `[agents]` configures roles and limits (`agents.<name>.*`,
   `max_depth`, `max_threads`) and has no `enabled` key, so Codex parses it and
   applies nothing.
@@ -661,16 +670,15 @@ The audit must keep these facts separate:
 - `features.multi_agent_v2.enabled` is what Kaola's gate reads.
   Kaola-Workflow does **not** write it for you (owner decision D2) — a
   fresh Kaola install refuses at preflight (`codex_multi_agent_v2_required`)
-  until you add it by hand,
-  ABOVE the `# BEGIN kaola-workflow agents` managed block (TOML forbids
-  re-declaring `[agents]` once an `[agents.<role>]` sub-table inside that block
-  has already opened it).
+  until you add it by hand. It goes under `[features]`, which never collides
+  with the `# BEGIN kaola-workflow agents` managed block.
 - `[notice].suppress_unstable_features_warning = true` only suppresses the
   under-development warning; it is not evidence that V2 is enabled.
-- `[agents].max_concurrent_threads_per_session` (or its back-compat alias
-  `[agents].max_threads`), when present, must be high enough for Kaola fan-out
-  plus the root session — the cap is INCLUSIVE of the root thread, so
-  sub-agent width is the configured cap minus one.
+- `features.multi_agent_v2.max_concurrent_threads_per_session`, when present,
+  must be high enough for Kaola fan-out plus the root session — the cap is
+  INCLUSIVE of the root thread, so sub-agent width is the configured cap minus
+  one. `agents.max_threads` is NOT an alias for it and must not be set
+  alongside: Codex rejects that key once MultiAgentV2 is enabled.
 - The installed plugin cache, generated role profiles, and global hooks must be
   fresh relative to the plugin source Codex is actually loading.
 - Runtime profile integrity comes from omission plus preflight: every generated
@@ -688,8 +696,8 @@ Kaola-Workflow:
 
 `developer_instructions` is a top-level key, so place it before the first TOML
 table. If the key already exists, merge these rules into its existing value
-instead of declaring it twice. Add or extend one top-level `[agents]` table;
-do not use the retired `features.multi_agent_v2` forms.
+instead of declaring it twice. Enable MultiAgentV2 under `[features]`; a
+top-level `[agents] enabled = true` does not enable it.
 
 ```toml
 developer_instructions = """
@@ -707,7 +715,7 @@ an update.
 [notice]
 suppress_unstable_features_warning = true
 
-[agents]
+[features.multi_agent_v2]
 enabled = true
 max_concurrent_threads_per_session = 5
 default_wait_timeout_ms = 3600000
@@ -726,8 +734,8 @@ After changing these settings, start a fresh Codex session so the tool surface
 and injected instructions are rebuilt. The preflight and doctor report
 `multi_agent_v2_enabled`, `max_concurrent_threads_per_session[_source]`,
 `effective_subagent_width`, and the wait-timeout bounds. Absent or false
-`[agents].enabled` refuses with the typed `codex_multi_agent_v2_required`
-status (repair: the exact `[agents]\nenabled = true` diff, never written by
+`features.multi_agent_v2.enabled` refuses with the typed `codex_multi_agent_v2_required`
+status (repair: the exact `[features.multi_agent_v2]\nenabled = true` diff, never written by
 Kaola itself). Routing skills call the direct `agents` namespace, never the
 server-reserved `collaboration` name, `functions.exec`, or Code Mode.
 
@@ -738,10 +746,10 @@ plugin cache.
 
 Every install/upgrade also prints the effective dispatch **posture** automatically
 (no separate command needed). Profile installation always succeeds — the installer
-never refuses on `[agents].enabled` (that gate lives at the later, dispatch-time
+never refuses on `features.multi_agent_v2.enabled` (that gate lives at the later, dispatch-time
 preflight, per D2) — but it re-reads the config it just wrote and reports the
 effort-gated MultiAgentMode the Codex runtime will actually enforce, plus whether
-`[agents].enabled` is set at all:
+`features.multi_agent_v2.enabled` is set at all:
 
 ```text
 Kaola-Workflow Codex multi_agent_v2: NOT enabled (see codex_multi_agent_v2_required at preflight)
@@ -751,11 +759,11 @@ Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture
 status: ok
 ```
 
-This report is REPORT-ONLY and never fails the install: `[agents].enabled` and
+This report is REPORT-ONLY and never fails the install: `features.multi_agent_v2.enabled` and
 `model_reasoning_effort` are both user-owned choices, so the installer never writes
 them. Although current Codex releases enable general subagent workflows by default,
 an install that prints `status: ok` while Kaola's `multi_agent_v2` attestation reads
-NOT enabled still needs the operator to add `[agents]\nenabled = true` by hand (ABOVE the
+NOT enabled still needs the operator to add `[features.multi_agent_v2]\nenabled = true` by hand (under
 managed block — see `codex_multi_agent_v2_required`'s repair diff) before any role
 agent can actually be dispatched; once enabled, a non-proactive posture still needs
 one of the remediations above: explicitly ask for sub-agents / delegation / parallel
@@ -765,7 +773,7 @@ exposes an `ultra` reasoning effort for your model/plan (undocumented as of Code
 `~/.codex/config.toml`, or pass it per-session (`codex -c model_reasoning_effort=ultra`).
 `kaola-workflow-codex-preflight.js` (both the normal gate and `--doctor`) reports the
 same posture non-fatally once enabled — a `warn:` line, never a red preflight — but
-refuses outright (`codex_multi_agent_v2_required`, exit 7) while `[agents].enabled`
+refuses outright (`codex_multi_agent_v2_required`, exit 7) while `features.multi_agent_v2.enabled`
 itself is absent-or-false. See `docs/api.md` § Codex Harness Scripts for the JSON
 field names.
 
@@ -883,7 +891,7 @@ mirrors the full packet into `dispatch.evidence_file` when its dispatch supplies
 file.
 
 Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
-is the only mode — there is no v1/thread-id fallback. Once `[agents].enabled = true`
+is the only mode — there is no v1/thread-id fallback. Once `features.multi_agent_v2.enabled = true`
 is set, plan-run passes `task_name: dispatch.codex_task_name`, a sanitized value
 derived from the workflow node id and role, with `fork_turns: "none"` and no
 transient model/effort overrides; the named standalone profile (or Codex's own

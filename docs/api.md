@@ -2529,9 +2529,9 @@ node scripts/kaola-workflow-codex-preflight.js --project-root <dir> [--plan <pla
 node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [--home <dir>] [--json] [--codex-version <v>]
 ```
 
-**Codex version floor (issue #775).** `CODEX_MIN_VERSION = '0.145.0'` — the first version to unify
-multi-agent settings under a top-level `[agents]` config table and stabilize MultiAgentV2 as the
-only dispatch path. The normal gate resolves the installed version with this precedence: the
+**Codex version floor.** `CODEX_MIN_VERSION = '0.145.0'` — the version this integration is verified
+against, in which MultiAgentV2 is stabilized but remains opt-in and off by default (only V1
+`multi_agent` is on by default), so `features.multi_agent_v2.enabled` must be set explicitly. The normal gate resolves the installed version with this precedence: the
 `--codex-version <v>` flag, then the `KAOLA_CODEX_VERSION` env var, then a live `codex --version`
 probe; an installed version below the floor (or an undetected version with no override) refuses
 `codex_version_unsupported` at exit 7, before any other check runs. The flag/env override is
@@ -2566,7 +2566,7 @@ the most-specific absolute `[projects."..."]` entry covering `--project-root` in
 declare `trust_level = "trusted"`; unknown/untrusted project footprints refuse as
 `project_trust_required` because Codex ignores their `.codex` layers. Every trusted
 repository-root-to-cwd project layer is then inspected and the active project authority must be
-fresh; a lower stale/conflicting layer cannot be hidden by a higher clean layer. `[agents].enabled`
+fresh; a lower stale/conflicting layer cannot be hidden by a higher clean layer. `features.multi_agent_v2.enabled`
 absent-or-false refuses `codex_multi_agent_v2_required` (see below) before profile staleness is
 even considered.
 
@@ -2589,7 +2589,7 @@ even considered.
 4. Stale Kaola `.toml` files left in the target dir (listed in the local `.kaola-managed-profiles.json` manifest, or in the stale-files list `docs-lookup.toml`) are detected; unknown user-owned TOMLs are **reported, never deleted** (the `extra_unmanaged` field).
 5. **Auto-install when safe**: if the only problem is a stale/missing/malformed managed block, profile file, or stale Kaola file, runs `install-codex-agent-profiles.js`, then re-verifies ALL checks. On success, returns exit 0 with `autofixed: true`.
 6. **Typed refusal when unsafe**: if the detected/attested Codex version is below the supported
-   floor, `[agents].enabled` is absent-or-false, any persisted config path is a symlink/wrong
+   floor, `features.multi_agent_v2.enabled` is absent-or-false, any persisted config path is a symlink/wrong
    type/unreadable, a project Kaola footprint is not covered by a trusted global project entry, an
    outside-marker `agents` declaration exists in any loaded project layer, the local manifest
    declares an unsupported future `schema_version`, the installer is unavailable/errors, or the
@@ -2612,22 +2612,22 @@ Codex to expose the V2 task-name spawn tools. Kaola-Workflow deliberately does *
 into the user's `config.toml` itself (a fresh install therefore always needs this one manual
 step) — the `repair` string carries the exact minimal paste-able diff. Three shapes are read: a
 `[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled = true, ... }` under
-`[features]`, and a bare `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does NOT
+`[features]`, and a bare `multi_agent_v2 = true`. A top-level `features.multi_agent_v2.enabled = true` does NOT
 enable MultiAgentV2 — `[agents]` has no `enabled` key — and `agents.max_threads` must not be set
 alongside it, because Codex rejects that key once MultiAgentV2 is enabled. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
 V2 transport-safety gate (`codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe`),
 which Codex >=0.145.0's stabilized MultiAgentV2 no longer needs.
 
 **Dispatch-posture report (additive, non-fatal — issue #598; #775 re-baseline):** every live-scope
-result after the persisted config paths are readable and `[agents].enabled` is on, success or
+result after the persisted config paths are readable and `features.multi_agent_v2.enabled` is on, success or
 profile refusal, additionally carries `dispatch_posture`
 (`"none"|"explicitRequestOnly"|"proactive"`), `model_reasoning_effort` (the raw root-level
 TOML value, or `null` when unset), `multi_agent_enabled` (mirrors `multi_agent_v2_enabled` — the
-`[agents].enabled` boolean), and `dispatch_posture_warning` (the exact remediation string, or
+`features.multi_agent_v2.enabled` boolean), and `dispatch_posture_warning` (the exact remediation string, or
 `null` when the posture is already `proactive`). This is the effort-gated Codex runtime
 MultiAgentMode — distinct from `dispatch_mode`/`multi_agent_v2_enabled` (#332/#571/#775), which
 only report whether the spawn *tools* are exposed, not whether the runtime will actually accept a
-spawn: `[agents].enabled` absent-or-false → `"none"`; otherwise a root-level
+spawn: `features.multi_agent_v2.enabled` absent-or-false → `"none"`; otherwise a root-level
 `model_reasoning_effort = "ultra"` → `"proactive"`, any other value or absent →
 `"explicitRequestOnly"`. **ATTESTATION-STYLE / NON-FATAL by construction** — these four fields
 never change `status` or the exit code, on either the normal gate or `--doctor`. On the normal
@@ -2654,9 +2654,10 @@ All six are gated on `multi_agent_v2_enabled` (the same boolean `dispatch_mode`/
 detection already derives, #332/#571/#775): when v2 is not active, every field reports `null` (source
 `'not_applicable'`), mirroring how `dispatch_posture` itself collapses to `"none"` when the feature
 is off. When v2 IS active: `max_concurrent_threads_per_session` reports the configured
-`[agents] max_concurrent_threads_per_session` verbatim (`source: 'config'`) when it is a positive
-integer — `max_threads` is accepted as a back-compat alias for the same field, first occurrence of
-either name winning; when both are absent or non-positive/non-integer, it falls back to the
+`features.multi_agent_v2.max_concurrent_threads_per_session` verbatim (`source: 'config'`) when it
+is a positive integer. `max_threads` is NOT an alias — it is a separate top-level `[agents]` key
+that Codex rejects once MultiAgentV2 is enabled — so a stray one is ignored here; when the field is
+absent or non-positive/non-integer, it falls back to the
 OBSERVED default of **4** (`source: 'observed_default'`) — this number comes from the issue's own
 controlled probe ("4 available concurrency slots, including you"), NOT from published Codex
 documentation, so it is labeled observed rather than a guaranteed default. This arithmetic is
@@ -2683,7 +2684,7 @@ and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
 | `4` | `autofix_unsafe` / `config_layer_unsafe` / `project_trust_required` | outside-marker `agents` declaration; linked/unreadable/wrong-type persisted config; or a project Kaola footprint Codex is not configured to trust |
 | `5` | `installer_failed` | installer missing / errored / still stale after re-verify |
 | `6` | `profile_schema_version_unsupported` | local manifest `schema_version` is newer than this installer supports — upgrade kaola-workflow |
-| `7` | `codex_version_unsupported` / `codex_multi_agent_v2_required` | detected Codex version below the supported floor; or `[agents].enabled` is absent-or-false (issue #775 — retired the 0.142/0.144 `codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe` transport gate and reused its exit code) |
+| `7` | `codex_version_unsupported` / `codex_multi_agent_v2_required` | detected Codex version below the supported floor; or `features.multi_agent_v2.enabled` is absent-or-false (issue #775 — retired the 0.142/0.144 `codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe` transport gate and reused its exit code) |
 
 **JSON output (`--json`):**
 
@@ -2738,7 +2739,7 @@ reports the same version-floor attestation the normal gate refuses on (`--codex-
 even though doctor never hard-refuses. Exit code is 0 only
 when repository source, every installed persisted layer, and every selected exact-name/version plugin cache are
 clean-or-absent AND the version is supported. It is 1 for malformed source, linked/unreadable config, an untrusted project Kaola
-footprint, stale managed blocks or profiles, a footprint scope with `[agents].enabled` off,
+footprint, stale managed blocks or profiles, a footprint scope with `features.multi_agent_v2.enabled` off,
 an unsupported Codex version, or plugin-cache drift. Plugin caches remain read-only; their
 repair is the exact `codex plugin remove <plugin>@<marketplace> && codex plugin add
 <plugin>@<marketplace>` refresh. Every stale scope carries a concrete repair.
@@ -2767,7 +2768,7 @@ Default-on validate → authority check → install → prune → manifest → p
    (Issue #775 retired the prior step-3 "V2 role-transport wall" — the 0.142/0.144
    `codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe` pre-install gate — since
    Codex >=0.145.0's stabilized MultiAgentV2 no longer needs it. The installer never gates on
-   `[agents].enabled` either — owner decision D2 keeps that a preflight-time refusal, not an
+   `features.multi_agent_v2.enabled` either — owner decision D2 keeps that a preflight-time refusal, not an
    install-time one, since Kaola does not write the flag for the user; `multi_agent_v2_enabled` is
    only ever *reported*, never blocked, via `deriveDispatchPosture`/`detectCodexDispatchMode`.)
 4. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the
