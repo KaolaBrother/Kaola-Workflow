@@ -3223,6 +3223,19 @@ function buildDispatch(nodeInfo, context) {
   // the serial/read path (ctx.leg_path/leg_branch null) ⇒ the dispatch shape is byte-identical to pre-#591.
   if (ctx.leg_path != null && String(ctx.leg_path).trim() !== '') {
     d.leg_path = String(ctx.leg_path);
+    // The lane-group member's AUTHORITATIVE evidence artifact is the LEG's own copy: record-evidence
+    // --verify resolves it (evidence_source:"leg") and the close measures it. The bare project-relative
+    // evidence_file hint resolves against whatever worktree the reader is in — resolved against the
+    // PARENT it strands the deliverable there, and close fails evidence_shape_failed against the
+    // still-seeded leg copy. Emit the leg copy as an ABSOLUTE path so there is nothing to infer.
+    if (ctx.evidence_file != null && String(ctx.evidence_file).trim() !== '') {
+      const ef = String(ctx.evidence_file);
+      d.evidence_file_abs = path.isAbsolute(ef) ? ef : path.join(String(ctx.leg_path), ef);
+    }
+    // The cwd contract at the same place: record-evidence --stdin persists to the evidence copy its cwd
+    // resolves (inside leg_path → the leg copy; elsewhere → the parent copy). For a leg member, write
+    // evidence_file_abs directly or run record-evidence from leg_path.
+    d.evidence_cwd_resolution = 'record-evidence --stdin writes the evidence copy matching its cwd; for a lane-group member the authoritative copy is evidence_file_abs (evidence_source: leg) — write that absolute path, or run record-evidence with leg_path as the cwd';
   }
   if (ctx.leg_branch != null && String(ctx.leg_branch).trim() !== '') {
     d.leg_branch = String(ctx.leg_branch);

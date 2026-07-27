@@ -11831,6 +11831,102 @@ scenario(() => {
   });
 
   // -------------------------------------------------------------------------
+  // #821-LEG-EVIDENCE-FILE-ABS (lane-group dispatch card): a co-opened member's AUTHORITATIVE evidence
+  //   artifact is the LEG's own copy (record-evidence --verify resolves it evidence_source:"leg"; the
+  //   close measures it), but the card's bare project-relative evidence_file resolves against whatever
+  //   worktree the reader is in — resolved against the PARENT it strands the deliverable there and the
+  //   close fails evidence_shape_failed against the still-seeded leg copy. The card now carries
+  //   evidence_file_abs (the leg copy as an ABSOLUTE path under leg_path) plus an
+  //   evidence_cwd_resolution note (record-evidence --stdin persists the copy its cwd resolves).
+  //   (RED-provable: pre-fix the card carries neither key.)
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.laneGroup, '#821 setup: {A,B} co-open into legs, got ' + JSON.stringify(r));
+    const rs = readRS(cacheDir);
+    assert((r.opened || []).length === 2, '#821: two co-open members opened');
+    for (const n of (r.opened || [])) {
+      const leg = rs.lane_group.legs[n.id];
+      const relEvidence = 'kaola-workflow/test-project/.cache/' + n.id + '.md';
+      // The project-relative hint is RETAINED (byte-compat); the absolute path is ADDITIVE.
+      assert(n.dispatch.evidence_file === relEvidence,
+        '#821: ' + n.id + ' evidence_file stays the project-qualified hint, got ' + JSON.stringify(n.dispatch.evidence_file));
+      const abs = n.dispatch.evidence_file_abs;
+      // Guard every subsequent use on abs being a string: on the pre-fix card the key is ABSENT, and
+      // a RED-by-design assertion must FAIL, never THROW (an uncaught TypeError would abort the shard
+      // and hide every other signal in it).
+      const absOk = typeof abs === 'string' && path.isAbsolute(abs);
+      assert(absOk,
+        '#821: ' + n.id + ' evidence_file_abs is an ABSOLUTE path (absent pre-fix), got ' + JSON.stringify(abs));
+      assert(absOk && abs === path.join(leg.legPath, relEvidence),
+        '#821: ' + n.id + ' evidence_file_abs resolves under the member\'s OWN leg_path (leg_path + evidence_file), got '
+        + JSON.stringify(abs) + ' want ' + JSON.stringify(path.join(leg.legPath, relEvidence)));
+      assert(absOk && abs.indexOf(leg.legPath + path.sep) === 0,
+        '#821: ' + n.id + ' evidence_file_abs is under leg_path ' + JSON.stringify(leg.legPath) + ', got ' + JSON.stringify(abs));
+      // open-ready's kw-stub commit seeds the evidence stub BEFORE each leg branches, so the card's
+      // absolute target is a REAL tracked file inside the leg the member can edit in place.
+      assert(absOk && fs.existsSync(abs),
+        '#821: ' + n.id + ' the seeded leg evidence copy EXISTS at evidence_file_abs (the kw-stub seed the leg inherits)');
+      // The failure this issue filed: resolving the relative hint against the PARENT strands the deliverable.
+      assert(absOk && abs !== path.join(repoRoot, relEvidence),
+        '#821: ' + n.id + ' evidence_file_abs is NOT the parent-worktree resolution that stranded the deliverable');
+      const note = n.dispatch.evidence_cwd_resolution;
+      assert(typeof note === 'string' && note.length > 0,
+        '#821: ' + n.id + ' evidence_cwd_resolution note present (absent pre-fix)');
+      assert(/record-evidence --stdin/.test(String(note)) && /cwd/.test(String(note)),
+        '#821: ' + n.id + ' the note documents the record-evidence --stdin cwd-resolution contract, got ' + JSON.stringify(note));
+    }
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #821-SERIAL-NO-LEG-EVIDENCE-ABS (byte-identity guard): on the serial/read path (no lane group, no
+  //   leg) an opened member's card carries NEITHER evidence_file_abs NOR evidence_cwd_resolution —
+  //   both attach conditionally under leg_path (like #591's leg fields), so serial/read open-ready
+  //   output stays byte-identical to pre-#821. Raw-string probe on the opened payload plus a
+  //   key-presence check on the dispatch object.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const { repoRoot } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 1, '#821-SERIAL: serial open ok (single write), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const d = r.opened[0].dispatch;
+    assert(d && !('evidence_file_abs' in d), '#821-SERIAL: serial dispatch has NO evidence_file_abs key, got ' + JSON.stringify(Object.keys(d)));
+    assert(d && !('evidence_cwd_resolution' in d), '#821-SERIAL: serial dispatch has NO evidence_cwd_resolution key, got ' + JSON.stringify(Object.keys(d)));
+    assert(JSON.stringify(r.opened).indexOf('"evidence_file_abs"') === -1 && JSON.stringify(r.opened).indexOf('"evidence_cwd_resolution"') === -1,
+      '#821-SERIAL: no evidence_file_abs/evidence_cwd_resolution anywhere in the serial opened payload');
+    cleanup(repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #821-BUILDDISPATCH-UNIT: the derivation itself, direct-call — relative join under leg_path,
+  //   absolute passthrough, the evidence_file-absent conditional shape, and the no-leg byte-identity arm.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const nodeInfo = { id: 'A', role: 'tdd-guide', model: 'standard', declared_write_set: 'ax.js' };
+    const legPath = path.join(os.tmpdir(), 'kw-821-leg', 'A');
+    const rel = 'kaola-workflow/test-project/.cache/A.md';
+    const d1 = buildDispatch(nodeInfo, { nonce: 'nonce12345678', evidence_file: rel, leg_path: legPath, leg_branch: 'kw/legs/test-project/A' });
+    assert(d1.evidence_file_abs === path.join(legPath, rel),
+      '#821-UNIT: a project-relative evidence_file joins UNDER leg_path, got ' + JSON.stringify(d1.evidence_file_abs));
+    assert(typeof d1.evidence_cwd_resolution === 'string' && d1.evidence_cwd_resolution.length > 0,
+      '#821-UNIT: the cwd-resolution note rides the leg_path arm');
+    const absTarget = path.join(legPath, rel);
+    const d2 = buildDispatch(nodeInfo, { nonce: 'nonce12345678', evidence_file: absTarget, leg_path: legPath, leg_branch: 'kw/legs/test-project/A' });
+    assert(d2.evidence_file_abs === absTarget,
+      '#821-UNIT: an ALREADY-absolute evidence_file passes through unchanged, got ' + JSON.stringify(d2.evidence_file_abs));
+    const d3 = buildDispatch(nodeInfo, { nonce: 'nonce12345678', leg_path: legPath, leg_branch: 'kw/legs/test-project/A' });
+    assert(!('evidence_file_abs' in d3),
+      '#821-UNIT: no evidence_file ⇒ NO evidence_file_abs key (conditionally attached, never null-valued)');
+    assert(typeof d3.evidence_cwd_resolution === 'string' && d3.evidence_cwd_resolution.length > 0,
+      '#821-UNIT: the cwd-resolution note attaches with leg_path even without an evidence_file');
+    const d4 = buildDispatch(nodeInfo, { nonce: 'nonce12345678', evidence_file: rel });
+    assert(!('evidence_file_abs' in d4) && !('evidence_cwd_resolution' in d4),
+      '#821-UNIT: no leg_path ⇒ NEITHER #821 key (serial/read byte-identity)');
+  });
+
+  // -------------------------------------------------------------------------
   // #692-LEG-UPSTREAM-EVIDENCE-ABSOLUTE: a co-opened WRITE member provisioned INTO an isolated leg
   //   carries a PARENT-sourced upstream_evidence pointer (seed = a COMPLETE producer, code-explorer,
   //   merged into the parent tree — NOT a live leg). Its dispatch.upstream_evidence[].path MUST be an
