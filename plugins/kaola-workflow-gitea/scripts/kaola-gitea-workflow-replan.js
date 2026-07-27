@@ -4222,6 +4222,37 @@ function appendConsentExtension(opts) {
         return schema.refuse('replan_consent_not_requested');
       }
     }
+    // #828: a granted extension raises the ceiling in THREE places that must stay consistent — the
+    // consent ledger (the authority), the state's cached `authorized_epoch_ceiling`, and the live
+    // committed receipt's `budget.ceiling`. `verifyCurrentEpochAuthority` holds a committed receipt
+    // to STRICT ceiling equality with state, and the rotation that would retire that receipt runs in
+    // `prepareReplan` only AFTER that gate — so raising state alone wedges every mutating verb with
+    // `state_epoch_receipt_mismatch` (the receipt, like state, is only a cache of the verified
+    // chain). Re-fence the receipt in the same locked write; the strict-equality tier stands. A
+    // `consent_halt` receipt is untouched: that tier never runs on it and `resumeReplan` already
+    // re-derives its ceiling from the chain.
+    const reFenceCommittedReceipt = newCeiling => {
+      if (transaction && transaction.phase === 'committed' && transaction.outcome === 'committed'
+          && transaction.budget.ceiling !== newCeiling) {
+        transaction.budget.ceiling = newCeiling;
+        // `promotedState` embeds `authorized_epoch_ceiling: budget.ceiling`, so the activation
+        // digests sealed at commit over the promoted state bytes go stale with the ceiling and the
+        // activation-integrity recompute (`verifyCompletedActivationOutputs`, also consulted by
+        // `resumeReplan`'s state-bytes comparison) would refuse. Re-seal exactly the two
+        // ceiling-dependent steps against the new ceiling: `transaction_committed` is
+        // ceiling-independent (epoch/plan_hash/count/snapshot) and the remaining steps digest
+        // plan/mirror/cleanup bytes, so all other seals stand.
+        if (activationComplete(transaction, 'child_state_promoted_fenced')) {
+          transaction.activation.child_state_promoted_fenced.digest = schema.sha256Hex(
+            Buffer.from(promotedState(paths, transaction, true)));
+        }
+        if (activationComplete(transaction, 'state_unfenced')) {
+          transaction.activation.state_unfenced.digest = schema.sha256Hex(
+            Buffer.from(promotedState(paths, transaction, false)));
+        }
+        updateTransaction(paths, transaction, opts, 'after_tx_consent_resumed');
+      }
+    };
     let ledger = { schema_version: 1, entries: [] };
     if (entryExists(paths.consentPath)) {
       try { ledger = readAuthorityJson(paths.consentPath); }
@@ -4240,6 +4271,10 @@ function appendConsentExtension(opts) {
       }
       const repaired = schema.writeEpochStateBlock(stateContent, { authorized_epoch_ceiling: verified.ceiling });
       durableWriteFile(paths.statePath, repaired, opts, 'after_state_consent_ceiling');
+      // The replay is the repair path for a crash between the original call's durable writes, so it
+      // must re-fence the same receipt cache; on a clean replay the ceiling already matches and the
+      // receipt is left untouched.
+      reFenceCommittedReceipt(verified.ceiling);
       return { result: 'consent_already_extended', extension_id: duplicate.extension_id,
         authorized_epoch_ceiling: verified.ceiling, entry_digest: duplicate.entry_digest,
         acceptance_change_digest: duplicate.acceptance_change_digest || null };
@@ -4277,6 +4312,7 @@ function appendConsentExtension(opts) {
     durableWriteJson(paths.consentPath, ledger, opts, 'after_consent_ledger');
     const updated = schema.writeEpochStateBlock(stateContent, { authorized_epoch_ceiling: entry.new_ceiling });
     durableWriteFile(paths.statePath, updated, opts, 'after_state_consent_ceiling');
+    reFenceCommittedReceipt(entry.new_ceiling);
     return { result: 'consent_extended', extension_id: entry.extension_id,
       authorized_epoch_ceiling: entry.new_ceiling, entry_digest: entry.entry_digest,
       acceptance_change_digest: acceptanceChangeDigest };

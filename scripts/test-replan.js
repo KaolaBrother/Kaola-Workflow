@@ -2401,6 +2401,43 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// #828: a GRANTED consent extension must release the very next prepare on a REAL
+// lineage. The bare initFixture carries no live committed receipt, so a hand-appended
+// exhausted budget never trips the strict state-vs-receipt ceiling equality in
+// `verifyCurrentEpochAuthority` — the structural hole that let a legitimate extension
+// wedge every mutating verb with `state_epoch_receipt_mismatch`. Drive two genuine
+// commits, hit the third-transition consent refusal, extend, and prepare MUST prepare.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    equal(driveReplanToCommit(fx).result, 'committed', '#828 real lineage commits the first review re-plan');
+    installCurrentReviewSource(fx, 'child-review:2');
+    fx.sourceAttemptId = 'child-review:2';
+    equal(driveReplanToCommit(fx).result, 'committed', '#828 real lineage commits the second review re-plan');
+    const receipt = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(receipt.phase, 'committed', '#828 the live receipt is the committed second epoch, not a fixture stub');
+
+    installCurrentReviewSource(fx, 'child-review:3');
+    const halted = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: 'child-review:3', transitionReason: 'review_repair_requires_replan' });
+    equal(halted.reason, 'replan_consent_required',
+      '#828 the third automatic transition consent-halts: ' + JSON.stringify(halted));
+
+    const extended = replan.appendConsentExtension({ repoRoot: fx.root, project: fx.project,
+      userTurnReference: 'user-turn-828-1', reason: 'authorize one additional review transition',
+      now: () => '2026-07-27T01:00:00.000Z' });
+    equal(extended.result, 'consent_extended', '#828 the human turn records one extension: ' + JSON.stringify(extended));
+    equal(extended.authorized_epoch_ceiling, 3, '#828 the granted ceiling rises exactly one slot');
+    ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok,
+      '#828 the shared current-authority gate accepts the state the consent turn itself produced');
+
+    const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: 'child-review:3', transitionReason: 'review_repair_requires_replan' });
+    equal(prepared.result, 'prepared',
+      '#828 a granted extension un-wedges the very next prepare on a real lineage: ' + JSON.stringify(prepared));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 // Review liveness and the one-shot diagnosis-to-build exemption are claim-scoped.
 scenario(() => {
   const lineage = '1'.repeat(64);
