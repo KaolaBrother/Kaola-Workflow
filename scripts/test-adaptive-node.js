@@ -92,6 +92,11 @@ const {
   loadOwnerProjection,
   ensureOwnerProjection,
   routeMismatchDetail,
+  // #829: the bounded re-anchor verb + its provenance proof + the commit-side candidate triple.
+  runRebindBase,
+  proveReanchorProvenance,
+  candidateTripleForCommit,
+  candidateTripleFromListing,
 } = require('./kaola-workflow-adaptive-node');
 const {
   RUNNING_SET_NAME,
@@ -20626,8 +20631,11 @@ scenario(() => {
   // seed(read) -> {wa, wb}(parallel-safe write antichain) -> {ga, gb}(their own gates) -> finalize
   // `extraNodes` appends further rows (used to build a GRAMMATICAL write-set overlap: an owner that is
   // dependency-ORDERED with the reviewed writer, which the freeze wall permits).
+  // `customPlan` replaces the whole text verbatim (the #829 replay-arm shape needs a descendant cone
+  // downstream of a lane-group member — a spine this builder's fixed rows cannot express).
   function plan683(cfg) {
     const c = cfg || {};
+    if (c.customPlan) return c.customPlan;
     const rows = [
       '| seed     | code-explorer | —       | —            | 1 | sequence |',
       '| wa       | tdd-guide     | seed    | ' + (c.waSet || 'ax.js') + ' | 1 | sequence |',
@@ -21405,6 +21413,310 @@ scenario(() => {
     assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
       && w.ledger683('wa') === 'complete',
       '#683 N14: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
+  });
+
+  // -------------------------------------------------------------------------
+  // #829-REPLAY-E2E — the #739 REPLAY ARM on a leg-era base, real git end to end. wa ran in a lane
+  // LEG (its barrier base is the pre-merge branch-point); its descendant tail completed AFTER the
+  // lane merge; the review then refuted wa's file. repair-node on the non-maximal semantic owner wa
+  // takes the in-plan descendant replay — and the arm now runs the SAME foreign-probe + rebind as a
+  // direct repair: the merged SIBLING file (bx.js, non-cone) is absorbed into a synthetic re-anchored
+  // base and journaled, and the cone's own output (tail.js) stays the cone reset's business
+  // (journaled as cone-absorbed). The reopened owner's close then PASSES its barrier — pre-#829 this
+  // arm skipped the probe entirely (the mock-shell #739 pins above keep the stale base as kept) and
+  // the same close died write_set_overflow on the merged files. This is the real-git close assertion
+  // behind those pins.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const REPLAY_PLAN_829 = [
+      '# Workflow Plan — issue-683', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —       | —            | 1 | sequence |',
+      '| wa       | tdd-guide     | seed    | ax.js        | 1 | sequence |',
+      '| wb       | tdd-guide     | seed    | bx.js        | 1 | sequence |',
+      '| tail     | tdd-guide     | wa      | tail.js      | 1 | sequence |',
+      '| review   | code-reviewer | tail    | —            | 1 | sequence |',
+      '| gb       | code-reviewer | wb      | —            | 1 | sequence |',
+      '| finalize | finalize      | review, gb | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | pending |', '| wa | pending |', '| wb | pending |', '| tail | pending |',
+      '| review | pending |', '| gb | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    const env = make683Repo({ customPlan: REPLAY_PLAN_829 });
+    const { repoRoot, cacheDir, planPath } = env;
+    const P = ['--project', PROJECT_683, '--json'];
+    const R = (a, s) => run683(repoRoot, a, s);
+    const nonceOf = (list, id) => ((list || []).find(n => n.id === id) || {}).nonce;
+    const nonceFor = id => fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12);
+    const ledger829 = id => {
+      const t = fs.readFileSync(planPath, 'utf8');
+      const m = t.slice(t.indexOf('## Node Ledger')).match(new RegExp('^\\|\\s*' + id + '\\s*\\|\\s*(\\S+)\\s*\\|', 'm'));
+      return m ? m[1] : null;
+    };
+    const journal829 = () => JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    const attempt829 = id => journal829().attempts.find(a => a.attempt_id === id);
+    const refSha829 = id => {
+      try {
+        return String(execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet',
+          'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
+      } catch (_) { return ''; }
+    };
+    const probe829 = id => JSON.parse(String(execFileSync('node',
+      [VALIDATOR_683, planPath, '--base-freshness', '--node-id', id, '--json'],
+      { cwd: repoRoot, encoding: 'utf8' })).trim().split('\n').pop());
+
+    // 1. seed.
+    let r = R(['open-ready', ...P]);
+    R(['record-evidence', '--node-id', 'seed', '--stdin', ...P],
+      'evidence-binding: seed ' + nonceOf(r.opened, 'seed') + '\nfindings: none\n');
+    R(['close-node', '--node-id', 'seed', ...P]);
+
+    // 2. wa + wb co-open in legs; each writes INSIDE its own leg; both close (the lane merge lands).
+    r = R(['open-ready', ...P]);
+    const opened2 = (r.opened || []).map(n => n.id).sort().join(',');
+    const rs829 = JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8'));
+    require683Setup(r.result === 'ok' && opened2 === 'wa,wb' && rs829.lane_group && rs829.lane_group.legs,
+      '829-replay writer_open', { repoRoot, openReady: r });
+    const legs = rs829.lane_group.legs;
+    for (const [id, file, body] of [['wa', 'ax.js', '// wa v1 (refuted)\n'], ['wb', 'bx.js', '// wb v1 (sibling)\n']]) {
+      const leg = legs[id].legPath;
+      fs.writeFileSync(path.join(leg, file), body);
+      const legCache = path.join(leg, 'kaola-workflow', PROJECT_683, '.cache');
+      fs.mkdirSync(legCache, { recursive: true });
+      fs.writeFileSync(path.join(legCache, id + '.md'),
+        'evidence-binding: ' + id + ' ' + nonceOf(r.opened, id) + '\nRED: t_' + id + ' threw pre-impl\nred_baseline: ' + nonceOf(r.opened, id) + '\n');
+    }
+    require683Setup(R(['close-node', '--node-id', 'wa', ...P]).result === 'ok'
+      && R(['close-node', '--node-id', 'wb', ...P]).result === 'ok', '829-replay writer_close', { repoRoot });
+    const legBaseWa = refSha829('wa');
+    assert(/^[0-9a-f]{40}$/.test(legBaseWa),
+      '#829-REPLAY-E2E: setup — wa\'s barrier base is its LEG branch-point (pre-merge), got ' + legBaseWa);
+
+    // 3. gb (the read gate on wb) opens before the write node tail; it APPROVES bx.js@v1.
+    r = R(['open-ready', ...P]);
+    require683Setup(r.result === 'ok' && (r.opened || []).length === 1 && r.opened[0].id === 'gb',
+      '829-replay gb_open', { repoRoot, openReady: r, opened: (r.opened || []).map(n => n.id) });
+    R(['record-evidence', '--node-id', 'gb', '--stdin', ...P],
+      'evidence-binding: gb ' + nonceOf(r.opened, 'gb') + '\nverdict: pass\nfindings_blocking: 0\n');
+    require683Setup(R(['close-node', '--node-id', 'gb', ...P]).result === 'ok', '829-replay gb_close', { repoRoot });
+
+    // 4. tail opens with a POST-MERGE base, writes tail.js, closes.
+    r = R(['open-ready', ...P]);
+    require683Setup(r.result === 'ok' && (r.opened || []).length === 1 && r.opened[0].id === 'tail',
+      '829-replay tail_open', { repoRoot, openReady: r, opened: (r.opened || []).map(n => n.id) });
+    fs.writeFileSync(path.join(repoRoot, 'tail.js'), '// tail v1\n');
+    R(['record-evidence', '--node-id', 'tail', '--stdin', ...P],
+      'evidence-binding: tail ' + nonceOf(r.opened, 'tail') + '\nRED: t_tail threw pre-impl\nred_baseline: ' + nonceOf(r.opened, 'tail') + '\n');
+    require683Setup(R(['close-node', '--node-id', 'tail', ...P]).result === 'ok', '829-replay tail_close', { repoRoot });
+
+    // The --base-freshness READ-ONLY probe: wa's leg-era base is STALE (head advanced through the
+    // merge), tail's post-merge base is FRESH, a never-opened node reports present:false — and the
+    // probe writes NOTHING (base file + ref byte-identical across it).
+    const baseBeforeProbe = fs.readFileSync(path.join(cacheDir, 'barrier-base-wa'), 'utf8');
+    const freshStale = probe829('wa');
+    assert(freshStale.result === 'ok' && freshStale.present === true && freshStale.stale === true
+      && freshStale.staleReason === 'head_advanced'
+      && /^[0-9a-f]{40}$/.test(String(freshStale.recordedHead || ''))
+      && /^[0-9a-f]{40}$/.test(String(freshStale.currentHead || ''))
+      && freshStale.recordedHead !== freshStale.currentHead,
+      '#829-REPLAY-E2E: --base-freshness NAMES wa\'s stale leg-era base (head_advanced), got '
+      + JSON.stringify(freshStale));
+    const freshTail = probe829('tail');
+    assert(freshTail.result === 'ok' && freshTail.present === true && freshTail.stale === false,
+      '#829-REPLAY-E2E: --base-freshness calls tail\'s post-merge base FRESH, got ' + JSON.stringify(freshTail));
+    const freshAbsent = probe829('finalize');
+    assert(freshAbsent.result === 'ok' && freshAbsent.present === false && freshAbsent.stale === false,
+      '#829-REPLAY-E2E: --base-freshness reports a never-opened node as present:false (never refuses), got '
+      + JSON.stringify(freshAbsent));
+    assert(fs.readFileSync(path.join(cacheDir, 'barrier-base-wa'), 'utf8') === baseBeforeProbe
+      && refSha829('wa') === legBaseWa,
+      '#829-REPLAY-E2E: the probe is READ-ONLY (base file + anchored ref byte-identical across it)');
+
+    // 5. the review refutes wa's file and settles fail. The finding rides the machine grammar (a
+    // `finding:` line — parseNodeFindings does not read the prose ## Findings table), so the attempt
+    // records the route ownership to wa that the replay bridge needs.
+    r = R(['open-ready', ...P]);
+    require683Setup(r.result === 'ok' && (r.opened || []).length === 1 && r.opened[0].id === 'review',
+      '829-replay review_open', { repoRoot, openReady: r, opened: (r.opened || []).map(n => n.id) });
+    R(['record-evidence', '--node-id', 'review', '--stdin', ...P],
+      'evidence-binding: review ' + nonceOf(r.opened, 'review') + '\nverdict: fail\nfindings_blocking: 1\n'
+      + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=ax.js fix_role=tdd-guide\n');
+    const crev = R(['close-node', '--node-id', 'review', ...P]);
+    require683Setup(crev.result === 'review_failed' && crev.attempt_id === 'review:1'
+      && crev.lifecycle_settled === true, '829-replay review_settle', { repoRoot, crev });
+
+    // 6. repair-node on the non-maximal semantic owner wa — the #739 replay arm, no longer base-exempt.
+    const rep = R(['repair-node', '--attempt-id', 'review:1', '--node-id', 'wa', ...P]);
+    assert(rep.result === 'ok' && rep.repaired === 'wa' && rep.consumed_by === 'wa'
+      && rep.replay && rep.replay.owner === 'wa'
+      && JSON.stringify(rep.replay.descendants_reset) === JSON.stringify(['tail']),
+      '#829-REPLAY-E2E: the in-plan descendant replay fires for the leg-era owner, got ' + JSON.stringify(rep));
+    assert(rep.base_stale === true && rep.base_freshness && rep.base_freshness.stale === true
+      && rep.base_freshness.staleReason === 'head_advanced',
+      '#829-REPLAY-E2E: the stale leg-era base is NAMED at repair dispatch (base_stale advisory), got '
+      + JSON.stringify(rep.base_freshness));
+    const rebind829 = (attempt829('review:1').rebind || [])[0] || {};
+    assert(rebind829.settled === true && rebind829.aborted === false
+      && rebind829.base_before === legBaseWa && typeof rebind829.base_after === 'string'
+      && /^[0-9a-f]{40}$/.test(rebind829.base_after) && rebind829.base_after !== legBaseWa,
+      '#829-REPLAY-E2E: the replay arm REBINDS the owner\'s leg-era base (the owner\'s base is not '
+      + 'exempt from truth), got ' + JSON.stringify(rebind829));
+    assert(JSON.stringify((rebind829.absorbed || []).map(a => a.path + '@' + a.owner))
+        === JSON.stringify(['bx.js@wb', 'tail.js@tail']),
+      '#829-REPLAY-E2E: the absorbed delta names the NON-CONE merged sibling bx.js@wb AND the cone '
+      + 'output tail.js@tail (record honesty), got ' + JSON.stringify(rebind829.absorbed));
+    assert(JSON.stringify(rebind829.attributed_to) === JSON.stringify(['tail', 'wb']),
+      '#829-REPLAY-E2E: both owners attributed, got ' + JSON.stringify(rebind829.attributed_to));
+    assert(refSha829('wa') === rebind829.base_after,
+      '#829-REPLAY-E2E: the anchored barrier ref moved to the synthetic re-anchored base');
+
+    // 7. THE REAL-GIT CLOSE ASSERTION: the reopened owner closes against its re-anchored base.
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
+    fs.writeFileSync(path.join(cacheDir, 'wa.md'),
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nred_baseline: ' + nonceFor('wa') + '\n');
+    const closeWa = R(['close-node', '--node-id', 'wa', ...P]);
+    assert(closeWa.result === 'ok' && ledger829('wa') === 'complete',
+      '#829-REPLAY-E2E: the reopened owner\'s barrier PASSES against the re-anchored base — pre-#829 '
+      + 'this close died write_set_overflow on the merged sibling/cone files, got ' + JSON.stringify(closeWa));
+    const or829 = R(['orient', ...P]);
+    assert(or829.result === 'ok',
+      '#829-REPLAY-E2E: the journal re-validates after replay+rebind (orient no longer fenced), got '
+      + JSON.stringify({ result: or829.result, reason: or829.reason }));
+  });
+
+  // -------------------------------------------------------------------------
+  // #829-REBIND-BASE-REFUSALS — the re-anchor verb's zero-write refusal surface, real git. gb PASSES
+  // (bx.js@v1 gate-approved); ga:1 blocks on ax.js. Pinned here: the #385 staleness NAMED at repair
+  // dispatch (the base_stale advisory on the P1 refusal, with real recorded/current heads), the
+  // producer-slice gate (reanchor_not_attempt_producer, zero-write), the argument guards, and the
+  // SPLIT/REPLAN guard registration. NOT pinned here (blocked by a defect reported through the
+  // workflow): the provenance-gated GREEN arc — route: rebind-base on the P1/P3/P4 refusals and the
+  // re-anchor itself — because the leg-base ref lineage the R1 proof anchors on is deleted at
+  // lane-group completion (LEG-BARRIER-TEARDOWN-DROPS-REF pins the deletion), before any gate can
+  // settle, so proveReanchorProvenance can never hold at repair time.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const w = drive683({ gbPass: true, seedFiles: { 'rogue.js': '// rogue v1\n' } });
+    const { R, P, ledger683, attempt683, refSha683 } = w;
+    assert(w.cgb.result === 'ok' && w.ledger683('gb') === 'complete',
+      '#829-VERB: setup — gb settles PASS (bx.js@v1 gate-approved); ga:1 blocks on ax.js');
+    const legBaseWa = refSha683('wa');
+    const rebinds829 = () => (attempt683('ga:1').rebind || []);
+
+    // (1) A rogue RESIDUE edit: the P1 refusal keeps its reason and NAMES the stale base at dispatch.
+    fs.writeFileSync(path.join(w.repoRoot, 'rogue.js'), '// rogue v2 (undeclared — no node owns this)\n');
+    const p1 = R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(p1.result === 'repair_requires_replan' && p1.reason === 'candidate_residue_changed',
+      '#829-VERB-P1: the rogue residue edit refuses candidate_residue_changed, got ' + JSON.stringify(p1));
+    assert(p1.base_stale === true && p1.base_freshness && p1.base_freshness.stale === true
+      && p1.base_freshness.staleReason === 'head_advanced'
+      && /^[0-9a-f]{40}$/.test(String(p1.base_freshness.recordedHead || ''))
+      && /^[0-9a-f]{40}$/.test(String(p1.base_freshness.currentHead || '')),
+      '#829-VERB-P1: the #385 stale signal is NAMED at repair dispatch (never a write_set_overflow '
+      + 'surprise at close), got ' + JSON.stringify(p1.base_freshness));
+    assert(rebinds829().length === 0 && refSha683('wa') === legBaseWa && ledger683('wa') === 'complete',
+      '#829-VERB-P1: the refusal is ZERO durable mutation');
+
+    // (2) The producer-slice gate precedes every proof: a non-producer of the named attempt refuses
+    // reanchor_not_attempt_producer, zero-write.
+    const notProducer = R(['rebind-base', '--attempt-id', 'ga:1', '--node-id', 'wb', ...P]);
+    assert(notProducer.result === 'refuse' && notProducer.reason === 'reanchor_not_attempt_producer',
+      '#829-VERB-R0: a non-producer of the named attempt refuses reanchor_not_attempt_producer, got '
+      + JSON.stringify(notProducer));
+    assert(rebinds829().length === 0 && refSha683('wb') !== '',
+      '#829-VERB-R0: the refusal is ZERO-WRITE (no journal record, the refs unmoved)');
+
+    // (3) The argument guards refuse typed: an unknown attempt id, and the CLI's required-flag checks.
+    const noAttempt = R(['rebind-base', '--attempt-id', 'ga:99', '--node-id', 'wa', ...P]);
+    assert(noAttempt.result === 'refuse' && noAttempt.reason === 'review_attempt_not_repairable',
+      '#829-VERB-ARG: an unknown attempt id refuses review_attempt_not_repairable, got ' + JSON.stringify(noAttempt));
+    const missingAttempt = R(['rebind-base', '--node-id', 'wa', ...P]);
+    assert(missingAttempt.result === 'refuse'
+      && (missingAttempt.reason === 'attempt_id_required'
+        || (missingAttempt.errors || []).some(e => /attempt-id required/.test(e))),
+      '#829-VERB-ARG: --attempt-id is required, got ' + JSON.stringify(missingAttempt));
+    const missingNode = R(['rebind-base', '--attempt-id', 'ga:1', ...P]);
+    assert(missingNode.result === 'refuse'
+      && (missingNode.reason === 'node_id_required'
+        || (missingNode.errors || []).some(e => /node-id required/.test(e))),
+      '#829-VERB-ARG: --node-id is required, got ' + JSON.stringify(missingNode));
+    assert(rebinds829().length === 0 && refSha683('wa') === legBaseWa,
+      '#829-VERB-ARG: every guard above is ZERO-WRITE');
+
+    // (4) The verb is registered with the worktree-authority split guard AND the re-plan fence — a
+    // mutating lifecycle command like repair-node, never an unguarded side door.
+    const src829 = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
+    const splitSet829 = (src829.match(/const SPLIT_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
+    const replanSet829 = (src829.match(/const REPLAN_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
+    assert(splitSet829.includes("'rebind-base'") && replanSet829.includes("'rebind-base'"),
+      '#829-VERB-GUARD: rebind-base is registered in SPLIT_GUARDED_SUBCOMMANDS + REPLAN_GUARDED_SUBCOMMANDS');
+  });
+
+  // -------------------------------------------------------------------------
+  // #829-TRIPLE-PINS — the R2 measuring stick, direct-call against the SAME real-git shape
+  // (drive683): the merge commit carries EXACTLY the current (reviewed) production surface, compared
+  // path-for-path through the SAME exempt-filtered triple both sides — the comparison runRebindBase's
+  // reviewed-tree identity check makes.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const w = drive683({ gbPass: true });
+    const mergeSha = String(execFileSync('git', ['-C', w.repoRoot, 'log', '--merges', '-F',
+      '--grep=kw-synth: ', '-1', '--format=%H'], { encoding: 'utf8' })).trim();
+    if (typeof candidateTripleForCommit === 'function') {
+      const headSha = String(execFileSync('git', ['-C', w.repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
+      const union = new Set(['ax.js', 'bx.js']);
+      const tripleMerge = candidateTripleForCommit(w.repoRoot, mergeSha, PROJECT_683, union);
+      const tripleHead = candidateTripleForCommit(w.repoRoot, headSha, PROJECT_683, union);
+      assert(tripleMerge.digest === tripleHead.digest && tripleMerge.residue_digest === tripleHead.residue_digest
+        && JSON.stringify(tripleMerge.declared) === JSON.stringify(tripleHead.declared),
+        '#829-R2: candidateTripleForCommit proves the merge carries EXACTLY the reviewed candidate '
+        + 'surface (the stick the re-anchor compares)');
+      assert(typeof candidateTripleFromListing === 'function',
+        '#829-R2: the pure listing half is exported beside the commit-side twin');
+      const residueOnly = candidateTripleForCommit(w.repoRoot, mergeSha, PROJECT_683, new Set(['ax.js']));
+      assert(residueOnly.declared['ax.js'] && !residueOnly.declared['bx.js']
+        && residueOnly.residue_digest !== tripleMerge.residue_digest,
+        '#829-R2: the union argument partitions declared vs residue exactly (bx.js moves to residue '
+        + 'when undeclared)');
+    } else {
+      assert(false, '#829-R2: candidateTripleForCommit is exported');
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // #829-P3/P4-ROUTE — the P3 twin of the VERB scenario's P1 pin: a changed SIBLING path with no
+  // recorded repair on its own gate refuses candidate_delta_unattributed (N3's exact shape) with the
+  // stale-base advisory NAMED, zero mutation. The route list feeding all three P-refusals
+  // (P1 candidate_residue_changed / P3 candidate_delta_unattributed / P4 rebind_limit_reached) and
+  // the shared refusalExtras spread are pinned at the source: reaching P4 through real git costs five
+  // proven rebinds, and the route itself is currently unreachable at repair time (the leg-base ref
+  // lineage is deleted at lane-group completion — see the VERB scenario's defect note), so the
+  // behavioral route assertions live in the defect report, not the green suite.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const w = drive683();
+    fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// ax.js changed with NO repair recorded on ga\n');
+    const before = w.refSha683('wb');
+    const r = w.R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(r.paths) === JSON.stringify(['ax.js']),
+      '#829-P3-ROUTE: the P3 refusal keeps its N3 reason + paths, got ' + JSON.stringify(r));
+    assert(r.base_stale === true && r.base_freshness && r.base_freshness.stale === true
+      && r.base_freshness.staleReason === 'head_advanced',
+      '#829-P3-ROUTE: the stale leg-era base is NAMED on the P3 refusal too, got ' + JSON.stringify(r.base_freshness));
+    assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
+      '#829-P3-ROUTE: zero durable mutation');
+    const nodeSrc = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
+    assert(/'candidate_residue_changed', 'candidate_delta_unattributed', 'rebind_limit_reached'/.test(nodeSrc),
+      '#829-P4-ROUTE: ALL THREE of P1/P3/P4 are named in the one reanchorRoute computation');
+    const limitBranch = nodeSrc.slice(nodeSrc.indexOf("proofOut.reason === 'rebind_limit_reached'"),
+      nodeSrc.indexOf("proofOut.reason === 'rebind_limit_reached'") + 700);
+    assert(/\.\.\.refusalExtras/.test(limitBranch),
+      '#829-P4-ROUTE: the rebind_limit_reached branch spreads the SAME refusalExtras (route + base_stale)');
   });
 
   for (const r of repos683) { try { fs.rmSync(r, { recursive: true, force: true }); } catch (_) {} }

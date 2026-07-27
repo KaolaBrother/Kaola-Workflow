@@ -18855,6 +18855,131 @@ function testSerializationInversion760() {
   console.log('testSerializationInversion760: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// #829 — the #385 stale/head_advanced signal is NAMED at repair dispatch. A lane-group member's
+// barrier base is its pre-merge leg branch-point, so a repair-time P1 refusal carries the
+// base_stale advisory (real recorded/current heads) instead of surfacing later as a
+// write_set_overflow surprise at close; the read-only --base-freshness probe names the same
+// staleness (and writes nothing). Compact real-git drive: {wa,wb} legs, ga refutes ax.js, gb
+// approves bx.js, then a rogue residue edit forces the P1 refusal.
+// ---------------------------------------------------------------------------
+function testRepairBaseFreshness829() {
+  const repo = adaptiveTmp('base-freshness-829');
+  initGitRepoWithBareRemote(repo);
+  spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-829'], { encoding: 'utf8' });
+  const project = 'issue-829';
+  const proj = path.join(repo, 'kaola-workflow', project);
+  const cacheDir = path.join(proj, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(proj, 'workflow-plan.md');
+  const PLAN_829 = [
+    '# Workflow Plan — issue-829', '',
+    '## Meta', 'plan_form: spine', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| seed     | code-explorer | —       | —            | 1 | sequence |',
+    '| wa       | tdd-guide     | seed    | ax.js        | 1 | sequence |',
+    '| wb       | tdd-guide     | seed    | bx.js        | 1 | sequence |',
+    '| ga       | code-reviewer | wa      | —            | 1 | sequence |',
+    '| gb       | code-reviewer | wb      | —            | 1 | sequence |',
+    '| finalize | finalize      | ga,gb   | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', 'Two disjoint writers behind their own review gates; the finalize sink walks after both.', '',
+    '## Node Ledger', '',
+    '| id | status |', '| --- | --- |',
+    '| seed | pending |', '| wa | pending |', '| wb | pending |', '| ga | pending |',
+    '| gb | pending |', '| finalize | pending |', '',
+  ].join('\n') + '\n';
+  fs.writeFileSync(planPath, PLAN_829);
+  fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\n');
+  fs.writeFileSync(path.join(repo, 'rogue.js'), '// rogue v1\n');
+  // stampVerifiedLegacyPlan's exact posture: pin the hash comment FIRST, then --freeze --repair.
+  const validator829 = require('./kaola-workflow-plan-validator');
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + validator829.computePlanHash(PLAN_829) + ' -->\n\n' + PLAN_829);
+  const fz = runNode(planValidatorScript, [planPath, '--freeze', '--repair', '--json'], repo);
+  assert(fz.status === 0, '#829-walk: freeze exits 0: ' + fz.stdout + fz.stderr);
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.kw/\n');
+  spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+  const R = (args, input) => runNode(adaptiveNodeScript, [...args, '--project', project, '--json'], repo, null,
+    input != null ? { input } : undefined);
+  const j = r => JSON.parse(r.stdout.trim().split('\n').pop());
+  const nonceOf = (opened, id) => ((opened || []).find(n => n.id === id) || {}).nonce;
+  const fail = (m, x) => assert(false, '#829-walk setup ' + m + ': ' + JSON.stringify(x === undefined ? null : x).slice(0, 600));
+
+  // seed.
+  let r = j(R(['open-ready']));
+  j(R(['record-evidence', '--node-id', 'seed', '--stdin'], 'evidence-binding: seed ' + nonceOf(r.opened, 'seed') + '\nfindings: none\n'));
+  if (j(R(['close-node', '--node-id', 'seed'])).result !== 'ok') fail('seed close');
+
+  // wa+wb co-open in legs; each writes INSIDE its leg; both close (the kw-synth merge lands).
+  r = j(R(['open-ready']));
+  const rs = JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8'));
+  assert((r.opened || []).map(n => n.id).sort().join(',') === 'wa,wb' && rs.lane_group && rs.lane_group.legs,
+    '#829-walk: the write antichain co-opens in isolated legs, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+  const legs = rs.lane_group.legs;
+  for (const [id, file, body] of [['wa', 'ax.js', '// wa v1 (refuted)\n'], ['wb', 'bx.js', '// wb v1 (approved)\n']]) {
+    fs.writeFileSync(path.join(legs[id].legPath, file), body);
+    const legCache = path.join(legs[id].legPath, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(legCache, { recursive: true });
+    fs.writeFileSync(path.join(legCache, id + '.md'),
+      'evidence-binding: ' + id + ' ' + nonceOf(r.opened, id) + '\nRED: t_' + id + ' threw pre-impl\nred_baseline: ' + nonceOf(r.opened, id) + '\n');
+  }
+  const closeWa829 = j(R(['close-node', '--node-id', 'wa']));
+  if (closeWa829.result !== 'ok') fail('wa close', closeWa829);
+  const closeWb829 = j(R(['close-node', '--node-id', 'wb']));
+  if (closeWb829.result !== 'ok') fail('wb close', closeWb829);
+
+  // The read-only --base-freshness probe: wa's leg-era base is STALE (head advanced through the
+  // merge); a never-opened node reports present:false; the probe writes NOTHING.
+  const baseBefore = fs.readFileSync(path.join(cacheDir, 'barrier-base-wa'), 'utf8');
+  const probeStale = j(runNode(planValidatorScript, [planPath, '--base-freshness', '--node-id', 'wa', '--json'], repo));
+  assert(probeStale.result === 'ok' && probeStale.present === true && probeStale.stale === true
+    && probeStale.staleReason === 'head_advanced'
+    && /^[0-9a-f]{40}$/.test(String(probeStale.recordedHead || ''))
+    && /^[0-9a-f]{40}$/.test(String(probeStale.currentHead || ''))
+    && probeStale.recordedHead !== probeStale.currentHead,
+    '#829-walk: --base-freshness NAMES the stale leg-era base (head_advanced), got ' + JSON.stringify(probeStale));
+  const probeAbsent = j(runNode(planValidatorScript, [planPath, '--base-freshness', '--node-id', 'finalize', '--json'], repo));
+  assert(probeAbsent.result === 'ok' && probeAbsent.present === false && probeAbsent.stale === false,
+    '#829-walk: --base-freshness reports a never-opened node as present:false (never refuses), got ' + JSON.stringify(probeAbsent));
+  assert(fs.readFileSync(path.join(cacheDir, 'barrier-base-wa'), 'utf8') === baseBefore,
+    '#829-walk: the probe is READ-ONLY (the base file is byte-identical across it)');
+
+  // The gates: ga refutes ax.js; gb approves bx.js.
+  r = j(R(['open-ready']));
+  assert((r.opened || []).map(n => n.id).sort().join(',') === 'ga,gb',
+    '#829-walk: both gates co-open, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+  j(R(['record-evidence', '--node-id', 'ga', '--stdin'],
+    'evidence-binding: ga ' + nonceOf(r.opened, 'ga') + '\nverdict: fail\nfindings_blocking: 1\n'
+    + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=ax.js fix_role=tdd-guide\n'));
+  j(R(['record-evidence', '--node-id', 'gb', '--stdin'],
+    'evidence-binding: gb ' + nonceOf(r.opened, 'gb') + '\nverdict: pass\nfindings_blocking: 0\n'));
+  const cga = j(R(['close-node', '--node-id', 'ga']));
+  assert(cga.result === 'review_failed' && cga.attempt_id === 'ga:1' && cga.lifecycle_settled === true,
+    '#829-walk: ga settles fail as attempt ga:1, got ' + JSON.stringify(cga));
+  if (j(R(['close-node', '--node-id', 'gb'])).result !== 'ok') fail('gb close');
+
+  // A rogue RESIDUE edit: the P1 refusal keeps its reason and NAMES the stale base at dispatch —
+  // the same recorded head the probe named (one signal, two readers).
+  fs.writeFileSync(path.join(repo, 'rogue.js'), '// rogue v2 (undeclared — no node owns this)\n');
+  const p1 = j(R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa']));
+  assert(p1.result === 'repair_requires_replan' && p1.reason === 'candidate_residue_changed',
+    '#829-walk: the rogue residue edit refuses candidate_residue_changed, got ' + JSON.stringify(p1));
+  assert(p1.base_stale === true && p1.base_freshness && p1.base_freshness.stale === true
+    && p1.base_freshness.staleReason === 'head_advanced'
+    && p1.base_freshness.recordedHead === probeStale.recordedHead,
+    '#829-walk: the repair-time advisory names the SAME recorded head the probe named, got '
+    + JSON.stringify(p1.base_freshness));
+  const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+  assert((journal.attempts.find(a => a.attempt_id === 'ga:1').rebind || []).length === 0,
+    '#829-walk: the refusal is ZERO durable mutation (no rebind record)');
+  fs.rmSync(repo, { recursive: true, force: true });
+  try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {}
+  console.log('testRepairBaseFreshness829: PASSED');
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -19129,6 +19254,7 @@ function buildRegistry() {
   add('testRunProgressMirror605',                         testRunProgressMirror605);
   add('testGateEvidenceNonceRotation654',                 testGateEvidenceNonceRotation654);
   add('testMixedRepairReplayJournal748',                  testMixedRepairReplayJournal748);
+  add('testRepairBaseFreshness829',                       testRepairBaseFreshness829);
   add('testReplanRuntimeFence699',                        testReplanRuntimeFence699);
   add('testPlanlessAndPlannedInitialAuthority699',        testPlanlessAndPlannedInitialAuthority699);
   add('testArchiveCallersFailClosed699',                  testArchiveCallersFailClosed699);

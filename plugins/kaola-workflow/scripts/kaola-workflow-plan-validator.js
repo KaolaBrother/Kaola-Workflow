@@ -5686,6 +5686,9 @@ function printHelp() {
     '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2/G3 ran; G3 = a non-delegable main-session-gate is complete — never n/a — and post-dominates completed code nodes); exit 1 if a completed node is uncovered\n' +
     '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
     '                 Idempotent: reuses an existing baseline (resume-safe — a re-dispatch never launders a crashed attempt)\n' +
+    '  --base-freshness --node-id ID  READ-ONLY probe of the #385 stale signal: does the recorded baseline predate the\n' +
+    '                 current HEAD (open-token vs HEAD)? Emits { present, stale, staleReason, recordedHead, currentHead };\n' +
+    '                 never writes (the --record-base reuse branch\'s comparison without its write path). [--json]\n' +
     '  --drop-base --node-id ID  delete node ID\'s baseline .cache file AND its anchored ref together (reopen/repair cleanup).\n' +
     '                 Idempotent: a missing file/ref is a clean no-op. Prevents a dangling ref tripping barrier_base_mismatch.\n' +
     '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +
@@ -6045,6 +6048,33 @@ function main() {
     schema.writeFileAtomicReplace(openTokenFile(nodeId), headNow() + '\n');
     schema.writeFileAtomicReplace(cacheBaseFile(nodeId), baseCommit);
     process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseCommit }) : 'recorded base ' + baseCommit + ' for node ' + nodeId) + '\n');
+    return;
+  }
+  if (args.includes('--base-freshness')) {
+    // The #385 stale/head_advanced signal as a READ-ONLY probe: the same token-vs-HEAD comparison
+    // --record-base's reuse branch makes, with NO write path — so a repair-time caller can NAME a
+    // stale base at dispatch without shelling a command that snapshots when the base is absent.
+    // Never refuses: an absent base is reported (present:false), not an error — the consumer's own
+    // no_barrier_base / writer_identity guards keep owning that refusal.
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    if (!nodeId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--base-freshness requires --node-id <id>'] }) : 'typed refusal: --base-freshness requires --node-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    let existing = '';
+    try { existing = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) {}
+    if (!existing) {
+      process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, present: false, stale: false }) : 'no recorded base for node ' + nodeId) + '\n');
+      return;
+    }
+    let openHead = '';
+    try { openHead = fs.readFileSync(openTokenFile(nodeId), 'utf8').trim(); } catch (_) {}
+    const cur = headNow();
+    const stale = !!(openHead && cur && openHead !== cur);
+    const out = { result: 'ok', nodeId, present: true, base: existing, reused: true, stale };
+    if (stale) { out.staleReason = 'head_advanced'; out.recordedHead = openHead; out.currentHead = cur; }
+    process.stdout.write((json ? JSON.stringify(out) : 'base freshness for node ' + nodeId + (stale ? ': STALE — head advanced ' + openHead + '->' + cur : ': fresh')) + '\n');
     return;
   }
   if (args.includes('--drop-base')) {

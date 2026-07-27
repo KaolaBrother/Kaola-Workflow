@@ -99,6 +99,10 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   // and the running set — a mutating lifecycle command like every other opener.
   'expand-open', 'expand-close',
   'reopen-node', 'revert-overflow', 'repair-node', 'route-findings', 'record-evidence',
+  // The bounded re-anchor verb moves a lane-group member's barrier ref + rewrites its base file —
+  // the same project-scoped .cache/ref mutation surface as repair-node, driven from the same
+  // worktree authority.
+  'rebind-base',
   // Records the dispatch-target swap into the project's .cache; a project-scoped mutation like
   // every other, so it resolves the folder from the same worktree authority.
   'substitute-role',
@@ -115,6 +119,7 @@ const REPLAN_GUARDED_SUBCOMMANDS = new Set([
   'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
   'expand-open', 'expand-close',
   'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
+  'rebind-base',
   'discard-speculative', 'mirror-project', 'substitute-role',
 ]);
 
@@ -324,6 +329,14 @@ const OPERATOR_HINT_REGISTRY = {
     ctx.route_mismatch_class === 'projection_missing'
       ? 'The review journal routes findings into the discharged interior of expansion point ' + (ctx.point || '<point>') + ', but no .cache/epoch-projections/ owner projection covers it (the discharge or journal predates the projection). Re-run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it re-writes the discharge projection. NEVER hand-edit the journal.'
       : 'The review journal\'s recorded finding routes do not match the frozen plan — an owner unknown to both the current node table and the discharge projection (tamper-class). The journal is the run\'s integrity anchor and is NEVER hand-edited; run orient to inspect, and finish or discard runs that predate the current release before re-freezing.',
+
+  // --- the bounded re-anchor verb (route: rebind-base) ---
+  reanchor_provenance_unprovable: (ctx) =>
+    'The barrier base of ' + (ctx.node_id || ctx.nodeId || '<id>') + ' cannot be PROVEN to predate a lane-group merge (' + (ctx.detail || 'no leg-base lineage') + '). rebind-base refuses zero-write; hand update-ref stays forbidden. If the base is genuinely stale through a lane-group merge, re-run repair-node and let its rebind refuse with route: rebind-base; otherwise a re-plan is the exit.',
+  rebind_base_not_reviewed: (ctx) =>
+    'The reviewed merged parent is no longer the current tree for ' + (ctx.node_id || ctx.nodeId || '<id>') + ' — the re-anchor would bind the repair to an unreviewed tree. A re-plan (or a fresh repair-node run whose own rebind proof passes) is the exit; never hand-edit the barrier ref.',
+  reanchor_not_attempt_producer: (ctx) =>
+    'rebind-base re-anchors a PRODUCER of the named attempt — ' + (ctx.node_id || ctx.nodeId || '<id>') + ' is not in its producer slice. Name a writer bound in the attempt\'s producer_bindings.',
 
   // --- close paths (#272/#303/#348/#437) ---
   barrier_failed: (ctx) =>
@@ -4310,6 +4323,72 @@ function declaredUnionPaths(nodes) {
   return out;
 }
 
+// candidateTripleFromListing — the PURE half of the candidate triple: filter an `ls-tree -r` listing
+// to the candidate surface (everything except the project's own control band + .kw/.git), then hash
+// the whole-tree lines (digest), split + hash the undeclared residue (residue_digest), and build the
+// '<mode> <sha>' declared map. Shared by the worktree snapshot (computeReviewCandidateDigest) and the
+// commit-side twin (candidateTripleForCommit), so the measuring stick can never drift between them.
+// NULL-PROTOTYPE declared maps, and that is load-bearing, not hygiene. These maps are keyed by
+// REPO-RELATIVE PATH, and on a plain `{}` the key `__proto__` is not stored — it hits
+// Object.prototype's __proto__ setter, which silently ignores a string value. The path would then be
+// journalled as if it did not exist, and because the union matched it is skipped by the residue
+// branch too, so it would sit in NO partition of the rebind proof while the whole-tree digest still
+// hashes its ls-tree line: P2/P3 would read the __proto__ GETTER on both sides, see Object.prototype
+// both times, and conclude "unchanged". The plan grammar accepts `__proto__` as a declared path (no
+// backslash, no glob, not directory-shaped), so this is reachable. With a null prototype the key is
+// an ordinary own property that survives JSON and compares like any other path.
+function candidateTripleFromListing(listing, project, union) {
+  const crypto = require('crypto');
+  const activePrefix = 'kaola-workflow/' + project + '/';
+  const lines = String(listing || '').split('\n').filter(Boolean).filter(line => {
+    const tab = line.indexOf('\t');
+    const file = tab >= 0 ? line.slice(tab + 1) : '';
+    return !file.startsWith(activePrefix) && !file.startsWith('.kw/') && !file.startsWith('.git/');
+  }).sort();
+  const declared = Object.create(null);
+  const residueLines = [];
+  for (const line of lines) {
+    const tab = line.indexOf('\t');
+    const file = tab >= 0 ? line.slice(tab + 1) : '';
+    if (!union.has(file)) { residueLines.push(line); continue; }
+    // '<mode> <sha>', NOT '<sha>'. The declared map is the MEASURING STICK for P2/P3, and a measuring
+    // stick weaker than the digest is a silent waiver: the digest, the residue digest, P5 and the
+    // barrier all treat (mode, sha) as tree identity, and git records the exec bit, the SYMLINK flag
+    // and the GITLINK flag in the mode ALONE. A symlink's blob IS its target-path bytes, so a plain
+    // file and a symlink to that same text share one blob sha and differ only in mode — a sha-only
+    // stick cannot tell them apart even in principle, and a mode-only revert of a sibling's APPROVED
+    // change would land in no partition and be waived. The ls-tree `type` field is a pure function of
+    // the mode (100644/100755/120000 -> blob, 160000 -> commit), so (mode, sha) is EXACTLY as strong
+    // as the whole line the digest hashes, at zero extra git calls. A declared entry we cannot parse
+    // fails CLOSED (the catch below turns it into candidate_digest_unavailable) rather than degrading
+    // to a value that could collide with "absent" under the `|| null` compares in proveRebindAdmissible.
+    const meta = line.slice(0, tab >= 0 ? tab : 0).trim().split(/\s+/);
+    const mode = meta[0] || '';
+    const blob = meta[2] || '';
+    if (!/^[0-7]{6}$/.test(mode) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(blob)) {
+      throw new Error('unparsable ls-tree entry for declared path: ' + file);
+    }
+    declared[file] = mode + ' ' + blob;
+  }
+  const sortedDeclared = Object.create(null);
+  for (const key of Object.keys(declared).sort()) sortedDeclared[key] = declared[key];
+  return {
+    digest: crypto.createHash('sha256').update(lines.join('\n') + (lines.length ? '\n' : '')).digest('hex'),
+    declared: sortedDeclared,
+    residue_digest: crypto.createHash('sha256').update(residueLines.join('\n') + (residueLines.length ? '\n' : '')).digest('hex'),
+  };
+}
+
+// candidateTripleForCommit — the commit-side twin: the SAME triple, read from a COMMIT's ls-tree
+// instead of a worktree snapshot. The re-anchor proof compares this against the live tree's triple
+// to prove a lane-group merge commit carries EXACTLY the reviewed candidate surface.
+function candidateTripleForCommit(root, commit, project, declaredUnion) {
+  const union = declaredUnion instanceof Set ? declaredUnion : new Set(declaredUnion || []);
+  const listing = String(execFileSync('git', ['-C', root, 'ls-tree', '-r', commit],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }));
+  return candidateTripleFromListing(listing, project, union);
+}
+
 // computeReviewCandidateDigest — the candidate TRIPLE, from ONE write-tree + ONE ls-tree (no extra git
 // calls beyond what the whole-tree digest already ran):
 //   digest           the whole-tree content address (byte-identical to the pre-rebind computation)
@@ -4321,7 +4400,6 @@ function declaredUnionPaths(nodes) {
 function computeReviewCandidateDigest(planPath, project, rootOverride, declaredUnion) {
   const fs = require('fs');
   const os = require('os');
-  const crypto = require('crypto');
   const root = rootOverride || getRoot();
   const union = declaredUnion instanceof Set ? declaredUnion : new Set(declaredUnion || []);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-index-'));
@@ -4332,53 +4410,7 @@ function computeReviewCandidateDigest(planPath, project, rootOverride, declaredU
     execFileSync('git', ['-C', root, 'add', '-A'], { env, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
     const tree = String(execFileSync('git', ['-C', root, 'write-tree'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER })).trim();
     const listing = String(execFileSync('git', ['-C', root, 'ls-tree', '-r', tree], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }));
-    const activePrefix = 'kaola-workflow/' + project + '/';
-    const lines = listing.split('\n').filter(Boolean).filter(line => {
-      const tab = line.indexOf('\t');
-      const file = tab >= 0 ? line.slice(tab + 1) : '';
-      return !file.startsWith(activePrefix) && !file.startsWith('.kw/') && !file.startsWith('.git/');
-    }).sort();
-    // NULL-PROTOTYPE, and that is load-bearing, not hygiene. These maps are keyed by REPO-RELATIVE PATH,
-    // and on a plain `{}` the key `__proto__` is not stored — it hits Object.prototype's __proto__ setter,
-    // which silently ignores a string value. The path would then be journalled as if it did not exist, and
-    // because the union matched it is skipped by the residue branch too, so it would sit in NO partition of
-    // the rebind proof while the whole-tree digest still hashes its ls-tree line: P2/P3 would read the
-    // __proto__ GETTER on both sides, see Object.prototype both times, and conclude "unchanged". The plan
-    // grammar accepts `__proto__` as a declared path (no backslash, no glob, not directory-shaped), so this
-    // is reachable. With a null prototype the key is an ordinary own property that survives JSON and
-    // compares like any other path.
-    const declared = Object.create(null);
-    const residueLines = [];
-    for (const line of lines) {
-      const tab = line.indexOf('\t');
-      const file = tab >= 0 ? line.slice(tab + 1) : '';
-      if (!union.has(file)) { residueLines.push(line); continue; }
-      // '<mode> <sha>', NOT '<sha>'. The declared map is the MEASURING STICK for P2/P3, and a measuring
-      // stick weaker than the digest is a silent waiver: the digest, the residue digest, P5 and the barrier
-      // all treat (mode, sha) as tree identity, and git records the exec bit, the SYMLINK flag and the
-      // GITLINK flag in the mode ALONE. A symlink's blob IS its target-path bytes, so a plain file and a
-      // symlink to that same text share one blob sha and differ only in mode — a sha-only stick cannot tell
-      // them apart even in principle, and a mode-only revert of a sibling's APPROVED change would land in
-      // no partition and be waived. The ls-tree `type` field is a pure function of the mode (100644/100755/
-      // 120000 -> blob, 160000 -> commit), so (mode, sha) is EXACTLY as strong as the whole line the digest
-      // hashes, at zero extra git calls. A declared entry we cannot parse fails CLOSED (the catch below
-      // turns it into candidate_digest_unavailable) rather than degrading to a value that could collide
-      // with "absent" under the `|| null` compares in proveRebindAdmissible.
-      const meta = line.slice(0, tab >= 0 ? tab : 0).trim().split(/\s+/);
-      const mode = meta[0] || '';
-      const blob = meta[2] || '';
-      if (!/^[0-7]{6}$/.test(mode) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(blob)) {
-        throw new Error('unparsable ls-tree entry for declared path: ' + file);
-      }
-      declared[file] = mode + ' ' + blob;
-    }
-    const sortedDeclared = Object.create(null);
-    for (const key of Object.keys(declared).sort()) sortedDeclared[key] = declared[key];
-    return {
-      digest: crypto.createHash('sha256').update(lines.join('\n') + (lines.length ? '\n' : '')).digest('hex'),
-      declared: sortedDeclared,
-      residue_digest: crypto.createHash('sha256').update(residueLines.join('\n') + (residueLines.length ? '\n' : '')).digest('hex'),
-    };
+    return candidateTripleFromListing(listing, project, union);
   } catch (err) {
     const e = new Error('candidate_digest_unavailable');
     e.cause = err;
@@ -8835,6 +8867,243 @@ function reconcilePendingRebind(opts, attempt, state, nodeId, writerPaths, now) 
       + ') nor base_after (' + record.base_after + ') of the unsettled rebind — restore it from the recorded pair' };
 }
 
+// proveReanchorProvenance — R1 of the re-anchor proof: "this node's recorded base PROVABLY predates
+// a lane-group merge". Fully git-checkable, read-only, never throws:
+//   (1) the recorded barrier base IS the node's leg-base ref — the node ran as a lane-group leg and
+//       its base was never re-anchored (a prior re-anchor fails this, which is also what BOUNDS the
+//       verb to one re-anchor per leg-era base);
+//   (2) the leg branch-point is a strict ancestor of HEAD;
+//   (3) a lane-group synthesis merge (`kw-synth: ` commit, the level_merged telemetry's git anchor)
+//       sits in base..HEAD.
+// Returns { ok:true, legBase, merges } (merges newest-first) or { ok:false, detail }.
+function proveReanchorProvenance(opts, nodeId) {
+  try {
+    const root = opts.repoRoot || getRoot();
+    const { baseFile } = writerBarrierAnchors(opts, nodeId);
+    let base = '';
+    try { base = String(opts.readFile(baseFile) || '').trim(); } catch (_) { base = ''; }
+    if (!/^[0-9a-f]{40}$/i.test(base)) {
+      return { ok: false, detail: 'no recorded barrier base for ' + nodeId };
+    }
+    const legSha = resolveRefSha(root, legBaseRef(opts.project, nodeId));
+    if (!legSha) {
+      return { ok: false, detail: 'no leg-base ref — ' + nodeId + ' never ran as a lane-group leg' };
+    }
+    if (legSha.toLowerCase() !== base.toLowerCase()) {
+      return { ok: false, detail: 'the recorded base is not the leg branch-point (already re-anchored, or never leg-era)' };
+    }
+    try {
+      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', base, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) {
+      return { ok: false, detail: 'the leg branch-point is not an ancestor of HEAD' };
+    }
+    let head = '';
+    try {
+      head = String(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
+    } catch (_) { head = ''; }
+    if (head && head.toLowerCase() === base.toLowerCase()) {
+      return { ok: false, detail: 'the leg branch-point IS the current head — no merge above it' };
+    }
+    let merges = [];
+    try {
+      const out = execFileSync('git', ['-C', root, 'log', '--format=%H', '--merges', '-F', '--grep=kw-synth: ', base + '..HEAD'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+      merges = String(out).split('\n').map(s => s.trim()).filter(s => /^[0-9a-f]{40}$/i.test(s));
+    } catch (_) { merges = []; }
+    if (!merges.length) {
+      return { ok: false, detail: 'no lane-group synthesis merge above the leg branch-point' };
+    }
+    return { ok: true, legBase: base, merges };
+  } catch (err) {
+    return { ok: false, detail: String((err && err.message) || err) };
+  }
+}
+
+// runRebindBase — the bounded RE-ANCHOR verb (route: rebind-base). The machine-owned form of the one
+// operation that used to be hand surgery on a fail-closed anchor: advance a lane-group member's
+// barrier ref from its leg-era branch-point to the REVIEWED MERGED PARENT, with the P-guards asserted
+// and the nonce rotated (the base file is the nonce source, so rewriting it rotates the nonce). Hand
+// update-ref stays forbidden — this is the legal alternative, and it refuses ZERO-WRITE whenever
+// provenance cannot be proven.
+//
+// The proof, in order (each a precondition of the next; nothing mutates before all hold):
+//   R1 provenance: proveReanchorProvenance — the recorded base IS the leg branch-point and a
+//      lane-group synthesis merge sits above it.
+//   R2 reviewed-tree identity: the CURRENT tree still IS the attempt's reviewed candidate (the same
+//      whole-candidate digest equality the repair fast-path uses, v2-runner-aware), AND one of the
+//      R1 merges carries EXACTLY that candidate surface (the exempt-filtered triple compared
+//      path-for-path) — the reviewed merged parent, not merely any merge.
+//   R3 identity + budget: the on-disk barrier identity equals the attempt's effective binding (the
+//      re-anchor moves a PROVEN base, never a swapped one), and the rebind ledger cap
+//      (REVIEW_REBIND_LIMIT) stays governing — the poisoned-base hazard the guards exist for.
+// The durable transaction then mirrors performRebind's order — journal record first (unsettled), ref
+// second, settle third — so reconcilePendingRebind converges a crash anywhere in the prefix, and the
+// journal's effective binding moves WITH the ref (no writer_identity_changed wedge on the repair
+// retry). The base_after is the reviewed merged parent commit itself: the writer's reviewed diff is
+// already IN it, so the reopened writer's barrier sees exactly its post-merge writes.
+function runRebindBase(opts) {
+  const { planPath, project, nodeId, attemptId, readFile, writeFile } = opts;
+  if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the lane-group member whose barrier base re-anchors' });
+  if (!attemptId) return refuse('attempt_id_required', { detail: '--attempt-id names the failed review attempt the re-anchor binds to' });
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+  const journalState = readReviewJournal(opts, content);
+  if (!journalState.ok) return { result: 'refuse', reason: journalState.reason,
+    ...(journalState.detail ? { detail: journalState.detail } : {}) };
+  if (!journalState.journal) return refuse('review_journal_missing', { detail: 'rebind-base binds to a recorded review attempt' });
+  const attempt = (journalState.journal.attempts || []).find(a => a.attempt_id === attemptId);
+  if (!attempt || attempt.outcome !== 'fail') {
+    return refuse('review_attempt_not_repairable', { attempt_id: attemptId });
+  }
+  const nodes = parseNodesFromContent(content);
+  const writer = nodes.find(n => n.id === nodeId);
+  if (!writer) return refuse('node_not_found', { node_id: nodeId });
+  if (!Object.keys(attempt.producer_bindings || {}).includes(nodeId)) {
+    return refuse('reanchor_not_attempt_producer', { node_id: nodeId, attempt_id: attemptId,
+      detail: 'rebind-base re-anchors a PRODUCER of the attempt — ' + nodeId + ' is not in its producer slice' });
+  }
+  const writerPaths = nodeDeclaredPaths(writer);
+  const root = opts.repoRoot || getRoot();
+  // R1 — provenance: the recorded base provably predates a lane-group merge.
+  const provenance = proveReanchorProvenance(opts, nodeId);
+  if (!provenance.ok) {
+    return { result: 'refuse', reason: 'reanchor_provenance_unprovable', node_id: nodeId, attempt_id: attemptId,
+      detail: provenance.detail + ' — hand update-ref stays forbidden' };
+  }
+  // The current candidate TRIPLE (the repair STEP 10 twin), needed by the crash reconcile below and
+  // the R2 identity check.
+  const declaredUnion = declaredUnionPaths(nodes);
+  let now;
+  try {
+    now = normalizeCandidate(opts.computeReviewCandidateDigest
+      ? opts.computeReviewCandidateDigest()
+      : computeReviewCandidateDigest(planPath, project, opts.repoRoot, declaredUnion));
+  } catch (_) { return { result: 'refuse', reason: 'candidate_digest_unavailable', node_id: nodeId, attempt_id: attemptId }; }
+  if (attempt.contract_version === 2) {
+    try {
+      const validator = require('./kaola-gitea-workflow-plan-validator');
+      const runner = require('./kaola-workflow-validation-runner');
+      const consumedPaths = typeof validator.parseValidationTestConsumes === 'function'
+        ? validator.parseValidationTestConsumes(content) : [];
+      const authoritative = opts.computeLandableTreeDigest
+        ? opts.computeLandableTreeDigest(root, { test_consumed_paths: consumedPaths })
+        : runner.computeLandableTreeDigest(root, { test_consumed_paths: consumedPaths });
+      if (!/^[0-9a-f]{64}$/i.test(String(authoritative || ''))) throw new Error('candidate unavailable');
+      now.digest = String(authoritative).toLowerCase();
+    } catch (_) {
+      return { result: 'refuse', reason: 'candidate_digest_unavailable', node_id: nodeId, attempt_id: attemptId };
+    }
+  }
+  // Crash convergence FIRST (the repair STEP 8.5 twin): an interrupted prior re-anchor/rebind leaves
+  // the ref legitimately ahead of the journal's effective binding; converge it before anything reads
+  // the writer's identity.
+  if (Array.isArray(attempt.rebind) && attempt.rebind.length) {
+    const rec = reconcilePendingRebind(opts, attempt, journalState, nodeId, writerPaths, now);
+    if (!rec.ok) {
+      return { result: 'refuse', reason: rec.reason, node_id: nodeId, attempt_id: attemptId,
+        ...(rec.detail ? { detail: rec.detail } : {}) };
+    }
+  }
+  // R3a — identity: the on-disk barrier identity must equal the attempt's effective binding.
+  const expectedIdentity = effectiveProducerBinding(attempt, nodeId);
+  const currentIdentity = opts.captureWriterBarrierIdentity
+    ? opts.captureWriterBarrierIdentity(nodeId) : captureWriterBarrierIdentity(opts, nodeId);
+  if (!verifyWriterBarrierIdentity(expectedIdentity, currentIdentity)) {
+    return { result: 'refuse', reason: 'writer_identity_changed', node_id: nodeId, attempt_id: attemptId,
+      detail: 'the on-disk barrier identity is not the attempt\'s recorded binding — the re-anchor moves a PROVEN base, never a swapped one' };
+  }
+  // R2 — reviewed-tree identity: the current tree still IS the attempt's reviewed candidate...
+  const cand = effectiveCandidate(attempt);
+  if (!now.digest || now.digest !== cand.digest) {
+    return { result: 'refuse', reason: 'rebind_base_not_reviewed', node_id: nodeId, attempt_id: attemptId,
+      detail: 'the current tree is no longer the reviewed candidate — the reviewed merged parent cannot be re-anchored against a moved tree (a re-plan is the exit)' };
+  }
+  // ...and one R1 merge carries EXACTLY that candidate surface (same exempt-filtered triple both
+  // sides, so the comparison stick cannot drift).
+  let nowLegacy;
+  try { nowLegacy = computeReviewCandidateDigest(planPath, project, root, declaredUnion); }
+  catch (_) { return { result: 'refuse', reason: 'candidate_digest_unavailable', node_id: nodeId, attempt_id: attemptId }; }
+  let mergeParent = null;
+  for (const m of provenance.merges) {
+    let triple = null;
+    try { triple = candidateTripleForCommit(root, m, project, declaredUnion); } catch (_) { triple = null; }
+    if (triple && triple.digest === nowLegacy.digest && triple.residue_digest === nowLegacy.residue_digest
+      && JSON.stringify(triple.declared) === JSON.stringify(nowLegacy.declared)) { mergeParent = m; break; }
+  }
+  if (!mergeParent) {
+    return { result: 'refuse', reason: 'rebind_base_not_reviewed', node_id: nodeId, attempt_id: attemptId,
+      detail: 'no lane-group synthesis merge above the leg branch-point carries the reviewed candidate surface' };
+  }
+  // R3b — the rebind ledger cap stays governing.
+  if (nonAbortedRebinds(attempt).length >= REVIEW_REBIND_LIMIT) {
+    return { result: 'rebind_limit_reached', attempt_id: attemptId,
+      rebinds: nonAbortedRebinds(attempt).length, limit: REVIEW_REBIND_LIMIT };
+  }
+  // The absorbed partition-2 delta: every declared path the merge moved outside this writer's own
+  // set, attributed to its recorded owner — the record stays honest about what the re-anchor absorbs.
+  const absorbed = [];
+  const attributedTo = new Set();
+  try {
+    const diffOut = String(execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', provenance.legBase, mergeParent],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }));
+    for (const p of diffOut.split('\n').map(s => s.trim()).filter(Boolean)) {
+      if (writerPaths.has(p) || !declaredUnion.has(p)) continue;
+      const owners = resolveOwningNodes(p, nodes);
+      if (!owners.length) continue;
+      const before = treeEntriesFor(root, provenance.legBase, [p]).get(p);
+      const after = treeEntriesFor(root, mergeParent, [p]).get(p);
+      absorbed.push({ path: p,
+        from_blob: before ? before.mode + ' ' + before.sha : null,
+        to_blob: after ? after.mode + ' ' + after.sha : null,
+        owner: owners.slice().sort()[0] });
+      for (const o of owners) attributedTo.add(o);
+    }
+  } catch (_) {
+    return { result: 'refuse', reason: 'candidate_digest_unavailable', node_id: nodeId, attempt_id: attemptId,
+      detail: 'the leg-base -> merge delta could not be computed' };
+  }
+  absorbed.sort((a, b) => a.path.localeCompare(b.path));
+  // The durable transaction — journal first (unsettled), ref second, settle third (the performRebind
+  // order; reconcilePendingRebind converges a crash anywhere in the prefix). The schema pins
+  // rebind.length > 0 => a selected repair writer: the re-anchor is a commitment to repair through
+  // THIS producer, and the schema's tuple/digest checks validate the record on the next read.
+  const record = {
+    generation: nonAbortedRebinds(attempt).length + 1,
+    base_before: currentIdentity.baseline,
+    base_after: mergeParent,
+    candidate_digest: now.digest,
+    candidate_declared: nowLegacy.declared,
+    producer_bindings: { [nodeId]: {
+      baseline: mergeParent, anchored_ref: mergeParent,
+      open_token: currentIdentity.open_token, generation: mergeParent.slice(0, 12),
+      ref: currentIdentity.ref } },
+    absorbed,
+    attributed_to: [...attributedTo].sort(),
+    settled: false,
+    aborted: false,
+  };
+  if (!attempt.repair || attempt.repair.selected_writer == null) {
+    attempt.repair = { selected_writer: nodeId, settled: false };
+  }
+  if (!Array.isArray(attempt.rebind)) attempt.rebind = [];
+  attempt.rebind.push(record);
+  writeReviewJournal(opts, journalState);
+  reviewFailpoint(opts, 'rebind_recorded');
+
+  execFileSync('git', ['-C', root, 'update-ref', currentIdentity.ref, mergeParent], { stdio: ['ignore', 'ignore', 'ignore'] });
+  const { baseFile } = writerBarrierAnchors(opts, nodeId);
+  writeFile(baseFile, mergeParent);
+  reviewFailpoint(opts, 'rebind_base_written');
+
+  record.settled = true;
+  writeReviewJournal(opts, journalState);
+  reviewFailpoint(opts, 'rebind_settled');
+  return { result: 'ok', node_id: nodeId, attempt_id: attemptId, route: 'rebind-base',
+    base_before: record.base_before, base_after: mergeParent, nonce_rotated: true,
+    absorbed, attributed_to: record.attributed_to };
+}
+
 function runRepairNodeCore(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir, attemptId } = opts;
 
@@ -8857,6 +9126,25 @@ function runRepairNodeCore(opts) {
   // of the repair transaction; the resume/idempotent short-circuits below recompute it directly (it is
   // a pure function of the attempt, so every path returns the byte-identical payload).
   let repairBrief = null;
+  // The #385 stale/head_advanced freshness signal, evaluated at repair ENTRY (read-only probe — the
+  // --base-freshness twin of --record-base's reuse branch, with no write path). A stale base is a
+  // NAMED condition at dispatch time here — never a write_set_overflow surprise at the later close.
+  // Advisory-only: the rebind below is the machine's answer to exactly this staleness, so the probe
+  // never refuses; a shell/probe failure leaves it null.
+  let baseFreshness = null;
+  try {
+    const { baseFile: freshnessBaseFile } = writerBarrierAnchors(opts, nodeId);
+    const basePresent = cacheExists ? cacheExists(freshnessBaseFile)
+      : (() => { try { readFile(freshnessBaseFile); return true; } catch (_) { return false; } })();
+    if (basePresent && typeof shell === 'function') {
+      const probe = shell(validatorPath, [planPath, '--base-freshness', '--node-id', nodeId, '--json']);
+      const rec = probe && probe.recordBase ? probe.recordBase : probe;
+      if (probe && probe.exitCode === 0 && rec && rec.result === 'ok' && rec.stale === true) {
+        baseFreshness = { stale: true, staleReason: rec.staleReason || 'head_advanced',
+          recordedHead: rec.recordedHead || null, currentHead: rec.currentHead || null };
+      }
+    }
+  } catch (_) { baseFreshness = null; }
   if (hasReviewJournal) {
     if (!attemptId) return { result: 'refuse', errors: ['--attempt-id required for repair-node'] };
     repairJournalState = readReviewJournal(opts, initialPlan);
@@ -9123,23 +9411,42 @@ function runRepairNodeCore(opts) {
         attempt_id: attemptId, producer_slice: proof.producer_slice };
     }
 
-    // #739 — a descendant REPLAY skips STEP 11-15. Those steps verify the writer's CURRENT tree is
-    // barrier-clean before consuming a direct repair; they are built for a graph-MAXIMAL writer with no
-    // completed writer descendants. For an upstream owner the descendant cone's disjoint outputs read as
-    // "foreign" to the owner's baseline (the barrier would fail), yet those descendants are exactly what
-    // the replay is about to RESET and re-run. STEP 9's baseline-identity check (above, run for both
-    // paths) still proves the owner is legitimately repairable (no swapped baseline); the whole-candidate
-    // re-review after the cascade re-certifies the modified tree, which is the real gate. No barrier
-    // replay / rebind is meaningful here, so none is performed.
-    if (!replayMode) {
+    // #739 + the replay-arm repair: a descendant REPLAY runs the SAME foreign-probe + rebind + barrier
+    // replay as a direct repair — the owner's base is NOT exempt from truth. The partition is the cone:
+    // the replay's own descendant-cone outputs legitimately read as "foreign" to the owner's (possibly
+    // leg-era) baseline, and those are the CONE RESET's business — reverted (the sanctioned
+    // revert-overflow path) or re-made under re-review when the cone re-runs, never a rebind. Only
+    // NON-cone foreign content (merged lane-group siblings that STAY) is the owner's-base truth the
+    // rebind must absorb: P3 attributes it to its recorded owners, the synthetic base keeps the
+    // owner's reviewed diff byte-identical, and the barrier then replays EXACT rather than poisoned.
+    // A refusal here is the typed repair-time signal — before, this arm skipped straight to the reopen
+    // and the same staleness surfaced only as a write_set_overflow at the later close. STEP 9's
+    // baseline-identity check (above) still proves the owner is legitimately repairable; the
+    // descendant-cone reset below is unchanged.
+    {
       // ---- STEP 11: the writer's foreign delta (exactly what the barrier would call outOfAllow). --
       const cand = effectiveCandidate(repairAttempt);
       const foreignProbe = computeWriterForeignPaths(opts, initialPlan, nodeId, currentIdentity.baseline);
-      const foreign = foreignProbe ? foreignProbe.foreign : [];
+      const foreignAll = foreignProbe ? foreignProbe.foreign : [];
+      // #739: split the foreign delta into cone-owned (the replay's own reset cone — reverted or
+      // re-made under re-review, so the stale base on those paths is the sanctioned flow) and
+      // NON-cone foreign (the rebind's business). A path owned by a cone member AND anyone else is
+      // NOT cone-owned — it stays in the rebind's examination set.
+      let coneForeign = [];
+      let foreign = foreignAll;
+      if (replayMode && foreignAll.length) {
+        const coneSet = new Set(replayMode.descendants);
+        foreign = foreignAll.filter(p => {
+          const owners = resolveOwningNodes(p, proofNodes);
+          const coneOwned = owners.length > 0 && owners.every(o => coneSet.has(o));
+          if (coneOwned) coneForeign.push(p);
+          return !coneOwned;
+        });
+      }
 
-      // ---- STEP 12: FAST PATH — nothing foreign and the candidate is exactly what was reviewed. ---
-      // Byte-identical to the pre-rebind behavior: the barrier replays HERE and `original_barrier_failed`
-      // keeps its exact precedence over every downstream guard.
+      // ---- STEP 12: FAST PATH — nothing (non-cone) foreign and the candidate is exactly what was
+      // reviewed. Byte-identical to the pre-rebind behavior: the barrier replays HERE and
+      // `original_barrier_failed` keeps its exact precedence over every downstream guard.
       const rebindNeeded = !(foreign.length === 0 && now.digest === cand.digest);
       if (rebindNeeded) {
         // ---- STEP 13: THE REBIND PROOF (P1 -> P2 -> P3 -> P4). Any failure = typed refusal, ZERO
@@ -9151,12 +9458,37 @@ function runRepairNodeCore(opts) {
           ledgerStatuses: proofLedger,
         });
         if (!proofOut.ok) {
+          // Typed re-anchor route: when the node's recorded base PROVABLY predates a lane-group merge
+          // (the leg-base ref lineage + level_merged merge ancestry), the P1/P3/P4 refusal names the
+          // legal alternative — the bounded rebind-base verb (proof-gated, zero-write on unprovable
+          // provenance) — instead of leaving hand update-ref as the only way out. P2
+          // (candidate_slice_changed — the refuted code ITSELF moved) and the residual digest refusal
+          // carry no route: re-anchoring cannot speak to either.
+          const reanchorRoute = ['candidate_residue_changed', 'candidate_delta_unattributed', 'rebind_limit_reached']
+            .includes(proofOut.reason) && proveReanchorProvenance(opts, nodeId).ok;
+          const refusalExtras = {
+            ...(reanchorRoute ? { route: 'rebind-base' } : {}),
+            ...(baseFreshness ? { base_stale: true, base_freshness: baseFreshness } : {}) };
           return proofOut.reason === 'rebind_limit_reached'
             ? { result: 'rebind_limit_reached', attempt_id: attemptId,
-              rebinds: nonAbortedRebinds(repairAttempt).length, limit: REVIEW_REBIND_LIMIT }
+              rebinds: nonAbortedRebinds(repairAttempt).length, limit: REVIEW_REBIND_LIMIT, ...refusalExtras }
             : { result: 'repair_requires_replan', reason: proofOut.reason, attempt_id: attemptId,
               producer_slice: proof.producer_slice, ...(proofOut.detail ? { detail: proofOut.detail } : {}),
-              ...(proofOut.paths ? { paths: proofOut.paths } : {}) };
+              ...(proofOut.paths ? { paths: proofOut.paths } : {}), ...refusalExtras };
+        }
+        if (replayMode && coneForeign.length) {
+          // Record honesty: the synthetic base absorbs the cone's CURRENT content too — P2 (slice
+          // paths) and the candidate-anchored delta just proved it equals the reviewed bytes for
+          // every cone path that reaches here (a changed non-slice cone path was refused above) — so
+          // name it in the record, attributed to the cone, rather than absorbing it silently.
+          for (const p of coneForeign) {
+            const owners = resolveOwningNodes(p, proofNodes);
+            proofOut.absorbed.push({ path: p, from_blob: cand.declared[p] || null,
+              to_blob: now.declared[p] || null, owner: owners.slice().sort()[0] });
+            for (const o of owners) if (!proofOut.attributed_to.includes(o)) proofOut.attributed_to.push(o);
+          }
+          proofOut.absorbed.sort((a, b) => a.path.localeCompare(b.path));
+          proofOut.attributed_to.sort();
         }
         // P5 + the rebind TRANSACTION are deferred to just below the P0 orphan guard: P0 (repairs stay
         // strictly serialized — one reopened writer at a time) is a PRECONDITION of this proof's soundness,
@@ -9164,13 +9496,18 @@ function runRepairNodeCore(opts) {
         // leg containment, so a foreign path would not be attributable to EITHER of them. Serialization is
         // what makes per-path attribution sound, so nothing may be rebound until P0 has held.
         pendingRebind = { proofOut, now, currentIdentity, writerPaths, producer_slice: proof.producer_slice };
-      } else {
+      } else if (!replayMode || foreignAll.length === 0) {
         // ---- STEP 15 (fast path): the original-barrier replay, unchanged. ------------------------
         const barrierProof = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
         if (!barrierProof || barrierProof.exitCode !== 0 || barrierProof.result !== 'ok') {
           return { result: 'repair_requires_replan', reason: 'original_barrier_failed', producer_slice: proof.producer_slice, barrierProof };
         }
       }
+      // #739 else: the ONLY foreign content is the replay's own cone output — reverted (revert-overflow)
+      // or re-made when the reset cone re-runs, and re-certified by the whole-candidate re-review after
+      // the cascade. No barrier replay is meaningful against the pre-reset tree (the cone's outputs
+      // legitimately read as overflow against the owner's reused baseline), so none runs — the base
+      // stays REUSED, byte-identical to the pre-#829 replay arm on this shape.
     }
     if (!repairAlreadySelected) {
       repairAttempt.repair = { selected_writer: nodeId, settled: false };
@@ -9566,10 +9903,13 @@ function runRepairNodeCore(opts) {
     const writer = nodes.find(n => n.id === nodeId);
     const seeded = seedEvidenceFile(planPath, nodeId, nonce, writer ? writer.role : 'implementer', true);
     if (seeded && seeded.ok === false) {
-      // REFUSE BEFORE THE APPEND. Repair reuses the barrier baseline by design, so the binding nonce
-      // is IDENTICAL across the repair — a stale `verdict: pass` body that survived a failed rotation
-      // would still carry a valid nonce, pass the shape check, and get the repair brief appended onto
-      // it. Appending here is precisely what launders the prior pass; stop short of it.
+      // REFUSE BEFORE THE APPEND. The binding nonce is IDENTICAL across the repair only when the
+      // barrier baseline was REUSED; on the rebind path the base MOVED (performRebind restamped
+      // .cache/barrier-base-<id> to the synthetic base), so the nonce ROTATED — the readNonce above
+      // reads the post-rebind base either way, and forceRotate re-seeds under it. A stale
+      // `verdict: pass` body that survived a failed rotation would still carry a valid nonce, pass
+      // the shape check, and get the repair brief appended onto it. Appending here is precisely what
+      // launders the prior pass; stop short of it.
       return { result: 'refuse', reason: 'evidence_seed_failed', nodeId, detail: seeded.detail,
         gatesReset, readOnlyReset, gatesFolded, deletedDownstreamBaselines, evidenceRemoved,
         baselineReused: true, attempt_id: repairAttempt.attempt_id };
@@ -9605,6 +9945,10 @@ function runRepairNodeCore(opts) {
     evidenceRemoved,
     // The CRITICAL anti-laundering invariant: the original barrier-base is reused, NOT re-snapshotted.
     baselineReused: true,
+    // The #385 freshness verdict evaluated at repair ENTRY — a stale base is NAMED here at dispatch
+    // time (advisory; the rebind above is the machine's answer to it), never a write_set_overflow
+    // surprise at the later close.
+    ...(baseFreshness ? { base_stale: true, base_freshness: baseFreshness } : {}),
     resumed: resumingReopenedWriter || undefined,
     ...(repairAttempt ? { attempt_id: repairAttempt.attempt_id, consumed_by: nodeId } : {}),
     // #730: the machine channel for the same digest-bound brief seeded into the writer's evidence.
@@ -15375,6 +15719,7 @@ function main() {
       '  write-halt          --project P --node-id N --reason consent|security|test_thrash|merge_conflict\n' +
       '  reopen-node         --project P --node-id N\n' +
       '  repair-node         --project P --attempt-id A --node-id N\n' +
+      '  rebind-base         --project P --attempt-id A --node-id N  (re-anchor a lane-group member\'s leg-era barrier base to the reviewed merged parent — proof-gated, nonce rotated; zero-write refuse when unprovable)\n' +
       '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
       '\n' +
       '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n' +
@@ -15853,6 +16198,20 @@ function main() {
         readdir: (d) => { try { return fs.readdirSync(d); } catch (_) { return []; } },
       });
     }
+  } else if (subcommand === 'rebind-base') {
+    // The bounded re-anchor verb: re-anchors a lane-group member's leg-era barrier base to the
+    // reviewed merged parent (proof-gated, nonce rotated). Zero-write refuse when unprovable.
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for rebind-base'] };
+    } else if (!attemptId) {
+      result = { result: 'refuse', errors: ['--attempt-id required for rebind-base'] };
+    } else {
+      result = runRebindBase({
+        planPath, statePath, project, nodeId, attemptId, shell, readFile, writeFile, cacheExists,
+        repoRoot,
+        now: () => new Date().toISOString(),
+      });
+    }
   } else if (subcommand === 'discard-speculative') {
     // #439 (D-419 Part 4, settlement 4) + #596: roll back a speculatively-opened node whose gate bet
     // failed (a write member additionally tears down its leg + purges stale evidence — DISCARD-ONLY).
@@ -16064,6 +16423,13 @@ module.exports = {
   // #434 (D-434-01): repair primitives.
   runRevertOverflow,
   runRepairNode,
+  // The bounded re-anchor verb + its lineage proof, and the commit-side candidate-triple twin the
+  // reviewed-merged-parent identity check runs — exported for direct both-direction pins (the
+  // provenance RED, the re-anchored GREEN).
+  runRebindBase,
+  proveReanchorProvenance,
+  candidateTripleForCommit,
+  candidateTripleFromListing,
   // #699: focused crash-safe review-outcome source publication proof.
   publishRepairReplanSource,
   // #439 (D-419 Part 4): speculative-read discard primitive.
