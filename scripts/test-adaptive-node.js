@@ -88,6 +88,10 @@ const {
   proveRebindAdmissible,
   // #699: crash-safe publication of a successor review-outcome source.
   publishRepairReplanSource,
+  // #827: the discharge owner projection (writer/read-fold) + the typed route-mismatch classifier.
+  loadOwnerProjection,
+  ensureOwnerProjection,
+  routeMismatchDetail,
 } = require('./kaola-workflow-adaptive-node');
 const {
   RUNNING_SET_NAME,
@@ -100,6 +104,14 @@ const {
   validateReviewJournal,
   // #688 (item 4): canonical blob-map shape check, direct-call hardening regression.
   isCanonicalBlobMap,
+  // #827: the discharge owner projection schema primitives (cross-edition drift anchor).
+  EPOCH_PROJECTIONS_DIR,
+  OWNER_PROJECTION_NAME,
+  OWNER_PROJECTION_SCHEMA_VERSION,
+  buildOwnerProjectionEntry,
+  verifyOwnerProjectionEntry,
+  foldOwnerProjection,
+  canonicalizeRouteOwners,
 } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 // #585: scheduler mutual-exclusion lock helpers (byte-identical ×4 in adaptive-schema).
@@ -580,6 +592,528 @@ scenario(() => {
       && statuses.finalize === 'pending' && !fs.existsSync(path.join(cacheDir, 'running-set.json')),
       'R7-SIMULTANEOUS-RED: both gates return pending, running set drains, and successor stays hidden');
   } finally { fs.rmSync(simultaneousTmp, { recursive: true, force: true }); }
+});
+
+// ===========================================================================
+// #827 — THE POST-DISCHARGE OWNER PROJECTION. A review gate settling AFTER its upstream expansion
+// point discharged records route_candidates carrying the interior LEAF owners; discharge is the
+// commitment point that changes the node view, so discharge owns the translation: expand-close
+// writes a durable, digest-bound leaf -> owning-milestone projection into the barrier-invisible
+// .cache/epoch-projections/ band, and BOTH journal route matchers canonicalize the recorded AND the
+// recomputed rows through it before comparing. An owner in NEITHER the execution node table NOR the
+// projection still refuses review_journal_route_mismatch (the tamper gate keeps its teeth), and the
+// refusal now carries a TYPED detail: `tamper` vs `projection_missing` (the legacy pre-projection
+// shape — the operator hint names the expand-close migration, never journal surgery).
+// ===========================================================================
+
+// #827-U — the projection primitives, direct-call: the digest-bound entry shape, the fail-closed
+// fold, the route-row canonicalization, the idempotent append-only writer, the typed mismatch
+// classifier, and the operator-hint registry entry.
+scenario(() => {
+  assert(typeof ensureOwnerProjection === 'function' && typeof loadOwnerProjection === 'function'
+    && typeof routeMismatchDetail === 'function',
+    '#827-U: the projection writer/read-fold/classifier are exported for direct pins');
+  assert(typeof buildOwnerProjectionEntry === 'function' && typeof verifyOwnerProjectionEntry === 'function'
+    && typeof foldOwnerProjection === 'function' && typeof canonicalizeRouteOwners === 'function'
+    && EPOCH_PROJECTIONS_DIR === 'epoch-projections' && OWNER_PROJECTION_NAME === 'owner-projection.json',
+    '#827-U: the schema-side entry/verify/fold/canonicalize primitives + band names are exported (drift anchor)');
+  if (typeof ensureOwnerProjection !== 'function' || typeof buildOwnerProjectionEntry !== 'function') return;
+
+  const H = 'a'.repeat(64);
+  // buildOwnerProjectionEntry: leaves stored SORTED (byte-stable canonical form); the digest binds
+  // { point, plan_hash, discharged_at, records, leaves } byte-for-byte; the plan hash lowercases.
+  const entry = buildOwnerProjectionEntry({ point: 'm1', plan_hash: H.toUpperCase(),
+    discharged_at: 'T1', records: ['m1#1'], leaves: ['m1-r1-u2', 'm1-r1-u1'] });
+  assert(JSON.stringify(entry.leaves) === JSON.stringify(['m1-r1-u1', 'm1-r1-u2']),
+    '#827-U: the entry stores leaves SORTED (canonical byte-stable form), got ' + JSON.stringify(entry.leaves));
+  assert(entry.plan_hash === H && /^[0-9a-f]{64}$/.test(entry.projection_digest),
+    '#827-U: the plan hash is lowercased and the projection digest is a 64-hex content address');
+  assert(verifyOwnerProjectionEntry(entry) === true, '#827-U: a well-formed entry verifies');
+  assert(verifyOwnerProjectionEntry({ ...entry, leaves: ['m1-r1-u2', 'm1-r1-u1'] }) === false,
+    '#827-U: unsorted leaves fail verification (the canonical form is enforced)');
+  assert(verifyOwnerProjectionEntry({ ...entry, records: ['m1#9'] }) === false,
+    '#827-U: a tampered records list breaks the digest binding');
+  assert(verifyOwnerProjectionEntry({ ...entry, projection_digest: 'b'.repeat(64) }) === false,
+    '#827-U: a forged digest fails verification');
+
+  // foldOwnerProjection: wrong plan hash / wrong schema version / unverifiable entries all fold to
+  // the EMPTY projection (fail-closed: can only ever KEEP a refusal in place, never lift one); a
+  // later entry for the same point SUPERSEDES (append-only per epoch).
+  const foldInput = entries => ({ schema_version: OWNER_PROJECTION_SCHEMA_VERSION, plan_hash: H, entries });
+  const e2 = buildOwnerProjectionEntry({ point: 'm1', plan_hash: H, discharged_at: 'T2',
+    records: ['m1#1', 'm1#2'], leaves: ['m1-r1-u1', 'm1-r1-u2', 'm1-r2-fx'] });
+  const folded = foldOwnerProjection(foldInput([entry, e2]), H);
+  assert(folded.present === true && JSON.stringify(folded.points) === JSON.stringify(['m1'])
+    && folded.leaf_to_milestone['m1-r1-u1'] === 'm1' && folded.leaf_to_milestone['m1-r2-fx'] === 'm1',
+    '#827-U: the fold unions every verifiable current-epoch entry (the re-discharge supersedes), got '
+    + JSON.stringify(folded));
+  assert(foldOwnerProjection(foldInput([entry]), 'c'.repeat(64)).present === false,
+    '#827-U: a wrong-epoch plan hash folds to the empty projection');
+  assert(foldOwnerProjection({ schema_version: 999, plan_hash: H, entries: [entry] }, H).present === false,
+    '#827-U: a foreign schema version folds to the empty projection');
+  assert(foldOwnerProjection(foldInput([{ ...entry, point: 'ghost' }]), H).present === false,
+    '#827-U: an entry whose digest no longer binds contributes NOTHING (fail-closed)');
+
+  // canonicalizeRouteOwners: leaf ids map to their milestone (dedup + re-sort + owning_node
+  // re-derived); spine ids and unknown ids map to themselves; non-owner fields carry over; PURE.
+  const leafMap = { 'm1-r1-u1': 'm1', 'm1-r2-fx': 'm1' };
+  const row = { finding_id: 'F-1', file: 'lib/composed.js', ownership_candidates: ['m1-r1-u1', 'm1-r2-fx'],
+    owning_node: null, fix_role: 'implementer' };
+  const canon = canonicalizeRouteOwners(row, leafMap);
+  assert(JSON.stringify(canon.ownership_candidates) === JSON.stringify(['m1']) && canon.owning_node === 'm1',
+    '#827-U: the whole leaf set collapses onto ONE milestone — uniquely milestone-owned, got ' + JSON.stringify(canon));
+  assert(canon.file === 'lib/composed.js' && canon.fix_role === 'implementer'
+    && row.ownership_candidates.length === 2 && row.owning_node === null,
+    '#827-U: non-owner fields carry over and the input row is NOT mutated (pure)');
+  const mixed = canonicalizeRouteOwners({ ownership_candidates: ['wall', 'm1-r1-u1', 'ghost'], owning_node: null }, leafMap);
+  assert(JSON.stringify(mixed.ownership_candidates) === JSON.stringify(['ghost', 'm1', 'wall'])
+    && mixed.owning_node === null,
+    '#827-U: spine + unknown ids map to themselves (identity) and a multi-owner row stays unowned, got '
+    + JSON.stringify(mixed));
+
+  // ensureOwnerProjection (the discharge-side writer): appended -> present (idempotent re-ensure) ->
+  // superseding APPEND on a re-discharge; loadOwnerProjection reads it back for the SAME hash only.
+  const files = {};
+  const pOpts = { planPath: '/p827u/workflow-plan.md',
+    readFile: p => { if (!(p in files)) throw new Error('ENOENT'); return files[p]; },
+    writeFile: (p, c) => { files[p] = c; }, mkdirp: () => {} };
+  const PROJ_U = '/p827u/.cache/epoch-projections/owner-projection.json';
+  const REC1 = [{ id: 'm1#1', units: [{ id: 'm1-r1-u1' }, { id: 'm1-r1-u2' }] }];
+  const REC2 = [{ id: 'm1#1', units: [{ id: 'm1-r1-u1' }, { id: 'm1-r1-u2' }] },
+    { id: 'm1#2', units: [{ id: 'm1-r2-fx' }] }];
+  assert(ensureOwnerProjection(pOpts, H, 'm1', REC1, 'T1') === 'appended'
+    && typeof files[PROJ_U] === 'string',
+    '#827-U: the first discharge APPENDS the projection entry into the barrier-invisible band');
+  const firstWrite = files[PROJ_U];
+  assert(ensureOwnerProjection(pOpts, H, 'm1', REC1, 'T1') === 'present' && files[PROJ_U] === firstWrite,
+    '#827-U: the identical re-ensure is idempotent (present, byte-untouched) — the crash-repair arm');
+  assert(ensureOwnerProjection(pOpts, H, 'm1', REC2, 'T2') === 'appended',
+    '#827-U: a re-discharge after re-expansion APPENDS a superseding entry (append-only, never a rewrite)');
+  const parsedFile = JSON.parse(files[PROJ_U]);
+  assert(parsedFile.schema_version === OWNER_PROJECTION_SCHEMA_VERSION && parsedFile.plan_hash === H
+    && parsedFile.entries.length === 2,
+    '#827-U: the durable file carries BOTH entries bound to the epoch plan hash, got '
+    + JSON.stringify({ v: parsedFile.schema_version, entries: parsedFile.entries.length }));
+  const loaded = loadOwnerProjection(pOpts, H);
+  assert(loaded.present === true && loaded.points instanceof Set && loaded.points.has('m1')
+    && loaded.leafToMilestone['m1-r1-u1'] === 'm1' && loaded.leafToMilestone['m1-r1-u2'] === 'm1'
+    && loaded.leafToMilestone['m1-r2-fx'] === 'm1',
+    '#827-U: loadOwnerProjection folds the durable band for the current epoch, got ' + JSON.stringify(loaded));
+  assert(loadOwnerProjection(pOpts, 'd'.repeat(64)).present === false,
+    '#827-U: a stale (wrong-hash) projection reads as EMPTY — identity canonicalization');
+  assert(loadOwnerProjection({ planPath: '/nowhere/workflow-plan.md', readFile: pOpts.readFile }, H).present === false,
+    '#827-U: an absent projection file reads as EMPTY (total, never throws)');
+  assert(ensureOwnerProjection(pOpts, null, 'm1', REC1, 'T3') === 'skipped'
+    && ensureOwnerProjection(pOpts, H, 'm1', [], 'T3') === 'skipped',
+    '#827-U: no plan hash / no records => skipped (nothing to project)');
+
+  // routeMismatchDetail: the TYPED distinction on the surviving refusal. projection_missing = the
+  // rows reference a REAL unit of a DISCHARGED point no projection covers (the legacy pre-projection
+  // shape) — the detail names the idempotent expand-close migration. tamper = everything else,
+  // unchanged fail-closed.
+  const DISCHARGED_PLAN = ['# Plan', '', '## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: u1 | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#1):', '  at: T1', '',
+    'discharge(m1):', '  at: T2', '  records: m1#1', ''].join('\n');
+  const execIds = new Set(['probe', 'm1', 'wall', 'done', 'm1-r1-u1']);
+  const legacy = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }],
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }],
+    { present: false, leafToMilestone: {}, points: new Set() }, DISCHARGED_PLAN, execIds);
+  assert(legacy.route_mismatch_class === 'projection_missing' && legacy.point === 'm1'
+    && /expand-close --node-id m1/.test(String(legacy.detail)) && /NEVER hand-edit the journal/.test(String(legacy.detail)),
+    '#827-U: a discharged-but-uncovered leaf classifies projection_missing, naming the idempotent '
+    + 'expand-close migration (never journal surgery), got ' + JSON.stringify(legacy));
+  const tampered = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r1-u9'], owning_node: 'm1-r1-u9' }], [],
+    { present: true, leafToMilestone: { 'm1-r1-u1': 'm1' }, points: new Set(['m1']) }, DISCHARGED_PLAN, execIds);
+  assert(tampered.route_mismatch_class === 'tamper' && !tampered.point && !tampered.detail,
+    '#827-U: a leaf-shaped owner in NEITHER the node table NOR the projection classifies tamper '
+    + '(the gate keeps its teeth), got ' + JSON.stringify(tampered));
+  const covered = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }], [],
+    { present: true, leafToMilestone: { 'm1-r1-u1': 'm1' }, points: new Set(['m1']) }, DISCHARGED_PLAN, execIds);
+  assert(covered.route_mismatch_class === 'tamper',
+    '#827-U: a COVERED leaf with a residual divergence is tamper, not projection_missing (disjoint classes)');
+  const nonLeaf = routeMismatchDetail(
+    [{ ownership_candidates: ['ghost'], owning_node: 'ghost' }], [],
+    { present: false, leafToMilestone: {}, points: new Set() }, DISCHARGED_PLAN, execIds);
+  assert(nonLeaf.route_mismatch_class === 'tamper',
+    '#827-U: a non-leaf-shaped unknown owner stays tamper even with no projection present');
+
+  // The OPERATOR_HINT_REGISTRY entry: the legacy class names the machine migration; the tamper class
+  // stays a bare fail-closed integrity signal. NEITHER suggests hand-editing the journal.
+  const legacyHint = getOperatorHint('review_journal_route_mismatch',
+    { route_mismatch_class: 'projection_missing', point: 'm1' });
+  assert(/expand-close --project <P> --node-id m1/.test(legacyHint) && /NEVER hand-edit the journal/.test(legacyHint),
+    '#827-U: the projection_missing hint names the idempotent expand-close migration, got ' + JSON.stringify(legacyHint));
+  const tamperHint = getOperatorHint('review_journal_route_mismatch', { route_mismatch_class: 'tamper' });
+  assert(!/expand-close/.test(tamperHint) && /NEVER hand-edited/.test(tamperHint),
+    '#827-U: the tamper hint names NO migration — a bare fail-closed integrity signal, got ' + JSON.stringify(tamperHint));
+  const bareHint = getOperatorHint('review_journal_route_mismatch', {});
+  assert(!/expand-close/.test(bareHint),
+    '#827-U: an unclassified (legacy-caller) mismatch takes the tamper wording — fail closed by default');
+});
+
+// ---------------------------------------------------------------------------
+// #827-GREEN — the legitimate post-discharge routing case, beside R8-PROJECTION-RED's tamper pin.
+// The journal recorded interior-LEAF owners while m1's FIRST frontier was live; m1 then re-expanded
+// (a fixer unit covering the SAME file) and DISCHARGED. Both sides canonicalize through the
+// discharge owner projection (leaf -> m1): validation PASSES, and route-findings resolves the
+// finding to its OWNING MILESTONE with route: reexpand-open — the cheap legal path, no journal
+// surgery, no consent. The SAME fixture with the projection removed is the legacy pre-projection
+// shape: the refusal returns, typed projection_missing, and threads through route-findings. A forged
+// leaf (in neither the execution node table nor the projection) stays tamper-class.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const crypto = require('crypto');
+  assert(typeof ensureOwnerProjection === 'function' && typeof loadOwnerProjection === 'function',
+    '#827-GREEN: the projection writer/read-fold are exported (the discharge-transaction surface)');
+  const NODE_ROWS_827 = [
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | CHANGELOG.md | 1 | sequence |',
+  ];
+  const LEDGER_827 = ['| probe | complete | |', '| m1 | complete | |', '| m1-r1-u1 | complete | |',
+    '| m1-r2-fx | complete | |', '| wall | complete | |', '| done | pending | |'];
+  const RECORDS_827 = ['## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: u1 | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#1):', '  at: T1', '',
+    'record(m1#2):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: fx | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#2):', '  at: T2', '',
+    'discharge(m1):', '  at: T3', '  records: m1#1, m1#2', ''].join('\n');
+  const planBody827 = makePlan(LEDGER_827, NODE_ROWS_827) + RECORDS_827;
+  const hash827 = planValidator.computePlanHash(planBody827);
+  const plan827 = '<!-- plan_hash: ' + hash827 + ' -->\n' + planBody827;
+
+  // The fixture genuinely needs the projection: the discharge removed nothing from the RECORDS, so
+  // the execution view still carries BOTH leaves — and the CURRENT recomputation names two owners
+  // where the record named one. Only canonicalization reconciles them.
+  const execNodes827 = planValidator.planNodesWithExpansions(plan827);
+  assert(execNodes827.some(n => n.id === 'm1-r1-u1') && execNodes827.some(n => n.id === 'm1-r2-fx'),
+    '#827-GREEN fixture: the execution view still carries BOTH discharged leaves');
+  assert(JSON.stringify(resolveOwningNodes('lib/composed.js', execNodes827))
+      === JSON.stringify(['m1-r1-u1', 'm1-r2-fx']),
+    '#827-GREEN fixture: the CURRENT recomputation names TWO leaves (the re-expansion grew the '
+    + 'interior) — only projection canonicalization reconciles it with the single-leaf record, got '
+    + JSON.stringify(resolveOwningNodes('lib/composed.js', execNodes827)));
+
+  const gate827 = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'wall', origin: ['m1'], members: ['wall'] });
+  const gens827 = [{ member: 'wall', nonce: 'wallnonce827a' }];
+  const digest827 = '9'.repeat(64);
+  const findingRaw827 = 'id=F-1 scope=in_scope action=fix status=open severity=high file=lib/composed.js fix_role=implementer';
+  const findingBody827 = 'evidence-binding: wall wallnonce827a\nverdict: fail\nfindings_blocking: 1\nfinding: ' + findingRaw827 + '\n';
+  const canonicalFinding827 = { source_node: 'wall', raw: findingRaw827, id: 'F-1', scope: 'in_scope',
+    action: 'fix', status: 'open', severity: 'high', file: 'lib/composed.js', fix_role: 'implementer' };
+  // RECORDED while only m1#1 was live: the single leaf owner of lib/composed.js.
+  const recordedRoute827 = { source_node: 'wall', finding_id: 'F-1', id: 'F-1', scope: 'in_scope',
+    action: 'fix', status: 'open', severity: 'high', file: 'lib/composed.js',
+    ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1', fix_role: 'implementer', raw: findingRaw827 };
+  const attempt827 = { attempt_id: 'wall:1', ordinal: 1, plan_hash: hash827, logical_gate: gate827,
+    candidate_digest: digest827, candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64),
+    generations: gens827,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: hash827,
+      logical_gate_key: gate827.key, candidate_digest: digest827, generations: gens827 })).digest('hex'),
+    settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
+    receipts: [{ node_id: 'wall', generation: 'wallnonce827a', body: findingBody827,
+      receipt_sha256: crypto.createHash('sha256').update(findingBody827).digest('hex'),
+      effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+    findings: [canonicalFinding827], route_candidates: [recordedRoute827], lifecycle_settled: true,
+    repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null };
+
+  const PROJ_827 = '/p827/.cache/epoch-projections/owner-projection.json';
+  const files827 = {
+    '/p827/workflow-plan.md': plan827,
+    '/p827/.cache/wall.md': findingBody827,
+    '/p827/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: hash827, attempts: [attempt827] }),
+  };
+  const io827 = { planPath: '/p827/workflow-plan.md', repoRoot: '/p827',
+    readFile: p => { if (!(p in files827)) throw new Error('ENOENT'); return files827[p]; },
+    writeFile: (p, c) => { files827[p] = c; }, cacheExists: p => p in files827, mkdirp: () => {} };
+  // The durable projection, in the discharge transaction's own entry format (built here with the
+  // PRE-EXISTING schema primitives so every behavioral assertion below stays a clean RED — never a
+  // throw — on a checkout where the fix is absent).
+  {
+    const core = { point: 'm1', plan_hash: hash827, discharged_at: 'T3',
+      records: ['m1#1', 'm1#2'], leaves: ['m1-r1-u1', 'm1-r2-fx'] };
+    const digest827p = crypto.createHash('sha256')
+      .update(require('./kaola-workflow-adaptive-schema').canonicalJson(core)).digest('hex');
+    files827[PROJ_827] = JSON.stringify({ schema_version: 1, plan_hash: hash827,
+      entries: [{ ...core, projection_digest: digest827p }] }, null, 2) + '\n';
+  }
+  // ...and the discharge transaction's writer produces the IDENTICAL bytes through the same seam
+  // (the ONLY writer — no orchestrator-facing verb).
+  if (typeof ensureOwnerProjection === 'function') {
+    const before827 = files827[PROJ_827];
+    const ensured = ensureOwnerProjection(io827, hash827, 'm1',
+      [{ id: 'm1#1', units: [{ id: 'm1-r1-u1' }] }, { id: 'm1#2', units: [{ id: 'm1-r2-fx' }] }], 'T3');
+    assert(ensured === 'present' && files827[PROJ_827] === before827,
+      '#827-GREEN: the discharge writer covers EXACTLY this discharge, idempotently (present), got ' + ensured);
+  }
+
+  // GREEN — the leaf-recorded journal VALIDATES post-discharge (canonicalized through the projection
+  // on BOTH sides of the comparison).
+  const state827 = readReviewJournal(io827, plan827);
+  assert(state827.ok === true,
+    '#827-GREEN: the leaf-recorded journal VALIDATES post-discharge — the post-discharge routing case '
+    + 'passes without mutation, got ' + JSON.stringify({ ok: state827.ok, reason: state827.reason }));
+
+  // TAMPER — a forged leaf (in neither the execution node table nor the projection) still refuses,
+  // typed tamper. Complements R8-PROJECTION-RED, which pins the refusal without the class.
+  const tamperAttempt827 = { ...attempt827, route_candidates: [{ ...recordedRoute827,
+    ownership_candidates: ['m1-r1-u9'], owning_node: 'm1-r1-u9' }] };
+  const filesTamper827 = { ...files827, '/p827/.cache/review-attempts.json':
+    JSON.stringify({ schema_version: 1, plan_hash: hash827, attempts: [tamperAttempt827] }) };
+  const tamperState827 = readReviewJournal({ ...io827,
+    readFile: p => { if (!(p in filesTamper827)) throw new Error('ENOENT'); return filesTamper827[p]; },
+    cacheExists: p => p in filesTamper827 }, plan827);
+  assert(tamperState827.ok === false && tamperState827.reason === 'review_journal_route_mismatch'
+    && tamperState827.route_mismatch_class === 'tamper' && !tamperState827.point,
+    '#827-TAMPER: an owner in NEITHER the table NOR the projection still refuses — tamper-class, the '
+    + 'gate keeps its teeth, got ' + JSON.stringify(tamperState827));
+
+  // GREEN routing — route-findings resolves the interior-owned finding to its OWNING MILESTONE.
+  const routed827 = runRouteFindings({ nodeId: 'wall', ...io827 }, 'test-project');
+  assert(routed827.result === 'ok' && routed827.count === 1,
+    '#827-GREEN: route-findings PASSES post-discharge (no journal surgery, no consent), got '
+    + JSON.stringify({ result: routed827.result, reason: routed827.reason }));
+  const row827 = (routed827.findings || [])[0] || {};
+  assert(JSON.stringify(row827.ownership_candidates) === JSON.stringify(['m1'])
+    && row827.owning_node === 'm1' && row827.route === 'reexpand-open',
+    '#827-GREEN: the interior-owned finding resolves to its OWNING MILESTONE with route: reexpand-open, '
+    + 'got ' + JSON.stringify(row827));
+  const persisted827 = JSON.parse(files827['/p827/.cache/findings-route.json'] || 'null') || [];
+  assert(persisted827.length === 1 && persisted827[0].owning_node === 'm1'
+    && persisted827[0].route === 'reexpand-open',
+    '#827-GREEN: the durable findings-route.json carries the same milestone resolution');
+
+  // LEGACY — the SAME journal with NO projection (a discharge/journal pair recorded before the
+  // projection existed): the refusal returns, typed projection_missing, and threads through
+  // route-findings with ZERO routing write.
+  const filesLegacy827 = { ...files827 };
+  delete filesLegacy827[PROJ_827];
+  delete filesLegacy827['/p827/.cache/findings-route.json'];
+  const ioLegacy827 = { ...io827,
+    readFile: p => { if (!(p in filesLegacy827)) throw new Error('ENOENT'); return filesLegacy827[p]; },
+    writeFile: (p, c) => { filesLegacy827[p] = c; }, cacheExists: p => p in filesLegacy827 };
+  const legacyState827 = readReviewJournal(ioLegacy827, plan827);
+  assert(legacyState827.ok === false && legacyState827.reason === 'review_journal_route_mismatch'
+    && legacyState827.route_mismatch_class === 'projection_missing' && legacyState827.point === 'm1'
+    && /expand-close --node-id m1/.test(String(legacyState827.detail)),
+    '#827-LEGACY: with no projection the SAME journal is the pre-fix legacy shape — the refusal '
+    + 'returns, typed projection_missing with the migration in the detail, got ' + JSON.stringify(legacyState827));
+  const routedLegacy827 = runRouteFindings({ nodeId: 'wall', ...ioLegacy827 }, 'test-project');
+  assert(routedLegacy827.result === 'refuse' && routedLegacy827.reason === 'review_journal_route_mismatch'
+    && routedLegacy827.route_mismatch_class === 'projection_missing' && routedLegacy827.point === 'm1',
+    '#827-LEGACY: the typed detail threads readReviewJournal -> route-findings (the fence refuses '
+    + 'BEFORE any routing write), got ' + JSON.stringify(routedLegacy827));
+  assert(typeof filesLegacy827['/p827/.cache/findings-route.json'] === 'undefined',
+    '#827-LEGACY: the refused route-findings wrote NOTHING');
+});
+
+// ---------------------------------------------------------------------------
+// #827-V2 — the schema-2 matcher twin, direct-call (the incident's own lane: a schema-2 journal
+// validated by reviewJournalV2MatchesPlan). The route recomputation ranges over the EXECUTION view
+// and BOTH sides canonicalize through the projection; the producer re-derivation stays the FREEZE
+// view (the #783 pin is untouched by this issue). RED-provable: pre-fix the recomputation ranged
+// over the SPINE ONLY, so a legitimately leaf-recorded attempt mismatched by construction.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  assert(typeof loadOwnerProjection === 'function' && typeof routeMismatchDetail === 'function',
+    '#827-V2: the projection read-fold + typed classifier are exported (the fix\'s surface)');
+  const NODE_ROWS_827V = [
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | CHANGELOG.md | 1 | sequence |',
+  ];
+  const LEDGER_827V = ['| probe | complete | |', '| m1 | complete | |', '| m1-r1-u1 | complete | |',
+    '| m1-r2-fx | complete | |', '| wall | complete | |', '| done | pending | |'];
+  const REC1_827V = ['## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: u1 | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#1):', '  at: T1', ''].join('\n');
+  const BOTH_827V = REC1_827V + '\n' + ['record(m1#2):', '  point: m1', '  grain: g', '  path: p',
+    '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: fx | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#2):', '  at: T2', '',
+    'discharge(m1):', '  at: T3', '  records: m1#1, m1#2', ''].join('\n');
+  const preReexpPlan827V = makePlan(LEDGER_827V, NODE_ROWS_827V) + REC1_827V;
+  const dischargedPlan827V = makePlan(LEDGER_827V, NODE_ROWS_827V) + BOTH_827V;
+
+  const spineNodes827V = planValidator.parseNodes(dischargedPlan827V);
+  const gate827V = reviewLogicalGate(spineNodes827V, spineNodes827V.find(n => n.id === 'wall'));
+  const gateCore827V = { key: gate827V.key, kind: gate827V.kind, members: gate827V.members,
+    claim_digest: gate827V.claim_digest, surface_digests: gate827V.surface_digests,
+    aggregation: gate827V.aggregation, certified_producers: gate827V.certified_producers };
+  const finding827V = { uid: 'F-1', scope: 'in_scope', action: 'fix', status: 'open', severity: 'high',
+    primary_anchor: { path: 'lib/composed.js' } };
+  // RECORDED pre-re-expansion (only m1#1 live): the single leaf owner.
+  const recorded827V = schema2RouteCandidates([finding827V],
+    planValidator.planNodesWithExpansions(preReexpPlan827V), 'wall');
+  assert(recorded827V.length === 1
+    && JSON.stringify(recorded827V[0].ownership_candidates) === JSON.stringify(['m1-r1-u1'])
+    && recorded827V[0].owning_node === 'm1-r1-u1',
+    '#827-V2 fixture: the attempt recorded the interior LEAF owner, got ' + JSON.stringify(recorded827V));
+  // ...while the CURRENT execution view names TWO owners for the same file (post-record growth).
+  const recomputed827V = schema2RouteCandidates([finding827V],
+    planValidator.planNodesWithExpansions(dischargedPlan827V), 'wall');
+  assert(JSON.stringify(recomputed827V[0].ownership_candidates) === JSON.stringify(['m1-r1-u1', 'm1-r2-fx']),
+    '#827-V2 fixture: the current recomputation names BOTH leaves — only canonicalization reconciles, got '
+    + JSON.stringify(recomputed827V));
+
+  const attempt827V = { attempt_id: 'wall:1', ordinal: 1, logical_gate: gateCore827V, gate_mode: 'change_gate',
+    outcome: 'fail', lifecycle_settled: true, consumed_by: null,
+    repair: { selected_writer: null, settled: null }, producer_bindings: {},
+    receipts: [{ node_id: 'wall', findings: [finding827V] }],
+    route_candidates: recorded827V };
+  const journal827V = { schema_version: 2, attempts: [attempt827V] };
+  const projection827V = { present: true,
+    leafToMilestone: { 'm1-r1-u1': 'm1', 'm1-r2-fx': 'm1' }, points: new Set(['m1']) };
+
+  const withProj827V = reviewJournalV2MatchesPlan(journal827V, dischargedPlan827V, projection827V);
+  assert(withProj827V.ok === true,
+    '#827-V2-GREEN: the schema-2 matcher validates the leaf-recorded attempt through the projection, '
+    + 'got ' + JSON.stringify(withProj827V));
+  const noProj827V = reviewJournalV2MatchesPlan(journal827V, dischargedPlan827V);
+  assert(noProj827V.ok === false && noProj827V.reason === 'review_journal_route_mismatch'
+    && noProj827V.route_mismatch_class === 'projection_missing' && noProj827V.point === 'm1',
+    '#827-V2-LEGACY: without the projection the schema-2 twin refuses, typed projection_missing, got '
+    + JSON.stringify(noProj827V));
+  const tampered827V = { schema_version: 2, attempts: [{ ...attempt827V,
+    route_candidates: recorded827V.map(r => ({ ...r,
+      ownership_candidates: ['ghost-writer'], owning_node: 'ghost-writer' })) }] };
+  const tamperResult827V = reviewJournalV2MatchesPlan(tampered827V, dischargedPlan827V, projection827V);
+  assert(tamperResult827V.ok === false && tamperResult827V.reason === 'review_journal_route_mismatch'
+    && tamperResult827V.route_mismatch_class === 'tamper' && !tamperResult827V.point,
+    '#827-V2-TAMPER: an owner in neither the table nor the projection refuses tamper-class in the '
+    + 'schema-2 twin too, got ' + JSON.stringify(tamperResult827V));
+  // The #783 invariance pin still holds: the producer re-derivation ranges over the FREEZE view, so
+  // this plan's (empty) spine producer set is what the attempt's bindings are matched against — a
+  // re-expansion can never grow a settled attempt into an identity mismatch.
+  assert(spineNodes827V.map(n => n.id).join(',') === 'probe,m1,wall,done',
+    '#827-V2: the producer re-derivation stays the FREEZE view (spine only) — the #783 pin is untouched');
+});
+
+// ---------------------------------------------------------------------------
+// #827-CLOSE — the discharge transaction itself writes the projection: expand-close returns
+// owner_projection:'appended' and the durable band covers every unit leaf of every record on the
+// point; the alreadyDischarged re-run is the crash-repair re-ensure ('present', byte-untouched; a
+// deleted file is re-appended byte-identically from the point's own discharge block).
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const { runExpandClose } = require('./kaola-workflow-adaptive-node');
+  assert(typeof runExpandClose === 'function' && typeof loadOwnerProjection === 'function',
+    '#827-CLOSE: runExpandClose + the projection read-fold are exported');
+  if (typeof runExpandClose !== 'function') return;
+  // Folds to the EMPTY projection where the read side is absent, so the pins below fail as clean RED
+  // assertions (never a throw) on a pre-fix checkout.
+  const load827 = typeof loadOwnerProjection === 'function' ? loadOwnerProjection
+    : () => ({ present: false, points: new Set(), leafToMilestone: {} });
+  const PLAN827C = rows => ['# Plan — 827c', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: lib/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', ...rows, '',
+    '## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: u1 | implementer | standard | lib/a.js | co_open | —',
+    '  unit: u2 | implementer | standard | lib/b.js | co_open | —', '',
+    'open(m1#1):', '  at: T0', ''].join('\n');
+  const mk827c = () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-827c-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-827c');
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const body = PLAN827C(['| probe | complete |', '| m1 | pending |', '| m1-r1-u1 | complete |',
+      '| m1-r1-u2 | complete |', '| wall | pending |', '| done | pending |']);
+    const hash = planValidator.computePlanHash(body);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), 'project: issue-827c\nbranch: wf/827c\n');
+    return {
+      tmp, planPath, hash,
+      projPath: path.join(projectDir, '.cache', 'epoch-projections', 'owner-projection.json'),
+      opts: { planPath, project: 'issue-827c',
+        shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
+        readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+        cacheExists: p => fs.existsSync(p),
+        mkdirp: d => { try { fs.mkdirSync(d, { recursive: true }); } catch (_) {} },
+        unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+        now: () => 'T1' },
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }),
+    };
+  };
+  const f = mk827c();
+  try {
+    const r1 = runExpandClose({ ...f.opts, nodeId: 'm1' });
+    assert(r1.result === 'ok' && JSON.stringify(r1.discharged) === JSON.stringify(['m1#1']),
+      '#827-CLOSE: the settled point discharges, got ' + JSON.stringify({ result: r1.result, reason: r1.reason }));
+    assert(r1.owner_projection === 'appended',
+      '#827-CLOSE: the discharge transaction itself writes the owner projection (owner_projection: '
+      + 'appended), got ' + JSON.stringify(r1.owner_projection));
+    assert(fs.existsSync(f.projPath),
+      '#827-CLOSE: the durable projection file exists at .cache/epoch-projections/owner-projection.json');
+    const firstWrite = fs.readFileSync(f.projPath, 'utf8');
+    const folded1 = load827({ planPath: f.planPath, readFile: f.opts.readFile }, f.hash);
+    assert(folded1.present === true && folded1.points.has('m1')
+      && folded1.leafToMilestone['m1-r1-u1'] === 'm1' && folded1.leafToMilestone['m1-r1-u2'] === 'm1',
+      '#827-CLOSE: the projection covers EVERY unit leaf of the discharged record, got ' + JSON.stringify(folded1));
+    assert(load827({ planPath: f.planPath, readFile: f.opts.readFile }, 'e'.repeat(64)).present === false,
+      '#827-CLOSE: the projection is epoch-bound — a foreign plan hash reads it as EMPTY');
+
+    const r2 = runExpandClose({ ...f.opts, nodeId: 'm1' });
+    assert(r2.result === 'ok' && r2.alreadyDischarged === true && r2.owner_projection === 'present'
+      && fs.readFileSync(f.projPath, 'utf8') === firstWrite,
+      '#827-CLOSE: the alreadyDischarged re-ensure is idempotent (present, byte-untouched), got '
+      + JSON.stringify({ already: r2.alreadyDischarged, owner_projection: r2.owner_projection }));
+
+    // The crash repair: a projection lost between the committed discharge and the write is re-appended
+    // by the same alreadyDischarged branch, byte-identical (the stamp comes from the point's OWN
+    // discharge block, not the wall clock).
+    fs.unlinkSync(f.projPath);
+    const r3 = runExpandClose({ ...f.opts, nodeId: 'm1' });
+    assert(r3.result === 'ok' && r3.alreadyDischarged === true && r3.owner_projection === 'appended'
+      && fs.readFileSync(f.projPath, 'utf8') === firstWrite,
+      '#827-CLOSE: a lost projection is re-appended BYTE-IDENTICALLY by the re-ensure (the crash-repair '
+      + 'heal), got ' + JSON.stringify({ owner_projection: r3.owner_projection }));
+  } finally { f.cleanup(); }
+
+  // A point with NO expansion record (nothing discharged, no interior) has nothing to project.
+  const PLAN827C_NOREC = ['# Plan — 827c2', '',
+    '## Meta', '', 'plan_form: spine', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | complete |', ''].join('\n');
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-827c2-'));
+  try {
+    const projectDir = path.join(tmp2, 'kaola-workflow', 'issue-827c2');
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const hash2 = planValidator.computePlanHash(PLAN827C_NOREC);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash2 + ' -->\n' + PLAN827C_NOREC);
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), 'project: issue-827c2\nbranch: wf/827c2\n');
+    const r = runExpandClose({ planPath, project: 'issue-827c2', nodeId: 'm1',
+      shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), mkdirp: () => {}, unlink: () => {}, now: () => 'T1' });
+    assert(r.result === 'ok' && r.alreadyDischarged === true && r.owner_projection === 'skipped'
+      && !fs.existsSync(path.join(projectDir, '.cache', 'epoch-projections')),
+      '#827-CLOSE: no records => no interior => owner_projection: skipped (no band created), got '
+      + JSON.stringify({ owner_projection: r.owner_projection }));
+  } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
 });
 
 // #699 schema-2 code/security fanouts are one runtime review transaction, not

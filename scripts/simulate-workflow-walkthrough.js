@@ -17614,6 +17614,34 @@ function testExpansionTransaction759() {
       '#759 (a): the discharge must name every record on the point, got ' + JSON.stringify(dcp.discharged));
     assertAppendOnly('after discharge');
 
+    // #827 — discharge is the commitment point that owns the leaf -> owning-milestone translation:
+    // the expand-close transaction wrote the durable, digest-bound owner projection into the
+    // barrier-invisible .cache/epoch-projections/ band (owner_projection:'appended'), covering every
+    // unit leaf of BOTH records on the point, epoch-bound to the spine plan hash. The alreadyDischarged
+    // re-run is the idempotent re-ensure (owner_projection:'present', the file byte-untouched).
+    assert(dcp.owner_projection === 'appended',
+      '#827: the discharge transaction itself writes the owner projection, got ' + JSON.stringify(dcp.owner_projection));
+    {
+      const schema827 = require('./kaola-workflow-adaptive-schema');
+      const projPath827 = path.join(proj, '.cache', 'epoch-projections', 'owner-projection.json');
+      assert(fs.existsSync(projPath827),
+        '#827: the durable projection exists at .cache/epoch-projections/owner-projection.json');
+      const firstWrite827 = fs.readFileSync(projPath827, 'utf8');
+      const folded827 = schema827.foldOwnerProjection(JSON.parse(firstWrite827), spineHash);
+      assert(folded827.present === true && JSON.stringify(folded827.points) === JSON.stringify(['m1'])
+        && ['m1-r1-u1', 'm1-r1-u2', 'm1-r1-u3', 'm1-r2-v1'].every(id => folded827.leaf_to_milestone[id] === 'm1'),
+        '#827: the projection covers every leaf of BOTH discharged records, epoch-bound to the spine '
+        + 'hash, got ' + JSON.stringify(folded827));
+      assert(schema827.foldOwnerProjection(JSON.parse(firstWrite827), 'f'.repeat(64)).present === false,
+        '#827: a foreign plan hash folds the band to EMPTY (epoch-bound, fail-closed)');
+      const reensure827 = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-759', '--node-id', 'm1', '--json'], grepo);
+      assert(reensure827.status === 0, '#827: the re-run expand-close exits 0: ' + reensure827.stdout + reensure827.stderr);
+      const rp827 = JSON.parse(reensure827.stdout);
+      assert(rp827.alreadyDischarged === true && rp827.owner_projection === 'present'
+        && fs.readFileSync(projPath827, 'utf8') === firstWrite827,
+        '#827: the alreadyDischarged re-ensure is idempotent (present, byte-untouched), got ' + JSON.stringify(rp827));
+    }
+
     // #763 (efficiency evidence line): expand-close appends ONE line to the point's OWN evidence
     // file. This point settled over TWO records (m1#1: 3 co_open units, m1#2: 1 co_open unit — a
     // re-expansion), so width sums BOTH records' units (4), no unit anywhere declared mode serial

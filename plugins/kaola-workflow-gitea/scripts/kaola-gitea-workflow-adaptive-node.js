@@ -316,6 +316,15 @@ const OPERATOR_HINT_REGISTRY = {
   count_bump: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' wrote a count-bump contract/test file not in its declared set. Swap the write set to include it (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
 
+  // --- review-journal route fence: the two mismatch classes. projection_missing is the LEGACY
+  //     shape (a discharge/journal pair recorded before the owner projection existed) and names the
+  //     machine migration; tamper stays a bare fail-closed integrity signal. Neither ever suggests
+  //     hand-editing the journal. ---
+  review_journal_route_mismatch: (ctx) =>
+    ctx.route_mismatch_class === 'projection_missing'
+      ? 'The review journal routes findings into the discharged interior of expansion point ' + (ctx.point || '<point>') + ', but no .cache/epoch-projections/ owner projection covers it (the discharge or journal predates the projection). Re-run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it re-writes the discharge projection. NEVER hand-edit the journal.'
+      : 'The review journal\'s recorded finding routes do not match the frozen plan — an owner unknown to both the current node table and the discharge projection (tamper-class). The journal is the run\'s integrity anchor and is NEVER hand-edited; run orient to inspect, and finish or discard runs that predate the current release before re-freezing.',
+
   // --- close paths (#272/#303/#348/#437) ---
   barrier_failed: (ctx) =>
     'The per-node barrier rejected ' + (ctx.nodeId || '<id>') + ' (writes outside its declared set). Review the offending paths, then ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json, or repair-node the writer.',
@@ -4615,7 +4624,7 @@ function reduceLogicalReviewAttempt(nodes, logicalGate, receipts) {
     blocker_veto: blockerVeto, aggregation, approvals, members: members.length };
 }
 
-function reviewJournalRoutesMatchPlan(journal, nodes) {
+function reviewJournalRoutesMatchPlan(journal, nodes, projection, planContent) {
   const canonicalize = value => {
     if (Array.isArray(value)) return value.map(canonicalize);
     if (!value || typeof value !== 'object') return value;
@@ -4627,15 +4636,25 @@ function reviewJournalRoutesMatchPlan(journal, nodes) {
   };
   const rows = values => values.map(canonicalize)
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  // Both sides canonicalize through the discharge owner projection (leaf -> owning milestone), the
+  // same translation the schema-2 twin applies: a leaf-recorded-then-discharged journal matches the
+  // execution-view recomputation, and post-record re-expansion growth collapses onto the milestone.
+  const routeProjection = (projection && projection.leafToMilestone) || {};
+  const execNodeIds = new Set((nodes || []).map(node => node.id));
   for (const attempt of (journal.attempts || [])) {
     const expected = [];
     for (const receipt of (attempt.receipts || [])) {
       const findings = parseNodeFindings(receipt.body).filter(f => f && f.id);
       expected.push(...routeCanonicalFindings(findings, nodes, receipt.node_id));
     }
-    if (JSON.stringify(rows(attempt.route_candidates || [])) !== JSON.stringify(rows(expected))) return false;
+    const recorded = attempt.route_candidates || [];
+    if (JSON.stringify(rows(recorded.map(row => reviewSchema.canonicalizeRouteOwners(row, routeProjection))))
+      !== JSON.stringify(rows(expected.map(row => reviewSchema.canonicalizeRouteOwners(row, routeProjection))))) {
+      return { ok: false,
+        ...routeMismatchDetail(recorded, expected, projection, planContent, execNodeIds) };
+    }
   }
-  return true;
+  return { ok: true };
 }
 
 // #748 — a validated in-plan replay (#739) resets its owner to in_progress and its descendant cone to
@@ -5042,7 +5061,105 @@ function loadCommittedLegacyImport(opts, planHash, suppliedPointer) {
   return { applicable: true, ok: true, transaction, parentJournal, pointer };
 }
 
-function reviewJournalV2MatchesPlan(journal, planContent) {
+// ---------------------------------------------------------------------------
+// The discharge OWNER PROJECTION (node side) — IO over the schema-owned entry/fold/canonicalize
+// primitives. The projection lives at `.cache/epoch-projections/owner-projection.json` beside the
+// plan — a band the barrier never sees and the epoch replan activation may clean. It is written ONLY
+// by the discharge transaction (expand-close, incl. its idempotent already-discharged re-ensure and
+// the re-discharge after a re-expansion): the scheduler clears its own residue; the orchestrator
+// never authors it.
+// ---------------------------------------------------------------------------
+function ownerProjectionPath(planPath) {
+  return path.join(path.dirname(planPath), '.cache', reviewSchema.EPOCH_PROJECTIONS_DIR,
+    reviewSchema.OWNER_PROJECTION_NAME);
+}
+
+// loadOwnerProjection — total, never throws. Any absent/malformed/stale file folds to the EMPTY
+// projection (identity canonicalization), which can only ever keep a refusal in place.
+function loadOwnerProjection(opts, planHash) {
+  const empty = { present: false, leafToMilestone: {}, points: new Set() };
+  if (!planHash || !opts || typeof opts.readFile !== 'function' || !opts.planPath) return empty;
+  let parsed = null;
+  try { parsed = JSON.parse(opts.readFile(ownerProjectionPath(opts.planPath))); } catch (_) { return empty; }
+  const folded = reviewSchema.foldOwnerProjection(parsed, planHash);
+  return { present: folded.present, leafToMilestone: folded.leaf_to_milestone,
+    points: new Set(folded.points) };
+}
+
+// ensureOwnerProjection — the discharge-side write. Appends the digest-bound entry for THIS
+// discharge (leaf ids of every unit of every record on the point -> the point). APPEND-ONLY per
+// epoch: a re-discharge after a re-expansion appends a superseding entry; valid existing entries are
+// carried over byte-for-byte (entries failing verification are inert on read and dropped on rewrite
+// — the self-healing direction). Idempotent: an entry covering this exact discharge (same point,
+// records, leaves) is already durable, so the write is skipped. Returns 'appended' | 'present' |
+// 'skipped' | 'write_failed' — never throws, because the discharge itself commits FIRST and the
+// already-discharged re-ensure is the crash repair for a missed write.
+function ensureOwnerProjection(opts, planHash, point, recs, dischargedAt) {
+  if (!planHash || !point || !Array.isArray(recs) || !recs.length) return 'skipped';
+  const leaves = recs.flatMap(r => ((r && Array.isArray(r.units)) ? r.units : []).map(u => u.id))
+    .filter(Boolean).sort();
+  if (!leaves.length) return 'skipped';
+  const records = recs.map(r => r.id);
+  const filePath = ownerProjectionPath(opts.planPath);
+  let parsed = null;
+  try { parsed = JSON.parse(opts.readFile(filePath)); } catch (_) { parsed = null; }
+  const base = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    && parsed.schema_version === reviewSchema.OWNER_PROJECTION_SCHEMA_VERSION
+    && parsed.plan_hash === planHash && Array.isArray(parsed.entries))
+    ? parsed : { schema_version: reviewSchema.OWNER_PROJECTION_SCHEMA_VERSION, plan_hash: planHash, entries: [] };
+  const valid = base.entries.filter(e => reviewSchema.verifyOwnerProjectionEntry(e) && e.plan_hash === planHash);
+  const dupe = valid.some(e => e.point === point
+    && JSON.stringify(e.records) === JSON.stringify(records)
+    && JSON.stringify(e.leaves) === JSON.stringify(leaves));
+  if (dupe) return 'present';
+  const entry = reviewSchema.buildOwnerProjectionEntry(
+    { plan_hash: planHash, point, records, leaves, discharged_at: dischargedAt });
+  const out = { schema_version: reviewSchema.OWNER_PROJECTION_SCHEMA_VERSION, plan_hash: planHash,
+    entries: valid.concat([entry]) };
+  try {
+    if (typeof opts.mkdirp === 'function') opts.mkdirp(path.dirname(filePath));
+    else { try { require('fs').mkdirSync(path.dirname(filePath), { recursive: true }); } catch (_) {} }
+    opts.writeFile(filePath, JSON.stringify(out, null, 2) + '\n');
+  } catch (_) { return 'write_failed'; }
+  return 'appended';
+}
+
+// routeMismatchDetail — the TYPED detail on the surviving `review_journal_route_mismatch`. Two
+// classes, both fail-closed:
+//   projection_missing — the rows reference a REAL unit of a DISCHARGED expansion point that no
+//     projection entry covers (a discharge or journal recorded before the projection existed). The
+//     detail names the migration: re-run expand-close for the point (idempotent — it re-writes the
+//     projection); NEVER hand-edit the journal.
+//   tamper — every other mismatch (an owner unknown to the current node table AND the projection,
+//     or a route-shape divergence). Unchanged fail-closed behavior.
+function routeMismatchDetail(recordedRows, expectedRows, projection, planContent, execNodeIds) {
+  let discharges = new Set();
+  try {
+    discharges = require('./kaola-gitea-workflow-plan-validator').parseExpansionRecords(planContent).discharges;
+  } catch (_) { discharges = new Set(); }
+  const covered = (projection && projection.points instanceof Set) ? projection.points : new Set();
+  const known = execNodeIds instanceof Set ? execNodeIds : new Set();
+  const ids = new Set();
+  for (const row of (recordedRows || []).concat(expectedRows || [])) {
+    for (const id of (row && Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [])) {
+      if (id) ids.add(id);
+    }
+    if (row && row.owning_node) ids.add(row.owning_node);
+  }
+  for (const id of ids) {
+    const m = /^(.*)-r[1-9][0-9]*-[A-Za-z0-9_-]+$/.exec(String(id));
+    if (m && known.has(id) && discharges.has(m[1]) && !covered.has(m[1])) {
+      return { route_mismatch_class: 'projection_missing', point: m[1],
+        detail: 'route rows reference the discharged interior of expansion point "' + m[1] + '" but no '
+          + '.cache/epoch-projections/ owner projection covers it (a discharge or journal recorded before '
+          + 'the projection existed). Re-run kaola-gitea-workflow-adaptive-node.js expand-close --node-id ' + m[1]
+          + ' — idempotent: it re-writes the discharge projection. NEVER hand-edit the journal.' };
+    }
+  }
+  return { route_mismatch_class: 'tamper' };
+}
+
+function reviewJournalV2MatchesPlan(journal, planContent, projection) {
   const validator = require('./kaola-gitea-workflow-plan-validator');
   // #783 (verified NOT a defect — stays the FREEZE view): this matcher re-validates a HISTORICAL
   // journal attempt (recorded once) against the plan. Its producer-binding re-derivation
@@ -5061,6 +5178,18 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
   // invariant.
   const nodes = validator.parseNodes(planContent);
   const byId = new Map(nodes.map(node => [node.id, node]));
+  // The ROUTE recomputation is the ONE exception to the freeze view pinned above. That invariance
+  // governs the PRODUCER re-derivation (a historical attempt's bindings must not grow when a
+  // milestone re-expands); route owners carry no such binding — they name WHERE findings land, and a
+  // discharged milestone's interior leaves exist ONLY in the execution view, so a spine-only
+  // recomputation could never reproduce a legitimately leaf-recorded attempt. Routes therefore
+  // recompute over the EXECUTION view and BOTH sides canonicalize through the discharge owner
+  // projection (leaf -> owning milestone), which also collapses post-record re-expansion growth (a
+  // later fixer unit and the original leaf map to the same milestone). An owner in NEITHER the
+  // execution node table NOR the projection still refuses below (the tamper gate keeps its teeth).
+  const routeNodes = parseNodesFromContent(planContent);
+  const routeProjection = (projection && projection.leafToMilestone) || {};
+  const execNodeIds = new Set(routeNodes.map(node => node.id));
   const planView = validator.buildPlanView(planContent);
   const ledger = readLedgerStatuses(planContent);
   const canonicalRows = rows => rows.map(row => reviewSchema.canonicalJson(row)).sort();
@@ -5109,10 +5238,12 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
       return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
     }
     const expectedRoutes = (attempt.receipts || []).flatMap(receipt =>
-      schema2RouteCandidates(receipt.findings || [], nodes, receipt.node_id));
-    if (reviewSchema.canonicalJson(canonicalRows(attempt.route_candidates || []))
-      !== reviewSchema.canonicalJson(canonicalRows(expectedRoutes))) {
-      return { ok: false, reason: 'review_journal_route_mismatch' };
+      schema2RouteCandidates(receipt.findings || [], routeNodes, receipt.node_id));
+    const recordedRoutes = attempt.route_candidates || [];
+    if (reviewSchema.canonicalJson(canonicalRows(recordedRoutes.map(row => reviewSchema.canonicalizeRouteOwners(row, routeProjection))))
+      !== reviewSchema.canonicalJson(canonicalRows(expectedRoutes.map(row => reviewSchema.canonicalizeRouteOwners(row, routeProjection))))) {
+      return { ok: false, reason: 'review_journal_route_mismatch',
+        ...routeMismatchDetail(recordedRoutes, expectedRoutes, projection, planContent, execNodeIds) };
     }
   }
   return { ok: true };
@@ -5211,6 +5342,10 @@ function readReviewJournal(opts, planContent) {
   let journal;
   try { journal = JSON.parse(opts.readFile(journalPath)); }
   catch (_) { return { ok: false, reason: 'review_journal_malformed', journalPath }; }
+  // The discharge owner projection both route matchers below canonicalize through (leaf -> owning
+  // milestone): a journal that recorded interior-leaf owners before its upstream expansion point
+  // discharged must match the recomputation WITHOUT journal surgery. Absent => empty (identity).
+  const ownerProjection = loadOwnerProjection(opts, planHash);
   if (journal && journal.plan_hash !== planHash) {
     const imported = loadCommittedLegacyImport(opts, planHash, undefined);
     if (imported.applicable) {
@@ -5252,8 +5387,11 @@ function readReviewJournal(opts, planContent) {
   if (journal && journal.schema_version === reviewSchema.REVIEW_JOURNAL_SCHEMA_VERSION) {
     const valid = validateReviewJournal(journal, planHash, reviewSchema.REVIEW_JOURNAL_SCHEMA_VERSION);
     if (!valid.ok) return { ok: false, reason: valid.reason, detail: valid.detail, journalPath };
-    const identity = reviewJournalV2MatchesPlan(journal, planContent);
-    if (!identity.ok) return { ok: false, reason: identity.reason, journalPath };
+    const identity = reviewJournalV2MatchesPlan(journal, planContent, ownerProjection);
+    if (!identity.ok) return { ok: false, reason: identity.reason, journalPath,
+      ...(identity.detail ? { detail: identity.detail } : {}),
+      ...(identity.route_mismatch_class ? { route_mismatch_class: identity.route_mismatch_class } : {}),
+      ...(identity.point ? { point: identity.point } : {}) };
     // #722: a schema-2 journal can now be a cross-epoch CHILD too, so it carries the same immutable
     // `legacy_import` pointer the schema-1 lane does once the child's first attempt persists it. Re-resolve
     // it here with the identical fail-closed rules: the pointer must match the committed transaction's
@@ -5293,8 +5431,12 @@ function readReviewJournal(opts, planContent) {
   const nodes = parseNodesFromContent(planContent);
   const identity = reviewJournalIdentityMatchesPlan(journal, nodes, readLedgerStatuses(planContent));
   if (!identity.ok) return { ok: false, reason: identity.reason, journalPath };
-  if (!reviewJournalRoutesMatchPlan(journal, nodes)) {
-    return { ok: false, reason: 'review_journal_route_mismatch', journalPath };
+  const routeMatch = reviewJournalRoutesMatchPlan(journal, nodes, ownerProjection, planContent);
+  if (!routeMatch.ok) {
+    return { ok: false, reason: 'review_journal_route_mismatch', journalPath,
+      ...(routeMatch.detail ? { detail: routeMatch.detail } : {}),
+      ...(routeMatch.route_mismatch_class ? { route_mismatch_class: routeMatch.route_mismatch_class } : {}),
+      ...(routeMatch.point ? { point: routeMatch.point } : {}) };
   }
   return { ok: true, plan_hash: planHash, journalPath, journal };
 }
@@ -5311,7 +5453,9 @@ function reviewFailpoint(opts, name) {
 
 function journalFence(opts, planContent) {
   const state = readReviewJournal(opts, planContent);
-  if (!state.ok) return { result: 'refuse', reason: state.reason, detail: state.detail || null };
+  if (!state.ok) return { result: 'refuse', reason: state.reason, detail: state.detail || null,
+    ...(state.route_mismatch_class ? { route_mismatch_class: state.route_mismatch_class } : {}),
+    ...(state.point ? { point: state.point } : {}) };
   if (state.legacy) return null;
   const blocker = reviewJournalBlocker(state.journal);
   return blocker ? { result: 'refuse', reason: blocker.reason, attempt_ids: blocker.attempt_ids,
@@ -8716,7 +8860,10 @@ function runRepairNodeCore(opts) {
   if (hasReviewJournal) {
     if (!attemptId) return { result: 'refuse', errors: ['--attempt-id required for repair-node'] };
     repairJournalState = readReviewJournal(opts, initialPlan);
-    if (!repairJournalState.ok) return { result: 'refuse', reason: repairJournalState.reason };
+    if (!repairJournalState.ok) return { result: 'refuse', reason: repairJournalState.reason,
+      ...(repairJournalState.detail ? { detail: repairJournalState.detail } : {}),
+      ...(repairJournalState.route_mismatch_class ? { route_mismatch_class: repairJournalState.route_mismatch_class } : {}),
+      ...(repairJournalState.point ? { point: repairJournalState.point } : {}) };
     repairAttempt = repairJournalState.journal.attempts.find(a => a.attempt_id === attemptId);
     if (!repairAttempt || repairAttempt.outcome !== 'fail' || repairAttempt.lifecycle_settled !== true) {
       return { result: 'refuse', reason: 'review_attempt_not_repairable', attempt_id: attemptId };
@@ -13690,11 +13837,25 @@ function runExpandClose(opts) {
   }
 
   const ledger = readLedgerStatuses(content);
-  if (String(ledger[nodeId] || '').toLowerCase() === 'complete') {
-    return { result: 'ok', expansion_point: nodeId, alreadyDischarged: true, taskTransitions: [] };
-  }
   const parsed = validator.parseExpansionRecords(content);
   const recs = parsed.records.filter(r => r.point === nodeId);
+  if (String(ledger[nodeId] || '').toLowerCase() === 'complete') {
+    // The plan side is a byte-zero no-op on this branch — but the discharge PROJECTION is a second
+    // artifact, and this is the only discharge entry point, so it owns the heal: a crash between the
+    // committed discharge and the projection write (or a discharge that predates the projection) is
+    // re-ensured here. The stamp comes from the point's OWN discharge block, so the re-ensured entry
+    // is byte-identical to the one the original discharge would have written (the `at` fallback only
+    // covers a hand-truncated records section). No records => no interior => nothing to project.
+    let ownerProjection = 'skipped';
+    if (recs.length) {
+      const dischargeBlocks = (parsed.blocks || []).filter(b => b.kind === 'discharge' && b.key === nodeId);
+      const recordedAt = dischargeBlocks.length ? dischargeBlocks[dischargeBlocks.length - 1].fields.at : null;
+      const at = recordedAt || ((typeof now === 'function') ? now() : new Date().toISOString());
+      ownerProjection = ensureOwnerProjection(opts, planHashFromContent(content), nodeId, recs, at);
+    }
+    return { result: 'ok', expansion_point: nodeId, alreadyDischarged: true, taskTransitions: [],
+      owner_projection: ownerProjection };
+  }
   if (!recs.length) {
     return refuse('expansion_never_composed', { node_id: nodeId, detail: 'the milestone has no expansion record — expand-open it before discharging' });
   }
@@ -13717,6 +13878,13 @@ function runExpandClose(opts) {
     'discharge(' + nodeId + '):\n  at: ' + stamp + '\n  records: ' + recs.map(r => r.id).join(', ') + '\n');
   writeFile(planPath, withDischarge);
 
+  // Discharge is the commitment point that changes the node view, so discharge OWNS the translation:
+  // the durable, digest-bound leaf -> owning-milestone owner projection for the discharged interior,
+  // appended into the barrier-invisible .cache/epoch-projections/ band. Written AFTER the discharge
+  // commits (a missed write is re-ensured by the already-discharged branch above — crash-safe
+  // alongside the existing bookkeeping), never by an orchestrator-facing verb.
+  const ownerProjection = ensureOwnerProjection(opts, planHashFromContent(content), nodeId, recs, stamp);
+
   // #763: EFFICIENCY EVIDENCE LINE — ONE line appended to the point's OWN evidence file, created
   // here if absent (an expansion point is never opened/seeded through the normal node lifecycle —
   // next-action withholds SPINE_EXPANSION_ROLE from the openable ready set — so this is the first
@@ -13737,6 +13905,7 @@ function runExpandClose(opts) {
   // .cache, which the mirror does not read). Fail-open by contract: a mirror-refresh failure is reported
   // in `taskMirror` and never rolls back the committed discharge.
   return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id),
+    owner_projection: ownerProjection,
     taskTransitions: [buildTransition(nodeId, 'complete', 'expand-close')],
     taskMirror: refreshTaskMirror(project, shell) };
 }
@@ -14095,7 +14264,7 @@ function deriveReExpansion(finding, content, opts) {
       }),
     });
   }
-  return { result: 'ok', decision: 'local', owners: route.owners,
+  return { result: 'ok', decision: 'local', route: 'reexpand-open', owners: route.owners,
     covered_files: route.covered_files, uncovered_files: route.uncovered_files,
     out_of_surface: route.out_of_surface || [], plans };
 }
@@ -15105,7 +15274,9 @@ function runRouteFindings(opts, project) {
   const journalState = readReviewJournal({ ...opts, planPath, readFile,
     cacheExists: opts.cacheExists || ((p) => fs.existsSync(p)) }, planContent);
   if (!journalState.ok) {
-    return { result: 'refuse', reason: journalState.reason, detail: journalState.detail || null };
+    return { result: 'refuse', reason: journalState.reason, detail: journalState.detail || null,
+      ...(journalState.route_mismatch_class ? { route_mismatch_class: journalState.route_mismatch_class } : {}),
+      ...(journalState.point ? { point: journalState.point } : {}) };
   }
   const authoritativeAttempts = journalState.ok && journalState.journal
     ? journalState.journal.attempts.filter(a => (a.receipts || []).some(r => r.node_id === nodeId))
@@ -15135,6 +15306,22 @@ function runRouteFindings(opts, project) {
         });
       }
     }
+  }
+
+  // 6b. Resolve interior-owned rows to their OWNING MILESTONE through the discharge projection —
+  // the machine-followable form of the re-expansion routing verdict: a row whose owners all resolve
+  // to discharged expansion points routes to `reexpand-open` on the owning milestone(s) (the cheap
+  // legal path — no journal surgery, no consent). Empty projection => identity, rows unchanged.
+  const routeProjection = loadOwnerProjection({ ...opts, planPath }, planHashFromContent(planContent));
+  if (routeProjection.present) {
+    findings = findings.map(row => {
+      const out = reviewSchema.canonicalizeRouteOwners(row, routeProjection.leafToMilestone);
+      const owners = Array.isArray(out.ownership_candidates) ? out.ownership_candidates : [];
+      if (owners.length && owners.every(id => routeProjection.points.has(id))) {
+        return { ...out, route: 'reexpand-open' };
+      }
+      return out;
+    });
   }
 
   // 7. write .cache/findings-route.json (array). Best-effort dir create.
@@ -15922,6 +16109,12 @@ module.exports = {
   resolveOwningNode,
   resolveOwningNodes,
   routeCanonicalFindings,
+  // The discharge owner projection: the discharge-side writer, the read fold, and the typed
+  // route-mismatch classifier — exported for direct both-direction pins of the post-discharge
+  // routing case beside the tamper RED.
+  loadOwnerProjection,
+  ensureOwnerProjection,
+  routeMismatchDetail,
   // #701 (D-701-01): schema-2 anchor-path ownership routing + the repair admissibility helpers.
   schema2RouteCandidates,
   findingOwnershipSummary,

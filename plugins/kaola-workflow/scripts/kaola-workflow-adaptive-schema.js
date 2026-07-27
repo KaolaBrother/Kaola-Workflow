@@ -4108,6 +4108,95 @@ function refuse(reason, extra) {
   return Object.assign({ result: 'refuse', reason: reason }, extra || {});
 }
 
+// ---------------------------------------------------------------------------
+// The discharge OWNER PROJECTION — a durable leaf -> owning-milestone mapping written by the
+// discharge transaction itself (expand-close, and the re-discharge after a re-expansion) into the
+// barrier-invisible `.cache/epoch-projections/` band. Routing verdicts belong to the machine at the
+// commitment point; the route between points stays free of traps. Discharge is the commitment point
+// that changes the node view (the interior collapses out of the spine view), so discharge owns the
+// translation — the orchestrator never authors this file (no orchestrator-facing verb).
+//
+// The journal route validators canonicalize BOTH recorded and recomputed route rows through this
+// projection before comparison (a leaf id maps to its milestone; a spine id maps to itself), so a
+// journal that recorded interior-LEAF owners before the discharge survives the discharge without
+// mutation, while an owner in NEITHER the current node table NOR the projection still refuses
+// `review_journal_route_mismatch` (the tamper gate keeps its teeth).
+//
+// Append-only per epoch: a re-expansion that re-discharges APPENDS a superseding entry rather than
+// rewriting one; the epoch replan activation owns cleanup of the whole band (fence-exempt there).
+// Every entry is digest-bound to the plan hash and the discharge event, so cross-epoch residue and
+// crash-torn bytes are detectable and fold to NOTHING (fail-closed: an entry that cannot be
+// verified contributes nothing, which can only ever keep a refusal in place, never lift one).
+// ---------------------------------------------------------------------------
+const EPOCH_PROJECTIONS_DIR = 'epoch-projections';
+const OWNER_PROJECTION_NAME = 'owner-projection.json';
+const OWNER_PROJECTION_SCHEMA_VERSION = 1;
+
+// buildOwnerProjectionEntry — the ONE writer-side entry shape. `records` keep their (deterministic)
+// expansion-record parse order; `leaves` are stored sorted so the canonical form is byte-stable.
+function buildOwnerProjectionEntry(core) {
+  const entry = {
+    point: String(core && core.point || ''),
+    plan_hash: String(core && core.plan_hash || '').toLowerCase(),
+    discharged_at: String(core && core.discharged_at || ''),
+    records: (Array.isArray(core && core.records) ? core.records : []).map(String),
+    leaves: (Array.isArray(core && core.leaves) ? core.leaves : []).map(String).sort(),
+  };
+  return Object.assign({}, entry, { projection_digest: sha256Hex(canonicalJson(entry)) });
+}
+
+// verifyOwnerProjectionEntry — total, never throws. TRUE only when the entry is well-formed AND its
+// digest binds { point, plan_hash, discharged_at, records, leaves } byte-for-byte.
+function verifyOwnerProjectionEntry(entry) {
+  if (!isPlainObject(entry)) return false;
+  if (typeof entry.point !== 'string' || !entry.point) return false;
+  if (typeof entry.plan_hash !== 'string' || !/^[0-9a-f]{64}$/.test(entry.plan_hash)) return false;
+  if (typeof entry.discharged_at !== 'string' || !entry.discharged_at) return false;
+  if (!Array.isArray(entry.records) || entry.records.some(r => typeof r !== 'string' || !r)) return false;
+  if (!Array.isArray(entry.leaves) || entry.leaves.some(id => typeof id !== 'string' || !id)) return false;
+  if (JSON.stringify(entry.leaves) !== JSON.stringify(entry.leaves.slice().sort())) return false;
+  if (typeof entry.projection_digest !== 'string' || !/^[0-9a-f]{64}$/.test(entry.projection_digest)) return false;
+  const core = { point: entry.point, plan_hash: entry.plan_hash, discharged_at: entry.discharged_at,
+    records: entry.records, leaves: entry.leaves };
+  return sha256Hex(canonicalJson(core)) === entry.projection_digest;
+}
+
+// foldOwnerProjection — the read side. Folds the parsed file into { present, leaf_to_milestone,
+// points } for the CURRENT plan hash. A file of the wrong schema version, a wrong-epoch plan hash,
+// or entries that fail verification all fold to the EMPTY projection (identity canonicalization).
+// Entries fold in append order: a later entry for the same point SUPERSEDES (its leaf set is the
+// full interior at re-discharge), and the leaf union always maps to the same owning point.
+function foldOwnerProjection(parsed, planHash) {
+  const empty = { present: false, leaf_to_milestone: {}, points: [] };
+  if (!isPlainObject(parsed) || parsed.schema_version !== OWNER_PROJECTION_SCHEMA_VERSION
+    || parsed.plan_hash !== planHash || !Array.isArray(parsed.entries)) return empty;
+  const leafToMilestone = {};
+  const points = new Set();
+  for (const entry of parsed.entries) {
+    if (!verifyOwnerProjectionEntry(entry) || entry.plan_hash !== planHash) continue;
+    points.add(entry.point);
+    for (const id of entry.leaves) leafToMilestone[id] = entry.point;
+  }
+  return { present: points.size > 0, leaf_to_milestone: leafToMilestone,
+    points: Array.from(points).sort() };
+}
+
+// canonicalizeRouteOwners — normalize ONE route row's owners through the projection. A discharged
+// interior leaf id maps to its owning milestone; any other id (a spine node, an unknown id) maps to
+// itself. The candidates are re-deduplicated + sorted and `owning_node` is re-derived, so a row
+// whose leaves collapse onto ONE milestone becomes uniquely milestone-owned. PURE: returns a new
+// row; every non-owner field is carried over untouched. Applied to BOTH the recorded journal rows
+// and the recomputed expectation before they are compared, never to the stored journal itself.
+function canonicalizeRouteOwners(row, leafToMilestone) {
+  if (!isPlainObject(row)) return row;
+  const map = isPlainObject(leafToMilestone) ? leafToMilestone : {};
+  const candidates = Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [];
+  const mapped = Array.from(new Set(candidates.map(id =>
+    (id != null && Object.prototype.hasOwnProperty.call(map, id)) ? map[id] : id))).sort();
+  return Object.assign({}, row, { ownership_candidates: mapped,
+    owning_node: mapped.length === 1 ? mapped[0] : null });
+}
+
 module.exports = {
   LANE_STALENESS_MS,
   SHARED_STATE_FIELDS,
@@ -4312,4 +4401,14 @@ module.exports = {
   spliceComplianceSection,
   emit,
   refuse,
+  // The discharge owner projection (.cache/epoch-projections/): the ONE entry shape, its digest
+  // verification, the append-order fold, and the route-owner canonicalization both journal route
+  // validators apply — the cross-edition anchor for the discharge commitment-point translation.
+  EPOCH_PROJECTIONS_DIR,
+  OWNER_PROJECTION_NAME,
+  OWNER_PROJECTION_SCHEMA_VERSION,
+  buildOwnerProjectionEntry,
+  verifyOwnerProjectionEntry,
+  foldOwnerProjection,
+  canonicalizeRouteOwners,
 };
