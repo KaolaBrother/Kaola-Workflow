@@ -1,0 +1,293 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "ef3c23fdae2135702f2fe272edb08865e8d70bfa1be8fb7a97c496574ea51915",
+  "attempts": [
+    {
+      "attempt_id": "review2-7c5cb5001221b1be:1",
+      "ordinal": 1,
+      "plan_hash": "ef3c23fdae2135702f2fe272edb08865e8d70bfa1be8fb7a97c496574ea51915",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n3-tests",
+          "n4-scripts",
+          "n5-prose",
+          "n6-docs"
+        ],
+        "claim_digest": "bc74d266fc42f44f4438acab0a877dfb0408986cbfd387ccbee3606e29945c21",
+        "key": "7c5cb5001221b1beb5fd26c49ea6078508b73ce83b740763483a15eb3b60ae77",
+        "kind": "sequence",
+        "members": [
+          "n7-falsify"
+        ],
+        "surface_digests": [
+          "0972167c7eb16c11ffeb55836f343245b0d26db34076012b2d209ffa5926fdde"
+        ]
+      },
+      "transaction_key": "53025b19978fc041bd965f0edbfd2f3ab4702491c315c1c1123f2f5bc98989d8",
+      "candidate_digest": "8c12d53b7acc71c0c8a14d26493c8968e4937ae070d9497718903dbb1d0d39ff",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 fda68957df76cd118d1fda49f0a977c4af1bd029",
+        "commands/kaola-workflow-plan-run.md": "100644 b96b1c240e3e8ce4b71a02d1807c3de6f784b762",
+        "docs/api.md": "100644 ca50bbd84d3cdad9f4966649ce0cd91509b9db06",
+        "docs/decisions/D-819-01.md": "100644 7324d73f5f82fd49d201936064802c197e76ae23",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 acc5e367f630e6086360f5e50fa6bbff2a23d957",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 15b709de25414a66be7542bc6eb147729d71c85d",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 a69ef4acaa9b798c525af524ecfbc79bfb90baca",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 7f5e50619b1f9a70d81394d9e41aba39e24e739d",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 68fd28469d8a9d92e9f9158231ea2a1727fd21d5",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 7c231589d612228cd2e56909477d4016db7426c6",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 0858567fbd818cfc29178818f8d99995ec978855",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 fcf133a107f1a291ed0b5835221f6e690bc7ca94",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 0858567fbd818cfc29178818f8d99995ec978855",
+        "scripts/test-adaptive-node.js": "100644 b5576982502bd304e77b3fcf689c21a0b6f1d172",
+        "scripts/test-route-reachability.js": "100644 d170c71d0a007a587f3d29e6279c55ec2c0d140f",
+        "templates/routing/plan-run.skeleton.md": "100644 23e538b19e11e3d9c6c33080d645b44214e0ff99",
+        "templates/routing/required-blocks.js": "100644 c9082012e7cd0bc78904f19f35f6697ce2a4b67c"
+      },
+      "candidate_residue_digest": "c1e9e55913e594d85106f2f977cc3bc80e9333dc367e0c3af5299240d9203d4c",
+      "epoch_lineage_id": "1ca37b66e7f4bc59f018c6746cd7b3381f02630ff3556051420aa44178c4dadf",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "1de27977aa382523036bc4568970a13f117d50589b8d37b94b2131aaa984f023",
+      "context_hashes": [
+        "af91eb0e6e7ffcb2700e81e6a095a664918159b5878b0aa55c316764fe35de80"
+      ],
+      "profile_hashes": [
+        "6c2120956ddaf2ededc4dec581451fec6ca7d6ad0915ed9f55d38e1e7cebd776"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "ba82d58558d88bd8dd43ad3c2306d0d4230a80ce17b781acc5213b5b4f08c1fd",
+          "blocking_findings": 0,
+          "candidate_digest": "8c12d53b7acc71c0c8a14d26493c8968e4937ae070d9497718903dbb1d0d39ff",
+          "certifier_digest": "8c12d53b7acc71c0c8a14d26493c8968e4937ae070d9497718903dbb1d0d39ff",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n7-falsify",
+          "raw_evidence_sha256": "4497d0915f18fd8308918fbc65507f24539b7e16ae44ad3a6a5be045ce7a5a4f",
+          "resolutions": [],
+          "resolved_profile_hash": "6c2120956ddaf2ededc4dec581451fec6ca7d6ad0915ed9f55d38e1e7cebd776",
+          "review_context_hash": "af91eb0e6e7ffcb2700e81e6a095a664918159b5878b0aa55c316764fe35de80",
+          "schema_version": 2,
+          "surface": "the entire accumulated diff for issue 819 against the run base — the four adaptive-node editions, scripts/test-adaptive-node.js, the plan-run routing skeleton and required-blocks table with the six rendered surfaces, scripts/test-route-reachability.js, and the docs and decision record — read together with the n1 surface inventory and the n2 mechanism spec, and re-verified by running node scripts/test-adaptive-node.js unsharded, node scripts/generate-routing-surfaces.js --check, node scripts/test-route-reachability.js, and node scripts/validate-script-sync.js, plus a mutation probe that reverts each seam in turn and confirms the matching assertion turns red",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n3-tests": {
+          "baseline": "bcb81dd402a29a040bfedf4ed432ad9b06780bf2",
+          "anchored_ref": "bcb81dd402a29a040bfedf4ed432ad9b06780bf2",
+          "open_token": "8d881aaf5dd43620cf1e06a8b7a4847a75d13db1",
+          "generation": "bcb81dd402a2",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n3-tests"
+        },
+        "n4-scripts": {
+          "baseline": "62e0af8d9649e516caefe78cdd29f96ce7b09068",
+          "anchored_ref": "62e0af8d9649e516caefe78cdd29f96ce7b09068",
+          "open_token": "88d97b8a54121d6d1586d2b8cacf6c9b6a8811fd",
+          "generation": "62e0af8d9649",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n4-scripts"
+        },
+        "n5-prose": {
+          "baseline": "89e5dde2bea3253e75a48bf385911ed75114ec37",
+          "anchored_ref": "89e5dde2bea3253e75a48bf385911ed75114ec37",
+          "open_token": "8d881aaf5dd43620cf1e06a8b7a4847a75d13db1",
+          "generation": "89e5dde2bea3",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n5-prose"
+        },
+        "n6-docs": {
+          "baseline": "78609a6c6101e9f78faf4c5ef0f02fa636a2df18",
+          "anchored_ref": "78609a6c6101e9f78faf4c5ef0f02fa636a2df18",
+          "open_token": "88d97b8a54121d6d1586d2b8cacf6c9b6a8811fd",
+          "generation": "78609a6c6101",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n6-docs"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-21a41a76ff8acd01:1",
+      "ordinal": 1,
+      "plan_hash": "ef3c23fdae2135702f2fe272edb08865e8d70bfa1be8fb7a97c496574ea51915",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "2ae2c5ee273809134c88a0404c442776433e7b537f8d551c6aa54eee59b1fb40",
+        "key": "21a41a76ff8acd01db6644150397d152604f833c4ad88c27a4fba64d894c7362",
+        "kind": "sequence",
+        "members": [
+          "n8-code-certify"
+        ],
+        "surface_digests": [
+          "e74fd9448ddfbefd8d024c96dcd3cadda5e43f7ae11a88ccdb707a235a45de11"
+        ]
+      },
+      "transaction_key": "0056793f4e157fd4cbb4f332143044ccb8412062c2210d959c203d5e97d3e415",
+      "candidate_digest": "8c12d53b7acc71c0c8a14d26493c8968e4937ae070d9497718903dbb1d0d39ff",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 fda68957df76cd118d1fda49f0a977c4af1bd029",
+        "commands/kaola-workflow-plan-run.md": "100644 b96b1c240e3e8ce4b71a02d1807c3de6f784b762",
+        "docs/api.md": "100644 ca50bbd84d3cdad9f4966649ce0cd91509b9db06",
+        "docs/decisions/D-819-01.md": "100644 7324d73f5f82fd49d201936064802c197e76ae23",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 acc5e367f630e6086360f5e50fa6bbff2a23d957",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 15b709de25414a66be7542bc6eb147729d71c85d",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 a69ef4acaa9b798c525af524ecfbc79bfb90baca",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 7f5e50619b1f9a70d81394d9e41aba39e24e739d",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 68fd28469d8a9d92e9f9158231ea2a1727fd21d5",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 7c231589d612228cd2e56909477d4016db7426c6",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 0858567fbd818cfc29178818f8d99995ec978855",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 fcf133a107f1a291ed0b5835221f6e690bc7ca94",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 0858567fbd818cfc29178818f8d99995ec978855",
+        "scripts/test-adaptive-node.js": "100644 b5576982502bd304e77b3fcf689c21a0b6f1d172",
+        "scripts/test-route-reachability.js": "100644 d170c71d0a007a587f3d29e6279c55ec2c0d140f",
+        "templates/routing/plan-run.skeleton.md": "100644 23e538b19e11e3d9c6c33080d645b44214e0ff99",
+        "templates/routing/required-blocks.js": "100644 c9082012e7cd0bc78904f19f35f6697ce2a4b67c"
+      },
+      "candidate_residue_digest": "c1e9e55913e594d85106f2f977cc3bc80e9333dc367e0c3af5299240d9203d4c",
+      "epoch_lineage_id": "2371b1b70ed4ee12e91822e5e88281a3185321aca4b493ca647214f76f4f1e4b",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "a946a525cb597ee8aceb5f15ecbde9e168624e068f6aee637ed02870904177fb",
+      "context_hashes": [
+        "739bf13afd5e0939580eb036f38c1d93397aa33d3d9c8d0dbb9b49f60dd5b1fa"
+      ],
+      "profile_hashes": [
+        "b9ad48f1eafd7f5123e74b85f23d5eda85268626e52c7b9a3b3116f541719453"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "07ef4e53a864c847dc84bb684e0f163f9f08215090f7474a81b469da10bfeca5",
+          "blocking_findings": 0,
+          "candidate_digest": "8c12d53b7acc71c0c8a14d26493c8968e4937ae070d9497718903dbb1d0d39ff",
+          "certifier_digest": "8c12d53b7acc71c0c8a14d26493c8968e4937ae070d9497718903dbb1d0d39ff",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n8-code-certify",
+            "nonce": "e5d144bbf842"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n8-code-certify",
+          "raw_evidence_sha256": "7e6564c990b213c61aeed32c31d5590b53c7511664e992d03eb313e9c9032037",
+          "resolutions": [],
+          "resolved_profile_hash": "b9ad48f1eafd7f5123e74b85f23d5eda85268626e52c7b9a3b3116f541719453",
+          "review_context_hash": "739bf13afd5e0939580eb036f38c1d93397aa33d3d9c8d0dbb9b49f60dd5b1fa",
+          "schema_version": 2,
+          "surface": "the entire accumulated diff for issue 819 against the run base across all four editions, validated by running the recorded validation_command end to end as four explicit sequential chain runs, by running node scripts/test-adaptive-node.js unsharded so the new coverage is actually executed rather than left to the fast gate's rotating one-twelfth slice, and by the forbidden-token check on every touched file under plugins",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n3-tests": {
+          "baseline": "bcb81dd402a29a040bfedf4ed432ad9b06780bf2",
+          "anchored_ref": "bcb81dd402a29a040bfedf4ed432ad9b06780bf2",
+          "open_token": "8d881aaf5dd43620cf1e06a8b7a4847a75d13db1",
+          "generation": "bcb81dd402a2",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n3-tests"
+        },
+        "n4-scripts": {
+          "baseline": "62e0af8d9649e516caefe78cdd29f96ce7b09068",
+          "anchored_ref": "62e0af8d9649e516caefe78cdd29f96ce7b09068",
+          "open_token": "88d97b8a54121d6d1586d2b8cacf6c9b6a8811fd",
+          "generation": "62e0af8d9649",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n4-scripts"
+        },
+        "n5-prose": {
+          "baseline": "89e5dde2bea3253e75a48bf385911ed75114ec37",
+          "anchored_ref": "89e5dde2bea3253e75a48bf385911ed75114ec37",
+          "open_token": "8d881aaf5dd43620cf1e06a8b7a4847a75d13db1",
+          "generation": "89e5dde2bea3",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n5-prose"
+        },
+        "n6-docs": {
+          "baseline": "78609a6c6101e9f78faf4c5ef0f02fa636a2df18",
+          "anchored_ref": "78609a6c6101e9f78faf4c5ef0f02fa636a2df18",
+          "open_token": "88d97b8a54121d6d1586d2b8cacf6c9b6a8811fd",
+          "generation": "78609a6c6101",
+          "ref": "refs/kaola-workflow/barrier/issue-819/n6-docs"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

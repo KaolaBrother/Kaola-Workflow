@@ -1,0 +1,15 @@
+{"node":"n3-tests","event":"leg_committed","ts":"2026-07-27T02:38:17.138Z"}
+{"node":"n5-prose","event":"leg_committed","ts":"2026-07-27T02:38:17.173Z"}
+{"node":"n3-tests","event":"leg_committed","ts":"2026-07-27T02:41:09.644Z"}
+{"node":"n5-prose","event":"leg_committed","ts":"2026-07-27T02:41:09.718Z"}
+{"node":"lg-n3-tests-n5-prose","event":"level_merged","ts":"2026-07-27T02:41:09.950Z"}
+{"node":"n3-tests","event":"closed","ts":"2026-07-27T02:41:10.098Z"}
+{"node":"n4-scripts","event":"opened","ts":"2026-07-27T02:42:04.059Z"}
+{"node":"n4-scripts","event":"closed","ts":"2026-07-27T03:19:22.051Z"}
+{"node":"n6-docs","event":"opened","ts":"2026-07-27T03:19:22.559Z"}
+{"node":"n6-docs","event":"closed","ts":"2026-07-27T03:30:43.278Z"}
+{"node":"n7-falsify","event":"opened","ts":"2026-07-27T03:30:44.503Z"}
+{"node":"n7-falsify","event":"closed","ts":"2026-07-27T04:14:55.502Z"}
+{"node":"n8-code-certify","event":"opened","ts":"2026-07-27T04:14:56.737Z"}
+{"node":"n8-code-certify","event":"closed","ts":"2026-07-27T04:56:52.935Z"}
+{"node":"n9-finalize","event":"opened","ts":"2026-07-27T04:56:53.456Z"}

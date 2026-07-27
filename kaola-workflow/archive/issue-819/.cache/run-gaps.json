@@ -1,0 +1,35 @@
+{
+  "project": "issue-819",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:parallel-write",
+      "sample": "a lane group's per-leg commit sweeps `kaola-workflow/{project}/.cache/node-timings.jsonl` into each leg branch. Both legs ADD it independently, so the group octopus merge always fails add/add on that path even when every real write set is disjoint. The group-stub commit tracks only the evidence seeds, so committing run telemetry per-leg is the deviation. Observed on group lg-n3-tests-n5-prose; repaired by hand (git rm on both leg branches) after 3 close-node refusals.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:parallel-write",
+      "sample": "`close-node` appends `leg_committed` telemetry to the PARENT worktree copy of node-timings.jsonl before it runs the octopus merge, so an untracked parent copy blocks the fast-forward. Combined with the gap above, a multi-member lane group cannot self-reconcile without operator repair.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:evidence-transport",
+      "sample": "for a lane-group member the authoritative evidence artifact is the LEG's `kaola-workflow/{project}/.cache/{node}.md`, not the parent worktree's. The dispatch card exposes `leg_path` but its `evidence_file` is a bare relative path, so an orchestrator that hands an agent an absolute parent path gets `evidence_shape_failed` at close with the deliverable stranded. `record-evidence --stdin` resolves the target by cwd, which is what makes the repair possible but is undocumented at the card.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:forward-compat-latent-unreachable-on-the-shipped-library",
+      "sample": "`classifyEvidenceBody`'s anti-forgery conjunct is VACUOUS for any role with no `ROLE_TOKEN_REGISTRY` row (`workflow-planner`, `finalize`, `expansion-point`): a marker-bearing body would classify `capability_gap` regardless of content. Unreachable today because P2 admits only `kind: producer` and all five producers carry a content token. It becomes reachable the moment `SUBSTITUTABLE_KINDS` widens, which the design record explicitly anticipates as a future change. Found by the change gate; ruled non-blocking for this candidate.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:docs-imprecision-non-blocking-in-this-run-s-own-new-docs",
+      "sample": "`CHANGELOG.md` and `docs/decisions/D-819-01.md` both say the seed comment is written \"for all 15 roles in the manifest\"; `ROLE_CAPABILITY_MANIFEST` has 18 entries (15 agent roles + 3 `kind: built-in`) and the measured behaviour covers all 18. It understates rather than misleads, and neither file is an agent-facing prompt surface, so it was not worth reopening a closed node to correct.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:pre-existing-docs-wording-untouched-by-this-diff",
+      "sample": "`docs/api.md`'s `worktree_authority_split` roster says `record-evidence --stdin`, but the code exempts only `record-evidence --verify`, so a bare `record-evidence` is guarded too.",
+      "count": 1
+    }
+  ]
+}
