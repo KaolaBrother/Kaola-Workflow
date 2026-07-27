@@ -533,6 +533,20 @@ const OPERATOR_HINT_REGISTRY = {
     + ((ctx.blocking_descendants && ctx.blocking_descendants.length) ? ' (' + ctx.blocking_descendants.join(', ') + ')' : '')
     + ' would have to be replayed to reopen it safely — not supported in-plan. Activate a replacement plan (/kaola-workflow-adapt) that re-derives from ' + (ctx.semantic_owner || '<writer>') + '.',
 
+  // --- role substitution ---
+  // The five older substitute_* codes deliberately fall through to the generic "Run orient" line.
+  // These two do not, because for both of them "run orient" actively MISDIRECTS: neither state is
+  // resolved by re-orienting, and misdirecting the orchestrator into improvising around a refusal is
+  // the exact failure the substitution channel exists to prevent.
+  substitute_self_noop: (ctx) =>
+    'Role "' + (ctx.to_role || '<role>') + '" is already the frozen role for ' + (ctx.nodeId || ctx.node_id || '<id>')
+    + '. Nothing was recorded. Name a DIFFERENT in-kind role, or escalate: ' + ADAPTIVE_NODE_SCRIPT
+    + ' write-halt --project <P> --reason consent --json.',
+  substitute_evidence_reset_failed: (ctx) =>
+    'The evidence for ' + (ctx.nodeId || ctx.node_id || '<id>') + ' could not be re-seeded atomically ('
+    + (ctx.detail || 'no resolvable binding nonce') + '). Do NOT hand-edit the evidence file; escalate: '
+    + ADAPTIVE_NODE_SCRIPT + ' write-halt --project <P> --reason consent --json.',
+
   // --- open-ready scheduler (#377) ---
   reconcile_first: () =>
     'A crashed open-ready left the running set in opening state. Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before opening more.',
@@ -3052,9 +3066,15 @@ function sanitizeCodexTaskName(value) {
   return cleaned || 'node';
 }
 
-function codexTaskNameForNode(nodeInfo) {
+// The task identity is derived from the role that will ACTUALLY be dispatched, which the optional
+// second argument names. Omitted / null / '' falls back to the plan's frozen `role` cell, so every
+// existing one-argument caller — and every node with no substitution on record — derives exactly the
+// string it derived before. A substituted node needs a FRESH identity because the runtime has already
+// consumed the frozen one: re-presenting it fails the spawn outright, which is what wedged the swap.
+function codexTaskNameForNode(nodeInfo, dispatchRole) {
   const id = nodeInfo && nodeInfo.id ? String(nodeInfo.id) : 'node';
-  const role = nodeInfo && nodeInfo.role ? String(nodeInfo.role) : '';
+  const frozen = nodeInfo && nodeInfo.role ? String(nodeInfo.role) : '';
+  const role = (dispatchRole != null && String(dispatchRole) !== '') ? String(dispatchRole) : frozen;
   return sanitizeCodexTaskName(role ? id + '__' + role : id);
 }
 
@@ -3111,12 +3131,17 @@ function resolveRoleSubstitution(ctx, nodeInfo) {
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
   const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
-  const codexTaskName = codexTaskNameForNode(nodeInfo);
   // A recorded role substitution redirects the DISPATCH TARGET only. The plan's `role` cell is what
   // was frozen and stays the node's identity everywhere else (model tier still resolves from the
   // plan's own `model` column, so a substitution can never lower a floor). Conditionally attached
   // like goal_line/leg_path: with nothing on record the card stays byte-identical to before.
+  //
+  // Resolved BEFORE the task name because the task identity derives from the dispatch target, not
+  // from the frozen cell — with nothing on record the two are the same value, so the unsubstituted
+  // card is byte-identical to before.
   const substitution = resolveRoleSubstitution(ctx, nodeInfo);
+  const agentType = substitution ? substitution.to_role : nodeInfo.role;
+  const codexTaskName = codexTaskNameForNode(nodeInfo, agentType);
   const d = {
     node_id:            nodeInfo.id,
     role:               nodeInfo.role,
@@ -3128,7 +3153,7 @@ function buildDispatch(nodeInfo, context) {
     required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
-    agent_type:         substitution ? substitution.to_role : nodeInfo.role,
+    agent_type:         agentType,
     codex_dispatch_mode: codexDispatchMode,
     codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model, nodeInfo.codex_session_proof || ctx.session_proof),
@@ -14775,6 +14800,25 @@ function runSubstituteRole(opts, project) {
   if (!node) return refuse('unknown_node', { node_id: nodeId, detail: 'no node "' + nodeId + '" in the frozen plan' });
   const fromRole = node.role;
 
+  // P0 — a swap to the role already frozen is a no-op with a durable footprint: it records a row that
+  // means nothing, and it destroys the one property the dispatch identity depends on (a substituted
+  // node must present an identity distinct from the one already consumed). Refuse before any read of
+  // the manifest, the substitution store, or the evidence file.
+  //
+  // FIRST, deliberately. `fromRole` is always the frozen cell, so this also catches the REVERT case (an
+  // active record to some other role, then --to-role <frozen role>) — and sitting above the idempotent
+  // replay branch is what makes the refusal total: a legacy self-substitution row already on disk would
+  // otherwise replay to `ok` forever. Accepted consequence of the precedence: a --to-role <frozen role>
+  // whose frozen role has no manifest row now refuses substitute_self_noop rather than
+  // substitute_unknown_role. The self-ness is the more specific defect.
+  if (fromRole === toRole) {
+    return refuse('substitute_self_noop', {
+      node_id: nodeId, from_role: fromRole, to_role: toRole,
+      detail: 'role "' + toRole + '" is already the frozen role for "' + nodeId +
+        '"; a substitution must name a DIFFERENT in-kind role',
+    });
+  }
+
   const manifest = reviewSchema.ROLE_CAPABILITY_MANIFEST;
   let registry = {};
   try { ({ ROLE_TOKEN_REGISTRY: registry } = require('./kaola-gitlab-workflow-plan-validator')); }
@@ -14794,17 +14838,6 @@ function runSubstituteRole(opts, project) {
       node_id: nodeId, from_role: fromRole, to_role: toRole,
       detail: 'the frozen role "' + fromRole + '" has no capability manifest row',
     });
-  }
-
-  // Idempotent replay: the same target already on record is a no-op, not a second record. A crash
-  // between the record and the dispatch therefore resumes by re-running the identical command.
-  const active = activeRoleSubstitution(cacheDir, readFile, nodeId);
-  if (active && active.to_role === toRole) {
-    return {
-      result: 'ok', node_id: nodeId, from_role: active.from_role, to_role: toRole,
-      basis: active.basis, recorded_at: active.ts, idempotent: true,
-      substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
-    };
   }
 
   // P2 — same kind, and only the kinds whose substitution is defined.
@@ -14839,9 +14872,9 @@ function runSubstituteRole(opts, project) {
     });
   }
 
-  // P5 — the node must still be dispatchable. A closed row, or one whose evidence body already
-  // carries a deliverable, means the frozen role's work exists; swapping the card then would
-  // relabel completed work rather than redirect pending work.
+  // P5a — the node must still be dispatchable. A closed row means the frozen role's work exists;
+  // swapping the card then would relabel completed work rather than redirect pending work. The
+  // LEDGER arm runs first and is untouched: a settled row refuses regardless of what its body says.
   const statuses = readLedgerStatuses(planContent);
   const status = statuses[nodeId] || 'pending';
   if (status !== 'pending' && status !== 'in_progress') {
@@ -14850,15 +14883,69 @@ function runSubstituteRole(opts, project) {
       detail: 'node status is "' + status + '"; substitution applies only to a pending/in_progress row',
     });
   }
+  // P5b — the body classification. 'seeded' (the opener's own scaffold, or nothing at all) and
+  // 'capability_gap' (a typed marker AND no non-empty required token value) are both dispatchable;
+  // only a deliverable refuses. Structural, not prose: a returning role cannot relabel real work into
+  // a reset, because the non-empty token value it delivered is what decides.
   let evidenceBody = '';
   try { evidenceBody = readFile(path.join(cacheDir, nodeId + '.md')); } catch (_) { evidenceBody = ''; }
-  if (evidenceBody && hasEvidenceBodyBelowHeader(evidenceBody)) {
+  const bodyClass = classifyEvidenceBody(evidenceBody, fromRole);
+  if (bodyClass === 'deliverable') {
     return refuse('substitute_node_closed', {
       node_id: nodeId, from_role: fromRole, to_role: toRole, status,
-      detail: 'evidence for "' + nodeId + '" already carries a recorded body; substitution applies only before a deliverable exists',
+      detail: 'evidence for "' + nodeId + '" already carries a recorded body; substitution applies only before a deliverable exists'
+        + ' (a body carrying a typed capability_gap marker and no non-empty required token is a GAP, not a deliverable, and resets instead)',
     });
   }
 
+  // --- commit phase. Every guard above is pure, so a refusal is a byte-for-byte no-op on disk. ---
+
+  // Detected, not returned on: the reset below must run before the replay short-circuit, or a crash
+  // between the reset and the record could never be resumed by re-running the identical command.
+  const active = activeRoleSubstitution(cacheDir, readFile, nodeId);
+  const isReplay = !!(active && active.to_role === toRole);
+
+  // C1 — a gap body is destroyed and the file re-seeded for the DISPATCH TARGET, atomically
+  // (tmp + fsync + rename), so the only sanctioned way out of a self-persisted gap is this subcommand
+  // rather than a hand patch of a nonce-bound artifact. The binding is PRESERVED, never rotated: the
+  // nonce IS the barrier baseline's SHA prefix, so rotating it would re-snapshot the worktree mid-node
+  // (laundering anything the gapped role wrote into the "before" picture) and would make the
+  // re-dispatched role's evidence refuse `evidence_stale` at close — one wedge traded for another.
+  // Fail loud on either failure mode: an atomic replace leaves the PRIOR file byte-intact when it
+  // fails, so swallowing it would report success over a surviving gap body.
+  let evidenceReset = false;
+  if (bodyClass === 'capability_gap') {
+    const nonce = readNonce(planPath, nodeId, readFile);
+    if (!nonce) {
+      return refuse('substitute_evidence_reset_failed', {
+        node_id: nodeId, from_role: fromRole, to_role: toRole,
+        detail: 'no resolvable binding nonce for "' + nodeId + '" (.cache/barrier-base-'
+          + sanitizeNodeId(nodeId) + ' is absent or empty); re-seeding at an empty binding would only '
+          + 'move the wedge to the close gate',
+      });
+    }
+    const reseed = seedEvidenceFile(planPath, nodeId, nonce, toRole, true, null);
+    if (reseed && reseed.ok === false) {
+      return refuse('substitute_evidence_reset_failed', {
+        node_id: nodeId, from_role: fromRole, to_role: toRole,
+        detail: 'atomic re-seed of .cache/' + nodeId + '.md failed: ' + (reseed.detail || reseed.reason || 'unknown'),
+      });
+    }
+    evidenceReset = true;
+  }
+
+  // C2 — the same target already on record is a no-op, not a second record. A crash between the
+  // record and the dispatch therefore resumes by re-running the identical command.
+  if (isReplay) {
+    return {
+      result: 'ok', node_id: nodeId, from_role: active.from_role, to_role: toRole,
+      basis: active.basis, recorded_at: active.ts, idempotent: true,
+      substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
+      evidence_reset: evidenceReset,
+    };
+  }
+
+  // C3 — record the swap.
   const basis = 'manifest superset (' + target.tools.join('+') + ' covers ' + source.tools.join('+') +
     '), kind ' + target.kind + ', identical token contract [' + toTokens.join(', ') + ']';
   const record = {
@@ -14875,12 +14962,21 @@ function runSubstituteRole(opts, project) {
     recorded_at: record.ts, idempotent: false,
     substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
     plan_unchanged: true,
+    evidence_reset: evidenceReset,
   };
 }
 
 // True when the seeded evidence file carries a real deliverable rather than only its seeded header.
 // The seed is the `evidence-binding:` line plus the required-token scaffold the opener writes; a
 // node that has been dispatched and returned has content beyond that.
+//
+// The scaffold is THREE line shapes, not two. `seedEvidenceFile`'s fresh seed emits an
+// `<!-- token: paste token here -->` guidance comment ABOVE every stub token, so counting a whole-line
+// HTML comment as a body made the opener's own untouched seed indistinguishable from a deliverable —
+// and a role that obeys "never hand-edit the seeded evidence file" leaves exactly that scaffold
+// behind. Tolerated here for the same reason a valueless `token:` line is: the OPENER wrote it, the
+// returning role did not. A comment sitting alongside real content still reads as a body, because the
+// content lines themselves decide.
 function hasEvidenceBodyBelowHeader(content) {
   const lines = String(content).split('\n');
   const bindingIdx = lines.findIndex(l => /^evidence-binding:/.test(l.trim()));
@@ -14888,11 +14984,50 @@ function hasEvidenceBodyBelowHeader(content) {
   return lines.slice(bindingIdx + 1).some(l => {
     const t = l.trim();
     if (t === '') return false;
+    // A whole-line seed guidance comment. Anchored at both ends so a line that merely STARTS with a
+    // comment and then carries prose is still a body.
+    if (/^<!--(?:(?!-->)[\s\S])*-->$/.test(t)) return false;
     // A seeded token scaffold is `token:` with no value; a real deliverable puts a value after it.
     const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(t);
     if (m) return m[2].trim() !== '';
     return true;
   });
+}
+
+// The typed, column-0 markers by which a returning role states it could not perform the brief. Both
+// forms are READ here and NEITHER is admitted at close: a gap may never close a node (the close-time
+// delegation_outcome vocabulary deliberately excludes it), but it is exactly the state substitution
+// exists to serve. Column-0 anchored like every other token key — an indented or quoted occurrence
+// inside another token's value is prose, not a marker, and is deliberately not matched.
+const CAPABILITY_GAP_MARKERS = Object.freeze([
+  /^capability_gap:[ \t]*\S/m,
+  /^delegation_outcome:[ \t]*capability_gap[ \t]*$/m,
+]);
+
+// classifyEvidenceBody — 'seeded' | 'capability_gap' | 'deliverable'.
+//
+// 'capability_gap' requires BOTH halves and the second is the load-bearing one: a typed marker AND
+// no non-empty value for any content-bearing token the role's contract demands. A role can therefore
+// only be classified as gapped by WITHHOLDING its whole deliverable. Stamping the marker onto real
+// work does not launder it — that body is a deliverable and the swap is refused.
+//
+// The value-presence regex is the one `checkEvidenceShape` uses, verbatim, so the two gates can never
+// disagree about what "a token carries a value" means.
+function classifyEvidenceBody(content, role) {
+  if (!content || !hasEvidenceBodyBelowHeader(content)) return 'seeded';
+  if (!CAPABILITY_GAP_MARKERS.some(re => re.test(content))) return 'deliverable';
+  let ROLE_TOKEN_REGISTRY;
+  try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitlab-workflow-plan-validator')); }
+  catch (_) { ROLE_TOKEN_REGISTRY = {}; }
+  const row = (ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || [];
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const tokenClass of row) {
+    if (tokenClass === 'evidence-binding') continue;
+    for (const alt of tokenClass.split('|')) {
+      if (new RegExp('^' + esc(alt) + ':[ \\t]*(\\S.*)$', 'm').test(content)) return 'deliverable';
+    }
+  }
+  return 'capability_gap';
 }
 
 function runRouteFindings(opts, project) {
@@ -14999,7 +15134,7 @@ function main() {
       '  expand-open         --project P --node-id N --stdin  (compose + record + open one expansion point)\n' +
       '  expand-close        --project P --node-id N          (discharge a fully-settled expansion point)\n' +
       '  amend-surface       --project P --node-id N --files "a,b"  (attribute an out-of-surface companion file + route to re-review)\n' +
-      '  substitute-role     --project P --node-id N --to-role R  (same-kind, superset-proven dispatch swap; plan + plan_hash unchanged)\n' +
+      '  substitute-role     --project P --node-id N --to-role R  (same-kind, superset-proven dispatch swap; plan + plan_hash unchanged; a typed capability_gap body is re-seeded atomically at its CURRENT binding, a deliverable is never cleared)\n' +
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -15602,8 +15737,12 @@ module.exports = {
   spliceLedgerNode,
   readLedgerStatuses,
   // The same-kind, superset-proven dispatch swap + its record readers, exported for direct coverage
-  // of the five typed refusals and the plan/plan_hash byte-identity claim.
+  // of the typed refusals and the plan/plan_hash byte-identity claim. The body classifier and its
+  // seeded-state predicate are exported alongside so the three-way classification can be pinned
+  // directly rather than only through runSubstituteRole's outcome.
   runSubstituteRole,
+  classifyEvidenceBody,
+  hasEvidenceBodyBelowHeader,
   readRoleSubstitutions,
   activeRoleSubstitution,
   spliceComplianceRow,
