@@ -25495,10 +25495,667 @@ scenario(() => {
       '#798: a recorded deliverable must refuse node_closed, got ' + JSON.stringify(r));
   }
   // A SEEDED-but-valueless evidence file is not a deliverable and must stay substitutable.
+  // NOTE: this hand-written two-line shape is NOT what `seedEvidenceFile` emits — the real opener
+  // seed carries an `<!-- token: paste token here -->` comment line per stub token. The
+  // production-seed variant of this same claim lives in the #819 block below, driven by the shipped
+  // seeder rather than by a fixture that flatters the guard.
   {
     const f = fixture('code-explorer', 'in_progress', 'evidence-binding: n1 abc123\nfindings:\n');
+    const before = fs.readFileSync(path.join(f.proj, '.cache', 'n1.md'), 'utf8');
     const r = runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1');
     assert(r.result === 'ok', '#798: a seed-only evidence file must remain substitutable, got ' + JSON.stringify(r));
+    assert(r.evidence_reset === false,
+      '#819-T3: an untouched seed carries nothing to destroy, so the ok return must say so explicitly '
+      + '(evidence_reset:false) rather than leave the reset state unstated, got ' + JSON.stringify(r.evidence_reset));
+    assert(fs.readFileSync(path.join(f.proj, '.cache', 'n1.md'), 'utf8') === before,
+      '#819-T3: a swap that resets nothing must leave the evidence bytes BYTE-IDENTICAL');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #819 — capability_gap recovery. Three seams the recovery path must clear, and one guard that must
+// survive it:
+//   (a) a returning role that self-persisted a gap must not wedge the swap behind P5 — while a role
+//       that delivered real work still must, or the change is indistinguishable from deleting P5;
+//   (b) a substituted node must present a FRESH dispatch identity, stable across an idempotent replay;
+//   (c) a swap to the role already frozen is a no-op that must never be recorded.
+// Fixture helpers are lifted to file scope because several scenarios below share them; each scenario
+// still owns and removes its own temp dirs.
+// ---------------------------------------------------------------------------
+
+// The barrier baseline a reset resolves its nonce from. `readNonce` takes the first 12 characters of
+// `.cache/barrier-base-<node>`, so the evidence binding below and this file agree by construction.
+const SUBROLE_SHA = 'abc123abc123deadbeefcafe0123456789abcdef';
+const SUBROLE_NONCE = SUBROLE_SHA.slice(0, 12);
+
+// The REFERENCE gap body: the bytes a real gapping role wrote, not an idealised marker. Its typed
+// marker is the column-0 `delegation_outcome: capability_gap` line the role emitted unprompted; the
+// only `capability_gap` PHRASE sits indented inside another token's value, and every content-bearing
+// token value is empty. A classifier keyed on a column-0 `capability_gap:` key alone does not fire here.
+const SUBROLE_GAP_BODY = [
+  'evidence-binding: n1 ' + SUBROLE_NONCE,
+  'findings:',
+  '  outcome: "capability_gap: local text-file read capability -- the dispatch forbids executing commands"',
+  '  facts:',
+  '    - "AGENTS.md requires CLAUDE.md to be read in full before repository action."',
+  '  validation_commands: []',
+  'delegation_outcome: capability_gap',
+  '<!-- findings: paste findings here -->',
+  'findings: ',
+  '',
+].join('\n');
+
+// The other typed marker: the column-0 key every role profile mandates as the compact summary return.
+const SUBROLE_GAP_BODY_KEYED = 'evidence-binding: n1 ' + SUBROLE_NONCE
+  + '\ncapability_gap: shell execution -- required to run the repository test suite\n';
+
+// The same reference body with its column-0 marker removed, so the ONLY `capability_gap` occurrence
+// left is the indented one inside a value. Prose, not a marker.
+const SUBROLE_GAP_BODY_INDENTED_ONLY = SUBROLE_GAP_BODY.replace('delegation_outcome: capability_gap\n', '');
+
+const SUBROLE_DELIVERABLE_BODY = 'evidence-binding: n1 ' + SUBROLE_NONCE + '\nfindings: already delivered\n';
+
+// The forgery: a real deliverable with the gap marker stamped on top. Relabeling work must not launder it.
+const SUBROLE_FORGED_BODY = [
+  'evidence-binding: n1 ' + SUBROLE_NONCE,
+  'findings: the frozen role delivered a full inventory of both seams and every pin standing on them',
+  'delegation_outcome: capability_gap',
+  '',
+].join('\n');
+
+function subrolePlan(role, status) {
+  return [
+    '# Workflow Plan', '',
+    '## Meta', 'plan_form: spine', 'plan_hash: deadbeefdeadbeef', '',
+    '## Nodes', '',
+    '| id | role | model | depends_on | shape | declared_write_set | cardinality |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| n1 | ' + role + ' | standard | — | sequence | — | 1 |',
+    '| n2 | code-reviewer | standard | n1 | sequence | — | 1 |',
+    '| sink | finalize | — | n2 | sequence | — | 1 |', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| n1 | ' + status + ' |', '| n2 | pending |', '| sink | pending |', '',
+  ].join('\n');
+}
+
+// opts: { role, status, evidence, baseline:false }. The barrier baseline is written by DEFAULT — the
+// existing #798 fixture writes none, so `readNonce` returns null there and any reset would refuse for
+// the wrong reason.
+function subroleFixture(opts) {
+  const o = opts || {};
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-819-'));
+  const proj = path.join(dir, 'kaola-workflow', 'p1');
+  const cache = path.join(proj, '.cache');
+  fs.mkdirSync(cache, { recursive: true });
+  const planPath = path.join(proj, 'workflow-plan.md');
+  fs.writeFileSync(planPath, subrolePlan(o.role || 'code-explorer', o.status || 'in_progress'), 'utf8');
+  if (o.baseline !== false) fs.writeFileSync(path.join(cache, 'barrier-base-n1'), SUBROLE_SHA + '\n', 'utf8');
+  if (o.evidence != null) fs.writeFileSync(path.join(cache, 'n1.md'), o.evidence, 'utf8');
+  const evidencePath = path.join(cache, 'n1.md');
+  const storePath = path.join(cache, 'role-substitutions.json');
+  return {
+    dir, proj, cache, planPath, evidencePath, storePath,
+    read: () => (fs.existsSync(evidencePath) ? fs.readFileSync(evidencePath, 'utf8') : null),
+    rows: () => (fs.existsSync(storePath)
+      ? (JSON.parse(fs.readFileSync(storePath, 'utf8')).substitutions || []) : null),
+  };
+}
+
+// A RED-by-design assertion must FAIL, never THROW. shardLib.runScenario does not catch, so an
+// exception out of a not-yet-existing export would abort the whole process and hide every other
+// signal this suite is supposed to hand the implementer.
+function subroleCall(label, fn) {
+  try {
+    const value = fn();
+    return (value && typeof value === 'object') ? value : { __value: value };
+  } catch (e) {
+    assert(false, label + ' threw instead of returning: ' + String((e && e.message) || e));
+    return {};
+  }
+}
+
+// #819-T1/T3b/T8/T9/T12 — the recovery path: a gap body resets and swaps, the opener's own seed is
+// left alone, both crash windows resume, and an unresolvable reset refuses rather than improvising.
+scenario(() => {
+  const { runSubstituteRole, seedEvidenceFile } = require('./kaola-workflow-adaptive-node');
+  const dirs = [];
+  try {
+    // T1 — the recovery this whole issue exists for.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_GAP_BODY });
+      dirs.push(f.dir);
+      const line1Before = f.read().split('\n')[0];
+      const r = subroleCall('#819-T1 substitute-role on a gap body',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'ok',
+        '#819-T1: a self-persisted capability_gap body is exactly the state substitution exists to '
+        + 'serve and must NOT wedge the swap, got ' + JSON.stringify(r));
+      assert(r.evidence_reset === true,
+        '#819-T1: the ok return must report evidence_reset:true so a destroyed body is on the record, '
+        + 'got ' + JSON.stringify(r.evidence_reset));
+      assert(r.idempotent === false, '#819-T1: a first swap is not a replay, got ' + JSON.stringify(r.idempotent));
+      const rows = f.rows();
+      assert(rows && rows.length === 1 && rows[0].to_role === 'investigator',
+        '#819-T1: exactly one active record naming the target, got ' + JSON.stringify(rows));
+      const after = f.read();
+      // The post-condition: the evidence file is at its binding-PRESERVING seeded state, reached with
+      // no hand intervention. Line 1 preserved is the load-bearing half (see T13).
+      assert(after != null && after.split('\n')[0] === line1Before,
+        '#819-T1: line 1 must be BYTE-IDENTICAL across the reset — the nonce IS the barrier baseline '
+        + 'prefix, so rotating it re-snapshots the worktree mid-node; got ' + JSON.stringify(after && after.split('\n')[0]));
+      // Expected bytes are computed by the SHIPPED seeder, not transcribed, so this cannot drift.
+      const g = subroleFixture({}); dirs.push(g.dir);
+      seedEvidenceFile(g.planPath, 'n1', SUBROLE_NONCE, 'investigator', false, null);
+      assert(after === g.read(),
+        '#819-T1: the file must be re-seeded to a FRESH seed for the dispatch target at the same nonce.\n'
+        + 'got:      ' + JSON.stringify(after) + '\nexpected: ' + JSON.stringify(g.read()));
+      assert(!/capability_gap/.test(String(after)),
+        '#819-T1: no trace of the gap body may survive the reset, got:\n' + after);
+    }
+
+    // T3b — the DE-VACUUMED seed-only case. The #798 block's two-line fixture is a shape
+    // `seedEvidenceFile` never emits: the real opener seed carries an `<!-- token: paste … -->`
+    // comment line per stub token, and `hasEvidenceBodyBelowHeader` counts any non-token line as a
+    // body. So the opener's OWN scaffold refuses the swap — on a node that has merely been OPENED,
+    // with no dispatch and no gap. This is the case a role hits when it gaps and (as its profile and
+    // the routing prose both instruct) writes NOTHING to the evidence file, which is the compliant
+    // path, so recovery is unreachable unless the scaffold is recognised as the seed it is.
+    {
+      const f = subroleFixture({}); dirs.push(f.dir);
+      seedEvidenceFile(f.planPath, 'n1', SUBROLE_NONCE, 'code-explorer', false, null);
+      const before = f.read();
+      assert(/^<!-- findings: paste findings here -->$/m.test(String(before)),
+        '#819-T3b: the fixture must be the REAL opener seed (comment scaffold), got:\n' + before);
+      const r = subroleCall('#819-T3b substitute-role on the production seed',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'ok',
+        '#819-T3b: the opener\'s OWN seed scaffold is not a deliverable — a node that has merely been '
+        + 'opened must stay substitutable, got ' + JSON.stringify(r));
+      assert(r.evidence_reset === false,
+        '#819-T3b: an untouched seed carries nothing to destroy, got ' + JSON.stringify(r.evidence_reset));
+      assert(f.read() === before, '#819-T3b: and its bytes must be left alone');
+    }
+
+    // T8 — crash window {seeded body, record}: re-running the IDENTICAL command is a no-op.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_GAP_BODY }); dirs.push(f.dir);
+      subroleCall('#819-T8 first swap',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      const afterFirst = f.read();
+      const again = subroleCall('#819-T8 replay',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(again.result === 'ok' && again.idempotent === true,
+        '#819-T8: the replay must be idempotent, got ' + JSON.stringify(again));
+      assert(again.evidence_reset === false,
+        '#819-T8: a replay re-classifies the re-seeded body as seeded and must NOT reset a second '
+        + 'time, got ' + JSON.stringify(again.evidence_reset));
+      assert((f.rows() || []).length === 1, '#819-T8: a replay must not append a second record');
+      assert(f.read() === afterFirst, '#819-T8: a replay must leave the evidence bytes untouched');
+    }
+
+    // T8-w1 — crash window {seeded body, NO record}: the reset landed, the record did not. Re-running
+    // the identical command completes it. No hand patch is reachable anywhere in the path.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_GAP_BODY }); dirs.push(f.dir);
+      subroleCall('#819-T8-w1 first swap',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      const afterReset = f.read();
+      fs.rmSync(f.storePath, { force: true });
+      const resumed = subroleCall('#819-T8-w1 resume',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(resumed.result === 'ok' && resumed.evidence_reset === false,
+        '#819-T8-w1: the re-seeded body re-classifies as seeded, so the resume records without a '
+        + 'second reset, got ' + JSON.stringify(resumed));
+      assert((f.rows() || []).length === 1, '#819-T8-w1: the resume must leave exactly one record');
+      assert(f.read() === afterReset, '#819-T8-w1: the resume must not touch the evidence bytes again');
+    }
+
+    // T9 — a gap body with no resolvable baseline nonce refuses; it never falls back to an empty nonce.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_GAP_BODY, baseline: false }); dirs.push(f.dir);
+      const before = f.read();
+      const r = subroleCall('#819-T9 substitute with no barrier baseline',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_evidence_reset_failed',
+        '#819-T9: no resolvable binding nonce must refuse rather than re-seed at an empty binding '
+        + '(which the close gate can only refuse), got ' + JSON.stringify(r));
+      assert(f.read() === before, '#819-T9: a refused reset must leave the evidence bytes intact');
+      assert(f.rows() === null, '#819-T9: a refused reset must write NO record');
+    }
+
+    // T12 — the ledger arm is untouched and still runs FIRST: a complete row refuses regardless of body.
+    {
+      const f = subroleFixture({ status: 'complete', evidence: SUBROLE_GAP_BODY }); dirs.push(f.dir);
+      const before = f.read();
+      const r = subroleCall('#819-T12 complete row with a gap body',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_node_closed' && r.status === 'complete',
+        '#819-T12: a complete row must still refuse node_closed even with a gap body, got ' + JSON.stringify(r));
+      assert(/node status is "complete"/.test(String(r.detail || '')),
+        '#819-T12: the LEDGER-STATUS arm must be the one that decided — its detail proves P5a still '
+        + 'runs before the body classification, got ' + JSON.stringify(r.detail));
+      assert(f.read() === before, '#819-T12: nothing may be reset on a closed row');
+      assert(f.rows() === null, '#819-T12: nothing may be recorded on a closed row');
+    }
+
+    // T12b — the ORDERING pin. A complete row carrying a DELIVERABLE is refusable by either arm, so
+    // only the `detail` says which one decided. On a gap body both orderings still refuse, which is
+    // why that case alone cannot pin the sequence.
+    {
+      const f = subroleFixture({ status: 'complete', evidence: SUBROLE_DELIVERABLE_BODY }); dirs.push(f.dir);
+      const r = subroleCall('#819-T12b ordering',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_node_closed', '#819-T12b: must refuse, got '
+        + JSON.stringify(r));
+      assert(/node status is "complete"/.test(String(r.detail || '')),
+        '#819-T12b: the LEDGER arm must decide first — a detail naming the evidence body instead proves '
+        + 'the body classification was hoisted above the status check, got ' + JSON.stringify(r.detail));
+    }
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #819-T2/T2b/T2c/T10 — the CONTROL half. Without these the change is indistinguishable from
+// deleting P5, and every refusal must stay a byte-for-byte no-op on disk.
+scenario(() => {
+  const { runSubstituteRole } = require('./kaola-workflow-adaptive-node');
+  const dirs = [];
+  try {
+    // T2 — a genuine deliverable still refuses.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_DELIVERABLE_BODY }); dirs.push(f.dir);
+      const before = f.read();
+      const r = subroleCall('#819-T2 deliverable',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+        '#819-T2: a recorded deliverable must still refuse node_closed, got ' + JSON.stringify(r));
+      assert(f.read() === before, '#819-T2: a refused swap must not touch the deliverable');
+      assert(f.rows() === null, '#819-T2: a refused swap must write NO record');
+    }
+
+    // T2b — the FORGERY control. Stamping the gap marker onto real work must not launder it: a body
+    // is a gap only when it ALSO withholds every content-bearing token value its contract demands.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_FORGED_BODY }); dirs.push(f.dir);
+      const before = f.read();
+      const r = subroleCall('#819-T2b forged marker over real findings',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+        '#819-T2b: a typed gap marker over a NON-EMPTY required token is a deliverable, not a gap — '
+        + 'a returning role must not be able to relabel its own work into a reset, got ' + JSON.stringify(r));
+      assert(f.read() === before, '#819-T2b: the forged body must survive byte-for-byte');
+    }
+
+    // T2c — the ANCHORING control. The sole `capability_gap` occurrence sits indented inside another
+    // token's value: that is prose, not a marker, and the body degrades to today's refusal. Deliberately
+    // fail-closed — an unanchored substring search would admit it and reset a body nobody typed a
+    // marker for. Every required token value here is EMPTY, which is what makes the anchoring the only
+    // thing standing between this body and an `ok`.
+    {
+      const f = subroleFixture({ evidence: SUBROLE_GAP_BODY_INDENTED_ONLY }); dirs.push(f.dir);
+      const before = f.read();
+      assert(!/^capability_gap:/m.test(String(before)) && !/^delegation_outcome:/m.test(String(before))
+        && /capability_gap/.test(String(before)),
+        '#819-T2c: the fixture must carry the phrase ONLY inside an indented value, got:\n' + before);
+      const r = subroleCall('#819-T2c indented-only marker',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_node_closed',
+        '#819-T2c: a marker must be COLUMN-0 anchored like every other token key; an occurrence '
+        + 'nested in another token\'s value is prose, got ' + JSON.stringify(r));
+      assert(f.read() === before, '#819-T2c: a refused swap must not reset');
+      assert(f.rows() === null, '#819-T2c: a refused swap must write NO record');
+    }
+
+    // T10 — EVERY guard is pure: a refused call is a byte-for-byte no-op on disk. Each row below
+    // carries a real barrier baseline AND (except P5b, whose whole point is a deliverable) a gap body,
+    // so a reset hoisted above the guard block would fire and this table would catch it.
+    {
+      const guards = [
+        { label: 'P0 self-substitution', role: 'code-explorer', status: 'in_progress', body: SUBROLE_GAP_BODY, to: 'code-explorer', reason: 'substitute_self_noop' },
+        { label: 'P1 unknown target', role: 'code-explorer', status: 'in_progress', body: SUBROLE_GAP_BODY, to: 'no-such-role', reason: 'substitute_unknown_role' },
+        { label: 'P2 kind mismatch', role: 'code-explorer', status: 'in_progress', body: SUBROLE_GAP_BODY, to: 'code-reviewer', reason: 'substitute_kind_mismatch' },
+        { label: 'P3 not a superset', role: 'investigator', status: 'in_progress', body: SUBROLE_GAP_BODY, to: 'code-explorer', reason: 'substitute_not_superset' },
+        { label: 'P4 token contract', role: 'code-explorer', status: 'in_progress', body: SUBROLE_GAP_BODY, to: 'code-architect', reason: 'substitute_token_contract_mismatch' },
+        { label: 'P5a ledger closed', role: 'code-explorer', status: 'complete', body: SUBROLE_GAP_BODY, to: 'investigator', reason: 'substitute_node_closed' },
+        { label: 'P5b deliverable', role: 'code-explorer', status: 'in_progress', body: SUBROLE_DELIVERABLE_BODY, to: 'investigator', reason: 'substitute_node_closed' },
+      ];
+      for (const g of guards) {
+        const f = subroleFixture({ role: g.role, status: g.status, evidence: g.body }); dirs.push(f.dir);
+        const before = f.read();
+        const planBefore = fs.readFileSync(f.planPath, 'utf8');
+        const r = subroleCall('#819-T10 ' + g.label,
+          () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: g.to }, 'p1'));
+        assert(r.result === 'refuse' && r.reason === g.reason,
+          '#819-T10 ' + g.label + ': must refuse ' + g.reason + ', got ' + JSON.stringify(r));
+        assert(f.read() === before,
+          '#819-T10 ' + g.label + ': a refusal must leave the evidence file BYTE-IDENTICAL — every '
+          + 'side effect belongs in the commit phase, after the last guard');
+        assert(f.rows() === null,
+          '#819-T10 ' + g.label + ': a refusal must write NO substitutions file');
+        assert(fs.readFileSync(f.planPath, 'utf8') === planBefore,
+          '#819-T10 ' + g.label + ': the frozen plan must stay BYTE-IDENTICAL');
+      }
+    }
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #819-T4/T5/T6/T11 — the dispatch identity. A substituted node must present an identity the runtime
+// has not already consumed; an unsubstituted one must present exactly today's card.
+scenario(() => {
+  const { runSubstituteRole, buildDispatch, codexTaskNameForNode, sanitizeCodexTaskName } =
+    require('./kaola-workflow-adaptive-node');
+  const { ROLE_CAPABILITY_MANIFEST } = require('./kaola-workflow-adaptive-schema');
+  const dirs = [];
+  const nodeInfo = { id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' };
+  try {
+    // T4/T5 — distinct after a substitution, and stable across an idempotent replay. The fixture is a
+    // PENDING node with no evidence file, so a failure here is attributable to the derivation alone
+    // and never to P5.
+    {
+      const f = subroleFixture({ status: 'pending' }); dirs.push(f.dir);
+      const ctx = { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: SUBROLE_NONCE };
+      const pre = subroleCall('#819-T4 pre-substitution card', () => buildDispatch(nodeInfo, ctx));
+      assert(pre.codex_task_name === 'n1_code_explorer',
+        '#819-T4: with nothing on record the identity is the frozen one, got ' + JSON.stringify(pre.codex_task_name));
+
+      const r = subroleCall('#819-T4 substitute',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(r.result === 'ok', '#819-T4: fixture precondition — the swap must succeed, got ' + JSON.stringify(r));
+
+      const post = subroleCall('#819-T4 post-substitution card', () => buildDispatch(nodeInfo, ctx));
+      assert(post.agent_type === 'investigator',
+        '#819-T4: the card must dispatch the SUBSTITUTE, got ' + JSON.stringify(post.agent_type));
+      assert(post.agent_type_frozen === 'code-explorer',
+        '#819-T4: the card must still state what the plan froze, got ' + JSON.stringify(post.agent_type_frozen));
+      assert(post.codex_task_name === 'n1_investigator',
+        '#819-T4: the task identity must be derived from the DISPATCH TARGET (the card\'s agent_type), '
+        + 'not the plan\'s frozen role cell, got ' + JSON.stringify(post.codex_task_name));
+      assert(post.codex_task_name !== pre.codex_task_name,
+        '#819-T4: a substituted node must present a FRESH identity — re-presenting the one the runtime '
+        + 'already consumed is the failure that wedged the recovery');
+
+      const again = subroleCall('#819-T5 replay',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(again.result === 'ok' && again.idempotent === true,
+        '#819-T5: the replay must be idempotent, got ' + JSON.stringify(again));
+      assert((f.rows() || []).length === 1, '#819-T5: the replay must not append a second record');
+      const post2 = subroleCall('#819-T5 post-replay card', () => buildDispatch(nodeInfo, ctx));
+      assert(post2.codex_task_name === post.codex_task_name,
+        '#819-T5: the identity is a pure function of (node id, active to_role) — a counter, timestamp, '
+        + 'or record ts as an input would break crash-resume, got ' + JSON.stringify(post2.codex_task_name)
+        + ' vs ' + JSON.stringify(post.codex_task_name));
+    }
+
+    // T4b — the derivation itself, without a fixture. The shipped library admits exactly ONE legal
+    // substitution (code-explorer -> investigator), so a second target is only reachable here.
+    {
+      assert(codexTaskNameForNode({ id: 'n1-explore', role: 'code-explorer' }) === 'n1_explore_code_explorer',
+        '#819-T4b: the one-argument call is unchanged, got '
+        + JSON.stringify(codexTaskNameForNode({ id: 'n1-explore', role: 'code-explorer' })));
+      const two = subroleCall('#819-T4b two-argument derivation',
+        () => ({ v: codexTaskNameForNode({ id: 'n1-explore', role: 'code-explorer' }, 'investigator') }));
+      assert(two.v === 'n1_explore_investigator',
+        '#819-T4b: an explicit dispatch role must override the frozen cell, got ' + JSON.stringify(two.v));
+      const wide = subroleCall('#819-T4b a wider target',
+        () => ({ v: codexTaskNameForNode({ id: 'n1-explore', role: 'code-explorer' }, 'knowledge-lookup') }));
+      assert(wide.v === 'n1_explore_knowledge_lookup',
+        '#819-T4b: the derivation must follow ANY dispatch target, got ' + JSON.stringify(wide.v));
+      for (const empty of [null, undefined, '']) {
+        const back = subroleCall('#819-T4b fallback ' + JSON.stringify(empty),
+          () => ({ v: codexTaskNameForNode({ id: 'n1-explore', role: 'code-explorer' }, empty) }));
+        assert(back.v === 'n1_explore_code_explorer',
+          '#819-T4b: an absent dispatch role must fall back to the frozen cell so every existing '
+          + 'one-argument caller is byte-unchanged, got ' + JSON.stringify(back.v));
+      }
+    }
+
+    // T6 — no record on file ⇒ the card is byte-identical to the pre-change golden. The key list is
+    // the MEASURED baseline key set at this commit; an unconditionally attached key reds here.
+    {
+      const GOLDEN_DISPATCH_KEYS = [
+        'agent_type', 'codex_dispatch_mode', 'codex_model', 'codex_model_source',
+        'codex_profile_compatible', 'codex_profile_mode', 'codex_profile_tier',
+        'codex_reasoning_effort', 'codex_reasoning_effort_source', 'codex_task_name',
+        'declared_write_set', 'evidence_file', 'forge_rider', 'guards', 'model', 'model_display',
+        'node_id', 'nonce', 'opencode_variant', 'opencode_variant_source', 'required_tokens',
+        'role', 'wait_budget_minutes', 'wait_budget_source', 'working_dir',
+      ];
+      const f = subroleFixture({ status: 'pending' }); dirs.push(f.dir);
+      const d = subroleCall('#819-T6 unsubstituted card', () => buildDispatch(nodeInfo,
+        { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: SUBROLE_NONCE }));
+      assert(d.agent_type === 'code-explorer' && d.role === 'code-explorer',
+        '#819-T6: an unsubstituted card dispatches the frozen role, got ' + JSON.stringify(d.agent_type));
+      assert(d.codex_task_name === 'n1_code_explorer',
+        '#819-T6: the unsubstituted identity must be BYTE-IDENTICAL to today\'s — a suffix appended '
+        + 'unconditionally would break the walkthrough pin that owns this derivation, got '
+        + JSON.stringify(d.codex_task_name));
+      assert(JSON.stringify(Object.keys(d).sort()) === JSON.stringify(GOLDEN_DISPATCH_KEYS),
+        '#819-T6: the unsubstituted card must gain NO new key.\ngot:      '
+        + JSON.stringify(Object.keys(d).sort()) + '\nexpected: ' + JSON.stringify(GOLDEN_DISPATCH_KEYS));
+      for (const k of ['agent_type_frozen', 'role_substituted', 'role_substitution_basis', 'evidence_reset']) {
+        assert(!(k in d), '#819-T6: an unsubstituted card must not carry "' + k + '"');
+      }
+    }
+
+    // T11 — a STANDING invariant, not a #819 regression: the sanitizer must stay injective over the
+    // installed library, or two roles would collapse to one task identity and the freshness T4 buys
+    // would be silently undone. Its mutation is "add a colliding role name" — it guards a FUTURE
+    // change, and it passes both before and after this issue's fix by design.
+    {
+      const roles = Object.keys(ROLE_CAPABILITY_MANIFEST);
+      const names = roles.map(sanitizeCodexTaskName);
+      assert(new Set(names).size === roles.length,
+        '#819-T11: sanitizeCodexTaskName must be injective over ROLE_CAPABILITY_MANIFEST ('
+        + roles.length + ' roles -> ' + new Set(names).size + ' distinct names)');
+    }
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #819-T7/T7b — a swap to the role already frozen is a no-op with a durable footprint: it records a
+// row that means nothing and destroys the one property the dispatch identity depends on.
+scenario(() => {
+  const { runSubstituteRole, buildDispatch } = require('./kaola-workflow-adaptive-node');
+  const dirs = [];
+  try {
+    // T7 — fresh, nothing on record.
+    {
+      const f = subroleFixture({ status: 'pending' }); dirs.push(f.dir);
+      const r = subroleCall('#819-T7 self-substitution',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-explorer' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_self_noop',
+        '#819-T7: a swap to the frozen role must refuse substitute_self_noop, got ' + JSON.stringify(r));
+      assert(r.from_role === 'code-explorer' && r.to_role === 'code-explorer',
+        '#819-T7: the refusal must name both roles, got ' + JSON.stringify(r));
+      assert(!fs.existsSync(f.storePath),
+        '#819-T7: a self-substitution must write NO record — the residue is a card that flags a '
+        + 'substitution while redirecting nothing');
+    }
+
+    // T7b — the observed REVERT case: an active record to investigator, then back to the frozen role.
+    // P0 must sit BEFORE the idempotent-replay branch, or a legacy self-row on disk replays to ok forever.
+    {
+      const f = subroleFixture({ status: 'pending' }); dirs.push(f.dir);
+      const first = subroleCall('#819-T7b forward swap',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(first.result === 'ok', '#819-T7b: fixture precondition — the forward swap must succeed, got '
+        + JSON.stringify(first));
+      const r = subroleCall('#819-T7b revert',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-explorer' }, 'p1'));
+      assert(r.result === 'refuse' && r.reason === 'substitute_self_noop',
+        '#819-T7b: reverting to the frozen role is still a self-substitution, got ' + JSON.stringify(r));
+      assert((f.rows() || []).length === 1,
+        '#819-T7b: the refused revert must not append a second row, got ' + JSON.stringify(f.rows()));
+      const d = subroleCall('#819-T7b card after the refused revert', () => buildDispatch(
+        { id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' },
+        { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: SUBROLE_NONCE }));
+      assert(d.agent_type === 'investigator' && d.codex_task_name === 'n1_investigator',
+        '#819-T7b: the surviving record still governs the card, got '
+        + JSON.stringify({ agent_type: d.agent_type, codex_task_name: d.codex_task_name }));
+    }
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #819-T8b — the reset is atomic and FAILS LOUD. An unwritable .cache must refuse, never report
+// success over a surviving body.
+scenario(() => {
+  const { runSubstituteRole } = require('./kaola-workflow-adaptive-node');
+  // Running as root defeats the permission bit; skip rather than pass vacuously.
+  if (process.getuid && process.getuid() === 0) {
+    assert(true, '#819-T8b: SKIPPED — running as uid 0, where chmod 0o555 does not deny writes');
+    return;
+  }
+  const dirs = [];
+  try {
+    const f = subroleFixture({ evidence: SUBROLE_GAP_BODY }); dirs.push(f.dir);
+    const before = f.read();
+    let r;
+    try {
+      fs.chmodSync(f.cache, 0o555);
+      r = subroleCall('#819-T8b unwritable .cache',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+    } finally {
+      fs.chmodSync(f.cache, 0o755);
+    }
+    assert(r.result === 'refuse' && r.reason === 'substitute_evidence_reset_failed',
+      '#819-T8b: a re-seed that cannot complete atomically must refuse — an atomic replace leaves the '
+      + 'PRIOR file byte-intact on failure, so swallowing it would report success over a surviving '
+      + 'gap body, got ' + JSON.stringify(r));
+    assert(f.rows() === null, '#819-T8b: a failed reset must write NO record');
+    // The prior body survives (the atomic replace never landed) or was unlinked by the fail-loud arm,
+    // leaving the fail-closed `evidence_unbound` residue. Either is admissible; a PARTIAL rewrite is not.
+    const after = f.read();
+    assert(after === null || after === before,
+      '#819-T8b: the evidence file must be either byte-intact or absent — never a torn prefix, got:\n' + after);
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #819-U1/U2 — the classifier as a unit, and the two operator hints. `substitute-role` today ships
+// five refusal codes with NO hint at all, so both new codes inherit the generic "Run orient" line —
+// which actively misdirects, and misdirecting the orchestrator into improvisation is the failure this
+// issue is about.
+scenario(() => {
+  const mod = require('./kaola-workflow-adaptive-node');
+  const { OPERATOR_HINT_REGISTRY, getOperatorHint, seedEvidenceFile } = mod;
+  const dirs = [];
+  try {
+    assert(typeof mod.classifyEvidenceBody === 'function',
+      '#819-U1: classifyEvidenceBody must be EXPORTED so the three-way classification can be pinned '
+      + 'directly rather than only through runSubstituteRole\'s outcome, got '
+      + typeof mod.classifyEvidenceBody);
+    if (typeof mod.classifyEvidenceBody === 'function') {
+      const classify = mod.classifyEvidenceBody;
+      const f = subroleFixture({}); dirs.push(f.dir);
+      seedEvidenceFile(f.planPath, 'n1', SUBROLE_NONCE, 'code-explorer', false, null);
+      const cases = [
+        ['absent file', '', 'seeded'],
+        ['header only', 'evidence-binding: n1 ' + SUBROLE_NONCE + '\n', 'seeded'],
+        ['production seed', f.read(), 'seeded'],
+        ['reference gap body', SUBROLE_GAP_BODY, 'capability_gap'],
+        ['column-0 capability_gap key', SUBROLE_GAP_BODY_KEYED, 'capability_gap'],
+        ['indented-only occurrence', SUBROLE_GAP_BODY_INDENTED_ONLY, 'deliverable'],
+        ['forged marker over real work', SUBROLE_FORGED_BODY, 'deliverable'],
+        ['plain deliverable', SUBROLE_DELIVERABLE_BODY, 'deliverable'],
+      ];
+      for (const [label, body, want] of cases) {
+        const got = subroleCall('#819-U1 ' + label, () => ({ v: classify(body, 'code-explorer') }));
+        assert(got.v === want,
+          '#819-U1 ' + label + ': expected "' + want + '", got ' + JSON.stringify(got.v));
+      }
+    }
+
+    for (const code of ['substitute_self_noop', 'substitute_evidence_reset_failed']) {
+      assert(typeof OPERATOR_HINT_REGISTRY[code] === 'function',
+        '#819-U2: ' + code + ' must carry an operator hint, got ' + typeof OPERATOR_HINT_REGISTRY[code]);
+      const hint = String(getOperatorHint(code,
+        { nodeId: 'n1', to_role: 'code-explorer', detail: 'no resolvable binding nonce' }) || '');
+      assert(!/Run orient/.test(hint),
+        '#819-U2: ' + code + ' must not fall through to the generic "Run orient" hint, got ' + JSON.stringify(hint));
+      assert(/write-halt/.test(hint),
+        '#819-U2: ' + code + ' must name the escalation, got ' + JSON.stringify(hint));
+    }
+    const resetHint = String(getOperatorHint('substitute_evidence_reset_failed', { nodeId: 'n1' }) || '');
+    assert(/hand-edit/i.test(resetHint),
+      '#819-U2: the reset-failure hint must forbid the hand patch this issue was filed over, got '
+      + JSON.stringify(resetHint));
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #819-T13 — THE END-TO-END PROOF, and the only assertion that tests the "preserve, do not rotate"
+// decision against the real close gate. Gap body -> substitute -> the substitute delivers -> close.
+// Rotating the nonce in the reset trades one wedge (substitution refused) for another (close refuses
+// evidence_stale), which no unit-level assertion above would catch.
+scenario(() => {
+  const { runSubstituteRole, runCloseNode, checkEvidenceShape } = require('./kaola-workflow-adaptive-node');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-819-e2e-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-819');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(
+      ['| n1 | in_progress | |', '| review | pending | |', '| done | pending | |'],
+      ['| n1 | code-explorer | — | — | 1 | sequence |',
+        '| review | code-reviewer | n1 | — | 1 | sequence |',
+        '| done | finalize | review | CHANGELOG.md | 1 | sequence |']);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-n1'), SUBROLE_SHA + '\n');
+    const evidencePath = path.join(cacheDir, 'n1.md');
+    fs.writeFileSync(evidencePath, SUBROLE_GAP_BODY);
+
+    const swap = subroleCall('#819-T13 substitute',
+      () => runSubstituteRole({ planPath, nodeId: 'n1', toRole: 'investigator' }, 'issue-819'));
+    assert(swap.result === 'ok' && swap.evidence_reset === true,
+      '#819-T13: the gap body must reset and swap, got ' + JSON.stringify(swap));
+
+    // The substitute now does the work, writing into the file the reset left behind — no hand patch.
+    const reseeded = fs.readFileSync(evidencePath, 'utf8');
+    assert(!/capability_gap/.test(reseeded) && /^findings: *$/m.test(reseeded),
+      '#819-T13: the re-seeded file must be a CLEAN empty stub for the substitute to fill — the gap '
+      + 'body\'s own empty `findings:` line would satisfy a bare stub probe, so the absence of the gap '
+      + 'is what proves the reset ran, got:\n' + reseeded);
+    fs.writeFileSync(evidencePath,
+      reseeded.replace(/^findings: *$/m, 'findings: real work delivered by the substituted role'));
+
+    // The close gate binds evidence to THIS open's nonce. Preserve ⇒ ok; rotate ⇒ evidence_stale.
+    const shape = checkEvidenceShape('code-explorer', 'n1', fs.readFileSync(evidencePath, 'utf8'),
+      { expectedNonce: SUBROLE_NONCE, expectedNodeId: 'n1' });
+    assert(shape.ok === true,
+      '#819-T13: the substitute\'s evidence must close against the binding the OPEN recorded — a '
+      + 'rotated nonce would refuse evidence_stale and trade one wedge for another, got '
+      + JSON.stringify(shape));
+
+    const common = {
+      planPath, project: 'issue-819',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+    };
+    const closed = subroleCall('#819-T13 close', () => runCloseNode({ ...common, nodeId: 'n1' }));
+    assert(closed.result === 'ok' && closed.closed === 'n1',
+      '#819-T13: the node must CLOSE after the substituted role delivers — the recovery is only real '
+      + 'if the run can finish, got ' + JSON.stringify(closed));
+
+    const after = fs.readFileSync(planPath, 'utf8');
+    const complianceRow = after.split('\n').find(l => /\| code-explorer \(n1\) \|/.test(l)) || '';
+    assert(/role_substituted: code-explorer→investigator/.test(complianceRow),
+      '#819-T13: the compliance row must record WHAT ACTUALLY RAN, got ' + JSON.stringify(complianceRow));
+    assert(/manifest superset/.test(complianceRow),
+      '#819-T13: and the basis that made it legal, got ' + JSON.stringify(complianceRow));
+    assert(/^\| n1 \| complete \|/m.test(after),
+      '#819-T13: the ledger row must be complete');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
 
