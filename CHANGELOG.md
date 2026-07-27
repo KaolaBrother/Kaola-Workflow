@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Freeze completeness: plans that cannot discharge their own obligations are refused at freeze (#830).** Three freeze-time checks convert two guaranteed mid-run traps into cheap refusals. A declared write set intersecting a foreign project's archive band refuses `writeset_foreign_archive`, reusing the barrier's own band predicate one phase earlier, with the operator hint naming the legal homes (the owning project's own lane, or the archive step of finalization). A `review_outcome` child epoch carrying a non-empty inherited findings frontier must declare a validation policy (`validation_command` + `validation_timeout_minutes`) — the only source of the vector digests its closure resolutions must cite — or refuses `child_frontier_unclosable`. The same child with zero writer nodes freezes with a named `frontier_without_writer` advisory in the freeze/handoff payloads (never a refusal; certification-only epochs are legitimate), passed through both the `ready_to_run` and replan `child_frozen` emissions. Planner profiles document both authoring rules on all four profile surfaces.
 ### Fixed
 
 - **The Codex MultiAgentV2 gate read the wrong config key and refused working configurations.** `detectCodexDispatchMode` looked for `enabled = true` in the top-level `[agents]` table. That is not where the switch lives, and `[agents]` has no `enabled` key at all — Codex parses such a block and applies nothing. The effect was an inverted gate: a config with MultiAgentV2 genuinely enabled was refused `codex_multi_agent_v2_required`, while the config the guide told users to write would have passed the gate with V2 actually off.

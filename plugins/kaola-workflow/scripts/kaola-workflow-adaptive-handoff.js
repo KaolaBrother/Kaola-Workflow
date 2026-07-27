@@ -1038,6 +1038,10 @@ function runHandoff(opts) {
     },
     decision,
     risk,
+    // #830: freeze-time named advisories (e.g. frontier_without_writer) pass through from the
+    // --freeze-checked verdict — audit signal for the planner/orchestrator, NEVER a gate;
+    // ready_to_run is unchanged.
+    ...(validateResult.warnings ? { warnings: validateResult.warnings } : {}),
     worktree_mirror: {
       status: mirrorResult.status
         || (mirrorResult.exitCode === 0 ? 'unknown' : 'failed'),
@@ -1114,6 +1118,9 @@ function runReplanHandoff(opts) {
     planner_attestation_digest: authority.planner_attestation_digest,
     first_node_id: frozenNodes[0].id,
     first_node_role: frozenNodes[0].role,
+    // #830: freeze-time named advisories (e.g. frontier_without_writer) pass through from the child
+    // freeze — audit signal for the planner/orchestrator, NEVER a gate; child_frozen is unchanged.
+    ...(frozen.warnings ? { warnings: frozen.warnings } : {}),
   };
 }
 

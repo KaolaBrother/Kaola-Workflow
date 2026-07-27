@@ -1616,6 +1616,317 @@ function runMirrorHandoffCase(mirrorResponse) {
 }
 
 // ---------------------------------------------------------------------------
+// #830 freeze-time dischargeability walls — the handoff surface. Three checks bind at freeze:
+// `writeset_foreign_archive` + `child_frontier_unclosable` (refusals) and `frontier_without_writer`
+// (a NAMED advisory, never a gate). The validator-side contracts (typed reasons, operator hints,
+// precedence, fail-closed project, negative space) live in test-plan-validator.js; here we pin:
+//   (ordering)   the child_frontier_unclosable refusal discharges at the END of the freeze wall —
+//                the G4 `/inherited_frontier/` expectation above keeps naming the grammar error;
+//   (ready)      the advisory passes through a ready_to_run emission (stub seam + REAL validator);
+//   (child)      the advisory passes through a replan child_frozen emission (stub + REAL freeze);
+//   (refuse-e2e) a foreign-archive declared write set surfaces as plan_invalid through the REAL
+//                validator subprocess, with --freeze never shelled.
+// ---------------------------------------------------------------------------
+
+// (ordering) — the #695 frontierPlan shape IS the load-bearing case: classes 'code' + digest 'none'
+// + no validation policy satisfies the unclosable condition AND carries an accumulated grammar
+// error. The grammar error must surface FIRST — a verdict reason of child_frontier_unclosable here
+// means the wall moved ahead of the grammar errors and the G4 fixture above goes red.
+{
+  const { validatePlan } = require('./kaola-workflow-plan-validator');
+  const orderingPlan = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'contract_version: 2', 'epoch_schema_version: 2', 'plan_epoch: 2',
+    'epoch_lineage_id: ' + '1'.repeat(64), 'parent_plan_hash: ' + '2'.repeat(64),
+    'parent_snapshot_manifest_digest: pending', 'claim_root_base_digest: ' + '3'.repeat(64),
+    'source_evidence_digest: ' + '5'.repeat(64), 'transition_reason: review_repair_requires_replan',
+    'planner_binding: dispatch-830', 'labels: area:scripts', 'sink: CHANGELOG.md',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: code', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| seed     | code-explorer | —      | —              | 1 | sequence | — | — | — | — | — |',
+    '| gate     | adversarial-verifier | seed | —        | 1 | sequence | scratch | inspect-observation | scratch | sequence | — |',
+    '| w        | doc-updater   | seed   | docs/decisions/D-830-01.md | 1 | sequence | — | — | — | — | — |',
+    '| finalize | finalize      | gate,w | —              | 1 | sequence | — | — | — | — | — |', '',
+    '## Design', '',
+    'Decompose: seed explores; gate and w are disjoint frontier legs; finalize sinks. Sequence edges are gate/data dependencies (S1). Done: docs landed and gate clears.', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |',
+    '| code-explorer (seed) | pending | | |', '| adversarial-verifier (gate) | pending | | |',
+    '| doc-updater (w) | pending | | |', '| finalize (finalize) | pending | | |', '',
+  ].join('\n') + '\n';
+  const v = validatePlan(orderingPlan, { root: path.resolve(__dirname, '..') });
+  assert(v.result === 'refuse' && v.reason !== 'child_frontier_unclosable'
+    && (v.errors || []).some(e => /inherited_frontier/.test(e)),
+    '#830-ordering: a grammar-broken child surfaces the /inherited_frontier/ grammar error FIRST — the unclosable wall discharges at the END of the freeze wall, got '
+    + JSON.stringify({ result: v.result, reason: v.reason, errors: v.errors }));
+}
+
+// Shared #830 fixture: a certification-only review_repair child — non-empty inherited frontier
+// (classes code + hex64 digest), named code certifier, declared validation policy, ZERO writer
+// nodes. In-grammar, carrying the frontier_without_writer advisory. Used by the child emissions
+// (stub + real freeze) and the ready_to_run e2e below.
+function makeFrontierWithoutWriterChild() {
+  return [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'contract_version: 2', 'epoch_schema_version: 2', 'plan_epoch: 2',
+    'epoch_lineage_id: ' + '3'.repeat(64), 'parent_plan_hash: ' + '4'.repeat(64),
+    'parent_snapshot_manifest_digest: pending', 'claim_root_base_digest: ' + '5'.repeat(64),
+    'source_evidence_digest: ' + '7'.repeat(64), 'transition_reason: review_repair_requires_replan',
+    'planner_binding: dispatch-830', 'labels: area:scripts', 'sink: CHANGELOG.md',
+    'code_certifier: child-review', 'security_certifier: none',
+    'inherited_frontier_digest: ' + '6'.repeat(64), 'inherited_frontier_classes: code',
+    'validation_command: node scripts/test-plan-validator.js', 'validation_timeout_minutes: 30', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| seed | code-explorer | — | — | 1 | sequence | — | — | — | — | — |',
+    '| child-review | code-reviewer | seed | — | 1 | sequence | — | current code candidate is approved | full code candidate | sequence | — |',
+    '| finalize | finalize | child-review | — | 1 | sequence | — | — | — | — | — |', '',
+    '## Design', '',
+    'Decompose: certification-only child epoch over the inherited frontier; sequence edges are gate/data dependencies (S1). Done: the named certifier clears the frontier.', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| seed | pending |', '| child-review | pending |', '| finalize | pending |', '',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |',
+    '| code-explorer (seed) | pending | | |', '| code-reviewer (child-review) | pending | | |', '| finalize (finalize) | pending | | |', '',
+  ].join('\n') + '\n';
+}
+const FWW_WARNING = {
+  warning: 'frontier_without_writer',
+  detail: 'this review_repair child epoch inherits a non-empty findings frontier but declares zero writer nodes'
+    + ' — a new finding surfaced by its gate has no possible owner (legal for a certification-only epoch; confirm the shape)',
+};
+
+// (ready, stub seam) — a --freeze-checked verdict carrying warnings passes them through to the
+// ready_to_run emission; the advisory is audit-only (handoff_status and decision are unmoved), and
+// a verdict WITHOUT warnings emits no warnings key at all.
+{
+  const planContent = makeUnfrozenPlan('auto-run');
+  const frozenPlanContent = stampFrozen(h => planContent + '<!-- plan_hash: ' + h + ' -->');
+  const runWithWarnings = (warnings) => {
+    let readCallCount = 0;
+    return runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', json: true,
+    shell: makeShellStub({
+      'kaola-workflow-plan-validator.js:--freeze-checked': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run',
+        planHash: PLAN_HASH_64, frozen: false, governance: { decision: 'auto-run', risk: {} },
+        risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+        ...(warnings ? { warnings } : {}),
+      },
+      'kaola-workflow-plan-validator.js:--freeze': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run',
+        planHash: PLAN_HASH_64, frozen: true, resumeOk: true,
+        risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+        ...(warnings ? { warnings } : {}),
+      },
+      'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+      'git:add': { exitCode: 0 },
+      'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
+    }),
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) { readCallCount++; return readCallCount <= 1 ? planContent : frozenPlanContent; }
+      if (fpath.endsWith('workflow-state.md')) return makeStateContent({ issueNumber: 830 });
+      return '';
+    },
+    writeFile: () => {},
+    stateMtime: undefined,
+  });
+  };
+
+  const flagged = runWithWarnings([FWW_WARNING]);
+  assert(flagged.handoff_status === 'ready_to_run' && flagged.decision === 'auto-run',
+    '#830-ready: a warning-bearing freeze verdict still emits ready_to_run (the advisory never gates), got '
+    + JSON.stringify({ handoff_status: flagged.handoff_status, decision: flagged.decision }));
+  assert(Array.isArray(flagged.warnings) && flagged.warnings.length === 1
+    && flagged.warnings[0].warning === 'frontier_without_writer'
+    && flagged.warnings[0].detail === FWW_WARNING.detail,
+    '#830-ready: the named frontier_without_writer advisory passes through the ready_to_run emission verbatim, got '
+    + JSON.stringify(flagged.warnings));
+
+  const clean = runWithWarnings(null);
+  assert(clean.handoff_status === 'ready_to_run' && !('warnings' in clean),
+    '#830-ready: a warning-free freeze verdict emits NO warnings key (absent, never empty), got '
+    + JSON.stringify({ handoff_status: clean.handoff_status, warnings: clean.warnings }));
+}
+
+// (child, stub seam) — a replan child freeze returning warnings passes them through to the
+// child_frozen emission; the transaction binding is unmoved.
+{
+  const child = makeFrontierWithoutWriterChild();
+  let writes = 0;
+  const result = runReplanHandoff({
+    childPath: '/fake/kaola-workflow/test-project/workflow-plan.next.md',
+    childContent: child,
+    transactionId: '8'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: '8'.repeat(64),
+      child_path: '/fake/kaola-workflow/test-project/workflow-plan.next.md',
+      child_digest: require('crypto').createHash('sha256').update(child).digest('hex'),
+      dispatch_nonce: 'dispatch-830',
+      planner_attestation_digest: '9'.repeat(64),
+    },
+    expected: {
+      epoch_lineage_id: '3'.repeat(64), plan_epoch: 2,
+      child_path: '/fake/kaola-workflow/test-project/workflow-plan.next.md',
+      parent_plan_hash: '4'.repeat(64), claim_root_base_digest: '5'.repeat(64),
+      inherited_frontier_digest: '6'.repeat(64), planner_binding: 'dispatch-830',
+    },
+    freezePlan: content => ({ result: 'in-grammar', frozen: true,
+      planHash: 'a'.repeat(64), content: '<!-- plan_hash: ' + 'a'.repeat(64) + ' -->\n' + content,
+      warnings: [FWW_WARNING] }),
+    writeFile: () => { writes++; },
+  });
+  assert(result.result === 'child_frozen' && result.phase === 'child_frozen'
+    && result.transaction_id === '8'.repeat(64) && result.child_plan_hash === 'a'.repeat(64),
+    '#830-child: a warning-bearing child freeze still emits child_frozen with the binding intact, got '
+    + JSON.stringify({ result: result.result, phase: result.phase, reason: result.reason }));
+  assert(Array.isArray(result.warnings) && result.warnings.length === 1
+    && result.warnings[0].warning === 'frontier_without_writer'
+    && result.warnings[0].detail === FWW_WARNING.detail,
+    '#830-child: the named advisory passes through the child_frozen emission verbatim, got ' + JSON.stringify(result.warnings));
+  assert(writes === 1, '#830-child: the advisory never blocks the single child-file freeze write');
+}
+
+// (child, REAL freeze) — the same emission driven through the REAL validator freezePlan (the
+// default seam): the genuine certification-only child freezes in-grammar and the computed advisory
+// rides child_frozen. This pins the whole wire — validatePlan computes the warning, freezePlan
+// spreads it, the handoff passes it through.
+{
+  const child = makeFrontierWithoutWriterChild();
+  const result = runReplanHandoff({
+    childPath: '/fake/kaola-workflow/test-project/workflow-plan.next.md',
+    childContent: child,
+    transactionId: '8'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: '8'.repeat(64),
+      child_path: '/fake/kaola-workflow/test-project/workflow-plan.next.md',
+      child_digest: require('crypto').createHash('sha256').update(child).digest('hex'),
+      dispatch_nonce: 'dispatch-830',
+      planner_attestation_digest: '9'.repeat(64),
+    },
+    expected: {
+      epoch_lineage_id: '3'.repeat(64), plan_epoch: 2,
+      child_path: '/fake/kaola-workflow/test-project/workflow-plan.next.md',
+      parent_plan_hash: '4'.repeat(64), claim_root_base_digest: '5'.repeat(64),
+      inherited_frontier_digest: '6'.repeat(64), planner_binding: 'dispatch-830',
+    },
+    validatorOptions: { root: path.resolve(__dirname, '..'), project: 'test-project' },
+    writeFile: () => {},
+  });
+  assert(result.result === 'child_frozen',
+    '#830-child-e2e: the REAL freezePlan freezes the certification-only child (advisory, never a refusal), got '
+    + JSON.stringify({ result: result.result, reason: result.reason, errors: result.errors }));
+  assert(Array.isArray(result.warnings) && result.warnings.length === 1
+    && result.warnings[0].warning === 'frontier_without_writer'
+    && /zero writer nodes/.test(result.warnings[0].detail),
+    '#830-child-e2e: the REAL computed frontier_without_writer advisory rides the child_frozen emission, got '
+    + JSON.stringify(result.warnings));
+}
+
+// (refuse-e2e) — the writeset_foreign_archive refusal surfaces through the normal handoff as
+// plan_invalid, end-to-end through the REAL validator subprocess, with --freeze NEVER shelled
+// (no mutation on refusal). The planner's bounded repair loop absorbs it like any plan_invalid.
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw830-wsa-h-'));
+  try {
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    const statePath = path.join(proj, 'workflow-state.md');
+    const planContent = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'plan_schema_version: 2', 'plan_form: spine', 'labels: enhancement',
+      'code_certifier: none', 'security_certifier: none',
+      'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| w | doc-updater | explore | kaola-workflow/archive/other-project/evidence.md | 1 | sequence |',
+      '| done | finalize | w | CHANGELOG.md | 1 | sequence |', '',
+      '## Design', '',
+      'Decompose: explore probes, w lands the doc, done sinks. sequence edges: S1 data dependencies. Done: the doc and CHANGELOG land.', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| explore | pending |', '| w | pending |', '| done | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, planContent);
+    fs.writeFileSync(statePath, makeStateContent({ issueNumber: 830 }));
+    let freezeShelled = false;
+    const result = runHandoff({
+      planPath, statePath, project: 'test-project', json: true,
+      // Delegate ONLY the validator to the real subprocess; stub everything else so the refuse-path
+      // test never shells the real roadmap/git (hermetic, no live-mirror pollution).
+      shell: (scriptPath, args) => {
+        const a = args || [];
+        const base = path.basename(scriptPath);
+        if (base === 'kaola-workflow-plan-validator.js') {
+          if (a.includes('--freeze')) freezeShelled = true;
+          return shellHandoff(scriptPath, a);
+        }
+        return { exitCode: 0 };
+      },
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => fs.readFileSync(fpath, 'utf8'),
+      writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+      stateMtime: undefined,
+    });
+    assert(result.handoff_status === 'plan_invalid',
+      '#830-refuse-e2e: a declared foreign-archive write set surfaces as plan_invalid, got ' + JSON.stringify(result.handoff_status));
+    assert(Array.isArray(result.errors) && result.errors.some(e => /foreign project/.test(e)
+      && /kaola-workflow\/archive\/other-project\/evidence\.md/.test(e) && /finalization/.test(e)),
+      '#830-refuse-e2e: the typed writeset_foreign_archive text (token + legal homes) reaches the handoff packet, got '
+      + JSON.stringify(result.errors));
+    assert(freezeShelled === false, '#830-refuse-e2e: --freeze NEVER shelled on the refusal (no mutation)');
+  } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// (ready-e2e) — the advisory crosses the WHOLE normal-handoff wire: REAL validator --freeze-checked
+// computes frontier_without_writer, REAL --freeze --governance-ack freezes the child, and the
+// ready_to_run emission carries the named warning. Hermetic: only the validator is real.
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw830-fww-h-'));
+  try {
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    const statePath = path.join(proj, 'workflow-state.md');
+    fs.writeFileSync(planPath, makeFrontierWithoutWriterChild());
+    fs.writeFileSync(statePath, makeStateContent({ issueNumber: 830 }));
+    const result = runHandoff({
+      planPath, statePath, project: 'test-project', json: true,
+      shell: (scriptPath, args) => {
+        const a = args || [];
+        if (path.basename(scriptPath) === 'kaola-workflow-plan-validator.js') return shellHandoff(scriptPath, a);
+        return { exitCode: 0, created: true, status: 'mirrored' };
+      },
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => fs.readFileSync(fpath, 'utf8'),
+      writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+      stateMtime: undefined,
+    });
+    assert(result.handoff_status === 'ready_to_run',
+      '#830-ready-e2e: the certification-only child FREEZES through the real handoff (advisory, never a refusal), got '
+      + JSON.stringify({ handoff_status: result.handoff_status, errors: result.errors }));
+    assert(Array.isArray(result.warnings) && result.warnings.length === 1
+      && result.warnings[0].warning === 'frontier_without_writer'
+      && /zero writer nodes/.test(result.warnings[0].detail),
+      '#830-ready-e2e: the REAL computed advisory rides the ready_to_run emission, got ' + JSON.stringify(result.warnings));
+  } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
 // Node Briefs — the durable per-node information channel grammar. A new hash-covered
 // `## Node Briefs` plan section (### <node-id> sub-blocks). Two freeze contracts, exercised
 // end-to-end through the REAL validator subprocess (shellHandoff) + the handoff mapping:

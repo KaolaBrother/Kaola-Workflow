@@ -118,6 +118,10 @@ refusals teach the walls at freeze — author to them, never clamp around them.
   cohesive cross-edition/aggregator write set in ONE node; fan out only for genuinely-disjoint work.
   **Test files a node authors are declared like any other file** — the barrier attributes a test path
   exactly as it attributes a production path, so an undeclared test write is a write-set overflow.
+  **A declared write set never reaches into another project's archive band**
+  (`kaola-workflow/archive/<other-project>/…`) — freeze refuses `writeset_foreign_archive` because the
+  barrier refuses that band unconditionally; retained evidence lives in the owning project's own
+  `kaola-workflow/<project>/` lane or lands via the archive step of finalization.
 - **Gates are walls the validator finds in the graph:** `code-reviewer` must post-dominate every
   code-producing node (G1); `security-reviewer` every sensitive node (G2); a `main-session-gate`
   (built-in, read-only, `sequence`-only) post-dominates every code node (G3) for a non-delegable
@@ -538,7 +542,12 @@ normal Method, and **never mutate the frozen parent `workflow-plan.md`** or its 
 - The **semantic authoring target is only the seeded `workflow-plan.next.md`** — verify it is a
   regular file, absent/empty at dispatch. Author the schema-2 child, preserve claim/root/epoch
   lineage, carry inherited code/security + unresolved-finding obligations to reachable certifiers,
-  and initialize every child ledger row `pending`.
+  and initialize every child ledger row `pending`. A child carrying a non-empty inherited findings
+  frontier MUST declare `validation_command` + `validation_timeout_minutes` — its closure resolutions
+  cite the vector digests only that command can produce, so a zero-vector child refuses
+  `child_frontier_unclosable`; a frontier-carrying child with zero writer nodes is legal (a
+  certification-only epoch) but freezes flagged `frontier_without_writer` — confirm that shape is
+  intended before freezing.
 - **Re-plan anchor for `## Design`.** The child's `## Design` DERIVES from the parent's — carry it
   forward and make any amendment EXPLICIT (state what changed and why), never a silent rewrite. The
   child passes the same freeze wall, so a present, non-empty `## Design` is enforced for free

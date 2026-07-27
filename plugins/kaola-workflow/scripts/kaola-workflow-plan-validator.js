@@ -89,6 +89,14 @@ const OPERATOR_HINT_REGISTRY = {
   mirror_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a mirror file outside its declared write set. Add the mirror to the write set or run revert-overflow.`,
   count_bump: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a count-bump file outside its declared write set. Add the file or run revert-overflow.`,
   foreign_archive: () => 'A file from a foreign archive was written. This is never allowed — revert the archive write.',
+  // #830: the freeze-time screen of DECLARED write sets against the same band the barrier owns. The
+  // barrier's foreign_archive refusal is unconditional and first-in-precedence, so a plan declaring
+  // such a path is frozen with a guaranteed mid-run repair inside it — refuse one phase earlier.
+  writeset_foreign_archive: (ctx) => `Node ${ctx.nodeId || '(unknown)'} declares a write-set path inside a foreign project's archive band ("${ctx.file || '(unknown)'}") — the barrier refuses that write unconditionally, so the plan can never run. Move retained evidence to a legal home: the owning project's own kaola-workflow/<project>/ lane, or the archive step of finalization (never a node write set).`,
+  // #830: a review_outcome child whose inherited findings frontier is non-empty must declare the
+  // validation policy that produces the vector digests its closure resolutions cite — an empty
+  // declaration admits nothing, so the frontier can never close.
+  child_frontier_unclosable: () => 'A review_repair child epoch carrying an inherited findings frontier declares no validation vectors (validation_command / validation_timeout_minutes) — its gate can produce no vector digest for a resolution to cite, so the frontier can never close. Declare the validation policy in ## Meta and re-freeze.',
   sensitive_write_unreviewed: () => 'A sensitive file was written without a completed security-reviewer node. Add a security-reviewer gate to the plan.',
   unattributed_write: (ctx) => `File "${ctx.file || '(unknown)'}" was written but not attributed to any node\'s write set. Add it to a node\'s declared write set.`,
   unattributed_change: () => 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node or run revert-overflow.',
@@ -4066,6 +4074,11 @@ function validatePlan(content, opts) {
   const planProducesCode = nodes.some(producesCode)
     || (isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE));
 
+  // #830 freeze-completeness flags, computed in the schema-2 block below (where the parsed
+  // validation policy is in scope) and discharged at the END of the freeze wall.
+  let childFrontierUnclosable = false;
+  let frontierWithoutWriter = false;
+
   if (planSchemaVersion === 2) {
     const validationPolicy = parseValidationPolicy(content, {
       contract: { ok: true, plan_schema_version: 2, contract_version: 2 },
@@ -4093,6 +4106,52 @@ function validatePlan(content, opts) {
       return { result: 'refuse', reason: 'validation_policy_required', operator_hint: getOperatorHint('plan_invalid'),
         errors: ['schema-2 code-producing plans require validation_command and validation_timeout_minutes'],
         planHash: computePlanHash(content), plan_schema_version: 2, contract_version: 2 };
+    }
+    // #830 freeze completeness (child-epoch closability), flags ONLY — the refusal/advisory fire at
+    // the END of the freeze wall so a plan broken on any accumulated grammar error surfaces THAT
+    // first. A review_outcome child epoch whose inherited findings frontier is non-empty owes at
+    // least one validation vector its resolutions can cite: a schema-2 closure resolution must name
+    // a validation_vector_digest out of the authoritative registry, and only a declared validation
+    // policy (validation_command + validation_timeout_minutes) can produce one — an empty declaration
+    // admits nothing, so a zero-vector child freezes with a frontier it can never close. The
+    // zero-WRITER sibling is advisory, never a refusal: a certification-only epoch is a legitimate
+    // shape (the named certifier can satisfy the frontier), so it is flagged for the planner, not
+    // refused. An expansion point counts as a potential writer — its interior composes at open time,
+    // so freeze cannot prove the child writer-less.
+    const epochContract = parseEpochContract(content);
+    if (epochContract.active && epochContract.fields.transition_reason === 'review_repair_requires_replan'
+        && epochContract.inherited.length > 0) {
+      if (!validationPolicy.command || !validationPolicy.timeout_minutes) childFrontierUnclosable = true;
+      if (!nodes.some(n => n.role !== TERMINAL_ROLE && n.writeSet && n.writeSet.size > 0)
+          && !(isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE))) frontierWithoutWriter = true;
+    }
+  }
+
+  // #830 freeze completeness (write-set screen): a declared write set intersecting a FOREIGN
+  // project's archive band refuses HERE, one phase before the barrier. The runtime foreign_archive
+  // refusal is unconditional and first-in-precedence, so freezing such a plan would bury a
+  // guaranteed mid-run repair inside it. Reuses the barrier's OWN band predicate
+  // (foreignArchivePath) — evaluated over declared tokens instead of actual writes, the one barrier
+  // family a freeze can judge without modeling runtime state. The project resolves from
+  // opts.project / opts.planPath; when it is indeterminate the predicate is fail-closed (ANY
+  // kaola-workflow/archive/<dir>/ token counts as foreign) — the barrier's own null-project
+  // posture, and never a false refusal for a legal plan (the archive band is never a legal
+  // declared write-set home; retained evidence lives in the owning project's lane or lands via
+  // the archive step of finalization). Precedence mirrors the barrier: first, ahead of the
+  // accumulated grammar errors below.
+  {
+    const freezeProject = opts.project
+      || (opts.planPath ? path.basename(path.dirname(path.resolve(opts.planPath))) : null);
+    for (const n of nodes) {
+      for (const tok of n.writeSet) {
+        if (foreignArchivePath(String(tok || '').replace(/^\.\//, ''), freezeProject)) {
+          return { result: 'refuse', reason: 'writeset_foreign_archive',
+            operator_hint: getOperatorHint('writeset_foreign_archive', { nodeId: n.id, file: tok }),
+            errors: [`node ${n.id} declared_write_set token "${tok}" intersects a foreign project's archive band — the barrier refuses foreign-archive writes unconditionally and first-in-precedence, so this plan could never run; move retained evidence to the owning project's lane or the archive step of finalization`],
+            planHash: computePlanHash(content), plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+            ...(isSpine ? { plan_form: 'spine' } : {}) };
+        }
+      }
     }
   }
 
@@ -5024,6 +5083,19 @@ function validatePlan(content, opts) {
       ...(isSpine ? { plan_form: 'spine' } : {}) };
   }
 
+  // #830 `child_frontier_unclosable` (FREEZE-ONLY), the last completeness gate: only an otherwise-
+  // in-grammar plan is held for an unclosable inherited frontier, so a plan broken on any grammar
+  // error surfaces THAT first (the flag was computed in the schema-2 block where the parsed
+  // validation policy is in scope). The vector-side mirror of the resolution anti-forgery conjunct:
+  // the same registry that stops an invented digest at close stops an unclosable plan at freeze.
+  // Deliberately absent from revalidateForResume — a plan frozen before this wall resumes.
+  if (childFrontierUnclosable) {
+    return { result: 'refuse', reason: 'child_frontier_unclosable', operator_hint: getOperatorHint('child_frontier_unclosable'),
+      errors: ['a review_repair child epoch whose inherited findings frontier is non-empty must declare at least one validation vector resolvable by its resolutions — validation_command and validation_timeout_minutes are absent, so its gate can produce no vector digest for a resolution to cite and the frontier can never close; declare the validation policy in ## Meta and re-freeze'],
+      planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...(isSpine ? { plan_form: 'spine' } : {}) };
+  }
+
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
   const reasons = [];
   let sensitivity = false, blastRadius = false, uncertain = false;
@@ -5053,6 +5125,12 @@ function validatePlan(content, opts) {
     diagnostics: { wideFanout: wideFanouts },
     plan_shape: planShape,
     ...(selectionRecord ? { selection: selectionRecord } : {}),
+    // #830 `frontier_without_writer` — NAMED ADVISORY, never a refusal: a review_repair child with a
+    // non-empty inherited frontier and zero writer nodes freezes (a certification-only epoch is a
+    // legitimate shape), but a NEW finding its gate surfaces has no possible owner. The planner sees
+    // the flag and decides. Audit-only; never moves the verdict.
+    ...(frontierWithoutWriter ? { warnings: [{ warning: 'frontier_without_writer',
+      detail: 'this review_repair child epoch inherits a non-empty findings frontier but declares zero writer nodes — a new finding surfaced by its gate has no possible owner (legal for a certification-only epoch; confirm the shape)' }] } : {}),
     // #765: only `spine` reaches the freeze wall now (dag refuses earlier), so isSpine is always true
     // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}),
@@ -5820,7 +5898,7 @@ function main() {
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors.join('; ')) + '\n');
       process.exitCode = 1; return;
     }
-    const v = validatePlan(content, { root });
+    const v = validatePlan(content, { root, planPath });
     if (v.result !== 'in-grammar') {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors: v.errors }) : 'typed refusal (out of grammar): ' + (v.errors || []).join('; ')) + '\n');
       process.exitCode = 1; return;
@@ -5833,6 +5911,9 @@ function main() {
       // the planner authored one (omitted in explicit-target mode).
       plan_shape: v.plan_shape,
       ...(v.selection ? { selection: v.selection } : {}),
+      // #830: freeze-time advisories (e.g. frontier_without_writer) travel with the checked verdict so
+      // the handoff can pass them through — named warnings, never refusals.
+      ...(v.warnings ? { warnings: v.warnings } : {}),
     };
     process.stdout.write((json ? JSON.stringify(out) : `checked (${v.decision}) plan_hash=${v.planHash} (not yet frozen)`) + '\n');
     return;
@@ -5870,7 +5951,7 @@ function main() {
         process.exitCode = 1; return;
       }
     }
-    const r = freezePlan(toFreeze, { root });
+    const r = freezePlan(toFreeze, { root, planPath });
     // #389: route the plan_hash-stamping freeze write (also the mid-run plan-repair re-freeze
     // writer that carries a populated ## Node Ledger) through the crash-safe atomic replace.
     // A torn workflow-plan.md would mismatch plan_hash and brick --resume-check with no recovery
@@ -5886,6 +5967,8 @@ function main() {
     }
     const payload = { result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded, header_normalized: headerNormalized };
     if (resumeOk !== undefined) payload.resumeOk = resumeOk;
+    // #830: freeze-time advisories (e.g. frontier_without_writer) — additive passthrough, never a gate.
+    if (r.warnings) payload.warnings = r.warnings;
     process.stdout.write((json ? JSON.stringify(payload) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}${resumeOk !== undefined ? ' resumeOk=' + resumeOk : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;
     return;
@@ -6840,7 +6923,7 @@ function main() {
     return;
   }
 
-  const v = validatePlan(content, { root });
+  const v = validatePlan(content, { root, planPath });
   if (json) process.stdout.write(JSON.stringify(v) + '\n');
   else if (v.result === 'refuse') process.stdout.write('typed refusal (out of grammar): ' + v.errors.join('; ') + '\n');
   else process.stdout.write(`in-grammar: ${v.decision}` + (v.risk.reasons.length ? ' — ' + v.risk.reasons.join('; ') : '') + '\n');
