@@ -195,6 +195,10 @@ const REQUIRED_BLOCKS = [
       'BYTE-IDENTICAL',
       'write-halt --reason consent',
       'is **NOT evidence**',
+      'substitute_self_noop',
+      'substitute_evidence_reset_failed',
+      'evidence_reset: true',
+      'derived from the DISPATCH TARGET',
     ],
   },
   {

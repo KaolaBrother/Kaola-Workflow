@@ -313,13 +313,27 @@ Same-kind and manifest-superset are checkable facts, so this decides mechanicall
 The frozen plan, its `## Node Ledger`, and `plan_hash` stay BYTE-IDENTICAL: substitution is dispatch
 metadata, recorded durably in `.cache/role-substitutions.json` and folded into the close-time
 compliance row. The re-issued card carries `agent_type` (dispatch this), `agent_type_frozen` (what
-the plan says), and `role_substituted: true`. On any typed refusal — `substitute_unknown_role`,
-`substitute_kind_mismatch`, `substitute_not_superset`, `substitute_token_contract_mismatch`,
-`substitute_node_closed` — there is no in-kind role that covers the brief, so escalate with
-`write-halt --reason consent` rather than dispatching anyway.
+the plan says), `role_substituted: true`, and a task identity derived from the DISPATCH TARGET — so a
+substituted node presents a FRESH identity, not the one already consumed. Spawn it anew from the
+re-issued card; never resume the consumed identity with a follow-up, and never reuse the
+pre-substitution task name. An unsubstituted node's card is unchanged.
 
-A `capability_gap` return is **NOT evidence**: never `record-evidence` it. The node stays open;
-substitute and re-dispatch, or halt.
+A `capability_gap` return is **NOT evidence**: never `record-evidence` it, and never hand-edit the
+seeded evidence file to clear it. The node stays open. A role that self-persisted a gap instead of a
+deliverable leaves a body that only `substitute-role` may clear: when that body carries a typed gap
+marker and no non-empty required token, the same call re-seeds the file atomically at its CURRENT
+binding before recording the swap and reports `evidence_reset: true`. A body carrying a real
+deliverable is never cleared — the swap is refused instead.
+
+Two refusal families, two different moves:
+
+- `substitute_self_noop` — the requested target IS the frozen role. Nothing was recorded and nothing
+  was cleared; name a DIFFERENT in-kind role, or halt.
+- `substitute_unknown_role`, `substitute_kind_mismatch`, `substitute_not_superset`,
+  `substitute_token_contract_mismatch`, `substitute_node_closed`,
+  `substitute_evidence_reset_failed` — no in-kind role covers the brief, or the node's evidence
+  cannot be safely reset, so escalate with `write-halt --reason consent` rather than dispatching
+  anyway.
 
 <!-- PIN: reviewer-contract-v2-execution -->
 #### Reviewer Contract Envelope, Validation, and Convergence
