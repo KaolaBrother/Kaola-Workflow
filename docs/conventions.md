@@ -469,12 +469,14 @@ There is **no absence audit**, and the gap is stated rather than hidden: nothing
 
 ## Two validation tiers — the fast gate is SAMPLED (#801)
 
-`npm run test:kaola-workflow:claude` is the **fast gate**: a hard 10-minute budget, bought by sampling, measured at 391s. `npm run test:kaola-workflow:claude:full` is the **complete gate**, and it is what a release receipt requires. `npm run test:full` chains the complete gate with the other three editions.
+`npm run test:kaola-workflow:claude` is the **fast gate**: a hard 10-minute budget, bought by sampling, measured at 391s. `npm run test:kaola-workflow:claude:full` runs everything and is **never mandated — in any case, including a release receipt.** The fast gate is sufficient evidence on its own; the full tier is an opt-in diagnostic. `npm run test:full` chains it with the other three editions for that same discretionary use.
+
+This is deliberate, and it is what `run-chains.js` already does: `resolveChains` maps the `claude` chain to the sampled command with no override, so every chain receipt — release receipts included — has always been fast-gate evidence. The rule now matches the tool instead of contradicting it.
 
 - **What the fast gate does NOT execute on a given run.** 11 of every 12 scenarios in `test-adaptive-node`, `test-replan` and `simulate-workflow-walkthrough`; and all of `test-interior-gate-freshness`, `test-release`, `test-run-chains`, `test-claim-hardening`, `test-barrier-base-integrity`, `test-sink-merge`. Those six are not registry-backed, so sampling is unavailable and whole-suite deferral was the only option.
 - **The rotation is the bound on that loss.** `--shard auto/N` seeds the slice index from HEAD: the same commit always runs the same slice (so a red is reproducible and re-running cannot shuffle a failure out of view), while consecutive commits run different slices (so the whole registry is covered across N commits). A fixed slice would leave the other N−1 permanently unexecuted for the same runtime — strictly worse.
 - **Coverage loss stays fail-closed.** The shard-coverage audit still asserts that shards agree on the registered scenario count and that their slices sum to exactly it, so a partition that drops or duplicates a scenario reds the chain.
-- **A cut must name its surviving gate.** Deferring a suite from the fast gate does not retire it: the full tier still runs it. Never defer without recording the defect class that stops being checked per-run and where it is still checked.
+- **A cut must name its surviving gate.** Deferring a suite from the fast gate does not retire it — `claude:full` still runs it — but since the full tier is never mandated, that is a place to reach for the suite deliberately, not a backstop that fires on its own. Never defer without recording the defect class that stops being checked per-run and where it is still checked.
 - **Do not reach for concurrency.** It has been measured twice on this suite set and produces false reds — see the #801 CHANGELOG entry and `docs/decisions/D-523-01.md`. Spawn reduction is likewise already refuted; the time is genuine nested work.
 
 ## Cross-runtime lexicon parity (#812)

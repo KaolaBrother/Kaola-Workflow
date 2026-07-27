@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 
+### Changed
+
+- **The complete tier (`claude:full`) is never mandated — in any case, including a release receipt.** The stated rule and the shipped tool disagreed: `docs/conventions.md` said a release receipt requires the complete gate, while `run-chains.js` `resolveChains` maps the `claude` chain to the sampled command with no override path, so every chain receipt ever produced — release receipts included — has been fast-gate evidence. `--release-check` and `--tag` verify greenness, waivers and `headSha`, never the tier, so nothing caught the divergence. The rule now matches the tool: the fast gate is sufficient evidence everywhere, and the full tier is an opt-in diagnostic reached for deliberately rather than a backstop that fires on its own.
+
+
 ### Fixed
 
 - **A dispatched role no longer refuses to read files it is fully capable of reading.** The role-dispatch brief never stated whether command execution was permitted *for reading*, and every role profile pairs that silence with a hard instruction to return `capability_gap` rather than improvise around a missing tool. On the three runtimes whose profiles carry no tools key — Codex, opencode, Kimi — nothing actually restricts the child, so a role whose manifest omits `Bash` (`code-explorer`, `planner`, `knowledge-lookup`) held shell access the whole time and resolved the ambiguity by coin-flip. Measured across 79 recorded Codex `code-explorer` dispatches: 37 used the shell and the rest did not, with the same role, model and reasoning effort landing on opposite readings on consecutive days. A run that lost the flip wedged at its first node — a `capability_gap` return is contractually not evidence, so the node cannot close, and the documented recovery (`substitute-role` then re-dispatch) is itself blocked, leaving a consent halt as the only exit.

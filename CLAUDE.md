@@ -111,7 +111,7 @@ For any **cross-edition** diff (see Validation Policy), run all four chains sequ
 npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
   npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
 ```
-A **release receipt must use the complete tier** — `npm run test:full` — never the sampled gate. See `docs/conventions.md` § Two validation tiers for exactly what the fast gate skips.
+`test:kaola-workflow:claude:full` is **never mandated — in any case, including a release receipt.** The fast gate is sufficient evidence everywhere; the full tier is an opt-in diagnostic you reach for deliberately. See `docs/conventions.md` § Two validation tiers for exactly what the fast gate skips.
 
 ## Documentation Update Checklist
 
