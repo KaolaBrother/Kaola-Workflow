@@ -25445,6 +25445,37 @@ scenario(() => {
         '#807-D2b: the early return is byte-zero-mutation on the plan');
     } finally { f.cleanup(); }
   }
+
+  // --- D2c (#759-gap): a pre-fix discharge left the milestone's pre-seeded compliance row pending —
+  //     the alreadyDischarged re-entry flips EXACTLY that row (no transition, no mirror: no ledger
+  //     row moved), and a second re-entry is byte-zero. A non-pending row stays untouched (D2b keeps
+  //     the no-table case byte-zero). ---
+  {
+    const DISCHARGED = ['| probe | complete |', '| m1 | complete |', '| wall | pending |', '| done | pending |'];
+    const COMPLIANCE = ['## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '| --- | --- | --- | --- |',
+      '| expansion-point (m1) | pending | | |', ''];
+    const f = mk807(PLAN807(DISCHARGED, COMPLIANCE), []);
+    try {
+      const r = runExpandClose({ ...f.opts, nodeId: 'm1' });
+      assert(r.result === 'ok' && r.alreadyDischarged === true,
+        '#759-gap-D2c: the re-entry still short-circuits ok, got ' + JSON.stringify(r));
+      assert(JSON.stringify(r.taskTransitions) === '[]'
+        && !Object.prototype.hasOwnProperty.call(r, 'taskMirror') && f.mirrorCalls.length === 0,
+      '#759-gap-D2c: the compliance repair moves no ledger row — no transition, no mirror refresh, got '
+        + JSON.stringify({ transitions: r.taskTransitions, mirror: r.taskMirror, calls: f.mirrorCalls.length }));
+      const repaired = fs.readFileSync(f.planPath, 'utf8');
+      assert(!/\| expansion-point \(m1\) \| pending \|/.test(repaired)
+        && /\| expansion-point \(m1\) \| main-session-direct \|/.test(repaired),
+      '#759-gap-D2c: the pending row flipped to main-session-direct in place, got:\n'
+        + (repaired.split('\n').filter(l => l.includes('expansion-point (m1)')).join('\n') || '<row missing>'));
+      const r2 = runExpandClose({ ...f.opts, nodeId: 'm1' });
+      assert(r2.result === 'ok' && r2.alreadyDischarged === true
+        && fs.readFileSync(f.planPath, 'utf8') === repaired,
+      '#759-gap-D2c: the repair is idempotent — the second re-entry is byte-zero-mutation');
+    } finally { f.cleanup(); }
+  }
 });
 
 // ===========================================================================
