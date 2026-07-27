@@ -404,6 +404,11 @@ the transport, never the contract.
 
 Dispatch the base role profile in `dispatch.agent_type` (legacy `dispatch.role` is only
 descriptive). Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
+- Reading the repository is never a capability gap. Where the runtime exposes no dedicated
+  file-reading tool, read-only command execution (file reads, listings, searches, `git` history)
+  IS permitted for that purpose. A manifest without `Bash` withholds EXECUTION as evidence —
+  builds, tests, measurements — never the ability to read. Reserve `capability_gap` for an action
+  no available tool can perform.
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 <!-- PIN: node-briefs-relay -->
 - When `dispatch.context_packet` is present, relay it VERBATIM into every role dispatch as the
