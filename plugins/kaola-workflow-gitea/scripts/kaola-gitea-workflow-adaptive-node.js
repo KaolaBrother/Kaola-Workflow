@@ -15050,6 +15050,13 @@ const CAPABILITY_GAP_MARKERS = Object.freeze([
 // only be classified as gapped by WITHHOLDING its whole deliverable. Stamping the marker onto real
 // work does not launder it — that body is a deliverable and the swap is refused.
 //
+// Fail-CLOSED on a vacuous contract: a role with NO content-bearing token row in ROLE_TOKEN_REGISTRY
+// (no row at all, or an evidence-binding-only row) gives the anti-forgery half nothing to iterate,
+// which would classify ANY marker-bearing body as a gap regardless of the work it carries. "No token
+// contract" is not "no delivered work" — such a body is NOT classifiable as a gap, so it stands as a
+// deliverable (the swap is refused) and the guard's meaning holds independently of whether the role
+// happens to have a registry row.
+//
 // The value-presence regex is the one `checkEvidenceShape` uses, verbatim, so the two gates can never
 // disagree about what "a token carries a value" means.
 function classifyEvidenceBody(content, role) {
@@ -15058,10 +15065,11 @@ function classifyEvidenceBody(content, role) {
   let ROLE_TOKEN_REGISTRY;
   try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitea-workflow-plan-validator')); }
   catch (_) { ROLE_TOKEN_REGISTRY = {}; }
-  const row = (ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || [];
+  const row = ((ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || [])
+    .filter(tokenClass => tokenClass !== 'evidence-binding');
+  if (!row.length) return 'deliverable'; // vacuous anti-forgery contract — fail closed (see header)
   const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const tokenClass of row) {
-    if (tokenClass === 'evidence-binding') continue;
     for (const alt of tokenClass.split('|')) {
       if (new RegExp('^' + esc(alt) + ':[ \\t]*(\\S.*)$', 'm').test(content)) return 'deliverable';
     }

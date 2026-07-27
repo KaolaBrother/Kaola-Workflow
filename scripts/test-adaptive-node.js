@@ -26279,6 +26279,62 @@ scenario(() => {
   }
 });
 
+// #822 — classifyEvidenceBody fails CLOSED on a vacuous anti-forgery contract. The capability_gap
+// classification requires BOTH a typed column-0 marker AND "no content-bearing token in the role's
+// ROLE_TOKEN_REGISTRY row carries a value" — but for a role with NO registry row at all the second
+// conjunct is vacuous: the loop has nothing to iterate, so pre-fix ANY marker-bearing body for such
+// a role classified capability_gap regardless of the work it carried (a marker could launder real
+// work into a reset). The shipped row-less roles are workflow-planner, finalize, expansion-point.
+// Post-fix, "no token contract" is NOT "no delivered work": the body is not classifiable as a gap,
+// so it stands as a deliverable and the swap is refused. (This is latent end-to-end today —
+// substitute-role's P2 admits only kind:producer, and no row-less role is a producer — so the pin
+// sits at the classifier unit, exactly where the issue names the obligation.)
+scenario(() => {
+  const mod = require('./kaola-workflow-adaptive-node');
+  const classify = mod.classifyEvidenceBody;
+  assert(typeof classify === 'function', '#822: classifyEvidenceBody is exported, got ' + typeof classify);
+  if (typeof classify !== 'function') return;
+  const ROWLESS_ROLES = ['workflow-planner', 'finalize', 'expansion-point'];
+  for (const role of ROWLESS_ROLES) {
+    // Fixture premise, mutation-proven: if a future change GIVES this role a content-bearing registry
+    // row, the vacuous-contract path no longer applies to it and this fixture must be re-authored —
+    // fail loudly here rather than silently assert the wrong contract.
+    assert(!ROLE_TOKEN_REGISTRY[role],
+      '#822: fixture premise — ' + role + ' has NO ROLE_TOKEN_REGISTRY row (a new content row retires this fixture)');
+    // The laundering vector: real delivered content with a typed gap marker stamped on top. Pre-fix
+    // this classified capability_gap via the vacuous conjunct, laundering the work into a reset.
+    const markerOverWork = 'evidence-binding: n1 ' + SUBROLE_NONCE + '\n'
+      + 'summary: ' + role + ' delivered a full account of the run and every artifact it touched\n'
+      + 'delegation_outcome: capability_gap\n';
+    assert(classify(markerOverWork, role) === 'deliverable',
+      '#822: ' + role + ' marker-over-work must classify deliverable — a marker must NOT launder real '
+      + 'work into a gap for a row-less role (pre-fix: capability_gap via the vacuous conjunct), got '
+      + JSON.stringify(classify(markerOverWork, role)));
+    // The marker-ONLY body: "no token contract" is not "no delivered work" — fail closed to
+    // deliverable (the swap is refused) rather than classify a gap the anti-forgery half never measured.
+    const markerOnly = 'evidence-binding: n1 ' + SUBROLE_NONCE + '\ndelegation_outcome: capability_gap\n';
+    assert(classify(markerOnly, role) === 'deliverable',
+      '#822: ' + role + ' marker-only body fails CLOSED to deliverable (pre-fix: capability_gap), got '
+      + JSON.stringify(classify(markerOnly, role)));
+    const keyedOnly = 'evidence-binding: n1 ' + SUBROLE_NONCE + '\ncapability_gap: required capability unavailable to this role\n';
+    assert(classify(keyedOnly, role) === 'deliverable',
+      '#822: ' + role + ' column-0 capability_gap key fails CLOSED to deliverable, got '
+      + JSON.stringify(classify(keyedOnly, role)));
+    // The unchanged arms: an empty/seed body stays seeded; a marker-free content body stays a deliverable.
+    assert(classify('', role) === 'seeded',
+      '#822: ' + role + ' empty body stays seeded, got ' + JSON.stringify(classify('', role)));
+    assert(classify('evidence-binding: n1 ' + SUBROLE_NONCE + '\nsummary: plain delivered work\n', role) === 'deliverable',
+      '#822: ' + role + ' marker-free content body stays deliverable');
+  }
+  // The guard is NOT de-fanged for row-bearing roles: the reference gap body still classifies
+  // capability_gap and the forged marker still classifies deliverable (the #819-U1 contract stands).
+  assert(classify(SUBROLE_GAP_BODY, 'code-explorer') === 'capability_gap',
+    '#822: a row-bearing role\'s genuine gap still classifies capability_gap — the fail-closed is '
+    + 'scoped to the vacuous contract, got ' + JSON.stringify(classify(SUBROLE_GAP_BODY, 'code-explorer')));
+  assert(classify(SUBROLE_FORGED_BODY, 'code-explorer') === 'deliverable',
+    '#822: the row-bearing anti-forgery arm still stands (a forged marker over real findings is a deliverable)');
+});
+
 // #819-T13 — THE END-TO-END PROOF, and the only assertion that tests the "preserve, do not rotate"
 // decision against the real close gate. Gap body -> substitute -> the substitute delivers -> close.
 // Rotating the nonce in the reset trades one wedge (substitution refused) for another (close refuses
