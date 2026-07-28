@@ -32,6 +32,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary decision
+// for the repo instead of one per line. See scripts/test-git-fixture.js for why arrangement
+// git is neither classifiable under the four boundary classes nor convertible in-process.
+const G = require('./test-git-fixture');
 
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
@@ -59,12 +63,9 @@ function makeTmpRoot() {
 }
 
 function initGitRepo(tmp) {
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  G.init(tmp, { branch: 'main' });
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+  G.commitPaths(tmp, 'README.md', 'init');
 }
 
 // #592: a git repo with a bare remote — needed to drive the real `--sink` transaction
@@ -74,9 +75,9 @@ function initGitRepo(tmp) {
 function initGitRepoWithBareRemote(tmp) {
   initGitRepo(tmp);
   const remotePath = tmp + '-remote';
-  spawnSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
-  spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
-  spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+  G.initBare(remotePath);
+  G.remoteAdd(tmp, 'origin', remotePath);
+  G.git(tmp, ['push', '-u', 'origin', 'main']);
   return remotePath;
 }
 
@@ -1223,13 +1224,12 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     ].join('\n'));
 
     // Feature branch carrying a deliverable — pushed upstream, mirrors the real sink shape.
-    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', branch], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'push', '-u', 'origin', branch], { encoding: 'utf8' });
+    G.checkout(tmpRoot, branch, { create: true });
+    G.git(tmpRoot, ['push', '-u', 'origin', branch]);
     fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
-    spawnSync('git', ['-C', tmpRoot, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'push', 'origin', branch], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+    G.commitPaths(tmpRoot, 'DELIVERABLE.txt', 'feat: deliverable');
+    G.git(tmpRoot, ['push', 'origin', branch]);
+    G.checkout(tmpRoot, 'main');
 
     // The bundle sink shape from the issue: --issue-numbers only, NO --issue.
     const result = spawnSync(process.execPath, [
@@ -1371,13 +1371,12 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     ].join('\n'));
 
     // Feature branch carrying a deliverable — pushed upstream, mirrors the real sink shape.
-    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', branch], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'push', '-u', 'origin', branch], { encoding: 'utf8' });
+    G.checkout(tmpRoot, branch, { create: true });
+    G.git(tmpRoot, ['push', '-u', 'origin', branch]);
     fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
-    spawnSync('git', ['-C', tmpRoot, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'push', 'origin', branch], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+    G.commitPaths(tmpRoot, 'DELIVERABLE.txt', 'feat: deliverable');
+    G.git(tmpRoot, ['push', 'origin', branch]);
+    G.checkout(tmpRoot, 'main');
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--branch', branch, '--project', project, '--issue', '61702', '--sink', '--json',
@@ -1415,12 +1414,11 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
   const tmpRoot = makeTmpRoot();
   try {
     initGitRepo(tmpRoot);
-    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', 'workflow/issue-61703'], { encoding: 'utf8' });
+    G.checkout(tmpRoot, 'workflow/issue-61703', { create: true });
     fs.writeFileSync(path.join(tmpRoot, 'feature.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmpRoot, 'add', 'feature.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: unmerged'], { encoding: 'utf8' });
-    const implSha = spawnSync('git', ['-C', tmpRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+    G.commitPaths(tmpRoot, 'feature.txt', 'feat: unmerged');
+    const implSha = G.head(tmpRoot);
+    G.checkout(tmpRoot, 'main');
 
     const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'issue-61703');
     fs.mkdirSync(archiveDest, { recursive: true });
@@ -1444,7 +1442,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       '#617 C: receipt.remote_closed_after_publish must be failed, got ' + receipt.remote_closed_after_publish);
 
     // Merge it — the SAME check must now pass.
-    spawnSync('git', ['-C', tmpRoot, 'merge', '--no-ff', 'workflow/issue-61703', '-m', 'merge'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['merge', '--no-ff', 'workflow/issue-61703', '-m', 'merge']);
     const receipt2 = Object.assign({}, receipt, { remote_closed_after_publish: undefined });
     const good = checkClosureInvariants(tmpRoot, receipt2, archiveDest, { implRef: implSha, sinkTarget: 'main' });
     assert(!good.violations.some(v => v.id === 'remote-closed-after-publish'),
@@ -1467,11 +1465,10 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     const project = 'issue-61704';
     // Unmerged feature branch — mirrors the incident: the implementation only ever landed on
     // the stale branch, never merged into main.
-    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', 'workflow/' + project], { encoding: 'utf8' });
+    G.checkout(tmpRoot, 'workflow/' + project, { create: true });
     fs.writeFileSync(path.join(tmpRoot, 'impl.txt'), 'implementation\n');
-    spawnSync('git', ['-C', tmpRoot, 'add', 'impl.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: unmerged implementation'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+    G.commitPaths(tmpRoot, 'impl.txt', 'feat: unmerged implementation');
+    G.checkout(tmpRoot, 'main');
 
     // Archived + closed — active folder gone, archive present — but the branch was NEVER merged.
     const archiveDir = path.join(tmpRoot, 'kaola-workflow', 'archive', project);
