@@ -772,22 +772,23 @@ function runHandoff(opts) {
     // raised. It is a real, observed shape — a planner that copies its skeleton from an ARCHIVED plan
     // (where the marker legitimately survives) carries the line into a brand-new ledger — and
     // `computePlanHash` covers `## Meta` + `## Nodes` only, so the marker rides the freeze unremarked.
-    // The freeze path is the only place that can tell FRESH from RESUMED, and `storedHash === null` is
-    // exactly that discriminator: an unfrozen draft has never run, so a marker on it cannot be a real
-    // halt. Refuse (zero mutation, before the validator and the freeze) and NAME the marker so the
-    // planner can repair its own draft through the bounded repair loop; an already-frozen plan is
-    // untouched, so a genuinely halted run still resumes.
-    if (!storedHash && planForHash && adaptiveSchema.readDurableConsentHalt(planForHash)) {
+    // The freeze path is the only place that can tell FRESH from RESUMED, and a never-frozen draft (no
+    // stored plan_hash) is exactly that discriminator: an unfrozen draft has never run, so a marker on
+    // it cannot be a real halt. Refuse (zero mutation, before the validator and the freeze) and NAME
+    // the marker so the planner can repair its own draft through the bounded repair loop; an
+    // already-frozen plan is untouched, so a genuinely halted run still resumes.
+    //
+    // Detection and wording live in the kernel (`detectDecoyConsentHalt`) because the OTHER freeze
+    // door — `plan-validator --freeze`, the writer this handoff shells and a documented public CLI —
+    // fences on the identical rule. One rule, one wording: both doors return the same typed reason and
+    // the same operator prose for the same draft bytes.
+    const decoyHalt = adaptiveSchema.detectDecoyConsentHalt(planForHash);
+    if (decoyHalt) {
       return {
         handoff_status: 'plan_invalid',
         result: 'refuse',
-        reason: 'decoy_consent_halt',
-        errors: ['decoy_consent_halt: the plan draft carries "' + adaptiveSchema.CONSENT_HALT_MARKER
-          + '" in its ## Node Ledger, but nothing has run yet — a fresh run cannot be halted for a '
-          + 'consent no one asked for, and the first open-next would refuse halt_pending. The marker '
-          + 'is written by write-halt and cleared by clear-halt; it is never authored. Remove the '
-          + '"' + adaptiveSchema.CONSENT_HALT_MARKER + '" line from the ## Node Ledger section and '
-          + 're-submit (it is most likely copied in from an archived plan used as a skeleton).'],
+        reason: decoyHalt.reason,
+        errors: [decoyHalt.error],
         validator_verdict: null,
       };
     }

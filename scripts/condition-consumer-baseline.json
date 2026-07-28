@@ -95,7 +95,6 @@
     "current_epoch_authority_invalid",
     "current_epoch_authority_unavailable",
     "dangling_depends_on",
-    "decoy_consent_halt",
     "diff_unresolved",
     "digest_changed_or_nonregular",
     "epoch_contract_invalid",

@@ -5434,6 +5434,21 @@ function freezePlan(content, opts) {
   // rather than wedging. Hash-neutral (the head is outside computePlanHash by construction);
   // a no-op on the common initial freeze (no head yet).
   content = schema.stripLedgerChainHead(content);
+  // The DECOY consent-halt fence, at the freeze WRITER. The adaptive-handoff entry carries the same
+  // fence, but the handoff is a CONVENIENCE over this function, not the writer: `--freeze` is what
+  // stamps plan_hash and replaces workflow-plan.md, and the `--freeze-checked` then
+  // `--freeze --governance-ack <hash>` chain is a documented public CLI reachable directly. Guarding
+  // only the handoff guards one of two doors, and the wedge simply enters through the other.
+  // Detection AND wording are shared (schema.detectDecoyConsentHalt) so the two doors cannot drift
+  // into two spellings of one refusal. Runs BEFORE the contract/grammar wall, mirroring the handoff's
+  // ordering, so the decoy is named for what it is rather than for whatever else the draft trips.
+  // Pure and zero-write: freezePlan never touches the filesystem, and the CLI writes only on frozen.
+  const decoyHalt = schema.detectDecoyConsentHalt(content);
+  if (decoyHalt) {
+    return { result: 'refuse', reason: decoyHalt.reason, errors: [decoyHalt.error],
+      planHash: computePlanHash(content), frozen: false,
+      plan_schema_version: null, contract_version: null };
+  }
   const contract = resolvePlanContract(content, { forFreeze: true });
   if (!contract.ok) {
     return { result: 'refuse', reason: contract.reason, errors: [contract.detail || contract.reason],
@@ -6174,7 +6189,15 @@ function main() {
       const rr = revalidateForResume(r.content, { root });
       resumeOk = !!rr.ok;
     }
-    const payload = { result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded, header_normalized: headerNormalized };
+    // Carry the TYPED reason out to the wire. freezePlan's refusals — resolvePlanContract's,
+    // validatePlan's, and the decoy consent-halt fence's alike — have always set `reason`, and this
+    // payload has always dropped it, so every shelling caller of the freeze WRITER saw an untyped
+    // `result:'refuse'` and had no choice but to string-match the prose. That is a general defect of
+    // this emission, not a property of any one refusal, so it is repaired generally rather than
+    // special-cased: a payload that can carry one typed reason but not another is the seam the decoy
+    // grew in. Emitted only when present, so the in-grammar payload stays byte-identical (the
+    // in-grammar verdict carries no `reason` key at all).
+    const payload = { result: r.result, ...(r.reason ? { reason: r.reason } : {}), decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded, header_normalized: headerNormalized };
     if (resumeOk !== undefined) payload.resumeOk = resumeOk;
     // #830: freeze-time advisories (e.g. frontier_without_writer) — additive passthrough, never a gate.
     if (r.warnings) payload.warnings = r.warnings;
