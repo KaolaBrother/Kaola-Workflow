@@ -4218,8 +4218,19 @@ const WRITE_FAILED_BLOCKED_ON = Object.freeze([
 const WRITE_FAILED_ENVIRONMENT_ERRNOS = Object.freeze(['ENOSPC', 'EACCES', 'EROFS', 'EMFILE', 'EIO']);
 // Every transition below is idempotent BY CONSTRUCTION — re-running it after the
 // substrate recovers either completes the write or reports it already landed.
+// THE FREEZE CHAIN'S VERBS BELONG TO THE PLAN-VALIDATOR, NEVER TO THE HANDOFF. `--freeze-checked`
+// / `--freeze` / `--governance-ack` are PLAN-VALIDATOR flags that the handoff SHELLS; the handoff's
+// own argv parser reads only --project / --plan / --json / --state-mtime and silently IGNORES them,
+// so `adaptive-handoff --freeze-checked <plan> --json` refuses "exactly one of --project or --plan
+// required" and an operator who follows it lands nowhere. The handoff's freeze transaction carries
+// NO verb flag at all (it is the default run), which is precisely why it cannot be named as a route
+// verb — a route names a dispatch token, and that transaction has none.
 const WRITE_FAILED_RETRY_BY_RECORD = Object.freeze({
-  plan: inGrammar('adaptive-handoff', '--freeze-checked', '<plan> --json'),
+  // The plan record IS workflow-plan.md, and the verb that writes it is the validator's own freeze.
+  // It re-validates before writing and re-computes the same plan_hash from the same author-immutable
+  // content, so re-running it after the substrate recovers either completes the write or reports
+  // exactly why it still cannot land.
+  plan: inGrammar('plan-validator', '--freeze', '<plan> --json'),
   position: inGrammar('adaptive-node', 'reconcile-running-set', '--project <P> --json'),
   evidence: inGrammar('adaptive-node', 'record-evidence', '--project <P> --node-id <N> --stdin --json'),
   forge_chain: inGrammar('claim', 'finalize', '--project <P> --json'),
@@ -4239,8 +4250,16 @@ const CAS_ROUTE_BY_RECORD = Object.freeze({
   review_receipt: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
   review_attempt: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
   review_context: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
-  plan_hash: inGrammar('adaptive-handoff', '--freeze-checked', '<plan> --json'),
-  governance_ack: inGrammar('adaptive-handoff', '--freeze-checked', '<plan> --json'),
+  // A plan_hash CAS is lost against an ALREADY-FROZEN plan (a child's authority/binding, a rebind
+  // replay). The re-read of a frozen plan's hash is the validator's resume check: it re-validates
+  // library + structure + hash and WRITES NOTHING, which is what "always a re-read verb, never a
+  // force" demands. The freeze verb would write, and writing is exactly what is refused here.
+  plan_hash: inGrammar('plan-validator', '--resume-check', '<plan> --json'),
+  // The ack covers the plan content that was governed, so a stale ack is cured by taking a FRESH
+  // hash — which is what `--freeze-checked` returns, without writing. This is the codebase's own
+  // shipped answer for governance_ack_stale ("re-run --freeze-checked to get a fresh hash, then
+  // --freeze --governance-ack <newHash>"); the flag it names is the validator's, not the handoff's.
+  governance_ack: inGrammar('plan-validator', '--freeze-checked', '<plan> --json'),
   parent_plan: inGrammar('replan', 'resume', '--project <P> --json'),
   parent_state: inGrammar('replan', 'resume', '--project <P> --json'),
   claim_root: inGrammar('replan', 'resume', '--project <P> --json'),
@@ -4417,9 +4436,456 @@ const REFUSAL_PAYLOAD_SCHEMAS = Object.freeze({
   }),
 });
 
+// ===========================================================================
+// THE CELL-KEYED WHY SLOT — the decomposition that lets the 176 condition-specific
+// operator templates be DELETED.
+//
+//   hint = FACT(payload)   pure field rendering ...................... DERIVED
+//        + WHY(cell)       the consequence the fact does not imply .... HAND-AUTHORED, O(cells)
+//        + ROUTE(payload)  the verb, as prose ........................ DERIVED
+//
+// The load-bearing measurement is that WHY is constant per CELL, not per condition. A
+// family hint that is constant per FAMILY can never carry ".mirror-tmp leftover" (the same
+// sentence has to serve a snapshot fault, a mirror fault and a leg-capture fault alike), so
+// the legacy tables survive it. A hint that is constant per CELL can, because
+// `running_set_opening_incomplete` / `_close_incomplete` / `_stale_member` are three
+// templates today and ONE cell — `kernel_write_failed/position` — tomorrow: their entire
+// difference is payload, which the FACT renders.
+//
+// A clause is authored ONLY where the fact does not already imply the consequence. Every
+// clause is forge-neutral (this file is byte-copied into every edition) and names NO verb —
+// the verb is the ROUTE slot's job, and a hand-written verb inside a clause is exactly the
+// drift the generated exit sentence exists to make impossible.
+// ===========================================================================
+
+// refusalScalar / refusalQuoted — the FIELD-PRESENCE GATE. A field the payload does not
+// carry renders NOTHING; there is no placeholder path, because a placeholder reads as a
+// measurement. NaN and non-finite numbers are absent by construction, never the string
+// "NaN"; objects and arrays are absent rather than stringified into nested nulls.
+function refusalScalar(value) {
+  if (typeof value === 'string') return value.trim() ? value : null;
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return null;
+}
+function refusalQuoted(value) {
+  const s = refusalScalar(value);
+  if (s === null) return null;
+  return typeof value === 'string' ? JSON.stringify(value) : s;
+}
+
+// --- the seven FACT renderers. Payload in, sentence out; nothing else is read. ---
+function refusalFactWriteFailed(p) {
+  const record = refusalScalar(p.record);
+  const target = refusalScalar(p.target);
+  const step = refusalScalar(p.step);
+  const at = refusalScalar(p.path);
+  const errno = refusalScalar(p.errno);
+  const blocked = refusalScalar(p.blocked_on);
+  const detail = refusalScalar(p.detail);
+  let s = 'The ' + (record ? record + ' record' : 'durable kernel') + ' write did not take';
+  if (target) s += ' (' + target + ')';
+  if (step) s += ' at step ' + step;
+  if (at) s += ' at ' + at;
+  if (errno) s += ': ' + errno;
+  if (blocked) s += ': ' + blocked + ' could not be computed';
+  if (detail) s += ': ' + detail;
+  return s + '.';
+}
+function refusalFactCasLost(p) {
+  const record = refusalScalar(p.record);
+  const field = refusalScalar(p.field);
+  const seam = refusalScalar(p.seam);
+  const expected = refusalQuoted(p.expected);
+  const found = refusalQuoted(p.found);
+  const legalNext = refusalScalar(p.legal_next);
+  let s = 'A compare-and-set on the ' + (record ? record + ' record' : 'kernel record') + ' lost';
+  if (field) s += ' on ' + field;
+  if (seam) s += ' at ' + seam;
+  if (expected && found) s += ': the transition demanded ' + expected + ' and found ' + found;
+  else if (expected) s += ': the transition demanded ' + expected;
+  else if (found) s += ': the record now reads ' + found;
+  s += '. Nothing was mutated';
+  if (legalNext) s += ', and the state on disk admits ' + legalNext;
+  return s + '.';
+}
+function refusalFactIntegrityBroken(p) {
+  const anchor = refusalScalar(p.anchor);
+  const kind = refusalScalar(p.kind);
+  const brokenAt = refusalScalar(p.broken_at);
+  const at = refusalScalar(p.path);
+  const epoch = refusalScalar(p.epoch);
+  let s = 'The ' + (anchor ? anchor + ' anchor' : 'kernel integrity anchor')
+    + ' failed its ' + (kind ? kind : 'integrity') + ' proof';
+  if (brokenAt) s += ' at ' + brokenAt;
+  if (at) s += ' (' + at + ')';
+  if (epoch) s += ' in epoch ' + epoch;
+  return s + '.';
+}
+function refusalFactLockHeld(p) {
+  const kind = refusalScalar(p.kind);
+  const holder = isPlainObject(p.holder) ? p.holder : {};
+  const sub = refusalScalar(holder.subcommand);
+  const pid = refusalScalar(holder.pid);
+  const host = refusalScalar(holder.host);
+  const occupying = refusalScalar(p.occupying_project);
+  let s = 'Another owner holds the ' + (kind ? kind : 'kernel') + ' lock';
+  const who = [];
+  if (sub) who.push(sub);
+  if (pid) who.push('pid ' + pid);
+  if (host) who.push('on ' + host);
+  if (who.length) s += ' (' + who.join(', ') + ')';
+  if (occupying) s += ', occupying project ' + occupying;
+  if (p.stale === true) s += ', and the hold is STALE';
+  else if (p.stale === false) s += ', and the holder is LIVE';
+  return s + '.';
+}
+function refusalFactEvidenceMissing(p) {
+  const recordKind = refusalScalar(p.record_kind);
+  const defect = refusalScalar(p.defect);
+  const expectedPath = refusalScalar(p.expected_path);
+  const nodeId = refusalScalar(p.node_id);
+  const role = refusalScalar(p.role);
+  // `absent` is this family's DEFINITIONAL predicate (the code is kernel_evidence_missing),
+  // not a placeholder standing in for an unmeasured field.
+  let s = 'The ' + (recordKind ? recordKind : 'evidence') + ' record this transition requires is '
+    + (defect ? defect : 'absent');
+  if (expectedPath) s += ' at ' + expectedPath;
+  if (nodeId) s += ' for node ' + nodeId;
+  if (role) s += ' (' + role + ')';
+  return s + '.';
+}
+function refusalFactSinkVerdict(p) {
+  const scope = refusalScalar(p.scope);
+  const findings = Array.isArray(p.findings) ? p.findings.filter(isPlainObject) : [];
+  const labels = [];
+  for (const f of findings) {
+    const kind = refusalScalar(f.kind);
+    if (!kind) continue;
+    // THE SUBTYPE IS THE FINDING HERE. `unattributed_paths` alone tells an operator nothing;
+    // which of the eight cures applies is carried entirely by the subtype.
+    const subtype = refusalScalar(f.subtype);
+    const label = subtype ? kind + '/' + subtype : kind;
+    if (labels.indexOf(label) < 0) labels.push(label);
+  }
+  const n = findings.length;
+  let s = 'The ' + (scope ? scope + ' ' : '') + 'sink refused with ' + n + ' finding' + (n === 1 ? '' : 's');
+  if (labels.length) s += ' (' + labels.join(', ') + ')';
+  return s + ', every precondition evaluated in ONE pass — this is the complete list, not the first failure.';
+}
+function refusalFactConsentRequired(p) {
+  const kind = refusalScalar(p.kind);
+  const nodeId = refusalScalar(p.node_id);
+  const ask = refusalScalar(p.ask);
+  const options = Array.isArray(p.options) ? p.options.map(refusalScalar).filter(Boolean) : [];
+  const resolution = refusalScalar(p.resolution_verb);
+  let s = 'This is a values call no script may make (' + (kind ? kind : 'consent') + ')';
+  if (nodeId) s += ' at node ' + nodeId;
+  if (ask) s += ': ' + ask;
+  if (options.length) s += ' — recorded options: ' + options.join(' | ');
+  if (resolution) s += '; the recorded resolution verb is ' + resolution;
+  return s + '.';
+}
+const REFUSAL_FACT_BY_CODE = Object.freeze({
+  kernel_write_failed: refusalFactWriteFailed,
+  kernel_cas_lost: refusalFactCasLost,
+  kernel_integrity_broken: refusalFactIntegrityBroken,
+  kernel_lock_held: refusalFactLockHeld,
+  kernel_evidence_missing: refusalFactEvidenceMissing,
+  sink_verdict: refusalFactSinkVerdict,
+  consent_required: refusalFactConsentRequired,
+});
+
+// refusalFact(code, payload) — the FACT clause. `null` for a code outside the enumerated
+// vocabulary (never a fabricated sentence). TOTAL: a non-object payload reads as empty.
+function refusalFact(code, payload) {
+  if (KERNEL_REFUSAL_VOCABULARY.indexOf(code) < 0) return null;
+  const render = REFUSAL_FACT_BY_CODE[code];
+  if (typeof render !== 'function') return null;
+  return render(isPlainObject(payload) ? payload : {});
+}
+
+// refusalCellKey(code, payload) — `${code}/${discriminatorValue}`, falling back to
+// `${code}/*` when the discriminator is ABSENT or carries a value the family does not
+// declare. Inventing a cell for an undeclared value is how a stale key becomes invisible to
+// the closure check, so both cases land on the ONE fallback key. TOTAL.
+function refusalCellKey(code, payload) {
+  if (KERNEL_REFUSAL_VOCABULARY.indexOf(code) < 0) return null;
+  const schema = REFUSAL_PAYLOAD_SCHEMAS[code];
+  const p = isPlainObject(payload) ? payload : {};
+  let value = null;
+  if (code === 'sink_verdict') {
+    // The declared discriminator is `findings[].kind`; the composite keys on its FIRST
+    // declared finding, and the unattributed subtype split belongs to the FACT, not the WHY.
+    const findings = Array.isArray(p.findings) ? p.findings : [];
+    for (const f of findings) {
+      if (isPlainObject(f) && typeof f.kind === 'string') { value = f.kind; break; }
+    }
+  } else {
+    const raw = p[schema.discriminator];
+    value = typeof raw === 'string' ? raw : null;
+  }
+  if (value === null || schema.values.indexOf(value) < 0) return code + '/*';
+  return code + '/' + value;
+}
+
+// REFUSAL_WHY — ONE CLAUSE PER CELL, keyed `${code}/${discriminatorValue}`. The `${code}/*`
+// row is the legal fallback refusalCellKey emits for a discriminator the family does not
+// declare; it does NOT satisfy a live cell (assertCellClosure proves that in both
+// directions), so it can never quietly close the map.
+const REFUSAL_WHY = Object.freeze({
+  // --- kernel_write_failed: nothing was recorded, so what is lost is the TRANSITION ---
+  'kernel_write_failed/plan': 'Nothing was stamped, so no node may open against this plan yet. A freeze '
+    + 'recomputes the same plan_hash from the same author-immutable content, which is why re-running it is '
+    + 'safe: it either completes the write or reports the same grammar errors again.',
+  'kernel_write_failed/position': 'A half-applied position leaves the ledger and the running set disagreeing '
+    + 'about which nodes are open, and can strand a staging tree (.mirror-tmp) or a partial baseline behind. '
+    + 'The recorded verb reconciles that pair and clears the residue rather than trusting either side.',
+  'kernel_write_failed/evidence': 'Evidence is the only durable account of what this node did, and the close '
+    + 'gate reads it — so until the write lands the node cannot close, and the work it describes is invisible '
+    + 'to every gate downstream.',
+  'kernel_write_failed/forge_chain': 'The forge chain is the last mile: this run\'s own commits are already '
+    + 'durable, so what did not land is the announcement, never the work. The run is resumable rather than '
+    + 'half-shipped, and nothing is published until the chain settles.',
+  'kernel_write_failed/*': 'A durable kernel write is all-or-nothing. A refused write records nothing, so the '
+    + 'transition is a no-op and the state you read before it is still the state on disk.',
+
+  // --- kernel_cas_lost: the record MOVED, and forcing it destroys the newer state ---
+  'kernel_cas_lost/ledger_row': 'The ledger row moved under this transition — another open, close or repair '
+    + 'already applied. Writing anyway would overwrite the newer row and strand whatever depends on it; the '
+    + 'ledger is the run\'s position, and hand-editing a row is never the recovery.',
+  'kernel_cas_lost/evidence_generation': 'The evidence generation advanced, so the record you are writing '
+    + 'belongs to an earlier open. Landing it now would attribute this open\'s work to a generation that has '
+    + 'already been read and judged.',
+  'kernel_cas_lost/review_receipt': 'A settled review receipt is immutable by design — it is the record later '
+    + 'gates cite — so a second write is refused rather than merged. The exit is a fresh attempt, never an '
+    + 'edit of the one already settled.',
+  'kernel_cas_lost/review_attempt': 'The review attempt already settled, so its verdict is part of this run\'s '
+    + 'history. Re-settling it would let a second verdict silently replace the one the plan routed on.',
+  'kernel_cas_lost/review_context': 'The review context identifies WHAT was reviewed. Two different contexts '
+    + 'under one identity would make every receipt that cites it ambiguous, so the collision is refused rather '
+    + 'than resolved by picking one.',
+  'kernel_cas_lost/plan_hash': 'The plan hash binds a record to the exact frozen plan it was made under, so a '
+    + 'mismatch means the two are describing different plans. Stamping the current hash over the record would '
+    + 'erase the only evidence that they ever diverged.',
+  'kernel_cas_lost/parent_plan': 'A re-plan epoch is claim-preserving: the parent plan and its ledger stay '
+    + 'byte-identical, because every committed epoch is retained and the child is attested against the parent '
+    + 'exactly as it was frozen. A parent that moved invalidates that attestation, not the child.',
+  'kernel_cas_lost/parent_state': 'The parent state moved while the epoch transition was in flight. Activating '
+    + 'the child now would bind it to a claim that no longer describes this run.',
+  'kernel_cas_lost/claim_root': 'The claim root is what makes this one run across every epoch. A root that has '
+    + 'moved means the folder in front of you and the claim you hold are no longer the same work, and every '
+    + 'later attribution would be made against the wrong lineage.',
+  'kernel_cas_lost/replan_source': 'The re-plan is prepared from a settled typed review outcome. If that source '
+    + 'moved, the child would be authored to answer a finding this run has since resolved differently.',
+  'kernel_cas_lost/governance_ack': 'The acknowledgement covers the exact plan content that was governed. The '
+    + 'plan was edited between the check and the freeze, so freezing now would ship a plan nobody approved under '
+    + 'the approval recorded for one they did.',
+  'kernel_cas_lost/*': 'A compare-and-set fires BEFORE any mutation, so this refusal is a pure no-op: the record '
+    + 'on disk is the newer one. Re-read it and take the verb that state admits — never force the write.',
+
+  // --- kernel_integrity_broken (R4): the deviation IS the evidence ---
+  'kernel_integrity_broken/hash_mismatch': 'The bytes no longer hash to what was recorded, so either the content '
+    + 'or the record moved. Re-stamping the hash would make the two agree again and destroy the only evidence '
+    + 'that they ever disagreed.',
+  'kernel_integrity_broken/chain_break': 'A back-link is gone, so the history can no longer be walked end to end. '
+    + 'Every gate downstream reads that chain, and appending past a break is what makes the gap permanently '
+    + 'unattributable.',
+  'kernel_integrity_broken/identity_mismatch': 'The record was made by a different identity than the one this '
+    + 'transition claims. That is exactly the shape a substituted writer or a replayed epoch produces, so '
+    + 're-deriving the identity would launder the signal instead of reading it.',
+  'kernel_integrity_broken/unattributed_delta': 'Content changed that no declared writer accounts for. An '
+    + 'unattributed delta is the one thing a review wall cannot certify, because there is no node whose evidence '
+    + 'covers it and no reviewer who was ever shown it.',
+  'kernel_integrity_broken/replay_binding': 'The binding was minted for a different open or a different node and '
+    + 're-presented here. A replay proves nothing about THIS transition, and accepting it would let one artifact '
+    + 'satisfy two gates.',
+  'kernel_integrity_broken/absent_anchor': 'The anchor this proof stands on is not there, so the proof cannot be '
+    + 'made either way. Absence is not a pass: an anchor that cannot be read is indistinguishable from one that '
+    + 'would have failed.',
+  'kernel_integrity_broken/schema_mismatch': 'The record does not have the shape its reader expects, so every '
+    + 'field read out of it is a guess. A reader that guesses here reports a verdict it never actually computed.',
+  'kernel_integrity_broken/noncanonical_bytes': 'The bytes are not in canonical form, so two honest readers can '
+    + 'hash them differently — which quietly turns every digest comparison downstream into a coin toss.',
+  'kernel_integrity_broken/last_copy_in_target': 'This would destroy the last surviving copy of a kernel record. '
+    + 'There is no undo past that point, and no later gate can reconstruct what it never saw.',
+  'kernel_integrity_broken/cycle': 'The transaction history refers back to itself, so there is no earlier state '
+    + 'to re-read and no order in which to replay it. A cyclic history cannot be repaired into a linear one — it '
+    + 'can only be discarded.',
+  'kernel_integrity_broken/*': 'The deviation IS the evidence here, so this class is NEVER auto-repaired. Do not '
+    + 're-stamp, re-derive or delete the anchor: each of those destroys the only record that it changed.',
+
+  // --- kernel_lock_held: another owner holds it; a lock is a claim, not a stale file ---
+  'kernel_lock_held/scheduler': 'Only one orchestrator may drive a project\'s scheduler at a time. The lock is a '
+    + 'claim on state, not a file to delete — unlinking it by hand is what lets two writers into the same ledger '
+    + '— so it is released by its owner finishing, or removed through the verb that probes liveness first.',
+  'kernel_lock_held/replan_fence': 'A re-plan epoch fences ordinary mutation for exactly as long as the transition '
+    + 'is open, so the parent plan and ledger stay byte-identical while the child is authored. Writing through the '
+    + 'fence is what produces a child attested against a parent that already moved.',
+  'kernel_lock_held/project_claim': 'This project folder already holds another run\'s kernel records. Two claims in '
+    + 'one folder overwrite each other\'s ledger and evidence, so the occupying run is finished, resumed or '
+    + 'discarded — never written over.',
+  'kernel_lock_held/*': 'Another owner holds this resource, so the write would race a live writer. A held lock is a '
+    + 'claim on state rather than leftover residue: it is released by its owner, never by hand.',
+
+  // --- kernel_evidence_missing: ABSENCE only; form is normalized on write ---
+  'kernel_evidence_missing/node_evidence': 'A node closes on its evidence, so with the record absent there is '
+    + 'nothing for the close gate to read and the work cannot be attributed to any writer. Record it from the run '
+    + 'that produced it — a file authored after the fact restates the self-description the record exists to '
+    + 'replace.',
+  'kernel_evidence_missing/selection_record': 'An orchestrator-originated claim is auditable only through its '
+    + 'selection record. Without one there is no durable account of WHY this target was chosen, so the claim is '
+    + 'refused with zero side effects rather than made unaccountably.',
+  'kernel_evidence_missing/final_fix_register': 'The register is the only record that a finalize-time fix entered '
+    + 'the candidate deliberately, and it is written by the commit verb alone. A missing entry means the change has '
+    + 'no owner at the one boundary past which nothing can attribute it — do not delete the changed files, that '
+    + 'answers a different fault.',
+  'kernel_evidence_missing/*': 'The content this record would have carried no longer exists to be written, so '
+    + 'proceeding loses it irrecoverably. Token FORM is never refused here (wrapping, ordering and whitespace are '
+    + 'normalized on write), so absence is the whole finding.',
+
+  // --- sink_verdict (L2): the composite verdict at the pristine boundary ---
+  'sink_verdict/tests_red': 'The sink is the pristine pre-mainline boundary, so a red chain there is this run\'s '
+    + 'own verdict on itself rather than a flake to re-roll. Nothing merges while it stands, and the verdict is '
+    + 'owned inside the workflow — no external pipeline can lift it.',
+  'sink_verdict/unattributed_paths': 'Paths changed that no node\'s declared write set covers, so no reviewer ever '
+    + 'saw them under any authority. The subtype names which cure applies: discard the stray write, attribute it '
+    + 'onto a surface and re-review it, or reshape the spine when the plan holds no authority that could certify '
+    + 'it. Writing another run\'s archive has no cure at all.',
+  'sink_verdict/unreviewed_change': 'A change reached the sink with no settled reviewing authority over it. The '
+    + 'legal cure is ADDING that authority, which is a spine change: a node-level fix cannot conjure a reviewer '
+    + 'the frozen plan never contained.',
+  'sink_verdict/unsettled_review': 'A review attempt is still open, so this run has a verdict pending on work it '
+    + 'is about to ship. An unsettled attempt is not a silent pass — the finding has to reach an owner before the '
+    + 'sink can read it as resolved.',
+  'sink_verdict/review_wall_absent': 'No review wall post-dominates this work, so nothing in the frozen shape was '
+    + 'ever obliged to certify it. That is a property of the plan rather than of the code, and only a reshape adds '
+    + 'it.',
+  'sink_verdict/sink_already_started': 'The sink has already taken an irreversible step, so this run\'s history is '
+    + 'no longer editable. Recovery past this point is a follow-up, never a rewrite of what shipped.',
+  'sink_verdict/missing_consent': 'An irreversible or value-laden call is waiting on a decision no script may make. '
+    + 'The machine has taken this as far as facts go; the remaining choice belongs to a human.',
+  'sink_verdict/forge_chain_unsettled': 'The local work is committed but the forge-side handoff has not settled — '
+    + 'the branch, the archive or the label is still mid-flight. The run is resumable rather than half-shipped, and '
+    + 'nothing is published until the chain closes.',
+  'sink_verdict/writer_identity_swapped': 'The identity that wrote the candidate is not the one this run recorded. '
+    + 'That is the shape a substituted writer produces, so it is investigated rather than re-stamped.',
+  'sink_verdict/candidate_drift': 'The candidate moved after it was certified, so every receipt taken over the old '
+    + 'bytes now describes something other than what would ship. Re-reading the whole set is the only way to learn '
+    + 'what is still true.',
+  'sink_verdict/final_fix_production_surface': 'A finalize-time fix touched production behavior. That lane admits '
+    + 'production surfaces only behind a settled PASS review over the POST-FIX candidate; if no authority in this '
+    + 'plan can certify the change, the shape itself is refuted and that is the exit to take rather than widening '
+    + 'this one.',
+  'sink_verdict/final_fix_register_unverified': 'The register that would attribute this fix does not verify, so it '
+    + 'cannot widen the attributed set. It is written by the commit verb alone, so a mismatch means it was edited '
+    + 'out of band — and deleting the changed files answers a different fault than the one being reported.',
+  'sink_verdict/*': 'Every precondition was evaluated in ONE pass, so this is the complete list rather than the '
+    + 'first failure. Each finding carries its own remedy, and the composite is re-read in full afterwards rather '
+    + 'than resumed at the one you fixed.',
+
+  // --- consent_required (A3): machines decide facts; humans decide values ---
+  'consent_required/halt_fence': 'A durable halt marker fences every mutating verb until it is cleared, and '
+    + 'clearing it asserts that the cause is resolved — which is why no script clears its own halt.',
+  'consent_required/acceptance_change': 'The acceptance surface is what this run agreed to deliver. Changing it '
+    + 'mid-run redefines success after the fact, so it is a standing call for whoever set it, never a repair the '
+    + 'plan may make on its own behalf.',
+  'consent_required/budget_exhausted': 'The automatic re-plan budget is spent. Extending it is a judgment about '
+    + 'whether this run is still converging, and the ceiling rises one slot at a time so that judgment is made '
+    + 'deliberately rather than absorbed.',
+  'consent_required/turn_reference_conflict': 'The consent reference offered has already been spent on an earlier '
+    + 'turn. Reusing it would let one approval authorize a second, different decision, so the reference is refused '
+    + 'rather than re-counted.',
+  'consent_required/disambiguation': 'The evidence admits more than one reading, and choosing silently is how a run '
+    + 'does the wrong work confidently. Nothing was claimed and no state was written, so answering costs one round '
+    + 'trip and nothing else.',
+  'consent_required/schema_upgrade': 'Upgrading a durable record\'s schema rewrites history this run\'s gates have '
+    + 'already read. It is reversible only by restoring the old bytes, so the call belongs to a human before '
+    + 'anything is rewritten.',
+  'consent_required/*': 'This is a values call, and value, standing and irreversible decisions route to a human '
+    + 'rather than being resolved by a script. Machines decide facts; humans decide values.',
+});
+
+// assertCellClosure() — BIDIRECTIONAL, and it RETURNS rather than throws.
+//   missing — a live cell with no WHY clause (the slot silently renders nothing).
+//   stale   — a WHY key that is not a live cell (a renamed discriminator left its clause behind).
+// One direction alone lets the map rot invisibly: a renamed value would read green forever while
+// the live cell fell back to nothing. The `${code}/*` fallback key is LEGAL and never stale, but it
+// does NOT satisfy a live cell — otherwise seven wildcards would close the whole map and the
+// cell-keyed slot would be a slot in name only.
+function assertCellClosure() {
+  const live = new Set();
+  const wildcard = new Set();
+  for (const code of KERNEL_REFUSAL_VOCABULARY) {
+    wildcard.add(code + '/*');
+    const schema = REFUSAL_PAYLOAD_SCHEMAS[code];
+    if (!schema || !Array.isArray(schema.values)) continue;
+    for (const value of schema.values) live.add(code + '/' + value);
+  }
+  const have = new Set(isPlainObject(REFUSAL_WHY) ? Object.keys(REFUSAL_WHY) : []);
+  const missing = [], stale = [];
+  for (const key of live) if (!have.has(key)) missing.push(key);
+  for (const key of have) if (!live.has(key) && !wildcard.has(key)) stale.push(key);
+  missing.sort();
+  stale.sort();
+  return { ok: missing.length === 0 && stale.length === 0, missing: missing, stale: stale };
+}
+
+// routeProse(route) — THE GENERATED EXIT SENTENCE. Every hint ends with exactly this, which is
+// the structural reason a hint can never contradict its own route: hand-written prose drifts from
+// the verb the machine resolved and nothing notices, but generated prose cannot drift from its own
+// input. TOTAL, deterministic, and the EMPTY STRING for an absent route — the deliberate silences
+// (no verb resolves the write of another run's archive) must render no exit at all, because naming
+// one would misdirect.
+//
+// FORGE-NEUTRAL: it names a SCRIPT ID and a bare verb, never an edition filename, because this text
+// is byte-copied into every edition and a filename would be wrong in three of four.
+function routeProse(route) {
+  if (!isPlainObject(route)) return '';
+  const verb = typeof route.verb === 'string' && route.verb.trim() ? route.verb : '';
+  if (!verb) return '';
+  if (!route.script) {
+    // Terminal classes. The resolution verb rides in the PAYLOAD, never in the route, so the
+    // sentence describes the EXIT rather than naming a command that does not exist.
+    if (verb === 'consent') {
+      return 'Exit: consent — put the decision to the human and record the answer before any further write.';
+    }
+    if (verb === 'environment') {
+      const args = isPlainObject(route.args) ? route.args : {};
+      if (args.blocker === 'live_holder') {
+        return 'Exit: environment — wait for the live holder to finish, or resume the run that owns it; the hold '
+          + 'is released by its owner, never by hand.';
+      }
+      return 'Exit: environment — clear the blocker outside the runtime, then re-run the transition that refused.';
+    }
+    return '';
+  }
+  const args = typeof route.args === 'string' && route.args.trim() ? ' ' + route.args.trim() : '';
+  return 'Exit: ' + route.script + ' ' + verb + args + '.';
+}
+
+// composeFamilyRefusalHint(code, payload) — THE THREE SLOTS, JOINED. This is the ONE body every
+// registry `hint` delegates to; it is a real function declaration, defined above, and every helper
+// it calls is defined in this file. (An earlier attempt at this slot delegated to a helper nobody
+// wrote: every hint threw ReferenceError, `composeOperatorHint`'s catch degraded it to the caller's
+// generic string, and 541 assertions passed over a dead layer. The sweep now calls each hint
+// DIRECTLY off the registry, which is the check that would have caught it.)
+function composeFamilyRefusalHint(code, payload) {
+  const p = isPlainObject(payload) ? payload : {};
+  const key = refusalCellKey(code, p);
+  const why = key && typeof REFUSAL_WHY[key] === 'string' ? REFUSAL_WHY[key] : '';
+  const parts = [refusalFact(code, p), why, routeProse(resolveRoute(code, p))];
+  return parts.filter(s => typeof s === 'string' && s.trim()).join(' ');
+}
+
 // ---------------------------------------------------------------------------
 // The registry — SEVEN rows. `route` and `hint` are FUNCTIONS of the payload, never
 // tables of incidents. Hints are forge-neutral: they name VERBS, never script paths.
+//
+// Every `hint` is now FACT + WHY(cell) + ROUTE. The bodies are one line each BECAUSE the
+// variation lives in the payload and the cell, which is exactly what makes the 176 legacy
+// condition-specific templates deletable: a hint that is constant per family cannot carry a
+// per-condition detail, and a hint that is constant per CELL can.
 // ---------------------------------------------------------------------------
 const KERNEL_REFUSAL_REGISTRY = Object.freeze({
   kernel_write_failed: Object.freeze({
@@ -4432,29 +4898,22 @@ const KERNEL_REFUSAL_REGISTRY = Object.freeze({
       if (p.retry_verb && p.retry_script) return inGrammar(p.retry_script, p.retry_verb, p.retry_args);
       return WRITE_FAILED_RETRY_BY_RECORD[p.record] || null;
     },
-    hint: (p) => 'A durable ' + (p.record || 'kernel') + ' write did not take'
-      + (p.target ? ' (' + p.target + ')' : '') + (p.step ? ' at step ' + p.step : '')
-      + (p.errno ? ' — errno ' + p.errno : (p.blocked_on ? ' — ' + p.blocked_on + ' could not be computed' : ''))
-      + '. Nothing was recorded, so the transition is a no-op: clear the blocker, then re-run the recorded retry verb — it is idempotent.',
+    hint: (p) => composeFamilyRefusalHint('kernel_write_failed', p),
   }),
   kernel_cas_lost: Object.freeze({
     locus: 'L1', auto_remediable: true,
     payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_cas_lost,
     route: (p) => CAS_ROUTE_BY_RECORD[p.record] || null,
-    hint: (p) => 'A compare-and-set on the ' + (p.record || 'kernel record') + ' lost'
-      + (p.field ? ' on ' + p.field : '') + ': the transition demanded ' + JSON.stringify(p.expected == null ? null : p.expected)
-      + ' and found ' + JSON.stringify(p.found == null ? null : p.found)
-      + '. Nothing was mutated. RE-READ the record — never force the write — then take '
-      + (p.legal_next ? 'the verb the current state admits (' + p.legal_next + ').' : 'the verb the current state admits.'),
+    // The `expected`/`found` pair is FIELD-PRESENCE GATED now. Rendering
+    // `JSON.stringify(p.expected == null ? null : p.expected)` printed "demanded null and found
+    // null" from a payload carrying neither — four words of fabricated measurement.
+    hint: (p) => composeFamilyRefusalHint('kernel_cas_lost', p),
   }),
   kernel_integrity_broken: Object.freeze({
     locus: 'L1', auto_remediable: false,
     payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_integrity_broken,
     route: (p) => INTEGRITY_ROUTE_BY_KIND[p.kind] || null,
-    hint: (p) => 'The ' + (p.anchor || 'kernel') + ' anchor failed its ' + (p.kind || 'integrity')
-      + ' proof' + (p.broken_at ? ' at ' + p.broken_at : '') + '. The deviation IS the evidence, so this is '
-      + 'NEVER auto-repaired: investigate or discard. Do not re-stamp, re-derive or delete the anchor — '
-      + 'that destroys the only record that it changed.',
+    hint: (p) => composeFamilyRefusalHint('kernel_integrity_broken', p),
   }),
   kernel_lock_held: Object.freeze({
     locus: 'L1', auto_remediable: true,
@@ -4465,19 +4924,16 @@ const KERNEL_REFUSAL_REGISTRY = Object.freeze({
       if (p.stale) return inGrammar('adaptive-node', 'unlock', '--project <P> --holder <pid|none> --json');
       return terminalRoute('environment', { blocker: 'live_holder', wait_on: (p.holder && p.holder.pid) || null });
     },
-    hint: (p) => 'Another owner holds the ' + (p.kind || 'scheduler') + ' resource'
-      + (p.holder && p.holder.pid ? ' (pid ' + p.holder.pid + (p.holder.subcommand ? ', ' + p.holder.subcommand : '') + ')' : '')
-      + (p.stale ? ' and the hold is STALE — remove it explicitly through the unlock verb (it refuses while the holder is live, so it cannot double-acquire).'
-        : ' and the holder is LIVE — wait for it, or resume the run that owns it. Never unlink the lock by hand.'),
+    // `stale` is the schema's declared SECONDARY discriminator: it selects the ROUTE arm and is
+    // rendered by the FACT, but the WHY key stays `${code}/${kind}` — the secondary split belongs
+    // to what happened, not to why it matters.
+    hint: (p) => composeFamilyRefusalHint('kernel_lock_held', p),
   }),
   kernel_evidence_missing: Object.freeze({
     locus: 'L1', auto_remediable: true,
     payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_evidence_missing,
     route: (p) => EVIDENCE_ROUTE_BY_RECORD_KIND[p.record_kind] || null,
-    hint: (p) => 'The ' + (p.record_kind || 'evidence') + ' record required by this transition is '
-      + (p.defect || 'absent') + (p.expected_path ? ' at ' + p.expected_path : '')
-      + '. Proceeding would lose it irrecoverably. Record it, then re-run the transition. '
-      + 'Token FORM is never refused — it is normalized on write.',
+    hint: (p) => composeFamilyRefusalHint('kernel_evidence_missing', p),
   }),
   sink_verdict: Object.freeze({
     locus: 'L2', auto_remediable: true,
@@ -4486,23 +4942,16 @@ const KERNEL_REFUSAL_REGISTRY = Object.freeze({
     // short-circuit, so following the route can never dead-end. Each finding carries its
     // own remedy route alongside.
     route: () => inGrammar('claim', 'finalize', '--check --project <P> --json'),
-    hint: (p) => {
-      const n = Array.isArray(p.findings) ? p.findings.length : 0;
-      const kinds = Array.isArray(p.findings) ? Array.from(new Set(p.findings.map(f => f && f.kind).filter(Boolean))).join(', ') : '';
-      return 'The ' + (p.scope || 'plan') + ' sink refused with ' + n + ' finding'
-        + (n === 1 ? '' : 's') + (kinds ? ' (' + kinds + ')' : '')
-        + '. Every precondition was evaluated in ONE pass — this is the complete list, not the first failure. '
-        + 'Clear each finding through its own route, then re-read them all again.';
-    },
+    // The FACT now renders each finding as `kind/subtype`. Rendering the kind alone dropped the
+    // field that says what actually happened: eight distinct `unattributed_paths` cells, with
+    // eight different cures, all read out as the same four words.
+    hint: (p) => composeFamilyRefusalHint('sink_verdict', p),
   }),
   consent_required: Object.freeze({
     locus: 'A3', auto_remediable: false,
     payload_schema: REFUSAL_PAYLOAD_SCHEMAS.consent_required,
     route: () => terminalRoute('consent', {}),
-    hint: (p) => 'This is a values call no script may make (' + (p.kind || 'consent') + ')'
-      + (p.ask ? ': ' + p.ask : '') + '. Put the decision to the human'
-      + (Array.isArray(p.options) && p.options.length ? ' with the recorded options (' + p.options.join(' | ') + ')' : '')
-      + (p.resolution_verb ? ', then resolve it with: ' + p.resolution_verb : '') + '.',
+    hint: (p) => composeFamilyRefusalHint('consent_required', p),
   }),
 });
 
@@ -4826,6 +5275,24 @@ function deriveDeviationRoutes() {
 //
 // The middle rung is the fold's actual win: the generic fallback used to fire for every
 // emitted code with no template, and a classified code now gets its family's hint instead.
+//
+// THE FAMILY-HINT RUNG IS NOT WRAPPED IN A CATCH, AND THAT IS THE POINT. A bare
+// `catch (_) { /* fall through */ }` around `row.hint(merged)` conflates two categories the
+// operator needs told apart:
+//
+//   * a PROGRAMMING ERROR (ReferenceError, TypeError — a helper that was never written, a
+//     renamed export, a typo). Falling back cannot recover it, and degrading it to the generic
+//     string destroys the only signal that the layer is dead. That is not hypothetical: an
+//     earlier attempt at the WHY slot deleted all seven hint bodies for a helper it never wrote,
+//     every hint threw, this catch swallowed all seven, and 541 assertions passed over a corpse.
+//   * a PAYLOAD IT CANNOT RENDER. This one IS recoverable, and the generic fallback is right.
+//
+// A bare catch cannot distinguish them, so it optimises for the wrong one: it guarantees the
+// recoverable case never inconveniences anyone at the price of guaranteeing the unrecoverable
+// case is never reported — a fail-OPEN guard in the middle of a fail-closed kernel. The split is
+// therefore IN BAND: a hint signals "I cannot render this" by returning null / '' (which falls
+// through below exactly as before), and anything THROWN propagates. "Cannot render" is a value;
+// "is broken" is an exception; the two stop being the same event.
 // ---------------------------------------------------------------------------
 function composeOperatorHint(reason, ctx, legacyTable, genericFallback) {
   const safeCtx = isPlainObject(ctx) ? ctx : {};
@@ -4839,15 +5306,15 @@ function composeOperatorHint(reason, ctx, legacyTable, genericFallback) {
   const classified = classifyRefusalCondition(reason);
   if (classified && classified.family) {
     const row = KERNEL_REFUSAL_REGISTRY[classified.family];
-    if (row) {
-      try {
-        const merged = Object.assign({}, classified.patch, safeCtx);
-        for (const key of Object.keys(classified.patch)) {
-          if (safeCtx[key] == null) merged[key] = classified.patch[key];
-        }
-        const out = row.hint(merged);
-        if (typeof out === 'string' && out.trim()) return out;
-      } catch (_) { /* fall through to the generic fallback */ }
+    if (row && typeof row.hint === 'function') {
+      const merged = Object.assign({}, classified.patch, safeCtx);
+      for (const key of Object.keys(classified.patch)) {
+        if (safeCtx[key] == null) merged[key] = classified.patch[key];
+      }
+      // NO CATCH — see the header. An unrenderable payload returns null/'' and falls through;
+      // a thrown error is a dead layer and must reach the caller.
+      const out = row.hint(merged);
+      if (typeof out === 'string' && out.trim()) return out;
     }
   }
   return genericFallback;
@@ -5341,6 +5808,13 @@ module.exports = {
   routeKey,
   resolveRoute,
   resolveSinkFindingRoute,
+  // The cell-keyed WHY slot: hint = FACT(payload) + WHY(cell) + ROUTE(payload). REFUSAL_WHY is the
+  // ONE hand-authored table (O(cells), not O(conditions)); everything else here is derived.
+  REFUSAL_WHY,
+  refusalCellKey,
+  assertCellClosure,
+  routeProse,
+  refusalFact,
   validateRefusalPayload,
   classifyRefusalCondition,
   stampRefusalEnvelope,
