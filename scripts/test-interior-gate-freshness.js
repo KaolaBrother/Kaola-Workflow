@@ -1161,6 +1161,171 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
   } finally { fs.rmSync(tmp8, { recursive: true, force: true }); }
 }
 
+// ---- 9. whole-candidate freshness keys on the RECORDED gate_effect, not a re-derived gate mode ----
+//
+// Block 8 exempted the investigation gate by RE-DERIVING its mode from the plan view at
+// --verdict-check time. That derivation is a second opinion about a fact the settle transaction
+// already RECORDED: the normalized receipt carries `gate_effect` (and `certifier_digest`), written
+// once from the same deriveGateEffect the runtime used at dispatch. Two views of one fact is the
+// generator; every divergence between them is a new wedge or a new hole. The rule is the recorded
+// one: freshness binds a receipt if and only if THAT RECEIPT certified producers.
+//
+// The 2x2 below is the whole contract, and BOTH diagonals move:
+//
+//   current derivation | recorded gate_effect | today            | required
+//   -------------------|----------------------|------------------|-------------------------
+//   change_gate        | none                 | REFUSED stale    | must NOT refuse  (over-refusal: the finalize wedge)
+//   change_gate        | pass                 | refused stale    | stays refused
+//   investigation      | pass                 | ACCEPTED         | must refuse stale (under-refusal: the laundering hole)
+//   investigation      | none                 | accepted         | stays accepted
+//
+// The two off-diagonal cells are not hypothetical. `checkSchema2One` re-derives from
+// buildPlanView (the FREEZE view); the runtime recorded the effect from the view it was dispatched
+// under. A milestone that re-expands a producer upstream of a settled skeptic moves the derivation
+// under a receipt that can never change — cell 1 wedges finalization forever, cell 3 silently
+// retires the staleness wall on a gate that really did certify.
+//
+// Driven by DIRECT CALL on verifyVerdictBlock with an injected readCache + computeCandidateDigest:
+// the divergence is the point, and no honest end-to-end run can manufacture it (that is exactly
+// why the defect is invisible to the runtime suites). `code_certifier: none` keeps
+// interiorSurfaceFresh out of the picture — with no final certifier it returns false immediately,
+// so the ONLY thing that can carry or refuse the gate here is the freshness rule under test.
+{
+  const tag = '834-freshness';
+  const planValidator = require('./kaola-workflow-plan-validator');
+  const SEALED = 'a'.repeat(64);      // the candidate the receipt sealed against
+  const CURRENT = 'b'.repeat(64);     // the candidate the tree carries now (whole-candidate stale)
+  const CTX = 'c'.repeat(64);
+  const BEH = 'd'.repeat(64);
+  const PROF = 'e'.repeat(64);
+
+  const buildPlan = nodeRows => [
+    '# Workflow Plan — recorded-gate-effect freshness', '',
+    '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+    'validation_command: node --check lib/impl.js', 'validation_timeout_minutes: 5', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|', ...nodeRows, '',
+    '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
+    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| writer | complete |', '| probe | complete |', '| finalize | pending |', '',
+  ].join('\n') + '\n';
+
+  // deriveGateMode(probe) === 'change_gate': a change producer (writer) reaches probe, and probe
+  // reaches the sink.
+  const CHANGE_GATE_ROWS = [
+    '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
+    '| probe | adversarial-verifier | writer | — | 1 | sequence | probe-change | impl-surface | sequence | writer |',
+    '| finalize | finalize | probe | — | 1 | sequence | — | — | — | — |',
+  ];
+  // deriveGateMode(probe) === 'investigation': nothing upstream of probe produces a change.
+  const INVESTIGATION_ROWS = [
+    '| probe | adversarial-verifier | — | — | 1 | sequence | probe-change | impl-surface | sequence | — |',
+    '| writer | tdd-guide | probe | lib/impl.js | 1 | sequence | — | — | — | — |',
+    '| finalize | finalize | writer | — | 1 | sequence | — | — | — | — |',
+  ];
+
+  // The recorded receipt, exactly as writeSchema2ReviewReceipt persists it. `gate_effect` and
+  // `certifier_digest` are the RECORDED pair the subtraction reads: an investigation dispatch
+  // records ('none', null); a change-gate dispatch records ('pass'/'fail', <sealed digest>).
+  const recordedReceipt = (gateEffect, certifierDigest) => JSON.stringify({
+    schema_version: 2, contract_version: 2, node_id: 'probe',
+    review_context_hash: CTX, behavior_contract_hash: BEH, resolved_profile_hash: PROF,
+    candidate_digest: SEALED, execution_status: 'complete', domain_outcome: 'not_refuted',
+    gate_effect: gateEffect, surface: 'impl-surface', findings: [], resolutions: [],
+    blocking_findings: 0, validation_vectors: [], certifier_digest: certifierDigest,
+    raw_evidence_sha256: 'f'.repeat(64),
+  });
+  const recordedEvidence = recordedMode => [
+    'evidence-binding: probe nonce834freshness', 'contract_version: 2',
+    'review_context_hash: ' + CTX, 'behavior_contract_hash: ' + BEH,
+    'resolved_profile_hash: ' + PROF, 'candidate_digest: ' + SEALED,
+    'domain_outcome: not_refuted', 'claim_outcome: not_refuted', 'gate_mode: ' + recordedMode,
+    'gate_claim: probe-change', 'gate_surface: impl-surface', 'gate_aggregation: sequence', '',
+  ].join('\n');
+
+  const verdictFor = (nodeRows, recordedMode, gateEffect, certifierDigest) => {
+    const cache = {
+      'probe.md': recordedEvidence(recordedMode),
+      ['review-receipts/' + CTX + '/probe.json']: recordedReceipt(gateEffect, certifierDigest),
+    };
+    return planValidator.verifyVerdictBlock(buildPlan(nodeRows), {
+      readCache: name => (name in cache ? cache[name] : null),
+      globCache: () => [],
+      computeCandidateDigest: () => CURRENT,
+    });
+  };
+  const staleRefused = out => !!(out && Array.isArray(out.failures)
+    && out.failures.some(f => f && f.nodeId === 'probe' && /stale/.test(String(f.reason || ''))));
+
+  // NON-VACUITY: the fixture really is whole-candidate stale, and the derivations really do differ
+  // from the recorded facts. Without this the four cells below could all be passing for free.
+  {
+    const changeMode = planValidator.buildPlanView(buildPlan(CHANGE_GATE_ROWS));
+    const investMode = planValidator.buildPlanView(buildPlan(INVESTIGATION_ROWS));
+    const schema = require('./kaola-workflow-adaptive-schema');
+    assert(schema.deriveGateMode(changeMode, changeMode.nodes.find(n => n.id === 'probe')) === 'change_gate',
+      tag + ' NON-VACUITY: the change-gate fixture really re-derives change_gate');
+    assert(schema.deriveGateMode(investMode, investMode.nodes.find(n => n.id === 'probe')) === 'investigation',
+      tag + ' NON-VACUITY: the investigation fixture really re-derives investigation');
+    assert(SEALED !== CURRENT,
+      tag + ' NON-VACUITY: the receipt is sealed against a DIFFERENT candidate than the tree carries');
+  }
+
+  // CELL 1 (RED) — the over-refusal. The receipt records gate_effect: none, i.e. it certified
+  // NOTHING; the current plan view re-derives change_gate. Whole-candidate freshness has no
+  // launderable meaning over a receipt that certifies nothing, and no scoped arm can rescue it
+  // (there is no certified producer slice), so this cell is a permanent finalize wedge today.
+  {
+    const out = verdictFor(CHANGE_GATE_ROWS, 'investigation', 'none', null);
+    assert(!staleRefused(out),
+      tag + ' CELL-1: a receipt RECORDING gate_effect "none" certifies nothing and must NEVER be '
+      + 'refused for whole-candidate staleness, however the current plan view re-derives its mode. '
+      + 'Freshness binds the RECORD, not a second opinion about it. Got '
+      + JSON.stringify(out && out.failures));
+    assert(out && out.ok === true,
+      tag + ' CELL-1: ...so the verdict block passes instead of wedging finalization, got '
+      + JSON.stringify({ ok: out && out.ok, failures: out && out.failures }));
+  }
+
+  // CELL 2 (must STAY refused) — the honest certifier. Recorded gate_effect: pass with a bound
+  // certifier_digest: this receipt DID certify producers, its candidate has moved, and nothing about
+  // trusting the record may relax that. This is the wall the subtraction must not knock down.
+  {
+    const out = verdictFor(CHANGE_GATE_ROWS, 'change_gate', 'pass', SEALED);
+    assert(staleRefused(out),
+      tag + ' CELL-2 (must stay refused): a receipt RECORDING a certifying gate_effect is still '
+      + 'refused stale once the candidate moves — trusting the record never widens what may pass, '
+      + 'got ' + JSON.stringify({ ok: out && out.ok, failures: out && out.failures }));
+  }
+
+  // CELL 3 (RED) — the under-refusal, and the reason this is not a pure relaxation. The receipt
+  // RECORDS gate_effect: pass over a sealed candidate (it certified producers), while the current
+  // plan view re-derives `investigation` and therefore hands it a free pass today. Any shape that
+  // moves the derivation — a re-expansion, a re-plan, an edited dependency column — silently
+  // retires the staleness wall on a gate that really did certify. Reading the record closes it.
+  {
+    const out = verdictFor(INVESTIGATION_ROWS, 'change_gate', 'pass', SEALED);
+    assert(staleRefused(out),
+      tag + ' CELL-3: a receipt RECORDING a certifying gate_effect must be refused stale even when '
+      + 'the CURRENT plan view re-derives `investigation` — the derived mode may not hand a real '
+      + 'certifier a staleness exemption, got '
+      + JSON.stringify({ ok: out && out.ok, failures: out && out.failures }));
+  }
+
+  // CELL 4 (must STAY accepted) — the #831 site-5 shape block 8 pins end-to-end, restated here on
+  // the recorded fact so the exemption survives the rewrite for the RIGHT reason.
+  {
+    const out = verdictFor(INVESTIGATION_ROWS, 'investigation', 'none', null);
+    assert(!staleRefused(out) && out && out.ok === true,
+      tag + ' CELL-4 (must stay accepted): an investigation receipt recording gate_effect "none" '
+      + 'still finalizes cleanly, got ' + JSON.stringify({ ok: out && out.ok, failures: out && out.failures }));
+  }
+}
+
 if (failed) {
   console.error(`\ninterior-gate freshness test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
