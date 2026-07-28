@@ -202,6 +202,33 @@ rejected by construction (it would violate P3). This also answers the standing q
 "is a state machine enough?": *as the durable contract, yes — this one; as police, no
 machine is needed at all.*
 
+### Every refusal names its exit — the route contract
+
+A refusal that fires without telling the agent the way out is a wedge with a label. The
+current state does not guarantee an exit: three per-script `OPERATOR_HINT_REGISTRY`
+tables coexist with five CLIs that decorate nothing, exactly one typed `route:` field
+exists in the codebase, and one shipped hint is circular (it names a precondition its
+own sibling mechanism destroyed). Three mechanisms make "every refusal has a way
+through" structural rather than prose discipline:
+
+1. **A typed `route` on every refusal envelope.** Each L1/L2 refusal carries
+   `route: {verb, args-template}` from a **closed vocabulary**: an in-grammar verb (the
+   next legal subcommand with its arguments), `consent` (the A3 valve — a human
+   decides), or `environment` (the blocker is outside the runtime: disk, forge,
+   network). Prose `operator_hint` remains as commentary; the route is the
+   machine-readable exit. R4 refusals route to investigation/discard verbs, never to an
+   auto-repair — the signal must not be laundered.
+2. **One registry.** The three per-script hint tables unify into a single kernel table
+   keyed by reason code: `{route, hint}`. This is feasible *only after* the census
+   shrinks to ~L1+L2 size — at 459 codes a unified table would be one more hand-kept
+   compliance mirror of the kind #833 subtracts.
+3. **The registry sweep — R2 generalized.** A suite walks every registered code:
+   provoke the refusal, follow its recorded route, arrive green. A route that dead-ends
+   fails the sweep, so the #840 class (route to a dead verb) and the circular-hint class
+   become build-time failures instead of post-release audit findings. Enforcement is
+   default-on with an exempt list carrying a one-line reason per entry — never an
+   opt-in allowlist.
+
 ### The parallel structure, retained — and mechanically strengthened (T9)
 
 "Parallel by default; serial requires evidence" is not carried over as a custom — it is
@@ -322,7 +349,9 @@ one-rule-one-wording; the single adaptive path.
   a violation of T11 to be hunted, not tolerated.
 - **P6 — Drawn-machine exhaustiveness.** Every reachable run condition appears in the
   transition table with a named exit; a walkthrough scenario asserts no reachable
-  condition lacks one (the mechanical form of "no undeclared states").
+  condition lacks one (the mechanical form of "no undeclared states"). The route
+  contract's registry sweep is its per-refusal refinement: every surviving reason code
+  is walked refusal → route → green, so an exit-less refusal cannot ship.
 
 ## Risks
 
