@@ -1121,6 +1121,389 @@ scenario(() => {
   } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
 });
 
+// ===========================================================================
+// #839 — THE POST-DISCHARGE RE-EXPANSION WINDOW. #827's projection closes the straight-line
+// post-discharge routing case, but its OWN designed follow-on re-opens the same hole one step later.
+// `route-findings` resolves an interior-owned finding to `route: reexpand-open`; `reexpand-open`
+// appends the fixer unit's expansion record; and from that instant the execution view names the NEW
+// fixer as a route owner while the discharge projection still covers only the FIRST record's leaves.
+// Recorded `[leaf]` vs recomputed `[leaf, fixer]` mismatches, and the classifier reads the point as
+// projection-COVERED, so the divergence is typed `tamper` — the class that names no route at all.
+//
+// That is not a cosmetic misclassification. `readReviewJournal` returns ok:false, so EVERY consumer
+// hard-refuses inside the window — including `record-evidence` for the fixer itself. The fixer
+// cannot record, so it cannot close; `expand-close` cannot re-discharge an unsettled point; the
+// projection therefore never gains the fixer, and the window never closes. `reexpand-open` itself is
+// caught by its own window: its Phase-1 record append opens the window, and the Phase-2 frontier open
+// then reads the journal it just invalidated and refuses — leaving the record appended, the unit row
+// `pending`, and NO `open()` proof, which `expand-close` refuses as `expansion_open_incomplete` and a
+// retried `reexpand-open` refuses as `reexpansion_point_not_discharged`. A permanent wedge with no
+// in-grammar exit.
+//
+// The window is STRUCTURAL, not a race: `ensureOwnerProjection` has exactly one caller
+// (`runExpandClose`), so nothing on the re-expansion path can advance the projection.
+//
+// Two fix directions close it and the pins below are deliberately blind to WHICH is taken: either
+// `reexpand-open` appends the superseding projection entry inside its own Phase-1 transaction (the
+// projection is append-only per epoch and the fold UNIONS entries, so one more write through the
+// existing writer suffices), or the matchers canonicalize units recorded on a projection-COVERED
+// point through the point's coverage rather than only through exact leaf entries. The assertions
+// name only the observable arc and the typed class, never the mechanism.
+// ===========================================================================
+
+// #839-ARC — the wedge as a GREEN ARC, driven end to end through the production verbs on a real
+// tmpdir: discharge -> a settled review carrying an interior-owned finding -> reexpand-open -> the
+// FIXER records its own evidence -> the fixer closes -> re-discharge, with the review journal
+// readable at every step. The review settles PASS carrying a non-blocking `action=note` finding, so
+// the unresolved-attempt fence (`review_attempt_unresolved`, a separate and correctly-typed gate
+// with its own repair route) is not in play and the ONLY thing standing between this run and a clean
+// re-expansion is the window itself.
+scenario(() => {
+  const { runExpandClose, runReExpandOpen, runCloseNode } = require('./kaola-workflow-adaptive-node');
+  const crypto = require('crypto');
+  assert(typeof runReExpandOpen === 'function' && typeof runExpandClose === 'function'
+    && typeof loadOwnerProjection === 'function',
+    '#839-ARC: the re-open verb, the discharge verb and the projection read-fold are exported');
+  if (typeof runReExpandOpen !== 'function' || typeof runExpandClose !== 'function') return;
+
+  const PLAN839 = ['# Plan — 839', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: lib/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| probe | complete |', '| m1 | pending |', '| m1-r1-u1 | complete |',
+    '| wall | pending |', '| done | pending |', '',
+    '## Required Agent Compliance', '', '| requirement | status | evidence |', '| --- | --- | --- |', '',
+    '## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: u1 | implementer | standard | lib/composed.js | co_open | —', '',
+    'open(m1#1):', '  at: T0', ''].join('\n');
+
+  const tmp839 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-839-'));
+  try {
+    const projectDir = path.join(tmp839, 'kaola-workflow', 'issue-839');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const hash839 = planValidator.computePlanHash(PLAN839);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash839 + ' -->\n' + PLAN839);
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), 'project: issue-839\nbranch: wf/839\n');
+
+    const BASE839 = 'b'.repeat(40);
+    const opts839 = {
+      planPath, project: 'issue-839',
+      shell: (scriptPath, args) => {
+        const base = path.basename(String(scriptPath));
+        const argv = args || [];
+        const at = argv.indexOf('--node-id');
+        const nid = at >= 0 ? argv[at + 1] : null;
+        if (base === 'kaola-workflow-next-action.js') {
+          return { exitCode: 0, result: 'ok', allDone: false,
+            readyPending: [{ id: 'm1-r2-fx', role: 'implementer', model: 'standard',
+              declared_write_set: 'lib/composed.js', kind: 'write' }] };
+        }
+        if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, result: 'ok' };
+        // --start / --record-base own the barrier baseline, and the evidence-binding nonce every
+        // record-evidence is checked against is that file's SHA prefix — so the stub must WRITE it,
+        // or the fixer's record-evidence refuses for a reason that has nothing to do with #839.
+        if ((argv.includes('--start') || argv.includes('--record-base')) && nid) {
+          const basePath = path.join(cacheDir, 'barrier-base-' + nid);
+          if (!fs.existsSync(basePath)) fs.writeFileSync(basePath, BASE839 + '\n');
+          return { exitCode: 0, ok: true, result: 'ok', nodeId: nid,
+            recordBase: { result: 'ok', nodeId: nid, base: BASE839 } };
+        }
+        return { exitCode: 0, ok: true, result: 'ok', overallOk: true,
+          recordBase: { base: BASE839 } };
+      },
+      readFile: p => fs.readFileSync(p, 'utf8'),
+      writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p),
+      mkdirp: d => { try { fs.mkdirSync(d, { recursive: true }); } catch (_) {} },
+      unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+      now: () => 'T1',
+      sinkProgressProbe: () => ({ state: 'pristine', evidence: 'test' }),
+    };
+    const livePlan = () => fs.readFileSync(planPath, 'utf8');
+
+    // --- (1) PRECONDITION: the first discharge commits and projects its own interior. ---
+    const discharged839 = runExpandClose({ ...opts839, nodeId: 'm1' });
+    assert(discharged839.result === 'ok' && discharged839.owner_projection === 'appended',
+      '#839-ARC PRECONDITION: the first discharge commits and writes its owner projection, got '
+      + JSON.stringify({ result: discharged839.result, reason: discharged839.reason,
+        owner_projection: discharged839.owner_projection }));
+
+    // --- (2) PRECONDITION: the wall settles carrying an interior-owned finding, and the journal
+    //     reads GREEN post-discharge (this is #827's shipped behaviour — the arc starts healthy). ---
+    const gate839 = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'wall',
+      origin: ['m1'], members: ['wall'] });
+    const gens839 = [{ member: 'wall', nonce: 'wallnonce839a' }];
+    const digest839 = '9'.repeat(64);
+    const raw839 = 'id=F-1 scope=in_scope action=note status=resolved severity=low '
+      + 'file=lib/composed.js fix_role=implementer';
+    const wallBody839 = 'evidence-binding: wall wallnonce839a\nverdict: pass\nfindings_blocking: 0\n'
+      + 'finding: ' + raw839 + '\n';
+    fs.writeFileSync(path.join(cacheDir, 'wall.md'), wallBody839);
+    const canonical839 = { source_node: 'wall', raw: raw839, id: 'F-1', scope: 'in_scope',
+      action: 'note', status: 'resolved', severity: 'low', file: 'lib/composed.js',
+      fix_role: 'implementer' };
+    // RECORDED while only m1#1 existed: the single interior leaf that owned lib/composed.js.
+    const route839 = { source_node: 'wall', finding_id: 'F-1', id: 'F-1', scope: 'in_scope',
+      action: 'note', status: 'resolved', severity: 'low', file: 'lib/composed.js',
+      ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1', fix_role: 'implementer',
+      raw: raw839 };
+    const attempt839 = { attempt_id: 'wall:1', ordinal: 1, plan_hash: hash839, logical_gate: gate839,
+      candidate_digest: digest839, candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64),
+      generations: gens839,
+      transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: hash839,
+        logical_gate_key: gate839.key, candidate_digest: digest839, generations: gens839 })).digest('hex'),
+      settlement_command: 'close-node', outcome: 'pass', reason: null,
+      receipts: [{ node_id: 'wall', generation: 'wallnonce839a', body: wallBody839,
+        receipt_sha256: crypto.createHash('sha256').update(wallBody839).digest('hex'),
+        effective_pass: true, verdict: 'pass', findings_blocking: 0 }],
+      findings: [canonical839], route_candidates: [route839], lifecycle_settled: true,
+      repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null };
+    fs.writeFileSync(path.join(cacheDir, 'review-attempts.json'),
+      JSON.stringify({ schema_version: 1, plan_hash: hash839, attempts: [attempt839] }, null, 2) + '\n');
+    const preState839 = readReviewJournal(opts839, livePlan());
+    assert(preState839.ok === true,
+      '#839-ARC PRECONDITION: the leaf-recorded journal reads GREEN after the discharge (#827), got '
+      + JSON.stringify({ ok: preState839.ok, reason: preState839.reason,
+        route_mismatch_class: preState839.route_mismatch_class }));
+
+    // --- (3) THE PIN: reexpand-open must COMMIT. Today its Phase-1 record append opens the window
+    //     and its own Phase-2 frontier open then refuses over the journal it just invalidated,
+    //     half-committing the transaction. ---
+    const reopen839 = runReExpandOpen({ ...opts839, nodeId: 'm1',
+      composition: { derivation: { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none' },
+        units: [{ name: 'fx', role: 'implementer', model: 'standard',
+          write_set: 'lib/composed.js', mode: 'co_open' }] } });
+    assert(reopen839.reason !== 'review_journal_route_mismatch',
+      '#839-ARC: reexpand-open must not be fenced by the window its OWN record append opens — it '
+      + 'refused review_journal_route_mismatch after half-committing, got '
+      + JSON.stringify({ result: reopen839.result, reason: reopen839.reason,
+        route_mismatch_class: reopen839.route_mismatch_class }));
+    assert(reopen839.result === 'ok' && reopen839.reopened === true,
+      '#839-ARC: the routed re-expansion COMMITS, got '
+      + JSON.stringify({ result: reopen839.result, reason: reopen839.reason, detail: reopen839.detail }));
+    const openedIds839 = (reopen839.opened || []).map(o => o.id);
+    assert(openedIds839.includes('m1-r2-fx')
+      && readLedgerStatuses(livePlan())['m1-r2-fx'] === 'in_progress',
+      '#839-ARC: the fixer unit is OPENED (in_progress), not stranded pending, got '
+      + JSON.stringify({ opened: openedIds839, ledger: readLedgerStatuses(livePlan()) }));
+
+    // --- (4) THE PIN: inside the window every readReviewJournal consumer must still work — most of
+    //     all record-evidence for the FIXER ITSELF, which is what makes the wedge permanent. ---
+    const windowState839 = readReviewJournal(opts839, livePlan());
+    assert(windowState839.ok === true,
+      '#839-ARC: the review journal stays READABLE while the re-expansion is in flight — the '
+      + 'recomputed fixer owner must reconcile against the discharge projection, got '
+      + JSON.stringify({ ok: windowState839.ok, reason: windowState839.reason,
+        route_mismatch_class: windowState839.route_mismatch_class, point: windowState839.point }));
+    const nonce839 = ((reopen839.opened || [])[0] || {}).nonce
+      || readNonce(planPath, 'm1-r2-fx', opts839.readFile) || '';
+    const recorded839 = runRecordEvidence({ ...opts839, nodeId: 'm1-r2-fx',
+      stdinContent: 'evidence-binding: m1-r2-fx ' + nonce839 + '\ntests-green: 12 passing\n' });
+    assert(recorded839.result === 'ok',
+      '#839-ARC: the FIXER records its own evidence inside the window — the refusal that makes the '
+      + 'wedge permanent (it can never close, so the point can never re-discharge, so the projection '
+      + 'can never gain it), got ' + JSON.stringify({ result: recorded839.result,
+        reason: recorded839.reason, detail: recorded839.detail }));
+    const routedWindow839 = runRouteFindings({ ...opts839, nodeId: 'wall' }, 'issue-839');
+    assert(routedWindow839.result === 'ok',
+      '#839-ARC: route-findings still resolves inside the window, got '
+      + JSON.stringify({ result: routedWindow839.result, reason: routedWindow839.reason,
+        route_mismatch_class: routedWindow839.route_mismatch_class }));
+
+    // --- (5) THE PIN: the arc CLOSES. The fixer closes, the point re-discharges, and the journal is
+    //     green on the far side — the projection now covers the fixer through the ordinary writer. ---
+    const closedFixer839 = runCloseNode({ ...opts839, nodeId: 'm1-r2-fx' });
+    assert(closedFixer839.result === 'ok',
+      '#839-ARC: the fixer unit closes, got ' + JSON.stringify({ result: closedFixer839.result,
+        reason: closedFixer839.reason, detail: closedFixer839.detail }));
+    const redischarged839 = runExpandClose({ ...opts839, nodeId: 'm1' });
+    assert(redischarged839.result === 'ok',
+      '#839-ARC: the milestone RE-discharges, got ' + JSON.stringify({ result: redischarged839.result,
+        reason: redischarged839.reason }));
+    const finalProjection839 = loadOwnerProjection({ planPath, readFile: opts839.readFile }, hash839);
+    assert(finalProjection839.present === true
+      && finalProjection839.leafToMilestone['m1-r1-u1'] === 'm1'
+      && finalProjection839.leafToMilestone['m1-r2-fx'] === 'm1',
+      '#839-ARC: after the re-discharge the projection covers BOTH interiors, got '
+      + JSON.stringify(finalProjection839.leafToMilestone));
+    const finalState839 = readReviewJournal(opts839, livePlan());
+    assert(finalState839.ok === true,
+      '#839-ARC: the journal is green on the far side of the whole arc, got '
+      + JSON.stringify({ ok: finalState839.ok, reason: finalState839.reason }));
+  } finally { fs.rmSync(tmp839, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #839-CLASS — the typed classifier, direct-call. A mismatch whose EXTRA owners are all expansion
+// units of a projection-COVERED point that carries an OPENED, UN-DISCHARGED record is the
+// re-expansion window, not forgery: it must carry a typed NON-tamper class, name the point, and
+// route to the re-discharge that closes it. Every neighbouring class stays exactly where #827 put
+// it — this narrows `tamper`, it never widens the relief. In particular the #827-U disjointness pin
+// (a COVERED leaf with a residual divergence on a point carrying NO open record) stays `tamper`, so
+// the new class turns on the OPEN, un-discharged record, never on coverage alone.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  assert(typeof routeMismatchDetail === 'function',
+    '#839-CLASS: the typed route-mismatch classifier is exported for direct pins');
+  if (typeof routeMismatchDetail !== 'function') return;
+
+  const RECORD1_839 = ['# Plan', '', '## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: none', '  unit: u1 | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#1):', '  at: T1', '',
+    'discharge(m1):', '  at: T2', '  records: m1#1', ''].join('\n');
+  // THE WINDOW: reexpand-open appended a SECOND record + its open proof; no discharge covers it yet.
+  const WINDOW_839 = RECORD1_839 + '\n' + ['record(m1#2):', '  point: m1', '  grain: g', '  path: p',
+    '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: fx | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#2):', '  at: T3', ''].join('\n');
+  const execIds839 = new Set(['probe', 'm1', 'wall', 'done', 'm1-r1-u1', 'm1-r2-fx']);
+  // The projection as it exists in the window: written by the FIRST discharge, covering m1#1 only.
+  const windowProjection839 = { present: true, leafToMilestone: { 'm1-r1-u1': 'm1' },
+    points: new Set(['m1']) };
+
+  const windowClass839 = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }],
+    [{ ownership_candidates: ['m1-r1-u1', 'm1-r2-fx'], owning_node: null }],
+    windowProjection839, WINDOW_839, execIds839);
+  assert(windowClass839.route_mismatch_class !== 'tamper',
+    '#839-CLASS: the re-expansion window is NOT forgery — an extra owner that is an expansion unit '
+    + 'of a projection-covered point carrying an OPENED, un-discharged record must not classify '
+    + 'tamper (the class that names no route), got ' + JSON.stringify(windowClass839));
+  assert(typeof windowClass839.route_mismatch_class === 'string'
+    && windowClass839.route_mismatch_class.length > 0,
+    '#839-CLASS: the window carries a TYPED class (callers classify structurally, never by prose), '
+    + 'got ' + JSON.stringify(windowClass839));
+  assert(windowClass839.point === 'm1',
+    '#839-CLASS: the window names the owning expansion point, got ' + JSON.stringify(windowClass839));
+  assert(typeof windowClass839.detail === 'string'
+    && /expand-close/.test(windowClass839.detail) && /\bm1\b/.test(windowClass839.detail),
+    '#839-CLASS: the detail routes to the RE-DISCHARGE that closes the window (expand-close on the '
+    + 'point), got ' + JSON.stringify(windowClass839.detail));
+  assert(!/hand-edit/i.test(String(windowClass839.detail))
+    || /NEVER hand-edit/i.test(String(windowClass839.detail)),
+    '#839-CLASS: the detail never invites journal surgery, got ' + JSON.stringify(windowClass839.detail));
+  const windowHint839 = getOperatorHint('review_journal_route_mismatch', windowClass839);
+  assert(typeof windowHint839 === 'string' && !/finish or discard runs/.test(windowHint839),
+    '#839-CLASS: the operator hint stops affirmatively MISDIRECTING (the tamper wording tells the '
+    + 'operator to finish or discard the run), got ' + JSON.stringify(windowHint839));
+
+  // --- The tamper pins that must SURVIVE the narrowing. ---
+  const forged839 = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r9-ghost'], owning_node: 'm1-r9-ghost' }], [],
+    windowProjection839, WINDOW_839, execIds839);
+  assert(forged839.route_mismatch_class === 'tamper' && !forged839.point,
+    '#839-CLASS: a FORGED owner — in neither the execution node table nor the projection — still '
+    + 'refuses tamper-class even while a window is open on the same point, got '
+    + JSON.stringify(forged839));
+  const settled839 = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }], [],
+    windowProjection839, RECORD1_839, new Set(['probe', 'm1', 'wall', 'done', 'm1-r1-u1']));
+  assert(settled839.route_mismatch_class === 'tamper',
+    '#839-CLASS: with NO open un-discharged record on the point, a covered leaf with a residual '
+    + 'divergence is still tamper — the new class turns on the OPEN record, never on coverage alone '
+    + '(the #827-U disjointness pin), got ' + JSON.stringify(settled839));
+  const legacy839 = routeMismatchDetail(
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }],
+    [{ ownership_candidates: ['m1-r1-u1'], owning_node: 'm1-r1-u1' }],
+    { present: false, leafToMilestone: {}, points: new Set() }, RECORD1_839,
+    new Set(['probe', 'm1', 'wall', 'done', 'm1-r1-u1']));
+  assert(legacy839.route_mismatch_class === 'projection_missing' && legacy839.point === 'm1',
+    '#839-CLASS: the #827 projection_missing class is untouched by the narrowing, got '
+    + JSON.stringify(legacy839));
+});
+
+// ---------------------------------------------------------------------------
+// #839-V2 — the schema-2 twin. The V2 route arm recomputes over the SAME execution view through the
+// SAME classifier, so the window reaches it identically and the fix must reach both lanes. Pinned on
+// the classification (mechanism-blind: whichever direction closes the window, a route divergence that
+// IS the window may never be typed `tamper`), with the V2 forgery pin held in place beside it.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  assert(typeof reviewJournalV2MatchesPlan === 'function' && typeof schema2RouteCandidates === 'function',
+    '#839-V2: the schema-2 matcher + its route recomputation are exported');
+  if (typeof reviewJournalV2MatchesPlan !== 'function') return;
+
+  const NODE_ROWS_839V = [
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | CHANGELOG.md | 1 | sequence |',
+  ];
+  const LEDGER_839V = ['| probe | complete | |', '| m1 | pending | |', '| m1-r1-u1 | complete | |',
+    '| m1-r2-fx | in_progress | |', '| wall | pending | |', '| done | pending | |'];
+  const REC1_839V = ['## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: none', '  unit: u1 | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#1):', '  at: T1', '',
+    'discharge(m1):', '  at: T2', '  records: m1#1', ''].join('\n');
+  const WINDOW_839V = REC1_839V + '\n' + ['record(m1#2):', '  point: m1', '  grain: g', '  path: p',
+    '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: fx | implementer | — | lib/composed.js | co_open | —', '',
+    'open(m1#2):', '  at: T3', ''].join('\n');
+  const dischargedPlan839V = makePlan(LEDGER_839V, NODE_ROWS_839V) + REC1_839V;
+  const windowPlan839V = makePlan(LEDGER_839V, NODE_ROWS_839V) + WINDOW_839V;
+
+  const spine839V = planValidator.parseNodes(windowPlan839V);
+  const gate839V = reviewLogicalGate(spine839V, spine839V.find(n => n.id === 'wall'));
+  const gateCore839V = { key: gate839V.key, kind: gate839V.kind, members: gate839V.members,
+    claim_digest: gate839V.claim_digest, surface_digests: gate839V.surface_digests,
+    aggregation: gate839V.aggregation, certified_producers: gate839V.certified_producers };
+  const finding839V = { uid: 'F-1', scope: 'in_scope', action: 'fix', status: 'open',
+    severity: 'high', primary_anchor: { path: 'lib/composed.js' } };
+  // RECORDED at settle time (post-discharge, pre-re-expansion): the single interior leaf.
+  const recorded839V = schema2RouteCandidates([finding839V],
+    planValidator.planNodesWithExpansions(dischargedPlan839V), 'wall');
+  assert(JSON.stringify(recorded839V.map(r => r.ownership_candidates)) === JSON.stringify([['m1-r1-u1']]),
+    '#839-V2 fixture: the attempt recorded the single interior leaf, got '
+    + JSON.stringify(recorded839V.map(r => r.ownership_candidates)));
+  // ...while the WINDOW execution view already names the fixer the re-expansion just composed.
+  const recomputed839V = schema2RouteCandidates([finding839V],
+    planValidator.planNodesWithExpansions(windowPlan839V), 'wall');
+  assert(JSON.stringify(recomputed839V.map(r => r.ownership_candidates))
+      === JSON.stringify([['m1-r1-u1', 'm1-r2-fx']]),
+    '#839-V2 fixture: the window recomputation already names the UN-DISCHARGED fixer, got '
+    + JSON.stringify(recomputed839V.map(r => r.ownership_candidates)));
+
+  const attempt839V = { attempt_id: 'wall:1', ordinal: 1, logical_gate: gateCore839V,
+    gate_mode: 'change_gate', outcome: 'fail', lifecycle_settled: true, consumed_by: null,
+    repair: { selected_writer: null, settled: null }, producer_bindings: {},
+    receipts: [{ node_id: 'wall', findings: [finding839V] }], route_candidates: recorded839V };
+  const journal839V = { schema_version: 2, attempts: [attempt839V] };
+  // The projection as it exists in the window: the FIRST discharge's entry only.
+  const windowProjection839V = { present: true, leafToMilestone: { 'm1-r1-u1': 'm1' },
+    points: new Set(['m1']) };
+
+  const windowV2 = reviewJournalV2MatchesPlan(journal839V, windowPlan839V, windowProjection839V);
+  assert(windowV2.route_mismatch_class !== 'tamper',
+    '#839-V2: the schema-2 lane reaches the window through the same execution-view recomputation, '
+    + 'so it must not type it tamper either, got ' + JSON.stringify(windowV2));
+  assert(windowV2.ok === true
+    || (typeof windowV2.route_mismatch_class === 'string' && windowV2.point === 'm1'),
+    '#839-V2: the schema-2 lane either reconciles the window or names it with a typed class + its '
+    + 'point, got ' + JSON.stringify(windowV2));
+
+  const forgedV2 = { schema_version: 2, attempts: [{ ...attempt839V,
+    route_candidates: recorded839V.map(r => ({ ...r,
+      ownership_candidates: ['ghost-writer'], owning_node: 'ghost-writer' })) }] };
+  const forgedResultV2 = reviewJournalV2MatchesPlan(forgedV2, windowPlan839V, windowProjection839V);
+  assert(forgedResultV2.ok === false && forgedResultV2.reason === 'review_journal_route_mismatch'
+    && forgedResultV2.route_mismatch_class === 'tamper' && !forgedResultV2.point,
+    '#839-V2: a forged owner still refuses tamper-class in the schema-2 twin even with a window open '
+    + 'on the same point, got ' + JSON.stringify(forgedResultV2));
+});
+
 // #699 schema-2 code/security fanouts are one runtime review transaction, not
 // independent sequence attempts. A replicated majority may carry one
 // non-blocking dissent; blocker/fix veto and partitioned-all stay fail-closed.
