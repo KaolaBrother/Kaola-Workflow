@@ -108,6 +108,9 @@ const {
   proveReanchorProvenance,
   candidateTripleForCommit,
   candidateTripleFromListing,
+  // Batch 0: the two default primitives behind revert-overflow's baseline partition.
+  gitPresentAtBase,
+  removeOverflowPaths,
 } = require('./kaola-workflow-adaptive-node');
 const {
   RUNNING_SET_NAME,
@@ -9589,6 +9592,54 @@ scenario(() => {
   assert(Array.isArray(bad.validReasons) && bad.validReasons.includes('merge_conflict'), 'T-MC-c: validReasons includes merge_conflict');
 });
 
+// ---------------------------------------------------------------------------
+// BATCH 0 — `integrity` joins the write-halt reason enum.
+//
+// It is the R4 halt: a hash, back-link, lineage or authority anchor did not verify, and the
+// deviation IS the evidence. The load-bearing property is the ASYMMETRY with merge_conflict —
+// `integrity` is TERMINAL. clear-halt still accepts only consent|security and its consent branch
+// strips consent/security/merge_conflict causes only, so an integrity cause SURVIVES a clear. An
+// auto-clearable integrity halt would launder exactly the signal the halt exists to preserve, so
+// that survival is pinned with teeth rather than left as an emergent property.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const files = {
+    '/p/workflow-plan.md': makePlan(['| impl-a | in_progress | |']),
+    '/p/workflow-state.md': makeState(),
+  };
+  const rf = (f) => { if (files[f] !== undefined) return files[f]; throw new Error('ENOENT ' + f); };
+  const wf = (f, c) => { files[f] = c; };
+  const shellStub = () => ({ status: 'skipped' });
+
+  // GREEN ARC: the reason is accepted and writes the full halt.
+  const wh = runWriteHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md',
+    project: 'p', nodeId: 'impl-a', reason: 'integrity', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(wh.result === 'ok' && wh.halt === 'written',
+    'BATCH0-INTEGRITY: write-halt --reason integrity is accepted, got ' + JSON.stringify({ result: wh.result, reason: wh.reason }));
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === true,
+    'BATCH0-INTEGRITY: the durable ledger halt marker is written, so the halt fence catches it');
+  assert(/escalated_to_full:\s*integrity/.test(files['/p/workflow-state.md']),
+    'BATCH0-INTEGRITY: state records escalated_to_full: integrity as the cause');
+  assert(Array.isArray(wh.markers) && wh.markers.includes('escalated_to_full:integrity'),
+    'BATCH0-INTEGRITY: the markers list names the integrity cause, got ' + JSON.stringify(wh.markers));
+
+  // TERMINAL: clear-halt(consent) lifts the ledger marker but must NOT strip the integrity cause.
+  const ch = runClearHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md',
+    project: 'p', reason: 'consent', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(ch.result === 'ok' && ch.halt === 'cleared', 'BATCH0-INTEGRITY: clear-halt(consent) still runs');
+  assert(/escalated_to_full:\s*integrity/.test(files['/p/workflow-state.md']),
+    'BATCH0-INTEGRITY: the integrity cause SURVIVES clear-halt --reason consent (terminal, like test_thrash) — an auto-clearable integrity halt would launder the R4 signal');
+  assert(runClearHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md',
+    project: 'p', reason: 'integrity', shell: shellStub, readFile: rf, writeFile: wf }).reason === 'invalid_reason',
+  'BATCH0-INTEGRITY: clear-halt does NOT gain an integrity arm — the halt is not self-clearable');
+
+  // The enum is reported on the invalid-reason refusal, so a caller can discover it.
+  const bad = runWriteHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md',
+    project: 'p', nodeId: 'impl-a', reason: 'banana', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(bad.validReasons.includes('integrity'),
+    'BATCH0-INTEGRITY: validReasons advertises integrity, got ' + JSON.stringify(bad.validReasons));
+});
+
 // Summary
 // ---------------------------------------------------------------------------
 // ===========================================================================
@@ -16387,6 +16438,9 @@ scenario(() => {
       for (const p of filePaths) reverted.push(p);
       return { exitCode: 0 };
     },
+    // Batch 0: the partition probe. This fixture's overflow file EXISTS at the baseline, so the
+    // whole set routes to checkout — the original #434-a narrative, now stated rather than assumed.
+    presentAtBase: (barrierRoot, sha, filePaths) => filePaths.slice(),
     readFile: (f) => {
       if (f.endsWith('workflow-plan.md')) return planContent;
       if (f.endsWith('barrier-base-impl')) return 'deadbeef1234567890ab\n';
@@ -16404,6 +16458,198 @@ scenario(() => {
     '#434-a: result.revertedPaths includes scripts/b.js, got ' + JSON.stringify(result));
   assert(result.barrierClearedAfterRevert === true,
     '#434-a: barrierClearedAfterRevert true after revert, got ' + JSON.stringify(result));
+  assert(JSON.stringify(result.checkedOutPaths) === JSON.stringify(['scripts/b.js'])
+    && JSON.stringify(result.deletedPaths) === JSON.stringify([]),
+    '#434-a: a baseline-tracked overflow is reported as checked out, with an empty delete set, got ' + JSON.stringify(result));
+});
+
+// ---------------------------------------------------------------------------
+// BATCH 0 — revert-overflow partitions outOfAllow against the baseline tree.
+//
+// THE DEFECT THIS CLOSES. `git checkout <baseSha> -- <path>` cannot restore a path that did not
+// exist at baseSha, and every overflow path travelled in ONE invocation, so a single newly-created
+// undeclared file made the WHOLE revert refuse `git_checkout_failed` — including the siblings that
+// would have reverted cleanly. Newly-created files are the DOMINANT overflow class since test writes
+// became attributable, so the discard primitive failed on exactly the case it is most reached for,
+// and the `unattributed_paths` route dead-ended where it is most reached.
+//
+// WHAT IS PINNED, in both directions: the mixed GREEN arc (some restored, some deleted, both sets
+// reported separately); the pure-delete arc that used to be a hard refusal; the fail-CLOSED probe
+// (an unreadable baseline tree must never be guessed past, because guessing "absent" DELETES a file
+// the baseline still holds); and the ordering guarantee that a failed restore deletes nothing.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const planNodes = [
+    '| impl | implementer | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const basePlan = () => makePlan([
+    '| impl | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+
+  // A driver that runs runRevertOverflow over a declared overflow set with declared baseline
+  // membership, capturing exactly which primitive each path was handed to.
+  const drive = (overflow, presentAtBase, over) => {
+    let planContent = basePlan();
+    const checkedOut = [];
+    const removed = [];
+    let barrierCalls = 0;
+    const opts = Object.assign({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      project: 'test-project',
+      nodeId: 'impl',
+      shell: (scriptPath, args) => {
+        if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') {
+          barrierCalls++;
+          if (barrierCalls === 1) {
+            return { exitCode: 1, result: 'refuse', barrierCheck: { reason: 'write_set_overflow', outOfAllow: overflow.slice() } };
+          }
+          return { exitCode: 0, result: 'pass', barrierCheck: { reason: null, outOfAllow: [] } };
+        }
+        return { exitCode: 0, result: 'pass' };
+      },
+      gitCheckout: (root, sha, filePaths) => { checkedOut.push(...filePaths); return { exitCode: 0 }; },
+      presentAtBase: () => presentAtBase.slice(),
+      removePaths: (root, filePaths) => { removed.push(...filePaths); return { exitCode: 0, removed: filePaths.slice() }; },
+      readFile: (f) => {
+        if (f.endsWith('workflow-plan.md')) return planContent;
+        if (f.endsWith('barrier-base-impl')) return 'deadbeef1234567890ab\n';
+        throw new Error('ENOENT ' + f);
+      },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: (f) => f.endsWith('barrier-base-impl'),
+      appendLog: () => {},
+    }, over || {});
+    return { result: runRevertOverflow(opts), checkedOut, removed };
+  };
+
+  // (a) MIXED — one pre-existing file, one newly created. Pre-Batch-0 this refused outright.
+  {
+    const { result, checkedOut, removed } = drive(
+      ['scripts/b.js', 'scripts/new.js'], ['scripts/b.js']);
+    assert(result.result === 'ok',
+      'BATCH0-REVERT-a: a mixed overflow (one tracked, one new) succeeds instead of refusing, got ' + JSON.stringify(result));
+    assert(JSON.stringify(checkedOut) === JSON.stringify(['scripts/b.js']),
+      'BATCH0-REVERT-a: ONLY the baseline-tracked path is handed to git checkout, got ' + JSON.stringify(checkedOut));
+    assert(JSON.stringify(removed) === JSON.stringify(['scripts/new.js']),
+      'BATCH0-REVERT-a: ONLY the newly-created path is handed to the delete primitive, got ' + JSON.stringify(removed));
+    assert(JSON.stringify(result.checkedOutPaths) === JSON.stringify(['scripts/b.js'])
+      && JSON.stringify(result.deletedPaths) === JSON.stringify(['scripts/new.js']),
+      'BATCH0-REVERT-a: the two sets are REPORTED separately (restore is reversible, delete is not), got ' + JSON.stringify(result));
+    assert(JSON.stringify(result.revertedPaths) === JSON.stringify(['scripts/b.js', 'scripts/new.js']),
+      'BATCH0-REVERT-a: revertedPaths stays the union in outOfAllow order (existing consumers unbroken), got ' + JSON.stringify(result));
+  }
+
+  // (b) PURE DELETE — the dominant overflow class, and the exact case that used to dead-end.
+  {
+    const { result, checkedOut, removed } = drive(['scripts/new1.js', 'scripts/new2.js'], []);
+    assert(result.result === 'ok',
+      'BATCH0-REVERT-b: an all-newly-created overflow succeeds (the dead-end this batch removes), got ' + JSON.stringify(result));
+    assert(checkedOut.length === 0,
+      'BATCH0-REVERT-b: git checkout is not invoked at all when nothing pre-existed, got ' + JSON.stringify(checkedOut));
+    assert(JSON.stringify(removed) === JSON.stringify(['scripts/new1.js', 'scripts/new2.js']),
+      'BATCH0-REVERT-b: both new files are deleted, got ' + JSON.stringify(removed));
+    assert(result.barrierClearedAfterRevert === true,
+      'BATCH0-REVERT-b: the re-run barrier confirms the overflow cleared, got ' + JSON.stringify(result));
+  }
+
+  // (c) FAIL-CLOSED probe — an unreadable baseline tree refuses and touches NOTHING. Guessing
+  //     "absent" here would delete a file the baseline still holds.
+  {
+    const { result, checkedOut, removed } = drive(['scripts/b.js'], [], {
+      presentAtBase: () => { throw new Error('fatal: not a valid object name deadbeef'); },
+    });
+    assert(result.result === 'refuse' && result.reason === 'baseline_partition_unavailable',
+      'BATCH0-REVERT-c: an unreadable baseline tree refuses baseline_partition_unavailable, got ' + JSON.stringify(result));
+    assert(checkedOut.length === 0 && removed.length === 0,
+      'BATCH0-REVERT-c: nothing is restored and nothing is deleted on the fail-closed probe');
+    assert(getOperatorHint('baseline_partition_unavailable', result).length > 0,
+      'BATCH0-REVERT-c: the new refusal carries an operator hint');
+  }
+
+  // (d) ORDER — a failed restore must delete NOTHING. The destructive half runs only after the
+  //     reversible half has landed, so a half-applied revert can never destroy unrecoverable bytes.
+  {
+    const { result, checkedOut, removed } = drive(['scripts/b.js', 'scripts/new.js'], ['scripts/b.js'], {
+      gitCheckout: () => ({ exitCode: 1 }),
+    });
+    assert(result.result === 'refuse' && result.reason === 'git_checkout_failed',
+      'BATCH0-REVERT-d: a failed restore still refuses git_checkout_failed, got ' + JSON.stringify(result));
+    assert(removed.length === 0,
+      'BATCH0-REVERT-d: NOTHING was deleted when the restore half failed, got ' + JSON.stringify(removed));
+    assert(JSON.stringify(result.deletedPaths) === JSON.stringify([]),
+      'BATCH0-REVERT-d: the refusal reports an empty delete set, got ' + JSON.stringify(result));
+    assert(checkedOut.length === 0, 'BATCH0-REVERT-d: the failing seam recorded no successful restore');
+  }
+
+  // (e) A FAILED DELETE is its own typed refusal, and reports what it did manage to remove.
+  {
+    const { result } = drive(['scripts/new1.js', 'scripts/new2.js'], [], {
+      removePaths: () => ({ exitCode: 1, removed: ['scripts/new1.js'], detail: 'EACCES' }),
+    });
+    assert(result.result === 'refuse' && result.reason === 'overflow_delete_failed',
+      'BATCH0-REVERT-e: a failed delete refuses overflow_delete_failed, got ' + JSON.stringify(result));
+    assert(JSON.stringify(result.deletedPaths) === JSON.stringify(['scripts/new1.js']),
+      'BATCH0-REVERT-e: the refusal reports the partial removal so the operator knows the real state, got ' + JSON.stringify(result));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BATCH 0 — the two DEFAULT primitives, against a REAL git repository.
+//
+// The seam-driven scenarios above prove the partition LOGIC. They cannot prove the primitives the
+// production path actually uses, because they replace them. A partition whose probe misreports
+// membership deletes files the baseline still holds, so the defaults are exercised directly here.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-batch0-partition-'));
+  try {
+    const g = (args) => execFixtureFileSync('git', ['-C', repoRoot, ...args],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'scripts', 'tracked.js'), 'module.exports = 1;\n');
+    fs.writeFileSync(path.join(repoRoot, 'scripts', 'with space.js'), 'module.exports = 2;\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    const baseSha = g(['rev-parse', 'HEAD']).trim();
+
+    // A newly-created undeclared file, plus an edit to a tracked one.
+    fs.writeFileSync(path.join(repoRoot, 'scripts', 'brand-new.js'), 'module.exports = 3;\n');
+    fs.writeFileSync(path.join(repoRoot, 'scripts', 'tracked.js'), 'module.exports = 99;\n');
+
+    const overflow = ['scripts/tracked.js', 'scripts/brand-new.js', 'scripts/with space.js'];
+    const present = gitPresentAtBase(repoRoot, baseSha, overflow);
+    assert(present.indexOf('scripts/tracked.js') >= 0 && present.indexOf('scripts/with space.js') >= 0,
+      'BATCH0-PARTITION: the real probe reports baseline-tracked paths as present (incl. one with a space), got ' + JSON.stringify(present));
+    assert(present.indexOf('scripts/brand-new.js') < 0,
+      'BATCH0-PARTITION: the real probe reports a newly-created file as ABSENT from the baseline, got ' + JSON.stringify(present));
+
+    const removal = removeOverflowPaths(repoRoot, ['scripts/brand-new.js']);
+    assert(removal.exitCode === 0 && JSON.stringify(removal.removed) === JSON.stringify(['scripts/brand-new.js']),
+      'BATCH0-PARTITION: the real delete primitive removes the new file, got ' + JSON.stringify(removal));
+    assert(!fs.existsSync(path.join(repoRoot, 'scripts', 'brand-new.js')),
+      'BATCH0-PARTITION: the new file is gone from the worktree');
+    // Idempotent: re-removing an already-absent path is a no-op, so a crashed retry converges.
+    const again = removeOverflowPaths(repoRoot, ['scripts/brand-new.js']);
+    assert(again.exitCode === 0 && again.removed.length === 0,
+      'BATCH0-PARTITION: removing an already-absent path is an idempotent no-op, got ' + JSON.stringify(again));
+    // A DIRECTORY is never followed — the primitive refuses rather than recursing.
+    fs.mkdirSync(path.join(repoRoot, 'scripts', 'adir'));
+    const dir = removeOverflowPaths(repoRoot, ['scripts/adir']);
+    assert(dir.exitCode !== 0 && fs.existsSync(path.join(repoRoot, 'scripts', 'adir')),
+      'BATCH0-PARTITION: a directory is refused, never recursively removed, got ' + JSON.stringify(dir));
+    // A bad baseline throws, which is what makes the caller fail CLOSED.
+    let threw = false;
+    try { gitPresentAtBase(repoRoot, '0000000000000000000000000000000000000000', ['scripts/tracked.js']); }
+    catch (_) { threw = true; }
+    assert(threw, 'BATCH0-PARTITION: an unresolvable baseline THROWS, so the caller refuses instead of guessing');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -19420,32 +19666,111 @@ scenario(() => {
 
   // -- T-585-stale-refuse: a DEAD-pid holder is NEVER auto-taken-over (an unlink-based takeover
   //    double-acquires under concurrency). The CLI refuses with the DISTINCT typed reason
-  //    scheduler_lock_stale, zero mutation, lock byte-intact; the operator_hint names the manual
-  //    recovery (rm the literal lockPath from ONE session). The recovery narrative then pins the
-  //    "never wedges" AC via the hint path: unlink by hand → re-run → proceeds. --
+  //    scheduler_lock_stale, zero mutation, lock byte-intact.
+  //
+  //    BATCH 0 — THE ROUTE IS NOW A VERB, AND THIS IS ITS GREEN ARC. The recovery used to be prose
+  //    (`rm "<lockPath>"`), which no consumer could follow mechanically. The hint now names the
+  //    `unlock` verb with the exact holder pid, and this scenario walks the whole arc END TO END
+  //    through the real CLI: refuse → read the route out of the hint → run it → re-run the
+  //    originally-refused command → arrive GREEN. That is the R2 traversal of the LEGAL path, not
+  //    just the refusing one, and it is what proves the route is not a dead end. --
   {
     const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
     const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
-    const stalePayload = JSON.stringify({ pid: 2147483646, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
+    const deadPid = 2147483646;
+    const stalePayload = JSON.stringify({ pid: deadPid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
     fs.writeFileSync(lockFile, stalePayload);
     const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
     assert(r.result === 'refuse' && r.reason === 'scheduler_lock_stale',
       'T-585-stale-refuse: dead-holder lock → typed scheduler_lock_stale refusal (no auto-takeover), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
     assert(r.exitCode === 1, 'T-585-stale-refuse: non-zero exit on the stale refusal');
-    assert(typeof r.operator_hint === 'string' && /rm "[^"]*scheduler\.lock"/.test(r.operator_hint),
-      'T-585-stale-refuse: operator_hint names the literal lockPath in an rm "<lockPath>" form, got ' + JSON.stringify(r.operator_hint));
+    assert(typeof r.operator_hint === 'string' && /unlock --project <P> --holder 2147483646 --json/.test(r.operator_hint),
+      'T-585-stale-refuse: operator_hint routes to the unlock VERB carrying the exact dead holder pid, got ' + JSON.stringify(r.operator_hint));
+    assert(!/rm "/.test(r.operator_hint),
+      'T-585-stale-refuse: the prose `rm` dead-end is GONE from the hint, got ' + JSON.stringify(r.operator_hint));
     let lockNow = null; try { lockNow = fs.readFileSync(lockFile, 'utf8'); } catch (_) { lockNow = null; }
     assert(lockNow === stalePayload, 'T-585-stale-refuse: the stale lockfile is byte-intact (never auto-removed)');
     const st = ledgerStatuses(planPath);
     assert(st.ra === 'pending' && st.rb === 'pending', 'T-585-stale-refuse: ledger unchanged — zero mutation');
     assert(readRS(cacheDir) === null, 'T-585-stale-refuse: no running set written');
-    // Recovery narrative (the hinted step): the operator removes the lock by hand from ONE session, then
-    // re-runs → the frontier opens (a dead holder never permanently wedges the project).
-    try { fs.unlinkSync(lockFile); } catch (_) {}
+    // FOLLOW THE ROUTE. The named verb, run exactly as the hint spells it.
+    const u = runNode(repoRoot, ['unlock', '--project', project, '--holder', String(deadPid), '--json']);
+    assert(u.result === 'ok' && u.unlocked === true && u.exitCode === 0,
+      'T-585-unlock: the routed verb removes the dead holder\'s lock and exits 0, got ' + JSON.stringify(u));
+    assert(u.holder && u.holder.pid === deadPid, 'T-585-unlock: the ok envelope reports the holder it removed');
+    assert(!fs.existsSync(lockFile), 'T-585-unlock: the lockfile is gone after unlock');
+    assert(!fs.readdirSync(cacheDir).some((n) => n.indexOf('.unlock-') >= 0),
+      'T-585-unlock: no quarantine residue is left behind by the rename-then-verify removal');
+    // ARRIVE GREEN. The originally-refused command now succeeds.
     const r2 = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
     assert(r2.result === 'ok' && Array.isArray(r2.opened) && r2.opened.length === 2,
-      'T-585-stale-refuse: after the operator removes the lock, open-ready proceeds (never wedges), got ' + JSON.stringify({ result: r2.result, opened: r2.opened && r2.opened.map((n) => n.id), reason: r2.reason }));
-    assert(!fs.existsSync(lockFile), 'T-585-stale-refuse: lock released after the recovered serial call');
+      'T-585-unlock: after the routed unlock, the originally-refused open-ready proceeds (never wedges), got ' + JSON.stringify({ result: r2.result, opened: r2.opened && r2.opened.map((n) => n.id), reason: r2.reason }));
+    assert(!fs.existsSync(lockFile), 'T-585-unlock: lock released after the recovered serial call');
+    // IDEMPOTENT: unlocking a project that holds no lock is an ok outcome value, not a refusal —
+    // the caller's next step is simply the command it wanted to run.
+    const u2 = runNode(repoRoot, ['unlock', '--project', project, '--holder', String(deadPid), '--json']);
+    assert(u2.result === 'ok' && u2.unlocked === false && u2.exitCode === 0,
+      'T-585-unlock: unlocking an unlocked project is ok/unlocked:false (idempotent), got ' + JSON.stringify(u2));
+    cleanup(repoRoot);
+  }
+
+  // -- T-585-unlock-guards: the three refusals that keep `unlock` from reintroducing the
+  //    unlink-based double-acquire hazard the acquire path names. Each is ZERO-MUTATION: the
+  //    lockfile must be byte-identical afterwards, because a removal that "mostly" worked is
+  //    exactly the state that lets two holders coexist. --
+  {
+    const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
+    const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+
+    // (1) LIVE holder — the load-bearing guard. This process's own pid is provably alive.
+    const livePayload = JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
+    fs.writeFileSync(lockFile, livePayload);
+    const live = runNode(repoRoot, ['unlock', '--project', project, '--holder', String(process.pid), '--json']);
+    assert(live.result === 'refuse' && live.reason === 'scheduler_lock_held' && live.exitCode === 1,
+      'T-585-unlock-guards: a LIVE holder refuses scheduler_lock_held — a running orchestrator\'s lock is never taken, got ' + JSON.stringify({ result: live.result, reason: live.reason }));
+    assert(fs.readFileSync(lockFile, 'utf8') === livePayload,
+      'T-585-unlock-guards: the live lockfile is byte-identical after the refusal (zero mutation)');
+
+    // (2) HOLDER MISMATCH — the compare-and-set. The lock was re-claimed between the operator's
+    //     read and this call, so the pid they name is no longer the pid on disk.
+    const otherDead = JSON.stringify({ pid: 2147483645, host: os.hostname(), ts: Date.now(), subcommand: 'close-node' });
+    fs.writeFileSync(lockFile, otherDead);
+    const mism = runNode(repoRoot, ['unlock', '--project', project, '--holder', '2147483646', '--json']);
+    assert(mism.result === 'refuse' && mism.reason === 'scheduler_lock_holder_mismatch' && mism.exitCode === 1,
+      'T-585-unlock-guards: a re-claimed lock refuses scheduler_lock_holder_mismatch (CAS on holder identity), got ' + JSON.stringify({ result: mism.result, reason: mism.reason }));
+    assert(mism.recorded_holder === '2147483645' && mism.requested_holder === '2147483646',
+      'T-585-unlock-guards: the mismatch refusal reports BOTH the recorded and requested holder, got ' + JSON.stringify(mism));
+    assert(fs.readFileSync(lockFile, 'utf8') === otherDead,
+      'T-585-unlock-guards: the re-claimed lockfile is byte-identical after the refusal (zero mutation)');
+
+    // (3) CORRUPT payload, FRESH file — the mid-write window. acquireProjectLock protects a lock
+    //     caught between its O_EXCL create and its payload write; unlock protects it identically.
+    fs.writeFileSync(lockFile, '{not json');
+    const fresh = runNode(repoRoot, ['unlock', '--project', project, '--holder', 'none', '--json']);
+    assert(fresh.result === 'refuse' && fresh.reason === 'scheduler_lock_held' && fresh.exitCode === 1,
+      'T-585-unlock-guards: a corrupt but FRESH lockfile refuses — it is most likely a holder caught mid-write, got ' + JSON.stringify({ result: fresh.result, reason: fresh.reason }));
+    assert(fs.readFileSync(lockFile, 'utf8') === '{not json',
+      'T-585-unlock-guards: the fresh corrupt lockfile is byte-identical after the refusal');
+    // ... and a pid-shaped --holder against a corrupt payload refuses the CAS rather than guessing.
+    const wrongForm = runNode(repoRoot, ['unlock', '--project', project, '--holder', '1234', '--json']);
+    assert(wrongForm.result === 'refuse' && wrongForm.reason === 'scheduler_lock_holder_mismatch',
+      'T-585-unlock-guards: a corrupt payload cannot be targeted by pid — it refuses the CAS, got ' + JSON.stringify({ result: wrongForm.result, reason: wrongForm.reason }));
+
+    // (3b) GREEN ARC for the corrupt arm: once the file is genuinely OLD, `--holder none` clears it.
+    const old = Date.now() - LANE_STALENESS_MS - 3600000;
+    fs.utimesSync(lockFile, new Date(old), new Date(old));
+    const cleared = runNode(repoRoot, ['unlock', '--project', project, '--holder', 'none', '--json']);
+    assert(cleared.result === 'ok' && cleared.unlocked === true,
+      'T-585-unlock-guards: an OLD corrupt lockfile is cleared by --holder none, got ' + JSON.stringify(cleared));
+    assert(!fs.existsSync(lockFile), 'T-585-unlock-guards: the old corrupt lockfile is gone');
+
+    // (4) --holder is MANDATORY: unlock must never be a bare "remove whatever is there".
+    fs.writeFileSync(lockFile, otherDead);
+    const bare = runNode(repoRoot, ['unlock', '--project', project, '--json']);
+    assert(bare.result === 'refuse' && Array.isArray(bare.errors) && /--holder/.test(bare.errors[0]),
+      'T-585-unlock-guards: unlock without --holder refuses — there is no untargeted removal, got ' + JSON.stringify(bare));
+    assert(fs.readFileSync(lockFile, 'utf8') === otherDead,
+      'T-585-unlock-guards: the lockfile is byte-identical after the missing-argument refusal');
     cleanup(repoRoot);
   }
   // -- age-based cross-host twin: an OLD-ts cross-host holder is ALSO a typed stale refusal (age fallback). --
@@ -29192,7 +29517,7 @@ scenario(() => {
 // sets. On the planner's ordinary all-concrete spine every sanctioned exit is closed BY
 // CONSTRUCTION (`amend-surface` wants an expansion-point row that shape has none of;
 // `reopen-node` refuses `would_orphan_in_progress` over the live sink; re-plan wants a FAILED
-// review attempt when every review PASSED; `revert-overflow` cannot restore a new file). The
+// review attempt when every review PASSED; `revert-overflow` discards a new file rather than attributing it). The
 // prescription manufactures the very refusal that blocks it.
 //
 // THE SHAPE OF THE FIX. Zero regulation on HOW the fix is produced (inline, or dispatched to

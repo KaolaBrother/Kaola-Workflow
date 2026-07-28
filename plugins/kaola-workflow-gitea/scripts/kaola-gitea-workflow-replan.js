@@ -213,8 +213,14 @@ function withProjectLock(paths, subcommand, body) {
   if (!lock.ok) {
     return schema.refuse(lock.stale ? 'scheduler_lock_stale' : 'scheduler_lock_held', {
       holder: lock.holder || null,
+      lockPath: paths.lockPath,
       operator_hint: lock.stale
-        ? 'Remove the stale scheduler.lock explicitly from one session, then retry.'
+        // The stale-lock exit is a verb, not a prose `rm`: adaptive-node's `unlock` removes the
+        // lockfile under a live-holder probe plus a holder-identity CAS, from one session only.
+        ? 'This project\'s scheduler.lock is held by a DEAD holder. Remove it from ONE session: '
+          + 'node scripts/kaola-gitea-workflow-adaptive-node.js unlock --project ' + paths.project
+          + ' --holder ' + ((lock.holder && Number.isInteger(lock.holder.pid)) ? lock.holder.pid : 'none')
+          + ' --json — then retry.'
         : 'Another project mutation owns scheduler.lock; retry after it completes.',
     });
   }
@@ -4783,6 +4789,201 @@ function appendConsentExtension(opts) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// abortReplan — the DISCARD exit for a wedged re-plan transaction.
+//
+// WHAT IT IS FOR. `prepare`/`resume` fail closed on a lost CAS or a broken authority anchor, and
+// both leave the project FENCED: every ordinary lifecycle mutation refuses `replan_in_progress`
+// until the transaction settles. `resume` is the roll-FORWARD exit. This is the roll-BACK one, and
+// without it a transaction that can never satisfy its own seams has no exit at all.
+//
+// THE IRREVERSIBILITY WALL. A transaction is abortable ONLY while the parent epoch has not been
+// snapshotted (schema.REPLAN_ABORTABLE_PHASES) AND no activation step has been entered. Both halves
+// are checked, not just the phase: `phase` advances after its step lands, so a crash mid-activation
+// can leave a step `complete` under an earlier-looking phase, and the activation journal is the
+// finer instrument. Past that wall the parent plan/state/mirror have begun rotating and the child is
+// partly live — discarding there would destroy newer state, which is the exact thing every CAS in
+// this file exists to prevent. It refuses with `legal_next: 'replan resume'` rather than dead-ending.
+//
+// WHAT IT DOES *NOT* UNDO. Nothing, because nothing needs undoing: through `child_frozen` the parent
+// plan and its ## Node Ledger are byte-identical (the whole epoch design rests on that), so abort
+// only has to remove the transaction's OWN scratch — the child draft, the planner packet and
+// attestation, the transaction file — and drop the fence.
+//
+// THE DURABLE RECORD. `.cache/aborted-transactions/{id}.json` is written FIRST, so the abort is
+// legible after the fact and a crash mid-abort is resumable: the record names the transaction, its
+// phase, its parent binding and the exact digests of every artifact removed. It is deliberately a
+// sibling of `.cache/committed-transactions/` and deliberately NOT part of the committed-authority
+// chain — an abandoned transaction has no successor to bind to, and giving it one would let a
+// discarded epoch masquerade as lineage.
+// ---------------------------------------------------------------------------
+function abortReplan(opts) {
+  const repoRoot = fs.realpathSync(opts.repoRoot || getRepoRoot());
+  const paths = projectPaths(repoRoot, opts.project);
+  return withProjectLock(paths, 'replan abort', () => abortReplanUnlocked(paths, opts));
+}
+
+function abortReplanUnlocked(paths, opts) {
+  const requested = String(opts.transactionId || '').trim();
+  if (!requested) {
+    return schema.refuse('replan_abort_transaction_required', {
+      detail: 'name the transaction to discard: --transaction <id> (it is the transaction_id the refusal you are recovering from reports)',
+    });
+  }
+
+  let stateContent = '';
+  try { stateContent = readAuthorityText(paths.statePath); }
+  catch (error) { return schema.refuse('replan_authority_path_invalid', { detail: error.message }); }
+  const stateFields = parseStateFields(stateContent);
+  const stateTx = stateFields.replan_transaction_id || 'none';
+
+  // Read the transaction WITHOUT validating first: a schema-invalid transaction is precisely one of
+  // the wedges this exit serves, so it must remain reachable. What is NOT tolerated is undecidable
+  // bytes — a payload that will not even parse cannot prove it is pre-activation, and guessing there
+  // could discard a half-activated epoch. That case escalates instead of discarding silently.
+  const transactionExists = entryExists(paths.transactionPath);
+  let raw = null;
+  if (transactionExists) {
+    try { raw = readAuthorityJson(paths.transactionPath); }
+    catch (error) {
+      return schema.refuse('replan_abort_undecidable', {
+        transaction_id: stateTx, detail: 'the transaction file will not parse (' + error.message
+          + '), so abort cannot prove the epoch is still pre-activation. Escalate: this is a broken kernel record, not a routine discard.',
+        legal_next: 'consent',
+      });
+    }
+  }
+
+  if (!raw) {
+    // No transaction on disk. Either the project is already clean (idempotent no-op), or the state
+    // still carries a fence whose transaction is gone — the `replan_integrity_mismatch` wedge, whose
+    // only correct repair is exactly this: drop the orphaned fence.
+    if (stateTx === 'none' && (stateFields.replan_status || 'none') === 'none') {
+      return { result: 'ok', aborted: false, transaction_id: requested,
+        detail: 'no replan transaction and no fence — nothing to abort' };
+    }
+    if (stateTx !== requested) {
+      return schema.refuse('replan_abort_transaction_mismatch', {
+        requested_transaction: requested, recorded_transaction: stateTx,
+        detail: 'the fence names ' + stateTx + ', not the transaction this call targets' });
+    }
+    const record = writeAbortRecord(paths, opts, {
+      transaction_id: requested, phase: 'orphaned_fence', outcome: 'orphaned_fence',
+      epoch_lineage_id: stateFields.epoch_lineage_id || 'none',
+      parent_plan_epoch: Number(stateFields.plan_epoch || 0),
+      parent_plan_hash: stateFields.active_plan_hash || 'none',
+      transition_reason: 'orphaned_fence', transaction_digest: null, removed: [],
+    });
+    durableWriteFile(paths.statePath, unfencedState(stateContent), opts, 'after_state_abort_unfenced');
+    return { result: 'ok', aborted: true, transaction_id: requested, phase: 'orphaned_fence',
+      removed: [], record: record.rel,
+      detail: 'the fence named a transaction with no file on disk — the orphaned fence was dropped' };
+  }
+
+  const transactionId = String(raw.transaction_id || 'none');
+  if (transactionId !== requested) {
+    return schema.refuse('replan_abort_transaction_mismatch', {
+      requested_transaction: requested, recorded_transaction: transactionId,
+      phase: raw.phase || 'unknown',
+      detail: 'the live transaction is ' + transactionId + ', not the one this call targets — re-read `replan status` before aborting' });
+  }
+
+  // The irreversibility wall, checked in both directions.
+  const enteredActivation = schema.REPLAN_ACTIVATION_STEPS.filter(step => {
+    const row = raw.activation && raw.activation[step];
+    return row && row.status && row.status !== 'not_started';
+  });
+  if (enteredActivation.length || !schema.REPLAN_ABORTABLE_PHASES.includes(raw.phase)) {
+    return schema.refuse('replan_abort_irreversible', {
+      transaction_id: transactionId, phase: raw.phase || 'unknown',
+      step: enteredActivation[0] || 'parent_epoch_snapshotted',
+      entered_activation: enteredActivation,
+      abortable_phases: schema.REPLAN_ABORTABLE_PHASES.slice(),
+      legal_next: 'replan resume',
+      detail: enteredActivation.length
+        ? 'activation has begun (' + enteredActivation.join(', ') + ') — the epoch is rotating and discarding it would destroy newer state'
+        : 'phase ' + (raw.phase || 'unknown') + ' is past the parent-epoch snapshot; roll forward with `replan resume` instead',
+    });
+  }
+  // A snapshot directory for the parent epoch that names THIS transaction means the snapshot landed
+  // even though the phase has not caught up (a crash between the rename and the phase write). The
+  // phase check above cannot see that, so the durable artifact is consulted directly.
+  const epochDir = path.join(paths.epochsDir, String((raw.parent && raw.parent.plan_epoch) || ''));
+  if (raw.parent && entryExists(epochDir)) {
+    return schema.refuse('replan_abort_irreversible', {
+      transaction_id: transactionId, phase: raw.phase || 'unknown',
+      step: 'parent_epoch_snapshotted', entered_activation: [],
+      abortable_phases: schema.REPLAN_ABORTABLE_PHASES.slice(),
+      legal_next: 'replan resume',
+      detail: 'the parent epoch snapshot at .cache/epochs/' + raw.parent.plan_epoch
+        + ' already exists — roll forward with `replan resume` instead',
+    });
+  }
+
+  // Journal-ahead: the record lands BEFORE anything is removed, and carries the digest of every
+  // artifact it is about to discard, so the abort is auditable from the record alone.
+  const artifacts = [
+    { rel: schema.REPLAN_PLAN_NEXT_NAME, abs: paths.childPath },
+    { rel: '.cache/' + schema.REPLAN_PLANNER_PACKET_NAME, abs: paths.packetPath },
+    { rel: '.cache/' + schema.REPLAN_PLANNER_ATTESTATION_NAME, abs: paths.attestationPath },
+  ].filter(entry => entryExists(entry.abs)).map(entry => Object.assign({
+    digest: schema.sha256Hex(readAuthorityBytes(entry.abs)),
+  }, entry));
+  const transactionBytes = readAuthorityBytes(paths.transactionPath);
+
+  const record = writeAbortRecord(paths, opts, {
+    transaction_id: transactionId,
+    phase: raw.phase || 'unknown',
+    outcome: raw.outcome || 'unknown',
+    epoch_lineage_id: raw.epoch_lineage_id || 'none',
+    parent_plan_epoch: Number((raw.parent && raw.parent.plan_epoch) || 0),
+    parent_plan_hash: (raw.parent && raw.parent.plan_hash) || 'none',
+    transition_reason: raw.transition_reason || 'unknown',
+    transaction_digest: schema.sha256Hex(transactionBytes),
+    removed: artifacts.map(entry => ({ path: entry.rel, digest: entry.digest }))
+      .concat([{ path: '.cache/' + schema.REPLAN_TRANSACTION_NAME,
+        digest: schema.sha256Hex(transactionBytes) }]),
+  });
+
+  for (let ordinal = 0; ordinal < artifacts.length; ordinal++) {
+    durableUnlink(artifacts[ordinal].abs, opts,
+      deterministicPathLabel('after_abort_artifact_unlinked', ordinal + 1, artifacts[ordinal].rel));
+  }
+  durableUnlink(paths.transactionPath, opts, 'after_abort_transaction_unlinked');
+  // The fence drops LAST. A crash before this leaves a fenced project whose transaction is gone —
+  // the orphaned-fence branch above, which a re-run of the same abort call finishes.
+  durableWriteFile(paths.statePath, unfencedState(stateContent), opts, 'after_state_abort_unfenced');
+
+  return { result: 'ok', aborted: true, transaction_id: transactionId, phase: raw.phase,
+    removed: record.value.removed.map(row => row.path), record: record.rel };
+}
+
+// The fence fields, and only the fence fields, return to their unfenced values. Every other epoch
+// field (lineage, claim binding, plan_epoch, the committed snapshot digest) is left exactly as it
+// was: an aborted transition never happened, so the project's epoch position is unchanged.
+function unfencedState(stateContent) {
+  return schema.writeEpochStateBlock(stateContent, {
+    replan_status: 'none', replan_transaction_id: 'none', replan_phase: 'none',
+  });
+}
+
+function writeAbortRecord(paths, opts, fields) {
+  const rel = '.cache/aborted-transactions/' + fields.transaction_id + '.json';
+  const abs = path.join(paths.cacheDir, 'aborted-transactions', fields.transaction_id + '.json');
+  // Re-aborting the SAME transaction id is legal: the id is derived from the CAS tuple, so a
+  // re-prepared identical candidate reuses it. Preserve the first abort's timestamp and count the
+  // repeats rather than colliding — the record is a log of what happened, not an authority chain.
+  const prior = readJsonOrNull(abs);
+  const value = Object.assign({ schema_version: 1 }, fields, {
+    first_aborted_at: (prior && prior.first_aborted_at) || nowIso(opts),
+    aborted_at: nowIso(opts),
+    abort_count: Number((prior && prior.abort_count) || 0) + 1,
+  });
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  durableWriteJson(abs, value, opts, 'after_abort_record');
+  return { rel, abs, value };
+}
+
 function readStatus(opts) {
   const repoRoot = fs.realpathSync(opts.repoRoot || getRepoRoot());
   const paths = projectPaths(repoRoot, opts.project);
@@ -4805,6 +5006,7 @@ function parseArgs(argv) {
     if (arg === '--json') out.json = true;
     else if (arg === '--project') out.project = argv[++index];
     else if (arg === '--source-attempt') out.sourceAttemptId = argv[++index];
+    else if (arg === '--transaction') out.transactionId = argv[++index];
     else if (arg === '--reason') out.transitionReason = argv[++index];
     else if (arg === '--user-turn-reference') out.userTurnReference = argv[++index];
     else if (arg === '--consent-reason') out.consentReason = argv[++index];
@@ -4836,6 +5038,8 @@ function main() {
       mismatch: args.mismatch, evidence: args.evidence });
   } else if (subcommand === 'resume') {
     result = resumeReplan({ project: args.project });
+  } else if (subcommand === 'abort') {
+    result = abortReplan({ project: args.project, transactionId: args.transactionId });
   } else if (subcommand === 'status') {
     result = readStatus({ project: args.project });
   } else if (subcommand === 'extend-consent') {
@@ -4895,6 +5099,7 @@ module.exports = {
   verifyCaseBProof,
   prepareReplan,
   resumeReplan,
+  abortReplan,
   appendConsentExtension,
   verifyConsentLedger,
   verifySnapshotManifest,

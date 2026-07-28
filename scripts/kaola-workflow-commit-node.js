@@ -60,10 +60,21 @@ const OPERATOR_HINT_REGISTRY = {
 // calls the template with ctx, returns a one-sentence string.
 // Falls back to a safe generic when no entry is registered for the reason.
 // ---------------------------------------------------------------------------
+// ADR 0013 / M3: one accessor, one fallback chain. The kernel module is required
+// DEFENSIVELY — this aggregator must stay runnable in a vendored install that ships the
+// aggregator without its sibling kernel, so a missing module degrades to exactly today's
+// two-rung behaviour rather than throwing.
+let kernelSchema = null;
+try { kernelSchema = require('./kaola-workflow-adaptive-schema'); } catch (_) { kernelSchema = null; }
+
 function getOperatorHint(reason, ctx) {
+  const fallback = `Unexpected refusal (reason: ${reason || 'unknown'}). Check the plan and node state, then retry or run repair-node to recover.`;
+  if (kernelSchema && typeof kernelSchema.composeOperatorHint === 'function') {
+    return kernelSchema.composeOperatorHint(reason, ctx || {}, OPERATOR_HINT_REGISTRY, fallback);
+  }
   const fn = OPERATOR_HINT_REGISTRY[reason];
   if (typeof fn === 'function') return fn(ctx || {});
-  return `Unexpected refusal (reason: ${reason || 'unknown'}). Check the plan and node state, then retry or run repair-node to recover.`;
+  return fallback;
 }
 
 // Resolve validator path relative to this script's own directory (so forge ports

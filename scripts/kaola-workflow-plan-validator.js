@@ -196,10 +196,12 @@ const OPERATOR_HINT_REGISTRY = {
   internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
 };
 
+// ADR 0013 / M3: one accessor, one fallback chain, shared with every other aggregator that
+// owns a legacy hint table — this table first (today's text verbatim, forge paths intact),
+// then the FAMILY hint from the kernel registry, then the generic fallback below.
 function getOperatorHint(reason, ctx) {
-  const fn = OPERATOR_HINT_REGISTRY[reason];
-  if (fn) return fn(ctx || {});
-  return `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+  const fallback = `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+  return schema.composeOperatorHint(reason, ctx || {}, OPERATOR_HINT_REGISTRY, fallback);
 }
 
 const TERMINAL_ROLE = 'finalize';
@@ -5511,6 +5513,44 @@ function normalizeLedgerHeader(content) {
 }
 
 // --- CLI --------------------------------------------------------------------
+
+// THE DECLARED DISPATCH SET. This script has no subcommand token — the verb IS the flag — so this
+// is the list of flags main() branches on to select WHAT the run does, and a refusal route naming
+// one of them names a real entry point. The registry route sweep READS this declaration instead of
+// scanning the source, because no source-text scan can separate a dispatch flag from an option: it
+// either misses live verbs or accepts `--node-id` as one, and a verb-existence guard built on that
+// scan guards nothing. main() remains the source of truth; this is its declaration, and the two
+// must be changed together.
+//
+// DELIBERATELY EXCLUDED — each of these parameterizes or modifies a run, it never selects one:
+//   value-carrying: --node-id, --nodes, --project, --base, --expect-base, --group-id, --member,
+//                   --merge-commit, --leg-root, --governance-ack
+//   modifiers:      --json, --repair, --skip-root-pin, --write-overlap-consent
+//   usage banner:   --help / -h (dispatched positionally off args[0], never a route target)
+// Sorted, not in dispatch order; dispatch PRECEDENCE lives in main() (note that --freeze-checked is
+// tested before --freeze, so passing both runs the check).
+const CLI_FLAGS = Object.freeze([
+  '--barrier-check',
+  '--base-freshness',
+  '--candidate-hash',
+  '--drop-base',
+  '--finalize-check',
+  '--freeze',
+  '--freeze-checked',
+  '--gate-verify',
+  '--group-barrier',
+  '--leg-barrier',
+  '--node-end',
+  '--parallel-safe',
+  '--parent-clean-check',
+  '--record-base',
+  '--release-check',
+  '--resume-check',
+  '--roles-manifest',
+  '--selector-check',
+  '--verdict-check',
+]);
+
 // #239 (v3.21.0): snapshot the LANDABLE worktree into a throwaway index and return the tree SHA. The
 // index is first seeded from HEAD (`read-tree HEAD`), then `git add -A` layers the working state on
 // top. This captures exactly the set that will be committed and merged: tracked changes (INCLUDING a
@@ -7134,6 +7174,9 @@ function main() {
 }
 
 module.exports = {
+  // The declared CLI dispatch set (see the `--- CLI ---` section header). Exported so the route
+  // sweep can verify a route's verb against a DECLARATION rather than an unsound source scan.
+  CLI_FLAGS,
   validatePlan,
   revalidateForResume,
   freezePlan,

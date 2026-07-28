@@ -45,7 +45,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -233,10 +233,19 @@ const OPERATOR_HINT_REGISTRY = {
   scheduler_locked: (ctx) =>
     'Another scheduler command holds this project\'s lock'
     + (ctx.holder && ctx.holder.subcommand ? ' (' + ctx.holder.subcommand + (ctx.holder.pid ? ' pid ' + ctx.holder.pid : '') + ')' : '')
-    + '. Only one orchestrator may drive a project\'s scheduler at a time — wait for the in-flight command to finish, then retry. (A dead/crashed holder refuses separately as scheduler_lock_stale with the manual recovery step.)',
+    + '. Only one orchestrator may drive a project\'s scheduler at a time — wait for the in-flight command to finish, then retry. (A dead/crashed holder refuses separately as scheduler_lock_stale, whose recovery is the unlock verb.)',
+  // `unlock` refused because the recorded holder is still LIVE. This is the guard that keeps the
+  // verb from reintroducing the double-acquire hazard: a running orchestrator's lock is never taken.
+  scheduler_lock_held: (ctx) => {
+    const h = (ctx.holder && typeof ctx.holder === 'object') ? ctx.holder : {};
+    return 'The scheduler lock is held by a LIVE holder ('
+      + (h.subcommand || 'unknown subcommand') + ', pid ' + (h.pid != null ? h.pid : '?')
+      + '); it is never removed while its owner is running. Wait for that command to finish, then retry — or, if you believe the process is gone, re-run the wedged command to re-probe liveness.';
+  },
   // #585 (repair): the lock's holder is DEAD/crashed (dead same-host PID, or an old cross-host/corrupt
-  // payload). The lock is NEVER auto-removed — an unlink-based takeover double-acquires under
-  // concurrency — so recovery is one explicit operator removal, from ONE session only.
+  // payload). The lock is still never auto-reclaimed by the ACQUIRE path — an unlink fused into
+  // acquire double-acquires under concurrency — but recovery is no longer a prose `rm`: the `unlock`
+  // verb removes it under a live-holder probe plus a holder-identity CAS, from one session.
   scheduler_lock_stale: (ctx) => {
     const h = (ctx.holder && typeof ctx.holder === 'object') ? ctx.holder : {};
     let since = 'unknown time';
@@ -247,9 +256,18 @@ const OPERATOR_HINT_REGISTRY = {
     return 'This project\'s scheduler lock is held by a DEAD/crashed holder ('
       + (h.subcommand || 'unknown subcommand') + ', pid ' + (h.pid != null ? h.pid : '?')
       + ' on ' + (h.host || 'unknown host') + ', since ' + since
-      + '). It is never removed automatically. Verify no other orchestrator session is recovering this project, then remove the lock by hand from ONE session only: rm "'
-      + (ctx.lockPath || '.cache/scheduler.lock') + '" — then re-run the command.';
+      + '). It is never reclaimed automatically. Verify no other orchestrator session is recovering this project, then remove it from ONE session only: '
+      + ADAPTIVE_NODE_SCRIPT + ' unlock --project <P> --holder ' + (Number.isInteger(h.pid) ? h.pid : 'none')
+      + ' --json — then re-run the command.';
   },
+  // `unlock` refused because the lock is NOT the one the caller observed — it was released and
+  // re-claimed in between. Re-read, then target the pid the fresh refusal reports.
+  scheduler_lock_holder_mismatch: (ctx) =>
+    'The scheduler lock is held by ' + (ctx.recorded_holder || 'a different holder') + ', not the '
+    + (ctx.requested_holder || '<pid>') + ' this unlock names — it was re-claimed after the refusal you are recovering from. Nothing was removed. Re-run the wedged command to read the CURRENT holder, then unlock that pid (or wait, if it is live).',
+  scheduler_unlock_failed: (ctx) =>
+    'Could not remove the scheduler lock at ' + (ctx.lockPath || '.cache/scheduler.lock') + ' ('
+    + (ctx.detail || 'filesystem fault') + '). The lock is untouched. Resolve the filesystem condition (permissions / read-only mount), then retry unlock.',
   // #466: worktree-authority split — a mutating lifecycle call ran from the MAIN root while a linked
   // worktree is recorded; the ledger/evidence/baselines would diverge from where the role agents write.
   worktree_authority_split: (ctx) =>
@@ -420,13 +438,13 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- halt (#391/#360) ---
   invalid_reason: (ctx) =>
-    'Invalid --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict') + '.',
+    'Invalid --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict, integrity') + '.',
   no_halt_present: () =>
     'No durable consent_halt: pending marker and no escalated_to_full state marker to clear — there is nothing to clear.',
   halt_written: (ctx) =>
-    'A ' + (ctx.reason ? ctx.reason : 'consent/security/test_thrash/merge_conflict') + ' halt is set for ' + (ctx.nodeId || '<id>') + '. Resolve the cause, then clear-halt --reason consent|security to resume.',
+    'A ' + (ctx.reason ? ctx.reason : 'consent/security/test_thrash/merge_conflict/integrity') + ' halt is set for ' + (ctx.nodeId || '<id>') + '. Resolve the cause, then clear-halt --reason consent|security to resume.',
   write_halt_invalid_reason: (ctx) =>
-    'Invalid write-halt --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict') + '.',
+    'Invalid write-halt --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict, integrity') + '.',
 
   // --- reopen / repair primitives (#434 / D-434-01) ---
   no_parseable_nodes: () =>
@@ -532,7 +550,14 @@ const OPERATOR_HINT_REGISTRY = {
   barrier_base_empty: (ctx) =>
     'The barrier-base for ' + (ctx.nodeId || '<id>') + ' is empty. Re-open the node to record a fresh baseline before revert-overflow.',
   git_checkout_failed: (ctx) =>
-    'Reverting the out-of-allow paths for ' + (ctx.nodeId || '<id>') + ' failed at the git checkout seam (' + (ctx.detail || 'non-zero') + '). Resolve the working-tree state and retry revert-overflow.',
+    'Restoring the baseline-tracked out-of-allow paths for ' + (ctx.nodeId || '<id>') + ' failed at the git checkout seam (' + (ctx.detail || 'non-zero') + '). Nothing was deleted — the discard half runs only after the restore half lands. Resolve the working-tree state and retry revert-overflow.',
+  // The presence probe that splits outOfAllow into restore-from-baseline vs delete. It fails CLOSED:
+  // an unreadable baseline tree can never be guessed past, because guessing "absent" would DELETE a
+  // file the baseline still holds.
+  baseline_partition_unavailable: (ctx) =>
+    'Could not read the baseline tree ' + (ctx.baseSha ? String(ctx.baseSha).slice(0, 12) : '<baseSha>') + ' to decide which out-of-allow paths pre-existed (' + (ctx.detail || 'git ls-tree failed') + '). Nothing was reverted. Restore the git object store (a partial fetch / pruned commit is the usual cause), then retry revert-overflow.',
+  overflow_delete_failed: (ctx) =>
+    'Discarding the newly-created out-of-allow paths for ' + (ctx.nodeId || '<id>') + ' failed (' + (ctx.detail || 'non-zero') + '). The baseline-tracked paths were already restored; inspect the reported deletedPaths, clear the offending entry by hand, then retry revert-overflow.',
   group_baseline_failed: (ctx) =>
     'Recording the lane-group baseline failed (group ' + (ctx.group_id || '<gid>') + '). Re-run open-ready; if it persists, reconcile the running set.',
 
@@ -652,24 +677,19 @@ const OPERATOR_HINT_REGISTRY = {
 // reverting the overflow, by amending the surface, or by reshaping the spine, so naming any verb
 // would misdirect. A reason with no entry gains no route — that silence is information.
 // ---------------------------------------------------------------------------
-const DEVIATION_ROUTES = {
-  // Out-of-set writes: discard them and re-land inside the declared set.
-  write_set_overflow: 'revert-overflow',
-  write_set_granularity: 'revert-overflow',
-  lockfile_write: 'revert-overflow',
-  mirror_write: 'revert-overflow',
-  count_bump: 'revert-overflow',
-  // Writes nobody declared: attribute them onto a surface and re-review, rather than discard.
-  unattributed_write: 'amend-surface',
-  // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which is a
-  // spine change — a node-level fix cannot conjure a reviewer the frozen plan never contained.
-  sensitive_write_unreviewed: 'shape_refutation',
-  // #826: a production-behavior final fix whose re-certification cannot be produced. The lane
-  // ADMITS production surfaces, but only behind a settled PASS over the post-fix candidate; when
-  // that receipt is unobtainable the plan simply has no authority that can certify the change, and
-  // the fallback is the same one every "the frozen shape cannot express this" case takes.
-  final_fix_production_surface: 'shape_refutation',
-};
+// ONE SOURCE (ADR 0013 / M3): the table is DERIVED from the kernel registry's per-finding
+// route resolver (`SINK_FINDING_ROUTE_BY_SUBTYPE` / `_BY_KIND` in adaptive-schema), which is
+// itself keyed by the composite sink verdict's own discriminator enums. This aggregator holds
+// no independent copy, so the two cannot drift and a route can only be changed in one place.
+// The emitted values are unchanged — each kernel entry carries the bare verb token verbatim:
+//   out-of-set writes (write_set_overflow / _granularity / lockfile_write / mirror_write /
+//     count_bump)                    -> revert-overflow  (discard, re-land inside the set)
+//   unattributed_write               -> amend-surface    (attribute + re-review, not discard)
+//   sensitive_write_unreviewed       -> shape_refutation (adding a reviewer gate is a spine change)
+//   final_fix_production_surface     -> shape_refutation (#826: no authority can certify it in-plan)
+// `foreign_archive` remains ABSENT — the kernel records it as an explicit null so the sweep
+// knows the silence is intentional rather than a gap.
+const DEVIATION_ROUTES = reviewSchema.deriveDeviationRoutes();
 
 // finalizeDeviationRoute — the CONTEXT-BOUND route for a refusal fired during finalization. Returns
 // the recorded verb when the sink's lane is genuinely OPEN (the unique terminal `finalize` row is
@@ -701,19 +721,17 @@ function finalizeDeviationRoute(opts, content) {
 // time, not stored, so the string is always consistent with the reason it
 // accompanies.
 // ---------------------------------------------------------------------------
+// ADR 0013 / M3: the lookup itself now lives in the kernel (`composeOperatorHint`), so all
+// four hint tables share ONE accessor with ONE fallback chain — this table first (so today's
+// text, and the forge ports' renamed script paths, are reproduced byte-for-byte), then the
+// FAMILY hint from the kernel registry, then this generic fallback. The middle rung closes the
+// hole this fallback used to fill for every emitted code with no template of its own.
 function getOperatorHint(reason, ctx) {
   const safeCtx = ctx || {};
   const fallback = 'Refusal reason: ' + (reason || 'unknown')
     + (safeCtx.nodeId ? ' (node ' + safeCtx.nodeId + ')' : '')
     + '. Run orient to inspect the plan + ledger state and the relevant plan-run recovery card.';
-  const tmpl = OPERATOR_HINT_REGISTRY[reason];
-  if (typeof tmpl !== 'function') return fallback;
-  try {
-    const out = tmpl(safeCtx);
-    return (typeof out === 'string' && out.trim()) ? out : fallback;
-  } catch (_) {
-    return fallback;
-  }
+  return reviewSchema.composeOperatorHint(reason, safeCtx, OPERATOR_HINT_REGISTRY, fallback);
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +759,11 @@ function decorateOperatorHint(envelope) {
   if (!envelope.reason) return envelope;
   const route = DEVIATION_ROUTES[envelope.reason];
   if (route && !envelope.route) envelope.route = route;
+  // ADR 0013 / M3 — the SECOND stamping seam (the first is schema.refuse). Dual emission:
+  // additive, idempotent, and never a rewrite of `reason` while the kernel runs in 'compat'
+  // mode, so every consumer that string-matches the legacy token keeps working. This seam
+  // covers the envelopes this aggregator builds inline rather than through schema.refuse.
+  reviewSchema.stampRefusalEnvelope(envelope);
   if (typeof envelope.operator_hint === 'string' && envelope.operator_hint) return envelope;
   envelope.operator_hint = getOperatorHint(envelope.reason, envelope);
   return envelope;
@@ -8333,7 +8356,12 @@ function runWriteHalt(opts) {
   const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut } = opts;
 
   // #463 (write-overlap): `merge_conflict` joins the allowlist — a consent-style, resumable halt.
-  const validReasons = ['consent', 'security', 'test_thrash', 'merge_conflict'];
+  // `integrity` is the R4 halt: a hash, back-link, lineage or authority anchor did not verify, and
+  // the deviation IS the evidence. It is TERMINAL like `test_thrash` — `clear-halt` still accepts
+  // only consent|security, so an integrity halt can never be cleared by the runtime that raised it.
+  // That asymmetry is the point: an auto-clearable integrity halt would launder the very signal the
+  // halt exists to preserve.
+  const validReasons = ['consent', 'security', 'test_thrash', 'merge_conflict', 'integrity'];
   if (!validReasons.includes(reason)) {
     return { result: 'refuse', reason: 'invalid_reason', validReasons };
   }
@@ -8483,6 +8511,124 @@ function runClearHalt(opts) {
     reason,
     taskMirror: refreshTaskMirror(project, shell),
   };
+}
+
+// ---------------------------------------------------------------------------
+// runUnlock — the ONE sanctioned removal of a project scheduler lock left behind by a
+// dead/crashed holder. Removes only; it NEVER acquires.
+//
+// WHY THIS DOES NOT REINTRODUCE THE DOUBLE-ACQUIRE HAZARD acquireProjectLock names.
+// That hazard is specific to an AUTO-TAKEOVER fused into the acquire path: an unlink there
+// executes a stale decision made BEFORE the unlink, so two concurrent takers holding the same
+// stale decision each remove the other's fresh claim and BOTH end up holding the lock. Three
+// properties, which must all hold together, keep this verb clear of it:
+//   (1) It never acquires. Removal and acquisition are separate commands, so nothing this verb
+//       does can produce two live holders — the worst case is a lock removed and then re-claimed
+//       by exactly one O_EXCL winner.
+//   (2) It refuses while the recorded holder is LIVE (isStaleLock's same-host process probe, the
+//       identical classifier the acquire path uses), so a running orchestrator's lock is never
+//       pulled out from under it.
+//   (3) It is a compare-and-set on holder IDENTITY: --holder must name the pid the caller
+//       observed in the refusal it is recovering from, and the payload is re-verified from the
+//       bytes actually removed. A lock re-claimed by a different process between the operator's
+//       read and this call therefore refuses instead of being destroyed — which is precisely the
+//       "executes a stale decision" step the acquire path could not defend against.
+// The removal itself is rename-then-verify rather than a bare unlink: the file is moved aside in
+// ONE syscall, the moved bytes are compared against the payload the CAS approved, and a payload
+// that turns out not to be the CAS target is renamed straight BACK rather than discarded.
+//
+// --holder none targets a lock whose payload is corrupt or carries no usable pid (the shape
+// acquireProjectLock reports as `holder: null`). That arm still requires the mtime-based stale
+// verdict, so a fresh lock caught mid-write between its O_EXCL create and its payload write is
+// protected exactly as the acquire path protects it.
+//
+// The lock path resolves cwd-relative, like every other project-scoped path: run unlock from the
+// same cwd the wedged command ran from.
+//
+// @param {object} opts
+//   lockPath {string}          .cache/scheduler.lock for the project
+//   holder   {string|number}   the pid the caller observed, or the literal 'none'
+//   fs       {object}          injectable fs seam (readFileSync/renameSync/unlinkSync/statSync)
+//   isStale  {function}        injectable staleness classifier (defaults to the schema's)
+//   staleAfterMs {number}      corrupt-payload age threshold (defaults to the schema's lane window)
+// ---------------------------------------------------------------------------
+function runUnlock(opts) {
+  const fsx = opts.fs || require('fs');
+  const staleFn = opts.isStale || isStaleLock;
+  const lockPath = opts.lockPath;
+  const requested = String(opts.holder === undefined || opts.holder === null ? '' : opts.holder).trim();
+
+  if (!requested) {
+    return { result: 'refuse', errors: ['--holder is required for unlock (the pid from the refusal being recovered, or `none` for a corrupt payload)'] };
+  }
+
+  let rawBytes;
+  try { rawBytes = fsx.readFileSync(lockPath, 'utf8'); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') {
+      // Idempotent: nothing holds the lock, so the caller's next step is simply the command it
+      // wanted to run. An outcome value on an ok envelope, never a refusal.
+      return { result: 'ok', unlocked: false, lockPath, detail: 'no scheduler lock present' };
+    }
+    return { result: 'refuse', reason: 'scheduler_unlock_failed', lockPath,
+      detail: 'cannot read the lock payload: ' + String((error && error.message) || error) };
+  }
+
+  let holder = null;
+  try { holder = JSON.parse(rawBytes); } catch (_) { holder = null; }
+  if (holder !== null && typeof holder !== 'object') holder = null;
+
+  if (holder) {
+    const recordedPid = Number.isInteger(holder.pid) ? String(holder.pid) : 'none';
+    if (requested !== recordedPid) {
+      return { result: 'refuse', reason: 'scheduler_lock_holder_mismatch', lockPath, holder,
+        requested_holder: requested, recorded_holder: recordedPid,
+        detail: 'the lock is held by ' + recordedPid + ', not the ' + requested + ' this call names — it was re-claimed after the refusal you are recovering from' };
+    }
+    if (!staleFn(holder)) {
+      return { result: 'refuse', reason: 'scheduler_lock_held', lockPath, holder, stale: false,
+        detail: 'the recorded holder is still LIVE — a running orchestrator\'s lock is never removed' };
+    }
+  } else {
+    if (requested !== 'none') {
+      return { result: 'refuse', reason: 'scheduler_lock_holder_mismatch', lockPath, holder: null,
+        requested_holder: requested, recorded_holder: 'none',
+        detail: 'the lock payload is corrupt or carries no pid — target it with --holder none' };
+    }
+    // Corrupt/empty payload: classify by the lockfile's mtime, exactly as the acquire path does, so
+    // a fresh lock caught between its O_EXCL create and its payload write is never removed.
+    let mtimeMs = Date.now();
+    try { mtimeMs = fsx.statSync(lockPath).mtimeMs; } catch (_) {}
+    const window = Number.isFinite(opts.staleAfterMs) ? opts.staleAfterMs : LANE_STALENESS_MS;
+    if (!((Date.now() - mtimeMs) > window)) {
+      return { result: 'refuse', reason: 'scheduler_lock_held', lockPath, holder: null, stale: false,
+        detail: 'the lock payload is unparseable but the file is younger than the staleness window — it is most likely a fresh holder caught mid-write' };
+    }
+  }
+
+  // Rename-then-verify. The move is one syscall; the bytes are re-read from the MOVED copy, so a
+  // payload that changed between the CAS above and this removal is detected and put back.
+  const quarantine = lockPath + '.unlock-' + process.pid + '-' + Date.now();
+  try { fsx.renameSync(lockPath, quarantine); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { result: 'ok', unlocked: false, lockPath, detail: 'the lock was released before this call removed it' };
+    }
+    return { result: 'refuse', reason: 'scheduler_unlock_failed', lockPath,
+      detail: 'cannot move the lock aside: ' + String((error && error.message) || error) };
+  }
+
+  let movedBytes = null;
+  try { movedBytes = fsx.readFileSync(quarantine, 'utf8'); } catch (_) { movedBytes = null; }
+  if (movedBytes !== rawBytes) {
+    try { fsx.renameSync(quarantine, lockPath); } catch (_) {}
+    return { result: 'refuse', reason: 'scheduler_lock_holder_mismatch', lockPath, holder,
+      requested_holder: requested, recorded_holder: holder && Number.isInteger(holder.pid) ? String(holder.pid) : 'none',
+      detail: 'the lock payload changed between verification and removal — it was restored untouched' };
+  }
+  try { fsx.unlinkSync(quarantine); } catch (_) {}
+
+  return { result: 'ok', unlocked: true, lockPath, holder, requested_holder: requested };
 }
 
 // ---------------------------------------------------------------------------
@@ -8925,12 +9071,16 @@ function runReopenNode(opts) {
 //
 // Steps:
 //   (1) Shell commit-node --barrier-check --json (per-node) to read the current outOfAllow list.
-//   (2) For each outOfAllow path, restore the baseline state via gitCheckout seam.
+//   (2) PARTITION outOfAllow against the baseline tree: paths that EXIST at baseSha are restored
+//       via the gitCheckout seam; paths that do NOT exist there (newly-created undeclared files,
+//       which have no blob to restore) are DELETED via the removePaths seam.
 //   (3) Append a provenance log entry recording the revert.
 //   (4) Re-run barrier-check to confirm all overflows cleared.
 //
-// gitCheckout seam: opts.gitCheckout(barrierRoot, baseSha, filePaths) — injectable for tests.
-// Falls back to real execFileSync when not provided.
+// Seams (all injectable for tests; each falls back to real git/fs when not provided):
+//   opts.gitCheckout(barrierRoot, baseSha, filePaths) → {exitCode}
+//   opts.presentAtBase(barrierRoot, baseSha, filePaths) → string[]  (the subset tracked at baseSha)
+//   opts.removePaths(barrierRoot, filePaths) → {exitCode, removed[]}
 //
 // @param {object} opts
 //   planPath   {string}   path to workflow-plan.md
@@ -8938,11 +9088,49 @@ function runReopenNode(opts) {
 //   nodeId     {string}   the in_progress node whose barrier overflowed
 //   shell      {function} (scriptPath, args[]) → {exitCode,...}  (commit-node)
 //   gitCheckout {function} (barrierRoot, sha, filePaths) → {exitCode}  (injectable seam)
+//   presentAtBase {function} (barrierRoot, sha, filePaths) → string[] (injectable seam)
+//   removePaths {function} (barrierRoot, filePaths) → {exitCode, removed[]} (injectable seam)
 //   readFile   {function} (path) → string
 //   writeFile  {function} (path, content) → void
 //   cacheExists {function} (path) → boolean
 //   appendLog  {function} (entry) → void  (optional; defaults to appendProvenanceLog)
 // ---------------------------------------------------------------------------
+// presentAtBase — the default probe: ONE `git ls-tree` over the baseline commit restricted to the
+// overflow pathspecs, NUL-separated so a path with spaces/quotes survives. A path git does not list
+// is absent from the baseline tree; on any git fault the probe reports "unknown" (null) and the
+// caller refuses rather than guessing, because guessing "absent" would DELETE a file that exists at
+// the baseline and guessing "present" would re-raise the checkout failure this partition removes.
+function gitPresentAtBase(barrierRoot, baseSha, filePaths) {
+  const out = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', baseSha, '--', ...filePaths], {
+    cwd: barrierRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return String(out || '').split('\0').filter(Boolean);
+}
+
+// removeOverflowPaths — the default discard: unlink each newly-created overflow file. Only a REGULAR
+// file is removed (never a directory, never a symlink — an lstat mismatch is reported, not followed),
+// and an already-absent path is a no-op so the verb stays idempotent across a crashed retry.
+function removeOverflowPaths(barrierRoot, filePaths) {
+  const fs = require('fs');
+  const removed = [];
+  for (const rel of filePaths) {
+    const abs = path.resolve(barrierRoot, rel);
+    let stat = null;
+    try { stat = fs.lstatSync(abs); }
+    catch (error) {
+      if (error && error.code === 'ENOENT') continue; // already gone — idempotent
+      return { exitCode: 1, removed, detail: 'lstat ' + rel + ': ' + String(error.message || error) };
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      return { exitCode: 1, removed, detail: rel + ' is not a regular file (refusing to remove)' };
+    }
+    try { fs.unlinkSync(abs); } catch (error) {
+      return { exitCode: 1, removed, detail: 'unlink ' + rel + ': ' + String(error.message || error) };
+    }
+    removed.push(rel);
+  }
+  return { exitCode: 0, removed };
+}
 function runRevertOverflow(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
   const gitCheckoutSeam = opts.gitCheckout || null;
@@ -8983,42 +9171,72 @@ function runRevertOverflow(opts) {
   // The barrier root is the repo root (the git checkout from which paths are relative).
   const barrierRoot = getRoot();
 
-  // (2) Restore each outOfAllow path to its baseline state.
+  // (2) PARTITION outOfAllow against the baseline tree, then revert each half with the primitive
+  // that half actually admits.
   //
-  // KNOWN GAP, recorded where it bites rather than filed: `git checkout <baseSha> -- <path>`
-  // cannot restore a path that did not exist at baseSha. A NEWLY-CREATED undeclared file has no
-  // blob at the baseline, so git exits non-zero and the whole revert refuses `git_checkout_failed`
-  // — including for the siblings that would have reverted cleanly, since the paths are passed in
-  // one invocation. The operator is then holding an overflow this primitive cannot clear.
+  // WHY THE PARTITION IS THE WHOLE VERB. `git checkout <baseSha> -- <path>` cannot restore a path
+  // that did not exist at baseSha: a NEWLY-CREATED undeclared file has no blob at the baseline, so
+  // git exits non-zero and — because every path travels in ONE invocation — the whole revert used to
+  // refuse `git_checkout_failed`, including for the siblings that would have reverted cleanly. Since
+  // test writes became attributable, newly-created files are the DOMINANT overflow class, so the
+  // discard primitive failed on exactly the case it is most often reached for, and the
+  // `unattributed_paths` route dead-ended where it is most reached.
   //
-  // This matters more than it reads. Since test writes became attributable, newly-created files
-  // are the DOMINANT overflow class, so the discard primitive fails on exactly the case it is now
-  // most often reached for. The preserve primitive (`amend-surface`) is the working recovery for
-  // companion work owned by a discharged milestone, which is why the `write_set_overflow` hint
-  // names both. A correct fix here would partition outOfAllow into paths present at baseSha
-  // (checkout) and paths absent from it (delete), and report the two sets separately.
-  const revertedPaths = [];
-  if (gitCheckoutSeam) {
-    const r = gitCheckoutSeam(barrierRoot, baseSha, outOfAllow);
-    if (r && r.exitCode !== 0) {
-      return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow, detail: 'gitCheckout seam returned non-zero' };
-    }
-    revertedPaths.push(...outOfAllow);
-  } else {
-    // Real git checkout path.
-    try {
-      execFileSync('git', ['checkout', baseSha, '--', ...outOfAllow], {
-        cwd: barrierRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      revertedPaths.push(...outOfAllow);
-    } catch (e) {
-      return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow, detail: String(e.message || e) };
+  // The two halves are NOT symmetric and are reported separately for that reason: `checkedOutPaths`
+  // restores content that already existed and is reversible from the baseline, while `deletedPaths`
+  // DESTROYS content that exists nowhere else. `revertedPaths` stays the union, in outOfAllow order,
+  // so every existing consumer of this envelope reads the same field it always did.
+  //
+  // The presence probe fails CLOSED: an unreadable baseline tree refuses rather than guessing, since
+  // guessing "absent" deletes a file the baseline still holds.
+  let presentSet;
+  try {
+    const probe = (opts.presentAtBase || gitPresentAtBase)(barrierRoot, baseSha, outOfAllow);
+    if (!Array.isArray(probe)) throw new Error('presentAtBase seam returned a non-array');
+    presentSet = new Set(probe.map(String));
+  } catch (e) {
+    return { result: 'refuse', reason: 'baseline_partition_unavailable', nodeId, outOfAllow, baseSha,
+      detail: String((e && e.message) || e) };
+  }
+  const checkedOutPaths = outOfAllow.filter(p => presentSet.has(p));
+  const deletedPaths = outOfAllow.filter(p => !presentSet.has(p));
+
+  // (2a) Restore the paths the baseline still holds.
+  if (checkedOutPaths.length) {
+    if (gitCheckoutSeam) {
+      const r = gitCheckoutSeam(barrierRoot, baseSha, checkedOutPaths);
+      if (r && r.exitCode !== 0) {
+        return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow,
+          checkedOutPaths, deletedPaths: [], detail: 'gitCheckout seam returned non-zero' };
+      }
+    } else {
+      try {
+        execFileSync('git', ['checkout', baseSha, '--', ...checkedOutPaths], {
+          cwd: barrierRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (e) {
+        return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow,
+          checkedOutPaths, deletedPaths: [], detail: String(e.message || e) };
+      }
     }
   }
 
+  // (2b) Discard the paths the baseline never held. Ordered AFTER the checkout so a failed restore
+  // never destroys anything: the destructive half runs only once the reversible half has landed.
+  if (deletedPaths.length) {
+    const removal = (opts.removePaths || removeOverflowPaths)(barrierRoot, deletedPaths);
+    if (!removal || removal.exitCode !== 0) {
+      return { result: 'refuse', reason: 'overflow_delete_failed', nodeId, outOfAllow,
+        checkedOutPaths, deletedPaths: (removal && removal.removed) || [],
+        detail: (removal && removal.detail) || 'removePaths seam returned non-zero' };
+    }
+  }
+
+  const revertedPaths = outOfAllow.slice();
+
   // (3) Append provenance log entry for the revert.
   if (typeof appendLogFn === 'function') {
-    appendLogFn({ event: 'revert-overflow', nodeId, revertedPaths, baseSha });
+    appendLogFn({ event: 'revert-overflow', nodeId, revertedPaths, checkedOutPaths, deletedPaths, baseSha });
   } else {
     appendProvenanceLog(planPath, 'revert-overflow', nodeId, baseSha ? baseSha.slice(0, 12) : null);
   }
@@ -9030,6 +9248,8 @@ function runRevertOverflow(opts) {
   return {
     result: 'ok',
     revertedPaths,
+    checkedOutPaths,
+    deletedPaths,
     baseSha: baseSha ? baseSha.slice(0, 12) : null,
     barrierClearedAfterRevert,
     barrierAfter,
@@ -15356,7 +15576,7 @@ function defaultSinkProgressProbe(opts, content) {
 // only the narrow allowband and `complete`-node declared write sets. On the planner's ordinary
 // all-concrete spine every sanctioned exit is closed BY CONSTRUCTION (`amend-surface` needs an
 // expansion-point row that shape lacks; `reopen-node` refuses over the live sink; re-plan needs a
-// FAILED review attempt when every review PASSED; `revert-overflow` cannot restore a new file). The
+// FAILED review attempt when every review PASSED; `revert-overflow` discards a new file rather than attributing it). The
 // prescription manufactured the very refusal that blocked it.
 //
 // THE SHAPE OF THE FIX. ZERO regulation on HOW the fix is produced — inline for a trivial
@@ -16586,7 +16806,8 @@ function main() {
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
-      '  write-halt          --project P --node-id N --reason consent|security|test_thrash|merge_conflict\n' +
+      '  write-halt          --project P --node-id N --reason consent|security|test_thrash|merge_conflict|integrity\n' +
+      '  unlock              --project P --holder <pid|none>  (remove a scheduler.lock left by a DEAD holder; refuses while the holder is live)\n' +
       '  reopen-node         --project P --node-id N\n' +
       '  repair-node         --project P --attempt-id A --node-id N\n' +
       '  rebind-base         --project P --attempt-id A --node-id N  (re-anchor a lane-group member\'s leg-era barrier base to the reviewed merged parent — proof-gated, nonce rotated; zero-write refuse when unprovable)\n' +
@@ -16657,6 +16878,8 @@ function main() {
   const nodeId   = nodeIdIdx >= 0 ? args[nodeIdIdx + 1] : null;
   const reason   = reasonIdx >= 0 ? args[reasonIdx + 1] : null;
   const attemptId = attemptIdIdx >= 0 ? args[attemptIdIdx + 1] : null;
+  const holderIdx = args.indexOf('--holder');
+  const holderArg = holderIdx >= 0 ? args[holderIdx + 1] : null;
   const maxIdx   = args.indexOf('--max');
   const maxArg   = maxIdx >= 0 ? parseInt(args[maxIdx + 1], 10) : null;
 
@@ -17043,6 +17266,11 @@ function main() {
     } else {
       result = runClearHalt({ planPath, statePath, project, reason, shell, readFile, writeFile });
     }
+  } else if (subcommand === 'unlock') {
+    // Deliberately OUTSIDE both guarded sets. It cannot be scheduler-lock-guarded (it would have to
+    // acquire the very lock it exists to remove), and it must not be replan-fenced (a stale lock
+    // wedges `replan resume` too, so fencing the exit would seal the wedge shut).
+    result = runUnlock({ lockPath: path.join(cacheDir, SCHEDULER_LOCK_NAME), holder: holderArg });
   } else if (subcommand === 'reopen-node') {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for reopen-node'] };
@@ -17224,6 +17452,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  // The derived deviation-route table. Exported so the fold is OBSERVABLE: a sweep can prove the
+  // shipped table is the kernel's derivation rather than an independent copy that merely agrees
+  // today. Without the export the derivation is only assertable by re-reading source text.
+  DEVIATION_ROUTES,
   spliceLedgerNode,
   readLedgerStatuses,
   // The same-kind, superset-proven dispatch swap + its record readers, exported for direct coverage
@@ -17329,9 +17561,14 @@ module.exports = {
   runCloseAndOpenNext,
   runWriteHalt,
   runClearHalt,
+  runUnlock,
   runReopenNode,
   // #434 (D-434-01): repair primitives.
   runRevertOverflow,
+  // Batch 0: the two default primitives behind revert-overflow's baseline partition, exported so
+  // the PRODUCTION path (not just the injected seams) is directly provable against a real repo.
+  gitPresentAtBase,
+  removeOverflowPaths,
   runRepairNode,
   // The bounded re-anchor verb + its lineage proof, and the commit-side candidate-triple twin the
   // reviewed-merged-parent identity check runs — exported for direct both-direction pins (the

@@ -1,0 +1,63 @@
+{
+  "_readme": [
+    "THE REMAINING-WORK LEDGER, not a hiding place. Three properties keep it honest, and",
+    "test-refusal-route-sweep.js enforces all three:",
+    "  1. every entry carries a one-line `reason`, an `owner_issue` and a `batch` — no entry",
+    "     without all three;",
+    "  2. STALE ENTRIES FAIL THE SUITE, bidirectionally: an exempt cell that has acquired a",
+    "     registered provoker (so it would now pass) fails and demands the entry be deleted,",
+    "     and a `retained_legacy` condition no longer emitted anywhere fails the same way;",
+    "  3. it prints its own size on every run, as the P2 metric.",
+    "A mirror grows silently; a ledger that fails when stale and prints its own count cannot.",
+    "",
+    "`cells` exempts the TIER-B arc only (provoke -> follow the route -> arrive green). TIER A",
+    "— route resolution, verb existence, R4 discipline, payload validation — is armed for EVERY",
+    "cell and admits no exemptions at all.",
+    "",
+    "THE CELL-KEYED WHY PINS ARE TIER A. The hint layer being ALIVE, the no-fabricated-fields",
+    "rule, hint/route agreement and cell closure are armed for every cell and CANNOT be exempted",
+    "here — the blanket `*` entry below does not reach them. A hint that throws used to degrade",
+    "silently to the caller's generic fallback, so an entire dead hint layer once read green",
+    "across 541 assertions; an exemption door on that pin would reopen exactly that hole."
+  ],
+  "cells": [
+    {
+      "cell": "*",
+      "reason": "Batch 1 lands the registry and typed routes only; the per-cell provoke->route->green fixtures are the later batches' work, one family per commit alongside its demotion",
+      "owner_issue": 845,
+      "batch": 1
+    }
+  ],
+  "retained_legacy": [
+    {
+      "condition": "expansion_unit_role_gate_unsupported",
+      "reason": "documents a REPRODUCED open/close view-split wedge; demoting lets an agent compose straight into it",
+      "owner_issue": 839,
+      "batch": 7
+    },
+    {
+      "condition": "child_frontier_unclosable",
+      "reason": "demotion is coupled to the frontier-closure fix; alone it converts a loud freeze wall into a silent wedge",
+      "owner_issue": 846,
+      "batch": 7
+    },
+    {
+      "condition": "plan_form_dag_retired",
+      "reason": "post-#765 the spine rules and all expansion machinery assume spine; a frozen dag plan's executor path is unverified",
+      "owner_issue": 846,
+      "batch": 7
+    },
+    {
+      "condition": "review_settlement_missing_findings",
+      "reason": "a failing aggregate with an empty canonical frontier loses the record of WHAT failed; [] vs [] reads as non-progress",
+      "owner_issue": 846,
+      "batch": 7
+    },
+    {
+      "condition": "legacy_claim_root_unprovable",
+      "reason": "deleting deriveLegacyClaimRoot removes a working capability for pre-#699 projects — an owner decision, not an implementer's",
+      "owner_issue": 846,
+      "batch": 7
+    }
+  ]
+}

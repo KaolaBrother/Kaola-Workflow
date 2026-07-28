@@ -187,15 +187,31 @@ different set and is deliberately NOT part of this equality — cells are derive
 its cells automatically. Deriving them is what makes the sweep meaningful: walking seven
 codes would prove almost nothing.
 
+Three columns: the code, its locus, and whether it is auto-remediable. A row's
+`auto_remediable` is `no` exactly when repairing the deviation would launder the evidence
+(R4) or when the call is a human's to make (A3).
+
 ```kernel-refusal-vocabulary
-kernel_write_failed        L1
-kernel_cas_lost            L1
-kernel_integrity_broken    L1
-kernel_lock_held           L1
-kernel_evidence_missing    L1
-sink_verdict               L2
-consent_required           A3
+kernel_write_failed        L1  yes
+kernel_cas_lost            L1  yes
+kernel_integrity_broken    L1  no
+kernel_lock_held           L1  yes
+kernel_evidence_missing    L1  yes
+sink_verdict               L2  yes
+consent_required           A3  no
 ```
+
+This block is **normative and closed**: adding a row is an amendment to this ADR, which is
+the anti-growth ratchet in its literal form. `scripts/test-refusal-route-sweep.js` parses
+it and asserts it equals `Object.keys(KERNEL_REFUSAL_REGISTRY)` and
+`KERNEL_REFUSAL_VOCABULARY` exactly, in both directions — so the registry has no
+independent content to drift with, and a code minted in a script (including one built by
+string concatenation at runtime) fails the build.
+
+Specificity is carried in the payload. Each family declares its discriminator enum in
+`REFUSAL_PAYLOAD_SCHEMAS`, and its route table is keyed by that same enum — the sweep
+proves the two key sets equal in both directions, so a discriminator value with no route
+and a route for an undeclared value are both build failures.
 
 Two clarifications the prose above left implicit. First, **the A3 consent valve is a
 third refusing locus** — `consent_required` is a refusal by every mechanical definition,
@@ -270,6 +286,29 @@ through" structural rather than prose discipline:
    become build-time failures instead of post-release audit findings. Enforcement is
    default-on with an exempt list carrying a one-line reason per entry — never an
    opt-in allowlist.
+
+### Amendment A1 — the enumerated vocabulary
+
+**The enumeration lives in ONE place: the fenced `kernel-refusal-vocabulary` block in
+§ Layer 2 above.** It carries the code, the locus and `auto_remediable`, and it is what
+`scripts/test-refusal-route-sweep.js` parses.
+
+A second copy of the table stood here until the merge that landed the registry. Two
+enumerations of a vocabulary whose defining property is having ONE left-hand side is a
+contradiction that git will merge cleanly and silently, so it is recorded rather than
+quietly dropped — see amendment 9.
+
+`kernel_evidence_missing` is a **deliberate +1** to the four L1 families named in Layer 2
+above, and is flagged as such rather than absorbed silently. Its justification is this
+ADR's own transition table — `close(unit) | evidence recorded (**L1**)` — plus the #825
+verdict on the claim boundary, which rules in the same language that a lost selection
+rationale is an irreversible kernel-record loss. `kernel_write_failed` means *the write
+did not take*; this means *the write was never made and the content no longer exists to
+make it*: a different actor (the agent, not the substrate) and a different route class
+(an in-grammar verb, never `environment`). The alternative — folding it into
+`kernel_write_failed` with `record: 'evidence', defect: 'absent'` — remains open to the
+owner; the ratchet exists precisely to make this choice expensive, so it is recorded here
+in the open rather than absorbed by an implementer.
 
 ### The parallel structure, retained — and mechanically strengthened (T9)
 
@@ -539,6 +578,28 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
    −58%, entirely in git *arrangement* code where nothing is asserted) is unaffected and
    retained. **This amendment was authored by the orchestrator on the evidence above and
    is open to reversal by the repo owner.**
+
+9. **One fence, one source: the duplicate vocabulary table is deleted.** The branch that
+   built the registry was cut before amendment 1 and carried its own enumeration — a
+   `### Amendment A1` heading with a markdown pipe table (code, locus, `auto_remediable`)
+   — while main carried the fenced block. **Git merged both cleanly**, leaving a
+   vocabulary whose defining property is having ONE left-hand side with two of them, and
+   the sweep parsing the copy that was about to be deleted.
+
+   Resolved in favor of the **fenced block**, which now carries the third column so
+   nothing measured is lost. The reason is not aesthetic: a fenced block is keyed by its
+   info-string, which is a contract, whereas a parser that locates a table by an exact
+   heading literal returns `null` the moment anyone rewords the heading — and a long ADR
+   holds many pipe tables a table regex can wander into. `parseAdrVocabulary` was
+   repointed at the fence and mutation-proved against this file: flipping an
+   `auto_remediable` value or dropping a row turns the sweep red, and a markdown table no
+   longer parses at all, so the collision cannot silently recur.
+
+   The generalizable part is why this was nearly missed. **A clean merge is not evidence
+   of a coherent result.** Both sides were individually correct; the defect existed only
+   in their union, which is precisely the class no per-branch check can see. It was
+   caught by an adversarial re-verification that diffed the two ADR versions against each
+   other rather than reviewing either alone.
 
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after
