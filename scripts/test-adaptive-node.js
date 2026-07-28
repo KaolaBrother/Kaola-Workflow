@@ -28981,6 +28981,653 @@ scenario(() => {
   }
 });
 
+// ===========================================================================
+// #826 — THE FINALIZE DEVIATION ROUTE: a sink-owned final-fix lane with a typed
+// attribution gate.
+//
+// THE TRAP BEING REMOVED. Finalization is the one phase where the orchestrator has LESS freedom
+// than mid-run. The finalize prose prescribes a fix lane for a failed final validation; the fix
+// lands; and the finalize attribution sweep then REFUSES it `unattributed_change`, because the
+// sweep credits exactly two sources — the narrow allowband and `complete`-node declared write
+// sets. On the planner's ordinary all-concrete spine every sanctioned exit is closed BY
+// CONSTRUCTION (`amend-surface` wants an expansion-point row that shape has none of;
+// `reopen-node` refuses `would_orphan_in_progress` over the live sink; re-plan wants a FAILED
+// review attempt when every review PASSED; `revert-overflow` cannot restore a new file). The
+// prescription manufactures the very refusal that blocks it.
+//
+// THE SHAPE OF THE FIX. Zero regulation on HOW the fix is produced (inline, or dispatched to
+// whichever role fits — no justifier, no approval, no mandated mode); FULL regulation at the ONE
+// commitment point where the fix enters the candidate: a new `final-fix-commit` verb writing a
+// digest-bound, sink-owned register at `.cache/final-fixes.json`, which the sweep then reads as
+// its THIRD attributed source.
+//
+// THE SCOPE WALL WAS DELIBERATELY WIDENED (owner override of the filed issue; see D-826-01).
+// The issue REJECTED production-behavior fixes outright. The owner ADMITS them — but only behind
+// a BOUND RE-CERTIFICATION RECEIPT: a settled PASS review attempt over the POST-FIX candidate,
+// digest-bound, named by the register entry itself. The receipt is now the load-bearing safeguard
+// that REPLACES the wall, so it is pinned here with teeth in all four of its failure states.
+// Validation-apparatus paths (tests, fixtures, build/tooling glue, allowband docs) keep the cheap
+// path: the bound green rerun receipt alone.
+//
+// WHAT THESE TESTS PIN, in priority order:
+//   (A) every NEW typed refusal, each ZERO-WRITE — the register must not exist, and the frozen
+//       plan / git state must be byte-identical, after a refused call;
+//   (B) the two pure predicates the widening rests on — the surface CLASSIFIER (conservative by
+//       default: an unrecognized path is production) and the RE-CERTIFICATION verifier (missing /
+//       unresolved / unsettled / stale all refuse; only a settled PASS bound to the post-fix
+//       candidate admits);
+//   (C) the sweep's third source + the `route:` deviation fields, INCLUDING the negatives — a
+//       register nobody can forge (any out-of-band edit refuses its OWN typed reason rather than
+//       laundering the path), and NO `final-fix-commit` route once the sink has pushed.
+//
+// THE PRISTINE (pre-push) BOUNDARY IS THE LANE'S HARD CLOSE and is pinned in both directions.
+// After push the record is immutable history; recovery is a follow-up issue, never a rewrite.
+// ===========================================================================
+{
+  const { execFileSync: exec826 } = require('child_process');
+  const NODE_CLI_826 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_826 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const REGISTER_REL_826 = path.join('kaola-workflow', 'issue-826', '.cache', 'final-fixes.json');
+
+  // A minimal, REAL finalize fixture: a three-node all-concrete spine (writer → review → sink) with
+  // the writer + review DISCHARGED and the sink LIVE (`in_progress`) — the exact state finalization
+  // runs in. Committed on a feature branch so `git diff <base>...HEAD` is a real, non-empty branch
+  // diff (the attribution sweep is vacuous when base === HEAD). No remote is created, so
+  // `origin/<branch>` is unresolved and the sink reads PRISTINE.
+  function makeFinalFixRepo826(opts) {
+    opts = opts || {};
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-826-finalfix-'));
+    const project = 'issue-826';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const body = [
+      '# Workflow Plan — issue-826', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| impl     | tdd-guide     | —      | src/app.js | 1 | sequence |',
+      '| review   | code-reviewer | impl   | —          | 1 | sequence |',
+      '| finalize | finalize      | review | —          | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| impl | complete |',
+      '| review | complete |',
+      '| finalize | ' + (opts.sinkStatus || 'in_progress') + ' |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, body);
+    const g = (args) => exec826('git',
+      ['-C', repoRoot, '-c', 'user.email=kw@test', '-c', 'user.name=kw', '-c', 'commit.gpgsign=false', ...args],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    g(['init']);
+    g(['config', 'user.email', 'kw@test']);
+    g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    const froze = freezeLegacyFixture(exec826, 'node', VALIDATOR_826, planPath, { cwd: repoRoot, encoding: 'utf8' });
+    assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse',
+      '#826 FIXTURE: the finalize spine must freeze, got ' + froze);
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']);
+    g(['commit', '-m', 'init']);
+    const base = g(['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+    const branch = 'workflow/issue-826';
+    g(['checkout', '-q', '-b', branch]);
+    // The sink-progress probe resolves the run's branch from workflow-state.md (NEVER git HEAD — the
+    // sink runs main-session-direct from the MAIN root). `noBranchPointer` removes it, which is the
+    // three-valued probe's UNKNOWN input.
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'),
+      '# State\n' + (opts.noBranchPointer ? '' : 'branch: ' + branch + '\n'));
+    // The writer's declared production file (attributed by `impl` being complete) + whatever extra
+    // paths the scenario wants on the branch UNATTRIBUTED.
+    fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'src', 'app.js'), '// impl work\n');
+    for (const extra of (opts.extraFiles || [])) {
+      fs.mkdirSync(path.dirname(path.join(repoRoot, extra.path)), { recursive: true });
+      fs.writeFileSync(path.join(repoRoot, extra.path), extra.body);
+    }
+    g(['add', '-A']);
+    g(['commit', '-m', 'run work']);
+    if (opts.sinkPushed) g(['update-ref', 'refs/remotes/origin/' + branch, 'HEAD']);
+    return { repoRoot, project, projDir, cacheDir, planPath, base, branch, g };
+  }
+  function cleanup826(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
+  function runNode826(repoRoot, subArgs, stdin) {
+    try {
+      const out = exec826('node', [NODE_CLI_826, ...subArgs],
+        { cwd: repoRoot, encoding: 'utf8', input: stdin == null ? '' : stdin });
+      return { exitCode: 0, ...JSON.parse(out.trim().split('\n').pop()) };
+    } catch (e) {
+      const status = (e.status == null) ? 1 : e.status;
+      try { return { exitCode: status, ...JSON.parse(String(e.stdout || '').trim().split('\n').pop()) }; }
+      catch (_) { return { exitCode: status, result: 'crash', raw: String(e.stdout || '') + String(e.stderr || '') }; }
+    }
+  }
+  function candidateHash826(repoRoot, planPath) {
+    const out = exec826('node', [VALIDATOR_826, planPath, '--candidate-hash', '--json'],
+      { cwd: repoRoot, encoding: 'utf8' });
+    return JSON.parse(out.trim().split('\n').pop()).validated_candidate_hash;
+  }
+  // The CONSUMER-mode (no package.json) finalize validation gate the sweep sits behind. Seeded AFTER
+  // the tree settles so the recorded binding covers the tree --finalize-check recomputes over.
+  function seedFinalValidation826(repoRoot, cacheDir, planPath) {
+    fs.writeFileSync(path.join(cacheDir, 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: '
+      + candidateHash826(repoRoot, planPath) + '\n');
+  }
+  // The EXACT subprocess cmdFinalize shells before any irreversible finalize side effect.
+  function finalizeCheck826(repoRoot, planPath, base) {
+    try {
+      const out = exec826('node', [VALIDATOR_826, planPath, '--finalize-check', '--json', '--base', base],
+        { cwd: repoRoot, encoding: 'utf8' });
+      return { exitCode: 0, ...JSON.parse(out.trim().split('\n').pop()) };
+    } catch (e) {
+      const status = (e.status == null) ? 1 : e.status;
+      try { return { exitCode: status, ...JSON.parse(String(e.stdout || '').trim().split('\n').pop()) }; }
+      catch (_) { return { exitCode: status, result: 'crash', raw: String(e.stdout || '') + String(e.stderr || '') }; }
+    }
+  }
+  function setLedger826(planPath, id, status) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const start = txt.indexOf('## Node Ledger');
+    const head = txt.slice(0, start), tail = txt.slice(start);
+    const re = new RegExp('^(\\|\\s*' + id + '\\s*\\|\\s*)\\S+(\\s*\\|)', 'm');
+    fs.writeFileSync(planPath, head + tail.replace(re, '$1' + status + '$2'));
+  }
+  function registerPath826(fx) { return path.join(fx.cacheDir, 'final-fixes.json'); }
+  function readRegister826(fx) {
+    try { return JSON.parse(fs.readFileSync(registerPath826(fx), 'utf8')); } catch (_) { return null; }
+  }
+  // A ZERO-WRITE witness: the frozen plan bytes, the register bytes (or its ABSENCE), the git HEAD
+  // and the porcelain worktree status. A refused final-fix-commit must leave all four identical.
+  function witness826(fx) {
+    let register = null;
+    try { register = fs.readFileSync(registerPath826(fx), 'utf8'); } catch (_) { register = null; }
+    let status = '';
+    try { status = fx.g(['status', '--porcelain']); } catch (_) { status = '(git status failed)'; }
+    let head = '';
+    try { head = fx.g(['rev-parse', 'HEAD']).trim(); } catch (_) { head = '(head unresolved)'; }
+    return { plan: fs.readFileSync(fx.planPath, 'utf8'), register, status, head };
+  }
+  function assertZeroWrite826(fx, before, label) {
+    const after = witness826(fx);
+    assert(after.plan === before.plan, label + ': the frozen plan is byte-identical after the refusal');
+    assert(after.register === before.register,
+      label + ': the final-fix register is untouched (was ' + (before.register === null ? 'ABSENT' : 'present')
+      + ', now ' + (after.register === null ? 'ABSENT' : 'present') + ')');
+    assert(after.head === before.head, label + ': git HEAD did not move');
+    assert(after.status === before.status, label + ': the worktree is unchanged');
+  }
+  // The stdin entry the verb records. One fix = one entry: the EXACT failed validation command, the
+  // fix commit, the touched paths, and the green rerun receipt binding the two.
+  function fixEntry826(fx, over) {
+    const head = fx.g(['rev-parse', 'HEAD']).trim();
+    const cmd = 'node scripts/test-final-fix-826.js';
+    return Object.assign({
+      failed_command: cmd,
+      fix_commit: head,
+      files: ['scripts/test-final-fix-826.js'],
+      rerun: { command: cmd, exit_code: 0, candidate_hash: candidateHash826(fx.repoRoot, fx.planPath) },
+      role: 'tdd-guide',
+    }, over || {});
+  }
+  function finalFix826(fx, entry) {
+    return runNode826(fx.repoRoot, ['final-fix-commit', '--project', fx.project, '--json', '--stdin'],
+      JSON.stringify(entry));
+  }
+  const APPARATUS_FILE_826 = { path: 'scripts/test-final-fix-826.js', body: '// stale-test correction\n' };
+
+  // -------------------------------------------------------------------------
+  // #826-A — THE REFUSAL LADDER. Four typed refusals, precedence-ordered, every one ZERO-WRITE.
+  //   RED (today): `final-fix-commit` is not a subcommand at all — the CLI falls through to the
+  //     untyped `{"result":"refuse","errors":["unknown subcommand: final-fix-commit"]}` catch-all,
+  //     which carries NO `reason` field, so every assertion below fails on reason alone.
+  //   GREEN: each precondition names its own reason, and a refused call is a pure no-op.
+  // -------------------------------------------------------------------------
+
+  // A1 — SINK NOT LIVE. The lane is sink-OWNED: with no `in_progress` finalize row there is no sink
+  // to own the register, and the run is not in finalization at all.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_sink_not_live',
+      '#826-A1: a final-fix-commit with no live sink refuses final_fix_sink_not_live, got '
+      + JSON.stringify({ result: r.result, reason: r.reason, errors: r.errors }));
+    assertZeroWrite826(fx, before, '#826-A1');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A2 — AFTER THE SINK STARTED (the pristine boundary, the lane's HARD CLOSE). `origin/<branch>`
+  // exists ⇒ the sink has pushed ⇒ the record is immutable history. Recovery after this point is a
+  // follow-up issue, never a history rewrite. This one must STAY refused forever.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkPushed: true, extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_after_sink_started',
+      '#826-A2: a pushed sink closes the lane with final_fix_after_sink_started, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.sink_progress === 'started',
+      '#826-A2: the refusal reports the DERIVED sink progress that closed it, got '
+      + JSON.stringify(r.sink_progress));
+    assertZeroWrite826(fx, before, '#826-A2');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A2b — FAIL-CLOSED ON UNKNOWN. The sink-progress predicate is THREE-valued and only `pristine`
+  // admits. With no `branch:` pointer the probe cannot derive anything, and the dangerous direction
+  // (a false `pristine` after a push, which would rewrite a shipped run) is the one that must never
+  // happen — so doubt collapses to a refusal, not an admission.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ noBranchPointer: true, extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_after_sink_started',
+      '#826-A2b: an UNDERIVABLE sink progress fails CLOSED onto the same wall, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.sink_progress === 'unknown',
+      '#826-A2b: ...and says so — `unknown`, not a laundered `started`, got ' + JSON.stringify(r.sink_progress));
+    assertZeroWrite826(fx, before, '#826-A2b');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A3 — NO GREEN RERUN. The register's whole claim is "this fix makes the failed validation pass";
+  // a non-zero rerun exit code is that claim being false on its face.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const entry = fixEntry826(fx);
+    entry.rerun.exit_code = 1;
+    const r = finalFix826(fx, entry);
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_unverified',
+      '#826-A3: a RED rerun receipt refuses final_fix_unverified, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assertZeroWrite826(fx, before, '#826-A3');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A4 — THE RERUN MUST BIND THE EXACT FAILED COMMAND. A receipt for some OTHER (easier) command is
+  // the classic rubber stamp: it proves something passed, never that the thing that failed passes.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const entry = fixEntry826(fx);
+    entry.rerun.command = 'node --version';
+    const r = finalFix826(fx, entry);
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_unverified',
+      '#826-A4: a rerun receipt for a DIFFERENT command refuses final_fix_unverified, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assertZeroWrite826(fx, before, '#826-A4');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A5 — THE RERUN MUST BIND THE POST-FIX CANDIDATE. The receipt is recorded against a candidate
+  // hash; if the tree has moved since, the green run no longer describes what is about to ship. This
+  // is the "digest-bound" half of the register — without it the entry is a note, not evidence.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const entry = fixEntry826(fx);          // hash captured HERE...
+    fs.writeFileSync(path.join(fx.repoRoot, 'src', 'app.js'), '// impl work, moved on\n'); // ...tree moves
+    const before = witness826(fx);
+    const r = finalFix826(fx, entry);
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_unverified',
+      '#826-A5: a rerun receipt bound to a STALE candidate refuses final_fix_unverified, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assertZeroWrite826(fx, before, '#826-A5');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A6 — PRODUCTION SURFACE, NO RE-CERTIFICATION. The owner WIDENED the wall (D-826-01): production
+  // behavior is admissible through the lane — but the bound re-certification receipt is what replaces
+  // the wall, so its ABSENCE must still refuse, zero-write, with its own discriminator.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const entry = fixEntry826(fx, { files: ['src/app.js'] });
+    const r = finalFix826(fx, entry);
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_production_surface',
+      '#826-A6: a production-surface entry with no re-certification refuses '
+      + 'final_fix_production_surface, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.recertification === 'missing',
+      '#826-A6: the refusal names WHICH re-certification state closed it, got '
+      + JSON.stringify(r.recertification));
+    assert(Array.isArray(r.production_paths) && r.production_paths.includes('src/app.js'),
+      '#826-A6: ...and names the production path(s) that triggered it, got '
+      + JSON.stringify(r.production_paths));
+    assertZeroWrite826(fx, before, '#826-A6');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A7 — PRODUCTION SURFACE, UNRESOLVABLE RECEIPT. A receipt is a POINTER into the run's own review
+  // journal, not a self-asserted field: naming an attempt nobody settled must refuse. Without this
+  // the widening degrades to "write any attempt_id you like".
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const entry = fixEntry826(fx, {
+      files: ['src/app.js'],
+      recertification: { attempt_id: 'review2-deadbeefdeadbeef:9', candidate_digest: 'a'.repeat(64) },
+    });
+    const r = finalFix826(fx, entry);
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_production_surface',
+      '#826-A7: a re-certification pointing at no settled attempt refuses '
+      + 'final_fix_production_surface, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.recertification === 'unresolved',
+      '#826-A7: ...discriminated as `unresolved`, got ' + JSON.stringify(r.recertification));
+    assertZeroWrite826(fx, before, '#826-A7');
+    cleanup826(fx.repoRoot);
+  });
+
+  // A8 — PRECEDENCE. The ladder is precedence-ordered so an operator is told the OUTERMOST fault
+  // first: with BOTH a dead sink and a red rerun, the emitted reason is the structural wall, not the
+  // receipt fault. A ladder that reported the inner fault would send the operator to fix a receipt
+  // for a lane that is not open at all.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const entry = fixEntry826(fx, { files: ['src/app.js'] });
+    entry.rerun.exit_code = 1;
+    const r = finalFix826(fx, entry);
+    assert(r.reason === 'final_fix_sink_not_live',
+      '#826-A8: sink_not_live > after_sink_started > unverified > production_surface — the '
+      + 'outermost wall is the emitted reason, got ' + JSON.stringify(r.reason));
+    cleanup826(fx.repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #826-B — THE ADMITTING PATHS + THE REGISTER. The lane has to actually WORK, or it is just a
+  // fifth way to be refused. These pin the cheap (validation-apparatus) path end to end and the
+  // register's recorded shape.
+  // -------------------------------------------------------------------------
+
+  // B1 — THE CHEAP PATH ADMITS. A stale-test correction is validation APPARATUS: it repairs the
+  // thing that JUDGES the product, so the standing certification over the product is untouched and
+  // the bound green rerun receipt is its whole oracle. No re-review, no consent, no justifier.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.exitCode === 0 && r.result === 'ok',
+      '#826-B1: a validation-apparatus fix with a bound green rerun receipt is ADMITTED, got '
+      + JSON.stringify({ result: r.result, reason: r.reason, errors: r.errors }));
+    assert(r.surface_class === 'validation-apparatus',
+      '#826-B1: ...and is recorded as validation-apparatus, got ' + JSON.stringify(r.surface_class));
+    const reg = readRegister826(fx) || {};
+    assert(Array.isArray(reg.entries) && reg.entries.length === 1,
+      '#826-B1: the sink-owned register exists at .cache/final-fixes.json with exactly one entry, got '
+      + JSON.stringify(reg.entries));
+    const e = (Array.isArray(reg.entries) && reg.entries[0]) || {};
+    assert(e.failed_command === 'node scripts/test-final-fix-826.js',
+      '#826-B1: the entry records the EXACT failed validation command, got ' + JSON.stringify(e.failed_command));
+    assert(Array.isArray(e.files) && e.files.length === 1 && e.files[0] === 'scripts/test-final-fix-826.js',
+      '#826-B1: the entry records the touched paths, got ' + JSON.stringify(e.files));
+    assert(typeof e.fix_commit === 'string' && /^[0-9a-f]{7,40}$/.test(e.fix_commit),
+      '#826-B1: the entry records the fix commit, got ' + JSON.stringify(e.fix_commit));
+    assert(e.rerun && e.rerun.exit_code === 0 && /^[0-9a-f]{64}$/.test(String(e.rerun.candidate_hash || '')),
+      '#826-B1: the entry records the green rerun receipt + its candidate binding, got ' + JSON.stringify(e.rerun));
+    assert(typeof reg.digest === 'string' && /^[0-9a-f]{64}$/.test(reg.digest),
+      '#826-B1: the register is DIGEST-BOUND, got ' + JSON.stringify(reg.digest));
+    assert(typeof reg.plan_hash === 'string' && /^[0-9a-f]{64}$/.test(reg.plan_hash),
+      '#826-B1: the register is bound to the frozen plan it belongs to, got ' + JSON.stringify(reg.plan_hash));
+    cleanup826(fx.repoRoot);
+  });
+
+  // B2 — NO CAP ON ENTRIES. Each entry carries its own green rerun receipt, and that receipt IS the
+  // natural bound; a second independent final-fix appends a second entry rather than refusing.
+  scenario(() => {
+    const second = { path: 'scripts/test-final-fix-826b.js', body: '// second stale-test correction\n' };
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826, second] });
+    const first = finalFix826(fx, fixEntry826(fx));
+    assert(first.result === 'ok', '#826-B2 precondition: the first fix records, got ' + JSON.stringify(first));
+    const cmd2 = 'node scripts/test-final-fix-826b.js';
+    const r = finalFix826(fx, fixEntry826(fx, {
+      failed_command: cmd2,
+      files: [second.path],
+      rerun: { command: cmd2, exit_code: 0, candidate_hash: candidateHash826(fx.repoRoot, fx.planPath) },
+    }));
+    assert(r.exitCode === 0 && r.result === 'ok',
+      '#826-B2: a SECOND final-fix is admitted — the lane has no per-run cap, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    const reg = readRegister826(fx) || {};
+    assert(Array.isArray(reg.entries) && reg.entries.length === 2,
+      '#826-B2: both entries are retained, got ' + JSON.stringify(reg.entries && reg.entries.length));
+    const files = (Array.isArray(reg.entries) ? reg.entries : []).flatMap(x => x.files || []).sort();
+    assert(files.join(',') === 'scripts/test-final-fix-826.js,scripts/test-final-fix-826b.js',
+      '#826-B2: ...each with its own paths, got ' + JSON.stringify(files));
+    cleanup826(fx.repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #826-C — THE TWO PURE PREDICATES THE WIDENING RESTS ON. Exported and tested directly, because
+  // the recertification states that matter most (`unsettled`, `stale`) and the ADMIT are exactly the
+  // ones a CLI fixture cannot reach without forging a whole settled review journal.
+  // -------------------------------------------------------------------------
+
+  // C1 — THE SURFACE CLASSIFIER. Apparatus = the machinery that JUDGES the product (tests, fixtures,
+  // build/tooling glue, allowband docs). Everything else is production. The load-bearing property is
+  // the DEFAULT: a path the classifier does not recognize is PRODUCTION, so an unanticipated surface
+  // fails toward the re-certification wall rather than through the cheap path.
+  scenario(() => {
+    const mod = require('./kaola-workflow-adaptive-node');
+    const classify = mod.classifyFinalFixSurface;
+    assert(typeof classify === 'function',
+      '#826-C1: classifyFinalFixSurface is exported for direct coverage, got ' + typeof classify);
+    if (typeof classify !== 'function') return;
+    const cls = (paths) => classify(paths, 'issue-826');
+    for (const p of ['scripts/test-adaptive-node.js', 'scripts/simulate-workflow-walkthrough.js',
+      'test/fixtures/sample.json', 'src/__tests__/app.test.js', 'package.json',
+      'docs/api.md', 'CHANGELOG.md', 'README.md']) {
+      const r = cls([p]);
+      assert(r && r.surface_class === 'validation-apparatus'
+        && Array.isArray(r.production) && r.production.length === 0,
+        '#826-C1: "' + p + '" is validation APPARATUS (it judges the product, or is allowband docs), got '
+        + JSON.stringify(r));
+    }
+    for (const p of ['src/app.js', 'scripts/kaola-workflow-adaptive-node.js', 'lib/router.ts']) {
+      const r = cls([p]);
+      assert(r && r.surface_class === 'production' && (r.production || []).includes(p),
+        '#826-C1: "' + p + '" is PRODUCTION behavior, got ' + JSON.stringify(r));
+    }
+    // CONSERVATIVE DEFAULT — the whole safety argument. An unrecognized surface is production.
+    const odd = cls(['vendor/opaque.bin']);
+    assert(odd && odd.surface_class === 'production' && (odd.production || []).includes('vendor/opaque.bin'),
+      '#826-C1: an UNRECOGNIZED path defaults to PRODUCTION (fail toward the re-certification wall), got '
+      + JSON.stringify(odd));
+    // MIXED — one production path in the set makes the whole ENTRY production. Classes do not net out.
+    const mixed = cls(['scripts/test-adaptive-node.js', 'src/app.js']);
+    assert(mixed && mixed.surface_class === 'production' && (mixed.production || []).join(',') === 'src/app.js',
+      '#826-C1: a mixed entry is PRODUCTION and names only the production member, got ' + JSON.stringify(mixed));
+  });
+
+  // C2 — THE RE-CERTIFICATION VERIFIER: the safeguard that REPLACED the wall, so it gets teeth in
+  // every direction. It consumes a SETTLED attempt out of the run's own review journal — the
+  // existing review-settlement machinery, inside the ledger-chain tamper boundary — never a
+  // self-asserted field on the register entry.
+  scenario(() => {
+    const mod = require('./kaola-workflow-adaptive-node');
+    const verify = mod.verifyFinalFixRecertification;
+    assert(typeof verify === 'function',
+      '#826-C2: verifyFinalFixRecertification is exported for direct coverage, got ' + typeof verify);
+    if (typeof verify !== 'function') return;
+    const POST = 'c'.repeat(64);   // the POST-FIX candidate digest
+    const PRE  = 'd'.repeat(64);   // the candidate BEFORE the fix
+    const settled = (over) => ({ attempts: [Object.assign({
+      attempt_id: 'review2-abcdef0123456789:1', outcome: 'pass', candidate_digest: POST,
+    }, over || {})] });
+    const entry = (rc) => ({ files: ['src/app.js'], recertification: rc });
+
+    // (a) MISSING — no receipt at all.
+    let r = verify(entry(null), settled(), POST);
+    assert(r && r.ok === false && r.state === 'missing',
+      '#826-C2a: no recertification on the entry ⇒ missing, got ' + JSON.stringify(r));
+    r = verify({ files: ['src/app.js'] }, settled(), POST);
+    assert(r && r.ok === false && r.state === 'missing',
+      '#826-C2a: an ABSENT recertification key ⇒ missing (never a silent pass), got ' + JSON.stringify(r));
+
+    // (b) UNRESOLVED — the pointer names an attempt the journal does not carry, or there is no
+    // journal at all. Bare presence of an attempt_id is never provenance.
+    r = verify(entry({ attempt_id: 'review2-nosuchattempt:1', candidate_digest: POST }), settled(), POST);
+    assert(r && r.ok === false && r.state === 'unresolved',
+      '#826-C2b: an attempt_id absent from the journal ⇒ unresolved, got ' + JSON.stringify(r));
+    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }), null, POST);
+    assert(r && r.ok === false && r.state === 'unresolved',
+      '#826-C2b: NO journal ⇒ unresolved (fail closed, never admit), got ' + JSON.stringify(r));
+
+    // (c) UNSETTLED — the attempt exists but did not settle PASS. A failed (or in-flight) review is
+    // not a certification.
+    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }),
+      settled({ outcome: 'fail' }), POST);
+    assert(r && r.ok === false && r.state === 'unsettled',
+      '#826-C2c: an attempt that did not settle PASS ⇒ unsettled, got ' + JSON.stringify(r));
+
+    // (d) STALE — a genuine settled PASS, but over a DIFFERENT candidate than the post-fix one. This
+    // is the receipt-replay attack the binding exists to stop: re-pointing at the pre-fix review.
+    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: PRE }),
+      settled({ candidate_digest: PRE }), POST);
+    assert(r && r.ok === false && r.state === 'stale',
+      '#826-C2d: a settled PASS bound to a DIFFERENT candidate ⇒ stale, got ' + JSON.stringify(r));
+    // ...and the entry may not disagree with the journal it points at, either.
+    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }),
+      settled({ candidate_digest: PRE }), POST);
+    assert(r && r.ok === false && r.state === 'stale',
+      '#826-C2d: an entry whose recorded digest disagrees with the settled attempt ⇒ stale, got '
+      + JSON.stringify(r));
+
+    // (e) THE ADMIT — the owner's widening. A settled PASS over the POST-FIX candidate, named by the
+    // entry and agreeing with the journal, ADMITS a production-behavior fix through the lane. Without
+    // this assertion the whole widening could be satisfied by a flat refusal.
+    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }), settled(), POST);
+    assert(r && r.ok === true,
+      '#826-C2e: a settled PASS bound to the POST-FIX candidate ADMITS a production-surface fix '
+      + '(D-826-01 — the wall was widened, not deleted), got ' + JSON.stringify(r));
+  });
+
+  // -------------------------------------------------------------------------
+  // #826-D — THE SWEEP'S THIRD SOURCE + THE DEVIATION ROUTES. A changed path is attributed iff it is
+  // in the allowband, OR in a `complete` node's declared write set, OR in a VERIFIED final-fix
+  // register entry. And an out-of-shape refusal names the ONE legal recorded verb that resolves it,
+  // so finalization stops being a dead end.
+  // -------------------------------------------------------------------------
+
+  // D1 — THE ROUND TRIP. Control → route → record → pass, over the EXACT `--finalize-check`
+  // subprocess cmdFinalize shells before any irreversible side effect.
+  //   CONTROL (passes today): the prescribed test-only fix is refused `unattributed_change`.
+  //   RED: that refusal carries no `route`, so the orchestrator is told what is wrong and nothing
+  //     about how to land it — the measured 40-minute dead end.
+  //   RED: after recording the fix there is still no third source, so the identical sweep refuses again.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const control = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(control.result === 'refuse' && control.reason === 'unattributed_change'
+      && (control.unattributed || []).includes('scripts/test-final-fix-826.js'),
+      '#826-D1 CONTROL: the prescribed finalize fix is refused unattributed_change today, got '
+      + JSON.stringify({ reason: control.reason, unattributed: control.unattributed }));
+    assert(control.route === 'final-fix-commit',
+      '#826-D1: with the sink LIVE and PRISTINE the refusal is a FORK, not a dead end — it names '
+      + 'the one recorded verb that lands the same decision, got ' + JSON.stringify(control.route));
+    const rec = finalFix826(fx, fixEntry826(fx));
+    assert(rec.result === 'ok',
+      '#826-D1: the fix records into the sink-owned register, got ' + JSON.stringify({ result: rec.result, reason: rec.reason }));
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const after = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(after.exitCode === 0 && after.result === 'pass',
+      '#826-D1: the SAME sweep now PASSES — the verified register is the THIRD attributed source, got '
+      + JSON.stringify({ result: after.result, reason: after.reason, unattributed: after.unattributed }));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D2 — THE REGISTER IS NOT A LAUNDERING PRIMITIVE. A hand-widened register must NOT attribute the
+  // smuggled path, and must NOT be reported as `unattributed_change` either — that reason's
+  // documented operator response is to DELETE the file, which is a lie about the real fault (the
+  // same argument the sealed-parent-epoch lineage already makes). It gets its own typed reason.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({
+      extraFiles: [APPARATUS_FILE_826, { path: 'src/smuggled.js', body: '// never reviewed\n' }],
+    });
+    const rec = finalFix826(fx, fixEntry826(fx));
+    assert(rec.result === 'ok', '#826-D2 precondition: the apparatus fix records, got ' + JSON.stringify(rec));
+    // Hand-widen the register OUT OF BAND, exactly as an operator "helping" the sweep along would.
+    // Falls back to a WHOLLY FORGED register when the verb has not shipped yet, so this scenario
+    // measures the sweep's laundering wall rather than crashing on the missing precondition.
+    const reg = readRegister826(fx) || { schema_version: 1, plan_hash: 'e'.repeat(64),
+      entries: [{ ordinal: 1, files: [] }], digest: 'f'.repeat(64) };
+    reg.entries[0].files = (reg.entries[0].files || []).concat(['src/smuggled.js']);
+    fs.writeFileSync(registerPath826(fx), JSON.stringify(reg, null, 2) + '\n');
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const r = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_register_unverified',
+      '#826-D2: an out-of-band register edit refuses final_fix_register_unverified — never a silent '
+      + 'attribution, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(!(r.unattributed || []).includes('src/smuggled.js'),
+      '#826-D2: ...and is NOT mislabelled unattributed_change (whose cure would delete the file), got '
+      + JSON.stringify(r.unattributed));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D3 — NO ROUTE WHEN THE LANE IS SHUT. The `route:` field is a promise the verb will accept the
+  // work; offering it after the sink has PUSHED would send the orchestrator at a refusal it can
+  // never clear. Same sweep, same refusal — no route.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkPushed: true, extraFiles: [APPARATUS_FILE_826] });
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const r = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(r.result === 'refuse' && r.reason === 'unattributed_change',
+      '#826-D3 precondition: still unattributed_change, got ' + JSON.stringify(r.reason));
+    assert(r.route !== 'final-fix-commit',
+      '#826-D3: after the sink has PUSHED the lane is closed, so the refusal offers NO '
+      + 'final-fix-commit route, got ' + JSON.stringify(r.route));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D4 — SAME, FOR A SINK THAT IS NOT LIVE. A `pending` sink is not finalization at all; the fix
+  // belongs to the ordinary in-plan path, so the finalize route must not be advertised.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const r = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(r.result === 'refuse' && r.reason === 'unattributed_change',
+      '#826-D4 precondition: still unattributed_change, got ' + JSON.stringify(r.reason));
+    assert(r.route !== 'final-fix-commit',
+      '#826-D4: a sink that is not in_progress offers NO final-fix-commit route, got '
+      + JSON.stringify(r.route));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D5 — THE OTHER TWO TRAPS GET THE SAME FORK. `reopen-node` in finalize context is the refusal
+  // that cost the measured 40 minutes: the tail review is `complete`, the sink is `in_progress` and
+  // is NOT a post-dominating gate, so the reopen refuses `would_orphan_in_progress` — with no exit
+  // named. It carries the route now.
+  //   CONTROL (passes today): the refusal fires and names the sink.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const r = runNode826(fx.repoRoot, ['reopen-node', '--project', fx.project, '--node-id', 'review', '--json']);
+    assert(r.exitCode === 1 && r.reason === 'would_orphan_in_progress'
+      && (r.inProgress || []).includes('finalize'),
+      '#826-D5 CONTROL: reopening the tail review over a live sink refuses would_orphan_in_progress, got '
+      + JSON.stringify({ reason: r.reason, inProgress: r.inProgress }));
+    assert(r.route === 'final-fix-commit',
+      '#826-D5: fired in FINALIZE context (sink live + pristine) the refusal names the recorded '
+      + 'lane instead of dead-ending, got ' + JSON.stringify(r.route));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D6 — AND THAT ROUTE IS CONTEXT-BOUND, NOT A BLANKET TABLE ROW. The same refusal fired with the
+  // sink already PUSHED must NOT advertise a lane that would only refuse
+  // `final_fix_after_sink_started`. A static DEVIATION_ROUTES row keyed on the reason alone would
+  // fail this; the emit site has to decide.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkPushed: true, extraFiles: [APPARATUS_FILE_826] });
+    const r = runNode826(fx.repoRoot, ['reopen-node', '--project', fx.project, '--node-id', 'review', '--json']);
+    assert(r.reason === 'would_orphan_in_progress',
+      '#826-D6 precondition: the same refusal fires, got ' + JSON.stringify(r.reason));
+    assert(r.route !== 'final-fix-commit',
+      '#826-D6: a pushed sink withdraws the route — the deviation route is CONTEXT-bound, not a '
+      + 'blanket reason→verb row, got ' + JSON.stringify(r.route));
+    cleanup826(fx.repoRoot);
+  });
+}
+
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 
 if (failed > 0) {
