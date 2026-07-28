@@ -659,7 +659,7 @@ The audit must keep these facts separate:
   must be written for Codex to expose the V2 task-name spawn tools at all.
 - Three shapes are accepted: a `[features.multi_agent_v2]` table, the inline
   `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
-  `multi_agent_v2 = true`. A top-level `features.multi_agent_v2.enabled = true` does **not**
+  `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not**
   enable it — `[agents]` configures roles and limits (`agents.<name>.*`,
   `max_depth`, `max_threads`) and has no `enabled` key, so Codex parses it and
   applies nothing.
@@ -763,9 +763,10 @@ This report is REPORT-ONLY and never fails the install: `features.multi_agent_v2
 `model_reasoning_effort` are both user-owned choices, so the installer never writes
 them. Although current Codex releases enable general subagent workflows by default,
 an install that prints `status: ok` while Kaola's `multi_agent_v2` attestation reads
-NOT enabled still needs the operator to add `[features.multi_agent_v2]\nenabled = true` by hand (under
-managed block — see `codex_multi_agent_v2_required`'s repair diff) before any role
-agent can actually be dispatched; once enabled, a non-proactive posture still needs
+NOT enabled still needs the operator to add `[features.multi_agent_v2]\nenabled = true` by hand (a
+`[features]` sub-table, which never collides with the `# BEGIN kaola-workflow agents` managed block,
+so its placement in the file is unconstrained — see `codex_multi_agent_v2_required`'s repair diff)
+before any role agent can actually be dispatched; once enabled, a non-proactive posture still needs
 one of the remediations above: explicitly ask for sub-agents / delegation / parallel
 work in that session (always available and always documented), or — if your Codex
 exposes an `ultra` reasoning effort for your model/plan (undocumented as of Codex

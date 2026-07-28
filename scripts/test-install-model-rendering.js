@@ -3499,12 +3499,13 @@ try {
       const configText = fs.readFileSync(projectConfigPath, 'utf8');
       assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: positional-form config.toml must contain managed agents block');
       const codexPreflightPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-codex-preflight.js');
-      // #775 (Codex 0.145 re-baseline): the config grammar moved to a top-level [agents] table
-      // with NO [features] wrapper at all — config/agents.toml's managed block no longer opens
-      // with [features], so there is nothing to strip/replace. This helper builds a user-owned
-      // [agents] table ahead of the managed block, mirroring the codex_multi_agent_v2_required
-      // remediation's exact placement (TOML forbids re-declaring [agents] once an
-      // [agents.<role>] sub-table inside the managed block has already opened it).
+      // #775 (Codex 0.145 re-baseline): the MultiAgentV2 switch lives at
+      // `features.multi_agent_v2.enabled`, NOT in the top-level [agents] table ([agents] has no
+      // `enabled` key). config/agents.toml's managed block opens with [agents.<role>] sub-tables,
+      // so there is nothing to strip/replace. This helper prepends a [features.multi_agent_v2]
+      // table ahead of the managed block, mirroring the codex_multi_agent_v2_required
+      // remediation's exact paste-able diff. The helper's NAME is historical: it enables V2 the
+      // way Codex actually reads it, not via [agents].
       function configWithAgentsEnabled(extraLines) {
         return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + configText;
       }
@@ -3680,8 +3681,8 @@ try {
 
       // --- #775: MultiAgentV2 concurrency + wait-timeout bounds — the arithmetic itself is
       // UNCHANGED (cap is INCLUSIVE of the root session; width = cap-1; default 4 -> width 3);
-      // only the config location moved to the unified top-level [agents] table, and max_threads
-      // is now a valid back-compat alias for max_concurrent_threads_per_session (not an error). ---
+      // the bounds are read from `features.multi_agent_v2`, and `max_threads` is NOT an alias for
+      // max_concurrent_threads_per_session — see the assertion below. ---
       function assertMultiAgentV2BoundsForConfig(body, expected, label) {
         const result = runPreflightForConfig(body);
         assert.strictEqual(result.status, 0, label + ': multi_agent_v2 bounds report must never fail preflight once v2 is enabled: ' + result.stderr + result.stdout);
@@ -3720,7 +3721,7 @@ try {
         min_wait_timeout_ms: null,
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
-      }, '#775 max_threads back-compat alias resolves to the same field as max_concurrent_threads_per_session');
+      }, '#775 max_threads is NOT an alias — a stray one leaves the cap at the observed default');
       assertMultiAgentV2BoundsForConfig(
         configWithAgentsEnabled('max_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000'),
         {
@@ -3730,7 +3731,7 @@ try {
           min_wait_timeout_ms: 1000,
           max_wait_timeout_ms: 1800000,
           default_wait_timeout_ms: 60000,
-        }, '#775 all four numeric fields configured under the unified [agents] table');
+        }, '#775 all four numeric fields configured under [features.multi_agent_v2]');
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled('max_concurrent_threads_per_session = 0'), {
         max_concurrent_threads_per_session: 4,
         max_concurrent_threads_per_session_source: 'observed_default',
@@ -3789,7 +3790,7 @@ try {
         assert(/effective subagent width 3 \(max_concurrent_threads_per_session=4 \[observed_default\]\)/.test(reinstall.stdout),
           '#775 AC1: [agents] enabled with no configured threads must report the observed-default width: ' + reinstall.stdout);
 
-        // Configure explicit bounds under the SAME unified [agents] table, re-install (idempotent
+        // Configure explicit bounds under the SAME [features.multi_agent_v2] table, re-install (idempotent
         // update) — the report must now print the concrete width + every configured bound.
         const beforeBounds = fs.readFileSync(postureConfigPath, 'utf8');
         fs.writeFileSync(postureConfigPath, beforeBounds.replace('[features.multi_agent_v2]\nenabled = true\n',
@@ -3901,7 +3902,7 @@ try {
     assert(/0\.145\.0/.test(installerMod.DISPATCH_POSTURE_VERSION_NOTE),
       '#775: version-guard note must name the verified Codex CLI version');
 
-    // #611 AC6 (#775: config location moved to the unified [agents] table; arithmetic UNCHANGED)
+    // #611 AC6 (#775: bounds are read from [features.multi_agent_v2]; arithmetic UNCHANGED)
     // — MultiAgentV2 concurrency + wait-timeout bounds — pure-function unit coverage (no
     // subprocess):
     //   v2 not enabled -> not_applicable, every field null.

@@ -2687,7 +2687,7 @@ Codex to expose the V2 task-name spawn tools. Kaola-Workflow deliberately does *
 into the user's `config.toml` itself (a fresh install therefore always needs this one manual
 step) — the `repair` string carries the exact minimal paste-able diff. Three shapes are read: a
 `[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled = true, ... }` under
-`[features]`, and a bare `multi_agent_v2 = true`. A top-level `features.multi_agent_v2.enabled = true` does NOT
+`[features]`, and a bare `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does NOT
 enable MultiAgentV2 — `[agents]` has no `enabled` key — and `agents.max_threads` must not be set
 alongside it, because Codex rejects that key once MultiAgentV2 is enabled. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
 V2 transport-safety gate (`codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe`),
