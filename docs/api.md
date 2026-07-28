@@ -2215,8 +2215,14 @@ transaction child, planner attestation, promoted live plan, and descendant state
 reports `legacy_external_binding`, otherwise `legacy_snapshot_binding_unsealed`. A newly authored
 child missing schema 2 is invalid, and schema-2 committed validation never accepts `pending`.
 
+`replan_planner_dispatch_required` is **not** a refusal: it is the planner handoff ANSWER. `resume`
+returns `result: 'planner_dispatch_required'` carrying that token in `reason`, together with the
+transaction id, packet path, child path, dispatch nonce and planner profile identity — and exits
+**0**, because nothing was attempted and nothing failed; the run is healthy and waiting for its next
+actor. Follow it by dispatching the planner, then run the same `resume` again.
+
 Common typed refusals include `replan_in_progress`, `replan_integrity_mismatch`,
-`replan_planner_dispatch_required`, `replan_planner_attestation_invalid`, `replan_child_invalid`,
+`replan_planner_attestation_invalid`, `replan_child_invalid`,
 `replan_candidate_changed`, `replan_snapshot_incomplete`, `replan_task_mirror_failed`,
 `replan_cache_cleanup_failed`, `replan_consent_required`, `replan_consent_ledger_invalid`,
 `legacy_claim_root_unprovable`, `legacy_snapshot_binding_unsealed`, and the active-state consistency
