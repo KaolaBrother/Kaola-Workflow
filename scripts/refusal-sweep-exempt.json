@@ -42,12 +42,6 @@
       "batch": 7
     },
     {
-      "condition": "plan_form_dag_retired",
-      "reason": "post-#765 the spine rules and all expansion machinery assume spine; a frozen dag plan's executor path is unverified",
-      "owner_issue": 846,
-      "batch": 7
-    },
-    {
       "condition": "review_settlement_missing_findings",
       "reason": "a failing aggregate with an empty canonical frontier loses the record of WHAT failed; [] vs [] reads as non-progress",
       "owner_issue": 846,

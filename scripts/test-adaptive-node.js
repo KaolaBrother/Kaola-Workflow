@@ -11891,8 +11891,18 @@ scenario(() => {
   assert(authoredNext(valid).nextNode.wait_budget_minutes === 180, '#655-COMPAT: semantically valid old frozen value passes current wall');
   assert(planValidator.revalidateForResume(valid.replace('| 180 |', '| 181 |')).reasonCode === 'plan_hash_mismatch', '#655-COMPAT: hash tamper refuses');
   assert(authoredNext(legacyFreezeUnknownWait('20', 'code-reviewer', '—')).reason === 'wait_budget_below_floor', '#655-COMPAT: omitted-model role floor applies at point of use');
+  // ADR 0013 R1/R3 — this used to REFUSE MID-RUN, at point of use, on a plan that had already
+  // frozen and resumed: the readiness answer for the whole frontier was voided by an inert cell on
+  // a role nothing waits on. The cell is now dropped, the frontier answers, and the dropped value
+  // does not ride onto the descriptor (the R2 green arc — the legal path through, not the refusal).
   const nondelegable = legacyFreezeUnknownWait('40', 'finalize', 'reasoning').replace('| done | finalize | work | — | 1 | sequence | — | — |\n', '');
-  assert(authoredNext(nondelegable).reason === 'wait_budget_nondelegable', '#655-COMPAT: nondelegable override refuses at point of use');
+  const nd = authoredNext(nondelegable);
+  assert(nd.reason === undefined && nd.nextNode,
+    '#655-COMPAT/ADR-0013: a nondelegable override must NOT refuse mid-run at point of use; got ' + JSON.stringify(nd.reason));
+  assert(!Object.prototype.hasOwnProperty.call(nd.nextNode, 'wait_budget_minutes')
+    || nd.nextNode.wait_budget_minutes === null,
+    '#655-COMPAT/ADR-0013: the dropped budget must not reach the dispatch descriptor; got '
+    + JSON.stringify(nd.nextNode.wait_budget_minutes));
   const optMeta = ['optimize(work):', '  metric_command: node bench.js', '  metric_paths: bench.js', '  direction: min',
     '  budget_iterations: 2', '  budget_wallclock_minutes: 60', '  regression_gate: npm test', '  metric_repeats: 1', '  min_delta: 0', '  patience: 1'];
   assert(authoredNext(legacyFreezeUnknownWait('60', 'metric-optimizer', 'standard', optMeta)).reason === 'wait_budget_conflict', '#655-COMPAT: optimizer dual budget refuses at point of use');
@@ -26296,7 +26306,24 @@ scenario(() => {
     };
     const GOOD = comp([{ name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' }]);
 
-    expectRefuse(SPINE759(READY).replace('plan_form: spine\n', ''), 'm1', GOOD, 'not_a_spine_plan', 'dag plan');
+    // ADR 0013 R3 — a plan that omits `plan_form` used to be a `dag` and was refused here forever
+    // (`not_a_spine_plan`) even though `spine` was the only authorable shape. `parsePlanForm` — the
+    // single reader every consumer shares — now normalizes that one retired token, so the omission
+    // expands exactly like the declared form. This is the R2 GREEN ARC for the retired
+    // `plan_form_dag_retired`, taken at the seam that would otherwise have become its wedge: the
+    // freeze wall accepts the plan, so this verb must too, or the conversion just moved the stuck
+    // state downstream.
+    {
+      written = null;
+      const undeclared = runExpandOpen(mkOpts(SPINE759(READY).replace('plan_form: spine\n', ''), 'm1', GOOD));
+      const declared = runExpandOpen(mkOpts(SPINE759(READY), 'm1', GOOD));
+      assert(undeclared.result === declared.result && undeclared.reason === declared.reason,
+        '#759-E/ADR-0013: an undeclared plan_form must expand identically to a declared spine, got '
+        + JSON.stringify({ undeclared: { result: undeclared.result, reason: undeclared.reason },
+          declared: { result: declared.result, reason: declared.reason } }));
+      assert(undeclared.reason !== 'not_a_spine_plan',
+        '#759-E/ADR-0013: the retired form must never wedge expand-open');
+    }
     expectRefuse(SPINE759(READY), null, GOOD, 'node_id_required', 'no --node-id');
     expectRefuse(SPINE759(READY), 'ghost', GOOD, 'node_not_found', 'unknown node');
     expectRefuse(SPINE759(READY), 'probe', GOOD, 'node_not_expansion_point', 'concrete node');
@@ -26881,7 +26908,15 @@ scenario(() => {
     '| done | finalize | wall | — | 1 | sequence |', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | complete |', '| wall | complete |', '| done | pending |', '',
   ].join('\n');
-  const DAG761c = SPINE761c.replace('plan_form: spine', 'plan_form: dag').replace('| m1 | expansion-point |', '| m1 | implementer |');
+  // A genuine legacy DAG: no expansion contract and no expansion point, which is what "DAG" MEANS
+  // structurally. It is deliberately no longer built by flipping the `plan_form` token — ADR 0013 R3
+  // normalizes that one retired token in the shared reader, so the discriminator can no longer stand
+  // in for the shape. The invariant under test is unchanged and is the one that was always load
+  // bearing: a plan with nothing to re-expand is inert, so the legacy escalation families run
+  // byte-identically. Keying it on the token instead would have been testing the spelling.
+  const DAG761c = SPINE761c
+    .replace(/expansion\(m1\):[\s\S]*?review_class: code-reviewer\n\n/, '')
+    .replace('| m1 | expansion-point |', '| m1 | implementer |');
 
   // INTERIOR finding routes LOCAL — the retire-as-primary win.
   const interior = spineReExpansionFirst(SPINE761c, ['scripts/x.js']);
@@ -26890,9 +26925,9 @@ scenario(() => {
   // SPINE-CHANGE finding (outside every milestone surface) returns null ⇒ the retained family escalates.
   assert(spineReExpansionFirst(SPINE761c, ['README.md']) === null,
     '#761c: a finding outside every milestone surface returns null so the SPINE-CHANGE (replan) family still fires');
-  // DAG plan is INERT ⇒ the legacy families are byte-identical.
+  // A plan with nothing to re-expand is INERT ⇒ the legacy families are byte-identical.
   assert(spineReExpansionFirst(DAG761c, ['scripts/x.js']) === null,
-    '#761c: a legacy DAG plan returns null (DAG-inert) — dependent_producer_replay_required / would_orphan / would_strand unchanged');
+    '#761c: a plan carrying no expansion contract returns null (inert) — dependent_producer_replay_required / would_orphan / would_strand unchanged');
   // Anchorless finding is not a local route (the router refuses; the precheck passes through).
   assert(spineReExpansionFirst(SPINE761c, []) === null,
     '#761c: an anchorless finding is not a local route (precheck passes through to the existing path)');

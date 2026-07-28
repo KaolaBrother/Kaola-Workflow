@@ -2088,9 +2088,24 @@ function testAdaptiveValidatorGovernance() {
       const out = waitValidator.validatePlan(waitPlan(cell), { root: tmp });
       assert(out.result === 'refuse' && out.reason === reason, '#655 typed refusal ' + reason + ': ' + JSON.stringify(out));
     }
+    // ADR 0013 R3 — a budget on a role nothing waits on is INERT, not wrong: the cell is dropped and
+    // the plan freezes (the R2 green arc for the retired `wait_budget_nondelegable`). The drop must
+    // reach the parsed node too, or a meaningless number rides onto a dispatch descriptor.
     for (const role of ['finalize', 'main-session-gate']) {
-      const out = waitValidator.validatePlan(waitPlan('40', role, 'reasoning').replace('| done | finalize | review | — | 1 | sequence | — | — |\n', ''), { root: tmp });
-      assert(out.result === 'refuse' && out.reason === 'wait_budget_nondelegable', '#655 nondelegable typed refusal: ' + JSON.stringify(out));
+      // Both roles are read-only and model-less; `finalize` additionally IS the sink, so the
+      // trailing sink row goes. The old pin could leave those violations in place because the
+      // budget refusal fired first — now that it does not, the fixture must be otherwise valid or
+      // the assertion would prove nothing about the budget.
+      let plan = waitPlan('40', role, '—').replace('| — | src/x.js |', '| — | — |');
+      if (role === 'finalize') plan = plan.replace('| done | finalize | review | — | 1 | sequence | — | — |\n', '');
+      const out = waitValidator.validatePlan(plan, { root: tmp });
+      assert(out.result === 'in-grammar', '#655/ADR-0013 nondelegable budget must be dropped, not refused: ' + JSON.stringify(out));
+      const node = waitValidator.parseNodes(plan).find(n => n.role === role);
+      const check = waitValidator.validateWaitBudgetNode(node, {});
+      assert(check.ok === true && check.wait_budget_minutes === null && check.dropped === 'nondelegable_role',
+        '#655/ADR-0013 the drop must be REPORTED on the result: ' + JSON.stringify(check));
+      assert(node.wait_budget_minutes === null,
+        '#655/ADR-0013 the dropped value must not survive on the parsed node: ' + JSON.stringify(node.wait_budget_minutes));
     }
     const roleModel = role => role === 'code-reviewer' ? 'opus' : 'sonnet';
     let resolved = waitValidator.validatePlan(waitPlan('20', 'code-reviewer', '—'), { root: tmp, resolveModel: roleModel });
@@ -9011,8 +9026,18 @@ function testArchiveIntegrityPortedToAllEditions832() {
           + 'these are DIVERGENT hand-ports; edition-sync will not write them for you');
     }
   };
-  // R2 — the archive-presence precondition on worktree teardown.
-  requiredIn(claims, 'archive_only_in_worktree', 'the R2 teardown refusal reason');
+  // R2 — the archive-presence precondition on worktree teardown. Under ADR 0013 R3 the precondition
+  // is DISCHARGED rather than demanded (the teardown rescues the archive up into main, verifies it
+  // landed, then removes), so the port guard tracks the token the rescue emits. The retired
+  // `archive_only_in_worktree` refusal must be absent everywhere, in BOTH directions — a hand-port
+  // that kept the old wall would otherwise pass a presence-only guard.
+  requiredIn(claims, 'archive_rescued', 'the R2 teardown archive-rescue token');
+  for (const rel of claims) {
+    assert(!fs.readFileSync(path.join(repoRoot, rel), 'utf8').includes('archive_only_in_worktree'),
+      '#832 port guard: ' + rel + ' still carries the RETIRED archive_only_in_worktree refusal — the '
+        + 'rescue replaces it in every edition, and a surviving hand-port would refuse where the '
+        + 'others repair');
+  }
   // R3 — the honest archive_commit token, on both writers of that field.
   requiredIn(claims, 'skipped_gitignored', 'the R3 honest archive_commit token');
   requiredIn(sinks, 'skipped_gitignored', 'the R3 honest archive_commit token');
@@ -17538,7 +17563,7 @@ function testSpinePlanFormFreeze758() {
   const refuses = (content, label, needle) => {
     const r = validator.validatePlan(content, { root: repoRoot });
     assert(r.result === 'refuse', '#758 ' + label + ': expected refuse, got ' + r.result);
-    assert(r.reason === 'plan_invalid' || r.reason === 'plan_form_duplicate' || r.reason === 'plan_form_unsupported' || r.reason === 'plan_form_dag_retired',
+    assert(r.reason === 'plan_invalid' || r.reason === 'plan_form_duplicate' || r.reason === 'plan_form_unsupported',
       '#758 ' + label + ': refusal must stay in an existing typed family, got reason=' + r.reason);
     assert((r.errors || []).some(e => e.includes(needle)),
       '#758 ' + label + ': expected an error containing "' + needle + '", got ' + JSON.stringify(r.errors));
@@ -17617,12 +17642,21 @@ function testSpinePlanFormFreeze758() {
     'expansion point pre-declares a fan-out', 'SPINE-3: expansion point m1 has shape');
   refuses(SPINE_PLAN_758.replace('| m1 | expansion-point | probe | — |', '| m1 | expansion-point | probe | scripts/x.js |'),
     'expansion point declares a write set', 'read-only role expansion-point (node m1) declares a write set');
-  // #765 (Wave E2): the legacy `dag` grammar is retired at the freeze wall. Dropping `plan_form: spine`
-  // makes this an absent-⇒-dag plan, which now refuses `plan_form_dag_retired` BEFORE the closed-library
-  // check ever sees the expansion-point token — so a legacy plan can never acquire the spine grammar by
-  // accident, and can no longer be authored at all.
-  refuses(SPINE_PLAN_758.replace('plan_form: spine\n', ''),
-    'dag plan retired at freeze', 'plan_form: dag is retired');
+  // #765 (Wave E2) as re-derived under ADR 0013 R3: the legacy `dag` grammar is still retired at the
+  // freeze wall, but the retirement is PERFORMED, not demanded. Dropping `plan_form: spine` makes this
+  // an absent-⇒-dag plan, which NORMALIZES to spine and freezes in-grammar carrying the
+  // `plan_form_normalized` advisory — the GREEN ARC (R2) for the retired `plan_form_dag_retired` code.
+  // The expansion-point token is admitted because the normalized form is spine.
+  {
+    const absentForm = SPINE_PLAN_758.replace('plan_form: spine\n', '');
+    const r = validator.validatePlan(absentForm, { root: repoRoot });
+    assert(r.result === 'in-grammar' && r.plan_form === 'spine',
+      '#765/ADR-0013: an absent-plan_form (dag) plan must NORMALIZE to spine and freeze in-grammar, got '
+      + JSON.stringify({ result: r.result, reason: r.reason, errors: r.errors }));
+    assert(Array.isArray(r.warnings) && r.warnings.some(w => w.warning === 'plan_form_normalized'),
+      '#765/ADR-0013: the normalization must be REPORTED as an advisory, never silent; got '
+      + JSON.stringify(r.warnings));
+  }
   // #765: SPINE-1 is RELAXED — a spine with NO expansion point (an all-concrete spine) is now the legal
   // way to author a fully-known-at-freeze DAG, semantically equal to the retired dag. It must freeze
   // in-grammar, not refuse.
@@ -17651,20 +17685,23 @@ function testSpinePlanFormFreeze758() {
     .replace(/\| done \| finalize \| wall \|[^\n]*\n/, '')
     .replace('| m2 | expansion-point | m1 |', '| m2 | expansion-point | m1, wall |'),
   'expansion point is the sink', 'SPINE-3: expansion point m2 is the plan\'s terminal node');
-  // An expansion point is not dispatched, so a frozen wait budget on it is meaningless — the same
-  // non-delegable family as the sink and the main-session gate (a typed reason, not plan_invalid).
+  // An expansion point is not dispatched, so a frozen wait budget on it is meaningless.
+  // ADR 0013 R3 — inert, not wrong: the cell is DROPPED and reported, never refused, and the drop
+  // reaches the parsed node so no meaningless number rides onto a dispatch descriptor.
+  // Pinned on the parsed node directly rather than by splicing a column into SPINE_PLAN_758: that
+  // surgery shifts every OTHER row's cells by one, which the old pin got away with only because the
+  // refusal short-circuited before any other row was read.
   {
-    const withBudget = SPINE_PLAN_758
-      .replace('| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim',
-        '| id | role | depends_on | declared_write_set | cardinality | shape | wait_budget_minutes | gate_claim')
-      .replace('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
-      .replace('| m1 | expansion-point | probe | — | 1 | sequence | —',
-        '| m1 | expansion-point | probe | — | 1 | sequence | 45 | —');
-    const r = validator.validatePlan(withBudget, { root: repoRoot });
-    assert(r.result === 'refuse' && r.reason === 'wait_budget_nondelegable',
-      '#758 expansion point wait budget: expected wait_budget_nondelegable, got '
-      + r.result + '/' + r.reason + ' ' + JSON.stringify(r.errors || []));
+    const m1 = validator.parseNodes(SPINE_PLAN_758).find(n => n.id === 'm1');
+    assert(m1 && m1.role === 'expansion-point', '#758: fixture must still carry the m1 expansion point');
+    m1.waitBudgetRaw = '45';
+    m1.wait_budget_minutes = 45;
+    const check = validator.validateWaitBudgetNode(m1, {});
+    assert(check.ok === true && check.wait_budget_minutes === null && check.dropped === 'nondelegable_role',
+      '#758/ADR-0013 an expansion point\'s wait budget must be DROPPED and reported, not refused; got '
+      + JSON.stringify(check));
+    assert(m1.wait_budget_minutes === null,
+      '#758/ADR-0013 the expansion point\'s inert budget must be dropped off the parsed node too');
   }
   // ...and no model tier: per-unit tier choice belongs to expansion time, not freeze.
   {
@@ -17679,14 +17716,22 @@ function testSpinePlanFormFreeze758() {
   }
 
   // (e) CUTOVER PIN over the real archived corpus (200+ frozen plans, all legacy dag/absent-plan_form).
-  // #765 (Wave E2) retires the legacy dag grammar at the FREEZE wall but NOT at the RESUME wall. The
-  // invariants, stable under repo evolution:
-  //   1. every archived (dag) plan now REFUSES at the freeze wall — dag can never reach in-grammar;
-  //   2. no archived plan emits the `plan_form` field (the dag refuse path does not set it);
-  //   3. the implicit legacy path and an EXPLICIT `plan_form: dag` are the SAME refusal (planHash aside);
-  //   4. the retirement fires on the corpus: at least some plans refuse `plan_form_dag_retired`;
-  //   5. FREEZE-ONLY no-brick: the retirement is ABSENT from the resume wall — revalidateForResume never
-  //      refuses `plan_form_dag_retired`, and some frozen legacy plans still resume green.
+  // #765 (Wave E2) retires the legacy dag grammar at the FREEZE wall but NOT at the RESUME wall; under
+  // ADR 0013 R3 the retirement NORMALIZES (`dag` ⇒ `spine`) instead of refusing. The invariants, stable
+  // under repo evolution:
+  //   1. no archived (dag) plan is refused FOR ITS FORM — the form vocabulary never terminates a plan;
+  //   2. every archived legacy plan resolves to the one authorable shape: a verdict that reaches the
+  //      emission carries `plan_form: 'spine'`, never `dag`;
+  //   3. the implicit legacy path and an EXPLICIT `plan_form: dag` are the SAME verdict (planHash aside)
+  //      — the normalization did not create an escape hatch for one of the two spellings;
+  //   4. the form is TRANSPARENT on the corpus: every archived legacy plan is now carried PAST the form
+  //      check to a downstream verdict (before the R3 conversion all 203 stopped at the form). The
+  //      corpus cannot show the full green arc — every plan in it predates the `## Design` wall, so it
+  //      lands on a LATER freeze-only gate — so the in-grammar traversal is pinned in (f) instead. That
+  //      split is deliberate: an "at least one reaches in-grammar" assertion over this corpus would be
+  //      vacuously unsatisfiable and would tempt a future reader to weaken the wrong half;
+  //   5. FREEZE-ONLY no-brick: the form is ABSENT from the resume wall — revalidateForResume never
+  //      refuses on it, and some frozen legacy plans still resume green.
   // Deliberately NOT pinned: absolute verdict counts (several refusals key off live repo facts).
   {
     const archiveRoot = path.join(repoRoot, 'kaola-workflow', 'archive');
@@ -17707,30 +17752,36 @@ function testSpinePlanFormFreeze758() {
     const legacyPlans = plans.filter(p => !/^plan_form:[ \t]*spine[ \t]*$/m.test(fs.readFileSync(p, 'utf8')));
     assert(legacyPlans.length >= 150,
       '#758 (e): the archived-plan regression pin needs the real corpus; found only ' + legacyPlans.length + ' legacy plans');
-    let dagRetired = 0;
+    const FORM_REASONS = new Set(['plan_form_dag_retired', 'plan_form_unsupported']);
+    let dagNormalized = 0;
     let resumeGreen = 0;
     for (const p of legacyPlans.sort()) {
       const content = fs.readFileSync(p, 'utf8');
       const legacy = validator.validatePlan(content, { root: repoRoot });
-      assert(legacy.result === 'refuse',
-        '#765 (e): archived legacy dag plan ' + p + ' must refuse at the freeze wall (dag retired), got ' + legacy.result);
-      assert(legacy.plan_form === undefined,
-        '#758 (e): archived legacy plan ' + p + ' must not gain a plan_form field');
-      if (legacy.reason === 'plan_form_dag_retired') dagRetired++;
+      assert(!FORM_REASONS.has(legacy.reason),
+        '#765/ADR-0013 (e): archived legacy dag plan ' + p + ' must never be refused for its FORM — the '
+        + 'form normalizes; got reason=' + legacy.reason);
+      assert(legacy.plan_form === undefined || legacy.plan_form === 'spine',
+        '#758 (e): archived legacy plan ' + p + ' must resolve to the one authorable shape, got '
+        + legacy.plan_form);
+      // Carried PAST the form: either in-grammar, or stopped by a wall that is not the form.
+      if (legacy.result === 'in-grammar' || !FORM_REASONS.has(legacy.reason)) dagNormalized++;
       const explicitDag = validator.validatePlan(
         content.replace(/^(## Meta[ \t]*)$/m, '$1\nplan_form: dag'), { root: repoRoot });
       const strip = r => JSON.stringify({ ...r, planHash: null });
       assert(strip(legacy) === strip(explicitDag),
         '#758 (e): implicit legacy and explicit plan_form: dag must be the SAME path for ' + p
         + '\n  implicit: ' + strip(legacy).slice(0, 300) + '\n  explicit: ' + strip(explicitDag).slice(0, 300));
-      // FREEZE-ONLY: the resume wall must stay tolerant of the frozen legacy dag plan.
+      // FREEZE-ONLY: the resume wall never reads the form at all.
       const resume = validator.revalidateForResume(content, { root: repoRoot });
-      assert(resume.reasonCode !== 'plan_form_dag_retired',
-        '#765 (e): the dag retirement must be ABSENT from the resume wall (no-brick) for ' + p);
+      assert(!FORM_REASONS.has(resume.reasonCode),
+        '#765 (e): the form must be ABSENT from the resume wall (no-brick) for ' + p);
       if (resume.ok) resumeGreen++;
     }
-    assert(dagRetired > 0,
-      '#765 (e): the dag retirement must fire on the corpus (dagRetired=' + dagRetired + ')');
+    assert(dagNormalized === legacyPlans.length,
+      '#765/ADR-0013 (e): the form must be TRANSPARENT — EVERY archived legacy dag plan must be carried '
+      + 'past the form check to a downstream verdict (carried=' + dagNormalized + ' of '
+      + legacyPlans.length + ')');
     assert(resumeGreen > 0,
       '#765 (e): freeze-only no-brick — some frozen legacy dag plans must still resume green (resumeGreen='
       + resumeGreen + ')');
@@ -17751,22 +17802,29 @@ function testSpinePlanFormFreeze758() {
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| explore | pending |', '| done | pending |', '',
     ].join('\n');
-    // absent plan_form ⇒ dag ⇒ refuses at freeze
+    // absent plan_form ⇒ dag ⇒ NORMALIZES to spine and freezes in-grammar (the R2 green arc)
     const rAbsent = validator.validatePlan(dagPlan, { root: repoRoot });
-    assert(rAbsent.result === 'refuse' && rAbsent.reason === 'plan_form_dag_retired',
-      '#765 (f): an absent-plan_form (dag) plan must refuse plan_form_dag_retired at freeze, got '
-      + JSON.stringify({ result: rAbsent.result, reason: rAbsent.reason }));
-    // explicit plan_form: dag ⇒ the SAME refusal
+    assert(rAbsent.result === 'in-grammar' && rAbsent.plan_form === 'spine',
+      '#765/ADR-0013 (f): an absent-plan_form (dag) plan must NORMALIZE to spine and freeze in-grammar, got '
+      + JSON.stringify({ result: rAbsent.result, reason: rAbsent.reason, errors: rAbsent.errors }));
+    assert((rAbsent.warnings || []).some(w => w.warning === 'plan_form_normalized'),
+      '#765/ADR-0013 (f): the normalization must be REPORTED, never silent; got ' + JSON.stringify(rAbsent.warnings));
+    // explicit plan_form: dag ⇒ the SAME normalized verdict (no spelling is privileged)
     const rExplicit = validator.validatePlan(dagPlan.replace('## Meta', '## Meta\nplan_form: dag'), { root: repoRoot });
-    assert(rExplicit.result === 'refuse' && rExplicit.reason === 'plan_form_dag_retired',
-      '#765 (f): an explicit plan_form: dag plan must refuse plan_form_dag_retired at freeze, got '
-      + JSON.stringify({ result: rExplicit.result, reason: rExplicit.reason }));
+    assert(rExplicit.result === 'in-grammar' && rExplicit.plan_form === 'spine',
+      '#765/ADR-0013 (f): an explicit plan_form: dag plan must normalize identically, got '
+      + JSON.stringify({ result: rExplicit.result, reason: rExplicit.reason, errors: rExplicit.errors }));
     // FREEZE-ONLY: a plan frozen BEFORE the cutover (a hash-stamped dag) must still RESUME green.
     const frozenDag = '<!-- plan_hash: ' + validator.computePlanHash(dagPlan) + ' -->\n\n' + dagPlan;
     const resume = validator.revalidateForResume(frozenDag, { root: repoRoot });
-    assert(resume.ok === true && resume.plan_form === undefined,
-      '#765 (f): a frozen legacy dag plan must still resume green (freeze-only no-brick), got '
-      + JSON.stringify({ ok: resume.ok, reasonCode: resume.reasonCode }));
+    // NO-BRICK, unchanged: it still resumes green. What changed is the REPORTED form — the reader
+    // normalizes the one retired token, so the resume payload now names the grammar the plan is
+    // actually judged under instead of leaving it unstated. Under-reporting the effective form is
+    // the drift class this campaign exists to remove, so the honest value is pinned, not the old
+    // silence.
+    assert(resume.ok === true && resume.plan_form === 'spine',
+      '#765 (f): a frozen legacy dag plan must still resume green and report its effective form, got '
+      + JSON.stringify({ ok: resume.ok, reasonCode: resume.reasonCode, plan_form: resume.plan_form }));
     // ...and the all-concrete spine twin of the same plan freezes in-grammar (the migration path).
     const rSpine = validator.validatePlan(dagPlan.replace('## Meta', '## Meta\nplan_form: spine'), { root: repoRoot });
     assert(rSpine.result === 'in-grammar' && rSpine.plan_form === 'spine',
@@ -21050,10 +21108,11 @@ function testAdaptiveLedgerHeaderInvalid425() {
       '#425: rewritten plan must have canonical `| id | status |` ledger header, got: ' + rewritten.slice(rewritten.indexOf('## Node Ledger'), rewritten.indexOf('## Node Ledger') + 60));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 
-  // (3) #774 — the diagnostic's hint must name a remedy that is REACHABLE. `--freeze --repair` routes
-  // through the full freeze wall, which refuses a legacy dag plan outright — and a pre-cutover dag
-  // plan is exactly the population that can still carry a non-canonical header, so the hint may not
-  // present --repair as the only route.
+  // (3) #774 — the diagnostic's hint must name a remedy that is REACHABLE. The hint used to carve out
+  // the legacy-dag population because `--freeze --repair` routed through a freeze wall that refused a
+  // dag plan outright. That wall now NORMALIZES, so the carve-out is dead choreography and is deleted
+  // with the refusal it navigated (ADR 0013 T11) — and the deletion is proven by the GREEN ARC below,
+  // not merely by the absence of the old string.
   {
     const adaptiveNode = require(adaptiveNodeScript);
     const d = adaptiveNode.spliceLedgerNode(planBody, 'impl', 'in_progress', { allowFrom: ['pending'] }).diagnostic;
@@ -21061,24 +21120,28 @@ function testAdaptiveLedgerHeaderInvalid425() {
       '#774: a non-canonical ledger header must still emit the structured diagnostic, got ' + JSON.stringify(d));
     assert(/\|\s*id\s*\|\s*status\s*\|/.test(d.hint) && /outside plan_hash/.test(d.hint),
       '#774: the hint must name the in-place header rewrite (the remedy that works on every frozen plan), got ' + d.hint);
-    assert(/plan_form_dag_retired/.test(d.hint),
-      '#774: the hint must say the --repair route is refused on a legacy dag plan, got ' + d.hint);
+    assert(!/plan_form_dag_retired/.test(d.hint),
+      '#774/T11: the hint must not name a refusal that can no longer fire — dead choreography is a '
+      + 'route to nowhere, got ' + d.hint);
 
-    // …and that is not a guess: --freeze --repair really is a dead end on a legacy dag plan. It
-    // normalizes the header in memory (header_normalized:true) and then refuses at the freeze wall,
-    // writing nothing (frozen:false) — so an operator following a --repair-only hint gets nowhere.
+    // …and the hint is not a guess: --freeze --repair really does carry a legacy dag plan through now.
+    // It normalizes the header, normalizes the retired form, freezes (frozen:true) and REWRITES the
+    // canonical header on disk — the exact traversal the old refusal made impossible (R2 green arc).
     const dagTmp = adaptiveTmp('774-dag-repair');
     try {
       const dagPath = path.join(dagTmp, 'plan.md');
-      const dagBody = planBody.replace('plan_form: spine', 'plan_form: dag');
+      // Design is injected (the #790 freeze-only wall is orthogonal to the form); the form stays `dag`
+      // — that ONE token is the whole subject of this arc.
+      const dagBody = injectDesignSection(planBody).replace('plan_form: spine', 'plan_form: dag');
       fs.writeFileSync(dagPath, '<!-- plan_hash: ' + pv.computePlanHash(dagBody) + ' -->\n\n' + dagBody);
       const dr = runNode(planValidatorScript, [dagPath, '--freeze', '--repair', '--json'], dagTmp);
       const dout = JSON.parse(dr.stdout);
-      assert(dr.status !== 0 && dout.result === 'refuse' && dout.frozen === false
-        && (dout.errors || []).some(e => /plan_form: dag is retired/.test(e)),
-        '#774: --freeze --repair on a legacy dag plan must refuse at the freeze wall, got ' + dr.status + ' ' + dr.stdout + dr.stderr);
-      assert(fs.readFileSync(dagPath, 'utf8').indexOf('| node | status |') >= 0,
-        '#774: the refused --repair must leave the non-canonical header untouched on disk');
+      assert(dr.status === 0 && dout.result === 'in-grammar' && dout.frozen === true
+        && dout.header_normalized === true,
+        '#774/ADR-0013: --freeze --repair on a legacy dag plan must now go all the way through, got '
+        + dr.status + ' ' + dr.stdout + dr.stderr);
+      assert(fs.readFileSync(dagPath, 'utf8').indexOf('| id | status |') >= 0,
+        '#774/ADR-0013: the repaired plan must carry the canonical header on disk');
     } finally { fs.rmSync(dagTmp, { recursive: true, force: true }); }
   }
 

@@ -51,9 +51,11 @@
 //       reported status:sinked with the project never archived and the roadmap never reconciled.
 //   (o) #746 — over-tighten guard: the ONE documented benign shape (a journal-only live dir with no
 //       workflow-state.md → snapshot_error:'state_missing') must STILL silently skip and sink.
-//   (p) #832 — worktree teardown must REFUSE while the run archive exists ONLY inside the tree being
-//       deleted (typed 'archive_only_in_worktree', nothing removed), with two negative controls: a
-//       worktree whose archive is also on main, and one that never held an archive.
+//   (p) #832 / ADR 0013 R3 — when the run archive exists ONLY inside the tree being deleted, the
+//       teardown RESCUES it up into main, verifies every file landed, and only then removes the
+//       tree; a rescue that cannot land fails closed under `mirror_sync_failed` with the tree left
+//       standing. Two negative controls: a worktree whose archive is also on main, and one that
+//       never held an archive.
 //   (q) #832 — receipt honesty: on a consumer whose .gitignore covers kaola-workflow/archive, git
 //       REFUSES the archive pathspec, so archive_commit must record 'skipped_gitignored' — the
 //       keep-worktree flow's unconditional stepDone() reports "done" for an operation git refused.
@@ -1227,7 +1229,7 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
 // belongs here rather than replicated per call site (the exact per-call-site duplication that let
 // #676/#707/#746/#497 each fix one site and leave the family alive).
 (function testRemoveWorktreeRefusesWhenArchiveOnlyInWorktree832() {
-  console.log('Test (#832 p): removeWorktree must REFUSE while the run archive exists ONLY inside the worktree being deleted — `git worktree remove --force` would destroy the run\'s only evidence trail');
+  console.log('Test (#832 p / ADR 0013 R3): removeWorktree must RESCUE the run archive up into main and then tear down — the precondition is discharged, not demanded');
   const claim = require(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'));
   const project = 'issue-83201';
   const tmpRoot = makeTmpRoot();
@@ -1240,13 +1242,48 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
     fs.writeFileSync(path.join(wtArchive, 'workflow-state.md'), 'status: closed\nissue_number: 83201\n');
     fs.writeFileSync(path.join(wtArchive, '.cache', 'n1.md'), 'binding: n1 nonce83201\nverdict: pass\n');
 
-    // MAIN carries no copy: removing the worktree now is unrecoverable data loss.
-    const refused = claim.removeWorktree(tmpRoot, project, { worktree_path: wtPath });
-    assert(refused && refused.removed === false && refused.reason === 'archive_only_in_worktree',
-      '#832 p: removeWorktree must refuse with a typed archive_only_in_worktree reason; got ' + JSON.stringify(refused));
-    assert(fs.existsSync(path.join(wtArchive, '.cache', 'n1.md')),
-      '#832 p: the refusal must leave the worktree (and the archive inside it) untouched');
-    assert(fs.existsSync(wtPath), '#832 p: the worktree directory must survive the refusal');
+    // MAIN carries no copy: removing the worktree blind would be unrecoverable data loss. The
+    // teardown therefore RESCUES the archive first — the R2 green arc for the retired
+    // `archive_only_in_worktree` refusal: the tree really does come down, and the evidence really
+    // does survive, which a refusal-only pin could never show.
+    const mainArchive = path.join(tmpRoot, 'kaola-workflow', 'archive', project);
+    const rescued = claim.removeWorktree(tmpRoot, project, { worktree_path: wtPath });
+    assert(rescued && rescued.removed === true && rescued.archive_rescued === true,
+      '#832 p: removeWorktree must rescue the archive and complete the teardown; got ' + JSON.stringify(rescued));
+    assert(!fs.existsSync(wtPath), '#832 p: the worktree must actually be gone after the rescue');
+    assert(fs.readFileSync(path.join(mainArchive, '.cache', 'n1.md'), 'utf8').includes('nonce83201'),
+      '#832 p: the run evidence must survive BYTE-FOR-BYTE in the main checkout, not merely exist');
+    assert(fs.readFileSync(path.join(mainArchive, 'workflow-state.md'), 'utf8').includes('issue_number: 83201'),
+      '#832 p: the whole archive tree is rescued, not just the top level');
+
+    // …and the fail-closed half is intact: when the rescue cannot land, the tree is NOT removed and
+    // the machine failure reports under the shipped `mirror_sync_failed` reason (no second code).
+    // Isolated in its own root, because the block is a non-directory at `kaola-workflow/archive`
+    // and would otherwise poison the negative controls below.
+    {
+      const blockedRoot = makeTmpRoot();
+      const blockedRemote = initGitRepoWithBareRemote(blockedRoot);
+      const blocked = 'issue-83201b';
+      try {
+        const wtPathB = path.join(blockedRoot, '.kw', 'worktrees', blocked);
+        git(blockedRoot, ['worktree', 'add', '-b', 'workflow/' + blocked, wtPathB, 'HEAD']);
+        fs.mkdirSync(path.join(wtPathB, 'kaola-workflow', 'archive', blocked), { recursive: true });
+        fs.writeFileSync(path.join(wtPathB, 'kaola-workflow', 'archive', blocked, 'workflow-state.md'), 'status: closed\n');
+        // A plain FILE where the destination's PARENT directory must be created: mkdirSync throws
+        // ENOTDIR, so the rescue cannot land and `archive/<project>` still does not exist.
+        fs.mkdirSync(path.join(blockedRoot, 'kaola-workflow'), { recursive: true });
+        fs.writeFileSync(path.join(blockedRoot, 'kaola-workflow', 'archive'), 'not a directory');
+        const failed = claim.removeWorktree(blockedRoot, blocked, { worktree_path: wtPathB });
+        assert(failed && failed.removed === false && failed.reason === 'mirror_sync_failed',
+          '#832 p: an unlandable rescue must fail closed under mirror_sync_failed; got ' + JSON.stringify(failed));
+        assert(fs.existsSync(wtPathB), '#832 p: a failed rescue must leave the worktree standing');
+        assert(fs.existsSync(path.join(wtPathB, 'kaola-workflow', 'archive', blocked, 'workflow-state.md')),
+          '#832 p: a failed rescue must leave the worktree archive byte-untouched');
+      } finally {
+        try { fs.rmSync(blockedRoot, { recursive: true, force: true }); } catch (_) {}
+        try { fs.rmSync(blockedRemote, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
 
     // Negative control 1 — MAIN carries the archive too, so teardown proceeds exactly as before.
     // Its own worktree, so the assertion stands or falls independently of the refusal above.
