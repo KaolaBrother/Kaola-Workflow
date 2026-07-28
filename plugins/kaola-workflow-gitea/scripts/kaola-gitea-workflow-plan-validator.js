@@ -618,6 +618,42 @@ function findRepoRoot(startDir) {
   }
   return startDir;
 }
+// #832: the run archive resolves against MAIN's project root regardless of invocation cwd, so a
+// SOURCE-MISSING finalize resume hands `--finalize-check` a plan that lives in MAIN's archive while
+// the candidate under validation — the branch, its commits, and the working tree every finalize arm
+// reasons about — is the LINKED WORKTREE the caller invoked from. Deriving the root from the plan
+// path alone then aims the candidate hash, the chain-receipt freshness arm and the attribution
+// sweep at the wrong working tree, and a settled re-entry refuses over a candidate nothing changed.
+// ONE rule fixes all three arms rather than each recomputing its own root.
+//
+// Narrow by construction: it applies only when the caller's cwd is a DIFFERENT working tree of the
+// SAME repository (proven by `git worktree list`, not guessed) and that tree does not contain the
+// plan. Every ordinary invocation — cwd inside the plan's own tree — resolves exactly as before,
+// and any probe failure falls back to the plan-derived root, so the gate keeps failing closed.
+function resolveFinalizeCheckRoot(planRoot) {
+  const topLevel = dir => {
+    try {
+      return fs.realpathSync(execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+    } catch (_) { return ''; }
+  };
+  let cwdTop, planTop;
+  try { cwdTop = topLevel(process.cwd()); } catch (_) { return planRoot; }
+  planTop = topLevel(planRoot);
+  if (!cwdTop || !planTop || cwdTop === planTop) return planRoot;
+  // Same repository? `git worktree list` from the plan's tree enumerates every linked worktree.
+  let listed = '';
+  try {
+    listed = execFileSync('git', ['-C', planTop, 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+  } catch (_) { return planRoot; }
+  const sameRepo = listed.split('\n')
+    .filter(l => l.startsWith('worktree '))
+    .some(l => {
+      try { return fs.realpathSync(l.slice('worktree '.length).trim()) === cwdTop; } catch (_) { return false; }
+    });
+  return sameRepo ? cwdTop : planRoot;
+}
 function installedRoles(root) {
   const roles = new Set(CANONICAL_ROLES);
   try {
@@ -5773,7 +5809,10 @@ function main() {
   }
   const planPath = args[0];
   const json = args.includes('--json');
-  const root = findRepoRoot(path.dirname(path.resolve(planPath)));
+  let root = findRepoRoot(path.dirname(path.resolve(planPath)));
+  // #832: a source-missing finalize resume validates the INVOKING worktree, not the tree the
+  // main-resident archive happens to sit in (see resolveFinalizeCheckRoot).
+  if (args.includes('--finalize-check')) root = resolveFinalizeCheckRoot(root);
   let finalizeFence = null;
   if (args.includes('--finalize-check')) {
     finalizeFence = readFinalizeReplanFence(planPath);

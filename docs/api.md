@@ -2388,10 +2388,23 @@ Emitted alongside `closure_receipt`, so a crash-resumed run is readable from the
   "ledger_compare": "not_needed|pass|skipped_no_plan|skipped_no_script",
   "impl_commit": "not_checked|not_applicable|committed|indeterminate",
   "roadmap_staged": true,
-  "archive_commit": "skipped|nothing_to_commit|committed",
+  "archive_commit": "skipped|nothing_to_commit|committed|deferred_to_sink|skipped_gitignored|failed",
   "finalize_commit": "skipped|nothing_to_commit|committed"
 }
 ```
+
+`archive_commit` reports the fate of the ARCHIVE, independently of what else the `chore: archive`
+commit carried. The archive destination always resolves against MAIN's project root (see
+`archiveProjectDir` below), so on a linked run it is outside the invoking worktree's index and
+cannot be committed there:
+
+- `deferred_to_sink` — the archive is on main, untracked, awaiting the sink's own `archive_commit`
+  step. This is the normal `--keep-worktree` outcome.
+- `skipped_gitignored` — the consumer's `.gitignore` covers `kaola-workflow/archive`, so git
+  REFUSES the paths. The archive exists on disk only; nothing was committed and nothing was
+  deleted. `kaola-workflow-sink-merge.js` records the same token as `receipt.archive_commit` and
+  still reaches `status: sinked` (refusing would brick every repo that ignores the archive band).
+  Both writers also emit a loud stderr warning — a refused operation is never reported as success.
 
 ### Crash-resume re-entry points
 

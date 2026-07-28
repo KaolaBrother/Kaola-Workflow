@@ -586,7 +586,39 @@ here for the full contract.
     `kaola-workflow/archive/<project>.archived-<ts>/` when the plain path already exists. The
     `archive_commit` step stages/commits this exact directory instead of assuming the plain path,
     and `disposeSinkJournals` sweeps its `.cache/` journals too. Absent when the `finalize` step
-    found no dest to record (e.g. a `--keep-worktree` flow that already archived on the branch).
+    found no dest to record (e.g. a `--keep-worktree` flow that already archived to main).
+
+## Archive Destination
+
+`archiveProjectDir` resolves the archive destination by ONE rule: for a linked run it is always
+`<mainRoot>/kaola-workflow/archive/<project>[<collision-suffix>]`, regardless of invocation cwd and
+regardless of `--keep-worktree`. A `--keep-worktree` finalize is invoked FROM the linked worktree
+(the documented node-cwd locus); writing the archive there put the run's whole evidence trail inside
+the tree `sink-merge` removes at cleanup. There is no valid case for archiving into a tree the sink
+is about to delete.
+
+Consequences of the one rule:
+
+- The archive is UNTRACKED on main until the sink's `archive_commit` step lands it. It never
+  collides with the sink's `git checkout` of the feature branch, because the branch no longer
+  carries the archive path at all.
+- `cmdFinalize --keep-worktree` cannot stage a path outside its own worktree, so it records the
+  archive's fate as `deferred_to_sink` (or `skipped_gitignored`) rather than claiming a commit.
+- `removeWorktree` — the single choke point every destructive caller funnels through — refuses
+  `{ removed: false, reason: 'archive_only_in_worktree' }` when `<wt>/kaola-workflow/archive/<project>`
+  exists and `<root>/kaola-workflow/archive/<project>` does not, and performs no git call. The probe
+  is existence-only on the plain path and never gates on git state.
+- `resume --project X` treats a settled main-resident archive as `already_finalized`; it reports
+  `finalize_incomplete` only while the branch still carries the live folder (proof the transaction's
+  own `chore: archive` commit never landed).
+- `--finalize-check` resolves its root from the caller's cwd when the plan lives in another working
+  tree of the same repository, so a source-missing resume validates the tree that will actually
+  merge rather than the tree the main-resident archive happens to sit in.
+
+`closure-audit` reports an `archive_content_incomplete` drift class (report-only in both modes, and
+identical offline): `workflow-state.md` is always required, `workflow-plan.md` when the state names a
+real plan hash, and each `.cache/<id>.md` a `complete` `## Node Ledger` row proves was recorded. The
+required set is derived from the archive's OWN record, never a blanket demand.
 
 ## Workflow State Fields
 

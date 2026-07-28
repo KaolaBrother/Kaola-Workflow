@@ -900,8 +900,13 @@ withForge({
     const lsTree = execFileSync('git', ['ls-tree', '--name-only', '-r', 'workflow/test-kw-proj'], { cwd: mainRoot, encoding: 'utf8' });
     assert(!lsTree.includes('kaola-workflow/test-kw-proj/'),
       'feature branch HEAD must not have live folder after finalize --keep-worktree, got:\n' + lsTree);
-    assert(lsTree.includes('kaola-workflow/archive/test-kw-proj/'),
-      'feature branch HEAD must have archive folder after finalize --keep-worktree, got:\n' + lsTree);
+    // #832: the archive resolves against MAIN's project root regardless of invocation cwd, so it
+    // is NOT on the feature branch — the sink's own archive_commit step lands it on main. Writing
+    // it into the linked worktree is exactly the destination the sink then deletes.
+    assert(!lsTree.includes('kaola-workflow/archive/test-kw-proj/'),
+      'feature branch HEAD must NOT carry the archive — it resolves against MAIN (#832), got:\n' + lsTree);
+    assert(fs.existsSync(path.join(mainRoot, 'kaola-workflow', 'archive', 'test-kw-proj', 'workflow-state.md')),
+      '#832: main must hold the archive after finalize --keep-worktree');
     console.log('finalize --keep-worktree commits archive rename (GitLab): PASSED');
   } finally {
     try { execFileSync('git', ['worktree', 'remove', '--force', wtPath], { cwd: mainRoot, encoding: 'utf8' }); } catch (_) {}

@@ -51,6 +51,12 @@
 //       reported status:sinked with the project never archived and the roadmap never reconciled.
 //   (o) #746 — over-tighten guard: the ONE documented benign shape (a journal-only live dir with no
 //       workflow-state.md → snapshot_error:'state_missing') must STILL silently skip and sink.
+//   (p) #832 — worktree teardown must REFUSE while the run archive exists ONLY inside the tree being
+//       deleted (typed 'archive_only_in_worktree', nothing removed), with two negative controls: a
+//       worktree whose archive is also on main, and one that never held an archive.
+//   (q) #832 — receipt honesty: on a consumer whose .gitignore covers kaola-workflow/archive, git
+//       REFUSES the archive pathspec, so archive_commit must record 'skipped_gitignored' — the
+//       keep-worktree flow's unconditional stepDone() reports "done" for an operation git refused.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -1203,12 +1209,150 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
   }
 })();
 
+// --------------------------------------------------------------------------- (p)/(q) #832
+
+// (p) The archive-presence precondition on worktree teardown. `removeWorktree` is the ONE choke
+// point every destructive caller funnels through — the merge step's pre-checkout removal, the
+// terminal teardown, the legacy non---sink Step 3, and cmdFinalize's own removal — so the probe
+// belongs here rather than replicated per call site (the exact per-call-site duplication that let
+// #676/#707/#746/#497 each fix one site and leave the family alive).
+(function testRemoveWorktreeRefusesWhenArchiveOnlyInWorktree832() {
+  console.log('Test (#832 p): removeWorktree must REFUSE while the run archive exists ONLY inside the worktree being deleted — `git worktree remove --force` would destroy the run\'s only evidence trail');
+  const claim = require(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'));
+  const project = 'issue-83201';
+  const tmpRoot = makeTmpRoot();
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  try {
+    const wtPath = path.join(tmpRoot, '.kw', 'worktrees', project);
+    git(tmpRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtPath, 'HEAD']);
+    const wtArchive = path.join(wtPath, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(path.join(wtArchive, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(wtArchive, 'workflow-state.md'), 'status: closed\nissue_number: 83201\n');
+    fs.writeFileSync(path.join(wtArchive, '.cache', 'n1.md'), 'binding: n1 nonce83201\nverdict: pass\n');
+
+    // MAIN carries no copy: removing the worktree now is unrecoverable data loss.
+    const refused = claim.removeWorktree(tmpRoot, project, { worktree_path: wtPath });
+    assert(refused && refused.removed === false && refused.reason === 'archive_only_in_worktree',
+      '#832 p: removeWorktree must refuse with a typed archive_only_in_worktree reason; got ' + JSON.stringify(refused));
+    assert(fs.existsSync(path.join(wtArchive, '.cache', 'n1.md')),
+      '#832 p: the refusal must leave the worktree (and the archive inside it) untouched');
+    assert(fs.existsSync(wtPath), '#832 p: the worktree directory must survive the refusal');
+
+    // Negative control 1 — MAIN carries the archive too, so teardown proceeds exactly as before.
+    // Its own worktree, so the assertion stands or falls independently of the refusal above.
+    const project2 = 'issue-83202';
+    const wtPath2 = path.join(tmpRoot, '.kw', 'worktrees', project2);
+    git(tmpRoot, ['worktree', 'add', '-b', 'workflow/' + project2, wtPath2, 'HEAD']);
+    const wtArchive2 = path.join(wtPath2, 'kaola-workflow', 'archive', project2);
+    fs.mkdirSync(wtArchive2, { recursive: true });
+    fs.writeFileSync(path.join(wtArchive2, 'workflow-state.md'), 'status: closed\nissue_number: 83202\n');
+    const mainArchive2 = path.join(tmpRoot, 'kaola-workflow', 'archive', project2);
+    fs.mkdirSync(mainArchive2, { recursive: true });
+    fs.writeFileSync(path.join(mainArchive2, 'workflow-state.md'), 'status: closed\nissue_number: 83202\n');
+    const removed = claim.removeWorktree(tmpRoot, project2, { worktree_path: wtPath2 });
+    assert(removed && removed.removed === true,
+      '#832 p: with main holding the archive the worktree is removed as before; got ' + JSON.stringify(removed));
+    assert(!fs.existsSync(wtPath2), '#832 p: the worktree is actually gone in the negative control');
+
+    // Negative control 2 — a worktree that never held an archive is removed as before (the probe
+    // must not become a blanket teardown block).
+    const project3 = 'issue-83203p';
+    const wtPath3 = path.join(tmpRoot, '.kw', 'worktrees', project3);
+    git(tmpRoot, ['worktree', 'add', '-b', 'workflow/' + project3, wtPath3, 'HEAD']);
+    const plain = claim.removeWorktree(tmpRoot, project3, { worktree_path: wtPath3 });
+    assert(plain && plain.removed === true,
+      '#832 p: an archive-free worktree is removed as before; got ' + JSON.stringify(plain));
+  } finally {
+    try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+})();
+
+// (q) Receipt honesty on a consumer whose .gitignore covers kaola-workflow/archive. git REFUSES
+// the archive pathspec ("The following paths are ignored by one of your .gitignore files"), yet the
+// keep-worktree flow's archive_commit step runs stepDone() unconditionally — its honesty guard is
+// scoped to receipt.archive_dest, which is unset precisely on this flow. The result is
+// steps.archive_commit:"done" for an operation git refused, on every run, silently.
+function buildGitignoredArchiveSinkFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  // main: the consumer's .gitignore covers the archive band + roadmap source/mirror.
+  fs.writeFileSync(path.join(tmpRoot, '.gitignore'), 'kaola-workflow/archive/\n');
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap + gitignore']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  // feature branch: the deliverable only. The keep-worktree finalize already ran — it archived the
+  // project and tried to commit the archive; git refused the ignored paths, so the branch carries
+  // NO archive and no live folder.
+  git(tmpRoot, ['checkout', '-b', branch]);
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: deliverable']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  // ...and the archive itself sits on MAIN's disk, untracked because it is ignored (#832 R1: the
+  // destination resolves against main's project root regardless of invocation cwd).
+  const archiveDir = path.join(tmpRoot, 'kaola-workflow', 'archive', project);
+  fs.mkdirSync(path.join(archiveDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
+    liveState(project, issue, new Date().toISOString()).replace('status: active', 'status: closed'));
+  fs.writeFileSync(path.join(archiveDir, 'workflow-plan.md'), planWithLedger([{ id: 'n1-impl', status: 'complete' }]));
+  fs.writeFileSync(path.join(archiveDir, 'finalization-summary.md'), '# Finalization Summary\n\nARCHIVED AFTER FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(archiveDir, '.cache', 'n1-impl.md'), 'binding: n1-impl nonce83203\nverdict: pass\n');
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project, archiveDir };
+}
+
+(function testArchiveCommitNeverClaimsDoneForGitignoredPaths832() {
+  console.log('Test (#832 q): on a consumer whose .gitignore covers kaola-workflow/archive, the sink must record archive_commit:"skipped_gitignored" — never a silent success for an operation git refused');
+  const project = 'issue-83203';
+  const issue = 83203;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue);
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // The consumer CHOSE to ignore the archive band, so this is not a failure — refusing here would
+    // brick every run on such a repo. It must be HONEST, not silent.
+    assert(result.status === 0, '#832 q: the sink must still complete; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#832 q: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // Precondition — git genuinely refused: nothing under kaola-workflow/archive/ reached HEAD.
+    const tree = git(fx.tmpRoot, ['ls-tree', '-r', '--name-only', 'HEAD']).stdout || '';
+    assert(!/kaola-workflow\/archive\//.test(tree),
+      '#832 q: precondition — the ignored archive genuinely never reached HEAD; got:\n' + tree);
+
+    // ...therefore the receipt must SAY so. 'done' / any success token here is the false claim.
+    const receipt = (out && out.receipt) || {};
+    assert(receipt.archive_commit === 'skipped_gitignored',
+      '#832 q: receipt.archive_commit must be "skipped_gitignored" (git refused the ignored paths); got '
+        + JSON.stringify(receipt.archive_commit) + '\nfull receipt: ' + JSON.stringify(receipt));
+
+    // The honest skip must not also destroy the archive it declined to commit.
+    assert(fs.existsSync(path.join(fx.archiveDir, '.cache', 'n1-impl.md')),
+      '#832 q: the on-disk archive must survive an honest skipped_gitignored');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715/#746) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715/#746) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

@@ -112,6 +112,59 @@ function archiveClosedIssues(root) {
   return set;
 }
 
+// (g) #832: prove archive CONTENT, not existence. `verifyArchiveComplete` cannot cover this class —
+// it is SOURCE-relative and runs at copy time, before the loss; an archive gutted afterwards (the
+// worktree that held it was deleted, or the sink's own receipt writer mkdir-ed a bare `.cache/`
+// skeleton) passes every existing check and drops silently out of archiveClosedIssues, which
+// `continue`s on any read error.
+//
+// The required set is derived from the archive's OWN record, never a blanket demand:
+//   - workflow-state.md is ALWAYS required (the #676 unconditional identity anchor);
+//   - workflow-plan.md is required only when the state names a real plan hash;
+//   - each `.cache/<id>.md` is required only when the plan's `## Node Ledger` proves it was
+//     recorded (listRecordedNodeEvidence — `complete` rows only; `n/a`/pending carry no obligation).
+// A blanket "plan + summary + evidence" rule would flag two thirds of a mature archive corpus, so
+// it would be noise rather than drift. LOCAL and report-only: an incomplete archive is not
+// repairable, so --execute reports it and never touches it.
+function archiveRequiredContent(dir) {
+  const missing = [];
+  let state;
+  try { state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'); } catch (_) { state = null; }
+  if (state === null) return ['workflow-state.md'];
+  const namesPlan = ['plan_hash', 'active_plan_hash'].some(key => {
+    const v = (field(state, key) || '').trim();
+    return v && v !== 'none' && v !== 'n/a' && v !== '—' && v !== '-';
+  });
+  const planPresent = fs.existsSync(path.join(dir, 'workflow-plan.md'));
+  if (namesPlan && !planPresent) missing.push('workflow-plan.md');
+  if (planPresent) {
+    // Lazy require: claim.js owns the ledger grammar (`complete` vs `n/a`/pending + the node-id
+    // validation) and re-deriving it here would be a second, divergable copy of that rule.
+    let listRecordedNodeEvidence;
+    try { ({ listRecordedNodeEvidence } = require('./kaola-workflow-claim.js')); } catch (_) { listRecordedNodeEvidence = null; }
+    if (typeof listRecordedNodeEvidence === 'function') {
+      for (const rel of listRecordedNodeEvidence(dir)) {
+        if (!fs.existsSync(path.join(dir, ...String(rel).split('/')))) missing.push(rel);
+      }
+    }
+  }
+  return missing;
+}
+
+function detectArchiveContentIncomplete(root) {
+  const out = [];
+  const archiveBase = path.join(root, 'kaola-workflow', 'archive');
+  if (!fs.existsSync(archiveBase)) return out;
+  let entries;
+  try { entries = fs.readdirSync(archiveBase, { withFileTypes: true }); } catch (_) { return out; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const missing = archiveRequiredContent(path.join(archiveBase, entry.name));
+    if (missing.length) out.push({ project: entry.name, missing });
+  }
+  return out.sort((a, b) => a.project.localeCompare(b.project));
+}
+
 // (a)+(d): one entry per issue_number. 'closed_remote' wins over 'archive_closed'.
 function detectStaleRoadmapSources(srcFiles, closedSet, archiveClosed) {
   const byNumber = new Map();
@@ -225,20 +278,24 @@ function buildAuditReport(root) {
   const staleLabels = detectStaleLabels();
   const activeClosed = detectActiveClosedFolders(folders, closedSet);
   const unarchivedPr = detectUnarchivedPrFolders(folders);
+  // #832: LOCAL — no remote probe, so it reports identically offline.
+  const archiveIncomplete = detectArchiveContentIncomplete(root);
 
   const drift = {
     stale_roadmap_sources: staleRoadmap,
     mirror_lists_closed_issues: mirrorClosed,
     stale_in_progress_labels: staleLabels,
     active_folder_for_closed_issue: activeClosed,
-    unarchived_pr_folders: unarchivedPr
+    unarchived_pr_folders: unarchivedPr,
+    archive_content_incomplete: archiveIncomplete
   };
   const counts = {
     stale_roadmap_sources: staleRoadmap.length,
     mirror_lists_closed_issues: mirrorClosed.length,
     stale_in_progress_labels: Array.isArray(staleLabels) ? staleLabels.length : 0,
     active_folder_for_closed_issue: activeClosed.length,
-    unarchived_pr_folders: Array.isArray(unarchivedPr) ? unarchivedPr.length : 0
+    unarchived_pr_folders: Array.isArray(unarchivedPr) ? unarchivedPr.length : 0,
+    archive_content_incomplete: archiveIncomplete.length
   };
   if (unresolved.length > 0) {
     drift.unresolved_closed_state = unresolved;
@@ -295,7 +352,11 @@ function executeRepairs(root, report) {
     repaired: repairedObj,
     reported_not_repaired: {
       active_folder_for_closed_issue: report.drift.active_folder_for_closed_issue,
-      unarchived_pr_folders: report.drift.unarchived_pr_folders
+      unarchived_pr_folders: report.drift.unarchived_pr_folders,
+      // #832: an incomplete archive is not repairable — the lost bytes are gone by construction
+      // (computePlanHash over a reconstruction cannot reproduce the frozen marker). Report it and
+      // never delete or rewrite it.
+      archive_content_incomplete: report.drift.archive_content_incomplete
     }
   };
 }
@@ -330,5 +391,8 @@ module.exports = {
   buildAuditReport,
   executeRepairs,
   collectClosedSet,
-  detectStaleRoadmapSources
+  detectStaleRoadmapSources,
+  // #832: archive CONTENT proof — exported for direct unit coverage of the record-derived rule.
+  detectArchiveContentIncomplete,
+  archiveRequiredContent
 };
