@@ -472,11 +472,28 @@ fenced `kernel-refusal-vocabulary` block — that block, the registry's key set 
 constant must be equal, and the sweep's cells are derived from those codes and their payload-schema
 discriminators — so the list above is a reader's summary, never the source.
 
-**Enforcement is review-time today, and that is scope, not an open question.** The mechanical half —
-one registry keyed by reason code, and a sweep that walks every registered code, provokes the refusal,
-follows its recorded route and arrives green, default-on with an exempt list carrying a one-line
-reason per entry, never an opt-in allowlist — is later batch tooling. Until it lands these rules bind
-at review.
+**Enforcement is half mechanical today, and the split is exact.** The registry landed:
+`KERNEL_REFUSAL_REGISTRY` in `scripts/kaola-workflow-adaptive-schema.js` carries one row per code
+(7 today), and `scripts/test-refusal-route-sweep.js` runs in **both** `test:kaola-workflow:claude`
+and `:claude:full`. The sweep is default-on and exempt-BY-LEDGER (`scripts/refusal-sweep-exempt.json`
+— every entry carries a `reason`, an `owner_issue` and a `batch`; a stale entry fails in *either*
+direction; the file prints its own size), never an opt-in allowlist. It splits into two tiers:
+
+- **Tier A — structural, armed for EVERY cell, admits no exemptions.** The three-way
+  ADR-fence ↔ registry-key-set ↔ `KERNEL_REFUSAL_VOCABULARY` equality; each family's discriminator
+  enum and its route table proved key-equal in both directions; route *shape* plus verb existence
+  against the scanned argv dispatch of the script the route names (a route to a verb that does not
+  exist is RED); R4 discipline; payload-schema validation; and the cell-keyed WHY pins — the hint
+  layer alive, no fabricated fields, hint/route agreement, cell closure. Every checker is fed a
+  deliberately broken input by an in-suite mutation battery and must reject. Measured on HEAD:
+  `node scripts/test-refusal-route-sweep.js` → 7 codes, 64 cells walked, 1187 assertions, exit 0.
+- **Tier B — behavioural (provoke the refusal for real, follow its recorded route, arrive green) —
+  is still review-time for every cell.** `TIER_B_PROVOKERS` is empty and a single blanket `"*"` entry
+  in the exempt ledger covers all 64 cells (`exempt_cells=64`), so no cell yet has a mechanically
+  executed green arc; the ledger fails the moment any cell gains a provoker while keeping its
+  exemption. Emission is still `REFUSAL_EMISSION_MODE: 'compat'` (the legacy `condition` rides in the
+  payload), and 5 `retained_legacy` conditions are deliberately not demoted. **Until a family
+  registers its provoker, its green arc binds at review.**
 
 Rationale and full derivation: `docs/decisions/0013-successor-test-two-gate-target-architecture.md`.
 
