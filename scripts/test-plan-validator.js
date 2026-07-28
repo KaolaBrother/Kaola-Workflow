@@ -484,6 +484,292 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
   } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
 }
 
+
+// ===========================================================================
+// T833-DERIVE — `## Required Agent Compliance` is DERIVED, not stored.
+//
+// The stored table was a hand-maintained MIRROR of the `## Node Ledger`: every lifecycle verb
+// had to remember to seed or flip a row, and three authorities refused whenever the mirror and
+// the ledger disagreed. #833 deletes the stored artifact and derives the table at read time.
+//
+// The load-bearing evidence is a PARITY MEASUREMENT over this repo's own archive — ~190 real
+// frozen plans with real stored tables, produced by the retired writer across a year of runs.
+// For each one the RETIRED authority (reproduced verbatim below, so the baseline cannot drift
+// with the code under test) and the new derivation are both evaluated, and every disagreement
+// is classified. A corpus FLOOR is asserted so the parity claim cannot pass vacuously by
+// finding zero inputs.
+//
+// Measured on the corpus as committed:
+//   * 186 archived plans carry a stored table.
+//   * 167 of them FAIL the retired stored-table authority — the mirror was wrong ~90% of the
+//     time, and each of those is a project the archive / discard / replan authorities would
+//     have refused to touch. That is the case for the subtraction, stated as a number.
+//   * Of the 19 whose stored table was WELL-FORMED, the derivation reproduces 16 exactly and
+//     disagrees on 3 — and all 3 disagreements are historical DEFECTS preserved in the
+//     archive, with the derivation right and the stored row wrong:
+//       - issue-270 `finalize (finalize)`      stored subagent-invoked (pre-#338: the sink's
+//                                              main-session-direct rule did not exist yet)
+//       - issue-530 `main-session-gate (n4-e2e)` stored subagent-invoked — this is #817's
+//                                              defect verbatim: a false delegation claim on a
+//                                              role that is never dispatched
+//       - issue-725 `finalize (n10-finalize)`  stored pending against a `complete` ledger row —
+//                                              literally `state_compliance_progress_invalid`,
+//                                              the mirror-lagging-the-ledger bug this issue ends
+// The three are pinned BY NAME below, so a derivation change that "fixes" the parity by
+// reproducing a bug reds this suite.
+// ===========================================================================
+{
+  const ARCHIVE_DIR = path.join(repoRoot, 'kaola-workflow', 'archive');
+
+  // The RETIRED authority, transcribed from the pre-#833 plan-validator. Deliberately a COPY:
+  // a parity baseline that imported the code under test would only ever compare it to itself.
+  const RETIRED_STATUSES = new Set([
+    'pending', 'invoked', 'subagent-invoked', 'local-fallback-explicit',
+    'local-fallback-tool-unavailable', 'main-session-direct', 'n/a', 'na', 'skipped',
+  ]);
+  function retiredAuthority(content, nodes) {
+    const refuse = detail => ({ ok: false, detail });
+    const heading = '## Required Agent Compliance';
+    const at = content.startsWith(heading) ? 0 : content.indexOf('\n' + heading);
+    if (at < 0) return refuse('section is missing');
+    const start = at === 0 ? 0 : at + 1;
+    const after = content.slice(start + 1).indexOf('\n## ');
+    const section = after < 0 ? content.slice(start) : content.slice(start, start + 1 + after);
+    const lines = section.split(/\r?\n/);
+    const headingIndex = lines.findIndex(line => line.trim() === heading);
+    if (headingIndex < 0) return refuse('section is malformed');
+    const body = lines.slice(headingIndex + 1);
+    if (body.some(line => line.trim() && !/^\|.*\|[ \t]*$/.test(line))) return refuse('non-table content');
+    const table = body.map(line => line.trim()).filter(line => line.startsWith('|'));
+    if (table.length < 2) return refuse('table is unparseable');
+    const cells = line => line.split('|').slice(1, -1).map(cell => cell.trim());
+    const header = cells(table[0]).map(cell => cell.toLowerCase());
+    const expectedHeader = ['requirement', 'status', 'evidence', 'skip reason'];
+    if (header.length !== expectedHeader.length
+      || header.some((cell, i) => cell !== expectedHeader[i])) return refuse('header');
+    const separator = cells(table[1]);
+    if (separator.length !== expectedHeader.length
+      || separator.some(cell => !/^:?-{3,}:?$/.test(cell.replace(/\s/g, '')))) return refuse('separator');
+    const rows = [];
+    for (const line of table.slice(2)) {
+      const row = cells(line);
+      if (row.length !== expectedHeader.length || !row[0]) return refuse('row is malformed');
+      const status = String(row[1] || '').toLowerCase();
+      if (!RETIRED_STATUSES.has(status)) return refuse('status unsupported for ' + row[0]);
+      rows.push({ requirement: row[0], status, evidence: row[2], skip_reason: row[3] });
+    }
+    const expected = new Set(nodes.map(node => node.role + ' (' + node.id + ')'));
+    const actual = rows.map(row => row.requirement);
+    if (rows.length !== nodes.length || new Set(actual).size !== rows.length
+      || actual.some(req => !expected.has(req))) return refuse('not exactly one row per node');
+    return { ok: true, rows };
+  }
+
+  assert(fs.existsSync(ARCHIVE_DIR),
+    'T833-DERIVE: the archived-run corpus must exist — the parity claim has no evidence without it');
+
+  let withStoredTable = 0;
+  let retiredRefused = 0;
+  let retiredPassed = 0;
+  let rowsCompared = 0;
+  const disagreements = [];
+
+  for (const entry of fs.readdirSync(ARCHIVE_DIR).sort()) {
+    const projectDir = path.join(ARCHIVE_DIR, entry);
+    const planFile = path.join(projectDir, 'workflow-plan.md');
+    let content;
+    try { content = fs.readFileSync(planFile, 'utf8'); } catch (_) { continue; }
+    if (content.indexOf('## Required Agent Compliance') < 0) continue;
+    withStoredTable++;
+
+    const execNodes = pv.planNodesWithExpansions(content);
+    const derived = pv.deriveAgentCompliance(content, {
+      nodes: execNodes,
+      readEvidence: id => fs.readFileSync(path.join(projectDir, '.cache', id + '.md'), 'utf8'),
+      readProvenance: () => fs.readFileSync(path.join(projectDir, '.cache', 'provenance-log.jsonl'), 'utf8'),
+    });
+
+    // Structural invariant, asserted on EVERY archived plan including the 167 broken ones:
+    // the derivation never refuses and always yields exactly one row per execution node.
+    if (!(derived.ok === true && derived.rows.length === execNodes.length
+      && new Set(derived.rows.map(r => r.requirement)).size === execNodes.length)) {
+      assert(false, 'T833-DERIVE: ' + entry + ' — the derivation must yield exactly one row per '
+        + 'execution node and never refuse, got ' + derived.rows.length + ' rows for '
+        + execNodes.length + ' nodes');
+    }
+
+    const retired = retiredAuthority(content, execNodes);
+    if (!retired.ok) { retiredRefused++; continue; }
+    retiredPassed++;
+    const stored = new Map(retired.rows.map(row => [row.requirement, row]));
+    for (const row of derived.rows) {
+      rowsCompared++;
+      const storedRow = stored.get(row.requirement);
+      const storedStatus = storedRow ? storedRow.status : '<absent>';
+      if (storedStatus !== row.status) {
+        disagreements.push({ project: entry, requirement: row.requirement,
+          stored: storedStatus, derived: row.status });
+      }
+    }
+  }
+
+  // --- the non-vacuity floors ---------------------------------------------
+  assert(withStoredTable >= 150,
+    'T833-DERIVE (corpus floor): at least 150 archived plans must carry a stored compliance table '
+    + 'for this parity measurement to mean anything, found ' + withStoredTable);
+  assert(retiredPassed >= 15,
+    'T833-DERIVE (corpus floor): at least 15 of them must have a WELL-FORMED stored table, so the '
+    + 'agreement half of the measurement is not vacuous either, found ' + retiredPassed);
+  assert(rowsCompared >= 100,
+    'T833-DERIVE (corpus floor): at least 100 rows must actually be compared, compared '
+    + rowsCompared);
+
+  // --- the case for the subtraction, as a number ---------------------------
+  assert(retiredRefused >= 120,
+    'T833-DERIVE: the retired stored-table authority must be measurably broken on the real corpus '
+    + '(that is WHY it is retired) — expected >=120 refusals, got ' + retiredRefused
+    + ' of ' + withStoredTable);
+
+  // --- parity, with every disagreement classified --------------------------
+  const KNOWN_DEFECTS = [
+    // Each entry is a HISTORICAL BUG preserved in the archive, where the stored row is wrong and
+    // the derivation is right. Any disagreement outside this list fails the suite.
+    { requirement: 'finalize (finalize)', stored: 'subagent-invoked', derived: 'main-session-direct' },
+    { requirement: 'main-session-gate (n4-e2e)', stored: 'subagent-invoked', derived: 'main-session-direct' },
+    { requirement: 'finalize (n10-finalize)', stored: 'pending', derived: 'main-session-direct' },
+  ];
+  const unexplained = disagreements.filter(d => !KNOWN_DEFECTS.some(k =>
+    k.requirement === d.requirement && k.stored === d.stored && k.derived === d.derived));
+  assert(unexplained.length === 0,
+    'T833-DERIVE (parity): every disagreement between the derivation and a WELL-FORMED stored '
+    + 'table must be a classified historical defect. Unexplained: ' + JSON.stringify(unexplained));
+  assert(disagreements.length === 3,
+    'T833-DERIVE (parity, exact): the corpus carries exactly 3 classified disagreements; a change '
+    + 'in this count means the derivation moved (or the corpus did) and must be re-classified, got '
+    + disagreements.length + ': ' + JSON.stringify(disagreements));
+  assert(disagreements.some(d => /issue-270/.test(d.project) && d.requirement === 'finalize (finalize)'),
+    'T833-DERIVE: the pre-#338 sink defect must still be the FIRST classified disagreement, got '
+    + JSON.stringify(disagreements));
+  assert(disagreements.some(d => /issue-530/.test(d.project) && d.requirement === 'main-session-gate (n4-e2e)'),
+    'T833-DERIVE: #817\'s false-delegation defect on a main-session-gate must still be present, got '
+    + JSON.stringify(disagreements));
+  assert(disagreements.some(d => /issue-725/.test(d.project) && d.stored === 'pending'),
+    'T833-DERIVE: the `complete` ledger row against a `pending` stored row — the exact shape the '
+    + 'retired state_compliance_progress_invalid existed to refuse — must still be present, got '
+    + JSON.stringify(disagreements));
+}
+
+// ===========================================================================
+// T833-UNIT — the derivation's own contract, exercised directly (not only through the corpus).
+// ===========================================================================
+{
+  const mk = (ledgerRows, nodeRows) => [
+    '# Workflow Plan — t833', '',
+    '## Meta', 'plan_form: spine', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...nodeRows, '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    ...ledgerRows, '',
+  ].join('\n');
+
+  const plan = mk(
+    ['| a | complete |', '| b | pending |', '| c | n/a |', '| d | in_progress |', '| e | complete |'],
+    ['| a | tdd-guide | — | src/a.js | 1 | sequence |',
+      '| b | code-reviewer | a | — | 1 | sequence |',
+      '| c | doc-updater | a | docs/x.md | 1 | sequence |',
+      '| d | implementer | a | src/d.js | 1 | sequence |',
+      '| e | finalize | b, c, d | CHANGELOG.md | 1 | sequence |']);
+
+  const rows = pv.deriveAgentCompliance(plan).rows;
+  const by = id => rows.find(r => r.node_id === id);
+  assert(rows.length === 5, 'T833-UNIT: one row per node, got ' + rows.length);
+  assert(by('a').status === 'subagent-invoked' && by('a').requirement === 'tdd-guide (a)',
+    'T833-UNIT: a complete delegable node derives subagent-invoked under its canonical cell, got '
+    + JSON.stringify(by('a')));
+  assert(by('b').status === 'pending' && by('d').status === 'pending',
+    'T833-UNIT: pending and in_progress both derive `pending`, got '
+    + JSON.stringify([by('b').status, by('d').status]));
+  assert(by('c').status === 'n/a' && by('c').skip_reason === 'ledger n/a',
+    'T833-UNIT: an n/a ledger row derives n/a with its skip reason, got ' + JSON.stringify(by('c')));
+  assert(by('e').status === 'main-session-direct',
+    'T833-UNIT: the non-delegable sink derives main-session-direct, got ' + JSON.stringify(by('e')));
+
+  // The dispatch-record override, both directions.
+  const provenance = JSON.stringify({ event: 'close', nodeId: 'a', main_session_direct: true }) + '\n';
+  assert(pv.deriveAgentCompliance(plan, { readProvenance: () => provenance })
+    .rows.find(r => r.node_id === 'a').status === 'main-session-direct',
+  'T833-UNIT: a close recorded main_session_direct overrides the delegable-role default');
+  assert(pv.deriveAgentCompliance(plan, { readProvenance: () => JSON.stringify({ event: 'close', nodeId: 'a' }) })
+    .rows.find(r => r.node_id === 'a').status === 'subagent-invoked',
+  'T833-UNIT (mutation proof): without the field the SAME node derives subagent-invoked');
+  assert(pv.deriveAgentCompliance(plan, { readProvenance: () => 'not json at all\n{' })
+    .rows.find(r => r.node_id === 'a').status === 'subagent-invoked',
+  'T833-UNIT: a torn/unparseable provenance journal yields no overrides, never a throw');
+
+  // A stored table cannot influence the derivation, however broken it is.
+  const withStored = plan + [
+    '## Required Agent Compliance', '',
+    '| requirement | state | ev |', '| --- | --- | --- |',
+    '| tdd-guide (a) | banana | | |',
+    '| ghost (nope) | pending | | |', '',
+  ].join('\n');
+  assert(JSON.stringify(pv.deriveAgentCompliance(withStored).rows) === JSON.stringify(rows),
+    'T833-UNIT: a malformed stored table is inert — the derivation is byte-identical without it');
+
+  // The renderer: hash-neutral, replaces in place, creates when absent.
+  const renderedFresh = pv.renderAgentComplianceSection(plan);
+  assert(renderedFresh.includes('| tdd-guide (a) | subagent-invoked |')
+    && renderedFresh.includes('| finalize (e) | main-session-direct |'),
+  'T833-UNIT: the renderer materializes the derived rows');
+  assert(pv.computePlanHash(renderedFresh) === pv.computePlanHash(plan),
+    'T833-UNIT: rendering is plan_hash-NEUTRAL (the section is outside the hash region)');
+  const renderedTwice = pv.renderAgentComplianceSection(renderedFresh);
+  assert(renderedTwice === renderedFresh,
+    'T833-UNIT: rendering is idempotent — it REPLACES the section, never appends a second one');
+  const renderedOverJunk = pv.renderAgentComplianceSection(withStored);
+  assert((renderedOverJunk.match(/## Required Agent Compliance/g) || []).length === 1
+    && !renderedOverJunk.includes('| ghost (nope) |'),
+  'T833-UNIT: rendering over a legacy stored table replaces it wholesale, got:\n'
+    + renderedOverJunk.slice(renderedOverJunk.indexOf('## Required Agent Compliance')));
+}
+
+// ===========================================================================
+// T833-RETIRED — the refusal codes are DELETED, not merely unreachable.
+// ===========================================================================
+{
+  assert(typeof pv.validateRequiredAgentCompliance === 'undefined',
+    'T833-RETIRED: validateRequiredAgentCompliance is gone from the validator surface');
+  assert(typeof pv.seedRequiredAgentCompliance === 'undefined',
+    'T833-RETIRED: the freeze-time pre-seed is gone from the validator surface');
+  assert(typeof pv.deriveAgentCompliance === 'function' && typeof pv.renderAgentComplianceSection === 'function',
+    'T833-RETIRED: the derivation and the renderer are what replaced them');
+  const sources = [
+    'scripts/kaola-workflow-plan-validator.js',
+    'scripts/kaola-workflow-replan.js',
+    'scripts/kaola-workflow-adaptive-node.js',
+    'scripts/kaola-workflow-claim.js',
+  ];
+  // Comments may narrate the retirement; no source may EMIT any of the three codes. The needle is
+  // the emission shapes the refusal-route census scans for, so this cannot pass on a comment.
+  const EMIT = [
+    /(?:reason|reasonCode|condition)\s*:\s*'(state_compliance_[a-z_]+|required_agent_compliance_invalid)'/,
+    /\brefuse\(\s*'(state_compliance_[a-z_]+|required_agent_compliance_invalid)'/,
+  ];
+  for (const rel of sources) {
+    const text = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+    for (const re of EMIT) {
+      assert(!re.test(text),
+        'T833-RETIRED: ' + rel + ' must not EMIT a retired compliance refusal code, matched '
+        + JSON.stringify((text.match(re) || [])[0]));
+    }
+  }
+  // Non-vacuity: the same needles DO match a synthetic emission, so the loop above is a real check.
+  assert(EMIT[1].test("  return refuse('state_compliance_progress_invalid');"),
+    'T833-RETIRED (non-vacuity): the emission needle must match a real emission when one exists');
+}
+
 if (failed > 0) {
   console.error('test-plan-validator: ' + failed + ' failed, ' + passed + ' passed');
   process.exit(1);

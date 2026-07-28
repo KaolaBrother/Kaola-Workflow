@@ -1758,62 +1758,131 @@ function parseLedger(content) {
   return ledger;
 }
 
-// #699: one structural authority for the mutable Required Agent Compliance
-// table. Schema-2 freeze and resume both require the exact one-row-per-node
-// requirement set (including the non-delegated finalize sink); lifecycle code
-// remains the sole owner of status/evidence advancement after freeze.
-const REQUIRED_AGENT_COMPLIANCE_STATUSES = new Set([
-  'pending', 'invoked', 'subagent-invoked', 'local-fallback-explicit',
-  'local-fallback-tool-unavailable', 'main-session-direct', 'n/a', 'na', 'skipped',
-]);
-function validateRequiredAgentCompliance(content, parsedNodes) {
-  const refuse = detail => ({ ok: false, result: 'refuse',
-    reason: 'required_agent_compliance_invalid', detail });
-  const nodes = Array.isArray(parsedNodes) ? parsedNodes : parseNodes(content);
+// #833 — agent compliance is DERIVED, never stored.
+//
+// `## Required Agent Compliance` used to be a hand-maintained MIRROR of the Node Ledger:
+// every lifecycle verb (close, expand-open, expand-close, discharge, freeze pre-seed) had to
+// REMEMBER to seed or flip a row, and three authorities refused whenever the mirror and the
+// ledger disagreed. Seven fixes chased that family (#714 malformed rows, #719 frozen plans
+// with no set, #723 bare requirement cells, #735 discard/release refusing structurally, #780
+// expansion units with ledger rows but no compliance rows, #504 a fabricated green row,
+// issue-1051 site 6 expand-close never flipping the milestone) and it kept producing, because
+// the state was DUPLICATED. Measured on this repo's own history: 167 of the 186 archived runs
+// that carry a stored table FAIL the stored-table authority — the mirror was wrong ~90% of the
+// time, and every one of those is a project the archive/discard/replan authorities would have
+// refused to touch.
+//
+// Everything a compliance row recorded is already durable somewhere the run cannot forget:
+//   * Requirement + node id  -> the frozen `## Nodes` table (plus recorded expansion units).
+//   * pending / done / n-a   -> the `## Node Ledger` status.
+//   * how it ran + evidence  -> the role (the two NON-DELEGABLE roles never dispatch) and the
+//                               per-node `.cache/{node-id}.md` evidence binding line.
+// So the table is derived at READ time from (nodes x ledger x .cache) and never written during
+// a run. There is nothing left to disagree with, so `required_agent_compliance_invalid` and the
+// whole `state_compliance_*` refusal class are gone rather than merely unreachable.
+//
+// A legacy plan that still carries a stored section is TOLERATED BYTE-FOR-BYTE: nothing reads
+// it for a verdict and nothing rewrites it. `renderAgentComplianceSection` re-materializes the
+// table at ARCHIVE time so the archived plan still reads like a receipt for a human.
+const DERIVED_COMPLIANCE_HEADER = '| Requirement | Status | Evidence | Skip Reason |';
+const DERIVED_COMPLIANCE_SEPARATOR = '|-------------|--------|----------|-------------|';
+// The roles that are NEVER dispatched as subagents, so `subagent-invoked` would be a false
+// delegation claim: the two the validator refuses to give a model (`finalize`, `main-session-gate`)
+// plus the spine `expansion-point`, which is composed and discharged by the executor itself and
+// which `next-action` deliberately withholds from the openable ready set. Mirrors the close-time
+// rule the retired writer used — the two gate roles by role test, the expansion point via the
+// `mainSessionDirect: true` its discharge passed — which is why the derivation reproduces the
+// writer's output on every archived run.
+const NON_DELEGATED_ROLES = new Set(['finalize', 'main-session-gate', SPINE_EXPANSION_ROLE]);
+
+// mainSessionDirectNodes — the DISPATCH RECORD half of the derivation. A node runs
+// main-session-direct either because its role is non-delegable, or because the orchestrator said
+// so at close (`--main-session-direct`). The second case is not implied by the role, so the close
+// records it in the per-node provenance entry it already writes; this reads that record back.
+// Best-effort by construction: the provenance log is an append-only advisory journal, so a
+// missing/torn/absent log simply yields no overrides and every delegable role reads
+// `subagent-invoked` — exactly what the retired writer emitted with no flag.
+function mainSessionDirectNodes(readProvenance) {
+  const ids = new Set();
+  if (typeof readProvenance !== 'function') return ids;
+  let text = null;
+  try { text = readProvenance(); } catch (_) { return ids; }
+  if (!text) return ids;
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch (_) { continue; }
+    if (entry && entry.event === 'close' && entry.main_session_direct === true && entry.nodeId) {
+      ids.add(entry.nodeId);
+    }
+  }
+  return ids;
+}
+
+// deriveAgentCompliance — the pure read-time authority. `opts.nodes` supplies the EXECUTION node
+// view when the caller already has it (`planNodesWithExpansions`); `opts.readEvidence(nodeId)`
+// is the optional per-node `.cache` evidence seam (returns the evidence text, or null/throws when
+// absent); `opts.readProvenance()` is the optional `.cache/provenance-log.jsonl` seam. Without the
+// seams the Evidence cell is derived structurally and execution mode falls back to the role rule,
+// so the function stays content-pure for callers that have no filesystem.
+//
+// It cannot refuse. One row per execution node is true BY CONSTRUCTION — the row set IS the node
+// set — which is exactly the property the stored mirror had to be policed for.
+function deriveAgentCompliance(content, opts) {
+  const options = opts || {};
+  const nodes = Array.isArray(options.nodes) ? options.nodes : planNodesWithExpansions(content);
+  const ledger = parseLedger(content);
+  const readEvidence = typeof options.readEvidence === 'function' ? options.readEvidence : null;
+  const inlineNodes = mainSessionDirectNodes(options.readProvenance);
+  const rows = nodes.map(node => {
+    const ledgerStatus = String(ledger.get(node.id) || 'pending').toLowerCase();
+    const requirement = node.role + ' (' + node.id + ')';
+    if (ledgerStatus === 'n/a' || ledgerStatus === 'na') {
+      return { requirement, node_id: node.id, role: node.role, ledger_status: 'n/a',
+        status: 'n/a', evidence: '', skip_reason: 'ledger n/a' };
+    }
+    if (ledgerStatus !== 'complete') {
+      return { requirement, node_id: node.id, role: node.role, ledger_status: ledgerStatus,
+        status: 'pending', evidence: '', skip_reason: '' };
+    }
+    let evidenceText = null;
+    if (readEvidence) { try { evidenceText = readEvidence(node.id); } catch (_) { evidenceText = null; } }
+    const evidence = evidenceText
+      ? String(evidenceText).split('\n')[0].slice(0, 80)
+      : (readEvidence ? '' : '.cache/' + node.id + '.md');
+    return {
+      requirement, node_id: node.id, role: node.role, ledger_status: 'complete',
+      status: (NON_DELEGATED_ROLES.has(node.role) || inlineNodes.has(node.id))
+        ? 'main-session-direct' : 'subagent-invoked',
+      evidence, skip_reason: '',
+    };
+  });
+  return { ok: true, derived: true, rows };
+}
+
+// renderAgentComplianceSection — materialize the derived table as the `## Required Agent
+// Compliance` markdown section. Used at ARCHIVE time only (never during a run): the section
+// lives OUTSIDE computePlanHash, so replacing it is hash-neutral and cannot stale a frozen
+// plan's integrity checks. A plan with no nodes renders nothing (returns the input unchanged).
+function renderAgentComplianceSection(content, opts) {
+  const derived = deriveAgentCompliance(content, opts);
+  if (!derived.rows.length) return content;
+  const table = [DERIVED_COMPLIANCE_HEADER, DERIVED_COMPLIANCE_SEPARATOR].concat(
+    derived.rows.map(row => '| ' + row.requirement + ' | ' + row.status + ' | '
+      + (row.evidence || '') + ' | ' + (row.skip_reason || '') + ' |'));
+  const block = '## Required Agent Compliance\n\n' + table.join('\n') + '\n';
   const located = schema.locateSection(content, 'Required Agent Compliance');
-  if (located.start < 0) return refuse('## Required Agent Compliance section is missing');
-  const end = located.next >= 0 ? located.next : String(content).length;
-  const section = String(content).slice(located.start, end);
-  const lines = section.split(/\r?\n/);
-  const headingIndex = lines.findIndex(line => line.trim() === '## Required Agent Compliance');
-  if (headingIndex < 0) return refuse('## Required Agent Compliance section is malformed');
-  const body = lines.slice(headingIndex + 1);
-  if (body.some(line => line.trim() && !/^\|.*\|[ \t]*$/.test(line))) {
-    return refuse('## Required Agent Compliance contains non-table content');
-  }
-  const table = body.map(line => line.trim()).filter(line => line.startsWith('|'));
-  if (table.length < 2) return refuse('## Required Agent Compliance table is unparseable');
-  const cells = line => line.split('|').slice(1, -1).map(cell => cell.trim());
-  const header = cells(table[0]).map(cell => cell.toLowerCase());
-  const expectedHeader = ['requirement', 'status', 'evidence', 'skip reason'];
-  if (header.length !== expectedHeader.length
-      || header.some((cell, index) => cell !== expectedHeader[index])) {
-    return refuse('## Required Agent Compliance header must be Requirement, Status, Evidence, Skip Reason');
-  }
-  const separator = cells(table[1]);
-  if (separator.length !== expectedHeader.length
-      || separator.some(cell => !/^:?-{3,}:?$/.test(cell.replace(/\s/g, '')))) {
-    return refuse('## Required Agent Compliance separator is malformed');
-  }
-  const rows = [];
-  for (const line of table.slice(2)) {
-    const row = cells(line);
-    if (row.length !== expectedHeader.length || !row[0]) {
-      return refuse('## Required Agent Compliance row is malformed');
-    }
-    const status = String(row[1] || '').toLowerCase();
-    if (!REQUIRED_AGENT_COMPLIANCE_STATUSES.has(status)) {
-      return refuse('## Required Agent Compliance status is unsupported for ' + row[0]);
-    }
-    rows.push({ requirement: row[0], status, evidence: row[2], skip_reason: row[3] });
-  }
-  const expected = new Set(nodes.map(node => node.role + ' (' + node.id + ')'));
-  const actual = rows.map(row => row.requirement);
-  if (rows.length !== nodes.length || new Set(actual).size !== rows.length
-      || actual.some(requirement => !expected.has(requirement))) {
-    return refuse('## Required Agent Compliance must contain exactly one requirement for every node');
-  }
-  return { ok: true, rows };
+  // `locateSection` reports `start`/`next` as the index of the NEWLINE PRECEDING the heading line
+  // (not the heading's first byte), so both edges are trimmed and re-emitted with exactly one blank
+  // line on either side. That is what makes the render idempotent — re-rendering an already-rendered
+  // plan is a byte no-op — and it is the same one-blank-line-before-the-next-heading shape #714 had
+  // to keep repairing in the retired incremental appender.
+  const head = (located.start < 0 ? String(content) : String(content).slice(0, located.start))
+    .replace(/\s*$/, '');
+  const end = located.start < 0 ? String(content).length
+    : (located.next >= 0 ? located.next : String(content).length);
+  const tail = located.start < 0 ? '' : String(content).slice(end).replace(/^\s*/, '');
+  return (head ? head + '\n\n' : '') + block + (tail ? '\n' + tail : '');
 }
 
 // #425: the alias sets the planner mis-authors for the two required ledger columns. `| node |`,
@@ -4146,14 +4215,9 @@ function validatePlan(content, opts) {
   if (nodes.length > schema.MAX_NODES) {
     return { result: 'refuse', reason: 'too_many_nodes', operator_hint: getOperatorHint('too_many_nodes'), errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
   }
-  if (parseEpochContract(content).active) {
-    const compliance = validateRequiredAgentCompliance(content, nodes);
-    if (!compliance.ok) {
-      return { result: 'refuse', reason: compliance.reason,
-        operator_hint: getOperatorHint(compliance.reason), errors: [compliance.detail],
-        planHash: computePlanHash(content) };
-    }
-  }
+  // #833: the schema-2 freeze wall used to validate a STORED `## Required Agent Compliance`
+  // table here. Compliance is derived at read time now (deriveAgentCompliance), so there is no
+  // stored artifact to police and no freeze-time seeding obligation to enforce.
   const ids = new Set(nodes.map(n => n.id));
   // `## Node Briefs` freeze wall: a brief whose ### <node-id> header names a node absent from ## Nodes
   // is an authoring error (the brief would never reach any dispatch), and a REPEATED ### <node-id> is
@@ -5268,21 +5332,12 @@ function revalidateForResume(content, opts) {
   // Same input-size backstop as validatePlan: the resume path also calls hasCycle, so an
   // oversized frozen plan must be refused before the DFS rather than overflow the stack.
   if (nodes.length > schema.MAX_NODES) return refuse('too_many_nodes', `plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`);
-  if (parseEpochContract(content).active) {
-    // SURGICAL SPLIT (mirrors verifyCurrentEpochAuthority replan.js): the five structural walls below
-    // (MAX_NODES, the ids Set, unknown_role, dangling_depends_on, hasCycle, uniqueSink) are freeze
-    // IDENTITY and MUST keep ranging over `nodes` (the FREEZE view) — a resumed expanded spine's
-    // intra-unit deps/ids would otherwise be re-subjected to the freeze-time closed-library/sink checks
-    // the spine form exists to defer. But validateRequiredAgentCompliance reasons about EXECUTED graph
-    // state: `appendLedgerRows` gives every expansion unit a ## Node Ledger row and never a ## Nodes
-    // row, and the compliance table is pre-seeded/flipped per unit, so on an expanded spine the table
-    // is written against the EXECUTION view. Judging it by the freeze view made the exact-one-row-per-
-    // node count mismatch unconditionally. A plan with no expansion records returns the identical
-    // parseNodes array by reference, so every non-expanded resume verdict is byte-unchanged.
-    const execNodes = planNodesWithExpansions(content);
-    const compliance = validateRequiredAgentCompliance(content, execNodes);
-    if (!compliance.ok) return refuse(compliance.reason, compliance.detail);
-  }
+  // #833: the resume wall used to re-validate a STORED `## Required Agent Compliance` table
+  // against the EXECUTION node view here — the surgical freeze-view/execution-view split existed
+  // solely because the stored table was written per expansion unit while the freeze view is the
+  // spine. Derived compliance has one row per execution node by construction, so the split, the
+  // wall, and the mid-run brick it caused are all gone. The five structural walls below keep
+  // ranging over the FREEZE view (`nodes`), unchanged.
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
   // #758: the resume wall is the SECOND closed-library reader. A frozen spine plan would brick at
@@ -5331,41 +5386,6 @@ function revalidateForResume(content, opts) {
     ...(resumeIsSpine ? { plan_form: 'spine' } : {}) };
 }
 
-// #719: PRODUCER-COMPLETES the compliance artifact at its authoring boundary.
-//
-// A FRESH epoch-1 schema-2 plan carries `plan_schema_version: 2` but NOT
-// `epoch_schema_version` (that field only appears on replan CHILD plans), so the freeze
-// wall (validatePlan) and the resume wall (revalidateForResume) — both gated on
-// `parseEpochContract(content).active` — skipped the compliance check and the plan froze
-// with NO `## Required Agent Compliance` section at all. The runtime epoch-authority
-// check is NOT gated that way: for an epoch-planned state it validates the section
-// unconditionally, so it refused a perfectly legitimate mid-run plan (replan prepare,
-// finalize archive, discard/release). Complete the artifact HERE instead of teaching the
-// shared authority check to tolerate an absent section — tolerance would blind it to
-// genuine mid-run corruption, which is a LOOSER gate, not an equivalent one.
-//
-// Emits exactly one `pending` row per node, in `## Nodes` order, INCLUDING the
-// finalize/sink node, using the exact canonical `role (node-id)` requirement cell that
-// addCloseCompliance advances IN PLACE (so a mid-run close/replay stays idempotent and
-// never appends a duplicate). INJECT-IF-ABSENT only: a plan that already carries the
-// section — a replan CHILD, or a re-freeze of a mid-run plan with advanced rows — is left
-// byte-identical, and a legacy v1 plan is never seeded at all. The section is outside
-// computePlanHash, so this is plan_hash-NEUTRAL: `--governance-ack`'s hash assertion and
-// `--resume-check` are unaffected.
-function seedRequiredAgentCompliance(content, parsedNodes) {
-  if (schema.locateSection(content, 'Required Agent Compliance').start >= 0) return content;
-  const nodes = Array.isArray(parsedNodes) ? parsedNodes : parseNodes(content);
-  if (!nodes.length) return content;
-  let seeded = content;
-  for (const node of nodes) {
-    // Reuse the shared row/section producer so the seeded bytes can never drift from the
-    // header/separator the lifecycle appender emits.
-    seeded = schema.spliceComplianceSection(seeded,
-      '| ' + node.role + ' (' + node.id + ') | pending | | |');
-  }
-  return seeded;
-}
-
 // Freeze: validate, and if in-grammar, inject/update the plan_hash comment.
 // #340: opts thread the repo root so Check 1's anchor-gated agent-registration surface
 // resolves against the validated root (not process.cwd()); backward-compatible (opts optional).
@@ -5385,13 +5405,11 @@ function freezePlan(content, opts) {
   }
   const v = validatePlan(content, opts || {});
   if (v.result !== 'in-grammar') return { ...v, frozen: false };
-  const stamped = injectHash(content, v.planHash);
-  // #719: seed AFTER the hash is computed and stamped (hash-neutral by construction), and
-  // ONLY for schema-2 — a legacy v1 plan must stay byte-identical for resume back-compat.
-  const seeded = contract.plan_schema_version === 2
-    ? seedRequiredAgentCompliance(stamped, parseNodes(stamped))
-    : stamped;
-  return { ...v, frozen: true, content: seeded };
+  // #833: freeze no longer PRE-SEEDS a `## Required Agent Compliance` table. The #719 seed
+  // existed only so a downstream authority would find the section it demanded; with compliance
+  // derived at read time there is nothing to pre-seed and nothing downstream that demands it,
+  // so every freeze — schema-1 and schema-2 alike — emits the same bytes it validated.
+  return { ...v, frozen: true, content: injectHash(content, v.planHash) };
 }
 function injectHash(content, hash) {
   const marker = `<!-- plan_hash: ${hash} -->`;
@@ -7214,7 +7232,8 @@ module.exports = {
   parseLabels,
   parseGoal,
   parseLedger,
-  validateRequiredAgentCompliance,
+  deriveAgentCompliance,
+  renderAgentComplianceSection,
   parseSpeculativePolicy,
   parseWriteOverlapPolicy,
   parseOptimizeContracts,

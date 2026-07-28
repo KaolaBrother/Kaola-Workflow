@@ -46,7 +46,7 @@
 //       DIRECTORY) stay bucket-3 foreign dirt and refuse sink_blocked with ZERO mutation.
 //   (m) #715/#518 — regression lock: THIS sink's own live + archive receipts remain exempt.
 //   (n) #746 — an archive refusal whose signal is a snapshot_error REASON rather than a file list
-//       (empty missing[] — e.g. state_compliance_progress_invalid from the schema-2 epoch-authority
+//       (empty missing[] — e.g. state_ledger_progress_invalid from the schema-2 epoch-authority
 //       gate) must fail the sink LOUDLY: the old missing.length-only discriminator swallowed it and
 //       reported status:sinked with the project never archived and the roadmap never reconciled.
 //   (o) #746 — over-tighten guard: the ONE documented benign shape (a journal-only live dir with no
@@ -1013,11 +1013,16 @@ function buildBranchlessFixture(project, issue) {
 
 // --------------------------------------------------------------------------- (n)/(o) #746
 
-// A schema-2 (epoch-envelope) frozen plan whose `## Required Agent Compliance` row for a
-// LEDGER-COMPLETE node is still `pending` — the post-run out-of-sync shape that makes
-// verifyCurrentEpochAuthority refuse `state_compliance_progress_invalid`. The compliance +
-// ledger sections sit OUTSIDE computePlanHash coverage, so the stored hash stays valid and the
-// project is a genuine schema-2 authority (never the legacy short-circuit).
+// A schema-2 (epoch-envelope) frozen plan carrying a run-state PROGRESS drift — a node reported
+// `complete` above a dependency that is still `pending` — the post-run out-of-sync shape that makes
+// verifyCurrentEpochAuthority refuse `state_ledger_progress_invalid` with an EMPTY `missing[]`.
+// (#833: this fixture used to drive the same shape through `state_compliance_progress_invalid`; that
+// tier is retired with the stored compliance table, so the vehicle moved to the ledger tier. The
+// property under test — a sink must never report `status:sinked` over an authority refusal it
+// silently skipped — is unchanged, and the stored compliance table is retained in the fixture as
+// INERT legacy bytes.) The compliance + ledger sections sit OUTSIDE computePlanHash coverage, so
+// the stored hash stays valid and the project is a genuine schema-2 authority (never the legacy
+// short-circuit).
 function schema2PlanWithCompliance(nodeRows) {
   const lines = [
     '# Workflow Plan — sink-test', '', '## Meta', 'project: sink-test', 'labels: test', '',
@@ -1066,8 +1071,10 @@ function buildSchema2AuthorityDriftFixture(project, issue) {
 
   git(tmpRoot, ['checkout', '-b', branch]);
   const nodeRows = [
-    { id: 'n1-impl', role: 'implementer', status: 'complete', compliance: 'pending' },
-    { id: 'n2-finalize', role: 'finalize', status: 'in_progress', compliance: 'pending' },
+    // n2-finalize depends on n1-impl (the builder chains depends_on), so `complete` above a
+    // `pending` dependency is the ledger-progress drift.
+    { id: 'n1-impl', role: 'implementer', status: 'pending', compliance: 'pending' },
+    { id: 'n2-finalize', role: 'finalize', status: 'complete', compliance: 'pending' },
   ];
   const plan = schema2PlanWithCompliance(nodeRows);
   const claimTs = '2026-07-21T00:00:00.000Z';
@@ -1168,7 +1175,7 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
 }
 
 (function testSwallowedEpochAuthorityRefusalFailsLoud() {
-  console.log('Test (#746 n): an archive refusal that carries an EMPTY missing[] but a real snapshot_error (state_compliance_progress_invalid) must fail the sink LOUDLY — never status:sinked over a silently skipped archive');
+  console.log('Test (#746 n): an archive refusal that carries an EMPTY missing[] but a real snapshot_error (state_ledger_progress_invalid) must fail the sink LOUDLY — never status:sinked over a silently skipped archive');
   const project = 'issue-74601';
   const issue = 74601;
   const fx = buildSchema2AuthorityDriftFixture(project, issue);
@@ -1180,7 +1187,7 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
       + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'finalize',
       '#746 n: must be a typed finalize-step refusal; got ' + JSON.stringify(out));
-    assert(out && out.archive_refusal === 'state_compliance_progress_invalid',
+    assert(out && out.archive_refusal === 'state_ledger_progress_invalid',
       '#746 n: the empty-missing[] authority refusal must surface as archive_refusal; got ' + JSON.stringify(out && out.archive_refusal));
 
     // Fail-closed: nothing deleted, nothing archived, the issue is NOT closed.

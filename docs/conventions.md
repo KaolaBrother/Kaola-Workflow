@@ -181,8 +181,9 @@ regardless of the native setting.
 Verifying the active (non-transaction) epoch is not a byte comparison. Every prepare/resume/archive/
 finalize/watch caller must compose the one shared `verifyCurrentEpochAuthority` result rather than
 re-derive a partial check: the authored `Meta`/`Nodes`/`Node Briefs` surface is hash-verified, while
-`Node Ledger`, `Required Agent Compliance`, and the task mirror are runtime surfaces that legally
-progress after commitment and are parse/consistency-checked instead. Do not add a second, private
+`Node Ledger` and the task mirror are runtime surfaces that legally
+progress after commitment and are parse/consistency-checked instead. `Required Agent Compliance` is
+not a surface at all any more — it is derived from the `Node Ledger` at read time. Do not add a second, private
 authority check to a new caller. For no-history repositories, preserve the exact object-width
 zero-commit/canonical-empty-tree root; never invent a path/time/file hash substitute.
 

@@ -1270,24 +1270,25 @@ function assert(condition, message) {
 }
 
 // ---------------------------------------------------------------------------
-// T-PRESEED (#719): freeze PRE-SEEDS the Required Agent Compliance set.
+// T-NOSEED (#833, was T-PRESEED/#719): freeze WRITES NO Required Agent
+// Compliance section — and no downstream authority wants one.
 //
-// A FRESH epoch-1 schema-2 plan carries `plan_schema_version: 2` but NOT
-// `epoch_schema_version` (that field only appears on replan CHILD plans), so
-// the freeze/resume compliance walls — both gated on parseEpochContract().active
-// — skip it and the plan froze with NO `## Required Agent Compliance` section at
-// all. The runtime epoch-authority check is NOT gated that way: it calls
-// validateRequiredAgentCompliance unconditionally for an epoch-planned state and
-// refuses the same plan mid-run. The producer must therefore complete the
-// artifact at its AUTHORING boundary — freeze appends exactly one pending row per
-// node, in `## Nodes` order, including the finalize/sink node — rather than the
-// shared authority check learning to tolerate its absence (that would blind it to
-// genuine mid-run corruption). The section is outside computePlanHash, so the
-// pre-seed is hash-neutral and --governance-ack / --resume-check are unaffected.
+// #719 taught freeze to PRE-SEED one `pending` row per node because the runtime
+// epoch-authority check demanded the section unconditionally and refused a
+// perfectly legitimate fresh schema-2 plan that had none. That was one of seven
+// fixes chasing the same family: a STORED mirror of the `## Node Ledger` that some
+// verb has to remember to seed or flip. #833 deletes the stored artifact instead —
+// compliance is DERIVED from (nodes x ledger x .cache) at read time — so freeze has
+// nothing to seed and every authority reads the ledger it always could have read.
+//
+// These pins are therefore INVERTED on purpose: the fresh schema-2 freeze must emit
+// NO section (and stay byte-identical to its hash-stamped input), an existing legacy
+// section must still be tolerated byte-for-byte, and the derivation must supply
+// exactly one row per node in `## Nodes` order — including the finalize/sink node —
+// without any of them being written down first.
 // ---------------------------------------------------------------------------
 {
   const { execFileSync } = require('child_process');
-
   // shape 'fresh'  — epoch-1 schema-2, NO epoch_schema_version, NO compliance section.
   // shape 'seeded' — same plan that ALREADY carries a hand-authored compliance section.
   // shape 'legacy' — a frozen v1 plan (no plan_schema_version) that must stay untouched.
@@ -1378,60 +1379,80 @@ function assert(condition, message) {
     return nextIdx >= 0 ? content.slice(start, start + 1 + nextIdx) : content.slice(start);
   };
 
-  // T-PRESEED-a: a fresh epoch-1 schema-2 plan freezes AND comes out compliance-complete.
+  // T-NOSEED-a: a fresh epoch-1 schema-2 plan freezes and carries NO compliance section.
   {
     const { repoRoot, plan } = mkPreseedRepo('fresh');
     assert(planValidator.parseEpochContract(plan).active === false,
-      'T-PRESEED-a: the fixture is a FRESH epoch-1 plan (no epoch_schema_version) — the wedge precondition');
+      'T-NOSEED-a: the fixture is a FRESH epoch-1 plan (no epoch_schema_version) — the #719 wedge precondition');
     const frozen = planValidator.freezePlan(plan, { root: repoRoot });
     assert(frozen.frozen === true && frozen.result === 'in-grammar',
-      'T-PRESEED-a: fresh schema-2 plan freezes, got ' + JSON.stringify(frozen.errors || frozen.result));
+      'T-NOSEED-a: fresh schema-2 plan freezes, got ' + JSON.stringify(frozen.errors || frozen.result));
+    assert(complianceBlock(frozen.content) === null,
+      'T-NOSEED-a: freeze writes NO ## Required Agent Compliance section (the #719 pre-seed is gone), got '
+        + JSON.stringify(complianceBlock(frozen.content)));
+    assert(frozen.content === plan.replace('# Workflow Plan — test-project\n',
+      '# Workflow Plan — test-project\n\n<!-- plan_hash: ' + frozen.planHash + ' -->\n'),
+    'T-NOSEED-a: the frozen bytes are the input plus the plan_hash stamp and nothing else');
+    // The derivation supplies what the seed used to: one row per node, ## Nodes order, sink included.
     const nodes = planValidator.parseNodes(frozen.content);
-    const comp = planValidator.validateRequiredAgentCompliance(frozen.content, nodes);
-    assert(comp.ok === true,
-      'T-PRESEED-a: freeze pre-seeds a validator-complete compliance set, got ' + JSON.stringify(comp));
-    assert(comp.ok && comp.rows.length === nodes.length && comp.rows.every(row => row.status === 'pending'),
-      'T-PRESEED-a: pre-seed is exactly one PENDING row per node, got ' + JSON.stringify(comp.rows || []));
-    assert(comp.ok && JSON.stringify(comp.rows.map(row => row.requirement))
+    const derived = planValidator.deriveAgentCompliance(frozen.content);
+    assert(derived.ok === true && derived.derived === true,
+      'T-NOSEED-a: the derivation cannot refuse, got ' + JSON.stringify(derived));
+    assert(derived.rows.length === nodes.length && derived.rows.every(row => row.status === 'pending'),
+      'T-NOSEED-a: a just-frozen plan derives exactly one PENDING row per node, got ' + JSON.stringify(derived.rows));
+    assert(JSON.stringify(derived.rows.map(row => row.requirement))
       === JSON.stringify(nodes.map(node => node.role + ' (' + node.id + ')')),
-    'T-PRESEED-a: rows are emitted in ## Nodes order and INCLUDE the finalize/sink node, got '
-      + JSON.stringify((comp.rows || []).map(row => row.requirement)));
+    'T-NOSEED-a: derived rows are in ## Nodes order and INCLUDE the finalize/sink node, got '
+      + JSON.stringify(derived.rows.map(row => row.requirement)));
     assert(planValidator.computePlanHash(frozen.content) === frozen.planHash,
-      'T-PRESEED-a: pre-seed is plan_hash-NEUTRAL (compliance table excluded from computePlanHash)');
+      'T-NOSEED-a: freeze stays plan_hash-consistent');
     assert(planValidator.revalidateForResume(frozen.content, { root: repoRoot }).ok === true,
-      'T-PRESEED-a: the pre-seeded frozen plan still --resume-check passes');
+      'T-NOSEED-a: the seed-less frozen plan --resume-check passes (the resume compliance wall is gone)');
     rmrf(repoRoot);
   }
 
-  // T-PRESEED-b: the pre-seed is INJECT-IF-ABSENT — a plan that already carries the
-  // section (a replan CHILD, or a mid-run plan with advanced rows) is byte-untouched.
+  // T-NOSEED-b: a plan that ALREADY carries a stored section is tolerated BYTE-FOR-BYTE —
+  // freeze neither validates it, rewrites it, nor refuses it, and the derivation ignores it.
   {
     const { repoRoot, plan } = mkPreseedRepo('seeded');
     const before = complianceBlock(plan);
     const frozen = planValidator.freezePlan(plan, { root: repoRoot });
-    assert(frozen.frozen === true, 'T-PRESEED-b: the already-seeded plan freezes');
+    assert(frozen.frozen === true, 'T-NOSEED-b: the already-seeded plan freezes');
     assert(complianceBlock(frozen.content) === before,
-      'T-PRESEED-b: an EXISTING compliance section is left byte-identical (advanced rows never clobbered)');
+      'T-NOSEED-b: an EXISTING compliance section is left byte-identical');
+    // Mutation proof of tolerance: corrupt the stored table in three ways the retired
+    // authority refused on (bad header, unknown status, a row for a node that does not exist)
+    // and freeze + resume must both still pass — the bytes are inert now.
+    const corrupted = frozen.content
+      .replace('| Requirement | Status | Evidence | Skip Reason |', '| requirement | state | ev |')
+      .replace('| tdd-guide (impl) | pending | | |', '| tdd-guide (impl) | banana | | |')
+      + '| ghost-role (no-such-node) | pending | | |\n';
+    assert(planValidator.revalidateForResume(corrupted, { root: repoRoot }).ok === true,
+      'T-NOSEED-b: a MALFORMED stored table no longer refuses at resume (required_agent_compliance_invalid retired), got '
+        + JSON.stringify(planValidator.revalidateForResume(corrupted, { root: repoRoot })));
+    const derivedOverStored = planValidator.deriveAgentCompliance(corrupted);
+    assert(derivedOverStored.rows.length === planValidator.parseNodes(corrupted).length
+      && derivedOverStored.rows.every(row => row.status === 'pending'),
+    'T-NOSEED-b: the derivation reads the LEDGER, never the corrupted stored table, got '
+      + JSON.stringify(derivedOverStored.rows));
     rmrf(repoRoot);
   }
 
-  // T-PRESEED-c: a legacy v1 plan gains NO section — v1 resume-check back-compat is byte-exact.
+  // T-NOSEED-c: a legacy v1 plan is still byte-exact through freeze (unchanged by #833).
   {
     const { repoRoot, plan } = mkPreseedRepo('legacy');
     const stamped = planValidator.freezePlan(plan, { root: repoRoot });
     assert(stamped.frozen === false && stamped.reason === 'plan_schema_version_missing',
-      'T-PRESEED-c: a bare v1 DRAFT still refuses at freeze (unchanged), got ' + JSON.stringify(stamped.reason));
-    // A v1 plan only re-freezes as verified-legacy-frozen: hash-stamp it the way a
-    // pre-schema-2 frozen plan already on disk is re-validated.
+      'T-NOSEED-c: a bare v1 DRAFT still refuses at freeze (unchanged), got ' + JSON.stringify(stamped.reason));
     const preFrozen = plan.replace('# Workflow Plan — test-project\n',
       '# Workflow Plan — test-project\n\n<!-- plan_hash: ' + planValidator.computePlanHash(plan) + ' -->\n');
     const reFrozen = planValidator.freezePlan(preFrozen, { root: repoRoot });
-    assert(reFrozen.frozen === true, 'T-PRESEED-c: the verified-legacy frozen v1 plan re-freezes, got '
+    assert(reFrozen.frozen === true, 'T-NOSEED-c: the verified-legacy frozen v1 plan re-freezes, got '
       + JSON.stringify(reFrozen.errors || reFrozen.reason));
     assert(complianceBlock(reFrozen.content) === null,
-      'T-PRESEED-c: a legacy v1 plan is NEVER pre-seeded (stays byte-identical for resume back-compat)');
+      'T-NOSEED-c: a legacy v1 plan gains no section');
     assert(reFrozen.content === preFrozen,
-      'T-PRESEED-c: the re-frozen v1 plan is byte-identical to its input');
+      'T-NOSEED-c: the re-frozen v1 plan is byte-identical to its input');
     rmrf(repoRoot);
   }
 }
