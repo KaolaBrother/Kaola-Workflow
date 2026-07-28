@@ -109,6 +109,9 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   // #439: the speculative-read discard is a mutating lifecycle transaction (ledger reset + baseline
   // drop + running-set removal) and must run from the worktree like every other mutator.
   'discard-speculative',
+  // #826: the final-fix register is project-scoped .cache the finalize sweep READS as an attribution
+  // source — written from the wrong root it would be invisible to the gate that consumes it.
+  'final-fix-commit',
 ]);
 
 // #699: every filesystem-mutating lifecycle entry is fenced by the same
@@ -121,6 +124,7 @@ const REPLAN_GUARDED_SUBCOMMANDS = new Set([
   'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
   'rebind-base',
   'discard-speculative', 'mirror-project', 'substitute-role',
+  'final-fix-commit',
 ]);
 
 function lastReplanCas(transaction) {
@@ -432,8 +436,45 @@ const OPERATOR_HINT_REGISTRY = {
     'Node ' + (ctx.nodeId || '<id>') + ' is not in the plan\'s ## Nodes. Check the node id against the frozen plan.',
   node_not_complete: (ctx) =>
     'Only a complete node can be reopened for repair; ' + (ctx.nodeId || '<id>') + ' is not complete. Run to allDone first, then reopen.',
-  would_orphan_in_progress: () =>
-    'Reopening this node would orphan an in_progress sibling. Close the in_progress node(s) first, then reopen.',
+  would_orphan_in_progress: (ctx) =>
+    'Reopening this node would orphan an in_progress sibling. Close the in_progress node(s) first, then reopen.'
+    + ((ctx && ctx.route === 'final-fix-commit')
+      ? ' The in_progress row here is the LIVE SINK, which no close can clear — this is finalization, not'
+        + ' a mid-run frontier. Repair the failed final validation however you judge best (inline, or'
+        + ' dispatched to whichever role fits — no mandated mode), then record it with'
+        + ' final-fix-commit while the sink is still pristine.'
+      : ''),
+  // #826 — THE FINALIZE DEVIATION ROUTE'S OWN LADDER. Four precedence-ordered walls around the ONE
+  // commitment point where a finalize-time fix enters the candidate.
+  final_fix_sink_not_live: (ctx) =>
+    'The final-fix lane is SINK-OWNED and the terminal finalize row is "' + ((ctx && ctx.sink_status) || 'not in_progress')
+    + '" — this run is not in finalization, so there is no sink to own the register. Land the fix through the'
+    + ' ordinary in-plan path (the node that declares the surface), or open the sink first.',
+  final_fix_after_sink_started: (ctx) =>
+    'The final-fix lane closes at the sink\'s first irreversible step, and the sink reads "'
+    + ((ctx && ctx.sink_progress) || 'unknown') + '"'
+    + ((ctx && ctx.sink_progress === 'unknown')
+      ? ' — the probe could not derive the state, and doubt fails CLOSED here because a false "pristine" after a'
+        + ' push would rewrite a shipped run. Restore the branch: pointer in workflow-state.md if it is missing.'
+      : ' — the record is immutable history now.')
+    + ' Recovery after this point is a FOLLOW-UP ISSUE, never a history rewrite.',
+  final_fix_unverified: (ctx) =>
+    'The register entry carries no receipt binding THE EXACT FAILED COMMAND to the post-fix candidate ('
+    + ((ctx && ctx.detail) || 'unverified') + '). Re-run the exact command that failed, confirm exit 0, take a'
+    + ' fresh candidate hash (--candidate-hash --json) AFTER the fix commit, and re-submit; a receipt for some'
+    + ' other command, or one bound to a candidate the tree has moved past, proves nothing about what ships.',
+  final_fix_production_surface: (ctx) =>
+    'This fix touches PRODUCTION behavior (' + (((ctx && ctx.production_paths) || []).join(', ') || 'unnamed path')
+    + ') and its re-certification receipt is "' + ((ctx && ctx.recertification) || 'missing')
+    + '". Production surfaces ARE admissible through this lane, but only behind a settled PASS review attempt'
+    + ' over the POST-FIX candidate, named by the entry and agreeing with the run\'s own review journal. Run the'
+    + ' re-review, then cite its attempt_id + candidate_digest in `recertification`. If no authority in this plan'
+    + ' can certify the change, the shape itself is refuted — take that exit instead of widening this one.',
+  final_fix_register_unverified: (ctx) =>
+    'The sink-owned final-fix register did not verify (' + ((ctx && ctx.register_reason) || 'unknown')
+    + '). It is written only by final-fix-commit, so a mismatch means it was edited out of band. Do NOT delete'
+    + ' the changed files — that answers the wrong fault. Remove the register and re-record each fix through'
+    + ' final-fix-commit.',
   // The replan preconditions below are empirical, not inferred: prepareReplan was run against an
   // all-complete post-finalize fixture and refuses `replan_source_journal_missing` with no
   // `.cache/review-attempts.json`, `replan_source_outcome_missing` with the journal but no
@@ -624,7 +665,33 @@ const DEVIATION_ROUTES = {
   // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which is a
   // spine change — a node-level fix cannot conjure a reviewer the frozen plan never contained.
   sensitive_write_unreviewed: 'shape_refutation',
+  // #826: a production-behavior final fix whose re-certification cannot be produced. The lane
+  // ADMITS production surfaces, but only behind a settled PASS over the post-fix candidate; when
+  // that receipt is unobtainable the plan simply has no authority that can certify the change, and
+  // the fallback is the same one every "the frozen shape cannot express this" case takes.
+  final_fix_production_surface: 'shape_refutation',
 };
+
+// finalizeDeviationRoute — the CONTEXT-BOUND route for a refusal fired during finalization. Returns
+// the recorded verb when the sink's lane is genuinely OPEN (the unique terminal `finalize` row is
+// `in_progress` AND the sink is still pristine), else null.
+//
+// Deliberately NOT a DEVIATION_ROUTES row. The table maps reason → verb statically, which is right
+// for a refusal whose cure never changes; but `would_orphan_in_progress` / `would_strand_completed_
+// dependent` fire in BOTH mid-run and finalize contexts, and the same refusal over a PUSHED sink
+// must NOT advertise a lane that could only refuse `final_fix_after_sink_started`. A route is a
+// promise the verb will accept the work; offering one that cannot be cleared is worse than silence.
+// decorateOperatorHint is idempotent (a callee-set route always wins), so the emit sites below stamp
+// this and the table never contradicts them.
+function finalizeDeviationRoute(opts, content) {
+  try {
+    const statuses = readLedgerStatuses(content);
+    const sink = reviewSchema.finalizeSinkStatus(parseNodesFromContent(content), id => statuses[id]);
+    if (!sink.live) return null;
+    return deriveSinkProgress(opts, content).state === 'pristine'
+      ? reviewSchema.FINAL_FIX_SUBCOMMAND : null;
+  } catch (_) { return null; }
+}
 
 // ---------------------------------------------------------------------------
 // getOperatorHint(reason, ctx) (#445 / D-445-01 §1-2) — the single emit-time
@@ -4939,6 +5006,28 @@ function activeReplayRelief(journal, nodes, ledgerStatuses) {
   return { exempt, preserved };
 }
 
+// RELIEF FOLLOWS THE RECORD. The journal-global replay relief above exists for exactly one job: to
+// keep an attempt's OWN recorded producer bindings readable while a live replay holds their ledger
+// rows non-terminal. It must never manufacture admission for a producer the attempt never bound.
+// That distinction is load-bearing once the recorded key set is trusted instead of re-derived: with
+// the relief unscoped, a binding STRIPPED from a settled attempt reads clean, because the stripped
+// producer is still admitted into the proof by somebody ELSE's replay. Scoping the relief to the
+// attempt's own recorded keys keeps the strip refused (its producer is neither terminal nor
+// relieved, so `history_valid` fails) while re-deriving nothing — the record decides who is
+// relieved, the ledger decides whether the rest are terminal. An attempt that records no bindings
+// at all (a legacy shape) has no record to follow and keeps the unscoped relief it always had.
+function reliefScopedToBindings(relief, attempt) {
+  const bindings = attempt && attempt.producer_bindings;
+  if (!bindings || typeof bindings !== 'object') {
+    return { preserved: [...relief.preserved], exempt: [...relief.exempt] };
+  }
+  const bound = new Set(Object.keys(bindings));
+  return {
+    preserved: [...relief.preserved].filter(id => bound.has(id)),
+    exempt: [...relief.exempt].filter(id => bound.has(id)),
+  };
+}
+
 function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
   const crypto = require('crypto');
   const byId = new Map((nodes || []).map(node => [node.id, node]));
@@ -4985,28 +5074,31 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
     const selectedWriter = attempt.repair && attempt.repair.selected_writer;
     const consumedWriter = attempt.consumed_by;
     const writer = selectedWriter || consumedWriter;
-    const hasProducerBindings = Object.prototype.hasOwnProperty.call(attempt, 'producer_bindings');
-    const bindingKeys = hasProducerBindings ? Object.keys(attempt.producer_bindings || {}).sort() : [];
+    const bindingKeys = Object.keys(attempt.producer_bindings || {}).sort();
     // #739: an in-plan descendant-replay record lets this attempt bind to a NON-maximal upstream owner with
     // its reopened descendant cone exempt from the graph-maximal + all-complete requirements. Recompute and
     // bound the cone against the frozen graph (never trust the record); an unsound record fails the read.
     const replayCheck = validatedReplayExempt(attempt, nodes);
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
-    // A settled historical attempt owns its immutable attempt-time producer proof. If a later gate
-    // legitimately reopens that producer, retain the older executed slice from its bindings. The
-    // actively repaired attempt remains narrower: its proven selected writer, PLUS any owner/cone member
-    // of an ACTIVE validated replay recorded anywhere in this journal (#748 — the replay's ledger
-    // mutation is journal-global, so the STATUS relief it grants must be too), may be nonterminal. The
-    // journal-global set is passed as statusRelief, NOT merged into replayExempt: it may admit a row the
-    // replay moved, and must never waive THIS attempt's graph-maximal writer-binding proof.
+    // TRUST THE RECORD, PROVE THE WRITER. The settle transaction RECORDED producer_bindings from the
+    // view that was live at the time; no later read can rebuild that view (intra-epoch growth is
+    // append-only and unversioned), so recomputing a slice here and refusing on inequality was a
+    // second opinion about a fact already inside the ledger-chain tamper boundary — and every
+    // divergence between the two was a wedge. The recorded KEY SET is therefore read, never re-derived.
+    //
+    // The recorded `selected_writer` is NOT in that category: it names the node a repair will hand a
+    // fresh baseline to, so it stays PROVEN graph-maximal against the frozen graph + ledger below.
+    // The proof is seeded with the proven writer, PLUS any owner/cone member of an ACTIVE validated
+    // replay recorded anywhere in this journal (#748 — the replay's ledger mutation is journal-global,
+    // so the STATUS relief it grants must be too). The journal-global set is passed as statusRelief,
+    // NOT merged into replayExempt: it may admit a row the replay moved, and must never waive THIS
+    // attempt's graph-maximal writer-binding proof. Where a writer is recorded the seed is that
+    // writer ALONE, never the recorded key set — otherwise a record would admit its own non-terminal
+    // producers, which is precisely the hole the schema-2 twin used to carry.
+    const scopedRelief = reliefScopedToBindings(relief, attempt);
     const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledgerStatuses,
-      (writer ? [writer] : bindingKeys).concat([...relief.preserved]),
-      replayCheck.replayExempt || [], relief.exempt);
-    if (hasProducerBindings) {
-      if (!proof.history_valid || JSON.stringify(bindingKeys) !== JSON.stringify(proof.producer_slice)) {
-        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
-      }
-    }
+      (writer ? [writer] : bindingKeys).concat(scopedRelief.preserved),
+      replayCheck.replayExempt || [], scopedRelief.exempt);
     if (selectedWriter != null || consumedWriter != null) {
       if (!writer || !byId.has(writer) || !nodeWriteSetNonempty(byId.get(writer)) || !proof.ok
         || (consumedWriter != null && consumedWriter !== writer)) {
@@ -5455,10 +5547,9 @@ function reviewJournalV2MatchesPlan(journal, planContent, projection) {
   // view that is INVARIANT across execution-time growth, or a settled attempt stops matching the
   // moment the plan grows. The FREEZE view (parseNodes — spine only) is that invariant for the GATE;
   // the EXECUTION view (planNodesWithExpansions) is NOT — a re-expansion appends new fixer units to
-  // the milestone. The producer-BINDING comparison below is the carve-out: the settle path records
-  // that slice from the execution view at settle time, so neither view alone re-derives it — the
-  // check is the interval envelope documented there (freeze ⊆ recorded ⊆ exec), which covers both
-  // the #759-gap milestone-wall shape and the #756 post-settle re-expansion shape.
+  // the milestone. The producer BINDINGS are no longer re-derived from any view at all — the
+  // recorded key set is read (see the writer proof below), so the freeze/execution split governs
+  // the GATE identity and the writer proof only.
   const nodes = validator.parseNodes(planContent);
   const byId = new Map(nodes.map(node => [node.id, node]));
   // The ROUTE recomputation is the ONE exception to the freeze view pinned above. That invariance
@@ -5504,43 +5595,35 @@ function reviewJournalV2MatchesPlan(journal, planContent, projection) {
       || reviewSchema.canonicalJson(attempt.logical_gate) !== reviewSchema.canonicalJson(expectedGate)) {
       return { ok: false, reason: 'review_journal_gate_identity_mismatch' };
     }
-    const bindingKeys = Object.keys(attempt.producer_bindings || {}).sort();
-    // #739: validate any in-plan descendant-replay record (fail closed on a forged one) and, for a
-    // derived (certified_producers-empty) gate, keep the reset descendant cone in the expected slice so
-    // bindingKeys still matches while those descendants sit at pending mid-replay.
+    // #739: validate any in-plan descendant-replay record (fail closed on a forged one); the cone it
+    // legitimately reset is consumed by the writer proof below, never by a key-set comparison.
     const replayCheck = validatedReplayExempt(attempt, nodes);
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
-    // #759-gap + #756, reconciled as an INTERVAL envelope. The settle path records the slice from
-    // the execution view AT SETTLE TIME; two legitimate histories diverge from every view we can
-    // recompute NOW: (a) a spine wall certifying an expansion milestone binds the milestone's
-    // COMPOSED UNITS (invisible to the freeze view, which under-derives to [] — the #759-gap wedge);
-    // (b) a settled attempt re-read AFTER the milestone re-expands is over-derived by the current
-    // execution view (the growth postdates the recording — the #756 wedge). The settle-time view
-    // itself is not reconstructible (intra-epoch growth is append-only and unversioned), so the
-    // check accepts the recorded slice iff it equals the freeze-view derivation OR the
-    // execution-view derivation, OR lies between them (freeze ⊆ recorded ⊆ exec) — machine-legit
-    // drift is exactly append-only growth inside that interval. On a spine-only plan the two views
-    // coincide and the rule collapses to the original exact equality, so every tamper pin (strip,
-    // forge, corrupt) keeps its teeth; the bounded residual — a key-strip that stays inside the
-    // interval on a growth-shaped plan — is the price of admitting growth, and is named for the
-    // derive-and-refuse redesign.
-    const execViewNodes = parseNodesFromContent(planContent);
-    const deriveSlice = view => uniqueMaximalReviewProducer(view, expectedGate.members,
-      (attempt.repair && attempt.repair.selected_writer) || attempt.consumed_by || '',
-      ledger, bindingKeys.concat([...relief.preserved]),
-      replayCheck.replayExempt || [], relief.exempt).producer_slice.slice().sort();
-    // #748: the journal-global set is statusRelief (admission only), never merged into replayExempt.
-    const freezeExpected = expectedGate.certified_producers.length
-      ? expectedGate.certified_producers.slice().sort() : deriveSlice(nodes);
-    const execExpected = expectedGate.certified_producers.length
-      ? expectedGate.certified_producers.slice().sort() : deriveSlice(execViewNodes);
-    const keysCanon = reviewSchema.canonicalJson(bindingKeys);
-    const isSubset = (a, b) => a.every(id => b.includes(id));
-    const identityOk = keysCanon === reviewSchema.canonicalJson(freezeExpected)
-      || keysCanon === reviewSchema.canonicalJson(execExpected)
-      || (isSubset(freezeExpected, bindingKeys) && isSubset(bindingKeys, execExpected));
-    if (!identityOk) {
-      return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+    // TRUST THE RECORD, PROVE THE WRITER — one policy, shared byte-for-byte with the schema-1 twin
+    // (reviewJournalIdentityMatchesPlan). The recorded `producer_bindings` key set is READ, not
+    // re-derived: settle wrote it from the view live at that moment, and that view is not
+    // reconstructible (intra-epoch growth is append-only and unversioned), so any recomputation here
+    // is a second opinion about a fact already inside the ledger-chain tamper boundary. The two
+    // shapes that used to need an interval envelope — a spine wall binding an expansion milestone's
+    // composed units (the freeze view under-derives to []) and a settled attempt re-read after its
+    // milestone re-expands (the execution view over-derives) — are simply the record, and read clean.
+    //
+    // What is NOT trusted is the recorded `selected_writer`: it names the node a repair will hand a
+    // fresh baseline to, so it stays proven the unique maximal producer of this gate against the
+    // frozen graph + ledger. Seeding that proof with the recorded bindings would let a record admit
+    // its own non-terminal producers, so it is seeded with the proven writer alone (#748 relief is
+    // still journal-global, and still statusRelief-only so it never waives the maximality clause).
+    const selectedWriter = attempt.repair && attempt.repair.selected_writer;
+    const consumedWriter = attempt.consumed_by;
+    const writer = selectedWriter || consumedWriter;
+    if (selectedWriter != null || consumedWriter != null) {
+      const scopedRelief = reliefScopedToBindings(relief, attempt);
+      const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledger,
+        [writer].concat(scopedRelief.preserved), replayCheck.replayExempt || [], scopedRelief.exempt);
+      if (!writer || !byId.has(writer) || !nodeWriteSetNonempty(byId.get(writer)) || !proof.ok
+        || (consumedWriter != null && consumedWriter !== writer)) {
+        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+      }
     }
     const expectedRoutes = (attempt.receipts || []).flatMap(receipt =>
       schema2RouteCandidates(receipt.findings || [], routeNodes, receipt.node_id));
@@ -8653,7 +8736,12 @@ function runReopenNode(opts) {
   const orphans = Object.keys(ledgerStatuses)
     .filter(id => ledgerStatuses[id] === 'in_progress' && id !== nodeId && !gateSet.has(id));
   if (orphans.length) {
-    return {
+    // #826: in FINALIZE context the orphan is the LIVE SINK, which no close can clear — the refusal
+    // was a dead end (the measured cost was ~40 minutes of proving the exit set empty). Name the one
+    // recorded verb that lands the same decision. Decided AT THE EMIT SITE, not from a static route
+    // table: over a PUSHED sink the identical refusal must offer nothing (see finalizeDeviationRoute).
+    const route = finalizeDeviationRoute(opts, planContent);
+    const out = {
       result: 'refuse',
       reason: 'would_orphan_in_progress',
       nodeId,
@@ -8663,6 +8751,11 @@ function runReopenNode(opts) {
       repair: 'close the listed node(s) via close-and-open-next (or reconcile/abort the batch) '
         + 'first, then re-run reopen-node',
     };
+    if (route) {
+      out.route = route;
+      out.operator_hint = getOperatorHint('would_orphan_in_progress', { nodeId, inProgress: orphans, route });
+    }
+    return out;
   }
 
   // (3b-ii) Fail-closed STRANDED-DEPENDENT guard — the role-agnostic ledger invariant (see
@@ -8673,7 +8766,9 @@ function runReopenNode(opts) {
   const resetPlan = planLedgerReset(nodes, ledgerStatuses, nodeId, gatesReset, desc);
   const stranded = resetPlan.stranded;
   if (stranded.length) {
-    return {
+    // #826: same finalize-context fork as the orphan guard above — context-bound, never a table row.
+    const route = finalizeDeviationRoute(opts, planContent);
+    const out = {
       result: 'refuse',
       reason: 'would_strand_completed_dependent',
       nodeId,
@@ -8684,6 +8779,8 @@ function runReopenNode(opts) {
       operator_hint: getOperatorHint('would_strand_completed_dependent',
         { nodeId, stranded, op: 'reopen', runFinished: runIsFinished(sink, ledgerStatuses) }),
     };
+    if (route) out.route = route;
+    return out;
   }
   // Read-only descendants fold to pending ALONGSIDE the gates. rowsReset is the full reset set from here
   // on — ledger fold, stale baselines, stale evidence — so a folded read-only row is treated EXACTLY like
@@ -10118,7 +10215,9 @@ function runRepairNodeCore(opts) {
   const orphans = Object.keys(ledgerStatuses)
     .filter(id => ledgerStatuses[id] === 'in_progress' && id !== nodeId && !gateSet.has(id));
   if (orphans.length) {
-    return {
+    // #826: the repair family's twin of reopen-node's finalize-context fork — same context-bound rule.
+    const route = finalizeDeviationRoute(opts, planContent);
+    const out = {
       result: 'refuse',
       reason: 'would_orphan_in_progress',
       nodeId,
@@ -10126,6 +10225,11 @@ function runRepairNodeCore(opts) {
       detail: 'in_progress row(s) [' + orphans.join(', ') + '] are not post-dominating gates of '
         + nodeId + ' — repair-node would leave an orphan multi-in_progress ledger',
     };
+    if (route) {
+      out.route = route;
+      out.operator_hint = getOperatorHint('would_orphan_in_progress', { nodeId, inProgress: orphans, route });
+    }
+    return out;
   }
 
   // #739 (write-diamond guard): a replay reopens the owner, so EVERY completed gate that is a descendant of
@@ -10169,6 +10273,8 @@ function runRepairNodeCore(opts) {
         + 'rejects as state_ledger_progress_invalid',
       operator_hint: getOperatorHint('would_strand_completed_dependent',
         { nodeId, stranded, op: 'repair', runFinished: runIsFinished(uniqueSink, ledgerStatuses) }),
+      // #826: context-bound finalize route (null outside finalize context / after the sink pushed).
+      ...(finalizeDeviationRoute(opts, planContent) ? { route: reviewSchema.FINAL_FIX_SUBCOMMAND } : {}),
     };
   }
   // Read-only descendants fold to pending alongside the gates (see planLedgerReset) — mirrors reopen-node.
@@ -10738,7 +10844,10 @@ function runRepairNode(opts) {
 // structural parse, the same one classifyBatchKind and the plan_hash consume). There is deliberately no
 // second token list here: read-only classification and writer/producer classification cannot drift because
 // they are one predicate. Write nodes co-open in isolated legs by default when planner-proven-disjoint
-// (#542), and serial-degrade (or consent-gate) when their sets overlap or are uncertain.
+// (#542), and serial-degrade (or consent-gate) when their sets overlap or are not PROVABLY disjoint
+// (`parallel_safe_indeterminate` — the prover could not decide, so the scheduler fails closed). That
+// is a mechanical verdict about the two write sets in hand, never an agent's forecast that a conflict
+// might materialize; the latter is inadmissible as a serializer.
 function isReadOnlyNode(node) {
   return !nodeWriteSetNonempty(node);
 }
@@ -15223,27 +15332,263 @@ function deriveSinkProgress(opts, content) {
 // exists — as the sink's first irreversible step. A missing origin ref (rev-parse exits 1) is the
 // pristine, not-yet-pushed signal; ANY other failure (no branch pointer, git error, non-repo) fails
 // CLOSED to 'unknown'.
+// #826: the derivation itself now lives in adaptive-schema, because the plan validator's finalize
+// deviation route asks the SAME question ("is the lane still open?") and a second copy is a place the
+// two authorities could disagree about whether a run has already shipped. This probe stays the
+// adaptive-node-side seam: it resolves the state file from the plan path and the repo root from the
+// run, then defers. Behavior is byte-identical to the inline derivation it replaces.
 function defaultSinkProgressProbe(opts, content) {
   const readFile = opts && opts.readFile;
   if (typeof readFile !== 'function') return { state: 'unknown', evidence: 'no readFile seam' };
-  let branch = null;
-  try {
-    const statePath = path.join(path.dirname(opts.planPath), 'workflow-state.md');
-    const st = readFile(statePath);
-    const m = /^branch:\s*(\S+)\s*$/m.exec(String(st || ''));
-    if (m) branch = m[1];
-  } catch (_) { branch = null; }
-  if (!branch) return { state: 'unknown', evidence: 'no branch: pointer in workflow-state.md (cannot derive sink progress)' };
   let root; try { root = opts.repoRoot || getRoot(); } catch (_) { root = process.cwd(); }
-  try {
-    const out = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/' + branch],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    if (String(out).trim()) return { state: 'started', evidence: 'origin/' + branch + ' exists — the sink has pushed (irreversible)' };
-    return { state: 'pristine', evidence: 'origin/' + branch + ' unresolved — the sink has not pushed' };
-  } catch (e) {
-    if (e && e.status === 1) return { state: 'pristine', evidence: 'no origin/' + branch + ' — the sink has not pushed' };
-    return { state: 'unknown', evidence: 'git rev-parse for origin/' + branch + ' failed (status ' + (e && e.status) + ') — cannot derive sink progress' };
+  return reviewSchema.deriveSinkProgressFromState({
+    readFile,
+    statePath: path.join(path.dirname(opts.planPath), 'workflow-state.md'),
+    repoRoot: root,
+  });
+}
+
+// ===========================================================================================
+// #826 — THE FINALIZE DEVIATION ROUTE: a sink-owned final-fix lane with a typed attribution gate.
+//
+// THE TRAP THIS REMOVES. Finalization was the ONE phase where the orchestrator had LESS freedom than
+// mid-run. The finalize prose prescribes a fix lane for a failed final validation; the fix lands; and
+// the finalize attribution sweep then REFUSES it `unattributed_change`, because the sweep credits
+// only the narrow allowband and `complete`-node declared write sets. On the planner's ordinary
+// all-concrete spine every sanctioned exit is closed BY CONSTRUCTION (`amend-surface` needs an
+// expansion-point row that shape lacks; `reopen-node` refuses over the live sink; re-plan needs a
+// FAILED review attempt when every review PASSED; `revert-overflow` cannot restore a new file). The
+// prescription manufactured the very refusal that blocked it.
+//
+// THE SHAPE OF THE FIX. ZERO regulation on HOW the fix is produced — inline for a trivial
+// correction, or dispatched to whichever role fits; no mandated mode, no justifier, no approval
+// attaches to the choice. FULL regulation at the ONE commitment point where the fix enters the
+// candidate: this verb, recording a digest-bound entry into the sink-owned register that the sweep
+// then reads as its THIRD attributed source.
+//
+// THE SCOPE WALL WAS DELIBERATELY WIDENED (see docs/decisions/D-826-01.md). The filed issue REJECTED
+// production-behavior paths outright. The owner ADMITS them — behind a BOUND RE-CERTIFICATION
+// RECEIPT: a settled PASS review attempt over the POST-FIX candidate, read out of the run's OWN
+// review journal (the existing settlement machinery, inside the ledger-chain tamper boundary), never
+// a self-asserted field. That receipt is now the load-bearing safeguard that REPLACES the wall, so it
+// is verified in all four of its failure directions. Validation-apparatus paths keep the cheap path:
+// the bound green rerun receipt alone.
+//
+// THE PRISTINE (pre-push) BOUNDARY IS THE LANE'S HARD CLOSE. After the sink's first irreversible step
+// the record is immutable history and recovery is a follow-up issue, never a rewrite.
+// ===========================================================================================
+
+// classifyFinalFixSurface — the surface classifier, owned by the plan validator (it lives with the
+// allowband predicates it reuses). Re-exported through this thin seam so the lifecycle aggregator has
+// ONE accessor and there is no second copy of the apparatus-vs-production rule.
+function classifyFinalFixSurface(paths, project) {
+  return require('./kaola-gitlab-workflow-plan-validator').classifyFinalFixSurface(paths, project);
+}
+
+// verifyFinalFixRecertification — the receipt that replaced the certifier wall, with teeth in every
+// direction. PURE: `journal` is the already-read review journal object (`{ attempts: [...] }`), so
+// this never invents a settlement store of its own.
+//
+//   missing     — the entry names no re-certification at all (an absent key is never a silent pass).
+//   unresolved  — the pointer names an attempt the journal does not carry, or there is no journal.
+//                 Bare presence of an attempt_id is not provenance.
+//   unsettled   — the attempt exists but did not settle PASS. A failed or in-flight review is not a
+//                 certification.
+//   stale       — a genuine settled PASS, but over a DIFFERENT candidate than the post-fix one (the
+//                 receipt-replay: re-pointing at the PRE-fix review), or an entry whose recorded
+//                 digest disagrees with the attempt it cites.
+//   ok          — settled PASS, bound to the post-fix candidate, agreed by entry and journal.
+function verifyFinalFixRecertification(entry, journal, expectedCandidateDigest) {
+  const rc = entry && entry.recertification;
+  if (!rc || typeof rc !== 'object' || Array.isArray(rc)
+    || typeof rc.attempt_id !== 'string' || !rc.attempt_id) {
+    return { ok: false, state: 'missing' };
   }
+  const attempts = (journal && typeof journal === 'object' && Array.isArray(journal.attempts))
+    ? journal.attempts : null;
+  if (!attempts) return { ok: false, state: 'unresolved' };
+  const attempt = attempts.find(a => a && typeof a === 'object' && a.attempt_id === rc.attempt_id);
+  if (!attempt) return { ok: false, state: 'unresolved' };
+  if (attempt.outcome !== 'pass') return { ok: false, state: 'unsettled' };
+  if (!expectedCandidateDigest || attempt.candidate_digest !== expectedCandidateDigest) {
+    return { ok: false, state: 'stale' };
+  }
+  if (rc.candidate_digest !== attempt.candidate_digest) return { ok: false, state: 'stale' };
+  return { ok: true, attempt_id: rc.attempt_id, candidate_digest: attempt.candidate_digest };
+}
+
+// The structural shape of a submitted entry, checked before anything is recomputed so a malformed
+// submission never reaches the (git-shelling) candidate recompute. Returns null when the shape holds.
+function finalFixEntryShapeFault(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'stdin is not a JSON object';
+  if (typeof entry.failed_command !== 'string' || !entry.failed_command.trim()) {
+    return 'failed_command must name the EXACT validation command that failed';
+  }
+  if (typeof entry.fix_commit !== 'string' || !entry.fix_commit.trim()) {
+    return 'fix_commit must name a rev that resolves in this repo';
+  }
+  if (!Array.isArray(entry.files) || !entry.files.length
+    || entry.files.some(p => typeof p !== 'string' || !p.trim())) {
+    return 'files must be a non-empty list of repo-relative paths';
+  }
+  if (entry.files.some(p => /[*?]/.test(p) || /\/$/.test(p))) {
+    return 'files must be EXACT paths — a directory or glob token cannot be attributed';
+  }
+  const rerun = entry.rerun;
+  if (!rerun || typeof rerun !== 'object' || Array.isArray(rerun)) return 'rerun receipt is absent';
+  if (typeof rerun.command !== 'string' || rerun.command !== entry.failed_command) {
+    return 'rerun.command "' + String(rerun.command) + '" is not the failed command "' + entry.failed_command
+      + '" — a receipt for some other command proves nothing about what failed';
+  }
+  if (rerun.exit_code !== 0) return 'rerun.exit_code is ' + JSON.stringify(rerun.exit_code) + ', not 0';
+  if (typeof rerun.candidate_hash !== 'string' || !/^[0-9a-f]{64}$/.test(rerun.candidate_hash)) {
+    return 'rerun.candidate_hash is not a 64-hex candidate binding';
+  }
+  return null;
+}
+
+// runFinalFixCommit — the ONE commitment point. The ladder is PRECEDENCE-ORDERED so an operator is
+// told the OUTERMOST fault first: a receipt complaint about a lane that is not open at all would send
+// them to fix the wrong thing. EVERY refusal is ZERO-WRITE — no register created or modified, the
+// frozen plan byte-identical, git untouched — so a refused call is a pure no-op.
+function runFinalFixCommit(opts) {
+  const { planPath, project, entry, readFile, writeFile } = opts;
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+
+  // ---- RUNG 1: the lane is SINK-OWNED. No live sink ⇒ this run is not in finalization at all. ----
+  const statuses = readLedgerStatuses(content);
+  const sink = reviewSchema.finalizeSinkStatus(parseNodesFromContent(content), id => statuses[id]);
+  if (!sink.live) {
+    return refuse('final_fix_sink_not_live', {
+      sink_node: sink.id, sink_status: sink.status || 'none',
+      detail: sink.id
+        ? 'the terminal sink "' + sink.id + '" is "' + (sink.status || 'unknown') + '", not in_progress'
+        : 'the plan has no unique terminal finalize node',
+    });
+  }
+
+  // ---- RUNG 2: the PRISTINE boundary — the lane's HARD CLOSE. Three-valued, fail-closed: only ----
+  // ---- 'pristine' admits, because a false 'pristine' after a push would rewrite a shipped run. ----
+  const progress = deriveSinkProgress(opts, content);
+  if (progress.state !== 'pristine') {
+    return refuse('final_fix_after_sink_started', {
+      sink_node: sink.id, sink_progress: progress.state,
+      detail: 'the sink has taken (or may have taken) its first irreversible step — ' + progress.evidence
+        + '; after that the record is immutable history and recovery is a follow-up issue, never a rewrite',
+    });
+  }
+
+  // ---- RUNG 3: the receipt must bind THE EXACT FAILED COMMAND to the POST-FIX candidate. ----
+  const shapeFault = finalFixEntryShapeFault(entry);
+  if (shapeFault) return refuse('final_fix_unverified', { detail: shapeFault });
+  const validator = require('./kaola-gitlab-workflow-plan-validator');
+  let hashRoot;
+  try { hashRoot = opts.repoRoot || getRoot(); } catch (_) { hashRoot = process.cwd(); }
+  let candidate = null;
+  try {
+    candidate = validator.computeCodeTreeHash(hashRoot, project, validator.parseValidationTestConsumes(content));
+  } catch (_) { candidate = null; }
+  if (!candidate) {
+    return refuse('final_fix_unverified', {
+      detail: 'the current candidate code-tree hash could not be computed (git failure) — the receipt cannot be bound',
+    });
+  }
+  if (entry.rerun.candidate_hash !== candidate) {
+    return refuse('final_fix_unverified', {
+      recorded_candidate_hash: entry.rerun.candidate_hash, current_candidate_hash: candidate,
+      detail: 'the rerun receipt is bound to candidate ' + entry.rerun.candidate_hash
+        + ' but the current candidate is ' + candidate + ' — the tree moved after the green run, so the '
+        + 'receipt no longer describes what is about to ship',
+    });
+  }
+  let fixCommit = null;
+  try {
+    fixCommit = execFileSync('git', ['-C', hashRoot, 'rev-parse', '--verify', '--quiet', entry.fix_commit + '^{commit}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) { fixCommit = null; }
+  if (!fixCommit) {
+    return refuse('final_fix_unverified', {
+      detail: 'fix_commit "' + entry.fix_commit + '" does not resolve to a commit in this repo',
+    });
+  }
+
+  // ---- RUNG 4: the SCOPE class. Apparatus takes the cheap path; production is ADMITTED only ----
+  // ---- behind a bound re-certification receipt (D-826-01 — the wall was widened, not deleted). ----
+  const surface = classifyFinalFixSurface(entry.files, project);
+  let recertification = null;
+  if (surface.surface_class === 'production') {
+    const journalState = readReviewJournal(opts, content);
+    const journal = (journalState && journalState.ok) ? journalState.journal : null;
+    const verdict = verifyFinalFixRecertification(entry, journal, candidate);
+    if (!verdict.ok) {
+      return refuse('final_fix_production_surface', {
+        recertification: verdict.state,
+        production_paths: surface.production,
+        detail: 'a production-behavior final fix is admissible only behind a settled PASS review attempt over '
+          + 'the POST-FIX candidate, named by the entry and agreed by the run\'s review journal (state: '
+          + verdict.state + ')',
+      });
+    }
+    recertification = { attempt_id: verdict.attempt_id, candidate_digest: verdict.candidate_digest };
+  }
+
+  // ---- ADMIT. Append one entry. NO per-run cap: each entry's own receipt is the natural bound. ----
+  const registerPath = path.join(path.dirname(planPath), '.cache', reviewSchema.FINAL_FIX_REGISTER_NAME);
+  const planHash = planHashFromContent(content);
+  if (!planHash) return refuse('final_fix_unverified', { detail: 'the plan carries no plan_hash — the register cannot be bound to it' });
+  let register = null;
+  let existingRaw = null;
+  try { existingRaw = readFile(registerPath); } catch (_) { existingRaw = null; }
+  if (existingRaw != null) {
+    try { register = JSON.parse(existingRaw); } catch (_) { register = null; }
+    const proof = register === null
+      ? { ok: false, reason: 'register_malformed', detail: 'unparseable JSON' }
+      : reviewSchema.verifyFinalFixRegister(register, planHash, files => classifyFinalFixSurface(files, project));
+    if (!proof.ok) {
+      return refuse('final_fix_register_unverified', {
+        register_reason: String(proof.reason || 'unknown'),
+        detail: 'the existing register at ' + registerPath + ' did not verify (' + proof.reason
+          + (proof.detail ? ': ' + proof.detail : '') + ') — it is written only by this verb, so a mismatch '
+          + 'means it was edited out of band; appending to it would launder the edit',
+      });
+    }
+  }
+  if (!register) register = { schema_version: reviewSchema.FINAL_FIX_REGISTER_SCHEMA_VERSION, plan_hash: planHash, entries: [] };
+  const recorded = {
+    ordinal: register.entries.length + 1,
+    failed_command: entry.failed_command,
+    fix_commit: fixCommit,
+    files: entry.files.map(p => String(p).trim().replace(/^\.\//, '')).slice().sort(),
+    surface_class: surface.surface_class,
+    rerun: { command: entry.rerun.command, exit_code: 0, candidate_hash: entry.rerun.candidate_hash },
+    recertification,
+    // AUDIT-ONLY: the custody rule (a dispatched test fix goes to the role that owns the test
+    // artifact) stays PROSE and judgment-enforced. The register RECORDS the producing role; it does
+    // not adjudicate it — a mechanical custody check here would re-regulate the free route.
+    role: (entry.role != null && String(entry.role).trim()) ? String(entry.role).trim() : null,
+    recorded_at: (typeof opts.now === 'function' ? opts.now() : new Date().toISOString()),
+  };
+  register.entries.push(recorded);
+  register.digest = reviewSchema.computeFinalFixRegisterDigest(register);
+  if (typeof opts.mkdirp === 'function') opts.mkdirp(path.dirname(registerPath));
+  writeFile(registerPath, JSON.stringify(register, null, 2) + '\n');
+  return {
+    result: 'ok',
+    mode: 'final-fix-commit',
+    project,
+    sink_node: sink.id,
+    ordinal: recorded.ordinal,
+    entries: register.entries.length,
+    surface_class: recorded.surface_class,
+    files: recorded.files,
+    fix_commit: recorded.fix_commit,
+    candidate_hash: recorded.rerun.candidate_hash,
+    recertification: recertification ? 'verified' : 'not_required',
+    register: path.join('kaola-workflow', project, '.cache', reviewSchema.FINAL_FIX_REGISTER_NAME),
+    plan_hash: register.plan_hash,
+    digest: register.digest,
+  };
 }
 
 // runReExpandOpen — the discharged-point re-open cascade (see the block header). MUTATES via a single
@@ -16247,6 +16592,13 @@ function main() {
       '  repair-node         --project P --attempt-id A --node-id N\n' +
       '  rebind-base         --project P --attempt-id A --node-id N  (re-anchor a lane-group member\'s leg-era barrier base to the reviewed merged parent — proof-gated, nonce rotated; zero-write refuse when unprovable)\n' +
       '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
+      '  final-fix-commit    --project P --stdin  (record ONE finalize-time fix into the sink-owned register at\n' +
+      '                      .cache/final-fixes.json — the ONE commitment point for a repair made during finalization.\n' +
+      '                      HOW the fix is produced is free: inline, or dispatched to whichever role fits. The entry is\n' +
+      '                      {failed_command, fix_commit, files[], rerun:{command,exit_code,candidate_hash}, role?,\n' +
+      '                      recertification?:{attempt_id,candidate_digest}}. Validation apparatus needs only the green\n' +
+      '                      rerun receipt; a PRODUCTION surface additionally needs a settled PASS review attempt over\n' +
+      '                      the post-fix candidate. Closes at the sink\'s first irreversible step.)\n' +
       '\n' +
       '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n' +
       '  --main-session-direct  (close-node / close-and-open-next) record this node as main-session-direct\n'
@@ -16756,6 +17108,26 @@ function main() {
     } else {
       result = runRouteFindings({ nodeId, planPath, repoRoot, readFile, writeFile }, project);
     }
+  } else if (subcommand === 'final-fix-commit') {
+    // #826: ONE JSON entry on stdin — the same transit expand-open / record-evidence use, so an entry
+    // naming several paths never has to survive shell argv quoting.
+    if (!hasStdin) {
+      result = { result: 'refuse', errors: ['--stdin required for final-fix-commit (the final-fix entry, as JSON)'] };
+    } else {
+      let entry = null;
+      let parseError = null;
+      try { entry = JSON.parse(fs.readFileSync(0, 'utf8')); }
+      catch (err) { parseError = String(err && err.message || err); }
+      if (parseError) {
+        result = decorateOperatorHint(refuse('final_fix_unverified', { detail: 'stdin is not valid JSON: ' + parseError }));
+      } else {
+        result = runFinalFixCommit({
+          planPath, statePath, project, entry, repoRoot, shell, readFile, writeFile, cacheExists,
+          mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+          now: () => new Date().toISOString(),
+        });
+      }
+    }
   } else if (subcommand === 'route-reexpansion') {
     // #761: READ-ONLY. Route ONE finding to a local re-expansion (or a spine replan / an unresolved
     // refusal), and — on a local route — emit the per-owner fixer composition. No mutation: this is
@@ -16930,6 +17302,14 @@ module.exports = {
   reExpansionFixFiles,
   deriveSinkProgress,
   defaultSinkProgressProbe,
+  // #826 — the finalize deviation route. The verb itself plus the TWO pure predicates the owner's
+  // widening rests on: the surface classifier (conservative by default — an unrecognized path is
+  // production) and the re-certification verifier (missing / unresolved / unsettled / stale all
+  // refuse; only a settled PASS bound to the post-fix candidate admits a production surface).
+  runFinalFixCommit,
+  classifyFinalFixSurface,
+  verifyFinalFixRecertification,
+  finalizeDeviationRoute,
   // #762 (declared-not-walled surfaces): the attribute→amend→re-review transaction, the amend-block
   // writer, the exact-file gate, and the durable-amendment merge — exported for direct both-direction pins.
   runAmendSurface,

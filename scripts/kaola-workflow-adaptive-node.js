@@ -10843,7 +10843,10 @@ function runRepairNode(opts) {
 // structural parse, the same one classifyBatchKind and the plan_hash consume). There is deliberately no
 // second token list here: read-only classification and writer/producer classification cannot drift because
 // they are one predicate. Write nodes co-open in isolated legs by default when planner-proven-disjoint
-// (#542), and serial-degrade (or consent-gate) when their sets overlap or are uncertain.
+// (#542), and serial-degrade (or consent-gate) when their sets overlap or are not PROVABLY disjoint
+// (`parallel_safe_indeterminate` — the prover could not decide, so the scheduler fails closed). That
+// is a mechanical verdict about the two write sets in hand, never an agent's forecast that a conflict
+// might materialize; the latter is inadmissible as a serializer.
 function isReadOnlyNode(node) {
   return !nodeWriteSetNonempty(node);
 }

@@ -4853,7 +4853,23 @@ function main() {
       acceptanceChangeSurface, authorityScope: args.authorityScope });
   } else if (subcommand === 'verify-snapshots') {
     const root = getRepoRoot();
-    result = verifyAllEpochSnapshots(path.join(root, 'kaola-workflow', args.project));
+    // verifyAllEpochSnapshots is a LIBRARY predicate — it answers in the bare `{ ok, reason }` form
+    // that claim.js, adaptive-node.js and the suites read, and that shape must not change. But
+    // main()'s exit-code rule keys on `result === 'refuse'` alone, so emitting the library form
+    // straight out made a FAILED lineage verification exit 0: a tampered or broken epoch snapshot
+    // read as a pass to every shell caller, which is the exact inversion a fail-closed seal exists
+    // to prevent. Convert to the typed envelope here, at the CLI boundary, and nowhere else.
+    const verified = verifyAllEpochSnapshots(path.join(root, 'kaola-workflow', args.project));
+    if (verified.ok) {
+      result = Object.assign({ result: 'ok' }, verified);
+    } else {
+      // `reason` is lifted out before the rest is folded in as detail, so the fallback cannot be
+      // clobbered back to undefined. Every ok:false arm reachable here carries a reason; the
+      // fallback reuses the existing internal-error code rather than minting vocabulary for a
+      // defensive branch during a census cut-down.
+      const { reason, ...detail } = verified;
+      result = schema.refuse(reason || 'replan_internal_error', detail);
+    }
   } else {
     throw new Error('unknown_subcommand:' + subcommand);
   }
