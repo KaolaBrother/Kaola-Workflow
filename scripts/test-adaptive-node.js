@@ -31126,6 +31126,433 @@ scenario(() => {
   });
 }
 
+// ===========================================================================
+// #846 — STANDING CONSENT CLASSES. The subtraction: a granted consent records a CLASS with run
+// scope, and repeat instances WITHIN that scope proceed on the standing grant and are LOGGED,
+// rather than re-asked. The valve itself is untouched — this removes re-asking, not consent.
+//
+// THE REAL MECHANISM these pins bind to (nothing here is invented):
+//   * `write-halt --project P --node-id N --reason consent` is the A3 valve raise. It writes
+//     `escalated_to_full: consent` into workflow-state.md and the durable `consent_halt: pending`
+//     marker into the plan's `## Node Ledger` (readDurableConsentHalt is the section-scoped probe).
+//   * `clear-halt --project P --reason consent` is the script-owned inverse — the human's "yes".
+//   * `orient` is the read-only successor surface: a process with ZERO context reads the run's
+//     position from it. It already reports `consentHalt`; it is where a successor must be able to
+//     see the standing grants and their applications (A1).
+//
+// THE SURFACE THESE PINS FIX (one new flag, one new envelope field, one new orient field — and
+// ZERO new refusal codes, because a consent interaction is the A3 valve and is already a
+// legitimate locus under ADR 0013 R1):
+//   * `write-halt ... --reason consent --consent-class <action>:<target>` names the class.
+//       - covered by a live standing grant  -> NO halt is written; the envelope carries
+//         `standing_grant: true` and the application is journaled.
+//       - not covered                       -> the halt is written exactly as today; the envelope
+//         carries `standing_grant: false` and the class rides the pending request.
+//     `standing_grant` is ALWAYS present and boolean: the valve must state, every single time,
+//     whether it spoke on a standing grant or put the question. A missing field is the invisible
+//     application the issue's third design answer exists to forbid.
+//   * `clear-halt --reason consent` grants exactly the class the PENDING halt recorded, and echoes
+//     it as `standing_grant_recorded`. Deliberately NO class flag at clear time: the human answered
+//     the question that was asked, so the grant cannot be widened past the question.
+//   * `orient` reports `consentGrants: [{ class, applications }]` — always an array.
+//
+// SCOPE (decided in the issue; these pins do not re-open it):
+//   1. class identity = ACTION + TARGET;  2. lifetime = the CLAIM (re-plan epoch, discard+restart,
+//   new candidate digest all revoke);  3. EVERY application is journaled;  4. a brand-new class
+//   ALWAYS asks.
+//
+// Every fixture is a real on-disk project (git repo + frozen plan + a VALID schema-2 epoch state
+// block) driven through the REAL CLI in SEPARATE PROCESSES. That is deliberate and load-bearing:
+// an in-memory grant cache would satisfy nothing here, because no two calls in these scenarios
+// share a heap. spawn-class: durable-handoff
+// ===========================================================================
+{
+  const { execFileSync: exec846, spawnSync: spawn846 } = require('child_process');
+  const schema846 = require('./kaola-workflow-adaptive-schema');
+  const NODE_CLI_846 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+
+  // The measured class from the issue: the same question asked THREE times in one run, the second
+  // wait alone costing 33 minutes.
+  const CLASS_846 = 'patch-installed-tooling:~/.claude/agents';
+  // Same ACTION, different TARGET. Design answer 1 says this is a DIFFERENT class.
+  const OTHER_TARGET_846 = 'patch-installed-tooling:~/.codex/agents';
+  // Different ACTION entirely — a brand-new class.
+  const OTHER_ACTION_846 = 'delete-worktree:~/.claude/agents';
+
+  const planBody846 = (design) => [
+    '# Workflow Plan — issue-846', '',
+    '## Meta', 'plan_form: spine', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |', '',
+    '## Node Briefs', '', '### impl-core', 'Patch the installed tooling.', '',
+    '## Design', '', design, '',
+    '## Node Ledger', '',
+    '| id | status |', '| --- | --- |',
+    '| impl-core | in_progress |', '| review | pending |', '| finalize | pending |', '',
+  ].join('\n') + '\n';
+  const DESIGN_A_846 = 'Decompose the frozen spine into concrete role nodes; every sequence edge is '
+    + 'a real data dependency (S1) and the review gate post-dominates the writer.';
+  const DESIGN_B_846 = 'Re-planned after the review gate refuted the original shape: the writer is '
+    + 'split and the gate re-anchored on the merged parent.';
+
+  const lineage846 = (repoRoot, sessionMarker, head, tree) => schema846.buildEpochLineage({
+    repository_id: 'kw/fixture-846', issue_numbers: [846], primary_issue: 846,
+    closure_policy: 'all', branch: 'wf/846', worktree_path: repoRoot,
+    claim_ts: '2026-07-29T00:00:00Z', session_marker: sessionMarker,
+  }, { object_format: 'sha1', commit: head, tree, branch: 'wf/846' });
+
+  function makeConsentRepo846() {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-846-consent-'));
+    const project = 'issue-846';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const statePath = path.join(projDir, 'workflow-state.md');
+    const body = planBody846(DESIGN_A_846);
+    const hash = planValidator.computePlanHash(body);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    const g = (a) => exec846('git', ['-C', repoRoot, ...a],
+      { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), '# fixture-846\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    const head = exec846('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const tree = exec846('git', ['-C', repoRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+    const lin = lineage846(repoRoot, 'sess-A-846', head, tree);
+    let s = 'name: issue-846\nstatus: in_progress\nbranch: wf/846\nissue_number: 846\n';
+    s = schema846.writeEpochStateBlock(s, {
+      epoch_schema_version: 2, claim_repository_id: 'kw/fixture-846',
+      claim_identity_digest: lin.claim_identity_digest,
+      claim_root_object_format: 'sha1', claim_root_base_commit: head, claim_root_base_tree: tree,
+      claim_root_base_digest: lin.claim_root_base_digest,
+      epoch_lineage_id: lin.epoch_lineage_id,
+      plan_epoch: 1, active_plan_hash: hash,
+      automatic_review_replans: 0, authorized_epoch_ceiling: 2,
+      replan_status: 'none', replan_transaction_id: 'none',
+    });
+    fs.writeFileSync(statePath, s);
+    return { repoRoot, project, projDir, planPath, statePath, hash, head, tree };
+  }
+
+  // ONE process per call. Nothing is carried between calls but bytes on disk.
+  function run846(fx, args) {
+    const r = spawn846(process.execPath, [NODE_CLI_846, ...args], { cwd: fx.repoRoot, encoding: 'utf8' });
+    let out = {};
+    try { out = JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    return out;
+  }
+  const ask846 = (fx, cls, reason) => run846(fx, ['write-halt', '--project', fx.project,
+    '--node-id', 'impl-core', '--reason', reason || 'consent',
+    ...(cls ? ['--consent-class', cls] : []), '--json']);
+  const clear846 = (fx) => run846(fx, ['clear-halt', '--project', fx.project, '--reason', 'consent', '--json']);
+  const orient846 = (fx) => run846(fx, ['orient', '--project', fx.project, '--json']);
+  const patchState846 = (fx, values) => fs.writeFileSync(fx.statePath,
+    schema846.writeEpochStateBlock(fs.readFileSync(fx.statePath, 'utf8'), values));
+  const haltMarker846 = (fx) => readDurableConsentHalt(fs.readFileSync(fx.planPath, 'utf8'));
+  const escalated846 = (fx) => /^escalated_to_full:/m.test(fs.readFileSync(fx.statePath, 'utf8'));
+  const liveGrant846 = (o, cls) => (Array.isArray(o.consentGrants) ? o.consentGrants : [])
+    .find(g => g && g.class === cls && g.revoked !== true) || null;
+  const cleanup846 = (fx) => { try { fs.rmSync(fx.repoRoot, { recursive: true, force: true }); } catch (_) {} };
+  // Grant CLASS_846 the way a real run does: ask, then have the human clear. Returns the
+  // clear-halt envelope so a scenario can assert on the grant record itself.
+  const grant846 = (fx, cls) => { ask846(fx, cls || CLASS_846); return clear846(fx); };
+
+  // -------------------------------------------------------------------------
+  // #846-A — THE SUBTRACTION ITSELF, end to end, across four separate processes.
+  // Ask -> yes -> the SAME question is never put again inside the claim; each application is
+  // journaled and a zero-context successor can read both the grant and its application count.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+
+    // A1. A brand-new class ALWAYS asks (design answer 4). The valve is untouched for anything
+    // ungranted: the durable marker and the state cause line land exactly as they do today. What is
+    // new is that the request NAMES its class, and the envelope SAYS it did not ride a grant.
+    const a1 = ask846(fx, CLASS_846);
+    assert(a1.result === 'ok' && a1.halt === 'written',
+      '#846-A1: an ungranted class still raises the valve, got ' + JSON.stringify({ result: a1.result, halt: a1.halt }));
+    assert(haltMarker846(fx) === true && escalated846(fx) === true,
+      '#846-A1: ...with the real durable markers (ledger consent_halt + escalated_to_full), got '
+      + JSON.stringify({ marker: haltMarker846(fx), escalated: escalated846(fx) }));
+    assert(a1.standing_grant === false,
+      '#846-A1: ...and the envelope states, in so many words, that NO standing grant answered this '
+      + 'question. A valve that is silent about which of the two things it did is a valve whose '
+      + 'applications cannot be audited, got ' + JSON.stringify(a1.standing_grant));
+    assert(a1.consent_class === CLASS_846,
+      '#846-A1: ...and the pending request carries the class, which is the ONLY thing clear-halt can '
+      + 'later grant — a grant that is not the answer to the question asked is a widened grant, got '
+      + JSON.stringify(a1.consent_class));
+
+    // A2. The human says yes. clear-halt grants exactly the class the pending halt recorded. There
+    // is deliberately NO class flag here: the grant is the answer to the question that was put.
+    const a2 = clear846(fx);
+    assert(a2.result === 'ok' && a2.halt === 'cleared',
+      '#846-A2: clear-halt(consent) still clears the halt, got ' + JSON.stringify({ result: a2.result, halt: a2.halt }));
+    assert(a2.standing_grant_recorded === CLASS_846,
+      '#846-A2: ...and records the standing grant for the class that was ASKED — not one supplied at '
+      + 'clear time, which is how a grant would widen past the question the human saw, got '
+      + JSON.stringify(a2.standing_grant_recorded));
+    assert(haltMarker846(fx) === false && escalated846(fx) === false,
+      '#846-A2: ...and the halt is genuinely gone, got '
+      + JSON.stringify({ marker: haltMarker846(fx), escalated: escalated846(fx) }));
+
+    // A3. THE 33 MINUTES. A FRESH PROCESS — no heap, no cache, nothing but the bytes on disk —
+    // asks the identical question and is NOT stopped. This is the whole issue.
+    const a3 = ask846(fx, CLASS_846);
+    assert(a3.result === 'ok' && a3.standing_grant === true,
+      '#846-A3: the SAME class inside the SAME claim proceeds on the standing grant instead of '
+      + 'putting the question a second time, got ' + JSON.stringify({ result: a3.result, standing_grant: a3.standing_grant, halt: a3.halt }));
+    assert(a3.consent_class === CLASS_846,
+      '#846-A3: ...naming the class it rode, got ' + JSON.stringify(a3.consent_class));
+    assert(a3.halt !== 'written' && haltMarker846(fx) === false && escalated846(fx) === false,
+      '#846-A3: ...and NOTHING halts — no ledger consent_halt marker, no escalated_to_full cause '
+      + 'line. A "standing grant" that still writes the halt has subtracted nothing, got '
+      + JSON.stringify({ halt: a3.halt, marker: haltMarker846(fx), escalated: escalated846(fx) }));
+
+    // A4. Third time (the issue measured three). Still no question.
+    const a4 = ask846(fx, CLASS_846);
+    assert(a4.standing_grant === true && haltMarker846(fx) === false,
+      '#846-A4: and the third instance too — the grant does not decay after one use, got '
+      + JSON.stringify({ standing_grant: a4.standing_grant, marker: haltMarker846(fx) }));
+
+    // A5. DESIGN ANSWER 3: every APPLICATION is journaled, not just the grant — and the journal is
+    // durable, because the successor that reads it here shares nothing with the processes that
+    // wrote it. A standing grant applied invisibly is indistinguishable from no valve at all.
+    const a5 = orient846(fx);
+    assert(a5.result === 'ok' && Array.isArray(a5.consentGrants),
+      '#846-A5: orient — the zero-context successor surface — reports the standing grants as an '
+      + 'array, got ' + JSON.stringify({ result: a5.result, consentGrants: a5.consentGrants }));
+    const g5 = liveGrant846(a5, CLASS_846);
+    assert(g5 !== null,
+      '#846-A5: ...including the grant made in an earlier process (A1: a successor with zero context '
+      + 'sees the same grants; an in-memory cache satisfies nothing here), got '
+      + JSON.stringify(a5.consentGrants));
+    assert(g5 && g5.applications === 2,
+      '#846-A5: ...and the count of APPLICATIONS, so "logged, not re-asked" is auditable rather than '
+      + 'merely quieter. Two applications rode this grant (A3, A4), got '
+      + JSON.stringify(g5 && g5.applications));
+
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-B — SAME ACTION, DIFFERENT TARGET STILL ASKS. Design answer 1 rejected the action verb
+  // alone precisely so a grant cannot leak to a target the human never saw when they said yes.
+  // The live-grant control runs FIRST so this negative can never pass merely because no grant
+  // exists at all.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, CLASS_846);
+    const control = ask846(fx, CLASS_846);
+    assert(control.standing_grant === true,
+      '#846-B control: the grant for ' + CLASS_846 + ' is live before the negative is tested, got '
+      + JSON.stringify(control.standing_grant));
+
+    const b = ask846(fx, OTHER_TARGET_846);
+    assert(b.standing_grant === false,
+      '#846-B: a request whose ACTION matches the grant but whose TARGET does not is a DIFFERENT '
+      + 'class and must still put the question — a grant that covered it would authorize a target '
+      + 'the human never saw, got ' + JSON.stringify(b.standing_grant));
+    assert(b.halt === 'written' && haltMarker846(fx) === true && escalated846(fx) === true,
+      '#846-B: ...and the valve genuinely halts, got '
+      + JSON.stringify({ halt: b.halt, marker: haltMarker846(fx), escalated: escalated846(fx) }));
+    assert(b.consent_class === OTHER_TARGET_846,
+      '#846-B: ...for the target actually requested, got ' + JSON.stringify(b.consent_class));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-C — A BRAND-NEW CLASS ALWAYS ASKS (design answer 4). Nothing in this issue widens WHAT
+  // may be consented to; it changes only how often the same question is put.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, CLASS_846);
+    const control = ask846(fx, CLASS_846);
+    assert(control.standing_grant === true,
+      '#846-C control: the grant is live before the negative is tested, got ' + JSON.stringify(control.standing_grant));
+
+    const c = ask846(fx, OTHER_ACTION_846);
+    assert(c.standing_grant === false && c.halt === 'written' && haltMarker846(fx) === true,
+      '#846-C: an ungranted class is untouched by any other class\'s grant — the valve is whole for '
+      + 'everything nobody has said yes to, got '
+      + JSON.stringify({ standing_grant: c.standing_grant, halt: c.halt, marker: haltMarker846(fx) }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-D — A RE-PLAN EPOCH REVOKES. Design answer 2: the grant lives for the CLAIM and dies on
+  // re-plan, because the plan the human consented under no longer exists. Driven the way an
+  // activation actually moves the position record: new plan bytes (new plan_hash), plan_epoch
+  // advanced, active_plan_hash re-pointed.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, CLASS_846);
+    const control = ask846(fx, CLASS_846);
+    assert(control.standing_grant === true,
+      '#846-D control: the grant is live under the PARENT epoch, got ' + JSON.stringify(control.standing_grant));
+
+    const bodyB = planBody846(DESIGN_B_846);
+    const hashB = planValidator.computePlanHash(bodyB);
+    assert(hashB !== fx.hash, '#846-D control: the child epoch is genuinely a different plan');
+    fs.writeFileSync(fx.planPath, '<!-- plan_hash: ' + hashB + ' -->\n' + bodyB);
+    patchState846(fx, { plan_epoch: 2, active_plan_hash: hashB });
+
+    const d = ask846(fx, CLASS_846);
+    assert(d.standing_grant === false,
+      '#846-D: after the epoch advances, the standing grant is REVOKED and the next request asks '
+      + 'again — consent given under a plan that has been rewritten is not consent to the rewrite, '
+      + 'got ' + JSON.stringify(d.standing_grant));
+    assert(d.halt === 'written' && readDurableConsentHalt(fs.readFileSync(fx.planPath, 'utf8')) === true,
+      '#846-D: ...and the valve really halts, got ' + JSON.stringify(d.halt));
+    const after = clear846(fx) && orient846(fx);
+    assert(liveGrant846(after, CLASS_846) === null,
+      '#846-D: ...and the parent-epoch grant is no longer live for the successor to read, got '
+      + JSON.stringify(after.consentGrants));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-E — A DISCARD+RESTART REVOKES. A restart mints a new claim identity (a new session
+  // marker/claim_ts re-derives claim_identity_digest, and with it epoch_lineage_id). The grant is
+  // scoped to the CLAIM, so it does not cross that boundary.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, CLASS_846);
+    const control = ask846(fx, CLASS_846);
+    assert(control.standing_grant === true,
+      '#846-E control: the grant is live under the ORIGINAL claim, got ' + JSON.stringify(control.standing_grant));
+
+    const restarted = lineage846(fx.repoRoot, 'sess-B-846-restarted', fx.head, fx.tree);
+    assert(restarted.epoch_lineage_id !== undefined && restarted.claim_identity_digest !== undefined,
+      '#846-E control: the restarted claim has its own lineage');
+    patchState846(fx, {
+      claim_identity_digest: restarted.claim_identity_digest,
+      epoch_lineage_id: restarted.epoch_lineage_id,
+    });
+
+    const e = ask846(fx, CLASS_846);
+    assert(e.standing_grant === false && e.halt === 'written',
+      '#846-E: a discard+restart is a NEW claim, and a grant made by the previous claim does not '
+      + 'answer for it — the next request asks again, got '
+      + JSON.stringify({ standing_grant: e.standing_grant, halt: e.halt }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-F — A NEW CANDIDATE DIGEST REVOKES, AND THE REVOCATION DOES NOT UNDO ITSELF.
+  //
+  // WHY THIS IS THE ONLY NON-VACUOUS FORM OF THAT TRIGGER. While `replan_status: candidate_changed`
+  // stands, the project is replan-FENCED: the fence in the CLI prologue refuses every mutating verb
+  // (and orient) before any body runs, so "it asks while the candidate is changed" is already true
+  // by construction and pins nothing. The entire content of the trigger is what happens AFTER the
+  // fence lifts — the fork is discarded, `replan_status` returns to `none`, and the epoch, claim and
+  // plan hash are all exactly what they were. An implementation that merely COMPARES a recorded
+  // scope binding against the current one resurrects the grant here, silently, and the human is
+  // never asked about the candidate they never saw. Revocation must be durable, not derived.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, CLASS_846);
+    const control = ask846(fx, CLASS_846);
+    assert(control.standing_grant === true,
+      '#846-F control: the grant is live before the candidate moves, got ' + JSON.stringify(control.standing_grant));
+
+    // The fork observes a changed candidate at a CAS seam and records it in the position record.
+    patchState846(fx, { replan_status: 'candidate_changed', replan_transaction_id: 'tx-846-cc' });
+    const fenced = ask846(fx, CLASS_846);
+    assert(fenced.standing_grant !== true,
+      '#846-F: while the candidate change stands the project is fenced, and no standing grant may '
+      + 'be applied through it, got ' + JSON.stringify({ result: fenced.result, reason: fenced.reason, standing_grant: fenced.standing_grant }));
+
+    // The fork is discarded. Epoch, claim identity and plan hash are byte-identical to the state the
+    // grant was made under — the ONLY thing that happened is that the candidate moved.
+    patchState846(fx, { replan_status: 'none', replan_transaction_id: 'none' });
+    const f = ask846(fx, CLASS_846);
+    assert(f.result === 'ok',
+      '#846-F precondition: the project is unfenced again, got ' + JSON.stringify({ result: f.result, reason: f.reason }));
+    assert(f.standing_grant === false,
+      '#846-F: a new candidate digest REVOKES the standing grant, and restoring the surrounding '
+      + 'state does not bring it back. A grant that returns from the dead the moment the scalars '
+      + 'match again is not a revocation, got ' + JSON.stringify(f.standing_grant));
+    assert(f.halt === 'written' && haltMarker846(fx) === true,
+      '#846-F: ...so the next request genuinely asks, got '
+      + JSON.stringify({ halt: f.halt, marker: haltMarker846(fx) }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-G — A GRANT NEVER WIDENS *WHAT* MAY BE CONSENTED TO, ONLY HOW OFTEN THE QUESTION IS PUT.
+  // A standing CONSENT grant is not standing authority over the other halt reasons. `security` and
+  // `integrity` are different questions — and `integrity` is the R4 halt, where the deviation IS
+  // the evidence and clear-halt does not even accept it.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, CLASS_846);
+    const control = ask846(fx, CLASS_846);
+    assert(control.standing_grant === true,
+      '#846-G control: the consent grant is live, got ' + JSON.stringify(control.standing_grant));
+
+    const sec = ask846(fx, CLASS_846, 'security');
+    assert(sec.standing_grant === false,
+      '#846-G: a standing CONSENT grant does not answer a SECURITY halt for the same class — the '
+      + 'grant changes how often one question is put, never which questions may be skipped, got '
+      + JSON.stringify(sec.standing_grant));
+    assert(sec.halt === 'written' && Array.isArray(sec.markers)
+      && sec.markers.includes('escalated_to_full:security'),
+      '#846-G: ...and the security halt lands with its own cause marker, got ' + JSON.stringify(sec.markers));
+    clear846(fx);
+
+    const integ = ask846(fx, CLASS_846, 'integrity');
+    assert(integ.standing_grant === false && integ.halt === 'written',
+      '#846-G: ...and least of all the R4 integrity halt, whose whole point is that the deviation is '
+      + 'itself evidence and is never auto-cleared, got '
+      + JSON.stringify({ standing_grant: integ.standing_grant, halt: integ.halt }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-H — THE CLASSLESS VALVE IS BYTE-FOR-BYTE THE VALVE WE HAVE. A consent halt raised without
+  // a class grants nothing and is re-asked forever, exactly as today. Opting in is what records a
+  // grant; nothing is granted by omission.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    const h1 = ask846(fx, null);
+    assert(h1.result === 'ok' && h1.halt === 'written' && haltMarker846(fx) === true,
+      '#846-H: a classless consent halt behaves exactly as today, got '
+      + JSON.stringify({ result: h1.result, halt: h1.halt, marker: haltMarker846(fx) }));
+    assert(h1.standing_grant === false,
+      '#846-H: ...and still SAYS no standing grant answered it — the field is unconditional, so a '
+      + 'reader never has to infer from absence, got ' + JSON.stringify(h1.standing_grant));
+
+    const h2 = clear846(fx);
+    assert(h2.result === 'ok' && (h2.standing_grant_recorded == null),
+      '#846-H: clearing a classless halt records NO grant — a grant by omission would authorize a '
+      + 'class nobody named, got ' + JSON.stringify(h2.standing_grant_recorded));
+
+    const h3 = orient846(fx);
+    assert(h3.result === 'ok' && Array.isArray(h3.consentGrants) && h3.consentGrants.length === 0,
+      '#846-H: ...and the successor reads an EMPTY grant set, not a missing one, got '
+      + JSON.stringify(h3.consentGrants));
+
+    const h4 = ask846(fx, null);
+    assert(h4.halt === 'written' && haltMarker846(fx) === true,
+      '#846-H: ...so the same classless question is put again, forever, got '
+      + JSON.stringify({ halt: h4.halt, marker: haltMarker846(fx) }));
+    cleanup846(fx);
+  });
+}
+
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 spawnCensus.report();
 
