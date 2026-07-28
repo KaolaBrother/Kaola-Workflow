@@ -233,7 +233,12 @@ function runScan(opts) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
   const artifact = { project, sweptClasses };
-  fs.writeFileSync(outputPath, JSON.stringify(artifact, null, 2) + '\n', 'utf8');
+  // `run-gaps.json` is a kernel Evidence record — the sweep result the finalization gate reads back,
+  // and one this writer deliberately refuses to recompute over a prior cycle. So it takes the
+  // crash-safe atomic replace like every other record write: a half-written artifact would parse as
+  // a SHORTER swept-class list, and the gate would pass on gaps that were swept but never stored.
+  require('./kaola-gitea-workflow-adaptive-schema').writeFileAtomicReplace(
+    outputPath, JSON.stringify(artifact, null, 2) + '\n');
 
   if (asJson) {
     process.stdout.write(JSON.stringify({

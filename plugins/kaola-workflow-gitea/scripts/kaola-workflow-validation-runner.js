@@ -1046,8 +1046,16 @@ function parseCli(argv) {
 
 function writeCliResult(result, outputPath) {
   const bytes = canonicalJson(result) + '\n';
-  if (outputPath) fs.writeFileSync(path.resolve(outputPath), bytes);
-  else process.stdout.write(bytes);
+  // `--output` is how a validation VECTOR is durably recorded, and a vector is a kernel Evidence
+  // record: the receipt binding command, environment digests, repeated results and candidate that an
+  // inherited validation obligation is satisfied against. A torn vector does not read as absent — it
+  // reads as non-canonical, which the consumer reports as `validation_vector_not_canonical` and which
+  // no re-run can repair, because the run it attests to is over. So it takes the atomic replace.
+  if (outputPath) {
+    require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(path.resolve(outputPath), bytes);
+  } else {
+    process.stdout.write(bytes);
+  }
 }
 
 function usage() {
