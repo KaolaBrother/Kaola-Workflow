@@ -4104,6 +4104,216 @@ scenario(() => {
     + JSON.stringify(liveRelief));
 });
 
+// ---------------------------------------------------------------------------
+// TRUST-THE-RECORD — the review journal's producer identity is READ, not re-derived, and the two
+// journal lanes enforce ONE policy over that recorded fact.
+//
+// The settle transaction RECORDS `producer_bindings`. Both read paths then recompute a producer
+// slice from a reconstructed node view and refuse on inequality — and they reconstruct DIFFERENT
+// views, so today they answer differently about the same bytes:
+//
+//   recorded shape                                | schema-1 read | schema-2 read
+//   ----------------------------------------------|---------------|---------------
+//   key set is a strict SUBSET of the derivation   | refuse        | refuse
+//   key set is a strict SUPERSET of the derivation | refuse        | refuse
+//   selected writer is NOT the maximal producer    | refuse        | ACCEPT   <-- divergence
+//   a bound producer sits at in_progress unrelieved| refuse        | ACCEPT   <-- divergence
+//
+// Two things are wrong with that table, and the subtraction fixes both at once:
+//
+//   (1) The two RECOMPUTE rows are wedges, not integrity. The recorded key set is the authority —
+//       settle wrote it from the view that was live at the time, which no later read can rebuild
+//       (intra-epoch growth is append-only and unversioned). The schema-2 lane already concedes
+//       this: it accepts anything inside an interval envelope (freeze <= recorded <= exec) whose
+//       own source comment names its residual as the thing this subtraction closes. A SUPERSET is
+//       the shape that actually wedged a live run — the freeze view under-derived to [] against a
+//       recorded slice of real composed units, and every later orient/open refused forever.
+//
+//   (2) The two DIVERGENCE rows are holes, and they are in the LOOSE lane. The recorded
+//       `repair.selected_writer` is not an identity to trust: it names a node the repair machinery
+//       will hand a fresh baseline to, so it must still be PROVEN a graph-maximal producer of this
+//       gate against the frozen graph + ledger. schema-1 proves it; schema-2 never did. Converging
+//       the lanes means schema-2 GAINS that proof — the subtraction tightens here, it does not
+//       relax.
+//
+// So the one policy is: TRUST the recorded key set; PROVE the recorded writer. Everything below is
+// that sentence, asserted twice — once per lane — over byte-identical recorded facts.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const crypto = require('crypto');
+  const NODE_ROWS = [
+    '| base | implementer | — | scripts/base.js | 1 | sequence |',
+    '| writer | tdd-guide | base | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | writer | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const ALL_COMPLETE = ['| base | complete | |', '| writer | complete | |',
+    '| review | pending | |', '| finalize | pending | |'];
+  const BASE_IN_PROGRESS = ['| base | in_progress | |', '| writer | complete | |',
+    '| review | pending | |', '| finalize | pending | |'];
+  const BASE_PENDING = ['| base | pending | |', '| writer | complete | |',
+    '| review | pending | |', '| finalize | pending | |'];
+  const identity = seed => ({ baseline: seed.repeat(40).slice(0, 40), anchored_ref: seed.repeat(40).slice(0, 40),
+    open_token: seed.repeat(40).slice(0, 40), generation: seed.repeat(12).slice(0, 12),
+    ref: 'refs/kaola-workflow/barrier/issue-834/' + seed });
+
+  // ---- schema-1 lane: driven through the REAL read (readReviewJournal), so the full schema-1
+  // structural validator runs first and only the identity matcher can be the refuser here.
+  const schema1Verdict = (ledgerRows, bindings, writer, extraAttempts) => {
+    const body = makePlan(ledgerRows, NODE_ROWS);
+    const planHash = planValidator.computePlanHash(body);
+    const plan = '<!-- plan_hash: ' + planHash + ' -->\n' + body;
+    const gate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review',
+      origin: ['writer'], members: ['review'] });
+    const attemptAt = (ordinal, attemptBindings, attemptWriter) => {
+      const nonce = 'n834ordinal' + ordinal;
+      const generations = [{ member: 'review', nonce }];
+      const digest = String(ordinal).repeat(64).slice(0, 64);
+      const body1 = 'evidence-binding: review ' + nonce + '\nverdict: fail\nfindings_blocking: 1\n';
+      return { attempt_id: 'review:' + ordinal, ordinal, plan_hash: planHash, logical_gate: gate,
+        candidate_digest: digest, candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64),
+        rebind: [], generations,
+        transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: planHash,
+          logical_gate_key: gate.key, candidate_digest: digest, generations })).digest('hex'),
+        settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
+        receipts: [{ node_id: 'review', generation: nonce, body: body1,
+          receipt_sha256: crypto.createHash('sha256').update(body1).digest('hex'),
+          effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+        findings: [], route_candidates: [], lifecycle_settled: true,
+        producer_bindings: attemptBindings,
+        repair: { selected_writer: attemptWriter, settled: true }, consumed_by: attemptWriter };
+    };
+    const attempts = [attemptAt(1, bindings, writer)]
+      .concat((extraAttempts || []).map((row, index) => attemptAt(index + 2, row.bindings, row.writer)));
+    const files = { '/i834/workflow-plan.md': plan,
+      '/i834/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: planHash, attempts }) };
+    const state = readReviewJournal({ planPath: '/i834/workflow-plan.md',
+      readFile: p => { if (!(p in files)) throw new Error('ENOENT'); return files[p]; },
+      cacheExists: p => p in files }, plan);
+    return { ok: state.ok === true, reason: state.reason || null };
+  };
+
+  // ---- schema-2 lane: the identity matcher by direct call (its twin of the same recorded facts).
+  const schema2Verdict = (ledgerRows, bindings, writer) => {
+    const plan = makePlan(ledgerRows, NODE_ROWS);
+    const nodes = planValidator.parseNodes(plan);
+    const gate = reviewLogicalGate(nodes, nodes.find(n => n.id === 'review'));
+    const gateCore = { key: gate.key, kind: gate.kind, members: gate.members,
+      claim_digest: gate.claim_digest, surface_digests: gate.surface_digests,
+      aggregation: gate.aggregation, certified_producers: gate.certified_producers };
+    const finding = { uid: 'F-1', scope: 'in_scope', action: 'fix', status: 'open',
+      severity: 'high', primary_anchor: { path: 'scripts/a.js' } };
+    const journal = { schema_version: 2, attempts: [{
+      attempt_id: 'review:1', ordinal: 1, logical_gate: gateCore, gate_mode: 'change_gate',
+      outcome: 'fail', lifecycle_settled: true, consumed_by: writer,
+      repair: { selected_writer: writer, settled: true },
+      producer_bindings: bindings,
+      receipts: [{ node_id: 'review', findings: [finding] }],
+      route_candidates: schema2RouteCandidates([finding], nodes, 'review'),
+    }] };
+    const out = reviewJournalV2MatchesPlan(journal, plan);
+    return { ok: out.ok === true, reason: out.reason || null };
+  };
+
+  // NON-VACUITY: the gate really is DERIVED (certified_producers empty), so both lanes really do
+  // fall through to the recomputation under test rather than reading a frozen `certifies` list.
+  {
+    const probeNodes = planValidator.parseNodes(makePlan(ALL_COMPLETE, NODE_ROWS));
+    const probeGate = reviewLogicalGate(probeNodes, probeNodes.find(n => n.id === 'review'));
+    assert(probeGate.certified_producers.length === 0,
+      '#834 NON-VACUITY: the fixture gate has DERIVED membership (empty certified_producers), so the '
+      + 'producer-slice recomputation is genuinely the code under test, got '
+      + JSON.stringify(probeGate.certified_producers));
+    const derived = uniqueMaximalReviewProducer(probeNodes, ['review'], 'writer',
+      readLedgerStatuses(makePlan(ALL_COMPLETE, NODE_ROWS)), ['writer'], [], []);
+    assert(JSON.stringify(derived.producer_slice) === JSON.stringify(['base', 'writer']),
+      '#834 NON-VACUITY: the plan-derived producer slice is [base, writer], so a recorded {writer} is '
+      + 'a strict SUBSET and a recorded {base, writer, finalize} a strict SUPERSET, got '
+      + JSON.stringify(derived.producer_slice));
+  }
+
+  // The one policy, as a table. `ok` is the REQUIRED verdict for BOTH lanes.
+  const MATRIX = [
+    { name: 'CONTROL exact match',
+      ledger: ALL_COMPLETE, bindings: { base: identity('b'), writer: identity('w') }, writer: 'writer',
+      ok: true,
+      why: 'the recorded key set equals the derivation and the writer is maximal — unchanged' },
+    { name: 'TRUST subset',
+      ledger: ALL_COMPLETE, bindings: { writer: identity('w') }, writer: 'writer',
+      ok: true,
+      why: 'a recorded key set NARROWER than today\'s derivation is the record, not corruption — the '
+        + 'settle-time view is not reconstructible, so the read must not second-guess it' },
+    { name: 'TRUST superset (the live wedge shape)',
+      ledger: ALL_COMPLETE,
+      bindings: { base: identity('b'), writer: identity('w'), finalize: identity('f') }, writer: 'writer',
+      ok: true,
+      why: 'a recorded key set WIDER than today\'s derivation is exactly the shape that wedged a live '
+        + 'run (a freeze-view recomputation under-derived to [] against real recorded producers) — it '
+        + 'must read clean; the recorded writer is still proven separately' },
+    { name: 'PROVE writer: non-maximal selected writer',
+      ledger: ALL_COMPLETE, bindings: { base: identity('b'), writer: identity('w') }, writer: 'base',
+      ok: false,
+      why: 'the recorded selected_writer is NOT an identity to trust — it names the node a repair will '
+        + 're-baseline, so it must still be proven the unique maximal producer of this gate' },
+    { name: 'PROVE writer: writer outside the frozen graph',
+      ledger: ALL_COMPLETE, bindings: { ghost: identity('g') }, writer: 'ghost',
+      ok: false,
+      why: 'a selected writer that is no producer of this gate at all stays refused' },
+    { name: 'PROVE writer: bound producer at in_progress with no validated replay',
+      ledger: BASE_IN_PROGRESS, bindings: { base: identity('b'), writer: identity('w') }, writer: 'writer',
+      ok: false,
+      why: 'an unrelieved non-terminal producer is an unproven producer history — relief comes only '
+        + 'from a validated replay record, never from the bindings seeding their own admission' },
+    { name: 'PROVE writer: bound producer at pending with no validated replay',
+      ledger: BASE_PENDING, bindings: { base: identity('b'), writer: identity('w') }, writer: 'writer',
+      ok: false,
+      why: 'same, at the other non-terminal status' },
+  ];
+
+  for (const row of MATRIX) {
+    const s1 = schema1Verdict(row.ledger, row.bindings, row.writer);
+    const s2 = schema2Verdict(row.ledger, row.bindings, row.writer);
+    assert(s1.ok === row.ok,
+      '#834 [' + row.name + '] schema-1: expected ok=' + row.ok + ' — ' + row.why + '. Got '
+      + JSON.stringify(s1));
+    assert(s2.ok === row.ok,
+      '#834 [' + row.name + '] schema-2: expected ok=' + row.ok + ' — ' + row.why + '. Got '
+      + JSON.stringify(s2));
+    assert(s1.ok === s2.ok,
+      '#834 [' + row.name + '] LANE CONVERGENCE: the schema-1 and schema-2 reads must return the SAME '
+      + 'verdict on the SAME recorded fact — two lanes with two policies over one record is the '
+      + 'generator this subtraction removes. Got schema-1=' + JSON.stringify(s1)
+      + ' schema-2=' + JSON.stringify(s2));
+    if (!row.ok) {
+      assert(s1.reason === 'review_journal_repair_identity_mismatch',
+        '#834 [' + row.name + '] schema-1 keeps the TYPED reason (a bare false is not a refusal a '
+        + 'caller can route), got ' + JSON.stringify(s1));
+      assert(s2.reason === 'review_journal_repair_identity_mismatch',
+        '#834 [' + row.name + '] schema-2 keeps the TYPED reason, got ' + JSON.stringify(s2));
+    }
+  }
+
+  // MUST STAY REFUSED — the producer-binding LINEAGE chain is what remains of the tamper boundary
+  // once the derivation is gone, so it has to keep its teeth. Two attempts at one logical gate both
+  // bind `writer`; the later one carries a re-snapshotted baseline that no rebind record chains to.
+  // That is the laundering vector the chain exists for, and it is a recorded-fact-vs-recorded-fact
+  // check (never a re-derivation), so nothing in this subtraction may weaken it.
+  {
+    const forged = schema1Verdict(ALL_COMPLETE, { base: identity('b'), writer: identity('w') }, 'writer',
+      [{ bindings: { base: identity('b'), writer: identity('z') }, writer: 'writer' }]);
+    assert(forged.ok === false && forged.reason === 'review_journal_repair_identity_mismatch',
+      '#834 LINEAGE (must stay refused): a later attempt whose producer binding does not continue the '
+      + 'gate\'s recorded chain is still refused — the chain, not the derivation, is the producer-'
+      + 'identity tamper boundary, got ' + JSON.stringify(forged));
+    const honest = schema1Verdict(ALL_COMPLETE, { base: identity('b'), writer: identity('w') }, 'writer',
+      [{ bindings: { base: identity('b'), writer: identity('w') }, writer: 'writer' }]);
+    assert(honest.ok === true,
+      '#834 LINEAGE control: the SAME two-attempt history with a continuous chain reads clean, so the '
+      + 'refusal above is caused by the forged binding and not by the second attempt, got '
+      + JSON.stringify(honest));
+  }
+});
+
 // #739-DIAMOND: the write-diamond liveness guard (surfaced by adversarial verification of #739). A finding
 // owned by the shared owner of two parallel disjoint writer branches, each with its own COMPLETE interior
 // gate, plus a common certifier that failed. Neither interior gate post-dominates the owner, so a replay
