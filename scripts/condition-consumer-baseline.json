@@ -181,7 +181,6 @@
     "register_digest_mismatch",
     "register_entry_malformed",
     "register_entry_receipt_unbound",
-    "register_entry_recertification_missing",
     "register_entry_rerun_red",
     "register_entry_surface_mismatch",
     "register_malformed",

@@ -639,15 +639,15 @@ function barrierExemptPath(p, project) {
 //     tooling glue, and the barrier-invisible docs allowband. Repairing the judge does not move the
 //     product, so the standing certification over the product still holds and the entry's bound
 //     GREEN RERUN receipt is its whole oracle. No re-review.
-//   PRODUCTION — everything else. A production-behavior fix IS admissible through the lane (the
-//     scope wall was deliberately widened; see docs/decisions/D-826-01.md), but only behind a BOUND
-//     RE-CERTIFICATION receipt: a settled PASS review attempt over the POST-FIX candidate. The
-//     receipt is what replaces the wall, so it is verified, not asserted.
+//   PRODUCTION — everything else. A production-behavior fix is REFUSED (see docs/decisions/D-826-01.md
+//     and its DIR-2 reversal): a behavior change arriving after every reviewer is discharged is a
+//     deviation that is ITSELF EVIDENCE, so it is reported rather than admitted behind any receipt.
+//     The refusal carries the typed exit — the shape is what gets refuted.
 //
 // THE DEFAULT IS THE WHOLE SAFETY ARGUMENT: a path this classifier does not RECOGNIZE is PRODUCTION.
-// An unanticipated surface therefore fails toward the re-certification wall, never through the cheap
-// path. A MIXED entry is production as a whole and names only its production members — classes do
-// not net out, because a green test rerun says nothing about the src file that rode along with it.
+// An unanticipated surface therefore fails toward the HARD WALL, never through the cheap path. A
+// MIXED entry is production as a whole and names only its production members — classes do not net
+// out, because a green test rerun says nothing about the src file that rode along with it.
 //
 // Reuses isBarrierInvisible (the #424 narrow allowband) and isTestLikePath (the conventional
 // tests/spec layout) rather than restating either, so the classifier cannot drift from the bands the
@@ -7330,9 +7330,9 @@ module.exports = {
   TEST_CUSTODY_ROLES,
   parseTestCustodyExemptions,
   isTestLikePath,
-  // The finalize deviation route's surface classifier — validation APPARATUS (cheap path: the bound
-  // green rerun receipt alone) vs PRODUCTION behavior (admissible only behind a bound
-  // re-certification receipt). Conservative by default: an unrecognized path is production.
+  // The finalize deviation route's surface classifier — validation APPARATUS (the lane's one path:
+  // the bound green rerun receipt alone) vs PRODUCTION behavior (refused outright; the shape is
+  // refuted instead). Conservative by default: an unrecognized path is production.
   isFinalFixApparatusPath,
   classifyFinalFixSurface,
   // Producer/consumer role classification for the node-to-node channel's consumed-proof (the lifecycle

@@ -419,11 +419,15 @@ node scripts/kaola-workflow-adaptive-node.js final-fix-commit --project {project
 JSON
 ```
 
-Validation apparatus (tests, fixtures, build/tooling glue, allowband docs) needs nothing more. A fix
-touching **production behavior** is admissible too, but only behind a bound re-certification receipt:
-run the review gate again over the post-fix candidate and cite its settled PASS as
-`"recertification":{"attempt_id":"<id>","candidate_digest":"<post-fix candidate digest>"}`. Without
-it the verb refuses `final_fix_production_surface`, zero-write.
+This lane records **validation apparatus only** — tests, fixtures, build/tooling glue, allowband
+docs: repairing the thing that JUDGES the product does not move the product, so the certification
+standing over it still holds and the bound green rerun receipt is the whole oracle. A fix touching
+**production behavior** is refused `final_fix_production_surface`, zero-write, and no receipt or
+entry field admits it: a behavior change arriving after every reviewer is discharged is a deviation
+that is itself evidence — evidence that the standing certification no longer describes the candidate
+— so it is reported, never converted into an admission. That refusal is a fork, not a dead end: it
+carries the typed exit `shape_refutation`, because if no authority in the frozen plan can certify the
+change then the SHAPE is what is refuted, and the re-plan epoch is the way out.
 
 This lane closes at the sink's first irreversible step: once the branch is pushed the record is
 immutable history and the verb refuses `final_fix_after_sink_started`. Recovery after that point is a
@@ -747,9 +751,11 @@ choices, or ambiguity that blocks correctness.
   final-fix-commit --project {project} --json --stdin`, one entry per fix (exact failed command, fix
   commit, touched paths, green rerun receipt bound to the post-fix candidate). The finalize
   attribution sweep credits that register as a third source; an unrecorded finalize-time fix refuses
-  `unattributed_change`. A fix touching production behavior additionally needs a bound
-  re-certification receipt (a settled PASS review attempt over the post-fix candidate) or the verb
-  refuses `final_fix_production_surface`. The lane closes at the sink's first irreversible step: once
+  `unattributed_change`. The register records **validation apparatus only**: a fix touching production
+  behavior refuses `final_fix_production_surface` and no receipt admits it — that deviation is itself
+  evidence the standing certification no longer describes the candidate, so the refusal routes to
+  `shape_refutation` (a re-plan that puts a certifying authority over the work) instead of being
+  laundered into an entry. The lane closes at the sink's first irreversible step: once
   the branch is pushed the verb refuses `final_fix_after_sink_started` and recovery is a follow-up
   issue, never a history rewrite.
 - A one-line, mechanically obvious inline edit (no behavior/API/security/design judgment) that fixes

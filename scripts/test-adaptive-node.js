@@ -29844,24 +29844,39 @@ scenario(() => {
 // digest-bound, sink-owned register at `.cache/final-fixes.json`, which the sweep then reads as
 // its THIRD attributed source.
 //
-// THE SCOPE WALL WAS DELIBERATELY WIDENED (owner override of the filed issue; see D-826-01).
-// The issue REJECTED production-behavior fixes outright. The owner ADMITS them — but only behind
-// a BOUND RE-CERTIFICATION RECEIPT: a settled PASS review attempt over the POST-FIX candidate,
-// digest-bound, named by the register entry itself. The receipt is now the load-bearing safeguard
-// that REPLACES the wall, so it is pinned here with teeth in all four of its failure states.
-// Validation-apparatus paths (tests, fixtures, build/tooling glue, allowband docs) keep the cheap
-// path: the bound green rerun receipt alone.
+// THE SCOPE WALL IS HARD, AND IT STAYS HARD. A finalize-time fix that touches PRODUCTION behavior
+// is REFUSED `final_fix_production_surface`. There is no receipt, register field, or verifier that
+// admits it — not "admitted behind a settled PASS", refused.
+//
+// WHY (R4, and it is the whole reason this is not an arbitrary restriction). ADR 0013's R4 is the
+// meaning-vs-form discriminator: auto-remedy applies only to a NON-CANONICAL FORM of CORRECT
+// CONTENT. A behavior change arriving after every reviewer is discharged is not bad form — it is a
+// DEVIATION THAT IS ITSELF EVIDENCE, evidence that the certification standing over this candidate no
+// longer describes it. Admitting it behind a re-certification receipt would LAUNDER that signal:
+// the finalize register would become a place where a fact about the run ("this shipped uncertified
+// work") is converted into a receipt saying the opposite. R4 always beats R3, so the deviation is
+// reported, never repaired. Building the receipt would add exactly the re-certification machinery
+// R4 exists to prevent, and would soften the one wall the ADR names as load-bearing.
+//
+// THE WALL IS NOT A DEAD END — THAT IS WHAT THE ROUTE IS FOR. The refusal carries a typed exit
+// (`route`), so the trap the issue complained about is removed BY THE ROUTE, not by widening the
+// scope. If no authority in the frozen plan can certify the change, the SHAPE is what is refuted,
+// and re-plan is the recorded exit. Validation-apparatus paths (tests, fixtures, build/tooling glue,
+// allowband docs) keep the cheap path: the bound green rerun receipt alone. The lane is not deleted;
+// only the production widening is.
 //
 // WHAT THESE TESTS PIN, in priority order:
-//   (A) every NEW typed refusal, each ZERO-WRITE — the register must not exist, and the frozen
-//       plan / git state must be byte-identical, after a refused call;
-//   (B) the two pure predicates the widening rests on — the surface CLASSIFIER (conservative by
-//       default: an unrecognized path is production) and the RE-CERTIFICATION verifier (missing /
-//       unresolved / unsettled / stale all refuse; only a settled PASS bound to the post-fix
-//       candidate admits);
+//   (A) every typed refusal, each ZERO-WRITE — the register must not exist, and the frozen plan /
+//       git state must be byte-identical, after a refused call; INCLUDING that a production surface
+//       refuses IDENTICALLY whether or not the submission carries a re-certification receipt (a
+//       receipt cannot change a verdict nothing consults);
+//   (B) the pure predicate the wall rests on — the surface CLASSIFIER, conservative by default (an
+//       unrecognized path is production, a mixed entry is production as a whole) — plus the ABSENCE
+//       of any re-certification verifier and the presence of the typed exit;
 //   (C) the sweep's third source + the `route:` deviation fields, INCLUDING the negatives — a
-//       register nobody can forge (any out-of-band edit refuses its OWN typed reason rather than
-//       laundering the path), and NO `final-fix-commit` route once the sink has pushed.
+//       register nobody can forge (any out-of-band edit, and any PRODUCTION-class entry however
+//       well-formed, refuses its OWN typed reason rather than laundering the path), and NO
+//       `final-fix-commit` route once the sink has pushed.
 //
 // THE PRISTINE (pre-push) BOUNDARY IS THE LANE'S HARD CLOSE and is pinned in both directions.
 // After push the record is immutable history; recovery is a follow-up issue, never a rewrite.
@@ -30033,10 +30048,13 @@ scenario(() => {
 
   // -------------------------------------------------------------------------
   // #826-A — THE REFUSAL LADDER. Four typed refusals, precedence-ordered, every one ZERO-WRITE.
-  //   RED (today): `final-fix-commit` is not a subcommand at all — the CLI falls through to the
-  //     untyped `{"result":"refuse","errors":["unknown subcommand: final-fix-commit"]}` catch-all,
-  //     which carries NO `reason` field, so every assertion below fails on reason alone.
-  //   GREEN: each precondition names its own reason, and a refused call is a pure no-op.
+  //   A1-A5 + A8 pin the lane's structural walls and are unaffected by the scope question.
+  //   A6-A7 pin the SCOPE wall, and are RED against the shipped widened form: today a production
+  //     surface refuses with a `recertification:` state that says which receipt would open it, and
+  //     the two submissions (with / without a receipt) produce DIFFERENT refusals — which is the
+  //     shipped code telling the operator that the right receipt is the cure.
+  //   GREEN: each precondition names its own reason, a refused call is a pure no-op, and the scope
+  //     wall is unconditional — a receipt is not consulted, so it cannot change the verdict.
   // -------------------------------------------------------------------------
 
   // A1 — SINK NOT LIVE. The lane is sink-OWNED: with no `in_progress` finalize row there is no sink
@@ -30132,43 +30150,72 @@ scenario(() => {
     cleanup826(fx.repoRoot);
   });
 
-  // A6 — PRODUCTION SURFACE, NO RE-CERTIFICATION. The owner WIDENED the wall (D-826-01): production
-  // behavior is admissible through the lane — but the bound re-certification receipt is what replaces
-  // the wall, so its ABSENCE must still refuse, zero-write, with its own discriminator.
+  // A6 — PRODUCTION SURFACE: THE HARD WALL. A finalize-time fix that touches production behavior is
+  // REFUSED, zero-write. Under R4 that change is a DEVIATION THAT IS ITSELF EVIDENCE — evidence that
+  // the standing certification no longer describes the candidate — so it is REPORTED, never repaired,
+  // and never converted into an admission. The refusal names the production path(s) that triggered it
+  // and carries the typed exit, so the wall is a fork in the road rather than a dead end.
   scenario(() => {
     const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
     const before = witness826(fx);
     const entry = fixEntry826(fx, { files: ['src/app.js'] });
     const r = finalFix826(fx, entry);
     assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_production_surface',
-      '#826-A6: a production-surface entry with no re-certification refuses '
-      + 'final_fix_production_surface, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
-    assert(r.recertification === 'missing',
-      '#826-A6: the refusal names WHICH re-certification state closed it, got '
-      + JSON.stringify(r.recertification));
+      '#826-A6: a production-surface entry refuses final_fix_production_surface, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
     assert(Array.isArray(r.production_paths) && r.production_paths.includes('src/app.js'),
       '#826-A6: ...and names the production path(s) that triggered it, got '
       + JSON.stringify(r.production_paths));
+    // THE WALL IS UNCONDITIONAL: there is no re-certification state to report, because no receipt
+    // state can change this verdict. A `recertification` discriminator on the refusal is the residue
+    // of the widening — it tells the operator a receipt is the cure, which is exactly the laundering
+    // R4 forbids.
+    assert(!('recertification' in r),
+      '#826-A6: the refusal carries NO re-certification discriminator — a behavior change is a '
+      + 'deviation that is itself evidence, so there is no receipt state that could open this wall '
+      + 'and none to report, got ' + JSON.stringify(r.recertification));
+    // ...and the hard wall is NOT a dead end: the refusal names the recorded exit.
+    assert(r.route === 'shape_refutation',
+      '#826-A6: the refusal carries the typed exit — if no authority in the frozen plan can certify '
+      + 'the change, the SHAPE is refuted and re-plan is the recorded route, got ' + JSON.stringify(r.route));
     assertZeroWrite826(fx, before, '#826-A6');
     cleanup826(fx.repoRoot);
   });
 
-  // A7 — PRODUCTION SURFACE, UNRESOLVABLE RECEIPT. A receipt is a POINTER into the run's own review
-  // journal, not a self-asserted field: naming an attempt nobody settled must refuse. Without this
-  // the widening degrades to "write any attempt_id you like".
+  // A7 — A RECEIPT CHANGES NOTHING. The reversal's whole content: the wall is not "production is
+  // admitted behind a bound re-certification receipt", it is "production is refused". So the SAME fix
+  // submitted WITH a well-formed re-certification receipt must produce a BYTE-IDENTICAL refusal —
+  // same reason, same paths, same route, same operator prose. A verdict that varies with the receipt
+  // is a verdict that CONSULTS the receipt, and a receipt that can move the verdict is a register
+  // that launders the deviation into an admission.
+  //
+  // The stray `recertification` key is deliberately NOT a shape fault: complaining about the receipt
+  // binding (RUNG 3) would tell the operator the wrong thing — that a better receipt is the cure. The
+  // outermost structural wall is the verdict (see A8).
   scenario(() => {
     const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
     const before = witness826(fx);
-    const entry = fixEntry826(fx, {
+    const bare = finalFix826(fx, fixEntry826(fx, { files: ['src/app.js'] }));
+    const withReceipt = finalFix826(fx, fixEntry826(fx, {
       files: ['src/app.js'],
       recertification: { attempt_id: 'review2-deadbeefdeadbeef:9', candidate_digest: 'a'.repeat(64) },
+    }));
+    assert(withReceipt.exitCode === 1 && withReceipt.result === 'refuse'
+      && withReceipt.reason === 'final_fix_production_surface',
+      '#826-A7: a production-surface entry carrying a re-certification receipt is refused just the '
+      + 'same — there is no receipt that admits it, got '
+      + JSON.stringify({ result: withReceipt.result, reason: withReceipt.reason }));
+    assert(!('recertification' in withReceipt),
+      '#826-A7: ...and the refusal still reports no receipt state, got '
+      + JSON.stringify(withReceipt.recertification));
+    const shape = (x) => JSON.stringify({
+      result: x.result, reason: x.reason, production_paths: x.production_paths,
+      route: x.route, detail: x.detail, operator_hint: x.operator_hint,
     });
-    const r = finalFix826(fx, entry);
-    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_production_surface',
-      '#826-A7: a re-certification pointing at no settled attempt refuses '
-      + 'final_fix_production_surface, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
-    assert(r.recertification === 'unresolved',
-      '#826-A7: ...discriminated as `unresolved`, got ' + JSON.stringify(r.recertification));
+    assert(shape(bare) === shape(withReceipt),
+      '#826-A7: the refusal is IDENTICAL with and without a receipt — a verdict that varies with the '
+      + 'receipt is one that consults it, and consulting it is the first half of laundering a '
+      + 'deviation into an admission.\n  without: ' + shape(bare) + '\n  with:    ' + shape(withReceipt));
     assertZeroWrite826(fx, before, '#826-A7');
     cleanup826(fx.repoRoot);
   });
@@ -30218,6 +30265,13 @@ scenario(() => {
       '#826-B1: the entry records the fix commit, got ' + JSON.stringify(e.fix_commit));
     assert(e.rerun && e.rerun.exit_code === 0 && /^[0-9a-f]{64}$/.test(String(e.rerun.candidate_hash || '')),
       '#826-B1: the entry records the green rerun receipt + its candidate binding, got ' + JSON.stringify(e.rerun));
+    // NO RE-CERTIFICATION FIELD SURVIVES IN THE RECORD. The register's entry schema carries no slot
+    // for a receipt that admits a production surface — a dead `recertification: null` is the residue
+    // of the widening, and a slot is the thing a later change fills back in.
+    assert(!('recertification' in e),
+      '#826-B1: the recorded entry carries NO recertification slot — the register holds apparatus '
+      + 'fixes only, and a receipt field is the seam a production widening would grow back through, '
+      + 'got ' + JSON.stringify(e.recertification));
     assert(typeof reg.digest === 'string' && /^[0-9a-f]{64}$/.test(reg.digest),
       '#826-B1: the register is DIGEST-BOUND, got ' + JSON.stringify(reg.digest));
     assert(typeof reg.plan_hash === 'string' && /^[0-9a-f]{64}$/.test(reg.plan_hash),
@@ -30251,15 +30305,17 @@ scenario(() => {
   });
 
   // -------------------------------------------------------------------------
-  // #826-C — THE TWO PURE PREDICATES THE WIDENING RESTS ON. Exported and tested directly, because
-  // the recertification states that matter most (`unsettled`, `stale`) and the ADMIT are exactly the
-  // ones a CLI fixture cannot reach without forging a whole settled review journal.
+  // #826-C — THE PREDICATE THE WALL RESTS ON, AND THE ABSENCE OF THE ONE IT DOES NOT. Exported and
+  // tested directly: the classifier decides WHICH SIDE of the wall a path is on, and nothing else
+  // decides whether the wall opens — because it does not open.
   // -------------------------------------------------------------------------
 
   // C1 — THE SURFACE CLASSIFIER. Apparatus = the machinery that JUDGES the product (tests, fixtures,
   // build/tooling glue, allowband docs). Everything else is production. The load-bearing property is
   // the DEFAULT: a path the classifier does not recognize is PRODUCTION, so an unanticipated surface
-  // fails toward the re-certification wall rather than through the cheap path.
+  // fails toward the HARD WALL rather than through the cheap path. This property predates the
+  // widening and survives its reversal unchanged — it is what makes "production is refused" a
+  // statement about every path, not just the ones somebody thought of.
   scenario(() => {
     const mod = require('./kaola-workflow-adaptive-node');
     const classify = mod.classifyFinalFixSurface;
@@ -30284,75 +30340,117 @@ scenario(() => {
     // CONSERVATIVE DEFAULT — the whole safety argument. An unrecognized surface is production.
     const odd = cls(['vendor/opaque.bin']);
     assert(odd && odd.surface_class === 'production' && (odd.production || []).includes('vendor/opaque.bin'),
-      '#826-C1: an UNRECOGNIZED path defaults to PRODUCTION (fail toward the re-certification wall), got '
-      + JSON.stringify(odd));
+      '#826-C1: an UNRECOGNIZED path defaults to PRODUCTION (fail toward the hard wall, never through '
+      + 'the cheap path), got ' + JSON.stringify(odd));
     // MIXED — one production path in the set makes the whole ENTRY production. Classes do not net out.
     const mixed = cls(['scripts/test-adaptive-node.js', 'src/app.js']);
     assert(mixed && mixed.surface_class === 'production' && (mixed.production || []).join(',') === 'src/app.js',
       '#826-C1: a mixed entry is PRODUCTION and names only the production member, got ' + JSON.stringify(mixed));
   });
 
-  // C2 — THE RE-CERTIFICATION VERIFIER: the safeguard that REPLACED the wall, so it gets teeth in
-  // every direction. It consumes a SETTLED attempt out of the run's own review journal — the
-  // existing review-settlement machinery, inside the ledger-chain tamper boundary — never a
-  // self-asserted field on the register entry.
+  // C2 — THERE IS NO RE-CERTIFICATION MACHINERY, AND THE WALL HAS A TYPED EXIT INSTEAD.
+  //
+  // The wall protects a STANDING CERTIFICATION, and under R4 a behavior change arriving after every
+  // reviewer is discharged is a deviation that is ITSELF EVIDENCE — evidence the certification no
+  // longer describes the candidate. A verifier that could turn that evidence into an admission is
+  // precisely the laundering R4 exists to prevent, so the verifier must not exist AT ALL: a dormant
+  // one is a loaded seam, and the register-side gate below is what a forged entry actually meets.
+  //
+  // What replaces it is not a softer receipt but a ROUTE. The original complaint was that the lane
+  // DEAD-ENDS; the route contract removes dead ends by construction, so the hard wall names its exit
+  // (re-plan on a refuted shape) and the operator is never stranded.
   scenario(() => {
     const mod = require('./kaola-workflow-adaptive-node');
-    const verify = mod.verifyFinalFixRecertification;
-    assert(typeof verify === 'function',
-      '#826-C2: verifyFinalFixRecertification is exported for direct coverage, got ' + typeof verify);
-    if (typeof verify !== 'function') return;
-    const POST = 'c'.repeat(64);   // the POST-FIX candidate digest
-    const PRE  = 'd'.repeat(64);   // the candidate BEFORE the fix
-    const settled = (over) => ({ attempts: [Object.assign({
-      attempt_id: 'review2-abcdef0123456789:1', outcome: 'pass', candidate_digest: POST,
-    }, over || {})] });
-    const entry = (rc) => ({ files: ['src/app.js'], recertification: rc });
+    const schema826 = require('./kaola-workflow-adaptive-schema');
 
-    // (a) MISSING — no receipt at all.
-    let r = verify(entry(null), settled(), POST);
-    assert(r && r.ok === false && r.state === 'missing',
-      '#826-C2a: no recertification on the entry ⇒ missing, got ' + JSON.stringify(r));
-    r = verify({ files: ['src/app.js'] }, settled(), POST);
-    assert(r && r.ok === false && r.state === 'missing',
-      '#826-C2a: an ABSENT recertification key ⇒ missing (never a silent pass), got ' + JSON.stringify(r));
+    // (a) THE VERIFIER IS GONE. Not "always refuses" — ABSENT. A receipt verifier that still exists
+    // is a mechanism whose only purpose is to open this wall, one edit away from doing so.
+    assert(mod.verifyFinalFixRecertification === undefined,
+      '#826-C2a: no re-certification verifier is exported — admitting a production fix behind a '
+      + 'receipt would launder a deviation that is itself evidence into a certification, which is '
+      + 'exactly the machinery R4 exists to prevent, got ' + typeof mod.verifyFinalFixRecertification);
 
-    // (b) UNRESOLVED — the pointer names an attempt the journal does not carry, or there is no
-    // journal at all. Bare presence of an attempt_id is never provenance.
-    r = verify(entry({ attempt_id: 'review2-nosuchattempt:1', candidate_digest: POST }), settled(), POST);
-    assert(r && r.ok === false && r.state === 'unresolved',
-      '#826-C2b: an attempt_id absent from the journal ⇒ unresolved, got ' + JSON.stringify(r));
-    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }), null, POST);
-    assert(r && r.ok === false && r.state === 'unresolved',
-      '#826-C2b: NO journal ⇒ unresolved (fail closed, never admit), got ' + JSON.stringify(r));
+    // (b) THE REGISTER CANNOT CARRY A PRODUCTION ENTRY — receipt or no receipt. This is the shared
+    // authority the sweep reads, so it is where a forged or laundered entry has to be stopped. A
+    // well-formed production entry with a perfectly bound receipt is the exact shape the widening
+    // used to admit; it must not verify.
+    const PLAN_HASH_826 = 'a'.repeat(64);
+    const classify826 = (files) => planValidator.classifyFinalFixSurface(files, 'issue-826');
+    const regEntry826 = (over) => Object.assign({
+      ordinal: 1,
+      failed_command: 'node scripts/test-final-fix-826.js',
+      fix_commit: 'abcdef1234567',
+      files: ['src/smuggled.js'],
+      surface_class: 'production',
+      rerun: { command: 'node scripts/test-final-fix-826.js', exit_code: 0, candidate_hash: 'b'.repeat(64) },
+      role: 'tdd-guide',
+      recorded_at: '2026-01-01T00:00:00.000Z',
+    }, over || {});
+    const sealed = (entry) => {
+      const reg = { schema_version: schema826.FINAL_FIX_REGISTER_SCHEMA_VERSION,
+        plan_hash: PLAN_HASH_826, entries: [entry] };
+      reg.digest = schema826.computeFinalFixRegisterDigest(reg);   // an HONEST digest — not a tamper test
+      return reg;
+    };
+    const withReceipt = schema826.verifyFinalFixRegister(
+      sealed(regEntry826({ recertification: { attempt_id: 'review2-abcdef0123456789:1',
+        candidate_digest: 'c'.repeat(64) } })), PLAN_HASH_826, classify826);
+    assert(withReceipt && withReceipt.ok === false,
+      '#826-C2b: a PRODUCTION register entry does not verify even with a perfectly bound '
+      + 're-certification receipt — the register is the sweep\'s shared authority, and an entry it '
+      + 'accepts becomes an attributed path no reviewer ever certified, got ' + JSON.stringify(withReceipt));
+    assert(!Array.isArray(withReceipt && withReceipt.files)
+      || !withReceipt.files.includes('src/smuggled.js'),
+      '#826-C2b: ...and it attributes nothing on the way out, got ' + JSON.stringify(withReceipt));
+    const noReceipt = schema826.verifyFinalFixRegister(
+      sealed(regEntry826()), PLAN_HASH_826, classify826);
+    assert(noReceipt && noReceipt.ok === false,
+      '#826-C2b: a PRODUCTION register entry does not verify without one either — the class is the '
+      + 'fault, not the paperwork, got ' + JSON.stringify(noReceipt));
 
-    // (c) UNSETTLED — the attempt exists but did not settle PASS. A failed (or in-flight) review is
-    // not a certification.
-    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }),
-      settled({ outcome: 'fail' }), POST);
-    assert(r && r.ok === false && r.state === 'unsettled',
-      '#826-C2c: an attempt that did not settle PASS ⇒ unsettled, got ' + JSON.stringify(r));
+    // (c) THE APPARATUS ENTRY STILL VERIFIES. The lane is not deleted — only the production widening
+    // is. Without this, "refuse everything" would satisfy (b) and the cheap path would be gone.
+    const apparatus = schema826.verifyFinalFixRegister(sealed(regEntry826({
+      files: ['scripts/test-final-fix-826.js'], surface_class: 'validation-apparatus',
+    })), PLAN_HASH_826, classify826);
+    assert(apparatus && apparatus.ok === true
+      && (apparatus.files || []).includes('scripts/test-final-fix-826.js'),
+      '#826-C2c: a validation-apparatus entry still verifies and still attributes its paths — the '
+      + 'cheap path survives; repairing the JUDGE does not move the product, so the standing '
+      + 'certification still holds, got ' + JSON.stringify(apparatus));
 
-    // (d) STALE — a genuine settled PASS, but over a DIFFERENT candidate than the post-fix one. This
-    // is the receipt-replay attack the binding exists to stop: re-pointing at the pre-fix review.
-    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: PRE }),
-      settled({ candidate_digest: PRE }), POST);
-    assert(r && r.ok === false && r.state === 'stale',
-      '#826-C2d: a settled PASS bound to a DIFFERENT candidate ⇒ stale, got ' + JSON.stringify(r));
-    // ...and the entry may not disagree with the journal it points at, either.
-    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }),
-      settled({ candidate_digest: PRE }), POST);
-    assert(r && r.ok === false && r.state === 'stale',
-      '#826-C2d: an entry whose recorded digest disagrees with the settled attempt ⇒ stale, got '
-      + JSON.stringify(r));
+    // (d) THE TYPED EXIT EXISTS AND RESOLVES. The wall is only defensible because it is not a dead
+    // end: the refusal routes to the re-plan that refutes the shape. Pinned at the ONE source the
+    // emitted `route` token is derived from, in both the structured and the legacy-token form.
+    const routed = schema826.SINK_FINDING_ROUTE_BY_KIND.final_fix_production_surface;
+    assert(routed && routed.route && routed.route.script === 'replan'
+      && routed.route.verb === 'shape-refutation',
+      '#826-C2d: the finding routes to `replan shape-refutation` — no authority in the frozen plan '
+      + 'can certify a post-discharge behavior change, so the SHAPE is what is refuted, got '
+      + JSON.stringify(routed));
+    assert(JSON.stringify(schema826.resolveSinkFindingRoute({ kind: 'final_fix_production_surface' }))
+      === JSON.stringify(routed.route),
+      '#826-C2d: ...and the per-finding resolver REACHES it (an exit nothing resolves is a dead end '
+      + 'with a table entry), got '
+      + JSON.stringify(schema826.resolveSinkFindingRoute({ kind: 'final_fix_production_surface' })));
+    assert(schema826.deriveDeviationRoutes().final_fix_production_surface === 'shape_refutation',
+      '#826-C2d: ...and the emitted bare-verb token stays `shape_refutation`, got '
+      + JSON.stringify(schema826.deriveDeviationRoutes().final_fix_production_surface));
 
-    // (e) THE ADMIT — the owner's widening. A settled PASS over the POST-FIX candidate, named by the
-    // entry and agreeing with the journal, ADMITS a production-behavior fix through the lane. Without
-    // this assertion the whole widening could be satisfied by a flat refusal.
-    r = verify(entry({ attempt_id: 'review2-abcdef0123456789:1', candidate_digest: POST }), settled(), POST);
-    assert(r && r.ok === true,
-      '#826-C2e: a settled PASS bound to the POST-FIX candidate ADMITS a production-surface fix '
-      + '(D-826-01 — the wall was widened, not deleted), got ' + JSON.stringify(r));
+    // (e) THE OPERATOR PROSE MUST NOT SELL A RETIRED CURE. The hint is the operator-facing half of
+    // the contract: telling them to obtain a receipt and cite it in `recertification` points at a
+    // field the entry schema no longer has and a lane that no longer opens. Naming the RETIRED FIELD
+    // TOKENS is the precise test — prose about why re-certification is refused stays legal.
+    const hint826 = getOperatorHint('final_fix_production_surface',
+      { production_paths: ['src/app.js'], route: 'shape_refutation' });
+    assert(typeof hint826 === 'string' && hint826.length > 0,
+      '#826-C2e: the refusal has an operator hint, got ' + JSON.stringify(hint826));
+    assert(!/`recertification`/.test(hint826) && !/attempt_id/.test(hint826),
+      '#826-C2e: the hint does not instruct the operator to cite a re-certification receipt — that '
+      + 'names a retired entry field and a cure that does not exist, got ' + JSON.stringify(hint826));
+    assert(/refut/i.test(hint826),
+      '#826-C2e: ...it names the exit instead, so the hard wall reads as a fork rather than a dead '
+      + 'end, got ' + JSON.stringify(hint826));
   });
 
   // -------------------------------------------------------------------------
@@ -30415,6 +30513,57 @@ scenario(() => {
     assert(!(r.unattributed || []).includes('src/smuggled.js'),
       '#826-D2: ...and is NOT mislabelled unattributed_change (whose cure would delete the file), got '
       + JSON.stringify(r.unattributed));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D2b — AND A *WELL-FORMED* PRODUCTION ENTRY IS THE SAME LAUNDERING, WEARING A RECEIPT. D2 breaks
+  // the digest, so it is caught as tampering. This one is honest in every mechanical respect — right
+  // schema, right plan_hash, recomputed digest, green rerun receipt bound to the exact failed command,
+  // a bound re-certification receipt — and it is the shape the widening produced LEGITIMATELY. It
+  // must STILL refuse, because the fault is not the paperwork: attributing `src/smuggled.js` here
+  // would let the sink ship production behavior no reviewing authority ever saw, with a register
+  // entry standing in for the certification. That is a deviation being laundered into a receipt,
+  // which R4 forbids outright — the deviation is itself the evidence, and evidence is reported, not
+  // repaired. This is the CORE of the reversal: the register may widen the attributed set only over
+  // the validation APPARATUS, never over the product.
+  scenario(() => {
+    // The smuggled production file is the ONLY unattributed path on the branch, so the register entry
+    // is the single thing standing between it and a PASSING sweep. Nothing else can mask the verdict.
+    const fx = makeFinalFixRepo826({
+      extraFiles: [{ path: 'src/smuggled.js', body: '// never reviewed\n' }],
+    });
+    const schema826 = require('./kaola-workflow-adaptive-schema');
+    const planHash = (/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/
+      .exec(fs.readFileSync(fx.planPath, 'utf8')) || [])[1];
+    const cmd = 'node scripts/test-final-fix-826.js';
+    const reg = {
+      schema_version: schema826.FINAL_FIX_REGISTER_SCHEMA_VERSION,
+      plan_hash: planHash,
+      entries: [{
+        ordinal: 1,
+        failed_command: cmd,
+        fix_commit: fx.g(['rev-parse', 'HEAD']).trim(),
+        files: ['src/smuggled.js'],
+        surface_class: 'production',
+        rerun: { command: cmd, exit_code: 0, candidate_hash: candidateHash826(fx.repoRoot, fx.planPath) },
+        recertification: { attempt_id: 'review2-abcdef0123456789:1', candidate_digest: 'c'.repeat(64) },
+        role: 'tdd-guide',
+        recorded_at: '2026-01-01T00:00:00.000Z',
+      }],
+    };
+    reg.digest = schema826.computeFinalFixRegisterDigest(reg);   // HONEST digest: nothing here is tampered
+    fs.writeFileSync(registerPath826(fx), JSON.stringify(reg, null, 2) + '\n');
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const r = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(r.exitCode === 1 && r.result === 'refuse',
+      '#826-D2b: a PRODUCTION register entry does not let the sweep pass — a finalize register may '
+      + 'never stand in for a certification over the product, got '
+      + JSON.stringify({ exitCode: r.exitCode, result: r.result, reason: r.reason }));
+    assert(r.reason === 'final_fix_register_unverified',
+      '#826-D2b: ...and it refuses with the register\'s own typed reason, got ' + JSON.stringify(r.reason));
+    assert(!(r.unattributed || []).includes('src/smuggled.js'),
+      '#826-D2b: ...NOT mislabelled unattributed_change, whose documented cure (delete the file) '
+      + 'answers a different fault than the one being reported, got ' + JSON.stringify(r.unattributed));
     cleanup826(fx.repoRoot);
   });
 
