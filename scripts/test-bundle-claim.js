@@ -795,6 +795,79 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
+// Test (9): #825 Gate 1 on the BUNDLE lane.
+//
+// The bundle claim is the second entry into claimProject-shaped provisioning, and it is exactly
+// the lane a no-target orchestrator survey produces (a same-scope bundle is the guarded exception
+// the ranking rules allow). If Gate 1 is only wired into the scalar path, the bundle lane becomes
+// the hole the whole gate leaks through. Three properties, mirroring the scalar coverage in
+// test-claim-hardening.js:
+//   (a) an orchestrator-selected bundle claim with no --selection-record refuses zero-write;
+//   (b) a plain (user-directed) bundle claim writes the DEGENERATE record + digest under the
+//       bundle project name;
+//   (c) kaola-workflow/.origin/<bundle-id>/ folds into <bundle-id>/.cache/origin/ and is removed.
+// RED (pre-impl): --target-source/--selection-record are unknown flags and nothing is persisted.
+// ---------------------------------------------------------------------------
+
+(function testBundleSelectionRecordGate() {
+  console.log('Test (9): #825 Gate 1 — the bundle lane carries the selection record + .origin fold');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeRoadmapFile(tmpRoot, 42);
+    writeRoadmapFile(tmpRoot, 47);
+    writeGhMockScript(binDir, { openIssues: [42, 47] });
+
+    // (a) orchestrator-selected, no record → typed refusal, zero-write.
+    const refused = runClaim(
+      ['startup', '--target-issues', '42,47', '--target-source', 'orchestrator_selected'],
+      tmpRoot, binDir
+    );
+    const refusedOut = parseClaim(refused);
+    assert(refused.status === 1, '#825 bundle: the gated bundle claim exits 1, got ' + refused.status);
+    assert(refusedOut && (refusedOut.status === 'selection_record_missing' || refusedOut.verdict === 'selection_record_missing'),
+      '#825 bundle: an orchestrator-selected bundle claim without --selection-record must refuse '
+        + 'selection_record_missing, got ' + JSON.stringify(refusedOut)
+        + '\nstdout: ' + refused.stdout + '\nstderr: ' + refused.stderr);
+    assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47')),
+      '#825 bundle: the refusal must create NO bundle folder (zero-write gate)');
+
+    // (b)+(c) a user-directed bundle claim: degenerate record + digest, and the staging fold.
+    const staging = path.join(tmpRoot, 'kaola-workflow', '.origin', 'bundle-42-47');
+    fs.mkdirSync(staging, { recursive: true });
+    fs.writeFileSync(path.join(staging, 'survey.md'), '# pre-claim recon\n');
+
+    const result = runClaim(
+      ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive'],
+      tmpRoot, binDir
+    );
+    const out = parseClaim(result);
+    assert(out && out.claim === 'acquired',
+      '#825 bundle: a user-directed bundle claim still acquires, got ' + JSON.stringify(out)
+        + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const recPath = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'origin', 'selection-record.json');
+    assert(fs.existsSync(recPath),
+      '#825 bundle: the bundle claim must write the degenerate record at ' + recPath);
+    let rec = null; try { rec = JSON.parse(fs.readFileSync(recPath, 'utf8')); } catch (_) {}
+    assert(rec && rec.selection_mode === 'explicit-target',
+      '#825 bundle: the degenerate bundle record carries selection_mode: explicit-target, got '
+        + JSON.stringify(rec && rec.selection_mode));
+    const state = readState(tmpRoot, 'bundle-42-47') || '';
+    assert(/^selection_record_digest:\s*[0-9a-f]{64}\s*$/m.test(state),
+      '#825 bundle: the bundle state must stamp selection_record_digest, got:\n' + state);
+
+    assert(fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'origin', 'survey.md')),
+      '#825 bundle: kaola-workflow/.origin/<bundle-id>/ must fold into <bundle-id>/.cache/origin/');
+    assert(!fs.existsSync(staging),
+      '#825 bundle: the staging dir must be REMOVED after the fold, still at ' + staging);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

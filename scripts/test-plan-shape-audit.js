@@ -283,6 +283,152 @@ function node(id, role, dependsOn, writeSet, shape) {
 }
 
 // ---------------------------------------------------------------------------
+// #825 (B3 + B2 relocation): selection/survey moves OUT of the planner and INTO the orchestrator.
+//
+// This block asserts the RE-HOMING, in both directions, on the prose surfaces:
+//
+//   (A) The planner is narrowed to a synthesist/shaper — the no-target survey mode is GONE from
+//       every planner profile, and the frontmatter/description no longer advertises it.
+//   (B) The ranking rules land VERBATIM on the SIX `next` routing surfaces (one wording, re-homed
+//       — not paraphrased), together with the Gate 1 vocabulary the orchestrator must now speak.
+//   (C) The SIX `adapt` surfaces hand the planner EVIDENCE PATHS (.cache/origin/) and know the
+//       clarification return.
+//   (D) The planner gains the shape-around-cited-evidence obligation. Per the issue this is
+//       JUDGMENT-enforced with NO new refusal code: assert the obligation's PRESENCE only —
+//       never attempt to assert node-level non-redundancy, which is not mechanically decidable.
+//   (E) The control boundary is UNCHANGED and still pinned (a synthesizer handed a conclusion
+//       stops synthesizing) — this is the one measured-history override of the freedom principle.
+//   (F) The new typed tokens are pinned in ALL FIVE contract validators, so a later edition edit
+//       cannot silently drop one edition's copy.
+//
+// RED (pre-impl): the survey block is still in the 4 planner profiles and in the `next` surfaces
+// only as a pointer AT the planner; none of the relocated ranking rules, the Gate 1 flags, the
+// obligation prose, or the clarification token exist anywhere yet.
+// ---------------------------------------------------------------------------
+{
+  const gen825 = require('./generate-routing-surfaces.js');
+  const read825 = (p) => { try { return fs.readFileSync(path.join(repoRoot, p), 'utf8'); } catch (_) { return null; } };
+
+  // The four non-additive planner profiles. The opencode + kimi runtime editions RENDER their
+  // planner profile from agents/workflow-planner.md at install time (there is no separate checked-in
+  // copy), so covering the .md covers them.
+  const PLANNER_PROFILES_825 = [
+    'agents/workflow-planner.md',
+    'plugins/kaola-workflow/agents/workflow-planner.toml',
+    'plugins/kaola-workflow-gitlab/agents/workflow-planner.toml',
+    'plugins/kaola-workflow-gitea/agents/workflow-planner.toml',
+  ];
+  const surfaces825 = (topic) => gen825.GENERATED_SURFACES.filter(s => s.topic === topic).map(s => s.path);
+  const NEXT_SURFACES_825 = surfaces825('next');
+  const ADAPT_SURFACES_825 = surfaces825('adapt');
+  const CONTRACT_VALIDATORS_825 = [
+    'scripts/validate-workflow-contracts.js',
+    'scripts/validate-kaola-workflow-contracts.js',
+    'plugins/kaola-workflow/scripts/validate-workflow-contracts.js',
+    'plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js',
+    'plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js',
+  ];
+
+  assert(NEXT_SURFACES_825.length === 6,
+    '#825 fixture: the `next` topic must render SIX surfaces, got ' + NEXT_SURFACES_825.length);
+  assert(ADAPT_SURFACES_825.length === 6,
+    '#825 fixture: the `adapt` topic must render SIX surfaces, got ' + ADAPT_SURFACES_825.length);
+
+  // --- (A) the survey mode is RETIRED from every planner profile ---
+  for (const p of PLANNER_PROFILES_825) {
+    const body = read825(p);
+    assert(body !== null, '#825(A) fixture: ' + p + ' must exist');
+    assert(body === null || !body.includes('No-target survey mode'),
+      '#825(A): the no-target survey mode must be RETIRED from ' + p
+        + ' (selection is orchestrator-owned now)');
+  }
+  {
+    const md = read825('agents/workflow-planner.md') || '';
+    assert(!md.includes('surveys the backlog itself'),
+      '#825(A): the planner frontmatter description must stop advertising the retired survey mode '
+        + '(agents/workflow-planner.md still says "surveys the backlog itself")');
+  }
+
+  // --- (B) the ranking rules land VERBATIM on the six `next` surfaces, with the Gate 1 vocabulary.
+  // These are the exact tokens the planner survey block owned; "one wording, re-homed" means they
+  // must appear on the orchestrator surface, not be reworded there.
+  const RELOCATED_RANKING_TOKENS_825 = [
+    'Bundle Selection Rules',     // bundle rules
+    'lane_bucket',                // co-tenant lane handling
+    '### Project rules',          // roadmap guardrail block
+    'frontier blocked because',   // Frontier-Blocked explicit fall-through
+    'closest actionable proxy',   // the anti-proxy precedence rule (polarity is load-bearing)
+  ];
+  const GATE1_TOKENS_825 = [
+    '--selection-record',
+    'selection_record_missing',
+    'selection_mode',
+  ];
+  for (const p of NEXT_SURFACES_825) {
+    const body = read825(p);
+    assert(body !== null, '#825(B) fixture: ' + p + ' must exist');
+    for (const token of RELOCATED_RANKING_TOKENS_825) {
+      assert(body !== null && body.includes(token),
+        '#825(B): the relocated ranking rule token ' + JSON.stringify(token)
+          + ' must appear VERBATIM on ' + p + ' (one wording, re-homed — not paraphrased)');
+    }
+    for (const token of GATE1_TOKENS_825) {
+      assert(body !== null && body.includes(token),
+        '#825(B): the Gate 1 token ' + JSON.stringify(token) + ' must reach ' + p
+          + ' — the orchestrator authors the record and must be told what refuses without it');
+    }
+  }
+
+  // --- (C) the six `adapt` surfaces hand the planner evidence PATHS + the clarification return ---
+  for (const p of ADAPT_SURFACES_825) {
+    const body = read825(p);
+    assert(body !== null, '#825(C) fixture: ' + p + ' must exist');
+    assert(body !== null && body.includes('.cache/origin/'),
+      '#825(C): ' + p + ' must hand the planner the reconnaissance evidence PATH '
+        + '(.cache/origin/) — evidence flows in, conclusions never do');
+    assert(body !== null && body.includes('clarification_required'),
+      '#825(C): ' + p + ' must carry the typed clarification_required return so the orchestrator '
+        + 'knows to ask the user and re-dispatch');
+  }
+
+  // --- (D) the shape-around-cited-evidence obligation, PRESENCE ONLY (judgment-enforced) ---
+  const OBLIGATION_TOKENS_825 = [
+    'do not author a node to re-derive it',
+    'Consume evidence, never accept a conclusion',
+  ];
+  for (const p of PLANNER_PROFILES_825) {
+    const body = read825(p);
+    for (const token of OBLIGATION_TOKENS_825) {
+      assert(body !== null && body.includes(token),
+        '#825(D): the shape-around-cited-evidence obligation token ' + JSON.stringify(token)
+          + ' must be present in ' + p + ' (prose obligation only — node-level non-redundancy is '
+          + 'NOT mechanically decidable and must never be asserted here)');
+    }
+    assert(body !== null && body.includes('clarification_required'),
+      '#825(D): the planner profile ' + p + ' must define the typed clarification_required return');
+  }
+
+  // --- (E) CONTROL: the control boundary is UNCHANGED and still pinned everywhere it was ---
+  for (const p of PLANNER_PROFILES_825.concat(ADAPT_SURFACES_825)) {
+    const body = read825(p);
+    assert(body !== null && body.includes('planner_control_boundary_violation'),
+      '#825(E) CONTROL: the planner control boundary must stay pinned in ' + p
+        + ' — B3 narrows the planner, it does not open it to prescriptions');
+  }
+
+  // --- (F) the new typed tokens are pinned in ALL FIVE contract validators ---
+  for (const v of CONTRACT_VALIDATORS_825) {
+    const body = read825(v);
+    assert(body !== null, '#825(F) fixture: ' + v + ' must exist');
+    assert(body !== null && body.includes('selection_record_missing'),
+      '#825(F): ' + v + ' must pin selection_record_missing (Gate 1 is the script refusal that '
+        + "replaces ADR 0006's prose-only planner-first lock)");
+    assert(body !== null && body.includes('clarification_required'),
+      '#825(F): ' + v + ' must pin clarification_required so no edition silently loses the channel');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GRAMMAR: issue-scout is fully retired from the plan-node-role registry.
 // ---------------------------------------------------------------------------
 {

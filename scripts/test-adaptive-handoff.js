@@ -3150,6 +3150,148 @@ const FWW_WARNING = {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T-825 (B4): the typed clarification channel.
+//
+// The planner narrows to a synthesist; when the brief is genuinely under-determined it must have a
+// TYPED way to say so instead of guessing or silently widening scope. The new return joins the
+// escalate family beside surveyVerdict's backlog_empty / selection_indeterminate:
+//
+//   { handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round }
+//
+// Legal pre-claim (nothing written) and post-claim/pre-freeze (claim held, plan unfrozen) — which
+// is exactly why the builder and its CLI must touch NO fs at all: they are the one return that can
+// fire before a project folder exists.
+//
+// The channel is BOUNDED at 3 round-trips (owner decision, 2026-07-27). Past the cap the return
+// degrades to the stop+ask posture rather than looping: a 4th ask is a design failure, not a
+// question. The cap is a module constant so the orchestrator surfaces and the profiles read ONE
+// number, and an empty/absent question fails CLOSED to the same posture (a channel that cannot
+// name its question cannot be answered).
+//
+// RED (pre-impl): neither clarificationRequired nor CLARIFICATION_ROUND_CAP is exported, and the
+// CLI has no --clarification-required flag (it falls through to the usage/plan_invalid path).
+// ---------------------------------------------------------------------------
+{
+  const handoff825 = require('./kaola-workflow-adaptive-handoff');
+  const { spawnSync: spawnS825 } = require('child_process');
+  const HANDOFF825 = path.join(__dirname, 'kaola-workflow-adaptive-handoff.js');
+
+  // --- (1) the bound is a NAMED export, not a magic number buried in a branch ---
+  assert(handoff825.CLARIFICATION_ROUND_CAP === 3,
+    'T-825(1): CLARIFICATION_ROUND_CAP must be the exported constant 3 (owner-settled bound), got '
+      + JSON.stringify(handoff825.CLARIFICATION_ROUND_CAP));
+  assert(typeof handoff825.clarificationRequired === 'function',
+    'T-825(1): clarificationRequired must be exported as a pure verdict builder, got '
+      + typeof handoff825.clarificationRequired);
+
+  // --- (2) rounds 1..3 build the typed escalate return ---
+  if (typeof handoff825.clarificationRequired === 'function') {
+    for (const round of [1, 2, 3]) {
+      const v = handoff825.clarificationRequired(
+        'Should the fold overwrite an existing .cache/origin/ file or refuse?',
+        ['kaola-workflow/.origin/issue-825/survey.md', 'docs/decisions/0013-free-origin.md'],
+        round
+      );
+      assert(v && v.handoff_status === 'clarification_required',
+        'T-825(2): round ' + round + ' must build handoff_status:clarification_required, got '
+          + JSON.stringify(v && v.handoff_status));
+      assert(v && v.result === 'escalate',
+        'T-825(2): round ' + round + ' must join the ESCALATE family (never refuse/ready_to_run), got '
+          + JSON.stringify(v && v.result));
+      assert(v && v.question === 'Should the fold overwrite an existing .cache/origin/ file or refuse?',
+        'T-825(2): the question must survive verbatim, got ' + JSON.stringify(v && v.question));
+      assert(v && Array.isArray(v.context_refs) && v.context_refs.length === 2
+        && v.context_refs[0] === 'kaola-workflow/.origin/issue-825/survey.md',
+        'T-825(2): context_refs must be carried as an array of PATHS (evidence, never a conclusion), got '
+          + JSON.stringify(v && v.context_refs));
+      assert(v && v.round === round,
+        'T-825(2): the return must carry its own round so the orchestrator can count, got '
+          + JSON.stringify(v && v.round));
+    }
+
+    // --- (3) past the cap the channel degrades to stop+ask, it does NOT keep asking ---
+    for (const round of [4, 9]) {
+      const v = handoff825.clarificationRequired('one more thing?', ['a.md'], round);
+      assert(v && v.handoff_status === 'clarification_exhausted',
+        'T-825(3): round ' + round + ' (> cap) must degrade to clarification_exhausted, got '
+          + JSON.stringify(v && v.handoff_status));
+      assert(v && v.result === 'escalate' && v.posture === 'stop_and_ask',
+        'T-825(3): the exhausted return must carry the stop+ask posture, got ' + JSON.stringify(v));
+      assert(v && v.cap === 3,
+        'T-825(3): the exhausted return must name the cap it hit, got ' + JSON.stringify(v && v.cap));
+    }
+
+    // --- (4) fail CLOSED: a channel with no question degrades to stop+ask, never a bare ask ---
+    for (const bad of ['', '   ', null, undefined]) {
+      const v = handoff825.clarificationRequired(bad, ['a.md'], 1);
+      assert(v && v.handoff_status === 'clarification_exhausted' && v.posture === 'stop_and_ask',
+        'T-825(4): an empty/absent question must fail closed to stop+ask, got ' + JSON.stringify(v));
+    }
+
+    // --- (5) an absent/garbage round is treated as round 1 (never as "already exhausted") ---
+    {
+      const v = handoff825.clarificationRequired('why?', ['a.md']);
+      assert(v && v.handoff_status === 'clarification_required' && v.round === 1,
+        'T-825(5): an omitted round defaults to 1, got ' + JSON.stringify(v));
+    }
+  }
+
+  // --- (6) CLI: emits the typed shape, exits non-zero, and writes NOTHING (it is legal PRE-claim,
+  // when no project folder exists at all). Mirrors the --survey-verdict fail-closed guarantee.
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-825-clarify-'));
+    try {
+      const before = fs.readdirSync(tmp);
+      const r = spawnS825(process.execPath, [HANDOFF825, '--clarification-required',
+        '--question', 'Which of the two candidate bundles does the frontier mean?',
+        '--context-refs', 'kaola-workflow/.origin/issue-825/survey.md,kaola-workflow/ROADMAP.md',
+        '--round', '2', '--json'], { cwd: tmp, encoding: 'utf8' });
+      let out = null; try { out = JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(r.status === 1,
+        'T-825(6): the clarification CLI exits 1 (escalate, never ready_to_run), got ' + r.status
+          + ' raw=' + String(r.stdout || '') + String(r.stderr || ''));
+      assert(out && out.handoff_status === 'clarification_required' && out.result === 'escalate',
+        'T-825(6): the CLI emits the typed clarification_required/escalate shape, got ' + JSON.stringify(out));
+      assert(out && out.question === 'Which of the two candidate bundles does the frontier mean?',
+        'T-825(6): the CLI carries --question verbatim, got ' + JSON.stringify(out && out.question));
+      assert(out && Array.isArray(out.context_refs) && out.context_refs.length === 2
+        && out.context_refs[1] === 'kaola-workflow/ROADMAP.md',
+        'T-825(6): the CLI splits --context-refs into an array, got ' + JSON.stringify(out && out.context_refs));
+      assert(out && out.round === 2,
+        'T-825(6): the CLI carries --round, got ' + JSON.stringify(out && out.round));
+      const after = fs.readdirSync(tmp);
+      assert(before.length === 0 && after.length === 0,
+        'T-825(6): the clarification CLI writes NO state/plan file (legal pre-claim), got ' + JSON.stringify(after));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // --- (7) CLI past the cap → clarification_exhausted / stop_and_ask, still zero-write ---
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-825-clarify-cap-'));
+    try {
+      const r = spawnS825(process.execPath, [HANDOFF825, '--clarification-required',
+        '--question', 'a fourth time?', '--round', '4', '--json'], { cwd: tmp, encoding: 'utf8' });
+      let out = null; try { out = JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(r.status === 1 && out && out.handoff_status === 'clarification_exhausted'
+        && out.posture === 'stop_and_ask',
+        'T-825(7): a 4th round on the CLI must emit clarification_exhausted/stop_and_ask, got '
+          + JSON.stringify(out) + ' status=' + r.status);
+      assert(fs.readdirSync(tmp).length === 0,
+        'T-825(7): the exhausted CLI still writes nothing');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // --- (8) the typed survey verdicts SURVIVE the re-homing. B2 moves the EMITTER to the
+  // orchestrator, it does not retire the vocabulary — deleting these would silently drop the
+  // backlog_empty / selection_indeterminate valve on the way past.
+  assert(Array.isArray(handoff825.SURVEY_VERDICTS)
+    && handoff825.SURVEY_VERDICTS.includes('backlog_empty')
+    && handoff825.SURVEY_VERDICTS.includes('selection_indeterminate'),
+    'T-825(8): SURVEY_VERDICTS must survive the orchestrator re-homing, got '
+      + JSON.stringify(handoff825.SURVEY_VERDICTS));
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
