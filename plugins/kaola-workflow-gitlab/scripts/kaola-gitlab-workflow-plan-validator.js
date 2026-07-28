@@ -7033,7 +7033,7 @@ function main() {
     // offered only while the lane is actually open (the unique terminal sink row is `in_progress` AND
     // the sink is still pristine). Advertising it after the push would send the orchestrator at a
     // refusal it could never clear.
-    let finalizeRoute = null;
+    let laneOpen = false;
     {
       const sinkRow = schema.finalizeSinkStatus(nodes, id => ledger.get(id));
       if (sinkRow.live) {
@@ -7042,12 +7042,28 @@ function main() {
           statePath: path.join(path.dirname(path.resolve(planPath)), 'workflow-state.md'),
           repoRoot: root,
         });
-        if (progress.state === 'pristine') finalizeRoute = schema.FINAL_FIX_SUBCOMMAND;
+        if (progress.state === 'pristine') laneOpen = true;
       }
     }
     const unattributed = changed.filter(p =>
       !isBarrierInvisible(p, projTag) && !/^kaola-workflow\//.test(p)
       && !completeDeclared.has(p) && !finalFixAttributed.has(p));
+    // AND THE SAME CLAUSE BINDS WHEN THE LANE IS OPEN BUT CANNOT ACCEPT THIS WORK. A route is a
+    // promise the verb will accept the work; offering one that cannot be cleared is worse than
+    // silence — which is exactly why a PUSHED sink withdraws the offer above rather than pointing at
+    // a lane that could only refuse. An unattributed set carrying NO validation-apparatus member
+    // meets the HARD scope wall on arrival — `final-fix-commit` refuses every path in it with
+    // `final_fix_production_surface`, whatever paperwork it carries, because a behavior change
+    // arriving after every reviewer is discharged is a deviation that is itself evidence. So the
+    // offer is withdrawn rather than made falsely, and the refusal's own prose (attribute the paths
+    // to a node, or remove them) is what the operator is left with.
+    //
+    // A MIXED set KEEPS the offer: the lane genuinely accepts the apparatus members, so the promise
+    // is keepable for the part it names. Withdrawing on any production path would delete the lane's
+    // whole purpose on exactly the runs that need it.
+    const finalizeRoute = (laneOpen && unattributed.length
+      && classifyFinalFixSurface(unattributed, projTag).apparatus.length)
+      ? schema.FINAL_FIX_SUBCOMMAND : null;
     if (unattributed.length) {
       const out = { result: 'refuse', reason: 'unattributed_change',
         operator_hint: getOperatorHint('unattributed_change', { route: finalizeRoute }), unattributed,

@@ -30628,6 +30628,76 @@ scenario(() => {
       + 'blanket reason→verb row, got ' + JSON.stringify(r.route));
     cleanup826(fx.repoRoot);
   });
+
+  // D7 — THE SAME CLAUSE, FOR A LANE THAT IS OPEN BUT CANNOT ACCEPT THE WORK. D3/D6 withdraw the
+  // offer because the lane is SHUT. This withdraws it for the other way the promise fails: the lane
+  // is live and pristine, but every unattributed path is PRODUCTION, so `final-fix-commit` meets the
+  // hard scope wall on arrival and refuses `final_fix_production_surface` whatever paperwork it
+  // carries. Following the advertised route would land on a refusal that verb can never clear — and
+  // a route is a promise the verb will accept the work, so offering one that cannot be cleared is
+  // worse than silence. The refusal's own prose (attribute the paths, or remove them) is what
+  // survives, exactly as it does over a pushed sink.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({
+      extraFiles: [{ path: 'src/prod-extra.js', body: '// undeclared production\n' }],
+    });
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const r = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(r.result === 'refuse' && r.reason === 'unattributed_change'
+      && (r.unattributed || []).includes('src/prod-extra.js'),
+      '#826-D7 precondition: an undeclared PRODUCTION path is refused unattributed_change with the '
+      + 'sink live and pristine, got ' + JSON.stringify({ reason: r.reason, unattributed: r.unattributed }));
+    assert(r.route !== 'final-fix-commit',
+      '#826-D7: with the unattributed set ENTIRELY production the lane could only refuse '
+      + 'final_fix_production_surface, so the offer is withdrawn rather than made falsely, got '
+      + JSON.stringify(r.route));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D8 — AND THE WITHDRAWAL IS NARROW, NOT BLANKET. A MIXED set keeps the offer: the lane genuinely
+  // accepts the apparatus members, so the promise is keepable for the part it names. Without this,
+  // "withdraw whenever any production path is present" would satisfy D7 while deleting the lane's
+  // whole purpose on precisely the runs that need it.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({
+      extraFiles: [APPARATUS_FILE_826, { path: 'src/prod-extra.js', body: '// undeclared production\n' }],
+    });
+    seedFinalValidation826(fx.repoRoot, fx.cacheDir, fx.planPath);
+    const r = finalizeCheck826(fx.repoRoot, fx.planPath, fx.base);
+    assert(r.result === 'refuse' && r.reason === 'unattributed_change',
+      '#826-D8 precondition: still unattributed_change, got ' + JSON.stringify(r.reason));
+    assert(r.route === 'final-fix-commit',
+      '#826-D8: a MIXED unattributed set KEEPS the offer — the lane accepts the apparatus members, '
+      + 'so the promise is keepable for what it names, got ' + JSON.stringify(r.route));
+    cleanup826(fx.repoRoot);
+  });
+
+  // D9 — AND THE HARD WALL'S OWN REFUSAL NAMES EXACTLY ONE EXIT. The envelope is stamped twice: the
+  // bare `route:` token from the derived deviation table, and the structured `refusal_route` from the
+  // kernel family resolver. They are two RENDERINGS of one exit; before this pin the second read
+  // `claim finalize --check`, the sink_verdict family's fixed re-read verb — which cannot clear a
+  // refusal that is ZERO-WRITE and therefore was never written into any verdict to be re-read. Two
+  // answers to "follow the typed route" is one answer too many.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ extraFiles: [APPARATUS_FILE_826] });
+    const r = finalFix826(fx, fixEntry826(fx, { files: ['src/app.js'] }));
+    assert(r.reason === 'final_fix_production_surface',
+      '#826-D9 precondition: the production surface refuses, got ' + JSON.stringify(r.reason));
+    assert(r.route === 'shape_refutation',
+      '#826-D9: the bare route token is the refuted shape, got ' + JSON.stringify(r.route));
+    assert(r.refusal_route && r.refusal_route.script === 'replan'
+      && r.refusal_route.verb === 'shape-refutation',
+      '#826-D9: ...and the STRUCTURED route names the same exit — a family-level re-read verb on a '
+      + 'finding a re-read can never clear is a second, contradicting answer, got '
+      + JSON.stringify(r.refusal_route));
+    // R4 rides on the envelope: this is the one deviation the ADR names as never-repairable, and a
+    // family-level `auto_remediable: true` could not say so.
+    assert(r.auto_remediable === false,
+      '#826-D9: ...and the refusal is stamped NOT auto-remediable — a behavior change arriving after '
+      + 'every reviewer is discharged is a deviation that is itself evidence, and evidence is '
+      + 'reported, never repaired, got ' + JSON.stringify(r.auto_remediable));
+    cleanup826(fx.repoRoot);
+  });
 }
 
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);

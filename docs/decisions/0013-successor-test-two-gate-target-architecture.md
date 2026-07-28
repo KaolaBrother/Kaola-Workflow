@@ -191,6 +191,13 @@ Three columns: the code, its locus, and whether it is auto-remediable. A row's
 `auto_remediable` is `no` exactly when repairing the deviation would launder the evidence
 (R4) or when the call is a human's to make (A3).
 
+The third column is the **family DEFAULT**, and the family is not always the right grain
+(see amendment 11): a composite family can hold cells that answer R4 differently. The
+default is refined per cell by `R4_NON_REMEDIABLE_CELLS`, read through
+`resolveAutoRemediable(code, payload)`, and that refinement is **tighten-only** — it may
+turn a `yes` family into `no` for a named cell and never the reverse. The column above is
+untouched by it and remains the single left-hand side of the three-way equality.
+
 ```kernel-refusal-vocabulary
 kernel_write_failed        L1  yes
 kernel_cas_lost            L1  yes
@@ -731,6 +738,44 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
     L2 or A3") is only checkable if the loci are the whole space. An incomplete drawing
     does not merely under-describe — it makes the decision's own guarantees unfalsifiable,
     which is precisely the charge this ADR levels at the 474 refusals it replaces.
+
+11. **One refusal, one exit — and `auto_remediable` refined to the CELL.** Auditing the
+    route contract against the #826 final-fix wall found the contract making its central
+    promise twice, differently. An actionable envelope is stamped by two seams: `route`,
+    the bare verb token derived from the per-finding table, and `refusal_route`, the
+    structured route resolved by the family. Nothing checked that they rendered the *same*
+    exit, and measured on the shipped code **all eight** reasons carrying a bare token
+    resolved `claim:finalize` structurally — the `sink_verdict` family's fixed re-read
+    verb. For `final_fix_production_surface` that second answer is not merely different, it
+    is unclearable: every refusal in that ladder is zero-write, so there is no verdict on
+    disk for a re-read to report.
+
+    Three changes, all in the direction of *one* answer. (a) The family's top-level route
+    is now payload-aware: the read-all-again verb is the COMPOSITE's exit and only the
+    composite's, and a payload naming exactly one finding resolves that finding's own
+    remedy route. A single finding whose cure the kernel deliberately does not name keeps
+    the re-read verb, which is a promise to *report* again — one re-reading can keep — not
+    a promise to accept a fix. (b) `final_fix_production_surface` classifies to its own
+    declared finding kind instead of being folded into `unreviewed_change`; the fold read
+    the same verb by coincidence while putting the two renderings in two different registry
+    cells, either changeable without the other. Both now come off ONE frozen entry
+    (`legacy_token` and `.route`). (c) `auto_remediable` gained a per-cell tightening,
+    because the family flag could not discriminate: `sink_verdict` is auto-remediable and
+    correctly so — a red chain is re-run — while the cell inside it that R4 exists to name
+    is precisely not. The flag was therefore silently saying "repair it" about the one
+    deviation this ADR says must be reported and never repaired.
+
+    The generalizable part: **a contract that states the same promise in two places has not
+    stated it twice, it has stated two contracts.** The sweep now walks the derived table
+    and proves both renderings name one verb, in both directions, so a reason cannot gain a
+    bare token without the structured route agreeing.
+
+    *Left open, deliberately.* The sweep's R4 route check (`checkR4`) is still gated on the
+    FAMILY flag, so the newly-tightened cell's route is not yet R4-checked. Closing that
+    gate requires deciding whether `replan shape-refutation` belongs in
+    `INVESTIGATION_OR_DISCARD` — it discards the *shape* rather than repairing the
+    deviation, which reads as investigation/discard, but that set is a fail-closed anchor
+    and widening it is an owner call, not an implementer's.
 
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after

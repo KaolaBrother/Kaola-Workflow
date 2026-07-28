@@ -4939,10 +4939,32 @@ const KERNEL_REFUSAL_REGISTRY = Object.freeze({
   sink_verdict: Object.freeze({
     locus: 'L2', auto_remediable: true,
     payload_schema: REFUSAL_PAYLOAD_SCHEMAS.sink_verdict,
-    // Top-level is ALWAYS the read-all-again verb: it is read-only and does not
-    // short-circuit, so following the route can never dead-end. Each finding carries its
-    // own remedy route alongside.
-    route: () => inGrammar('claim', 'finalize', '--check --project <P> --json'),
+    // ONE AUTHORITATIVE EXIT PER REFUSAL.
+    //
+    // The read-all-again verb is the COMPOSITE's route, and only the composite's. With several
+    // findings no single verb clears the verdict, so re-reading is the honest exit: it is
+    // read-only and does not short-circuit, and following it can never dead-end.
+    //
+    // A payload naming EXACTLY ONE finding is not a composite. There is nothing to re-read —
+    // every refusal in this class is emitted BEFORE anything is written — so a re-read reports
+    // nothing at all, and the finding's own remedy route is the one exit that can clear it. The
+    // route contract's promise is that a refusal names exactly one exit and that exit accepts the
+    // work; a top-level verb that contradicted the per-finding resolver would hand an operator
+    // two answers, one of which can never clear the refusal.
+    //
+    // A single finding whose cure the kernel deliberately does not name (the `foreign_archive`
+    // silence, or a bare `unattributed_paths` carrying no subtype) keeps the re-read verb. That is
+    // a promise to REPORT again — which re-reading can keep — not a promise to accept a fix, and
+    // it leaves the deliberate per-finding null exactly where it lives, in the per-finding
+    // resolver the sweep checks.
+    route: (p) => {
+      const findings = Array.isArray(p.findings) ? p.findings.filter(isPlainObject) : [];
+      if (findings.length === 1) {
+        const own = resolveSinkFindingRoute(findings[0]);
+        if (own) return own;
+      }
+      return inGrammar('claim', 'finalize', '--check --project <P> --json');
+    },
     // The FACT now renders each finding as `kind/subtype`. Rendering the kind alone dropped the
     // field that says what actually happened: eight distinct `unattributed_paths` cells, with
     // eight different cures, all read out as the same four words.
@@ -4955,6 +4977,43 @@ const KERNEL_REFUSAL_REGISTRY = Object.freeze({
     hint: (p) => composeFamilyRefusalHint('consent_required', p),
   }),
 });
+
+// ---------------------------------------------------------------------------
+// R4_NON_REMEDIABLE_CELLS — the per-CELL tightening of `auto_remediable`.
+//
+// The registry flag is a FAMILY DEFAULT, and the family is the wrong grain for R4. R4 asks
+// a question about CONTENT — would repairing this deviation launder the evidence? — and one
+// composite family holds cells that answer it differently. `sink_verdict` is auto-remediable
+// at the family level and correctly so: a red chain is re-run, an out-of-set write is
+// reverted, an unattributed write is attributed. But `final_fix_production_surface` is the
+// one cell R4 exists to name. A behavior change arriving after every reviewer is discharged
+// is not a non-canonical FORM of correct content; it is a deviation that is ITSELF EVIDENCE
+// — evidence that the certification standing over this candidate no longer describes it —
+// so it is reported, never repaired, and admitting it behind any receipt would convert a
+// fact about the run into a receipt saying the opposite. A family-level `true` cannot say
+// that, so before this list it said the opposite by default.
+//
+// TIGHTEN-ONLY, in the same sense as every other axiom in this repo: a listed cell may only
+// turn a `true` family into `false`. It can never widen a family that is already `false`,
+// and it never touches the FAMILY column, which stays the single three-way-equality source
+// shared by the ADR's fenced vocabulary block, the registry and the vocabulary constant.
+// ---------------------------------------------------------------------------
+const R4_NON_REMEDIABLE_CELLS = Object.freeze([
+  'sink_verdict/final_fix_production_surface',
+]);
+
+// resolveAutoRemediable(code, payload) — the ONE accessor. TOTAL: `null` for a code outside
+// the enumerated vocabulary, the family default otherwise, tightened to `false` for a cell
+// this list names. Never throws.
+function resolveAutoRemediable(code, payload) {
+  const row = KERNEL_REFUSAL_REGISTRY[code];
+  if (!row) return null;
+  if (row.auto_remediable === false) return false;
+  let key = null;
+  try { key = refusalCellKey(code, payload); } catch (_) { key = null; }
+  if (key && R4_NON_REMEDIABLE_CELLS.indexOf(key) >= 0) return false;
+  return row.auto_remediable;
+}
 
 // resolveRoute(code, payload) — the ONE route entry point. Total: never throws, returns
 // null when the payload carries no discriminator the family knows.
@@ -5087,7 +5146,16 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
       'seam_checkpoint_unattributable'] },
   { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unreviewed_change', detail: c }] }),
     match: ['gate_unsatisfied', 'verdict_not_pass', 'rebind_base_not_reviewed',
-      'reexpansion_review_wall_missing', 'final_fix_production_surface'] },
+      'reexpansion_review_wall_missing'] },
+  // `final_fix_production_surface` is a DECLARED finding kind in its own right, so it classifies to
+  // ITSELF rather than being folded into `unreviewed_change`. Folding it read the same route by
+  // coincidence — both cells happen to name `replan shape-refutation` — while putting the bare
+  // `route:` token and the structured `refusal_route` in DIFFERENT registry cells, where either can
+  // be changed without the other. Classifying to its own kind puts both renderings of the exit in
+  // ONE cell (`legacy_token` and `.route` of the same frozen entry), and gives the operator that
+  // cell's own WHY clause instead of the generic unreviewed-change one.
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'final_fix_production_surface', detail: c }] }),
+    match: ['final_fix_production_surface'] },
   { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unsettled_review', detail: c }] }),
     match: ['review_attempt_unresolved', 'review_attempt_consumed'] },
   { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'candidate_drift', detail: c }] }),
@@ -5234,14 +5302,22 @@ function stampRefusalEnvelope(envelope) {
 
   if (envelope.refusal_family == null) envelope.refusal_family = classified.family;
   if (envelope.refusal_locus == null) envelope.refusal_locus = row.locus;
-  if (row.auto_remediable === false && envelope.auto_remediable == null) envelope.auto_remediable = false;
+  // The payload the resolver reads is the envelope itself, widened by the classifier's
+  // derived discriminator — so a call site that already carries the discriminator wins.
+  const payload = Object.assign({}, classified.patch, envelope);
+  for (const key of Object.keys(classified.patch)) {
+    if (envelope[key] == null) payload[key] = classified.patch[key];
+  }
+  // R4 is a property of the CELL, not of the family. A composite family that is
+  // auto-remediable overall still holds cells that must never be repaired, so the flag is
+  // RESOLVED from the payload rather than read off the family row — otherwise the one
+  // deviation R4 exists to name ships with no `auto_remediable` stamp at all, which reads as
+  // "repair it" to every consumer. Still stamped only when FALSE and only when the caller
+  // left it unset: the stamp stays additive and idempotent.
+  if (envelope.auto_remediable == null && resolveAutoRemediable(classified.family, payload) === false) {
+    envelope.auto_remediable = false;
+  }
   if (envelope.refusal_route == null) {
-    // The payload the resolver reads is the envelope itself, widened by the classifier's
-    // derived discriminator — so a call site that already carries the discriminator wins.
-    const payload = Object.assign({}, classified.patch, envelope);
-    for (const key of Object.keys(classified.patch)) {
-      if (envelope[key] == null) payload[key] = classified.patch[key];
-    }
     const route = resolveRoute(classified.family, payload);
     if (route) envelope.refusal_route = route;
   }
@@ -6186,6 +6262,8 @@ module.exports = {
   routeKey,
   resolveRoute,
   resolveSinkFindingRoute,
+  R4_NON_REMEDIABLE_CELLS,
+  resolveAutoRemediable,
   // The cell-keyed WHY slot: hint = FACT(payload) + WHY(cell) + ROUTE(payload). REFUSAL_WHY is the
   // ONE hand-authored table (O(cells), not O(conditions)); everything else here is derived.
   REFUSAL_WHY,
