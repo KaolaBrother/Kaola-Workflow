@@ -853,10 +853,20 @@ Digest-proven cleanup may remove only snapshotted epoch-local active caches. It 
 `verify-snapshots` and Finalization recursively verify both seals, epoch sequence,
 lineage/root/state bindings, manifest contents, and the consent ceiling before closure.
 
+A transaction that can never satisfy its own seams is discarded by `replan abort --transaction <id>`,
+the roll-BACK counterpart to `resume`. It is admissible only before the parent epoch is snapshotted
+and before any activation step is entered — past that wall the epoch is rotating, so abort refuses
+`replan_abort_irreversible` and routes to `resume`. It never touches the parent plan or its ledger
+(through `child_frozen` those bytes are untouched by construction), removes only the transaction's own
+scratch, and drops the fence LAST so a crash mid-abort leaves a still-fenced project that re-running
+abort finishes. Every abort leaves `.cache/aborted-transactions/{id}.json` — a durable log entry, NOT
+part of the committed-authority chain: an abandoned transaction has no successor to bind to, and
+giving it one would let a discarded epoch masquerade as lineage.
+
 Crash coverage is state contract, not an implementation detail. `REPLAN_DURABLE_WRITE_LABELS`
-contains 41 ordered base families. Snapshot-stage file, cleanup-intent, and cache-unlink mutations
-append deterministic `<sorted-ordinal>:<path-digest>` suffixes; candidate-change transaction/state
-receipts append `<cas-seam>`. Durable helpers fire after their operations. Tests lock the full
+contains 47 ordered base families. Snapshot-stage file, cleanup-intent, cache-unlink, and
+abort-artifact-unlink mutations append deterministic `<sorted-ordinal>:<path-digest>` suffixes;
+candidate-change transaction/state receipts append `<cas-seam>`. Durable helpers fire after their operations. Tests lock the full
 inventory/dynamic grammar and exercise every discovered main-path prefix for one-resume convergence
 and an exact no-effect second resume; they do not yet directly execute every registered
 consent/failure side-path label.

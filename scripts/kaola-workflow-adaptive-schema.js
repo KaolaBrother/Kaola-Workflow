@@ -400,6 +400,11 @@ const REPLAN_DURABLE_WRITE_LABELS = Object.freeze([
   'after_tx_consent_resumed', 'after_tx_failure_snapshot', 'after_tx_failure_task_mirror',
   'after_tx_failure_cleanup',
   'after_predecessor_history', 'after_source_history',
+  // The discard exit (`replan abort`). Journal-ahead ordering: the abort RECORD lands first, then
+  // the reversible artifacts, then the transaction, and the fence is dropped LAST — so a crash at
+  // any prefix leaves either a still-fenced project a re-run of abort finishes, or a clean one.
+  'after_abort_record', 'after_abort_artifact_unlinked', 'after_abort_transaction_unlinked',
+  'after_state_abort_unfenced',
 ]);
 const REPLAN_DURABLE_WRITE_LABELS_DYNAMIC = Object.freeze({
   after_snapshot_stage_file: 'after_snapshot_stage_file:<sorted-ordinal>:<path-digest>',
@@ -407,7 +412,15 @@ const REPLAN_DURABLE_WRITE_LABELS_DYNAMIC = Object.freeze({
   after_cache_unlinked: 'after_cache_unlinked:<sorted-ordinal>:<path-digest>',
   after_tx_candidate_changed: 'after_tx_candidate_changed:<cas-seam>',
   after_state_candidate_changed: 'after_state_candidate_changed:<cas-seam>',
+  after_abort_artifact_unlinked: 'after_abort_artifact_unlinked:<sorted-ordinal>:<path-digest>',
 });
+// The transaction phases an `abort` may discard, in the order they occur. A transaction is
+// abortable only while the parent epoch has NOT been snapshotted: from `parent_archived` onward the
+// snapshot directory is a durable kernel record keyed by the PARENT epoch, so discarding the
+// transaction beneath it would either strand a manifest naming a transaction that no longer exists
+// (which collides with the next prepare) or require deleting a kernel record to clear it. Past that
+// line the exit is `resume` (roll forward) or a claim-level discard, never `abort`.
+const REPLAN_ABORTABLE_PHASES = Object.freeze(['prepared', 'planner_pending', 'child_frozen']);
 const EPOCH_STATE_FIELD_ORDER = Object.freeze([
   'epoch_schema_version',
   'claim_repository_id',
@@ -4432,6 +4445,7 @@ module.exports = {
   REPLAN_STATUSES,
   REPLAN_CAS_SEAMS,
   REPLAN_ACTIVATION_STEPS,
+  REPLAN_ABORTABLE_PHASES,
   REPLAN_DURABLE_WRITE_LABELS,
   REPLAN_DURABLE_WRITE_LABELS_DYNAMIC,
   EPOCH_STATE_FIELD_ORDER,

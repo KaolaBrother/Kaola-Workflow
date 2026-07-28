@@ -283,6 +283,8 @@ The adaptive scripts share a framed-output + refusal contract so a caller can al
   }
   ```
 
+  **`revert-overflow` partitions its work against the baseline tree.** `git checkout <baseSha> -- <path>` cannot restore a path that did not exist at `baseSha`, and every overflow path used to travel in ONE invocation — so a single newly-created undeclared file made the WHOLE revert refuse `git_checkout_failed`, including the siblings that would have reverted cleanly. Since test writes became attributable (#813) newly-created files are the dominant overflow class, so the discard primitive failed on exactly the case it is most reached for. `outOfAllow` is now split by a `git ls-tree` probe over the baseline commit into paths **present at `baseSha`** (restored by checkout) and paths **absent from it** (deleted), reported separately as `checkedOutPaths` / `deletedPaths`; `revertedPaths` remains the union in `outOfAllow` order, so existing consumers are unchanged. The restore half runs FIRST, so a failed checkout deletes nothing. The probe fails CLOSED — an unreadable baseline tree refuses `baseline_partition_unavailable` with zero effect, because guessing "absent" would delete a file the baseline still holds — and a failed delete refuses `overflow_delete_failed` reporting what it did remove. The delete primitive removes only regular files, never a directory or symlink, and an already-absent path is an idempotent no-op.
+
   **Vocabulary contract (D-445-01 §3):** `write_set_overflow` family hints MUST reference `revert-overflow`, NEVER `drop-base`. The `write_set_overflow` hint additionally NAMES `amend-surface` as the preserve half of the pair, with one line on when each fits (stray artifacts you want gone ⇒ discard; genuine companion work owned by a discharged spine milestone ⇒ attribute + re-review). Naming is all it does: no branch, gate, reason code, or justifier selects between them — the caller owns the judgment, and the hint's only job is to stop hiding one of the two options. A crash-repair / reopen-writer hint MUST reference `repair-node`. NO hint string in any aggregator contains a forge CLI token (`gh` / `glab` / `tea`) — hints are forge-neutral and ship in all four editions. The three aggregators hosting `OPERATOR_HINT_REGISTRY` are `adaptive-node.js`, `commit-node.js`, and `plan-validator.js`; the registry lives INSIDE each script (co-located with its emit sites, no shared import). The human channel (`operator_hint`) and the machine channel (`proposed_repair`, D-440-01) name the SAME #424/#434 primitives.
 
   **`--summary` mode (issue #446 / D-446-01 §4).** When `--summary` is passed to `adaptive-node.js`, the subcommand prints ONE line instead of full JSON:
@@ -400,7 +402,13 @@ Every mutating `adaptive-node.js` subcommand runs a layered guard prologue **bef
 { "pid": 12345, "host": "example-host", "ts": 1751500000000, "subcommand": "open-ready" }
 ```
 
-**Claim contract.** `fs.openSync(lockPath, 'wx')` (O_EXCL | O_CREAT) either succeeds (write the payload, `fsync`, return `{ok:true, release}`) or fails `EEXIST`, in which case the holder is CLASSIFIED, never removed: `isStaleLock(holder)` returns `true` for a dead same-host PID (`process.kill(pid, 0)` throws `ESRCH`) or an old/corrupt cross-host payload (age > `LANE_STALENESS_MS`, 24h), and `false` for a live PID or a fresh (possibly mid-write) payload. The classification only SELECTS the refusal reason (`scheduler_locked` for a live holder, `scheduler_lock_stale` for a dead one) — it can never cause an acquire, so a misclassification's worst case is a wrong hint flavor, never a lost mutual-exclusion guarantee. There is deliberately NO auto-takeover of a stale lock — see `docs/decisions/D-585-01.md` for the empirical refutation that led to this fail-closed design. Recovery from a genuinely dead holder is ONE explicit operator `rm "<lockPath>"` (named literally in the `scheduler_lock_stale` `operator_hint`), then a re-run.
+**Claim contract.** `fs.openSync(lockPath, 'wx')` (O_EXCL | O_CREAT) either succeeds (write the payload, `fsync`, return `{ok:true, release}`) or fails `EEXIST`, in which case the holder is CLASSIFIED, never removed: `isStaleLock(holder)` returns `true` for a dead same-host PID (`process.kill(pid, 0)` throws `ESRCH`) or an old/corrupt cross-host payload (age > `LANE_STALENESS_MS`, 24h), and `false` for a live PID or a fresh (possibly mid-write) payload. The classification only SELECTS the refusal reason (`scheduler_locked` for a live holder, `scheduler_lock_stale` for a dead one) — it can never cause an acquire, so a misclassification's worst case is a wrong hint flavor, never a lost mutual-exclusion guarantee. There is deliberately NO auto-takeover of a stale lock inside the ACQUIRE path — see `docs/decisions/D-585-01.md` for the empirical refutation that led to this fail-closed design. Recovery from a genuinely dead holder is the `unlock` verb, named with the exact holder pid in the `scheduler_lock_stale` `operator_hint` (and in `replan.js`'s equivalent), run from ONE session, then a re-run:
+
+```bash
+node scripts/kaola-workflow-adaptive-node.js unlock --project <project> --holder <pid|none> --json
+```
+
+`unlock` does not reintroduce the double-acquire hazard, because it (1) **never acquires** — removal and acquisition are separate commands, so nothing it does can produce two live holders; (2) **refuses while the holder is LIVE**, using the same `isStaleLock` probe (`scheduler_lock_held`); and (3) is a **compare-and-set on holder identity** — `--holder` must name the pid the caller observed, and a lock re-claimed in between refuses `scheduler_lock_holder_mismatch` with zero mutation. `--holder none` targets a corrupt/pid-less payload and still requires the mtime-based stale verdict, so a fresh holder caught between its O_EXCL create and its payload write is protected exactly as the acquire path protects it. Removal is rename-then-verify (the moved bytes are re-compared and renamed BACK on a mismatch), and unlocking an unlocked project is an idempotent `result: 'ok', unlocked: false`. `unlock` is deliberately outside both `SPLIT_GUARDED_SUBCOMMANDS` (it cannot acquire the lock it removes) and `REPLAN_GUARDED_SUBCOMMANDS` (a stale lock wedges `replan resume` too, so fencing the exit would seal the wedge shut); the lock path resolves cwd-relative like every other project path.
 
 The lockfile is a **transient coordination artifact**, not durable workflow state: it is barrier-exempt (the `kaola-workflow/` prefix allowband), never survives to `kaola-workflow/archive/{project}/`, and its absence on disk is the normal (unlocked) state between invocations. See `docs/workflow-state-contract.md` for its place in the `.cache/` inventory.
 
@@ -1906,8 +1914,21 @@ node scripts/kaola-workflow-replan.js extend-consent \
   --project <project> --user-turn-reference <ref> \
   --consent-reason <reason> [--authority-scope shape_refutation] --json
 
-# Recursively verify every retained epoch snapshot and active-state binding.
+# Recursively verify every retained epoch snapshot and active-state binding. Emits
+# `result: 'ok'` / `result: 'refuse'` and exits 0 / 1 accordingly.
 node scripts/kaola-workflow-replan.js verify-snapshots --project <project> --json
+
+# DISCARD a wedged transaction. `resume` is the roll-forward exit; this is the roll-back one, for a
+# transaction that can never satisfy its own seams (a lost CAS, a broken authority anchor, or a fence
+# whose transaction file is gone). `--transaction` is a compare-and-set on the transaction id: there
+# is no untargeted discard. Admissible only while the parent epoch has NOT been snapshotted
+# (`prepared` | `planner_pending` | `child_frozen`) AND no activation step has been entered; past
+# that wall it refuses `replan_abort_irreversible` carrying `legal_next: 'replan resume'`. Unparseable
+# transaction bytes refuse `replan_abort_undecidable` and escalate, because a record that cannot
+# prove it is pre-activation must never be discarded on a guess. The parent plan and its ledger are
+# never touched. Every abort writes `.cache/aborted-transactions/{id}.json` naming the phase, the
+# parent binding, and the digest of every artifact removed.
+node scripts/kaola-workflow-replan.js abort --project <project> --transaction <id> --json
 ```
 
 Schema-2 epoch 1 recognizes exactly two active-authority forms. `planless` means epoch 1,
@@ -2161,11 +2182,11 @@ Cleanup is manifest-allowlisted and digest-checked; epoch, transaction, consent,
 authority are never removed. Finalization and closure recursively verify every file plus the
 projection/child/transaction/attestation/live-state chain.
 
-`REPLAN_DURABLE_WRITE_LABELS` is an exact ordered inventory of 41 base labels spanning prepare,
-fences, packet/child publication, snapshot, activation, cleanup, reauthor, consent, and typed failure
-paths. Five families add deterministic suffixes: staged snapshot file, cleanup intent, and cache
-unlink use `<sorted-ordinal>:<path-digest>`; candidate-changed transaction/state writes use
-`<cas-seam>`. The durable helpers fire immediately after their operations. Tests lock the exact
+`REPLAN_DURABLE_WRITE_LABELS` is an exact ordered inventory of 47 base labels spanning prepare,
+fences, packet/child publication, snapshot, activation, cleanup, reauthor, consent, typed failure
+paths, and the four-step abort discard. Six families add deterministic suffixes: staged snapshot file,
+cleanup intent, cache unlink, and abort-artifact unlink use `<sorted-ordinal>:<path-digest>`;
+candidate-changed transaction/state writes use `<cas-seam>`. The durable helpers fire immediately after their operations. Tests lock the exact
 inventory/dynamic grammar and execute every discovered main-path prefix with one-resume convergence
 plus a second resume that leaves bytes and cardinalities unchanged; the registered consent/failure
 side labels must not be described as directly failpoint-executed until a later test proves that.

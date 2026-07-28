@@ -2080,6 +2080,376 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// ===========================================================================
+// BATCH 0 — `replan abort`, the DISCARD exit for a wedged transaction.
+//
+// WHY IT HAD TO EXIST. `prepare` and `resume` fail closed on a lost CAS or a broken authority
+// anchor, and both leave the project FENCED: every ordinary lifecycle mutation refuses
+// `replan_in_progress` until the transaction settles. `resume` is the roll-FORWARD exit. There was
+// no roll-BACK one, so a transaction that can never satisfy its own seams had no exit at all —
+// which is the permanent-wedge class this campaign exists to extinguish.
+//
+// WHAT THESE SCENARIOS PIN, in both directions:
+//   (1) the GREEN arc — a prepared transaction is discarded, the parent plan and ledger come
+//       through BYTE-IDENTICAL, the fence drops, and the project runs again;
+//   (2) the IRREVERSIBILITY wall — activation entered, or the parent epoch already snapshotted,
+//       refuses and ROUTES to `resume` instead of dead-ending;
+//   (3) the CAS on transaction identity — abort is targeted, never "discard whatever is there";
+//   (4) the durable RECORD — an abort is legible afterwards, and names every artifact it removed;
+//   (5) the ORPHANED-FENCE repair — a fence whose transaction file is gone is the
+//       `replan_integrity_mismatch` wedge, and dropping it is exactly the correct repair;
+//   (6) UNDECIDABLE bytes escalate rather than discarding — a transaction file that will not parse
+//       cannot prove it is pre-activation, and guessing there could discard a half-activated epoch.
+// ===========================================================================
+
+// The transaction id is the CAS-tuple digest recorded ON DISK; read it from the transaction rather
+// than from a caller's envelope, so these scenarios pin abort's contract and not prepare's shape.
+function liveTransactionId(fx, prepared) {
+  equal(prepared.result, 'prepared', 'BATCH0-ABORT fixture prepares a transaction: ' + JSON.stringify(prepared));
+  return JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8')).transaction_id;
+}
+
+// (1) GREEN ARC — abort a live transaction, then prove the project is genuinely usable again.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const planBefore = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'));
+    // Advance to `planner_pending` with an attested child on disk — the richest abortable state, so
+    // the discard has every scratch artifact to clear (packet, child draft, attestation).
+    const tx = advanceToAttestedChild(fx);
+    const txId = tx.transaction_id;
+    equal(tx.phase, 'planner_pending', 'BATCH0-ABORT-1: fixture is at planner_pending');
+
+    // The fence is real: ordinary mutation is blocked while it stands.
+    const fenced = schema.readReplanFence(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'),
+      JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8')));
+    ok(fenced.fenced === true, 'BATCH0-ABORT-1: the live transaction FENCES the project');
+    ok(fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json')),
+      'BATCH0-ABORT-1: the planner packet the abort must clear is on disk');
+    ok(fs.existsSync(path.join(fx.projectDir, 'workflow-plan.next.md')),
+      'BATCH0-ABORT-1: the child draft the abort must clear is on disk');
+    ok(fs.existsSync(path.join(fx.cacheDir, 'replan-planner-attestation.json')),
+      'BATCH0-ABORT-1: the planner attestation the abort must clear is on disk');
+
+    const aborted = replan.abortReplan({ repoRoot: fx.root, project: fx.project, transactionId: txId });
+    equal(aborted.result, 'ok', 'BATCH0-ABORT-1: abort returns ok: ' + JSON.stringify(aborted));
+    equal(aborted.aborted, true, 'BATCH0-ABORT-1: abort reports the transaction discarded');
+    equal(aborted.phase, 'planner_pending', 'BATCH0-ABORT-1: abort reports the phase it discarded from');
+
+    // (a) The parent plan is byte-identical. The whole epoch design rests on the parent never being
+    //     rewritten, so an abort that touched it would be a far worse bug than the wedge it cures.
+    ok(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md')).equals(planBefore),
+      'BATCH0-ABORT-1: the parent workflow-plan.md is BYTE-IDENTICAL after the abort');
+    // (b) The transaction and its scratch are gone.
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-transaction.json')),
+      'BATCH0-ABORT-1: the transaction file is removed');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json')),
+      'BATCH0-ABORT-1: the planner packet is removed');
+    ok(!fs.existsSync(path.join(fx.projectDir, 'workflow-plan.next.md')),
+      'BATCH0-ABORT-1: the child draft is removed');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-planner-attestation.json')),
+      'BATCH0-ABORT-1: the planner attestation is removed');
+    // (c) The fence is DOWN — this is the property that makes the project usable again.
+    const after = replan.parseStateFields(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'));
+    equal(after.replan_status, 'none', 'BATCH0-ABORT-1: replan_status returns to none');
+    equal(after.replan_transaction_id, 'none', 'BATCH0-ABORT-1: replan_transaction_id returns to none');
+    equal(after.replan_phase, 'none', 'BATCH0-ABORT-1: replan_phase returns to none');
+    const unfenced = schema.readReplanFence(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), null);
+    ok(unfenced.ok === true && unfenced.fenced === false,
+      'BATCH0-ABORT-1: the fence reads CLEAR after abort — ordinary mutation is admissible again: ' + JSON.stringify(unfenced));
+    // (d) The epoch position is untouched: an aborted transition never happened.
+    equal(Number(after.plan_epoch), 1, 'BATCH0-ABORT-1: plan_epoch is unchanged (no epoch was consumed)');
+    equal(after.active_plan_hash, replan.parseStateFields(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8')).plan_hash,
+    'BATCH0-ABORT-1: the active plan hash still names the parent');
+
+    // (e) ARRIVE GREEN: the same transition can be requested again from a clean slate.
+    const reprepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' });
+    equal(reprepared.result, 'prepared',
+      'BATCH0-ABORT-1: a fresh prepare succeeds after the abort (the exit truly unwedges): ' + JSON.stringify(reprepared));
+
+    // (f) THE VERB IS REACHABLE FROM THE CLI, which is the only form a route can name. A route
+    //     that resolves to an in-process function nobody can invoke is still a dead end.
+    const cli = args => spawnSync(process.execPath,
+      [path.join(__dirname, 'kaola-workflow-replan.js'), ...args],
+      { cwd: fx.root, encoding: 'utf8', env: gitEnv });
+    const liveId = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8')).transaction_id;
+    const mistarget = cli(['abort', '--project', fx.project, '--transaction', '0'.repeat(64), '--json']);
+    equal(mistarget.status, 1, 'BATCH0-ABORT-1: a refused abort exits NON-ZERO from the CLI: ' + mistarget.stdout + mistarget.stderr);
+    equal(JSON.parse(mistarget.stdout.trim().split('\n').pop()).reason, 'replan_abort_transaction_mismatch',
+      'BATCH0-ABORT-1: the CLI surfaces the typed mismatch');
+    const cliAbort = cli(['abort', '--project', fx.project, '--transaction', liveId, '--json']);
+    equal(cliAbort.status, 0, 'BATCH0-ABORT-1: `replan abort` succeeds from the CLI: ' + cliAbort.stdout + cliAbort.stderr);
+    equal(JSON.parse(cliAbort.stdout.trim().split('\n').pop()).aborted, true,
+      'BATCH0-ABORT-1: the CLI envelope reports the discard');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-transaction.json')),
+      'BATCH0-ABORT-1: the CLI abort removed the transaction');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// (4) The durable record — an abort is legible after the fact, and a repeat abort of the same
+// deterministic transaction id logs rather than colliding.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const txId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const aborted = replan.abortReplan({ repoRoot: fx.root, project: fx.project, transactionId: txId });
+    const recordPath = path.join(fx.cacheDir, 'aborted-transactions', txId + '.json');
+    ok(fs.existsSync(recordPath),
+      'BATCH0-ABORT-4: the abort writes a durable record at .cache/aborted-transactions/<id>.json');
+    equal(aborted.record, '.cache/aborted-transactions/' + txId + '.json',
+      'BATCH0-ABORT-4: the ok envelope names the record path');
+    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    equal(record.transaction_id, txId, 'BATCH0-ABORT-4: the record names the discarded transaction');
+    equal(record.phase, 'prepared', 'BATCH0-ABORT-4: the record names the phase it was discarded from');
+    equal(record.abort_count, 1, 'BATCH0-ABORT-4: first abort counts once');
+    ok(Array.isArray(record.removed) && record.removed.some(row => row.path === '.cache/replan-transaction.json'),
+      'BATCH0-ABORT-4: the record enumerates every artifact removed, with its digest: ' + JSON.stringify(record.removed));
+    ok(record.removed.every(row => typeof row.digest === 'string' && /^[0-9a-f]{64}$/.test(row.digest)),
+      'BATCH0-ABORT-4: every removed artifact carries a sha256 digest, so the discard is auditable');
+    ok(record.parent_plan_hash && record.parent_plan_hash !== 'none',
+      'BATCH0-ABORT-4: the record binds the parent plan it was abandoning');
+
+    // The transaction id is CAS-tuple-derived, so a re-prepared identical candidate REUSES it.
+    // A second abort must log, not collide.
+    replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' });
+    const second = replan.abortReplan({ repoRoot: fx.root, project: fx.project, transactionId: txId });
+    equal(second.result, 'ok', 'BATCH0-ABORT-4: a second abort of the same deterministic id succeeds: ' + JSON.stringify(second));
+    const record2 = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    equal(record2.abort_count, 2, 'BATCH0-ABORT-4: repeat aborts are counted, not collided');
+    equal(record2.first_aborted_at, record.first_aborted_at,
+      'BATCH0-ABORT-4: the first abort timestamp is preserved across the repeat');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// (3) The CAS on transaction identity — abort is targeted, never "discard whatever is there".
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const preparedId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const txBytes = fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'));
+    const stateBytes = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'));
+
+    const wrong = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: 'f'.repeat(64) });
+    equal(wrong.result, 'refuse', 'BATCH0-ABORT-3: a mismatched --transaction refuses');
+    equal(wrong.reason, 'replan_abort_transaction_mismatch',
+      'BATCH0-ABORT-3: the mismatch is typed: ' + JSON.stringify(wrong));
+    equal(wrong.recorded_transaction, preparedId,
+      'BATCH0-ABORT-3: the refusal reports the transaction that IS live, so the caller can re-target');
+    ok(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json')).equals(txBytes),
+      'BATCH0-ABORT-3: ZERO MUTATION — the transaction is byte-identical after the mismatched abort');
+    ok(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md')).equals(stateBytes),
+      'BATCH0-ABORT-3: ZERO MUTATION — the fence is byte-identical after the mismatched abort');
+
+    const bare = replan.abortReplan({ repoRoot: fx.root, project: fx.project });
+    equal(bare.reason, 'replan_abort_transaction_required',
+      'BATCH0-ABORT-3: abort without --transaction refuses — there is no untargeted discard: ' + JSON.stringify(bare));
+    ok(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json')).equals(txBytes),
+      'BATCH0-ABORT-3: ZERO MUTATION after the missing-argument refusal');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// (2) The IRREVERSIBILITY wall, in both of its forms, each routing to `resume` rather than
+// dead-ending. This is the guard the task brief calls out: an abort past the point of no return
+// would destroy newer state, which is the exact thing every CAS in this file exists to prevent.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    // Drive to `parent_archived`: the parent epoch snapshot has landed, so the transaction now owns
+    // a durable kernel record keyed by the PARENT epoch.
+    const common = { repoRoot: fx.root, project: fx.project };
+    advanceToAttestedChild(fx);
+    try {
+      replan.resumeReplan({ ...common,
+        failpoint(name) { if (name === 'after_state_parent_archived_fence') throw new Error('stop-at-parent-archived'); } });
+    } catch (_) { /* the staged crash is the fixture */ }
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+    equal(tx.phase, 'parent_archived', 'BATCH0-ABORT-2: fixture reached parent_archived: ' + JSON.stringify({ phase: tx.phase }));
+    const txBytes = fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'));
+
+    const refused = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: tx.transaction_id });
+    equal(refused.result, 'refuse', 'BATCH0-ABORT-2: abort past the snapshot refuses');
+    equal(refused.reason, 'replan_abort_irreversible',
+      'BATCH0-ABORT-2: the wall is typed replan_abort_irreversible: ' + JSON.stringify(refused));
+    equal(refused.legal_next, 'replan resume',
+      'BATCH0-ABORT-2: the refusal ROUTES to the roll-forward exit rather than dead-ending');
+    ok(typeof refused.step === 'string' && refused.step.length > 0,
+      'BATCH0-ABORT-2: the refusal names the step that made it irreversible: ' + JSON.stringify(refused.step));
+    ok(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json')).equals(txBytes),
+      'BATCH0-ABORT-2: ZERO MUTATION — the transaction is byte-identical after the wall refusal');
+    ok(fs.existsSync(path.join(fx.cacheDir, 'epochs', String(tx.parent.plan_epoch))),
+      'BATCH0-ABORT-2: the parent epoch snapshot is untouched');
+
+    // ARRIVE GREEN via the ROUTE the refusal named: `resume` rolls the epoch forward.
+    let rolled = null;
+    for (let turn = 0; turn < 10 && !(rolled && ['committed', 'already_committed'].includes(rolled.result)); turn++) {
+      rolled = replan.resumeReplan(common);
+    }
+    ok(['committed', 'already_committed'].includes(rolled.result),
+      'BATCH0-ABORT-2: the routed `resume` completes the epoch (the refusal is a redirect, not a wedge): ' + JSON.stringify(rolled));
+
+    // And once committed, abort still refuses — a settled epoch is never discardable.
+    const committedTx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+    const post = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: committedTx.transaction_id });
+    equal(post.reason, 'replan_abort_irreversible',
+      'BATCH0-ABORT-2: a COMMITTED transaction is never abortable: ' + JSON.stringify(post));
+    ok(Array.isArray(post.entered_activation) && post.entered_activation.length > 0,
+      'BATCH0-ABORT-2: the refusal enumerates the activation steps already entered: ' + JSON.stringify(post.entered_activation));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// (2b) The finer instrument: `phase` advances only AFTER its step lands, so a crash mid-activation
+// can leave a step entered under an earlier-looking phase. The activation journal is checked
+// independently of the phase for exactly that reason.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    advanceToAttestedChild(fx);
+    try {
+      replan.resumeReplan({ repoRoot: fx.root, project: fx.project,
+        failpoint(name) { if (name === 'after_state_child_frozen_fence') throw new Error('stop-at-child-frozen'); } });
+    } catch (_) { /* the staged crash is the fixture */ }
+    const txPath = path.join(fx.cacheDir, 'replan-transaction.json');
+    const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+    equal(tx.phase, 'child_frozen', 'BATCH0-ABORT-2b: fixture is at child_frozen (an abortable phase)');
+    // Hand-plant an entered activation step under the abortable phase — the shape a crash between
+    // an activation write and its phase write produces.
+    tx.activation.child_plan_promoted = { status: 'complete', digest: null, at: '2026-07-16T03:00:00.000Z' };
+    fs.writeFileSync(txPath, schema.canonicalJson(tx) + '\n');
+    const refused = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: tx.transaction_id });
+    equal(refused.reason, 'replan_abort_irreversible',
+      'BATCH0-ABORT-2b: an ENTERED activation step blocks abort even under an abortable phase: ' + JSON.stringify(refused));
+    equal(refused.step, 'child_plan_promoted',
+      'BATCH0-ABORT-2b: the refusal names the entered step, not the phase');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// (5) The ORPHANED-FENCE repair. A fence whose transaction file is gone reads
+// `replan_integrity_mismatch` and blocks every lifecycle mutation with no in-band exit. Dropping
+// the orphaned fence is exactly the correct repair, and it is also abort's own crash-resume path
+// (the fence is written LAST, so a crash mid-abort lands in precisely this state).
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const preparedId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    fs.unlinkSync(path.join(fx.cacheDir, 'replan-transaction.json'));
+    const wedged = schema.readReplanFence(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), null);
+    equal(wedged.reason, 'replan_integrity_mismatch',
+      'BATCH0-ABORT-5: control — a fence with no transaction is the integrity-mismatch wedge');
+
+    const mistarget = replan.abortReplan({ repoRoot: fx.root, project: fx.project, transactionId: '0'.repeat(64) });
+    equal(mistarget.reason, 'replan_abort_transaction_mismatch',
+      'BATCH0-ABORT-5: even the orphaned-fence repair is CAS-targeted: ' + JSON.stringify(mistarget));
+
+    const repaired = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: preparedId });
+    equal(repaired.result, 'ok', 'BATCH0-ABORT-5: the orphaned fence is droppable: ' + JSON.stringify(repaired));
+    equal(repaired.phase, 'orphaned_fence', 'BATCH0-ABORT-5: the record names what it repaired');
+    const cleared = schema.readReplanFence(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), null);
+    ok(cleared.ok === true && cleared.fenced === false,
+      'BATCH0-ABORT-5: the wedge is gone: ' + JSON.stringify(cleared));
+    ok(fs.existsSync(path.join(fx.cacheDir, 'aborted-transactions', preparedId + '.json')),
+      'BATCH0-ABORT-5: the repair still leaves a durable record');
+
+    // Idempotent on a project with nothing to abort.
+    const noop = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: preparedId });
+    equal(noop.result, 'ok', 'BATCH0-ABORT-5: aborting a clean project is ok');
+    equal(noop.aborted, false, 'BATCH0-ABORT-5: ... and reports nothing was aborted (idempotent)');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// (6) UNDECIDABLE bytes escalate rather than discarding. A transaction file that will not parse
+// cannot prove it is pre-activation, so discarding it could destroy a half-activated epoch. R4:
+// the broken record IS evidence — it routes to a human, never to a silent repair.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const preparedId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const txPath = path.join(fx.cacheDir, 'replan-transaction.json');
+    fs.writeFileSync(txPath, '{ this is not json');
+    const refused = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: preparedId });
+    equal(refused.result, 'refuse', 'BATCH0-ABORT-6: unparseable transaction bytes refuse');
+    equal(refused.reason, 'replan_abort_undecidable',
+      'BATCH0-ABORT-6: the refusal is typed undecidable, not a generic invalid: ' + JSON.stringify(refused));
+    equal(refused.legal_next, 'consent',
+      'BATCH0-ABORT-6: an undecidable kernel record escalates to a human, never to a silent discard');
+    equal(fs.readFileSync(txPath, 'utf8'), '{ this is not json',
+      'BATCH0-ABORT-6: ZERO MUTATION — the corrupt bytes are preserved as the evidence they are');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// A SCHEMA-INVALID (but parseable) transaction stays abortable — that wedge is precisely what the
+// exit serves. Pinning it stops a later tightening from re-sealing the door.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const preparedId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const txPath = path.join(fx.cacheDir, 'replan-transaction.json');
+    const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+    tx.budget = 'not-an-object';
+    fs.writeFileSync(txPath, JSON.stringify(tx) + '\n');
+    ok(schema.validateReplanTransaction(tx).ok === false,
+      'BATCH0-ABORT-7: control — the planted transaction is schema-invalid');
+    ok(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result === 'refuse',
+      'BATCH0-ABORT-7: control — resume cannot roll a schema-invalid transaction forward');
+    const aborted = replan.abortReplan({ repoRoot: fx.root, project: fx.project,
+      transactionId: preparedId });
+    equal(aborted.result, 'ok',
+      'BATCH0-ABORT-7: a schema-invalid transaction is still discardable — that wedge is the exit\'s whole purpose: ' + JSON.stringify(aborted));
+    const cleared = schema.readReplanFence(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), null);
+    ok(cleared.ok === true && cleared.fenced === false, 'BATCH0-ABORT-7: the project is unfenced afterwards');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// BATCH 0 — `verify-snapshots` exits NON-ZERO on a failing verification. It emitted a bare
+// `{ok:false}` with no `result:'refuse'`, and main()'s exit-code branch keys on `result`, so the
+// one command whose entire job is to say no exited 0 while saying it.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const run = args => spawnSync(process.execPath,
+      [path.join(__dirname, 'kaola-workflow-replan.js'), ...args],
+      { cwd: fx.root, encoding: 'utf8', env: gitEnv });
+
+    // GREEN ARC first: a project with no epochs verifies and exits 0.
+    const green = run(['verify-snapshots', '--project', fx.project, '--json']);
+    const greenOut = JSON.parse(green.stdout.trim().split('\n').pop());
+    equal(green.status, 0, 'BATCH0-VERIFY: a passing verification exits 0: ' + green.stdout + green.stderr);
+    equal(greenOut.result, 'ok', 'BATCH0-VERIFY: a passing verification carries result:ok');
+    equal(greenOut.ok, true, 'BATCH0-VERIFY: the predicate field survives for in-process callers');
+
+    // Now break it: an epoch directory that is not a valid snapshot.
+    fs.mkdirSync(path.join(fx.cacheDir, 'epochs', '1'), { recursive: true });
+    fs.writeFileSync(path.join(fx.cacheDir, 'epochs', '1', 'manifest.json'), '{"schema_version":2}\n');
+    const red = run(['verify-snapshots', '--project', fx.project, '--json']);
+    const redOut = JSON.parse(red.stdout.trim().split('\n').pop());
+    equal(redOut.result, 'refuse',
+      'BATCH0-VERIFY: a FAILING verification carries result:refuse: ' + JSON.stringify(redOut));
+    equal(red.status, 1,
+      'BATCH0-VERIFY: ... and exits NON-ZERO, so a caller that checks the exit code is not silently green');
+    ok(typeof redOut.reason === 'string' && redOut.reason.length > 0,
+      'BATCH0-VERIFY: the refusal keeps its typed reason: ' + JSON.stringify(redOut.reason));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 // Every durable activation/cleanup prefix rolls forward exactly once. In
 // particular, once the child plan is visible no recovery path may restore or
 // revalidate the parent as the active plan.
@@ -2098,6 +2468,11 @@ const REQUIRED_DURABLE_LABELS = [
   'after_state_reauthor_fence', 'after_consent_ledger', 'after_state_consent_ceiling',
   'after_tx_consent_resumed', 'after_tx_failure_snapshot', 'after_tx_failure_task_mirror',
   'after_tx_failure_cleanup', 'after_predecessor_history', 'after_source_history',
+  // Batch 0: the `replan abort` discard exit. Appended AFTER the main-path prefix set (the
+  // discovery loop only requires the first 30 to fire on the commit path), because abort is a
+  // roll-BACK exit that the roll-forward driver never reaches.
+  'after_abort_record', 'after_abort_artifact_unlinked', 'after_abort_transaction_unlinked',
+  'after_state_abort_unfenced',
 ];
 deepEqual(schema.REPLAN_DURABLE_WRITE_LABELS, REQUIRED_DURABLE_LABELS,
   'central durable-write inventory is exact and ordered');
@@ -2107,6 +2482,7 @@ deepEqual(schema.REPLAN_DURABLE_WRITE_LABELS_DYNAMIC, {
   after_cache_unlinked: 'after_cache_unlinked:<sorted-ordinal>:<path-digest>',
   after_tx_candidate_changed: 'after_tx_candidate_changed:<cas-seam>',
   after_state_candidate_changed: 'after_state_candidate_changed:<cas-seam>',
+  after_abort_artifact_unlinked: 'after_abort_artifact_unlinked:<sorted-ordinal>:<path-digest>',
 }, 'dynamic durable-write labels have deterministic ordinal/path or seam suffixes');
 const persistenceSource = fs.readFileSync(path.join(__dirname, 'kaola-workflow-replan.js'), 'utf8');
 deepEqual([...persistenceSource.matchAll(/(?:schema\.writeFileAtomicReplace|fs\.renameSync|fs\.unlinkSync|fs\.writeFileSync)/g)]
