@@ -1596,6 +1596,407 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   }
 }
 
+// ===========================================================================
+// K -> 0 — THE `condition:` DELETION TRIGGER.
+//
+// During the migration every refusal carries its LEGACY token twice: in `reason`
+// (compat mode) and mirrored into `condition`. `condition` is MIGRATION STAGING, not a
+// compatibility promise — when `REFUSAL_EMISSION_MODE` flips to 'family', `reason`
+// carries the family token and `condition` becomes vestigial. The refusal sweep prints
+// `distinct_condition_values=K`; K must count DOWN to zero, and until now NOTHING made
+// it. The standing warning that a unified table degenerates into "one more hand-kept
+// compliance mirror" lands on `condition:`, not on the registry: a legacy token nobody
+// reads is pure hand-kept weight, and the only mechanism that makes weight disappear is
+// a build that stays red while it is still there.
+//
+// THE MEASUREMENT THAT MAKES THIS TRACTABLE: every consumer of a legacy token is OURS.
+// The consumer corpora below are the six routing surfaces (the 30 generated command +
+// SKILL files), the contract validators, our own `scripts/test-*` / `simulate-*` suites,
+// and the documentation + role profiles. There is no third party anywhere in that list.
+// So a token whose consumer set is EMPTY is not a promise being kept — it is a field to
+// delete, and this block says so by name, file and line.
+//
+// SHAPE — A RATCHET, NOT A HARD GATE, and deliberately: the first measurement found 284
+// of 737 emitted tokens with no consumer at all. A hard gate would have to be disarmed
+// on day one, which is how a guard becomes decorative. So:
+//
+//   * enforcement is DEFAULT-ON and EXEMPT-BY-BASELINE, never an opt-in allowlist. A
+//     token that is NOT in the baseline and has no consumer fails immediately. A newly
+//     minted legacy token is therefore loud by default, which is the whole point: the
+//     forgotten token must be the noisy case, not the silent one.
+//   * the baseline can only go DOWN, and that is enforced in BOTH directions. An entry
+//     whose token has since acquired a consumer, or is no longer emitted at all, fails
+//     as STALE and demands its own deletion. Neither failure can be satisfied by adding
+//     a row; the only maintenance path is deleting rows.
+//
+// VACUITY IS THE REAL RISK HERE, in both directions, so both are pinned below: a scan
+// too permissive reports everything consumed (the guard becomes decorative forever —
+// caught by the stale-baseline direction plus an explicit floor), and a scan gone blind
+// reports everything unconsumed (caught by the corpus-size floors and the blind-corpus
+// mutation). The mutation battery at the end plants an orphan (must RED, naming its
+// file and line) and a consumed token (must stay green), because a checker that cannot
+// fail is not a checker.
+// ===========================================================================
+{
+  const CONDITION_BASELINE_PATH = 'scripts/condition-consumer-baseline.json';
+
+  // The emission shapes are the refusal sweep's, restated rather than imported: the
+  // sweep is a top-level assertion script, not a module, so requiring it would run its
+  // whole suite as a side effect. One rule, one wording is preserved MECHANICALLY
+  // instead — the restatement is pinned TEXTUALLY to the sweep's own block below, so a
+  // shape edited there (or an anchor renamed) reds here instead of silently forking the
+  // census into two disagreeing measurements of the same K.
+  const CONDITION_EMISSION_SHAPES = [
+    /(?:reason|reasonCode|status|verdict|handoff_status|inner_reason|condition)\s*:\s*'([a-z][a-z0-9_:]{3,})'/g,
+    /\b(?:refuse|bad|fail)\(\s*'([a-z][a-z0-9_:]{3,})'/g,
+    /reasons\.push\(\s*'([a-z][a-z0-9_:]{3,})'/g,
+    /throw new Error\(\s*'([a-z][a-z0-9_]{3,})'\s*\)/g,
+  ];
+
+  // Extract the sweep's own EMISSION_SHAPES literals as `source flags` strings.
+  // Returns null on ANY shape it does not recognize — a gutted array, a renamed anchor,
+  // a non-literal entry — so the comparison below fails closed rather than comparing
+  // against nothing.
+  function extractSweepShapes(src) {
+    if (typeof src !== 'string') return null;
+    const m = src.match(/\nconst EMISSION_SHAPES = \[\n([\s\S]*?)\n\];\n/);
+    if (!m) return null;
+    const out = [];
+    for (const line of m[1].split('\n')) {
+      const lm = line.match(/^\s*\/(.*)\/([gimsuy]*),\s*$/);
+      if (!lm) return null;
+      out.push(lm[1] + ' ' + lm[2]);
+    }
+    return out.length ? out : null;
+  }
+
+  const sweepShapes = extractSweepShapes(fs.readFileSync(
+    path.join(REPO, 'scripts/test-refusal-route-sweep.js'), 'utf8'));
+  const mineShapes = CONDITION_EMISSION_SHAPES.map(r => r.source + ' ' + r.flags);
+  assert(sweepShapes !== null,
+    'K0 shapes: the refusal sweep\'s `const EMISSION_SHAPES = [...]` block must still be locatable — '
+    + 'if it was renamed or reshaped, re-point this extractor rather than letting the two censuses fork');
+  assert(sweepShapes !== null && JSON.stringify(sweepShapes) === JSON.stringify(mineShapes),
+    'K0 shapes: this block\'s emission shapes must be TEXTUALLY identical to the refusal sweep\'s — '
+    + 'two measurements of the same K may not disagree. sweep=' + JSON.stringify(sweepShapes)
+    + ' here=' + JSON.stringify(mineShapes));
+
+  // ---- the emitted universe: token -> the emission sites that mint it ------
+  // PURE: `readFile` is injected so the mutation battery drives the identical scanner
+  // over in-memory fixtures and never touches the real tree.
+  function scanConditionEmissions(files, readFile) {
+    const sites = new Map();
+    for (const rel of files) {
+      const content = readFile(rel);
+      if (typeof content !== 'string') continue;
+      const lines = content.split('\n');
+      for (const re of CONDITION_EMISSION_SHAPES) {
+        for (let i = 0; i < lines.length; i++) {
+          re.lastIndex = 0;
+          let m;
+          while ((m = re.exec(lines[i])) !== null) {
+            if (m[1].indexOf('_') < 0) continue;
+            if (!sites.has(m[1])) sites.set(m[1], []);
+            const list = sites.get(m[1]);
+            if (!list.some(s => s.file === rel && s.line === i + 1)) list.push({ file: rel, line: i + 1 });
+          }
+        }
+      }
+    }
+    for (const list of sites.values()) {
+      list.sort((a, b) => (a.file === b.file ? a.line - b.line : (a.file < b.file ? -1 : 1)));
+    }
+    return sites;
+  }
+
+  // ---- consumer corpora, all DERIVED (a 7th edition / a renamed validator flows
+  //      through for free; a hand-typed list is how a corpus quietly goes blind) -----
+  function walkRel(relDir, match, out = []) {
+    const abs = path.join(REPO, relDir);
+    if (!fs.existsSync(abs)) return out;
+    for (const e of fs.readdirSync(abs, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const rel = relDir + '/' + e.name;
+      if (e.isDirectory()) walkRel(rel, match, out);
+      else if (match(rel, e.name)) out.push(rel);
+    }
+    return out;
+  }
+
+  function buildCorpus(name, files) {
+    const entries = files.map(rel => [rel, fs.readFileSync(path.join(REPO, rel), 'utf8')]);
+    // The joined blob is a fast negative filter only; the per-file loop is what names
+    // the reader. Both read the SAME bytes, so the blob can never say "consumed" where
+    // the loop would say otherwise.
+    return { name, entries, joined: entries.map(e => e[1]).join('\n \n') };
+  }
+
+  const routingFiles = []
+    .concat(...claudeEditions.map(ed => walkRel(ed.commandsDir, rel => rel.endsWith('.md'))))
+    .concat(...codexEditions.map(ed => walkRel(ed.skillsDir, rel => rel.endsWith('/SKILL.md'))));
+  const validatorFiles = walkRel('scripts', (rel, name) => /^validate-.*contracts.*\.js$/.test(name))
+    .concat(walkRel('plugins', (rel, name) => /^validate-.*contracts.*\.js$/.test(name)));
+  const suiteFiles = walkRel('scripts', (rel, name) => /^(?:test-|simulate-).*\.js$/.test(name)
+    && rel.indexOf('/', 'scripts/'.length) < 0);
+  const docFiles = walkRel('docs', rel => rel.endsWith('.md'))
+    .concat(walkRel('agents', rel => rel.endsWith('.md')))
+    .concat(walkRel('plugins', rel => /\/agents\/[^/]+\.(?:md|toml)$/.test(rel)));
+
+  const CORPORA = [
+    buildCorpus('routing-surface', routingFiles),
+    buildCorpus('contract-validator', validatorFiles),
+    buildCorpus('suite', suiteFiles),
+    buildCorpus('doc-or-profile', docFiles),
+  ];
+
+  // CORPUS FLOORS — a corpus that quietly went blind (a renamed directory, a tightened
+  // glob) would make every token look unconsumed. That direction is loud anyway (mass
+  // orphan failures), but it must NAME ITSELF rather than be diagnosed from the noise.
+  assert(routingFiles.length >= 6,
+    'K0 corpus: the six routing surfaces must resolve to at least 6 files — got ' + routingFiles.length);
+  assert(validatorFiles.length >= 4,
+    'K0 corpus: the four contract validators must all resolve — got ' + validatorFiles.length);
+  assert(suiteFiles.length >= 20,
+    'K0 corpus: the scripts/test-* + simulate-* suite corpus must resolve — got ' + suiteFiles.length);
+  assert(docFiles.length >= 5,
+    'K0 corpus: the docs + role-profile corpus must resolve — got ' + docFiles.length);
+
+  function firstReader(token, corpus) {
+    if (!corpus.joined.includes(token)) return null;
+    for (const [rel, content] of corpus.entries) if (content.includes(token)) return rel;
+    return null;
+  }
+
+  // ---- the checker — PURE, everything injected -----------------------------
+  // `emissions`: Map<token, [{file,line}]>. `corpora`: [{name, entries, joined}].
+  // `baseline`: string[]. `productionReader(token, emittingFiles)`: file|null — used
+  // ONLY to make the demand honest (a token whose sole reader is a sibling production
+  // script needs that reader migrated first; it is still a failure, but "delete it" on
+  // its own would be a wrong instruction).
+  function checkConditionConsumers({ emissions, corpora, baseline, productionReader }) {
+    const failures = [];
+    const zero = [];
+    const baselineSet = new Set(baseline);
+    for (const [token, sites] of emissions) {
+      const readers = [];
+      for (const c of corpora) {
+        const rel = firstReader(token, c);
+        if (rel) readers.push(c.name + ' ' + rel);
+      }
+      if (readers.length) continue;
+      zero.push(token);
+      if (baselineSet.has(token)) continue;
+      const where = sites.slice(0, 3).map(s => s.file + ':' + s.line).join(', ')
+        + (sites.length > 3 ? ' (+' + (sites.length - 3) + ' more)' : '');
+      const prod = typeof productionReader === 'function'
+        ? productionReader(token, new Set(sites.map(s => s.file)))
+        : null;
+      failures.push('orphan-condition: `' + token + '` is emitted at ' + where
+        + ' and read by NO routing surface, NO contract validator, NO suite and NO doc. '
+        + (prod
+          ? 'Its only reader is production code at ' + prod + ' — retire that reader with it, '
+            + 'THEN delete this legacy token. '
+          : 'DELETE the condition field at that site — carry the family + payload instead. ')
+        + 'It is migration staging nobody outside production reads, and K cannot reach 0 while it stands.');
+    }
+    zero.sort();
+    const zeroSet = new Set(zero);
+    for (const token of baseline) {
+      if (zeroSet.has(token)) continue;
+      const why = emissions.has(token)
+        ? 'now HAS a consumer'
+        : 'is no longer emitted anywhere';
+      failures.push('stale-baseline: `' + token + '` ' + why + ' — the ratchet moved DOWN. '
+        + 'Delete this entry from ' + CONDITION_BASELINE_PATH + '; the baseline may only shrink, '
+        + 'and an entry that outlives its condition is exactly the hand-kept mirror this guard exists to prevent.');
+    }
+    return { failures, zero };
+  }
+
+  // ---- REAL RUN -----------------------------------------------------------
+  const CONDITION_CENSUS_FILES = fs.readdirSync(path.join(REPO, 'scripts'))
+    .filter(f => /^kaola-workflow-.*\.js$/.test(f))
+    .map(f => 'scripts/' + f)
+    .sort();
+  const emissions = scanConditionEmissions(CONDITION_CENSUS_FILES,
+    rel => fs.readFileSync(path.join(REPO, rel), 'utf8'));
+  assert(emissions.size > 100,
+    'K0 census: the emitted-condition scan must be non-vacuous across all four emission shapes — got '
+    + emissions.size);
+
+  const productionSources = CONDITION_CENSUS_FILES.map(rel => [rel, fs.readFileSync(path.join(REPO, rel), 'utf8')]);
+  const productionReader = (token, emittingFiles) => {
+    for (const [rel, content] of productionSources) {
+      if (emittingFiles.has(rel)) continue;
+      if (content.includes(token)) return rel;
+    }
+    return null;
+  };
+
+  const baselineRaw = JSON.parse(fs.readFileSync(path.join(REPO, CONDITION_BASELINE_PATH), 'utf8'));
+  const baseline = baselineRaw.zero_consumer_conditions;
+  assert(Array.isArray(baseline) && baseline.every(t => typeof t === 'string' && t.length > 0),
+    'K0 baseline: ' + CONDITION_BASELINE_PATH + ' must carry a `zero_consumer_conditions` array of strings');
+  assert(Array.isArray(baselineRaw._doc) && baselineRaw._doc.length > 0,
+    'K0 baseline: the ledger must carry its own `_doc` — an exempt list with no stated reason is a hiding place');
+  assert(new Set(baseline).size === baseline.length,
+    'K0 baseline: no duplicate entries — a duplicate is a row that can be deleted without moving the ratchet');
+  assert(baseline.slice().sort().join('\n') === baseline.join('\n'),
+    'K0 baseline: entries must be sorted — an unsorted ledger merges dirty, and this campaign has already '
+    + 'lost a whole suite to a clean merge of two appends');
+
+  const k0 = checkConditionConsumers({ emissions, corpora: CORPORA, baseline, productionReader });
+  for (const msg of k0.failures) assert(false, 'K0 ' + msg);
+  assert(k0.failures.length === 0,
+    'K0: every emitted legacy condition token is either read by a consumer or carried by the '
+    + CONDITION_BASELINE_PATH + ' ratchet (' + k0.zero.length + ' zero-consumer tokens today)');
+
+  // NON-VACUITY FLOOR. An independent prover measured 21 zero-consumer legacy codes over a
+  // narrower universe than the census K used here; this scan measures many more (see the
+  // report accompanying this change for the disagreement and why it is a superset, not a
+  // contradiction). The floor pins the DIRECTION: if this ever drops below the prover's
+  // number, the consumer scan has gone permissive — matching prose it should not match —
+  // and the trigger has quietly become decorative. A consumed-side floor guards the mirror
+  // image: a scan that matches NOTHING would report every token orphaned.
+  assert(k0.zero.length >= 21,
+    'K0 non-vacuity: the zero-consumer set fell to ' + k0.zero.length + ', below the 21 an independent '
+    + 'prover measured. Either the migration genuinely finished (delete this floor with the baseline) '
+    + 'or the consumer scan went permissive and this guard is now decorative — check which.');
+  assert(emissions.size - k0.zero.length >= 100,
+    'K0 non-vacuity: only ' + (emissions.size - k0.zero.length) + ' tokens were found consumed — a scan '
+    + 'that finds almost nothing has gone blind, and blind reports every token as deletable');
+
+  // ---- MUTATION BATTERY — a green suite is not evidence a guard is armed ----
+  {
+    // The probes are ASSEMBLED AT RUNTIME on purpose. This file is itself in the `suite`
+    // corpus, so a probe token written as one literal would be "consumed" by the very
+    // checker testing it — the exact self-satisfying vacuity this battery exists to
+    // disprove. The assertion right below proves the assembly worked.
+    const ORPHAN = 'zzz' + '_k0_orphan_' + 'probe';
+    const VANISHED = 'zzz' + '_k0_vanished_' + 'probe';
+    const selfSource = fs.readFileSync(__filename, 'utf8');
+    assert(selfSource.indexOf(ORPHAN) < 0 && selfSource.indexOf(VANISHED) < 0,
+      'K0 mutation: the probe tokens must not appear as literals in this file — otherwise this suite is '
+      + 'their own consumer and every mutation below passes vacuously');
+
+    const site = [{ file: 'scripts/kaola-workflow-probe.js', line: 42 }];
+    const orphanOnly = new Map([[ORPHAN, site]]);
+
+    // (1) PLANTED ORPHAN over the REAL corpora — must RED, and must NAME file and line.
+    const planted = checkConditionConsumers({ emissions: orphanOnly, corpora: CORPORA, baseline: [] });
+    assert(planted.failures.length === 1
+      && planted.failures[0].indexOf(ORPHAN) >= 0
+      && planted.failures[0].indexOf('scripts/kaola-workflow-probe.js:42') >= 0
+      && /DELETE the condition field/.test(planted.failures[0]),
+      'K0 mutation: a condition literal with no consumer must RED against the REAL corpora, naming the token '
+      + 'and the file:line that emits it — got ' + JSON.stringify(planted.failures));
+
+    // (2) PLANTED CONSUMED — the mirror image, DERIVED (never a hardcoded token, which
+    //     would be consumed by this file). A token the real corpora do read must stay
+    //     green at a fabricated emission site: a checker that reds on everything proves
+    //     exactly as little as one that reds on nothing.
+    const consumedToken = [...emissions.keys()].find(t => !k0.zero.includes(t));
+    assert(typeof consumedToken === 'string',
+      'K0 mutation: at least one emitted token must be genuinely consumed, or the positive half is untestable');
+    const consumedProbe = checkConditionConsumers({
+      emissions: new Map([[consumedToken, site]]), corpora: CORPORA, baseline: [] });
+    assert(consumedProbe.failures.length === 0 && consumedProbe.zero.length === 0,
+      'K0 mutation: a condition literal WITH a real consumer must stay green — got '
+      + JSON.stringify(consumedProbe.failures));
+
+    // (3) EXEMPT-BY-BASELINE — the same orphan, baselined, is silent (and still counted).
+    const exempted = checkConditionConsumers({ emissions: orphanOnly, corpora: CORPORA, baseline: [ORPHAN] });
+    assert(exempted.failures.length === 0 && exempted.zero.length === 1,
+      'K0 mutation: a baselined orphan must be exempt from the failure and still counted in K');
+
+    // (4) STALE BASELINE, direction A — a baselined token that GAINED a consumer must RED
+    //     and demand its own row be deleted. Without this the ratchet is one-way and the
+    //     ledger outlives the work, which is precisely the hand-kept mirror failure mode.
+    const gained = checkConditionConsumers({
+      emissions: new Map([[consumedToken, site]]), corpora: CORPORA, baseline: [consumedToken] });
+    assert(gained.failures.length === 1 && /stale-baseline/.test(gained.failures[0])
+      && /now HAS a consumer/.test(gained.failures[0]),
+      'K0 mutation: a baselined token that acquired a consumer must RED as stale — got '
+      + JSON.stringify(gained.failures));
+
+    // (5) STALE BASELINE, direction B — a baselined token no longer emitted at all.
+    const vanished = checkConditionConsumers({
+      emissions: orphanOnly, corpora: CORPORA, baseline: [ORPHAN, VANISHED] });
+    assert(vanished.failures.length === 1 && /stale-baseline/.test(vanished.failures[0])
+      && /no longer emitted anywhere/.test(vanished.failures[0]),
+      'K0 mutation: a baselined token that is no longer emitted must RED as stale — got '
+      + JSON.stringify(vanished.failures));
+
+    // (6) PERMISSIVE-SCAN VACUITY — the failure mode where the guard survives but stops
+    //     biting. A corpus that matches the orphan makes it look consumed; because the
+    //     baseline still carries it, the stale direction fires. The two directions
+    //     together are what make "everything looks consumed" impossible to reach quietly.
+    const permissive = checkConditionConsumers({
+      emissions: orphanOnly,
+      corpora: [{ name: 'permissive', entries: [['fake', ORPHAN]], joined: ORPHAN }],
+      baseline: [ORPHAN] });
+    assert(permissive.failures.length === 1 && /stale-baseline/.test(permissive.failures[0]),
+      'K0 mutation: a scan gone permissive must RED through the stale direction rather than go quiet');
+
+    // (7) BLIND-CORPUS — zero corpora reports everything orphaned. Loud, not silent.
+    const blind = checkConditionConsumers({ emissions: orphanOnly, corpora: [], baseline: [] });
+    assert(blind.failures.length === 1 && /orphan-condition/.test(blind.failures[0]),
+      'K0 mutation: a blind consumer scan must RED loudly rather than pass');
+
+    // (8) PRODUCTION-ONLY READER — the demand must change wording, not severity. A token
+    //     whose sole reader is a sibling production script still fails, but "delete it"
+    //     alone would be a wrong instruction.
+    const prodOnly = checkConditionConsumers({
+      emissions: orphanOnly, corpora: CORPORA, baseline: [],
+      productionReader: () => 'scripts/kaola-workflow-claim.js' });
+    assert(prodOnly.failures.length === 1
+      && /Its only reader is production code at scripts\/kaola-workflow-claim\.js/.test(prodOnly.failures[0])
+      && !/DELETE the condition field/.test(prodOnly.failures[0]),
+      'K0 mutation: a production-only reader must still fail, with the migrate-then-delete instruction');
+
+    // (9) THE SCANNER itself — both directions. An empty file set yields nothing; a
+    //     synthetic emission is found at its exact line.
+    assert(scanConditionEmissions([], () => '').size === 0,
+      'K0 mutation: the emission scanner over an empty file set must be empty');
+    const synthetic = ['// header', '', "  return { result: 'refuse', reason: '" + ORPHAN + "' };"].join('\n');
+    const scanned = scanConditionEmissions(['scripts/kaola-workflow-synthetic.js'], () => synthetic);
+    assert(scanned.has(ORPHAN) && scanned.get(ORPHAN)[0].line === 3
+      && scanned.get(ORPHAN)[0].file === 'scripts/kaola-workflow-synthetic.js',
+      'K0 mutation: the emission scanner must report the exact file and line that mints a token');
+    assert(scanConditionEmissions(['x'], () => "reason: 'nounderscore'").size === 0,
+      'K0 mutation: the scanner must keep the census filter (a token with no underscore is not a legacy code)');
+
+    // (10) THE SHAPE EXTRACTOR — fails closed, never silently against nothing.
+    assert(extractSweepShapes('const EMISSION_SHAPES = [\n];\n') === null,
+      'K0 mutation: extractSweepShapes must return null on a gutted array rather than compare against nothing');
+    assert(extractSweepShapes('# no such block') === null,
+      'K0 mutation: extractSweepShapes must return null when the anchor is absent or renamed');
+    assert(extractSweepShapes(null) === null,
+      'K0 mutation: extractSweepShapes must be total on a non-string input');
+    assert(JSON.stringify(extractSweepShapes('\nconst EMISSION_SHAPES = [\n  /a_b/g,\n];\n')) === JSON.stringify(['a_b g']),
+      'K0 mutation: extractSweepShapes must read a well-formed block');
+  }
+
+  // ---- THE COUNTDOWN BANNER — K and its deletable remainder, on every run --
+  const unbaselined = k0.zero.filter(t => baseline.indexOf(t) < 0).length;
+  console.log('CONDITION CENSUS (K -> 0) — distinct_condition_values=' + emissions.size
+    + '  consumed=' + (emissions.size - k0.zero.length)
+    + '  zero_consumer=' + k0.zero.length
+    + '  baselined=' + baseline.length
+    + '  unbaselined=' + unbaselined);
+  console.log('  the ratchet may only shrink; `condition:` is migration staging, and a token no routing '
+    + 'surface, validator, suite or doc reads is a field to delete.');
+  if (process.argv.indexOf('--condition-census') >= 0) {
+    console.log(JSON.stringify({
+      distinct_condition_values: emissions.size,
+      zero_consumer_conditions: k0.zero,
+      sites: k0.zero.reduce((acc, t) => {
+        acc[t] = (emissions.get(t) || []).map(s => s.file + ':' + s.line);
+        return acc;
+      }, {}),
+    }, null, 2));
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
