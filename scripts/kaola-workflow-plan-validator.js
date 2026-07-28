@@ -196,10 +196,12 @@ const OPERATOR_HINT_REGISTRY = {
   internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
 };
 
+// ADR 0013 / M3: one accessor, one fallback chain, shared with every other aggregator that
+// owns a legacy hint table — this table first (today's text verbatim, forge paths intact),
+// then the FAMILY hint from the kernel registry, then the generic fallback below.
 function getOperatorHint(reason, ctx) {
-  const fn = OPERATOR_HINT_REGISTRY[reason];
-  if (fn) return fn(ctx || {});
-  return `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+  const fallback = `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+  return schema.composeOperatorHint(reason, ctx || {}, OPERATOR_HINT_REGISTRY, fallback);
 }
 
 const TERMINAL_ROLE = 'finalize';

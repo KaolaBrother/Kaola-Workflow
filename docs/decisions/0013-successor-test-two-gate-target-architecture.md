@@ -235,6 +235,42 @@ through" structural rather than prose discipline:
    default-on with an exempt list carrying a one-line reason per entry — never an
    opt-in allowlist.
 
+### Amendment A1 — the enumerated vocabulary
+
+This is the enumerated list Layer 2 refers to. It is **normative and closed**: adding a
+row is an amendment to this ADR, which is the anti-growth ratchet in its literal form.
+`scripts/test-refusal-route-sweep.js` parses this table and asserts it equals
+`Object.keys(KERNEL_REFUSAL_REGISTRY)` and `KERNEL_REFUSAL_VOCABULARY` exactly, in both
+directions — so the registry has no independent content to drift with, and a code minted
+in a script (including one built by string concatenation at runtime) fails the build.
+
+| Code | Locus | auto_remediable |
+|---|---|---|
+| `kernel_write_failed` | L1 | yes |
+| `kernel_cas_lost` | L1 | yes |
+| `kernel_integrity_broken` | L1 | **no** (R4) |
+| `kernel_lock_held` | L1 | yes |
+| `kernel_evidence_missing` | L1 | yes |
+| `sink_verdict` | L2 | yes |
+| `consent_required` | A3 | **no** (values call) |
+
+Specificity is carried in the payload. Each family declares its discriminator enum in
+`REFUSAL_PAYLOAD_SCHEMAS`, and its route table is keyed by that same enum — the sweep
+proves the two key sets equal in both directions, so a discriminator value with no route
+and a route for an undeclared value are both build failures.
+
+`kernel_evidence_missing` is a **deliberate +1** to the four L1 families named in Layer 2
+above, and is flagged as such rather than absorbed silently. Its justification is this
+ADR's own transition table — `close(unit) | evidence recorded (**L1**)` — plus the #825
+verdict on the claim boundary, which rules in the same language that a lost selection
+rationale is an irreversible kernel-record loss. `kernel_write_failed` means *the write
+did not take*; this means *the write was never made and the content no longer exists to
+make it*: a different actor (the agent, not the substrate) and a different route class
+(an in-grammar verb, never `environment`). The alternative — folding it into
+`kernel_write_failed` with `record: 'evidence', defect: 'absent'` — remains open to the
+owner; the ratchet exists precisely to make this choice expensive, so it is recorded here
+in the open rather than absorbed by an implementer.
+
 ### The parallel structure, retained — and mechanically strengthened (T9)
 
 "Parallel by default; serial requires evidence" is not carried over as a custom — it is

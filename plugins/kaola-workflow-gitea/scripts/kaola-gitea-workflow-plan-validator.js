@@ -100,7 +100,14 @@ const OPERATOR_HINT_REGISTRY = {
   child_frontier_unclosable: () => 'A review_repair child epoch carrying an inherited findings frontier declares no validation vectors (validation_command / validation_timeout_minutes) — its gate can produce no vector digest for a resolution to cite, so the frontier can never close. Declare the validation policy in ## Meta and re-freeze.',
   sensitive_write_unreviewed: () => 'A sensitive file was written without a completed security-reviewer node. Add a security-reviewer gate to the plan.',
   unattributed_write: (ctx) => `File "${ctx.file || '(unknown)'}" was written but not attributed to any node\'s write set. Add it to a node\'s declared write set.`,
-  unattributed_change: () => 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node or run revert-overflow.',
+  unattributed_change: (ctx) => (ctx && ctx.route === 'final-fix-commit')
+    ? 'A file changed on this branch is not attributed to any complete node\'s write set. The sink is LIVE and still PRISTINE, so a finalize-time fix has a recorded home: fix it however you judge best, then record it with node scripts/kaola-gitea-workflow-adaptive-node.js final-fix-commit --project <project> --json --stdin (the entry names the exact failed command, the fix commit, the touched paths and the green rerun receipt). Otherwise attribute the file to a node or run revert-overflow.'
+    : 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node or run revert-overflow.',
+  // The sink-owned final-fix register is an ATTRIBUTION source, so an unverified register is a
+  // laundering primitive: append a path and an unreviewed file ships attributed. Refuse on its OWN
+  // reason rather than reporting the smuggled path as `unattributed_change`, whose documented cure —
+  // delete the file — would be a lie about the real fault (mirrors epoch_lineage_unverified).
+  final_fix_register_unverified: (ctx) => `The sink-owned final-fix register (.cache/${schema.FINAL_FIX_REGISTER_NAME}) did not verify (${(ctx && ctx.register_reason) || 'unknown'}), so its entries cannot widen the attributed set. This is NOT an unattributed_change and must not be answered by deleting the changed files: the register is written only by final-fix-commit, so a mismatch means it was edited out of band. Restore it from the recorded entries (or remove it and re-record each fix through final-fix-commit), then re-run the finalize check.`,
   // #724: the whole-plan barrier unions the SEALED parent-epoch write sets into the allowlist, so the
   // epoch snapshots are load-bearing safety evidence. When the on-disk lineage does not verify, the
   // barrier refuses HERE rather than falling through to a child-only allowlist — that fallthrough
@@ -190,10 +197,12 @@ const OPERATOR_HINT_REGISTRY = {
   internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
 };
 
+// ADR 0013 / M3: one accessor, one fallback chain, shared with every other aggregator that
+// owns a legacy hint table — this table first (today's text verbatim, forge paths intact),
+// then the FAMILY hint from the kernel registry, then the generic fallback below.
 function getOperatorHint(reason, ctx) {
-  const fn = OPERATOR_HINT_REGISTRY[reason];
-  if (fn) return fn(ctx || {});
-  return `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+  const fallback = `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+  return schema.composeOperatorHint(reason, ctx || {}, OPERATOR_HINT_REGISTRY, fallback);
 }
 
 const TERMINAL_ROLE = 'finalize';
@@ -584,6 +593,60 @@ function isTestLikePath(p) {
 }
 function barrierExemptPath(p, project) {
   return isWorkflowArtifactPath(p, project) || isBarrierInvisible(p, project) || isTestLikePath(p);
+}
+
+// ---------------------------------------------------------------------------
+// THE FINAL-FIX SURFACE CLASSIFIER — which class of thing a finalize-time fix touched, and therefore
+// which evidence the sink-owned final-fix register demands before it will record it.
+//
+//   VALIDATION APPARATUS — the machinery that JUDGES the product: tests, fixtures, the test/build
+//     tooling glue, and the barrier-invisible docs allowband. Repairing the judge does not move the
+//     product, so the standing certification over the product still holds and the entry's bound
+//     GREEN RERUN receipt is its whole oracle. No re-review.
+//   PRODUCTION — everything else. A production-behavior fix IS admissible through the lane (the
+//     scope wall was deliberately widened; see docs/decisions/D-826-01.md), but only behind a BOUND
+//     RE-CERTIFICATION receipt: a settled PASS review attempt over the POST-FIX candidate. The
+//     receipt is what replaces the wall, so it is verified, not asserted.
+//
+// THE DEFAULT IS THE WHOLE SAFETY ARGUMENT: a path this classifier does not RECOGNIZE is PRODUCTION.
+// An unanticipated surface therefore fails toward the re-certification wall, never through the cheap
+// path. A MIXED entry is production as a whole and names only its production members — classes do
+// not net out, because a green test rerun says nothing about the src file that rode along with it.
+//
+// Reuses isBarrierInvisible (the #424 narrow allowband) and isTestLikePath (the conventional
+// tests/spec layout) rather than restating either, so the classifier cannot drift from the bands the
+// barrier and the finalize sweep already enforce. Pure (no fs).
+// ---------------------------------------------------------------------------
+const FINAL_FIX_TOOLING_BASENAMES = new Set([
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml',
+  'tsconfig.json', 'jsconfig.json', 'jest.config.js', 'jest.config.ts', 'jest.config.json',
+  'vitest.config.js', 'vitest.config.ts', 'babel.config.js', 'karma.conf.js', 'Makefile',
+]);
+function isFinalFixApparatusPath(p, project) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (isBarrierInvisible(rel, project)) return true;             // allowband docs + the project tree
+  if (isTestLikePath(rel)) return true;                          // tests?/ __tests__/ spec/ *.test.* *.spec.*
+  if (/(^|\/)(test|simulate)-[^/]+\.(c|m)?js$/.test(rel)) return true;  // this repo's own test naming
+  if (/(^|\/)(fixtures?|testdata|__fixtures__|__mocks__|__snapshots__)\//.test(rel)) return true;
+  if (FINAL_FIX_TOOLING_BASENAMES.has(rel.split('/').pop())) return true;
+  return false;
+}
+function classifyFinalFixSurface(paths, project) {
+  const production = [];
+  const apparatus = [];
+  for (const raw of (Array.isArray(paths) ? paths : [])) {
+    const rel = String(raw == null ? '' : raw).trim().replace(/^\.\//, '');
+    if (isFinalFixApparatusPath(rel, project)) apparatus.push(rel);
+    else production.push(rel);      // includes the empty/unparseable token: unrecognized ⇒ production
+  }
+  production.sort();
+  apparatus.sort();
+  return {
+    surface_class: production.length ? 'production' : 'validation-apparatus',
+    production,
+    apparatus,
+  };
 }
 
 // Phase-5 sensitivity categories (phase5.md:45-46): auth, payments, user data,
@@ -3202,11 +3265,18 @@ function verifyVerdictBlock(content, opts) {
     }
     const currentCandidate = currentSchema2Candidate();
     const wholeStale = !currentCandidate || receipts.some(receipt => receipt.candidate_digest !== currentCandidate);
-    // An investigation-mode gate certifies NOTHING (certified_producers empty by construction,
-    // deriveGateEffect maps every outcome to 'none', and it post-dominates no producer) — its
-    // receipt binds the pre-write tree by design, so whole-candidate freshness has no launderable
-    // meaning and would wedge any run whose writes legitimately touched surfaces the gate read.
-    if (wholeStale && gateMode !== 'investigation' && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
+    // Freshness binds the RECORD, not a second opinion about it. A gate certifies producers iff one
+    // of its own normalized receipts RECORDED a gate_effect other than 'none' — the runtime wrote
+    // that effect (paired with certifier_digest) once, from the deriveGateEffect it actually
+    // dispatched under. Re-deriving the gate mode from the current plan view instead diverges from
+    // the receipt in both directions: a receipt recording 'none' certifies NOTHING (its receipt
+    // binds the pre-write tree by design and no scoped arm can rescue it — a permanent finalize
+    // wedge once the view re-derives change_gate), and a receipt recording a certifying effect must
+    // keep its staleness wall even where the view now re-derives `investigation`. Fail closed: an
+    // absent or unrecognized recorded value counts as certifying.
+    const recordedCertifying = !receipts.length || receipts.some(receipt =>
+      String(receipt.gate_effect == null ? '' : receipt.gate_effect) !== 'none');
+    if (wholeStale && recordedCertifying && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
       return { ok: false, nodeId: node.id, role: node.role, found: true,
         reason: 'schema-2 certifier receipt is stale for the current candidate' };
     }
@@ -6825,10 +6895,72 @@ function main() {
         }
       }
     }
+    // #826 — THE THIRD ATTRIBUTED SOURCE + THE DEVIATION ROUTE.
+    //
+    // Finalization used to be the ONE phase where the orchestrator had LESS freedom than mid-run: the
+    // finalize prose prescribes a fix lane for a failed final validation, the fix lands, and this
+    // sweep then refuses it `unattributed_change` — because it credits exactly two sources, the
+    // narrow allowband and `complete`-node declared write sets. On an all-concrete spine every other
+    // sanctioned exit is closed by construction, so the prescription manufactured the very refusal
+    // that blocked it. The sink-owned final-fix register is the recorded form of that same decision:
+    // a THIRD attributed source, and the `route` below turns the refusal into a fork rather than a
+    // dead end.
+    //
+    // THE LAUNDERING WALL comes first, and it is the same argument #753 makes for the sealed parent
+    // epochs: an attribution source that has not been PROVED cannot widen the attributed set. A
+    // register that does not verify refuses on its OWN reason and never reports the smuggled path as
+    // `unattributed_change`, whose documented cure (delete the file) would be a lie about the fault.
+    const finalFixRegisterPath = path.join(cacheDir, schema.FINAL_FIX_REGISTER_NAME);
+    let finalFixRaw = null;
+    try { finalFixRaw = fs.readFileSync(finalFixRegisterPath, 'utf8'); } catch (_) { finalFixRaw = null; }
+    const finalFixAttributed = new Set();
+    if (finalFixRaw != null) {
+      let parsedRegister = null;
+      try { parsedRegister = JSON.parse(finalFixRaw); } catch (_) { parsedRegister = null; }
+      const proof = parsedRegister === null
+        ? { ok: false, reason: 'register_malformed', detail: 'unparseable JSON' }
+        : schema.verifyFinalFixRegister(parsedRegister, readStoredHash(content) || null,
+          files => classifyFinalFixSurface(files, projTag));
+      if (!proof.ok) {
+        const out = { result: 'refuse', reason: 'final_fix_register_unverified',
+          register_reason: String(proof.reason || 'unknown'),
+          operator_hint: getOperatorHint('final_fix_register_unverified', { register_reason: proof.reason }),
+          errors: ['the sink-owned final-fix register at ' + finalFixRegisterPath + ' did not verify ('
+            + proof.reason + (proof.detail ? ': ' + proof.detail : '')
+            + ') — the finalize attribution sweep credits its entries, so an unverified register cannot'
+            + ' be trusted to widen the attributed set; this is NOT an unattributed_change and must not'
+            + ' be answered by deleting the changed files'] };
+        process.stdout.write((json ? JSON.stringify(out)
+          : 'typed refusal: final_fix_register_unverified (' + proof.reason + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      for (const p of proof.files) finalFixAttributed.add(p);
+    }
+    // The deviation route is CONTEXT-bound, not a blanket reason→verb mapping: `final-fix-commit` is
+    // offered only while the lane is actually open (the unique terminal sink row is `in_progress` AND
+    // the sink is still pristine). Advertising it after the push would send the orchestrator at a
+    // refusal it could never clear.
+    let finalizeRoute = null;
+    {
+      const sinkRow = schema.finalizeSinkStatus(nodes, id => ledger.get(id));
+      if (sinkRow.live) {
+        const progress = schema.deriveSinkProgressFromState({
+          readFile: p => fs.readFileSync(p, 'utf8'),
+          statePath: path.join(path.dirname(path.resolve(planPath)), 'workflow-state.md'),
+          repoRoot: root,
+        });
+        if (progress.state === 'pristine') finalizeRoute = schema.FINAL_FIX_SUBCOMMAND;
+      }
+    }
     const unattributed = changed.filter(p =>
-      !isBarrierInvisible(p, projTag) && !/^kaola-workflow\//.test(p) && !completeDeclared.has(p));
+      !isBarrierInvisible(p, projTag) && !/^kaola-workflow\//.test(p)
+      && !completeDeclared.has(p) && !finalFixAttributed.has(p));
     if (unattributed.length) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', operator_hint: getOperatorHint('unattributed_change'), unattributed, errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] }) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
+      const out = { result: 'refuse', reason: 'unattributed_change',
+        operator_hint: getOperatorHint('unattributed_change', { route: finalizeRoute }), unattributed,
+        errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] };
+      if (finalizeRoute) out.route = finalizeRoute;
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
       process.exitCode = 1; return;
     }
     // #653: the pass payload echoes the verified binding in consumer mode ONLY (boundCandidateHash
@@ -7102,6 +7234,11 @@ module.exports = {
   TEST_CUSTODY_ROLES,
   parseTestCustodyExemptions,
   isTestLikePath,
+  // The finalize deviation route's surface classifier — validation APPARATUS (cheap path: the bound
+  // green rerun receipt alone) vs PRODUCTION behavior (admissible only behind a bound
+  // re-certification receipt). Conservative by default: an unrecognized path is production.
+  isFinalFixApparatusPath,
+  classifyFinalFixSurface,
   // Producer/consumer role classification for the node-to-node channel's consumed-proof (the lifecycle
   // aggregator imports the SAME sets so the split never drifts).
   PRODUCER_ROLES,

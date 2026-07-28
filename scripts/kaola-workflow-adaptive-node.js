@@ -677,24 +677,19 @@ const OPERATOR_HINT_REGISTRY = {
 // reverting the overflow, by amending the surface, or by reshaping the spine, so naming any verb
 // would misdirect. A reason with no entry gains no route — that silence is information.
 // ---------------------------------------------------------------------------
-const DEVIATION_ROUTES = {
-  // Out-of-set writes: discard them and re-land inside the declared set.
-  write_set_overflow: 'revert-overflow',
-  write_set_granularity: 'revert-overflow',
-  lockfile_write: 'revert-overflow',
-  mirror_write: 'revert-overflow',
-  count_bump: 'revert-overflow',
-  // Writes nobody declared: attribute them onto a surface and re-review, rather than discard.
-  unattributed_write: 'amend-surface',
-  // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which is a
-  // spine change — a node-level fix cannot conjure a reviewer the frozen plan never contained.
-  sensitive_write_unreviewed: 'shape_refutation',
-  // #826: a production-behavior final fix whose re-certification cannot be produced. The lane
-  // ADMITS production surfaces, but only behind a settled PASS over the post-fix candidate; when
-  // that receipt is unobtainable the plan simply has no authority that can certify the change, and
-  // the fallback is the same one every "the frozen shape cannot express this" case takes.
-  final_fix_production_surface: 'shape_refutation',
-};
+// ONE SOURCE (ADR 0013 / M3): the table is DERIVED from the kernel registry's per-finding
+// route resolver (`SINK_FINDING_ROUTE_BY_SUBTYPE` / `_BY_KIND` in adaptive-schema), which is
+// itself keyed by the composite sink verdict's own discriminator enums. This aggregator holds
+// no independent copy, so the two cannot drift and a route can only be changed in one place.
+// The emitted values are unchanged — each kernel entry carries the bare verb token verbatim:
+//   out-of-set writes (write_set_overflow / _granularity / lockfile_write / mirror_write /
+//     count_bump)                    -> revert-overflow  (discard, re-land inside the set)
+//   unattributed_write               -> amend-surface    (attribute + re-review, not discard)
+//   sensitive_write_unreviewed       -> shape_refutation (adding a reviewer gate is a spine change)
+//   final_fix_production_surface     -> shape_refutation (#826: no authority can certify it in-plan)
+// `foreign_archive` remains ABSENT — the kernel records it as an explicit null so the sweep
+// knows the silence is intentional rather than a gap.
+const DEVIATION_ROUTES = reviewSchema.deriveDeviationRoutes();
 
 // finalizeDeviationRoute — the CONTEXT-BOUND route for a refusal fired during finalization. Returns
 // the recorded verb when the sink's lane is genuinely OPEN (the unique terminal `finalize` row is
@@ -726,19 +721,17 @@ function finalizeDeviationRoute(opts, content) {
 // time, not stored, so the string is always consistent with the reason it
 // accompanies.
 // ---------------------------------------------------------------------------
+// ADR 0013 / M3: the lookup itself now lives in the kernel (`composeOperatorHint`), so all
+// four hint tables share ONE accessor with ONE fallback chain — this table first (so today's
+// text, and the forge ports' renamed script paths, are reproduced byte-for-byte), then the
+// FAMILY hint from the kernel registry, then this generic fallback. The middle rung closes the
+// hole this fallback used to fill for every emitted code with no template of its own.
 function getOperatorHint(reason, ctx) {
   const safeCtx = ctx || {};
   const fallback = 'Refusal reason: ' + (reason || 'unknown')
     + (safeCtx.nodeId ? ' (node ' + safeCtx.nodeId + ')' : '')
     + '. Run orient to inspect the plan + ledger state and the relevant plan-run recovery card.';
-  const tmpl = OPERATOR_HINT_REGISTRY[reason];
-  if (typeof tmpl !== 'function') return fallback;
-  try {
-    const out = tmpl(safeCtx);
-    return (typeof out === 'string' && out.trim()) ? out : fallback;
-  } catch (_) {
-    return fallback;
-  }
+  return reviewSchema.composeOperatorHint(reason, safeCtx, OPERATOR_HINT_REGISTRY, fallback);
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +759,11 @@ function decorateOperatorHint(envelope) {
   if (!envelope.reason) return envelope;
   const route = DEVIATION_ROUTES[envelope.reason];
   if (route && !envelope.route) envelope.route = route;
+  // ADR 0013 / M3 — the SECOND stamping seam (the first is schema.refuse). Dual emission:
+  // additive, idempotent, and never a rewrite of `reason` while the kernel runs in 'compat'
+  // mode, so every consumer that string-matches the legacy token keeps working. This seam
+  // covers the envelopes this aggregator builds inline rather than through schema.refuse.
+  reviewSchema.stampRefusalEnvelope(envelope);
   if (typeof envelope.operator_hint === 'string' && envelope.operator_hint) return envelope;
   envelope.operator_hint = getOperatorHint(envelope.reason, envelope);
   return envelope;
@@ -17451,6 +17449,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  // The derived deviation-route table. Exported so the fold is OBSERVABLE: a sweep can prove the
+  // shipped table is the kernel's derivation rather than an independent copy that merely agrees
+  // today. Without the export the derivation is only assertable by re-reading source text.
+  DEVIATION_ROUTES,
   spliceLedgerNode,
   readLedgerStatuses,
   // The same-kind, superset-proven dispatch swap + its record readers, exported for direct coverage

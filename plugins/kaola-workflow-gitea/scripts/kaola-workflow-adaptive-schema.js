@@ -400,6 +400,11 @@ const REPLAN_DURABLE_WRITE_LABELS = Object.freeze([
   'after_tx_consent_resumed', 'after_tx_failure_snapshot', 'after_tx_failure_task_mirror',
   'after_tx_failure_cleanup',
   'after_predecessor_history', 'after_source_history',
+  // The discard exit (`replan abort`). Journal-ahead ordering: the abort RECORD lands first, then
+  // the reversible artifacts, then the transaction, and the fence is dropped LAST — so a crash at
+  // any prefix leaves either a still-fenced project a re-run of abort finishes, or a clean one.
+  'after_abort_record', 'after_abort_artifact_unlinked', 'after_abort_transaction_unlinked',
+  'after_state_abort_unfenced',
 ]);
 const REPLAN_DURABLE_WRITE_LABELS_DYNAMIC = Object.freeze({
   after_snapshot_stage_file: 'after_snapshot_stage_file:<sorted-ordinal>:<path-digest>',
@@ -407,7 +412,15 @@ const REPLAN_DURABLE_WRITE_LABELS_DYNAMIC = Object.freeze({
   after_cache_unlinked: 'after_cache_unlinked:<sorted-ordinal>:<path-digest>',
   after_tx_candidate_changed: 'after_tx_candidate_changed:<cas-seam>',
   after_state_candidate_changed: 'after_state_candidate_changed:<cas-seam>',
+  after_abort_artifact_unlinked: 'after_abort_artifact_unlinked:<sorted-ordinal>:<path-digest>',
 });
+// The transaction phases an `abort` may discard, in the order they occur. A transaction is
+// abortable only while the parent epoch has NOT been snapshotted: from `parent_archived` onward the
+// snapshot directory is a durable kernel record keyed by the PARENT epoch, so discarding the
+// transaction beneath it would either strand a manifest naming a transaction that no longer exists
+// (which collides with the next prepare) or require deleting a kernel record to clear it. Past that
+// line the exit is `resume` (roll forward) or a claim-level discard, never `abort`.
+const REPLAN_ABORTABLE_PHASES = Object.freeze(['prepared', 'planner_pending', 'child_frozen']);
 const EPOCH_STATE_FIELD_ORDER = Object.freeze([
   'epoch_schema_version',
   'claim_repository_id',
@@ -4105,7 +4118,739 @@ function emit(obj, opts) {
 }
 
 function refuse(reason, extra) {
-  return Object.assign({ result: 'refuse', reason: reason }, extra || {});
+  return stampRefusalEnvelope(Object.assign({ result: 'refuse', reason: reason }, extra || {}));
+}
+
+// ===========================================================================
+// THE ONE KERNEL REFUSAL REGISTRY (ADR 0013 Amendment A1 / M3)
+//
+// SEVEN enumerated refusal families, all located at L1 / L2 / A3. Advisories, tool
+// outcomes and usage errors are NOT in the vocabulary: they carry no family, no
+// registry row and no sweep obligation.
+//
+// Two structural rules make seven sufficient where the census found ~610 strings:
+//
+//   1. THE ROUTE IS A PURE FUNCTION OF THE PAYLOAD, NOT OF THE CODE. `resolveRoute`
+//      dispatches through ONE resolver per family, keyed by that family's declared
+//      discriminator enum. This is what lets `kernel_write_failed` route to
+//      `environment` on `errno: ENOSPC` and to an idempotent retry verb on a
+//      subprocess non-ok WITHOUT minting a second code.
+//   2. DUAL EMISSION DURING MIGRATION. Every refusal carries its family AND the
+//      legacy `condition` token. `condition` is a payload VALUE, never a registry
+//      key — it is diagnostic text and the P2 census metric, and the count of
+//      distinct `condition` values is what counts down to zero.
+//
+// WHY THIS CANNOT BECOME A HAND-KEPT MIRROR (the ADR's named failure mode — "at 459
+// codes a unified table would be one more hand-kept compliance mirror of the kind
+// #833 subtracts"):
+//   - It has SEVEN rows and cannot grow. `test-refusal-route-sweep.js` parses the
+//     enumerated list out of the ADR markdown and asserts it equals the registry key
+//     set exactly. The registry has no independent content to drift WITH.
+//   - The route column is a FUNCTION, not a table of incidents. Each family's route
+//     table is keyed by that family's own payload-schema enum, and the sweep asserts
+//     the two key sets are equal IN BOTH DIRECTIONS. A discriminator value with no
+//     route is a build failure; a route for a value the schema does not declare is a
+//     build failure. There is nowhere for a stale row to hide.
+//   - The legacy conditions live in an ORDERED CLASSIFIER (pattern rules), not as
+//     registry keys. Adding a legacy condition adds no row anywhere.
+//
+// FORGE-NEUTRALITY IS LOAD-BEARING HERE. This file is byte-copied (never
+// rename-rendered) into every edition, so a route may NEVER carry a
+// `kaola-workflow-<x>.js` filename. Routes name a SCRIPT ID (`adaptive-node`,
+// `replan`, …) plus a bare subcommand token; the consumer maps the id onto its own
+// edition's filename.
+// ===========================================================================
+
+const KERNEL_REFUSAL_VOCABULARY = Object.freeze([
+  'kernel_write_failed',
+  'kernel_cas_lost',
+  'kernel_integrity_broken',
+  'kernel_lock_held',
+  'kernel_evidence_missing',
+  'sink_verdict',
+  'consent_required',
+]);
+
+// The CLOSED route vocabulary. A route is either an in-grammar verb (a script id plus
+// the subcommand/flag token that script's own main() dispatches on) or one of two
+// terminal classes. `consent` is the A3 valve; `environment` names a blocker outside
+// the runtime. Nothing else is a legal exit.
+const ROUTE_TERMINAL_VERBS = Object.freeze(['consent', 'environment']);
+const ROUTE_SCRIPT_IDS = Object.freeze([
+  'adaptive-node', 'replan', 'plan-validator', 'adaptive-handoff', 'commit-node',
+  'claim', 'run-chains',
+]);
+
+// R4: the ONLY routes a non-auto-remediable (integrity) refusal may name. Investigate
+// or discard — never a repair verb, because the deviation IS the evidence and a repair
+// launders it. The sweep asserts membership; a route outside this set is a build failure.
+const INVESTIGATION_OR_DISCARD = Object.freeze([
+  'adaptive-node:orient',
+  'adaptive-node:write-halt',
+  'adaptive-node:discard-speculative',
+  'replan:prepare',
+  'replan:abort',
+  'claim:release',
+]);
+
+function routeKey(route) {
+  if (!route || typeof route !== 'object') return null;
+  return route.script ? route.script + ':' + route.verb : String(route.verb || '');
+}
+
+function inGrammar(script, verb, args) {
+  return Object.freeze({ verb: verb, script: script, args: args == null ? '' : args });
+}
+function terminalRoute(verb, args) {
+  return Object.freeze({ verb: verb, script: null, args: args == null ? {} : args });
+}
+
+// --- family 1: kernel_write_failed -----------------------------------------
+// A durable kernel write was ATTEMPTED and factually did not take. Factual, never
+// normative. The route splits on the payload, not on a second code: a substrate fault
+// (errno, or a subprocess that would not answer) is `environment`; anything else is the
+// idempotent retry verb for the record class.
+const WRITE_FAILED_RECORDS = Object.freeze(['plan', 'position', 'evidence', 'forge_chain']);
+const WRITE_FAILED_BLOCKED_ON = Object.freeze([
+  'candidate_digest', 'candidate_partition', 'anchor_index', 'validation_vectors',
+  'claim_root_base', 'writer_identity', 'plan_contract', 'epoch_authority',
+]);
+const WRITE_FAILED_ENVIRONMENT_ERRNOS = Object.freeze(['ENOSPC', 'EACCES', 'EROFS', 'EMFILE', 'EIO']);
+// Every transition below is idempotent BY CONSTRUCTION — re-running it after the
+// substrate recovers either completes the write or reports it already landed.
+const WRITE_FAILED_RETRY_BY_RECORD = Object.freeze({
+  plan: inGrammar('adaptive-handoff', '--freeze-checked', '<plan> --json'),
+  position: inGrammar('adaptive-node', 'reconcile-running-set', '--project <P> --json'),
+  evidence: inGrammar('adaptive-node', 'record-evidence', '--project <P> --node-id <N> --stdin --json'),
+  forge_chain: inGrammar('claim', 'finalize', '--project <P> --json'),
+});
+
+// --- family 2: kernel_cas_lost ---------------------------------------------
+// A compare-and-set on a durable record LOST: the transition demanded state X, found Y,
+// and writing anyway would silently destroy the newer state. Fires BEFORE any mutation,
+// so a refused call is a pure no-op. The route is always a RE-READ verb, never a force.
+const CAS_RECORDS = Object.freeze([
+  'ledger_row', 'evidence_generation', 'review_receipt', 'review_attempt', 'review_context',
+  'plan_hash', 'parent_plan', 'parent_state', 'claim_root', 'replan_source', 'governance_ack',
+]);
+const CAS_ROUTE_BY_RECORD = Object.freeze({
+  ledger_row: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  evidence_generation: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  review_receipt: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  review_attempt: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  review_context: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  plan_hash: inGrammar('adaptive-handoff', '--freeze-checked', '<plan> --json'),
+  governance_ack: inGrammar('adaptive-handoff', '--freeze-checked', '<plan> --json'),
+  parent_plan: inGrammar('replan', 'resume', '--project <P> --json'),
+  parent_state: inGrammar('replan', 'resume', '--project <P> --json'),
+  claim_root: inGrammar('replan', 'resume', '--project <P> --json'),
+  replan_source: inGrammar('replan', 'resume', '--project <P> --json'),
+});
+
+// --- family 3: kernel_integrity_broken (R4-protected) ----------------------
+// A hash, back-link, lineage or authority anchor does not verify, or the last copy of a
+// kernel record would be destroyed. The deviation IS the evidence, so R4 beats R3
+// absolutely and the route may NEVER be a repair verb.
+//
+// The route derives from `kind`, NEVER from a per-anchor table — a per-anchor table is
+// exactly how the no-auto-repair rule silently becomes forty hand-kept decisions again.
+const INTEGRITY_KINDS = Object.freeze([
+  'hash_mismatch', 'chain_break', 'identity_mismatch', 'unattributed_delta', 'replay_binding',
+  'absent_anchor', 'schema_mismatch', 'noncanonical_bytes', 'last_copy_in_target', 'cycle',
+]);
+const INTEGRITY_ANCHORS = Object.freeze([
+  'plan_hash', 'ledger_chain', 'epoch_lineage', 'epoch_binding', 'snapshot_manifest',
+  'committed_transactions', 'consent_ledger', 'review_journal', 'review_context', 'review_receipt',
+  'validation_vector', 'reviewer_profile', 'barrier_base', 'candidate', 'acceptance_anchor',
+  'merge_ancestry', 'writer_identity', 'legacy_claim_root',
+]);
+const INTEGRITY_ROUTE_BY_KIND = Object.freeze({
+  hash_mismatch: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  identity_mismatch: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  unattributed_delta: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  absent_anchor: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  schema_mismatch: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  noncanonical_bytes: inGrammar('adaptive-node', 'orient', '--project <P> --json'),
+  // A broken back-link, a replayed binding, and a would-be last-copy deletion are the
+  // three kinds where CONTINUING is what destroys the evidence — they escalate rather
+  // than merely report, through the halt verb's own `integrity` reason.
+  chain_break: inGrammar('adaptive-node', 'write-halt', '--project <P> --reason integrity --detail <detail> --json'),
+  replay_binding: inGrammar('adaptive-node', 'write-halt', '--project <P> --reason integrity --detail <detail> --json'),
+  last_copy_in_target: inGrammar('adaptive-node', 'write-halt', '--project <P> --reason integrity --detail <detail> --json'),
+  // A cyclic transaction history can only be DISCARDED — there is no state to re-read.
+  cycle: inGrammar('replan', 'abort', '--project <P> --transaction <id> --json'),
+});
+
+// --- family 4: kernel_lock_held --------------------------------------------
+// Another owner holds the resource this write needs. "Another owner holds it" is the
+// same fact at three granularities, so a project folder already holding another run's
+// kernel records folds here rather than minting a code.
+const LOCK_KINDS = Object.freeze(['scheduler', 'replan_fence', 'project_claim']);
+
+// --- family 5: kernel_evidence_missing -------------------------------------
+// A T1 Evidence record required by a transition is ABSENT at a boundary where proceeding
+// loses it irrecoverably. `kernel_write_failed` means the write did not take; this means
+// the write was never made and the content no longer exists to make it.
+//
+// ABSENCE ONLY. Token form, wrapped values, ordering, whitespace and absent optional
+// fields are normalized on write (R3) and reported as `normalized[]` on the OK envelope.
+// A replayed or copied binding is R4 evidence and lives in `kernel_integrity_broken`
+// with `kind: 'replay_binding'`, never here.
+const EVIDENCE_RECORD_KINDS = Object.freeze(['node_evidence', 'selection_record', 'final_fix_register']);
+const EVIDENCE_ROUTE_BY_RECORD_KIND = Object.freeze({
+  node_evidence: inGrammar('adaptive-node', 'record-evidence', '--project <P> --node-id <N> --stdin --json'),
+  selection_record: inGrammar('claim', 'startup', '--target-issue <N> --target-source <S> --selection-record <path> --json'),
+  // The census design named a `record-final-fix` verb that does not exist. The shipped
+  // verb is `final-fix-commit`; the scanned in-grammar assertion is precisely what turns
+  // that class of mistake (#840: a route naming a dead verb) into a build failure.
+  final_fix_register: inGrammar('adaptive-node', 'final-fix-commit', '--project <P> --json --stdin'),
+});
+
+// --- family 6: sink_verdict (L2) -------------------------------------------
+// ONE composite verdict at the pristine pre-mainline / pre-tag boundary. Report-all in
+// one pass — nothing short-circuits. Every specific condition is a `findings[]` row.
+const SINK_FINDING_KINDS = Object.freeze([
+  'tests_red', 'unattributed_paths', 'unreviewed_change', 'unsettled_review', 'review_wall_absent',
+  'sink_already_started', 'missing_consent', 'forge_chain_unsettled', 'writer_identity_swapped',
+  'candidate_drift', 'final_fix_production_surface', 'final_fix_register_unverified',
+]);
+const SINK_UNATTRIBUTED_SUBTYPES = Object.freeze([
+  'write_set_overflow', 'write_set_granularity', 'lockfile_write', 'mirror_write', 'count_bump',
+  'unattributed_write', 'sensitive_write_unreviewed', 'foreign_archive',
+]);
+
+// The per-finding route resolver, seeded by the barrier reason precedence the plan
+// validator already owns — the same derivation the shipped `DEVIATION_ROUTES` header
+// claims, now with ONE source. `legacy_token` reproduces today's bare-verb route string
+// byte-for-byte, so folding the table changes no emitted value.
+const SINK_FINDING_ROUTE_BY_SUBTYPE = Object.freeze({
+  write_set_overflow: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
+  write_set_granularity: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
+  lockfile_write: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
+  mirror_write: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
+  count_bump: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
+  // Writes nobody declared: attribute them onto a surface and re-review, rather than discard.
+  unattributed_write: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
+  // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which
+  // is a spine change — a node-level fix cannot conjure a reviewer the frozen plan never
+  // contained.
+  sensitive_write_unreviewed: Object.freeze({ route: inGrammar('replan', 'shape-refutation', '--project <P> --json'), legacy_token: 'shape_refutation' }),
+  // DELIBERATE SILENCE, PRESERVED. Writing another run's archive is not curable by
+  // reverting the overflow, by amending the surface, or by reshaping the spine, so naming
+  // any verb would misdirect. The sweep must know the null is intentional, not a gap.
+  foreign_archive: null,
+});
+const SINK_FINDING_ROUTE_BY_KIND = Object.freeze({
+  tests_red: Object.freeze({ route: inGrammar('run-chains', '--project', '<P> --json'), legacy_token: null }),
+  unattributed_paths: Object.freeze({ route: null, legacy_token: null, by_subtype: 'SINK_FINDING_ROUTE_BY_SUBTYPE' }),
+  unreviewed_change: Object.freeze({ route: inGrammar('replan', 'shape-refutation', '--project <P> --json'), legacy_token: null }),
+  unsettled_review: Object.freeze({ route: inGrammar('adaptive-node', 'route-findings', '--project <P> --node-id <N> --json'), legacy_token: null }),
+  review_wall_absent: Object.freeze({ route: inGrammar('replan', 'shape-refutation', '--project <P> --json'), legacy_token: null }),
+  sink_already_started: Object.freeze({ route: inGrammar('claim', 'verify-sink', '--project <P> --json'), legacy_token: null }),
+  // The A3 valve is reachable from INSIDE the composite without a second code.
+  missing_consent: Object.freeze({ route: terminalRoute('consent', {}), legacy_token: null }),
+  forge_chain_unsettled: Object.freeze({ route: inGrammar('claim', 'finalize', '--project <P> --json'), legacy_token: null }),
+  writer_identity_swapped: Object.freeze({ route: inGrammar('adaptive-node', 'orient', '--project <P> --json'), legacy_token: null }),
+  candidate_drift: Object.freeze({ route: inGrammar('claim', 'finalize', '--check --project <P> --json'), legacy_token: null }),
+  final_fix_production_surface: Object.freeze({ route: inGrammar('replan', 'shape-refutation', '--project <P> --json'), legacy_token: 'shape_refutation' }),
+  final_fix_register_unverified: Object.freeze({ route: inGrammar('adaptive-node', 'final-fix-commit', '--project <P> --json --stdin'), legacy_token: null }),
+});
+
+// --- family 7: consent_required (A3) ---------------------------------------
+// An irreversible or value-laden call that no script may make. The resolution verb rides
+// in the PAYLOAD, never in the route — `consent` is a closed-vocabulary terminal.
+const CONSENT_KINDS = Object.freeze([
+  'halt_fence', 'acceptance_change', 'budget_exhausted', 'turn_reference_conflict',
+  'disambiguation', 'schema_upgrade',
+]);
+
+// ---------------------------------------------------------------------------
+// The payload schemas. THE DISCRIMINATOR ENUMS LIVE HERE, ONE PLACE. Each family's
+// route table is keyed by its own `values` array, and the sweep proves the two key sets
+// equal in both directions — so a new discriminator value without a route, or a route
+// for a value the schema does not declare, fails the build.
+// ---------------------------------------------------------------------------
+const REFUSAL_PAYLOAD_SCHEMAS = Object.freeze({
+  kernel_write_failed: Object.freeze({
+    discriminator: 'record', values: WRITE_FAILED_RECORDS,
+    enums: Object.freeze({ blocked_on: WRITE_FAILED_BLOCKED_ON, errno: WRITE_FAILED_ENVIRONMENT_ERRNOS }),
+    fields: Object.freeze(['record', 'target', 'step', 'blocked_on', 'path', 'errno',
+      'git_stderr_first_line', 'exit_status', 'detail', 'rolled_back', 'retry_verb',
+      'retry_script', 'retry_args', 'node_id', 'project', 'condition']),
+  }),
+  kernel_cas_lost: Object.freeze({
+    discriminator: 'record', values: CAS_RECORDS, enums: Object.freeze({}),
+    fields: Object.freeze(['record', 'field', 'expected', 'found', 'token', 'blocking_rows',
+      'legal_next', 'node_id', 'transaction_id', 'phase', 'seam', 'condition']),
+  }),
+  kernel_integrity_broken: Object.freeze({
+    discriminator: 'kind', values: INTEGRITY_KINDS,
+    enums: Object.freeze({ anchor: INTEGRITY_ANCHORS }),
+    fields: Object.freeze(['anchor', 'kind', 'expected', 'actual', 'path', 'broken_at', 'epoch',
+      'node_id', 'attempt_id', 'bypass_risk', 'auto_remediable', 'legal_exits', 'condition']),
+  }),
+  kernel_lock_held: Object.freeze({
+    discriminator: 'kind', values: LOCK_KINDS,
+    enums: Object.freeze({}), secondary_discriminator: 'stale',
+    fields: Object.freeze(['kind', 'path', 'holder', 'stale', 'held_for_ms', 'occupying_project',
+      'occupying_issue', 'transaction_id', 'phase', 'legal_mutation', 'condition']),
+  }),
+  kernel_evidence_missing: Object.freeze({
+    discriminator: 'record_kind', values: EVIDENCE_RECORD_KINDS,
+    enums: Object.freeze({ defect: Object.freeze(['absent', 'unreadable', 'not_json_object', 'wrong_type']) }),
+    fields: Object.freeze(['record_kind', 'node_id', 'role', 'expected_path', 'defect',
+      'normalized_on_write', 'condition']),
+  }),
+  sink_verdict: Object.freeze({
+    discriminator: 'findings[].kind', values: SINK_FINDING_KINDS,
+    enums: Object.freeze({ scope: Object.freeze(['plan', 'release']), subtype: SINK_UNATTRIBUTED_SUBTYPES }),
+    fields: Object.freeze(['scope', 'findings', 'checks', 'candidate_digest', 'sink_progress',
+      'finalize_transaction', 'condition']),
+  }),
+  consent_required: Object.freeze({
+    discriminator: 'kind', values: CONSENT_KINDS,
+    enums: Object.freeze({ halt_reason: Object.freeze(['consent', 'security', 'test_thrash', 'merge_conflict', 'integrity']) }),
+    fields: Object.freeze(['kind', 'ask', 'options', 'resolution_verb', 'halt_reason', 'node_id',
+      'marker_path', 'clear_command', 'conflicted_paths', 'leg_branches', 'parent_acceptance_digest',
+      'child_acceptance_digest', 'item_delta', 'automatic_review_replans', 'authorized_epoch_ceiling',
+      'authority_scope', 'candidates', 'round', 'cap', 'context_refs', 'condition']),
+  }),
+});
+
+// ---------------------------------------------------------------------------
+// The registry — SEVEN rows. `route` and `hint` are FUNCTIONS of the payload, never
+// tables of incidents. Hints are forge-neutral: they name VERBS, never script paths.
+// ---------------------------------------------------------------------------
+const KERNEL_REFUSAL_REGISTRY = Object.freeze({
+  kernel_write_failed: Object.freeze({
+    locus: 'L1', auto_remediable: true,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_write_failed,
+    route: (p) => {
+      const env = (p.errno && WRITE_FAILED_ENVIRONMENT_ERRNOS.indexOf(p.errno) >= 0)
+        || (p.blocked_on && WRITE_FAILED_BLOCKED_ON.indexOf(p.blocked_on) >= 0);
+      if (env) return terminalRoute('environment', { blocker: p.blocked_on || p.errno || 'unknown', path: p.path || null });
+      if (p.retry_verb && p.retry_script) return inGrammar(p.retry_script, p.retry_verb, p.retry_args);
+      return WRITE_FAILED_RETRY_BY_RECORD[p.record] || null;
+    },
+    hint: (p) => 'A durable ' + (p.record || 'kernel') + ' write did not take'
+      + (p.target ? ' (' + p.target + ')' : '') + (p.step ? ' at step ' + p.step : '')
+      + (p.errno ? ' — errno ' + p.errno : (p.blocked_on ? ' — ' + p.blocked_on + ' could not be computed' : ''))
+      + '. Nothing was recorded, so the transition is a no-op: clear the blocker, then re-run the recorded retry verb — it is idempotent.',
+  }),
+  kernel_cas_lost: Object.freeze({
+    locus: 'L1', auto_remediable: true,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_cas_lost,
+    route: (p) => CAS_ROUTE_BY_RECORD[p.record] || null,
+    hint: (p) => 'A compare-and-set on the ' + (p.record || 'kernel record') + ' lost'
+      + (p.field ? ' on ' + p.field : '') + ': the transition demanded ' + JSON.stringify(p.expected == null ? null : p.expected)
+      + ' and found ' + JSON.stringify(p.found == null ? null : p.found)
+      + '. Nothing was mutated. RE-READ the record — never force the write — then take '
+      + (p.legal_next ? 'the verb the current state admits (' + p.legal_next + ').' : 'the verb the current state admits.'),
+  }),
+  kernel_integrity_broken: Object.freeze({
+    locus: 'L1', auto_remediable: false,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_integrity_broken,
+    route: (p) => INTEGRITY_ROUTE_BY_KIND[p.kind] || null,
+    hint: (p) => 'The ' + (p.anchor || 'kernel') + ' anchor failed its ' + (p.kind || 'integrity')
+      + ' proof' + (p.broken_at ? ' at ' + p.broken_at : '') + '. The deviation IS the evidence, so this is '
+      + 'NEVER auto-repaired: investigate or discard. Do not re-stamp, re-derive or delete the anchor — '
+      + 'that destroys the only record that it changed.',
+  }),
+  kernel_lock_held: Object.freeze({
+    locus: 'L1', auto_remediable: true,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_lock_held,
+    route: (p) => {
+      if (p.kind === 'project_claim') return inGrammar('claim', 'resume', '--project <occupying_project> --json');
+      if (p.kind === 'replan_fence') return inGrammar('replan', 'resume', '--project <P> --json');
+      if (p.stale) return inGrammar('adaptive-node', 'unlock', '--project <P> --holder <pid|none> --json');
+      return terminalRoute('environment', { blocker: 'live_holder', wait_on: (p.holder && p.holder.pid) || null });
+    },
+    hint: (p) => 'Another owner holds the ' + (p.kind || 'scheduler') + ' resource'
+      + (p.holder && p.holder.pid ? ' (pid ' + p.holder.pid + (p.holder.subcommand ? ', ' + p.holder.subcommand : '') + ')' : '')
+      + (p.stale ? ' and the hold is STALE — remove it explicitly through the unlock verb (it refuses while the holder is live, so it cannot double-acquire).'
+        : ' and the holder is LIVE — wait for it, or resume the run that owns it. Never unlink the lock by hand.'),
+  }),
+  kernel_evidence_missing: Object.freeze({
+    locus: 'L1', auto_remediable: true,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_evidence_missing,
+    route: (p) => EVIDENCE_ROUTE_BY_RECORD_KIND[p.record_kind] || null,
+    hint: (p) => 'The ' + (p.record_kind || 'evidence') + ' record required by this transition is '
+      + (p.defect || 'absent') + (p.expected_path ? ' at ' + p.expected_path : '')
+      + '. Proceeding would lose it irrecoverably. Record it, then re-run the transition. '
+      + 'Token FORM is never refused — it is normalized on write.',
+  }),
+  sink_verdict: Object.freeze({
+    locus: 'L2', auto_remediable: true,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.sink_verdict,
+    // Top-level is ALWAYS the read-all-again verb: it is read-only and does not
+    // short-circuit, so following the route can never dead-end. Each finding carries its
+    // own remedy route alongside.
+    route: () => inGrammar('claim', 'finalize', '--check --project <P> --json'),
+    hint: (p) => {
+      const n = Array.isArray(p.findings) ? p.findings.length : 0;
+      const kinds = Array.isArray(p.findings) ? Array.from(new Set(p.findings.map(f => f && f.kind).filter(Boolean))).join(', ') : '';
+      return 'The ' + (p.scope || 'plan') + ' sink refused with ' + n + ' finding'
+        + (n === 1 ? '' : 's') + (kinds ? ' (' + kinds + ')' : '')
+        + '. Every precondition was evaluated in ONE pass — this is the complete list, not the first failure. '
+        + 'Clear each finding through its own route, then re-read them all again.';
+    },
+  }),
+  consent_required: Object.freeze({
+    locus: 'A3', auto_remediable: false,
+    payload_schema: REFUSAL_PAYLOAD_SCHEMAS.consent_required,
+    route: () => terminalRoute('consent', {}),
+    hint: (p) => 'This is a values call no script may make (' + (p.kind || 'consent') + ')'
+      + (p.ask ? ': ' + p.ask : '') + '. Put the decision to the human'
+      + (Array.isArray(p.options) && p.options.length ? ' with the recorded options (' + p.options.join(' | ') + ')' : '')
+      + (p.resolution_verb ? ', then resolve it with: ' + p.resolution_verb : '') + '.',
+  }),
+});
+
+// resolveRoute(code, payload) — the ONE route entry point. Total: never throws, returns
+// null when the payload carries no discriminator the family knows.
+function resolveRoute(code, payload) {
+  const row = KERNEL_REFUSAL_REGISTRY[code];
+  if (!row) return null;
+  try {
+    const route = row.route(isPlainObject(payload) ? payload : {});
+    return route || null;
+  } catch (_) { return null; }
+}
+
+// resolveSinkFindingRoute(finding) — the PER-FINDING resolver inside the composite. Keyed
+// by `kind`, then by `subtype` for the unattributed family. A null result is the
+// deliberate `foreign_archive` silence, not a gap.
+function resolveSinkFindingRoute(finding) {
+  if (!isPlainObject(finding)) return null;
+  if (finding.kind === 'unattributed_paths') {
+    const entry = SINK_FINDING_ROUTE_BY_SUBTYPE[finding.subtype];
+    return entry ? entry.route : null;
+  }
+  const entry = SINK_FINDING_ROUTE_BY_KIND[finding.kind];
+  return entry ? entry.route : null;
+}
+
+// validateRefusalPayload(code, payload) — total, never throws.
+// { ok, errors: [] }. Checks the code is enumerated, the family's discriminator is
+// present and in its declared enum, and (for the composite) that every finding kind and
+// unattributed subtype is declared.
+function validateRefusalPayload(code, payload) {
+  const errors = [];
+  if (KERNEL_REFUSAL_VOCABULARY.indexOf(code) < 0) {
+    return { ok: false, errors: ['code "' + code + '" is not in KERNEL_REFUSAL_VOCABULARY'] };
+  }
+  const schema = REFUSAL_PAYLOAD_SCHEMAS[code];
+  const p = isPlainObject(payload) ? payload : {};
+  if (code === 'sink_verdict') {
+    if (!Array.isArray(p.findings)) errors.push('sink_verdict requires findings[]');
+    else {
+      p.findings.forEach((f, i) => {
+        if (!isPlainObject(f)) { errors.push('findings[' + i + '] is not an object'); return; }
+        if (SINK_FINDING_KINDS.indexOf(f.kind) < 0) errors.push('findings[' + i + '].kind "' + f.kind + '" is not declared');
+        if (f.kind === 'unattributed_paths' && f.subtype != null
+          && SINK_UNATTRIBUTED_SUBTYPES.indexOf(f.subtype) < 0) {
+          errors.push('findings[' + i + '].subtype "' + f.subtype + '" is not declared');
+        }
+      });
+    }
+    if (p.scope != null && schema.enums.scope.indexOf(p.scope) < 0) errors.push('scope "' + p.scope + '" is not declared');
+    return { ok: errors.length === 0, errors: errors };
+  }
+  const d = schema.discriminator;
+  if (p[d] == null) errors.push('missing discriminator "' + d + '"');
+  else if (schema.values.indexOf(p[d]) < 0) errors.push(d + ' "' + p[d] + '" is not declared for ' + code);
+  for (const key of Object.keys(schema.enums)) {
+    if (p[key] != null && schema.enums[key].indexOf(p[key]) < 0) {
+      errors.push(key + ' "' + p[key] + '" is not declared for ' + code);
+    }
+  }
+  return { ok: errors.length === 0, errors: errors };
+}
+
+// ---------------------------------------------------------------------------
+// THE COMPATIBILITY CLASSIFIER — an ORDERED PATTERN RULE LIST, not a per-condition table.
+//
+// This is the anti-mirror boundary. A legacy condition is classified by MATCHING, so the
+// list grows with families and shapes, never with incidents; a token no rule matches is
+// UNCLASSIFIED, which is an honest statement of remaining migration work rather than a
+// silent default. Nothing here is a registry key.
+//
+// Rules are matched IN ORDER, first match wins, so the narrow closed families come before
+// the broad suffix patterns. A `family: null` rule is an explicit statement that a token
+// is NOT in the vocabulary (advisory / tool outcome / usage error / deleted) — it stops a
+// later catch-all from claiming it, and the silence becomes deliberate.
+// ---------------------------------------------------------------------------
+const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
+  // --- explicitly OUT of the vocabulary (silence made deliberate) ----------
+  { family: null, match: [
+    // Advisories that a suffix rule would otherwise claim.
+    'runtime_profile_unavailable', 'no_barrier_base', 'no_group_base', 'no_leg_base',
+    'barrier_failed', 'group_barrier_failed', 'leg_barrier_failed', 'selector_failed',
+    'no_selector_line', 'gate_not_complete', 'node_not_ready', 'no_ready_node',
+    'node_not_found', 'node_not_in_ledger', 'plan_missing', 'next_action_failed',
+    'certifier_binding_seed_missing', 'upstream_not_consumed', 'repair_requires_replan',
+    'repair_limit_reached', 'rebind_limit_reached', 'expansion_point_not_openable',
+    // Outcome values on ok envelopes.
+    'no_worktree', 'worktree_dir_missing', 'frontier_blocked', 'gate_live', 'fanout_refuted',
+    'already_finalized', 'finalize_incomplete', 'project_archived', 'unlink_failed',
+    // Usage errors (exit 2, no locus).
+    'missing_node_id', 'node_id_required', 'attempt_id_required', 'missing_nodes',
+    'too_few_nodes', 'missing_group_id', 'missing_leg_root', 'missing_project',
+    'invalid_args', 'invalid_project', 'invalid_reason', 'unknown_flag',
+    'finding_json_unreadable', 'expansion_composition_malformed',
+    'replan_consent_reference_required',
+  ] },
+
+  // --- A3: the consent valve ----------------------------------------------
+  { family: 'consent_required', patch: { kind: 'halt_fence' }, match: ['halt_pending'] },
+  { family: 'consent_required', patch: { kind: 'acceptance_change' },
+    match: ['acceptance_repair_fenced', 'replan_child_acceptance_changed'] },
+  { family: 'consent_required', patch: { kind: 'budget_exhausted' }, match: ['replan_consent_required'] },
+  { family: 'consent_required', patch: { kind: 'turn_reference_conflict' }, match: ['replan_consent_reference_reused'] },
+  { family: 'consent_required', patch: { kind: 'disambiguation' },
+    match: [/^clarification_/, 'target_ambiguity', 'resume_ambiguous', 'selection_indeterminate'] },
+  { family: 'consent_required', patch: { kind: 'schema_upgrade' }, match: ['review_journal_schema_upgrade_required'] },
+  { family: 'consent_required', patch: { kind: 'halt_fence', halt_reason: 'merge_conflict' }, match: ['merge_conflict'] },
+
+  // --- L1: lock held ------------------------------------------------------
+  { family: 'kernel_lock_held', patch: (c) => ({ kind: 'scheduler', stale: c === 'scheduler_lock_stale' }),
+    match: [/^scheduler_lock/, 'scheduler_locked'] },
+  { family: 'kernel_lock_held', patch: { kind: 'replan_fence' }, match: ['replan_in_progress'] },
+  { family: 'kernel_lock_held', patch: { kind: 'project_claim' },
+    match: ['target_occupied', 'target_set_conflicts_active_work'] },
+
+  // --- L1: evidence missing (ABSENCE only) --------------------------------
+  { family: 'kernel_evidence_missing', patch: { record_kind: 'node_evidence', defect: 'absent' },
+    match: ['evidence_absent'] },
+  { family: 'kernel_evidence_missing', patch: { record_kind: 'selection_record', defect: 'absent' },
+    match: [/^selection_record_/] },
+  { family: 'kernel_evidence_missing', patch: { record_kind: 'final_fix_register', defect: 'absent' },
+    match: ['final_fix_register_unverified'] },
+
+  // --- L2: the composite sink verdict -------------------------------------
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'tests_red', detail: c }] }),
+    match: [/^chains_/, /^final_validation_/, 'repo_kind_undetermined'] },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unattributed_paths', subtype: c, detail: c }] }),
+    match: SINK_UNATTRIBUTED_SUBTYPES },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unattributed_paths', subtype: 'unattributed_write', detail: c }] }),
+    match: ['unattributed_change', 'staging_guard_foreign_archive', 'staging_guard_multi_project',
+      'seam_checkpoint_unattributable'] },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unreviewed_change', detail: c }] }),
+    match: ['gate_unsatisfied', 'verdict_not_pass', 'rebind_base_not_reviewed',
+      'reexpansion_review_wall_missing', 'final_fix_production_surface'] },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unsettled_review', detail: c }] }),
+    match: ['review_attempt_unresolved', 'review_attempt_consumed'] },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'candidate_drift', detail: c }] }),
+    match: [/^candidate_(digest|residue|slice)_changed$/] },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'sink_already_started', detail: c }] }),
+    match: ['reexpansion_after_sink_started', 'final_fix_after_sink_started'] },
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'forge_chain_unsettled', detail: c }] }),
+    match: ['implementation_commit_missing', 'impl_commit_not_ancestor', 'active_folder_still_present',
+      'archive_folder_missing', 'worktree_lingering', 'branch_lingering'] },
+
+  // --- L1: integrity broken (R4) — keyed by KIND, never by anchor ---------
+  { family: 'kernel_integrity_broken', patch: { kind: 'replay_binding' },
+    match: ['evidence_stale', 'evidence_unbound', 'review_journal_replay_identity_mismatch'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'cycle' }, match: [/_cycle$/] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'unattributed_delta' },
+    match: ['candidate_delta_unattributed', 'rebind_base_rewrite_unsafe'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'hash_mismatch' },
+    match: [/_hash_mismatch$/, 'plan_integrity_failed', 'mirror_verify_failed'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'chain_break' },
+    match: [/^ledger_(chain_journal_missing|missing|unparseable)$/, /^replan_transaction_history_/,
+      /^replan_source_history_/, 'expansion_records_malformed', 'review_journal_missing',
+      'replan_committed_predecessor_unresolved', 'replan_history_receipt_collision',
+      'replan_consent_ledger_invalid'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'last_copy_in_target' },
+    match: ['archive_incomplete', 'node_evidence_missing', 'archive_only_in_worktree', 'archive_refused',
+      /^cwd_inside_/] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'absent_anchor' },
+    match: [/^barrier_base_(missing|empty)$/, 'reanchor_provenance_unprovable', 'acceptance_anchor_unreadable',
+      'legacy_claim_upgrade_required', 'drop_base_window_open', 'leg_base_unreachable',
+      'merge_base_unreachable', 'leg_omitted_from_merge', 'leg_baseline_split', 'barrier_base_mismatch'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'noncanonical_bytes' },
+    match: [/_not_canonical$/, /^review_journal_legacy_import_/] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'schema_mismatch' },
+    match: [/_malformed$/, /_schema2_contract_invalid$/, /_version_mismatch$/, /^replan_transaction_(invalid|attempt_invalid)$/,
+      'review_producer_history_invalid', 'state_active_plan_invalid', 'state_epoch_schema_missing',
+      'state_current_epoch_authority_invalid', 'replan_child_first_node_invalid'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'identity_mismatch' },
+    match: [/_identity_mismatch$/, /^snapshot_.*_mismatch$/, /^epoch_lineage_/, 'epoch_state_mismatch',
+      'epoch_contract_invalid', 'current_epoch_authority_invalid', 'replan_child_integrity_failure',
+      /^replan_pre_freeze_cas_/, 'writer_identity_changed', 'review_profile_hash_mismatch',
+      /^review_context_(mismatch|plan_mismatch)$/, 'review_receipt_identity_invalid'] },
+
+  // --- L1: CAS lost -------------------------------------------------------
+  { family: 'kernel_cas_lost', patch: { record: 'ledger_row' },
+    match: ['close_transition_disallowed', 'node_not_complete', 'ledger_row_missing',
+      'ledger_status_unexpected', 'would_orphan_in_progress', 'would_strand_completed_dependent',
+      'expansion_unit_id_collision'] },
+  { family: 'kernel_cas_lost', patch: { record: 'evidence_generation' },
+    match: [/^evidence_generation_/, /^review_generation_/] },
+  { family: 'kernel_cas_lost', patch: { record: 'review_attempt' }, match: ['review_attempt_settled'] },
+  { family: 'kernel_cas_lost', patch: { record: 'review_receipt' },
+    match: ['review_outcome_receipts_immutable', 'review_receipt_immutable'] },
+  { family: 'kernel_cas_lost', patch: { record: 'review_context' }, match: ['review_context_hash_collision'] },
+  { family: 'kernel_cas_lost', patch: { record: 'governance_ack' }, match: ['governance_ack_stale'] },
+  { family: 'kernel_cas_lost', patch: { record: 'parent_plan' },
+    match: ['replan_parent_plan_changed', 'replan_parent_missing', 'replan_parent_hash_invalid'] },
+  { family: 'kernel_cas_lost', patch: { record: 'parent_state' }, match: ['replan_parent_state_changed'] },
+  { family: 'kernel_cas_lost', patch: { record: 'replan_source' },
+    match: ['replan_source_changed', 'replan_source_lineage_mismatch', 'replan_source_conflict'] },
+  { family: 'kernel_cas_lost', patch: { record: 'claim_root' },
+    match: [/^claim_root_/, 'claim_lineage_digest_mismatch', 'claim_worktree_mismatch',
+      'legacy_claim_root_unprovable'] },
+  { family: 'kernel_cas_lost', patch: { record: 'plan_hash' },
+    match: ['replan_child_authority_unverified', 'replan_child_binding_mismatch', 'rebind_replay_diverged'] },
+
+  // --- L1: write failed — the SUFFIX patterns, matched LAST ---------------
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'plan', step: 'freeze', target: c }),
+    match: [/^plan_invalid:/, /^freeze_failed/, 'cannot_reread_plan_after_freeze'] },
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', blocked_on: c.replace(/_unavailable$/, '') }),
+    match: [/_unavailable$/] },
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', step: c }),
+    match: [/^replan_/, /^snapshot_/, /^cleanup_/] },
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'evidence', target: c }),
+    match: [/^evidence_/, /^review_(context|receipt)_persist_failed$/, 'review_evidence_validation_failed',
+      'substitute_evidence_reset_failed'] },
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'forge_chain', target: c }),
+    match: ['finalize_commit_failed', 'archive_exception', 'target_set_label_rollback_failed',
+      'target_set_mismatch'] },
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', target: c }),
+    match: [/_persist_failed$/, /_write_failed$/, /_read_failed$/, /_rollback_failed$/,
+      /_cleanup_failed$/, /_probe_failed$/, /^baseline_/, /^group_baseline_/, /^mirror_(failed|sync_failed)$/,
+      /^leg_(provision|capture)_failed$/, 'ledger_splice_failed', 'seam_checkpoint_failed',
+      'finalize_mirror_refused', 'merge_head_unresolved', 'no_leg_branches'] },
+]);
+
+function matchesRule(rule, condition) {
+  for (const m of rule.match) {
+    if (typeof m === 'string') { if (m === condition) return true; }
+    else if (m instanceof RegExp) { if (m.test(condition)) return true; }
+  }
+  return false;
+}
+
+// classifyRefusalCondition(condition) — the compatibility lookup.
+// Returns { family, patch } for a classified token, { family: null, explicit: true } for a
+// token a rule deliberately excludes, or null when NOTHING matched (unclassified — the
+// P2 remaining-work signal). Total: never throws.
+function classifyRefusalCondition(condition) {
+  if (typeof condition !== 'string' || !condition) return null;
+  for (const rule of REFUSAL_COMPATIBILITY_RULES) {
+    if (!matchesRule(rule, condition)) continue;
+    if (rule.family === null) return { family: null, explicit: true, patch: {} };
+    let patch = {};
+    try { patch = typeof rule.patch === 'function' ? rule.patch(condition) : Object.assign({}, rule.patch); }
+    catch (_) { patch = {}; }
+    return { family: rule.family, explicit: true, patch: patch };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// DUAL EMISSION.
+//
+// `REFUSAL_EMISSION_MODE` is the ONE switch that decides which token rides in `reason`.
+//   'compat' (SHIPPED)  — `reason` keeps its LEGACY token, so every consumer that
+//                         string-matches today keeps working unchanged; the family rides
+//                         in `refusal_family` and the legacy token is mirrored into
+//                         `condition` (the census metric).
+//   'family'            — `reason` carries the FAMILY and `condition` carries the legacy
+//                         token. This is the end state; flipping the constant is the whole
+//                         change, and it is gated on the consumers having migrated.
+//
+// Either way BOTH values are on the envelope, which is what "dual emission" buys: the
+// migration never has a moment where one of the two is unavailable.
+//
+// The stamp is ADDITIVE and IDEMPOTENT: it never overwrites a field a caller already set
+// (a caller knows its concrete situation; the registry only supplies the default), and it
+// never removes or rewrites one.
+// ---------------------------------------------------------------------------
+const REFUSAL_EMISSION_MODE = 'compat';
+
+function stampRefusalEnvelope(envelope) {
+  if (!isPlainObject(envelope)) return envelope;
+  const actionable = envelope.result === 'refuse' || envelope.result === 'halt' || envelope.result === 'warn';
+  if (!actionable) return envelope;
+  const legacy = envelope.condition || envelope.reason;
+  if (typeof legacy !== 'string' || !legacy) return envelope;
+  if (envelope.condition == null) envelope.condition = legacy;
+
+  const classified = classifyRefusalCondition(legacy);
+  if (!classified || !classified.family) return envelope;
+  const row = KERNEL_REFUSAL_REGISTRY[classified.family];
+  if (!row) return envelope;
+
+  if (envelope.refusal_family == null) envelope.refusal_family = classified.family;
+  if (envelope.refusal_locus == null) envelope.refusal_locus = row.locus;
+  if (row.auto_remediable === false && envelope.auto_remediable == null) envelope.auto_remediable = false;
+  if (envelope.refusal_route == null) {
+    // The payload the resolver reads is the envelope itself, widened by the classifier's
+    // derived discriminator — so a call site that already carries the discriminator wins.
+    const payload = Object.assign({}, classified.patch, envelope);
+    for (const key of Object.keys(classified.patch)) {
+      if (envelope[key] == null) payload[key] = classified.patch[key];
+    }
+    const route = resolveRoute(classified.family, payload);
+    if (route) envelope.refusal_route = route;
+  }
+  if (REFUSAL_EMISSION_MODE === 'family') envelope.reason = classified.family;
+  return envelope;
+}
+
+// ---------------------------------------------------------------------------
+// deriveDeviationRoutes() — the shipped bare-verb `route:` table, DERIVED from the
+// per-finding resolver above so the two cannot drift. This is the fold: the routes have
+// ONE source, and the aggregator that emits them holds no independent copy.
+// `foreign_archive`'s absence is preserved by the null entry.
+// ---------------------------------------------------------------------------
+function deriveDeviationRoutes() {
+  const out = {};
+  for (const subtype of Object.keys(SINK_FINDING_ROUTE_BY_SUBTYPE)) {
+    const entry = SINK_FINDING_ROUTE_BY_SUBTYPE[subtype];
+    if (entry && entry.legacy_token) out[subtype] = entry.legacy_token;
+  }
+  for (const kind of Object.keys(SINK_FINDING_ROUTE_BY_KIND)) {
+    const entry = SINK_FINDING_ROUTE_BY_KIND[kind];
+    if (entry && entry.legacy_token) out[kind] = entry.legacy_token;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// composeOperatorHint — THE ONE HINT LOOKUP, shared by every aggregator that owns a
+// legacy template table. The chain is: the caller's legacy template (so today's text is
+// reproduced byte-for-byte and the forge ports keep their renamed script paths) → the
+// FAMILY hint from the kernel registry → the caller's generic fallback.
+//
+// The middle rung is the fold's actual win: the generic fallback used to fire for every
+// emitted code with no template, and a classified code now gets its family's hint instead.
+// ---------------------------------------------------------------------------
+function composeOperatorHint(reason, ctx, legacyTable, genericFallback) {
+  const safeCtx = isPlainObject(ctx) ? ctx : {};
+  const tmpl = legacyTable && legacyTable[reason];
+  if (typeof tmpl === 'function') {
+    try {
+      const out = tmpl(safeCtx);
+      if (typeof out === 'string' && out.trim()) return out;
+    } catch (_) { /* fall through to the family hint */ }
+  }
+  const classified = classifyRefusalCondition(reason);
+  if (classified && classified.family) {
+    const row = KERNEL_REFUSAL_REGISTRY[classified.family];
+    if (row) {
+      try {
+        const merged = Object.assign({}, classified.patch, safeCtx);
+        for (const key of Object.keys(classified.patch)) {
+          if (safeCtx[key] == null) merged[key] = classified.patch[key];
+        }
+        const out = row.hint(merged);
+        if (typeof out === 'string' && out.trim()) return out;
+      } catch (_) { /* fall through to the generic fallback */ }
+    }
+  }
+  return genericFallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -4197,6 +4942,175 @@ function canonicalizeRouteOwners(row, leafToMilestone) {
     owning_node: mapped.length === 1 ? mapped[0] : null });
 }
 
+// ---------------------------------------------------------------------------
+// THE SINK-OWNED FINAL-FIX REGISTER — the ONE commitment point at which a fix produced DURING
+// finalization enters the candidate. Zero regulation on HOW the fix is produced (inline, or
+// dispatched to whichever role fits: no mandated mode, no justifier, no approval); full regulation
+// HERE, where the fix is recorded and the finalize attribution sweep starts crediting it.
+//
+// The register is a per-run `.cache` artifact owned by the LIVE sink: it may only be written while
+// the terminal finalize row is `in_progress` AND the sink is still PRISTINE (nothing pushed). After
+// the sink's first irreversible step the record is immutable history and recovery is a follow-up
+// issue, never a rewrite.
+//
+// DIGEST-BOUND, because the sweep reads it as an ATTRIBUTION source: an unverified register is a
+// laundering primitive (append a path, and an unreviewed file ships attributed). The digest covers
+// { schema_version, plan_hash, entries } and every entry re-states its own gates, so the sweep can
+// re-prove the whole file rather than trust it. A register that does not verify refuses its OWN
+// typed reason — never `unattributed_change`, whose documented cure (delete the file) would be a lie
+// about the real fault.
+//
+// The two helpers below are the SINGLE source both the writer (adaptive-node's final-fix-commit) and
+// the reader (the plan validator's finalize attribution sweep) use, so the two can never disagree
+// about what "verified" means. `classify` is injected — the surface classifier lives with the
+// allowband predicates in the plan validator, and this module stays dependency-free.
+// ---------------------------------------------------------------------------
+const FINAL_FIX_REGISTER_NAME = 'final-fixes.json';
+const FINAL_FIX_SUBCOMMAND = 'final-fix-commit';
+const FINAL_FIX_REGISTER_SCHEMA_VERSION = 1;
+const FINAL_FIX_SURFACE_CLASSES = ['validation-apparatus', 'production'];
+
+// The digest binds the register's whole meaning-carrying core. Recomputable by anyone holding the
+// file: the point is DETECTION of an out-of-band edit, not secrecy.
+function computeFinalFixRegisterDigest(register) {
+  const core = {
+    schema_version: (register && register.schema_version) != null
+      ? register.schema_version : FINAL_FIX_REGISTER_SCHEMA_VERSION,
+    plan_hash: String((register && register.plan_hash) || ''),
+    entries: Array.isArray(register && register.entries) ? register.entries : [],
+  };
+  return sha256Hex(Buffer.from(canonicalJson(core), 'utf8'));
+}
+
+// verifyFinalFixRegister — total, never throws. Re-proves the file AND every entry's own gates.
+// Returns { ok: true, files: [...] } (the union of attributed paths, sorted) or { ok: false, reason,
+// detail }. FAIL-CLOSED in every direction: an unknown schema, a foreign plan_hash, a broken digest,
+// a red rerun, a receipt bound to another command, or a production entry with no re-certification
+// receipt all refuse rather than attribute.
+function verifyFinalFixRegister(parsed, planHash, classify) {
+  if (!isPlainObject(parsed)) return { ok: false, reason: 'register_malformed', detail: 'not a JSON object' };
+  if (parsed.schema_version !== FINAL_FIX_REGISTER_SCHEMA_VERSION) {
+    return { ok: false, reason: 'register_schema_unknown',
+      detail: 'schema_version ' + JSON.stringify(parsed.schema_version) + ' (expected ' + FINAL_FIX_REGISTER_SCHEMA_VERSION + ')' };
+  }
+  if (typeof parsed.plan_hash !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.plan_hash)) {
+    return { ok: false, reason: 'register_plan_hash_malformed', detail: String(parsed.plan_hash) };
+  }
+  if (planHash && parsed.plan_hash !== planHash) {
+    return { ok: false, reason: 'register_plan_hash_mismatch',
+      detail: 'register is bound to plan ' + parsed.plan_hash + ', not ' + planHash };
+  }
+  if (!Array.isArray(parsed.entries)) return { ok: false, reason: 'register_malformed', detail: 'entries is not an array' };
+  if (typeof parsed.digest !== 'string' || computeFinalFixRegisterDigest(parsed) !== parsed.digest) {
+    return { ok: false, reason: 'register_digest_mismatch',
+      detail: 'the recorded digest does not bind the recorded entries — the register was edited out of band' };
+  }
+  const files = new Set();
+  for (const entry of parsed.entries) {
+    const gate = verifyFinalFixEntry(entry, classify);
+    if (!gate.ok) return { ok: false, reason: gate.reason, detail: 'entry ' + JSON.stringify(entry && entry.ordinal) + ': ' + gate.detail };
+    for (const p of entry.files) files.add(p);
+  }
+  return { ok: true, files: Array.from(files).sort(), entries: parsed.entries.length };
+}
+
+// verifyFinalFixEntry — ONE recorded entry's own gates, re-proved from the bytes. Total; never
+// throws. Deliberately does NOT re-run anything: it re-checks that the receipt the writer accepted
+// is still internally coherent, which is exactly what an out-of-band editor has to break.
+function verifyFinalFixEntry(entry, classify) {
+  if (!isPlainObject(entry)) return { ok: false, reason: 'register_entry_malformed', detail: 'not an object' };
+  if (typeof entry.failed_command !== 'string' || !entry.failed_command.trim()) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'failed_command is missing' };
+  }
+  if (typeof entry.fix_commit !== 'string' || !/^[0-9a-f]{7,40}$/.test(entry.fix_commit)) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'fix_commit is not a resolved rev' };
+  }
+  if (!Array.isArray(entry.files) || !entry.files.length
+    || entry.files.some(p => typeof p !== 'string' || !p.trim() || /[*?]|\/$/.test(p))) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'files must be a non-empty list of exact repo-relative paths' };
+  }
+  const rerun = entry.rerun;
+  if (!isPlainObject(rerun) || rerun.command !== entry.failed_command) {
+    return { ok: false, reason: 'register_entry_receipt_unbound',
+      detail: 'the rerun receipt does not name the exact failed command' };
+  }
+  if (rerun.exit_code !== 0) {
+    return { ok: false, reason: 'register_entry_rerun_red', detail: 'rerun exit_code ' + JSON.stringify(rerun.exit_code) };
+  }
+  if (typeof rerun.candidate_hash !== 'string' || !/^[0-9a-f]{64}$/.test(rerun.candidate_hash)) {
+    return { ok: false, reason: 'register_entry_receipt_unbound', detail: 'rerun.candidate_hash is not a candidate binding' };
+  }
+  if (FINAL_FIX_SURFACE_CLASSES.indexOf(entry.surface_class) === -1) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'unknown surface_class ' + JSON.stringify(entry.surface_class) };
+  }
+  if (typeof classify === 'function') {
+    let recomputed = null;
+    try { recomputed = classify(entry.files); } catch (_) { recomputed = null; }
+    if (!recomputed || recomputed.surface_class !== entry.surface_class) {
+      return { ok: false, reason: 'register_entry_surface_mismatch',
+        detail: 'recorded surface_class "' + entry.surface_class + '" does not match the paths it names' };
+    }
+  }
+  if (entry.surface_class === 'production') {
+    const rc = entry.recertification;
+    if (!isPlainObject(rc) || typeof rc.attempt_id !== 'string' || !rc.attempt_id
+      || typeof rc.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/.test(rc.candidate_digest)) {
+      return { ok: false, reason: 'register_entry_recertification_missing',
+        detail: 'a production-surface entry carries no bound re-certification receipt' };
+    }
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// deriveSinkProgressFromState — the ONE derivation of "has the sink taken its first irreversible
+// step?", shared by the adaptive node's sink-progress probe and the plan validator's finalize
+// deviation route so the two can never disagree about whether the lane is open. Resolves the run's
+// branch from `workflow-state.md` (NEVER `git rev-parse HEAD`: the sink runs main-session-direct
+// from the MAIN root, so HEAD would make the predicate inert), then treats a PUSHED branch —
+// `origin/<branch>` exists — as the first irreversible step.
+//
+// THREE-VALUED and FAIL-CLOSED: only 'pristine' admits. A missing origin ref is the pristine
+// not-yet-pushed signal; ANY other failure (no branch pointer, git error, non-repo) collapses to
+// 'unknown', because the dangerous direction is a false 'pristine' after a push.
+// ---------------------------------------------------------------------------
+function deriveSinkProgressFromState(io) {
+  const readFile = io && io.readFile;
+  if (typeof readFile !== 'function') return { state: 'unknown', evidence: 'no readFile seam' };
+  let branch = null;
+  try {
+    const st = readFile(io.statePath);
+    const m = /^branch:\s*(\S+)\s*$/m.exec(String(st || ''));
+    if (m) branch = m[1];
+  } catch (_) { branch = null; }
+  if (!branch) return { state: 'unknown', evidence: 'no branch: pointer in workflow-state.md (cannot derive sink progress)' };
+  const root = (io && io.repoRoot) || process.cwd();
+  const { execFileSync } = require('child_process');
+  try {
+    const out = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/' + branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (String(out).trim()) return { state: 'started', evidence: 'origin/' + branch + ' exists — the sink has pushed (irreversible)' };
+    return { state: 'pristine', evidence: 'origin/' + branch + ' unresolved — the sink has not pushed' };
+  } catch (e) {
+    if (e && e.status === 1) return { state: 'pristine', evidence: 'no origin/' + branch + ' — the sink has not pushed' };
+    return { state: 'unknown', evidence: 'git rev-parse for origin/' + branch + ' failed (status ' + (e && e.status) + ') — cannot derive sink progress' };
+  }
+}
+
+// finalizeSinkStatus — the plan's UNIQUE terminal sink row, read through whatever ledger accessor
+// the caller already holds. `live` is the finalize-context predicate every deviation route keys on:
+// exactly one `finalize` node, and its ledger row is `in_progress`. A plan with zero or several
+// finalize rows is NOT finalize context (fail-closed: no route, no lane).
+function finalizeSinkStatus(nodes, statusOf) {
+  const list = (Array.isArray(nodes) ? nodes : []).filter(n => n && n.role === 'finalize');
+  if (list.length !== 1) return { id: null, status: null, live: false };
+  const id = list[0].id;
+  let status = null;
+  try { status = statusOf(id); } catch (_) { status = null; }
+  status = (status == null || status === '') ? null : String(status).toLowerCase();
+  return { id, status, live: status === 'in_progress' };
+}
+
 module.exports = {
   LANE_STALENESS_MS,
   SHARED_STATE_FIELDS,
@@ -4263,6 +5177,7 @@ module.exports = {
   REPLAN_STATUSES,
   REPLAN_CAS_SEAMS,
   REPLAN_ACTIVATION_STEPS,
+  REPLAN_ABORTABLE_PHASES,
   REPLAN_DURABLE_WRITE_LABELS,
   REPLAN_DURABLE_WRITE_LABELS_DYNAMIC,
   EPOCH_STATE_FIELD_ORDER,
@@ -4401,6 +5316,36 @@ module.exports = {
   spliceComplianceSection,
   emit,
   refuse,
+  // --- ADR 0013 Amendment A1 / M3: the ONE kernel refusal registry ---
+  KERNEL_REFUSAL_VOCABULARY,
+  KERNEL_REFUSAL_REGISTRY,
+  REFUSAL_PAYLOAD_SCHEMAS,
+  REFUSAL_COMPATIBILITY_RULES,
+  REFUSAL_EMISSION_MODE,
+  ROUTE_TERMINAL_VERBS,
+  ROUTE_SCRIPT_IDS,
+  INVESTIGATION_OR_DISCARD,
+  WRITE_FAILED_RETRY_BY_RECORD,
+  WRITE_FAILED_BLOCKED_ON,
+  WRITE_FAILED_ENVIRONMENT_ERRNOS,
+  CAS_ROUTE_BY_RECORD,
+  INTEGRITY_ROUTE_BY_KIND,
+  INTEGRITY_ANCHORS,
+  EVIDENCE_ROUTE_BY_RECORD_KIND,
+  SINK_FINDING_ROUTE_BY_KIND,
+  SINK_FINDING_ROUTE_BY_SUBTYPE,
+  SINK_FINDING_KINDS,
+  SINK_UNATTRIBUTED_SUBTYPES,
+  CONSENT_KINDS,
+  LOCK_KINDS,
+  routeKey,
+  resolveRoute,
+  resolveSinkFindingRoute,
+  validateRefusalPayload,
+  classifyRefusalCondition,
+  stampRefusalEnvelope,
+  deriveDeviationRoutes,
+  composeOperatorHint,
   // The discharge owner projection (.cache/epoch-projections/): the ONE entry shape, its digest
   // verification, the append-order fold, and the route-owner canonicalization both journal route
   // validators apply — the cross-edition anchor for the discharge commitment-point translation.
@@ -4411,4 +5356,18 @@ module.exports = {
   verifyOwnerProjectionEntry,
   foldOwnerProjection,
   canonicalizeRouteOwners,
+  // The sink-owned final-fix register (the finalize deviation route's ONE commitment point): the
+  // filename + verb constants, the digest binding, and the fail-closed verifier BOTH the writer
+  // (adaptive-node) and the finalize attribution sweep (plan-validator) prove the file through.
+  FINAL_FIX_REGISTER_NAME,
+  FINAL_FIX_SUBCOMMAND,
+  FINAL_FIX_REGISTER_SCHEMA_VERSION,
+  FINAL_FIX_SURFACE_CLASSES,
+  computeFinalFixRegisterDigest,
+  verifyFinalFixRegister,
+  verifyFinalFixEntry,
+  // The finalize-context predicates the deviation routes key on: one derivation of "has the sink
+  // pushed?" and one reading of the unique terminal sink row.
+  deriveSinkProgressFromState,
+  finalizeSinkStatus,
 };
