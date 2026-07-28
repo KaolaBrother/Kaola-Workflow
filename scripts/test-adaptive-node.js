@@ -5,6 +5,12 @@
 // Hand-rolled assert + counter; repo style (no framework).
 // Pure core tests use injected shell/readFile/writeFile seams (no subprocess).
 
+// Advisory spawn census. Installed before ANY child_process binding is taken (here or in a
+// required module) so the counted wrappers are what gets bound. Pass-through and fail-open:
+// it can change no assertion and fail no run.
+const spawnCensus = require('./test-spawn-census');
+spawnCensus.install('test-adaptive-node');
+
 // Require the module — will throw "Cannot find module" if not yet written.
 const {
   spliceLedgerNode,
@@ -29839,6 +29845,7 @@ scenario(() => {
 }
 
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
+spawnCensus.report();
 
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
