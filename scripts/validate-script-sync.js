@@ -92,6 +92,31 @@ const COMMON_SCRIPTS = [
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
+  // TEST INFRASTRUCTURE, four-tree. Neither of these two ships to a consumer — the install
+  // manifest emits no test file — but each edition tree needs its OWN copy rather than a
+  // require reaching back into scripts/, because every forge contract validator forbids a
+  // `require('../…')` inside its scripts tree ("must not fall back to root or GitHub plugin
+  // scripts"). That rule is the reason for the duplication, and this group is what stops the
+  // duplication from becoming divergence. Both files are path-independent, so the copies are
+  // exactly byte-identical with no rename normalisation.
+  {
+    label: 'spawn-census module copies (test infrastructure)',
+    files: [
+      'scripts/test-spawn-census.js',
+      'plugins/kaola-workflow/scripts/test-spawn-census.js',
+      'plugins/kaola-workflow-gitlab/scripts/test-spawn-census.js',
+      'plugins/kaola-workflow-gitea/scripts/test-spawn-census.js',
+    ],
+  },
+  {
+    label: 'git-fixture module copies (test infrastructure)',
+    files: [
+      'scripts/test-git-fixture.js',
+      'plugins/kaola-workflow/scripts/test-git-fixture.js',
+      'plugins/kaola-workflow-gitlab/scripts/test-git-fixture.js',
+      'plugins/kaola-workflow-gitea/scripts/test-git-fixture.js',
+    ],
+  },
   {
     label: 'closure-contract module copies',
     files: [

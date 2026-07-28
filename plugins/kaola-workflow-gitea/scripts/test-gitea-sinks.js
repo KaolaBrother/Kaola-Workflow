@@ -4,7 +4,7 @@
 // file destructures child_process so the counted wrappers are what it binds. Advisory,
 // pass-through and fail-open: the require itself is guarded, so a census that is absent
 // or faulty can change no assertion and fail no run.
-try { require('../../../scripts/test-spawn-census').install('test-gitea-sinks'); } catch (_) { /* advisory only */ }
+try { require('./test-spawn-census').install('test-gitea-sinks'); } catch (_) { /* advisory only */ }
 
 const assert = require('assert');
 const fs = require('fs');

@@ -4,7 +4,7 @@
 // file destructures child_process so the counted wrappers are what it binds. Advisory,
 // pass-through and fail-open: the require itself is guarded, so a census that is absent
 // or faulty can change no assertion and fail no run.
-try { require('../../../scripts/test-spawn-census').install('simulate-kaola-workflow-walkthrough'); } catch (_) { /* advisory only */ }
+try { require('./test-spawn-census').install('simulate-kaola-workflow-walkthrough'); } catch (_) { /* advisory only */ }
 
 const fs = require('fs');
 const os = require('os');
