@@ -5173,8 +5173,20 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     match: [/^chains_/, /^final_validation_/, 'repo_kind_undetermined'] },
   { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unattributed_paths', subtype: c, detail: c }] }),
     match: SINK_UNATTRIBUTED_SUBTYPES },
+  // `staging_guard_foreign_archive` is the finalize-time EMISSION of the `foreign_archive`
+  // subtype — the same condition under its legacy token — so it classifies to THAT cell, not to
+  // the generic `unattributed_write` one. This is the `final_fix_production_surface` remedy below
+  // applied where the misfold is BEHAVIOR-VISIBLE rather than coincidental: `unattributed_write`
+  // routes to `amend-surface`, and `foreign_archive`'s route is a DELIBERATE null. Folding the two
+  // handed the operator an exit that ATTRIBUTES another run's archive onto this run's write set —
+  // exactly the laundering the null exists to forbid — while the same hint's WHY clause said the
+  // condition has no cure at all. Classifying to its own cell puts the fact, the WHY and the exit
+  // in ONE cell, and makes the dedicated `foreign_archive` cell reachable from the only legacy
+  // token that means it.
+  { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unattributed_paths', subtype: 'foreign_archive', detail: c }] }),
+    match: ['staging_guard_foreign_archive'] },
   { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unattributed_paths', subtype: 'unattributed_write', detail: c }] }),
-    match: ['unattributed_change', 'staging_guard_foreign_archive', 'staging_guard_multi_project',
+    match: ['unattributed_change', 'staging_guard_multi_project',
       'seam_checkpoint_unattributable'] },
   { family: 'sink_verdict', patch: (c) => ({ findings: [{ kind: 'unreviewed_change', detail: c }] }),
     match: ['gate_unsatisfied', 'verdict_not_pass', 'rebind_base_not_reviewed',
@@ -5307,11 +5319,33 @@ function classifyRefusalCondition(condition) {
 //                         in `refusal_family` and the legacy token is mirrored into
 //                         `condition` (the census metric).
 //   'family'            — `reason` carries the FAMILY and `condition` carries the legacy
-//                         token. This is the end state; flipping the constant is the whole
-//                         change, and it is gated on the consumers having migrated.
+//                         token. This is the end state, and it is gated on the consumers
+//                         having migrated.
 //
-// Either way BOTH values are on the envelope, which is what "dual emission" buys: the
-// migration never has a moment where one of the two is unavailable.
+// WHAT THE SWITCH ACTUALLY COVERS — and it is NOT every refusal this workflow emits.
+//
+// Dual emission is a property of `stampRefusalEnvelope`, so it holds on exactly the envelopes
+// that PASS THROUGH it: the shared `refuse()` constructor above, and the one direct stamp seam.
+// Today that is `kaola-workflow-adaptive-node.js` and `kaola-workflow-replan.js` — and, within
+// those, only the sites built by `refuse()` rather than by an object literal.
+//
+// It does NOT reach `kaola-workflow-claim.js`, `kaola-workflow-plan-validator.js`,
+// `kaola-workflow-adaptive-handoff.js`, `kaola-workflow-commit-node.js`,
+// `kaola-workflow-next-action.js` or `kaola-workflow-run-chains.js`. Those build refusal
+// envelopes as object literals or through their OWN local `refuse` closures, so a refusal from
+// one of them carries no `refusal_family`, `refusal_locus`, `refusal_route` or `condition` even
+// when its token IS classifiable. A consumer that matches on `refusal_family` therefore misses
+// every refusal from those surfaces — including the Gate-1 commitment point
+// (`selection_record_missing`, which classifies to `kernel_evidence_missing` and has a real
+// route). Do not read "dual emission" as a whole-workflow guarantee; it is a per-call-site one.
+//
+// SO FLIPPING THE CONSTANT IS NOT THE WHOLE CHANGE. The flip rewrites `reason` on stamped
+// envelopes only, and it cannot be extended to the rest by wiring the stamp in at those call
+// sites alone: the stamp derives its legacy token from `envelope.condition || envelope.reason`,
+// and those surfaces emit `status` / `verdict` / `handoff_status`-shaped envelopes that carry
+// NEITHER — so the stamp returns them untouched. Reaching them requires those envelopes to
+// carry a `reason` or `condition` FIRST, which is a change to their emitted shape and therefore
+// to what their consumers read. That work is not done, and this comment does not pretend it is.
 //
 // The stamp is ADDITIVE and IDEMPOTENT: it never overwrites a field a caller already set
 // (a caller knows its concrete situation; the registry only supplies the default), and it
