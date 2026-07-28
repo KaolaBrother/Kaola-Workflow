@@ -1246,6 +1246,31 @@ function runReplanHandoff(opts) {
 // ---------------------------------------------------------------------------
 // CLI — thin wrapper; all process I/O and FS live here.
 // ---------------------------------------------------------------------------
+
+// THE DECLARED DISPATCH SET. This script has no subcommand token — the verb IS the flag — so this
+// is the list of flags main() branches on to select WHAT the run does, and a refusal route naming
+// one of them names a real entry point. The registry route sweep READS this declaration instead of
+// scanning the source, because no source-text scan can separate a dispatch flag from an option: it
+// either misses live verbs or accepts `--reason` as one, and a verb-existence guard built on that
+// scan guards nothing. main() remains the source of truth; this is its declaration, and the two
+// must be changed together.
+//
+// The DEFAULT run — the freeze/orient handoff transaction — carries NO verb flag at all: it is
+// `--project <NAME> --json` (or `--plan <PATH> --json`). That is why `--freeze-checked` /
+// `--freeze` / `--governance-ack` / `--resume-check` are absent below: they are PLAN-VALIDATOR
+// flags this script SHELLS (see the SPAWN 1 / SPAWN 2 calls in runHandoff), and its own argv parser
+// never reads them — passing one here is silently ignored, so a route naming it is a dead route.
+//
+// DELIBERATELY EXCLUDED — each of these parameterizes or modifies a run, it never selects one:
+//   value-carrying: --project, --plan, --state-mtime, --reason (of --survey-verdict),
+//                   --question / --context-refs / --round (of --clarification-required)
+//   modifiers:      --json
+//   usage banner:   --help / -h (dispatched positionally off args[0], never a route target)
+const CLI_FLAGS = Object.freeze([
+  '--clarification-required',
+  '--survey-verdict',
+]);
+
 function main() {
   const args = process.argv.slice(2);
 
@@ -1415,4 +1440,6 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, clarificationRequired, CLARIFICATION_ROUND_CAP, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };
+// CLI_FLAGS — the declared CLI dispatch set (see the CLI section header). Exported so the route
+// sweep can verify a route's verb against a DECLARATION rather than an unsound source scan.
+module.exports = { CLI_FLAGS, runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, clarificationRequired, CLARIFICATION_ROUND_CAP, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };
