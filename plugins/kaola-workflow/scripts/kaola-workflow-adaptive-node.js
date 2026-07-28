@@ -320,14 +320,17 @@ const OPERATOR_HINT_REGISTRY = {
   count_bump: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' wrote a count-bump contract/test file not in its declared set. Swap the write set to include it (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
 
-  // --- review-journal route fence: the two mismatch classes. projection_missing is the LEGACY
+  // --- review-journal route fence: the three mismatch classes. projection_missing is the LEGACY
   //     shape (a discharge/journal pair recorded before the owner projection existed) and names the
-  //     machine migration; tamper stays a bare fail-closed integrity signal. Neither ever suggests
-  //     hand-editing the journal. ---
+  //     machine migration; reexpansion_in_flight is the run's OWN in-flight re-expansion append and
+  //     names the re-discharge that closes it; tamper stays a bare fail-closed integrity signal.
+  //     None of the three ever suggests hand-editing the journal. ---
   review_journal_route_mismatch: (ctx) =>
     ctx.route_mismatch_class === 'projection_missing'
       ? 'The review journal routes findings into the discharged interior of expansion point ' + (ctx.point || '<point>') + ', but no .cache/epoch-projections/ owner projection covers it (the discharge or journal predates the projection). Re-run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it re-writes the discharge projection. NEVER hand-edit the journal.'
-      : 'The review journal\'s recorded finding routes do not match the frozen plan — an owner unknown to both the current node table and the discharge projection (tamper-class). The journal is the run\'s integrity anchor and is NEVER hand-edited; run orient to inspect, and finish or discard runs that predate the current release before re-freezing.',
+      : ctx.route_mismatch_class === 'reexpansion_in_flight'
+        ? 'The review journal\'s recorded routes diverge from the plan ONLY by the interior of expansion point ' + (ctx.point || '<point>') + ' that an in-flight re-expansion has opened and no discharge covers yet — the run\'s own append, not tamper. It closes at the RE-DISCHARGE: settle the open unit(s), then run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it appends the superseding owner projection. NEVER hand-edit the journal.'
+        : 'The review journal\'s recorded finding routes do not match the frozen plan — an owner unknown to both the current node table and the discharge projection (tamper-class). The journal is the run\'s integrity anchor and is NEVER hand-edited; run orient to inspect, and finish or discard runs that predate the current release before re-freezing.',
 
   // --- the bounded re-anchor verb (route: rebind-base) ---
   reanchor_provenance_unprovable: (ctx) =>
@@ -1779,12 +1782,97 @@ function readCanonicalReviewContext(opts, contextHash) {
   return { ok: true, context, contextPath };
 }
 
+// ---------------------------------------------------------------------------
+// EVIDENCE TOKEN RESOLUTION — refuse on missing MEANING, never on serialization.
+//
+// A token's value used to be readable only in ONE byte-exact shape: the key at column 0, the value
+// non-whitespace and on the SAME line. A value that wrapped onto the next line, a key indented by a
+// space, or the documented presence-only `findings_none` written without a colon were all refused
+// even though the information was present and correct — a refusal that costs a triage plus a
+// re-dispatch and changes zero product state.
+//
+// The resolution rule, used by EVERY content-token reader (checkEvidenceShape's role branches and
+// the schema-2 review required-token loop):
+//   1. RECOGNITION — the key may carry leading whitespace. Any OTHER prefix character (notably the
+//      seed's `<!--`) still fails to match, so a `<!-- token: paste … -->` seed comment can never
+//      satisfy a check.
+//   2. SAME-LINE VALUE — `token:` followed by a non-whitespace tail resolves to that tail (trimmed).
+//   3. WRAPPED VALUE — when the same-line tail is empty, the value is the IMMEDIATELY following
+//      line, and only when that line is a genuine continuation: it exists, is non-blank, does not
+//      open an `<!-- … -->` comment, and is not itself a `<name>:` key line. No skipping — a blank
+//      line, a comment, a sibling key, or EOF leaves the token EMPTY and the refusal fires unchanged.
+//   4. BARE PRESENT-ONLY TOKEN — a line that is EXACTLY the token name resolves to a canonical value
+//      ONLY for the documented presence-only token (`findings_none`), whose meaning IS its presence.
+//      Every other token written bare still resolves to nothing and still refuses.
+//   5. LAST-MATCH-WINS across all forms, in line order (a corrected re-statement still wins).
+//
+// Deliberately OUT of scope: the `evidence-binding: <node-id> <nonce>` anti-replay header, the
+// `red_baseline` receipt, `upstream_read`'s consumed-proof echo, and the main-session-gate
+// `verdict:` / `instrumentation:` tokens. Those are two-field MACHINE identities whose exact shape
+// is the contract (verdict/instrumentation keep parity with adaptive-schema's parseNodeVerdict), not
+// prose an agent composes — they stay byte-exact.
+// ---------------------------------------------------------------------------
+
+// A line is somebody's `<name>:` KEY line when, after optional leading whitespace, it opens with an
+// identifier immediately followed by ':'. Used only to prove a line is NOT the previous token's
+// wrapped value.
+const EVIDENCE_KEY_LINE_RE = /^[ \t]*[A-Za-z_][A-Za-z0-9_.-]*:/;
+
+// The documented PRESENCE-ONLY token(s). Written bare, the token name alone carries the whole
+// meaning, so it normalizes to a canonical value instead of refusing. Scoped deliberately: a bare
+// `RED` / `build-green` / `finding_json` carries no value and must still refuse.
+const EVIDENCE_PRESENCE_ONLY_TOKENS = Object.freeze({ findings_none: 'true' });
+
+function escapeEvidenceToken(token) {
+  return String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Rule 3. Returns the trimmed continuation value, or null when the next physical line is not one.
+function evidenceContinuationValue(lines, index) {
+  if (index + 1 >= lines.length) return null;
+  const next = String(lines[index + 1]);
+  const trimmed = next.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('<!--')) return null;
+  if (EVIDENCE_KEY_LINE_RE.test(next)) return null;
+  return trimmed;
+}
+
+// (content, token) -> string | null. `null` = the token is absent entirely; `''` = the key is
+// present but carries no resolvable value (both are refused by the non-empty predicate below; the
+// distinction is what the DD-5 absent-key exemption keys off).
 function evidenceTokenValue(content, token) {
-  const escaped = String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp('^' + escaped + ':[ \\t]*(.*?)\\s*$', 'gm');
-  let match, last = null;
-  while ((match = re.exec(String(content || ''))) !== null) last = match[1];
+  const name = String(token);
+  const escaped = escapeEvidenceToken(name);
+  const keyRe = new RegExp('^[ \\t]*' + escaped + ':[ \\t]*(.*?)[ \\t\\r]*$');
+  const bareCanonical = Object.prototype.hasOwnProperty.call(EVIDENCE_PRESENCE_ONLY_TOKENS, name)
+    ? EVIDENCE_PRESENCE_ONLY_TOKENS[name] : null;
+  const bareRe = bareCanonical === null ? null : new RegExp('^[ \\t]*' + escaped + '[ \\t\\r]*$');
+  const lines = String(content || '').split('\n');
+  let last = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(keyRe);
+    if (m) {
+      if (m[1] !== '') { last = m[1]; continue; }
+      const continuation = evidenceContinuationValue(lines, i);
+      last = continuation === null ? '' : continuation;
+      continue;
+    }
+    if (bareRe && bareRe.test(line)) last = bareCanonical;
+  }
   return last;
+}
+
+// The gate predicate: the token resolves to a non-empty value.
+function evidenceTokenSatisfied(content, token) {
+  const value = evidenceTokenValue(content, token);
+  return value !== null && String(value).trim() !== '';
+}
+
+// The DD-5 absent-key probe: the token appears at all (value may be empty).
+function evidenceTokenKeyPresent(content, token) {
+  return evidenceTokenValue(content, token) !== null;
 }
 
 function buildReviewAnchorIndex(opts, context, candidateDigest, rawFindings, nodes, reviewerId) {
@@ -2881,8 +2969,10 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: expectedTokens };
     }
     // The open-time seed contains empty RED:/red_baseline: keys and comments naming both tokens.
-    // Require a non-empty column-0 value so a seed-only file can never satisfy --verify or close.
-    const hasRed = /^RED:[ \t]*(\S.*)$/m.test(content);
+    // Require a non-empty RESOLVED value (same line, or wrapped onto the immediately following
+    // continuation line) so a seed-only file can never satisfy --verify or close: the seed's empty
+    // key is followed by an `<!-- … -->` comment or by EOF, neither of which is a continuation.
+    const hasRed = evidenceTokenSatisfied(content, 'RED');
     if (!hasRed) {
       return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: expectedTokens };
     }
@@ -2914,8 +3004,10 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: expectedTokens };
     }
     // The open-time seed contains an empty key and a comment listing the alternation. Require an
-    // actual non-empty column-0 value so encrypted-return recovery cannot accept untouched scaffolding.
-    const hasChangeType = /^(?:tests-green|regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
+    // actual non-empty RESOLVED value (same line or wrapped) so encrypted-return recovery cannot
+    // accept untouched scaffolding — the seed's empty key is followed by EOF, not a continuation.
+    const hasChangeType = ['tests-green', 'regression-green', 'build-green', 'smoke-integration']
+      .some(tier => evidenceTokenSatisfied(content, tier));
     if (!hasChangeType) {
       return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing verification-tier token', expected: expectedTokens };
     }
@@ -2927,16 +3019,17 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
   // would close a node COMPLETE on a hollow stub with zero ratchet log. Enforce that each of the
   // four non-binding D6 tokens is present AND carries a non-empty value (evidence-binding is
   // checked at the top of this function). Presence-only, per the function's documented contract:
-  // a non-whitespace value after the column-0 `<token>:` is required; the value itself is not
-  // validated. The stub's `<!-- <token>: paste ... -->` comment line is NOT column-0 anchored on
-  // the token key, so it never satisfies the check.
+  // a non-empty RESOLVED value after `<token>:` is required (same line, or wrapped onto the
+  // immediately following continuation line); the value itself is not validated. The stub's
+  // `<!-- <token>: paste ... -->` comment line neither matches the token key (its `<!--` prefix is
+  // not whitespace) nor counts as a continuation, so it never satisfies the check.
   if (role === 'metric-optimizer') {
     if (!content) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for metric-optimizer node ' + nodeId, expected: ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green'] };
     }
     const D6_TOKENS = ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green'];
     for (const token of D6_TOKENS) {
-      const hasValue = new RegExp('^' + token + ':[ \\t]*(\\S.*)$', 'm').test(content);
+      const hasValue = evidenceTokenSatisfied(content, token);
       if (!hasValue) {
         return { ok: false, kind: 'shape', missingTokenClass: token, reason: 'metric-optimizer ' + nodeId + ' evidence missing non-empty ' + token + ' token', expected: D6_TOKENS };
       }
@@ -2959,9 +3052,8 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator')); } catch (_) { ROLE_TOKEN_REGISTRY = {}; }
     const row = (ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || null;
     if (row) {
-      const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const keyPresent = (tok) => new RegExp('^' + esc(tok) + ':', 'm').test(content);
-      const valuePresent = (tok) => new RegExp('^' + esc(tok) + ':[ \\t]*(\\S.*)$', 'm').test(content);
+      const keyPresent = (tok) => evidenceTokenKeyPresent(content, tok);
+      const valuePresent = (tok) => evidenceTokenSatisfied(content, tok);
       for (const tokenClass of row) {
         if (tokenClass === 'evidence-binding') continue;
         const alts = tokenClass.split('|');
@@ -3149,9 +3241,69 @@ function resolveRoleSubstitution(ctx, nodeInfo) {
   return null;
 }
 
+// The SPAWN PARAMETERS of a dispatch card: the identity of the role that will actually be dispatched
+// plus every tier-derived knob an orchestrator is forbidden to improvise. Factored out of
+// `buildDispatch` so the card the three openers emit and the card `substitute-role` re-issues after a
+// mid-node swap are ONE derivation instead of two that can silently drift. Key order matches the object
+// literal it replaces, so every dispatch card stays byte-identical.
+//
+// `dispatchRole` is the DISPATCH TARGET (the substitute when one is on record, the frozen role
+// otherwise) — the task identity derives from it, because the runtime has already consumed the frozen
+// one. The Codex profile pair deliberately reads the FROZEN `nodeInfo.role`: the named role profile is
+// the plan's own declaration and a substitution redirects the dispatch, not the plan.
+function spawnParameterFields(nodeInfo, dispatchRole, sessionProof, opencodeProvider) {
+  return {
+    agent_type:          dispatchRole,
+    codex_dispatch_mode: resolveCodexDispatchMode(),
+    codex_task_name:     codexTaskNameForNode(nodeInfo, dispatchRole),
+    ...dispatchEffort(nodeInfo.model, sessionProof),
+    // Current-Codex adapter: the named role profile inherits the parent pair. The historical role
+    // class remains declarative metadata and never creates a tier/profile conflict.
+    ...codexProfilePolicy(nodeInfo.role, nodeInfo.model),
+    // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
+    // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
+    // present on EVERY dispatch card so no timeout is left to model improvisation.
+    ...waitBudgetMinutes(nodeInfo.model),
+    // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
+    // effort variant (reasoning→top, standard→second) when ctx.opencode_provider is set (opencode
+    // runtime). null/absent provider → role_default (the agent's configured variant wins).
+    ...dispatchEffortOpencode(nodeInfo.model, opencodeProvider),
+  };
+}
+
+// The card a mid-node `substitute-role` RE-ISSUES on its own ok payload. A substitution lands on a node
+// that is ALREADY `in_progress`, and no opener can re-card one: every `buildDispatch` call site resolves
+// its target from the scheduler's readySet and an in_progress row is never in it. So the only card left
+// on disk is the envelope the CONSUMED open wrote, while the plan-run surfaces mandate that every spawn
+// parameter come from the dispatch card and forbid improvising a task name — which left the re-dispatch
+// with no sanctioned source at all. The commit therefore hands the spawn parameters back itself, built
+// from the SAME derivation the openers use, so the payload and the card can never disagree.
+//
+// No session proof and no opencode provider are threaded: both are per-invocation runtime facts this
+// subcommand does not hold, and both resolve to the same role-default sentinels the openers emit when
+// they are absent.
+function reissuedSpawnCard(nodeInfo, substitution) {
+  const card = {
+    ...spawnParameterFields(nodeInfo, substitution.to_role, null, null),
+    // Both roles, exactly as the openers' card states them: what to dispatch (agent_type, above) and
+    // what the frozen plan says. Naming only the substitute would hide the divergence the record
+    // exists to make visible.
+    agent_type_frozen:       nodeInfo.role,
+    role_substituted:        true,
+    role_substitution_basis: substitution.basis,
+  };
+  // A validated planner wait-budget override outranks the tier floor on the openers' card; mirror it
+  // so the re-issued budget is the one the join loop would have honored. Not re-validated here — the
+  // freeze gate already did that, and this value sits on a frozen plan.
+  if (Number.isInteger(nodeInfo.wait_budget_minutes)) {
+    card.wait_budget_minutes = nodeInfo.wait_budget_minutes;
+    card.wait_budget_source = 'planner_override';
+  }
+  return card;
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
-  const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
   // A recorded role substitution redirects the DISPATCH TARGET only. The plan's `role` cell is what
   // was frozen and stays the node's identity everywhere else (model tier still resolves from the
   // plan's own `model` column, so a substitution can never lower a floor). Conditionally attached
@@ -3162,7 +3314,6 @@ function buildDispatch(nodeInfo, context) {
   // card is byte-identical to before.
   const substitution = resolveRoleSubstitution(ctx, nodeInfo);
   const agentType = substitution ? substitution.to_role : nodeInfo.role;
-  const codexTaskName = codexTaskNameForNode(nodeInfo, agentType);
   const d = {
     node_id:            nodeInfo.id,
     role:               nodeInfo.role,
@@ -3174,21 +3325,10 @@ function buildDispatch(nodeInfo, context) {
     required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
-    agent_type:         agentType,
-    codex_dispatch_mode: codexDispatchMode,
-    codex_task_name:    codexTaskName,
-    ...dispatchEffort(nodeInfo.model, nodeInfo.codex_session_proof || ctx.session_proof),
-    // Current-Codex adapter: the named role profile inherits the parent pair. The historical role
-    // class remains declarative metadata and never creates a tier/profile conflict.
-    ...codexProfilePolicy(nodeInfo.role, nodeInfo.model),
-    // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
-    // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
-    // present on EVERY dispatch card so no timeout is left to model improvisation.
-    ...waitBudgetMinutes(nodeInfo.model),
-    // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
-    // effort variant (reasoning→top, standard→second) when ctx.opencode_provider is set (opencode
-    // runtime). null/absent provider → role_default (the agent's configured variant wins).
-    ...dispatchEffortOpencode(nodeInfo.model, ctx.opencode_provider),
+    ...spawnParameterFields(
+      nodeInfo, agentType,
+      nodeInfo.codex_session_proof || ctx.session_proof,
+      ctx.opencode_provider),
   };
   if (ctx.runtime === 'codex' || nodeInfo.codex_session_proof) {
     const proof = nodeInfo.codex_session_proof || ctx.session_proof || { status: 'absent', source: 'session_jsonl' };
@@ -5117,14 +5257,24 @@ function loadOwnerProjection(opts, planHash) {
     points: new Set(folded.points) };
 }
 
-// ensureOwnerProjection — the discharge-side write. Appends the digest-bound entry for THIS
-// discharge (leaf ids of every unit of every record on the point -> the point). APPEND-ONLY per
-// epoch: a re-discharge after a re-expansion appends a superseding entry; valid existing entries are
-// carried over byte-for-byte (entries failing verification are inert on read and dropped on rewrite
-// — the self-healing direction). Idempotent: an entry covering this exact discharge (same point,
-// records, leaves) is already durable, so the write is skipped. Returns 'appended' | 'present' |
-// 'skipped' | 'write_failed' — never throws, because the discharge itself commits FIRST and the
-// already-discharged re-ensure is the crash repair for a missed write.
+// ensureOwnerProjection — the projection-band write. Appends the digest-bound entry for the named
+// records (leaf ids of every unit of every record passed -> the point).
+//
+// TWO CALLERS, one semantic: "these leaves are owned by this point." The DISCHARGE (runExpandClose)
+// projects the FULL interior of the point at its commitment point — the original and primary write.
+// The RE-OPEN (runExpandOpen under `_allowDischarged`) projects the interior it is about to compose,
+// in the same Phase-1 transaction that composes it, so the execution view never names a unit the
+// projection does not (see the block at that call site — that gap is a permanent wedge, not a
+// cosmetic one). The band's semantic is therefore "projected interior", not "discharged interior";
+// `discharged_at` is the event stamp of whichever write minted the entry.
+//
+// APPEND-ONLY per epoch: a re-open and the re-discharge that follows each append their own entry and
+// the read-side fold UNIONS them; valid existing entries are carried over byte-for-byte (entries
+// failing verification are inert on read and dropped on rewrite — the self-healing direction).
+// Idempotent: an entry covering this exact (point, records, leaves) triple is already durable, so the
+// write is skipped. Returns 'appended' | 'present' | 'skipped' | 'write_failed' — never throws,
+// because the discharge itself commits FIRST and the already-discharged re-ensure is the crash repair
+// for a missed write.
 function ensureOwnerProjection(opts, planHash, point, recs, dischargedAt) {
   if (!planHash || !point || !Array.isArray(recs) || !recs.length) return 'skipped';
   const leaves = recs.flatMap(r => ((r && Array.isArray(r.units)) ? r.units : []).map(u => u.id))
@@ -5155,28 +5305,72 @@ function ensureOwnerProjection(opts, planHash, point, recs, dischargedAt) {
   return 'appended';
 }
 
-// routeMismatchDetail — the TYPED detail on the surviving `review_journal_route_mismatch`. Two
-// classes, both fail-closed:
+// reExpansionWindowUnits — the interior a re-expansion has ALREADY composed but no discharge covers
+// yet, keyed by unit id -> { point, record }. A record qualifies only when ALL of these hold:
+//   * its point is COVERED by the owner projection (so a previous discharge already projected that
+//     point — a never-discharged point is a first expansion, which cannot diverge this way);
+//   * no `discharge(<point>)` block lists the record id in its `records:` field (un-discharged); and
+//   * the record is POSITIVELY PROVEN opened (`open(<record>)`), the same fail-closed predicate the
+//     expansion lifecycle uses everywhere else.
+// Returns the LITERAL unit ids of those records — never a shape/prefix rule — which is what keeps
+// the class below unforgeable: an id that merely LOOKS like an interior leaf is not in this map.
+function reExpansionWindowUnits(parsed, covered) {
+  const byUnit = new Map();
+  if (!parsed || !Array.isArray(parsed.records)) return byUnit;
+  const validator = require('./kaola-workflow-plan-validator');
+  const dischargedRecords = new Set();
+  for (const block of (parsed.blocks || [])) {
+    if (!block || block.kind !== 'discharge') continue;
+    const listed = String((block.fields && block.fields.records) || '').split(',');
+    for (const id of listed.map(s => s.trim()).filter(Boolean)) dischargedRecords.add(id);
+  }
+  for (const rec of parsed.records) {
+    if (!rec || !rec.point || !covered.has(rec.point)) continue;
+    if (dischargedRecords.has(rec.id) || !validator.expansionRecordOpened(parsed, rec.id)) continue;
+    for (const unit of (rec.units || [])) {
+      if (unit && unit.id) byUnit.set(unit.id, { point: rec.point, record: rec.id });
+    }
+  }
+  return byUnit;
+}
+
+// routeMismatchDetail — the TYPED detail on the surviving `review_journal_route_mismatch`. Three
+// classes, all fail-closed, in precedence order:
 //   projection_missing — the rows reference a REAL unit of a DISCHARGED expansion point that no
 //     projection entry covers (a discharge or journal recorded before the projection existed). The
 //     detail names the migration: re-run expand-close for the point (idempotent — it re-writes the
 //     projection); NEVER hand-edit the journal.
+//   reexpansion_in_flight — the two sides diverge ONLY by unit ids of a record a re-expansion has
+//     already OPENED on a projection-COVERED point and no discharge covers yet. The execution view
+//     names those units the instant the record lands, while the projection still carries the
+//     PREVIOUS discharge's interior, so this divergence is the run's own append — not forgery — and
+//     it closes at the RE-DISCHARGE, which the detail names. NARROW BY CONSTRUCTION: every diverging
+//     id must be a LITERAL unit of such a record, so a forged interior-shaped owner keeps refusing
+//     tamper even while a real window is open on the same point, and a point carrying no open
+//     un-discharged record is untouched (coverage alone never relieves).
 //   tamper — every other mismatch (an owner unknown to the current node table AND the projection,
 //     or a route-shape divergence). Unchanged fail-closed behavior.
 function routeMismatchDetail(recordedRows, expectedRows, projection, planContent, execNodeIds) {
-  let discharges = new Set();
+  let parsed = null;
   try {
-    discharges = require('./kaola-workflow-plan-validator').parseExpansionRecords(planContent).discharges;
-  } catch (_) { discharges = new Set(); }
+    parsed = require('./kaola-workflow-plan-validator').parseExpansionRecords(planContent);
+  } catch (_) { parsed = null; }
+  const discharges = (parsed && parsed.discharges instanceof Set) ? parsed.discharges : new Set();
   const covered = (projection && projection.points instanceof Set) ? projection.points : new Set();
   const known = execNodeIds instanceof Set ? execNodeIds : new Set();
-  const ids = new Set();
-  for (const row of (recordedRows || []).concat(expectedRows || [])) {
-    for (const id of (row && Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [])) {
-      if (id) ids.add(id);
+  const rowIds = (rows) => {
+    const out = new Set();
+    for (const row of (rows || [])) {
+      for (const id of (row && Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [])) {
+        if (id) out.add(id);
+      }
+      if (row && row.owning_node) out.add(row.owning_node);
     }
-    if (row && row.owning_node) ids.add(row.owning_node);
-  }
+    return out;
+  };
+  const recordedIds = rowIds(recordedRows);
+  const expectedIds = rowIds(expectedRows);
+  const ids = new Set([...recordedIds, ...expectedIds]);
   for (const id of ids) {
     const m = /^(.*)-r[1-9][0-9]*-[A-Za-z0-9_-]+$/.exec(String(id));
     if (m && known.has(id) && discharges.has(m[1]) && !covered.has(m[1])) {
@@ -5185,6 +5379,29 @@ function routeMismatchDetail(recordedRows, expectedRows, projection, planContent
           + '.cache/epoch-projections/ owner projection covers it (a discharge or journal recorded before '
           + 'the projection existed). Re-run kaola-workflow-adaptive-node.js expand-close --node-id ' + m[1]
           + ' — idempotent: it re-writes the discharge projection. NEVER hand-edit the journal.' };
+    }
+  }
+  const windowUnits = reExpansionWindowUnits(parsed, covered);
+  if (windowUnits.size) {
+    // The DIVERGENCE, not the union: ids carried by both sides already agree and say nothing about
+    // the class. Every diverging id must be a live un-discharged unit of ONE point and be in the
+    // execution node table; anything else falls through to tamper below.
+    const diverging = [...ids].filter(id => !(recordedIds.has(id) && expectedIds.has(id)));
+    const owners = diverging.map(id => (known.has(id) ? windowUnits.get(id) : null));
+    if (diverging.length && owners.every(Boolean)) {
+      const points = new Set(owners.map(o => o.point));
+      if (points.size === 1) {
+        const point = [...points][0];
+        const recs = [...new Set(owners.map(o => o.record))].sort();
+        return { route_mismatch_class: 'reexpansion_in_flight', point,
+          detail: 'route rows diverge ONLY by the interior of expansion point "' + point + '" that '
+            + 're-expansion record(s) ' + recs.join(', ') + ' have already opened and no discharge covers '
+            + 'yet — the execution view names those units while the .cache/epoch-projections/ owner '
+            + 'projection still carries the previous discharge. This is the re-expansion window, not '
+            + 'tamper, and it closes at the RE-DISCHARGE: settle the open unit(s), then run '
+            + 'kaola-workflow-adaptive-node.js expand-close --node-id ' + point + ' — idempotent: it '
+            + 'appends the superseding owner projection. NEVER hand-edit the journal.' };
+      }
     }
   }
   return { route_mismatch_class: 'tamper' };
@@ -7151,6 +7368,75 @@ function runOpenNext(opts) {
   };
 }
 
+// The schema-2 review evidence token names. They live on the reviewer contract rather than in the
+// role registry, so the writer-side canonicalizer names them explicitly.
+const REVIEW_EVIDENCE_TOKEN_NAMES = [
+  'contract_version', 'review_context_hash', 'behavior_contract_hash', 'resolved_profile_hash',
+  'candidate_digest', 'domain_outcome', 'claim_outcome', 'gate_mode', 'gate_claim', 'gate_surface',
+  'gate_aggregation', 'execution_status', 'gate_effect', 'finding_json', 'resolution_json',
+];
+
+// Every token name a reader may look for, ROLE-INDEPENDENT (the canonicalizer must work even when
+// the plan cannot be read). `evidence-binding` is deliberately EXCLUDED: it is the byte-exact
+// anti-replay identity header, not agent-composed prose, and the close gate must stay able to refuse
+// a malformed one.
+function knownEvidenceTokenNames() {
+  const names = new Set(REVIEW_EVIDENCE_TOKEN_NAMES);
+  names.add('findings_none');
+  names.add('upstream_read');
+  try {
+    const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
+    for (const row of Object.values(ROLE_TOKEN_REGISTRY || {})) {
+      for (const tokenClass of row) {
+        for (const alt of String(tokenClass).split('|')) names.add(alt);
+      }
+    }
+  } catch (_) { /* fail-soft: the review names alone still canonicalize a review body */ }
+  names.delete('evidence-binding');
+  return names;
+}
+
+// Where a canonical serialization genuinely matters (machine-read receipts), the WRITER normalizes
+// on record instead of a later READER refusing after the fact. Two rewrites, both TOKEN-SCOPED:
+//   * a KNOWN token whose value wrapped onto a valid continuation line collapses to `token: <value>`
+//     (the dangling empty `token:` line does not survive);
+//   * a bare presence-only token line becomes its canonical `token: <value>` form.
+// Everything else — a non-token `Summary:` key and its prose, an already-canonical body — is
+// returned BYTE-IDENTICAL. Fail-soft by construction: an unrecognised line is copied through.
+function canonicalizeEvidenceTokens(content) {
+  const raw = String(content || '');
+  if (!raw) return raw;
+  const names = knownEvidenceTokenNames();
+  const lines = raw.split('\n');
+  const out = [];
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const keyMatch = line.match(/^[ \t]*([A-Za-z_][A-Za-z0-9_.-]*):[ \t]*(.*?)[ \t\r]*$/);
+    if (keyMatch && names.has(keyMatch[1])) {
+      if (keyMatch[2] === '') {
+        const continuation = evidenceContinuationValue(lines, i);
+        if (continuation !== null) {
+          out.push(keyMatch[1] + ': ' + continuation);
+          i++;                       // the continuation line is folded in, not duplicated
+          changed = true;
+          continue;
+        }
+      }
+      out.push(line);
+      continue;
+    }
+    const bareMatch = line.match(/^[ \t]*([A-Za-z_][A-Za-z0-9_.-]*)[ \t\r]*$/);
+    if (bareMatch && Object.prototype.hasOwnProperty.call(EVIDENCE_PRESENCE_ONLY_TOKENS, bareMatch[1])) {
+      out.push(bareMatch[1] + ': ' + EVIDENCE_PRESENCE_ONLY_TOKENS[bareMatch[1]]);
+      changed = true;
+      continue;
+    }
+    out.push(line);
+  }
+  return changed ? out.join('\n') : raw;
+}
+
 // The verdict/word-boundary-presence branches of checkEvidenceShape whose bare-name presence regex would
 // be FALSE-SATISFIED by an empty re-injected key — never re-inject content tokens for these roles.
 const REINJECT_EXCLUDED_ROLES = new Set([
@@ -7291,6 +7577,14 @@ function runRecordEvidence(opts) {
   // consumed check requires a non-empty value), never a pass. Old in-flight nodes (whose record-evidence
   // already ran under old code) never re-enter here ⇒ exempt.
   contentToWrite = reinjectMissingRequiredKeys(contentToWrite, planPath, nodeId, recordReadFile);
+
+  // Canonicalize the token serialization ON RECORD. The reader already accepts a wrapped value and
+  // the documented bare presence-only token, so nothing downstream depends on this — it exists so a
+  // machine-read receipt is stored in ONE shape rather than each later reader re-deriving it. A body
+  // already in canonical form is written byte-identical, and a re-injected EMPTY key stays empty
+  // (the line after it is a sibling key or EOF, never a continuation), so the non-droppability
+  // guarantee above is unchanged.
+  contentToWrite = canonicalizeEvidenceTokens(contentToWrite);
 
   // #699: read-only certifier bodies arrive through stdin and replace the seeded file. Preserve the
   // authoritative OPEN-TIME G4 tuple rather than trusting/recomputing agent-supplied bindings at
@@ -14077,6 +14371,28 @@ function runExpandOpen(opts) {
       }
     });
   }
+  // THE RE-EXPANSION WINDOW IS CLOSED BY THE WRITE THAT OPENS IT.
+  //
+  // A RE-open (`_allowDischarged` — only runReExpandOpen sets it) appends a SECOND record to a point
+  // whose owner projection covers only the PREVIOUS discharge's interior. From the instant that
+  // record lands, the execution view names the new unit ids as route owners while the projection does
+  // not, so every review-journal read recomputes routes the recorded rows cannot match. That refusal
+  // fences record-evidence for the NEW UNITS THEMSELVES, so they can never close, the point can never
+  // re-discharge, and the projection can never gain them — a permanent wedge with no in-grammar exit.
+  // The re-open therefore projects its own interior here, in the SAME Phase-1 transaction, so the
+  // window never exists. Discharge remains the owner of the FULL-interior projection: this entry
+  // carries only THIS record's leaves, and the band is append-only + UNIONing + idempotent per epoch,
+  // so the re-discharge still appends its own superseding entry and nothing is ever rewritten.
+  //
+  // ORDER IS DELIBERATE — projection BEFORE the plan write. The band is barrier-invisible and an
+  // entry for units that never landed is INERT (canonicalization only ever sees ids the route rows
+  // actually carry), whereas the reverse order re-opens the exact window on any crash in between.
+  // Fail-open like every other .cache write on this path: ensureOwnerProjection never throws, and a
+  // `write_failed` leaves the classifier's typed reexpansion_in_flight class as the operator route.
+  const reopenProjection = opts._allowDischarged
+    ? ensureOwnerProjection(opts, planHash, nodeId, [{ id: recordId, units: unitIds.map(id => ({ id })) }],
+      (typeof now === 'function') ? now() : new Date().toISOString())
+    : null;
   writeFile(planPath, seeded);
 
   // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
@@ -14114,6 +14430,7 @@ function runExpandOpen(opts) {
     expansion_id: recordId,
     expansion_point: nodeId,
     ordinal,
+    ...(reopenProjection ? { owner_projection: reopenProjection } : {}),
     ...(reactivation ? { reactivation } : {}),
     units: composed.units.map((u, i) => ({ ...u, id: unitIds[i] })),
     derivation: composed.derivation,
@@ -15578,6 +15895,10 @@ function runSubstituteRole(opts, project) {
       basis: active.basis, recorded_at: active.ts, idempotent: true,
       substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
       evidence_reset: evidenceReset,
+      // The replay must be as dispatchable as the first call: this IS the resume path, and a resume
+      // that answered with less would land the orchestrator back in the improvisation. Pure in the
+      // node + the active record, so both calls re-issue the identical card.
+      ...reissuedSpawnCard(node, active),
     };
   }
 
@@ -15599,6 +15920,11 @@ function runSubstituteRole(opts, project) {
     substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
     plan_unchanged: true,
     evidence_reset: evidenceReset,
+    // RE-ISSUE the dispatch card. Recording the swap without handing back a spawn identity is what
+    // wedged the recovery: the node is in_progress, so no opener will ever re-card it. Only an ok
+    // return carries this — a refusal recorded nothing, and a card behind a refusal would be a spawn
+    // identity for a substitution that never happened.
+    ...reissuedSpawnCard(node, record),
   };
 }
 
@@ -15665,10 +15991,13 @@ function classifyEvidenceBody(content, role) {
   const row = ((ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || [])
     .filter(tokenClass => tokenClass !== 'evidence-binding');
   if (!row.length) return 'deliverable'; // vacuous anti-forgery contract — fail closed (see header)
-  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The SAME value-presence resolution checkEvidenceShape uses (evidenceTokenSatisfied), so the two
+  // gates can never disagree about what "a token carries a value" means. A body whose token value
+  // wrapped onto the next line is a real deliverable to the close gate, so it must be a real
+  // deliverable here too — stamping a capability_gap marker over it must not launder it.
   for (const tokenClass of row) {
     for (const alt of tokenClass.split('|')) {
-      if (new RegExp('^' + esc(alt) + ':[ \\t]*(\\S.*)$', 'm').test(content)) return 'deliverable';
+      if (evidenceTokenSatisfied(content, alt)) return 'deliverable';
     }
   }
   return 'capability_gap';
@@ -16426,6 +16755,11 @@ module.exports = {
   complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
+  // The single evidence-token reader behind both the shape gate's content-token branches and the
+  // schema-2 review required-token loop. Exported so the "refuse on missing MEANING, not on
+  // serialization" contract is pinnable directly — the review loop is otherwise reachable only
+  // through a complete schema-2 review-context + profile + candidate-digest fixture.
+  evidenceTokenValue,
   checkVerdictParse,
   readCoordinationState,
   probeCoordination,

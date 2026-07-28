@@ -314,6 +314,24 @@ function parseGapSection(summaryPath) {
   return inSection ? entries : null;
 }
 
+// Does a ## Run gaps summary sample denote the SAME gap as a seeded sample?
+//
+// The two used to be compared with strict `===`, so a summary that ABBREVIATED or ELABORATED on the
+// seeded prose — the normal thing to write in a summary — refused even though the gap was correctly
+// seeded, correctly observed, and correctly mapped. The information was present; only its
+// serialization differed. Match by containment instead: either side being a prefix/substring of the
+// other identifies the same gap, symmetrically (the summary may shorten OR extend the seeded text).
+//
+// This loosens the SAMPLE comparison and nothing else. The reasonClass comparison stays EXACT at
+// both call sites, an empty side never matches (a degenerate sample would otherwise be contained in
+// everything), and a sample with no containment relation still refuses.
+function samplesMatch(a, b) {
+  const left  = String(a === undefined || a === null ? '' : a).trim();
+  const right = String(b === undefined || b === null ? '' : b).trim();
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
 function runCheck(opts) {
   const { project, outputPath, summaryPath, asJson, forceOffline } = opts;
 
@@ -341,12 +359,13 @@ function runCheck(opts) {
   // .cache/run-gaps-manual.md must not pass vacuously just because the scanner swept nothing.
   const gapEntries = parseGapSection(summaryPath);
 
-  // Reverse containment: every strict-regex ## Run gaps entry must exist in sweptClasses as an
-  // exact (reasonClass, sample) tuple — i.e. it was actually seeded/observed by the scanner, not
-  // hand-typed into the summary without ever being mapped to a machine-checked source.
+  // Reverse containment: every strict-regex ## Run gaps entry must exist in sweptClasses under an
+  // EXACT reasonClass with a sample that denotes the same gap (samplesMatch) — i.e. it was actually
+  // seeded/observed by the scanner, not hand-typed into the summary without ever being mapped to a
+  // machine-checked source.
   if (gapEntries !== null && gapEntries.length > 0) {
     const unseeded = gapEntries
-      .filter(e => !sweptClasses.some(sc => sc.reasonClass === e.reasonClass && sc.sample === e.sample))
+      .filter(e => !sweptClasses.some(sc => sc.reasonClass === e.reasonClass && samplesMatch(sc.sample, e.sample)))
       .map(e => ({ reasonClass: e.reasonClass, sample: e.sample }));
 
     if (unseeded.length > 0) {
@@ -407,7 +426,7 @@ function runCheck(opts) {
 
   for (const sc of sweptClasses) {
     const match = gapEntries.find(e =>
-      e.reasonClass === sc.reasonClass && e.sample === sc.sample
+      e.reasonClass === sc.reasonClass && samplesMatch(e.sample, sc.sample)
     );
     if (!match) {
       unmapped.push({ reasonClass: sc.reasonClass, sample: sc.sample });
