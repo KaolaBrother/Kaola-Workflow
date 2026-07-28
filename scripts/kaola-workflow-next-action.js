@@ -20,6 +20,11 @@
 // readyPending and active are purely additive (issue #281): the openable batch
 // frontier and the in_progress set. readySet/nextNode/allDone are unchanged.
 //
+// nextNode is since narrowed to the SERIAL-OPENABLE projection of readySet
+// rather than readySet[0]: an expansion point is never openable through the
+// normal node lifecycle, so it is filtered out of nextNode alone — readySet,
+// allDone and the stall refusal still carry it.
+//
 // Exit code 1 iff result==='refuse'.
 // ---------------------------------------------------------------------------
 
@@ -339,10 +344,22 @@ function computeNextAction(content, opts) {
     if (specFloorRefusal) return specFloorRefusal;
   }
 
+  // nextNode is the SERIAL-OPENABLE projection of readySet — the id the two serial open doors
+  // (open-next's fallthrough and close-and-open-next's fused advance) OPEN by construction. An
+  // expansion point holds no work of its own and is opened only by the `expand-open` transaction,
+  // so offering it here made the serial path open the container; the subsequent expand-open /
+  // open-ready / expand-close then each refused `serial_node_live` over the point's OWN in_progress
+  // row. Filter on ROLE (not status) — the same exclusion readyPending and speculativePending
+  // already apply — and take the first survivor in document order, or null when none survives (the
+  // caller routes off `expansionPending`). readySet / allDone / the stall refusal are UNCHANGED:
+  // the point still counts toward "work remains". A plan with no expansion point is byte-identical
+  // to the legacy `readySet[0]` derivation.
+  const serialOpenable = readySet.filter(n => n.role !== SPINE_EXPANSION_ROLE);
+
   return {
     result: 'ok',
     readySet,
-    nextNode: readySet[0] || null,
+    nextNode: serialOpenable[0] || null,
     allDone,
     readyPending,
     active,

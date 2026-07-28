@@ -28713,6 +28713,274 @@ scenario(() => {
     '#838-ROUTE: an existing route must not be overwritten, got ' + JSON.stringify(preset.route));
 });
 
+// ===========================================================================
+// #835 — THE EXPANSION POINT IS OFF THE SERIAL-OPEN SURFACE.
+//
+// An expansion point holds NO work of its own: it is opened by the `expand-open` TRANSACTION, which
+// composes and opens its whole frontier, and it is never dispatched as an agent. next-action already
+// keeps it off `readyPending` and `speculativePending` for exactly that reason — but `nextNode` was
+// literally `readySet[0]`, and BOTH serial open doors (`open-next`'s fallthrough and
+// `close-and-open-next`'s fused advance) open whatever `nextNode` names. So the serial path opened the
+// container, and then `expand-open` / `open-ready` / `expand-close` each refused `serial_node_live`
+// over the point's OWN in_progress row — a wedge with no governed reset.
+//
+// The subtraction is ONE classification at the source, replacing three compensating exclusions:
+//   * `nextNode` is drawn from the SERIAL-OPENABLE projection of readySet (points removed).
+//     `readySet` / `allDone` / the stall refusal are UNCHANGED — pinned in scripts/test-next-action.js.
+//   * `open-next` refuses a point BY CONSTRUCTION even when one is named explicitly; `expand-open`
+//     stays the single entry.
+//   * The three `_serialExclude` CALL SITES and the container-detection block are DELETED, so a point
+//     whose row is somehow in_progress fences the guard like any other live serial node.
+//
+// The `serialExclude` MECHANISM itself is NOT deleted: `runReExpandOpen` still passes the SINK id
+// through it so a discharged-point re-open is not refused over the very sink it invalidates. Both
+// directions are pinned below — the call sites go, the plumbing stays.
+// ===========================================================================
+scenario(() => {
+  const { runExpandOpen, runExpandClose } = require('./kaola-workflow-adaptive-node');
+  const realNextAction835 = require('./kaola-workflow-next-action').computeNextAction;
+
+  // --- (A) THE TWO SERIAL OPEN DOORS, driven through the REAL next-action. ----------------------
+  // The next-action shell seam DELEGATES to the real computeNextAction over the live plan bytes, so
+  // these are integration pins over the actual aggregator, not a hand-authored frontier.
+  const NODES835 = [
+    '| w1 | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| m1 | expansion-point | w1 | — | 1 | sequence |',
+    '| done | finalize | m1 | CHANGELOG.md | 1 | sequence |',
+  ];
+  const STATE835 = '/p/workflow-state.md';
+  // The ledger row for `id`, isolated from the same-id `## Nodes` row so a failure diagnostic quotes
+  // the status that actually moved.
+  const ledgerRow835 = (planText, id) => (String(planText).split('\n')
+    .find(l => new RegExp('^\\| ' + id + ' \\| (pending|in_progress|complete|n/a) ').test(l)) || '<no ledger row>');
+  const seamsA835 = (ledgerRows, extraFiles) => {
+    const files = Object.assign({ [RS_PLAN_PATH]: makePlan(ledgerRows, NODES835), [STATE835]: makeState() },
+      extraFiles || {});
+    return {
+      files,
+      planPath: RS_PLAN_PATH, statePath: STATE835, project: 'p',
+      shell: (sp) => {
+        const b = path.basename(sp);
+        if (b === 'kaola-workflow-next-action.js') {
+          return Object.assign({ exitCode: 0 },
+            realNextAction835(files[RS_PLAN_PATH], { resolveModel: () => 'sonnet' }));
+        }
+        if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+        return { exitCode: 0, ok: true, result: 'ok' };
+      },
+      readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+      writeFile: (fp, c) => { files[fp] = c; },
+      cacheExists: (fp) => fp in files,
+      mkdirp: () => {},
+    };
+  };
+
+  // A1 — open-next with NO --node-id and the point the ONLY ready node. The serial door must not open
+  // it, and must not mutate the ledger or record a baseline for it.
+  {
+    const h = seamsA835(['| w1 | complete | |', '| m1 | pending | |', '| done | pending | |']);
+    const r = runOpenNext({ planPath: h.planPath, statePath: h.statePath, project: h.project, nodeId: null,
+      shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+    assert(!(r.opened && r.opened.id === 'm1'),
+      '#835-A1: open-next must NEVER serial-open an expansion point — expand-open is the single '
+      + 'entry, got ' + JSON.stringify({ result: r.result, reason: r.reason, opened: r.opened }));
+    assert(r.result === 'refuse' && ['no_ready_node', 'expansion_point_not_openable'].includes(r.reason),
+      '#835-A1: with nothing serial-openable left, open-next must return a TYPED refusal (the caller '
+      + 'routes to expand-open off expansionPending), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(/\| m1 \| pending \|/.test(h.files[RS_PLAN_PATH]),
+      '#835-A1: ZERO MUTATION — the point ledger row must still be pending, got '
+      + JSON.stringify(ledgerRow835(h.files[RS_PLAN_PATH], 'm1')));
+  }
+
+  // A2 — open-next asked for the point BY NAME. "Cannot open a point by construction" has to hold on
+  // the explicit path too, or the fix is only a next-action ordering accident.
+  {
+    const h = seamsA835(['| w1 | complete | |', '| m1 | pending | |', '| done | pending | |']);
+    const r = runOpenNext({ planPath: h.planPath, statePath: h.statePath, project: h.project, nodeId: 'm1',
+      shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+    assert(r.result === 'refuse' && r.reason === 'expansion_point_not_openable',
+      '#835-A2: `open-next --node-id <point>` must refuse with the typed reason '
+      + 'expansion_point_not_openable, got ' + JSON.stringify({ result: r.result, reason: r.reason, opened: r.opened }));
+    assert(/\| m1 \| pending \|/.test(h.files[RS_PLAN_PATH]),
+      '#835-A2: ZERO MUTATION on the refusal');
+  }
+
+  // A3 CONTROL — the refusal is scoped to the POINT. A concrete node named by --node-id still opens,
+  // so A2 discriminates the role rather than the explicit-target path as a whole.
+  {
+    const h = seamsA835(['| w1 | pending | |', '| m1 | pending | |', '| done | pending | |']);
+    const r = runOpenNext({ planPath: h.planPath, statePath: h.statePath, project: h.project, nodeId: 'w1',
+      shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+    assert(r.result === 'ok' && r.opened && r.opened.id === 'w1',
+      '#835-A3 CONTROL: a concrete node still opens through the same door, got '
+      + JSON.stringify({ result: r.result, reason: r.reason, opened: r.opened }));
+  }
+
+  // A4 — THE FUSED ADVANCE. Closing the node the point depends on must NOT advance INTO the point.
+  // This is the exact production sequence that produced the wedge.
+  {
+    const h = seamsA835(['| w1 | in_progress | |', '| m1 | pending | |', '| done | pending | |'], {
+      '/p/.cache/w1.md': 'RED: failing assertion before implementation\n'
+        + 'GREEN: assertion passes after implementation\nthe test ran',
+    });
+    const r = runCloseAndOpenNext({ planPath: h.planPath, statePath: h.statePath, project: h.project,
+      nodeId: 'w1', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+    assert(r.result === 'ok' && r.closed === 'w1',
+      '#835-A4 FIXTURE: the predecessor still closes normally, got ' + JSON.stringify(r));
+    assert(!(r.opened && r.opened.id === 'm1'),
+      '#835-A4: the fused advance must NEVER open the expansion point, got '
+      + JSON.stringify({ opened: r.opened, reason: r.reason }));
+    assert(r.opened === null && r.reason === 'frontier_blocked',
+      '#835-A4: ...it reports the CLOSED-ONLY envelope with the already-shipped `frontier_blocked` '
+      + 'marker — the exact word the plan-run skeleton documents for "a spine whose ready expansion '
+      + 'points are never driven opens nothing, returns frontier_blocked" — so the executor routes to '
+      + 'expand-open, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
+    assert(/\| m1 \| pending \|/.test(h.files[RS_PLAN_PATH]),
+      '#835-A4: the point ledger row must still be pending after the advance, got '
+      + JSON.stringify(ledgerRow835(h.files[RS_PLAN_PATH], 'm1')));
+  }
+
+  // --- (B) THE THREE EXCLUSIONS ARE GONE, and the MECHANISM they used still works. ---------------
+  // Fixtures are the #759 injected-seam shape: nothing touches disk, and every refusal below is
+  // attributable to the guard prologue alone (the point is ready and its prior record is settled).
+  const PLAN835B = '/tmp/i835/kaola-workflow/issue-835/workflow-plan.md';
+  const RS835B = '/tmp/i835/kaola-workflow/issue-835/.cache/' + RUNNING_SET_NAME;
+  const SPINE835B = (ledgerRows) => ['# Plan', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| done | finalize | m1 | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', ...ledgerRows, '',
+    '## Expansion Records', '',
+    'record(m1#1):', '  point: m1',
+    '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: a | code-explorer | — | — | co_open | —', '',
+    'open(m1#1):', '  at: T', ''].join('\n');
+  const COMP835 = {
+    derivation: { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none' },
+    units: [{ name: 'z1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' }],
+  };
+  const seamsB835 = (content) => {
+    const writes = [];
+    return {
+      planPath: PLAN835B, project: 'issue-835', writes,
+      shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
+      readFile: (fp) => {
+        if (fp === RS835B) return '';
+        if (fp === PLAN835B) return content;
+        throw new Error('ENOENT: ' + fp);
+      },
+      writeFile: (fp, c) => { if (fp === PLAN835B) writes.push(c); },
+      cacheExists: () => false, mkdirp: () => {}, now: () => 'T',
+    };
+  };
+  // The point's OWN row is live; every other row is settled. Pre-subtraction the three call sites
+  // excluded exactly this id, so the guard waved the transaction through.
+  const POINT_LIVE835 = SPINE835B(['| probe | complete |', '| m1 | in_progress |',
+    '| m1-r1-a | complete |', '| done | pending |']);
+  // A PEER row is live and the point is pending — the shape the surviving mechanism serves.
+  const PEER_LIVE835 = SPINE835B(['| probe | complete |', '| m1 | pending |',
+    '| m1-r1-a | complete |', '| done | in_progress |']);
+
+  // B1 — expand-open (site 2 deleted).
+  {
+    const s = seamsB835(POINT_LIVE835);
+    const r = runExpandOpen({ ...s, nodeId: 'm1', composition: COMP835 });
+    assert(r.result === 'refuse' && r.reason === 'serial_node_live',
+      '#835-B1: with the point exclusion DELETED, expand-open over a live point row refuses like any '
+      + 'other live serial node — the guard is back to its simple form, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(s.writes.length === 0, '#835-B1: a guard refusal must mutate NOTHING');
+  }
+
+  // B2 — expand-close (site 3 deleted).
+  {
+    const s = seamsB835(POINT_LIVE835);
+    const r = runExpandClose({ ...s, nodeId: 'm1' });
+    assert(r.result === 'refuse' && r.reason === 'serial_node_live',
+      '#835-B2: with the point exclusion DELETED, expand-close over a live point row refuses too, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(s.writes.length === 0, '#835-B2: a guard refusal must mutate NOTHING');
+  }
+
+  // B3 — open-ready (site 1 deleted: the container-detection block that re-derived the exclusion
+  // itself, for the top-up call that arrives with no `_serialExclude` on opts).
+  {
+    const s = seamsB835(POINT_LIVE835);
+    const r = runOpenReady({ ...s, max: null, fanoutCapReadonly: 8 });
+    assert(r.result === 'refuse' && r.reason === 'serial_node_live',
+      '#835-B3: with the container-detection block DELETED, open-ready refuses over a live point row, '
+      + 'got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(s.writes.length === 0, '#835-B3: a guard refusal must mutate NOTHING');
+  }
+
+  // B4 — THE MECHANISM SURVIVES. `runReExpandOpen` forwards the SINK id through `_serialExclude` so a
+  // discharged-point re-open is not refused over the very sink it is invalidating. Deleting the
+  // parameter (rather than the three call sites) would break re-expansion, so pin it directly.
+  {
+    const s = seamsB835(PEER_LIVE835);
+    const r = runExpandOpen({ ...s, nodeId: 'm1', composition: COMP835, _serialExclude: ['done'] });
+    assert(!(r.result === 'refuse' && r.reason === 'serial_node_live'),
+      '#835-B4: an explicitly-passed `_serialExclude` must STILL suppress the named id — this is the '
+      + 're-expansion path and it must not be collateral damage, got '
+      + JSON.stringify({ result: r.result, reason: r.reason }));
+  }
+
+  // B5 CONTROL — the same fixture WITHOUT `_serialExclude` still refuses, so B4 is not vacuous and no
+  // OTHER live serial node is being silently waved through.
+  {
+    const s = seamsB835(PEER_LIVE835);
+    const r = runExpandOpen({ ...s, nodeId: 'm1', composition: COMP835 });
+    assert(r.result === 'refuse' && r.reason === 'serial_node_live',
+      '#835-B5 CONTROL: a live PEER serial node still refuses expand-open when nothing excludes it, '
+      + 'got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  }
+
+  // --- (C) DELETED, NOT BYPASSED — source pins on both directions of the subtraction. ------------
+  {
+    const src835 = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
+    const bodyOf835 = (name) => {
+      const start = src835.indexOf('\nfunction ' + name + '(');
+      if (start < 0) return '';
+      const end = src835.indexOf('\nfunction ', start + 1);
+      return src835.slice(start, end < 0 ? src835.length : end);
+    };
+    const openReady835 = bodyOf835('runOpenReady');
+    const expandOpen835 = bodyOf835('runExpandOpen');
+    const expandClose835 = bodyOf835('runExpandClose');
+    const reExpand835 = bodyOf835('runReExpandOpen');
+    const prologue835 = bodyOf835('mutationGuardPrologue');
+    assert(openReady835 && expandOpen835 && expandClose835 && reExpand835 && prologue835,
+      '#835-C FIXTURE: every function body slice resolved');
+
+    // GONE — the three call sites.
+    assert(!/const containers = Object\.keys\(ledger\)/.test(openReady835),
+      '#835-C1: runOpenReady no longer re-derives an expansion-point container exclusion (site 1 '
+      + 'DELETED, not bypassed)');
+    assert(!/\.concat\(containers\)/.test(openReady835),
+      '#835-C1: ...and nothing concats a container list onto the serial exclusion');
+    assert(!/opts\._serialExclude = /.test(expandOpen835),
+      '#835-C2: runExpandOpen no longer writes its own node id onto opts._serialExclude (site 2 DELETED)');
+    assert(!/opts\._serialExclude = /.test(expandClose835),
+      '#835-C3: runExpandClose no longer writes its own node id onto opts._serialExclude (site 3 DELETED)');
+
+    // SURVIVES — the mechanism and its one real caller.
+    assert(/function coordinationRefusal\(coord, excl, serialExclude\)/.test(src835),
+      '#835-C4: coordinationRefusal KEEPS its serialExclude parameter — the mechanism is not the '
+      + 'compensation, only the three call sites were');
+    assert(/cfg\.serialExclude/.test(prologue835),
+      '#835-C4: mutationGuardPrologue still forwards cfg.serialExclude to the coordination layer');
+    assert(/_serialExclude: sinkNode/.test(reExpand835),
+      '#835-C4: runReExpandOpen still forwards the SINK id through _serialExclude — the surviving '
+      + 'caller the subtraction must not break');
+  }
+});
+
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 
 if (failed > 0) {
