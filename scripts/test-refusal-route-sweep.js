@@ -47,30 +47,144 @@ const {
   classifyRefusalCondition, deriveDeviationRoutes, REFUSAL_EMISSION_MODE,
 } = schema;
 
+// The route-contract surface. Read through a TOTAL accessor rather than destructured, so a
+// symbol that has not landed yet produces ONE named red assertion instead of a TypeError that
+// takes the whole sweep — including the 541 assertions that are already meaningful — with it.
+// Each dependent block is gated on presence, and the gate itself is the red; there is no state
+// in which a missing export is silently skipped.
+function kernelFn(name) { return typeof schema[name] === 'function' ? schema[name] : null; }
+const REFUSAL_WHY = schema.REFUSAL_WHY;
+const refusalCellKey = kernelFn('refusalCellKey');
+const assertCellClosure = kernelFn('assertCellClosure');
+const routeProse = kernelFn('routeProse');
+const refusalFact = kernelFn('refusalFact');
+const PENDING_CONTRACT = [];
+
 // ===========================================================================
 // (0) THE SCANNED IN-GRAMMAR VERB SET — scanned from each script's own dispatch,
 //     never hand-listed. This is the structural fix for the #840 class: a route
 //     naming a verb that does not exist fails BEFORE any cell is walked.
 // ===========================================================================
 
-// Two dispatch shapes ship in this codebase, and the scanner reads both from source
-// rather than trusting a maintained list:
-//   - subcommand scripts  — `subcommand === '<verb>'` / `sub === '<verb>'` in main()
-//   - flag scripts        — the verb IS the flag, matched as a '--flag' literal
+// THE AGGREGATORS DO NOT SHARE ONE DISPATCH SHAPE, and pretending they do is how this
+// scanner goes wrong in both directions at once. The three shipped shapes, measured:
+//   adaptive-node, replan     `subcommand === '<verb>'`
+//   claim                     `sub === '<verb>'`
+//   plan-validator, handoff   `args.includes('--flag')` AND `args.indexOf('--flag')`
+//
+// Narrowing the flag branch to `.includes` alone reports live verbs DEAD (a false red, which
+// invites the next maintainer to weaken the guard). Widening it to any `'--flag'` literal in
+// the file — WHICH IS WHAT SHIPPED — is worse: it admits `--porcelain`, `--name-only`,
+// `--show-toplevel` and `--exclude-standard`, which are GIT's flags that this script merely
+// forwards, plus every value-carrying option. A guard that accepts `--reason` as a verb reads
+// green forever.
+//
+// The fix is structural, not a wider regex. Flag-dispatched scripts DECLARE their verbs
+// (`CLI_FLAGS`) and the sweep reads the declaration; the declaration is then made trustworthy
+// by two checks that bite in opposite directions — every declared flag must appear in the
+// script's own dispatch source, and no value-carrying option may be declared.
 const VERB_SOURCES = [
   { script: 'adaptive-node', file: 'scripts/kaola-workflow-adaptive-node.js', kind: 'subcommand' },
   { script: 'replan', file: 'scripts/kaola-workflow-replan.js', kind: 'subcommand' },
   { script: 'claim', file: 'scripts/kaola-workflow-claim.js', kind: 'subcommand' },
-  { script: 'plan-validator', file: 'scripts/kaola-workflow-plan-validator.js', kind: 'flag' },
-  { script: 'adaptive-handoff', file: 'scripts/kaola-workflow-adaptive-handoff.js', kind: 'flag' },
+  { script: 'plan-validator', file: 'scripts/kaola-workflow-plan-validator.js', kind: 'declared',
+    module: './kaola-workflow-plan-validator' },
+  { script: 'adaptive-handoff', file: 'scripts/kaola-workflow-adaptive-handoff.js', kind: 'declared',
+    module: './kaola-workflow-adaptive-handoff' },
   { script: 'commit-node', file: 'scripts/kaola-workflow-commit-node.js', kind: 'flag' },
   { script: 'run-chains', file: 'scripts/kaola-workflow-run-chains.js', kind: 'flag' },
 ];
+
+// Options that CARRY A VALUE. The flag is not the verb — it is a parameter of one — so a
+// `CLI_FLAGS` containing any of these has stopped describing the dispatch.
+const VALUE_CARRYING_OPTIONS = Object.freeze([
+  '--project', '--plan', '--json', '--reason', '--question', '--state-mtime', '--governance-ack',
+]);
+
+// scanDispatchedFlags(content) — PURE. The flags this source actually BRANCHES on, read from
+// the three argv-dispatch shapes that ship. A '--flag' sitting in an array literal that gets
+// forwarded to another script is NOT a dispatch and must not be admitted; that distinction is
+// the whole point, and the mutation battery pins it.
+const FLAG_DISPATCH_SHAPES = [
+  /\b(?:args|argv|process\.argv)\s*\.\s*(?:includes|indexOf)\(\s*'(--[a-z0-9][a-z0-9-]*)'/g,
+  /\b[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\[\s*\d+\s*\])?\s*===\s*'(--[a-z0-9][a-z0-9-]*)'/g,
+];
+function scanDispatchedFlags(content) {
+  const set = new Set();
+  if (typeof content !== 'string') return set;
+  for (const re of FLAG_DISPATCH_SHAPES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(content)) !== null) set.add(m[1]);
+  }
+  return set;
+}
+
+// The LEGACY whole-file literal scan. Retained ONLY as the migration seam below, never as an
+// answer: it is the over-permissive branch this leg exists to retire.
+function scanFlagLiterals(content) {
+  const set = new Set();
+  const re = /'(--[a-z0-9][a-z0-9-]*)'/g;
+  let m;
+  while ((m = re.exec(content)) !== null) set.add(m[1]);
+  return set;
+}
+
+// readDeclaredFlags(moduleRel) — the declaration side. Total: a module that will not load, or
+// one with no `CLI_FLAGS` array, is reported rather than thrown.
+function readDeclaredFlags(moduleRel) {
+  let mod;
+  try { mod = require(moduleRel); } catch (e) { return { ok: false, flags: [], error: 'module did not load: ' + e.message }; }
+  const declared = mod && mod.CLI_FLAGS;
+  if (!Array.isArray(declared)) return { ok: false, flags: [], error: 'CLI_FLAGS is not exported as an array' };
+  return { ok: true, flags: declared.slice(), error: null };
+}
+
+// checkDeclaredFlagSet(declared, dispatched, valueCarrying) — PURE, and it bites BOTH ways.
+// A declared flag nothing dispatches is a verb that does not exist; a declared flag that is a
+// value-carrying option is a guard that will never fail again.
+function checkDeclaredFlagSet(declared, dispatched, valueCarrying) {
+  if (!Array.isArray(declared) || declared.length === 0) {
+    return ['CLI_FLAGS is absent or empty — nothing is declared, so nothing can be checked'];
+  }
+  const errors = [];
+  const have = dispatched instanceof Set ? dispatched : new Set(dispatched || []);
+  for (const flag of declared) {
+    if (!have.has(flag)) {
+      errors.push('DECLARED-BUT-DEAD — "' + flag + '" is in CLI_FLAGS but this script\'s own argv parser never branches on it');
+    }
+    if ((valueCarrying || []).indexOf(flag) >= 0) {
+      errors.push('VALUE-CARRYING — "' + flag + '" takes a value; it is a parameter, not a verb, and declaring it makes the guard vacuous');
+    }
+  }
+  return errors;
+}
+
+// The per-script measurement, taken ONCE and reused by the assertions below.
+const DISPATCH_REPORT = {};
+for (const src of VERB_SOURCES) {
+  DISPATCH_REPORT[src.script] = {
+    src: src,
+    dispatched: scanDispatchedFlags(read(src.file)),
+    declared: src.kind === 'declared' ? readDeclaredFlags(src.module) : null,
+  };
+}
+const DECLARED_SOURCES = VERB_SOURCES.filter(s => s.kind === 'declared');
+const FALLBACK_ENGAGED = DECLARED_SOURCES.filter(s => !DISPATCH_REPORT[s.script].declared.ok).map(s => s.script);
 
 function scanInGrammarVerbs(sources) {
   const set = new Set();
   for (const src of sources) {
     const content = read(src.file);
+    if (src.kind === 'declared') {
+      // The declaration is the source of truth. While it does not yet exist the legacy literal
+      // scan carries the set forward so the rest of the sweep stays meaningful — and the
+      // CONTRACT assertion below is RED for exactly as long as that seam is open, so the
+      // fallback can never be in effect quietly.
+      const declared = readDeclaredFlags(src.module);
+      for (const flag of (declared.ok ? declared.flags : scanFlagLiterals(content))) set.add(src.script + ':' + flag);
+      continue;
+    }
     const re = src.kind === 'subcommand'
       ? /\b(?:subcommand|sub)\s*===\s*'([a-z0-9][a-z0-9-]*)'/g
       : /'(--[a-z0-9][a-z0-9-]*)'/g;
@@ -90,6 +204,50 @@ for (const src of VERB_SOURCES) {
 }
 assert(ROUTE_SCRIPT_IDS.every(id => VERB_SOURCES.some(s => s.script === id)),
   'SCAN: every ROUTE_SCRIPT_IDS entry must have a scanned source, else a route could name an unscannable script');
+
+// --- the declaration, and the two checks that make it trustworthy ---
+for (const src of DECLARED_SOURCES) {
+  const rec = DISPATCH_REPORT[src.script];
+  assert(rec.declared.ok,
+    'CONTRACT: ' + src.file + ' must export CLI_FLAGS (the flags its own argv parser DISPATCHES on) — '
+      + rec.declared.error + '. Until it does, the sweep falls back to the whole-file literal scan, which '
+      + 'admits git flags such as --porcelain and every value-carrying option as if they were verbs');
+  assert(checkDeclaredFlagSet(rec.declared.flags, rec.dispatched, VALUE_CARRYING_OPTIONS).length === 0,
+    'DECLARATION[' + src.script + ']: '
+      + checkDeclaredFlagSet(rec.declared.flags, rec.dispatched, VALUE_CARRYING_OPTIONS).join(' | '));
+}
+
+// --- the check that does NOT wait for the declaration ---
+// Every route naming a flag-dispatched script is measured against that script's OWN argv
+// dispatch right now. This is the sound reading of "the verb exists", and it is armed whether
+// or not CLI_FLAGS has landed.
+{
+  const routedFlags = new Map();
+  for (const table of [WRITE_FAILED_RETRY_BY_RECORD, CAS_ROUTE_BY_RECORD, INTEGRITY_ROUTE_BY_KIND,
+    EVIDENCE_ROUTE_BY_RECORD_KIND]) {
+    for (const key of Object.keys(table)) {
+      const r = table[key];
+      if (r && r.script && DISPATCH_REPORT[r.script]) routedFlags.set(r.script + ' ' + r.verb, r);
+    }
+  }
+  for (const table of [SINK_FINDING_ROUTE_BY_KIND, SINK_FINDING_ROUTE_BY_SUBTYPE]) {
+    for (const key of Object.keys(table)) {
+      const r = table[key] && table[key].route;
+      if (r && r.script && DISPATCH_REPORT[r.script]) routedFlags.set(r.script + ' ' + r.verb, r);
+    }
+  }
+  let flagRoutesChecked = 0;
+  for (const [label, route] of routedFlags) {
+    if (route.verb.slice(0, 2) !== '--') continue;
+    flagRoutesChecked++;
+    assert(DISPATCH_REPORT[route.script].dispatched.has(route.verb),
+      'DISPATCH: the route "' + label + '" names a flag that script\'s own argv parser never branches on — '
+        + 'it appears in the file only as a literal forwarded to another script, so an operator who types it '
+        + 'does not reach the verb the route promises');
+  }
+  assert(flagRoutesChecked > 0,
+    'DISPATCH: no flag-shaped route was measured — the cross-check went vacuous');
+}
 
 // ===========================================================================
 // (1) THE THREE-WAY EQUALITY INVARIANT
