@@ -1075,6 +1075,113 @@ const EXPECTED_DEVIATION_ROUTES = {
     'FOLD: the derived table must still be the one the aggregator exports');
 }
 
+// ===========================================================================
+// (4B) ONE EXIT, TWO RENDERINGS — the bare `route:` token and the structured `refusal_route`
+//      must name the SAME verb.
+//
+// An actionable envelope is stamped twice: `route` from the derived bare-verb table (keyed by
+// reason) and `refusal_route` from the family resolver (keyed by the classified payload). They
+// are two RENDERINGS of one exit, and nothing checked that they rendered the same one. Measured
+// on the shipped code before this check landed, all EIGHT reasons carrying a bare token resolved
+// `claim:finalize` structurally — so an operator told to "follow the typed route" got two
+// different answers, and for `final_fix_production_surface` the structured one is a re-read of a
+// verdict that was never written (every refusal in that ladder is zero-write), which can never
+// clear the refusal.
+//
+// Walking the derived table is what makes this ratchet-shaped: a reason cannot gain a bare token
+// without the structured route agreeing, in either direction.
+// ===========================================================================
+{
+  const bare = deriveDeviationRoutes();
+  const tokenOf = (verb) => String(verb || '').replace(/-/g, '_');
+  assert(Object.keys(bare).length >= 8,
+    'ONE EXIT: the derived bare-route table must be non-trivial, got ' + Object.keys(bare).length + ' rows');
+  for (const reason of Object.keys(bare).sort()) {
+    const hit = classifyRefusalCondition(reason);
+    assert(hit && hit.family,
+      'ONE EXIT: "' + reason + '" emits a bare route token but classifies to no family — the two '
+      + 'renderings cannot be compared, so nothing would notice them diverging');
+    if (!hit || !hit.family) continue;
+    const structured = resolveRoute(hit.family, Object.assign({}, hit.patch));
+    assert(structured,
+      'ONE EXIT: "' + reason + '" emits the bare token "' + bare[reason] + '" but resolves NO '
+      + 'structured refusal_route');
+    if (!structured) continue;
+    assert(tokenOf(bare[reason]) === tokenOf(structured.verb),
+      'ONE EXIT: "' + reason + '" names TWO exits — bare route "' + bare[reason]
+      + '" vs structured refusal_route "' + routeKey(structured) + '". A refusal names exactly one '
+      + 'exit, and that exit is a promise the verb will accept the work; two answers means at least '
+      + 'one of them cannot clear the refusal.');
+  }
+}
+
+// ===========================================================================
+// (4C) R4 IS A PROPERTY OF THE CELL, NOT OF THE FAMILY.
+//
+// `auto_remediable` is declared per FAMILY (the ADR's fenced block is the single source for that
+// column). But R4 asks about CONTENT — would repairing this deviation launder the evidence? — and
+// `sink_verdict` holds cells that answer it differently: a red chain is re-run; a finalize-time
+// PRODUCTION fix is the one deviation R4 exists to say must be reported and never repaired. A
+// family flag cannot discriminate, so the cell tightening is resolved from the payload.
+// ===========================================================================
+{
+  const resolveAutoRemediable = kernelFn('resolveAutoRemediable');
+  const R4_CELLS = schema.R4_NON_REMEDIABLE_CELLS;
+  assert(typeof resolveAutoRemediable === 'function',
+    'R4 CELL: the kernel must export resolveAutoRemediable(code, payload) — the per-cell accessor');
+  assert(Array.isArray(R4_CELLS) && R4_CELLS.length > 0 && Object.isFrozen(R4_CELLS),
+    'R4 CELL: the kernel must export a frozen, non-empty R4_NON_REMEDIABLE_CELLS list');
+  if (typeof resolveAutoRemediable === 'function' && Array.isArray(R4_CELLS)) {
+    // The named cell reads FALSE even though its family reads true.
+    assert(KERNEL_REFUSAL_REGISTRY.sink_verdict.auto_remediable === true,
+      'R4 CELL: the precondition of this whole block is that sink_verdict is auto-remediable at the '
+      + 'FAMILY level — if that changed, the tightening is measuring nothing');
+    assert(resolveAutoRemediable('sink_verdict',
+      { findings: [{ kind: 'final_fix_production_surface', detail: 'x' }] }) === false,
+      'R4 CELL: final_fix_production_surface is NOT auto-remediable — a behavior change arriving '
+      + 'after every reviewer is discharged is a deviation that is itself evidence, and evidence is '
+      + 'reported, never repaired');
+    // ...and a sibling cell in the same family still reads the family default, or the tightening
+    // has swallowed the family rather than refining it.
+    assert(resolveAutoRemediable('sink_verdict', { findings: [{ kind: 'tests_red' }] }) === true,
+      'R4 CELL: a sibling cell keeps the family default — a red chain is re-run, and a tightening '
+      + 'that turned the whole family false would delete the auto-remedy the family exists for');
+    // TIGHTEN-ONLY, both directions: never widens an R4 family, and an unlisted cell is untouched.
+    for (const code of KERNEL_REFUSAL_VOCABULARY) {
+      const row = KERNEL_REFUSAL_REGISTRY[code];
+      if (row.auto_remediable !== false) continue;
+      assert(resolveAutoRemediable(code, {}) === false,
+        'R4 CELL: the per-cell resolver may only TIGHTEN — it widened the already-R4 family "' + code + '"');
+    }
+    for (const key of R4_CELLS) {
+      const parts = String(key).split('/');
+      assert(parts.length === 2 && KERNEL_REFUSAL_VOCABULARY.indexOf(parts[0]) >= 0,
+        'R4 CELL: "' + key + '" must be a `${code}/${discriminator}` key over the enumerated vocabulary');
+      assert(LIVE_CELL_KEYS.indexOf(key) >= 0,
+        'R4 CELL: "' + key + '" must name a LIVE cell — a tightening for a cell that does not exist '
+        + 'is silently inert, which is the exact shape of a guard nobody notices is off');
+    }
+    // TOTAL: a code outside the vocabulary and a junk payload must not throw.
+    assert(resolveAutoRemediable('zzz_not_a_family', {}) === null,
+      'R4 CELL: a code outside the enumerated vocabulary resolves null, never a fabricated verdict');
+    assert(safeCall(p => resolveAutoRemediable('sink_verdict', p), null).ok,
+      'R4 CELL: resolveAutoRemediable must be TOTAL — it threw on a non-object payload');
+    // AND IT REACHES THE ENVELOPE. A derivation nothing stamps is a derivation nobody reads.
+    const env = schema.refuse('final_fix_production_surface', { production_paths: ['src/app.js'] });
+    assert(env.auto_remediable === false,
+      'R4 CELL: the emitted envelope must carry auto_remediable:false for the tightened cell — '
+      + 'without the stamp the one deviation R4 names ships looking auto-repairable, got '
+      + JSON.stringify(env.auto_remediable));
+    assert(routeKey(env.refusal_route) === 'replan:shape-refutation',
+      'R4 CELL: ...and it still routes at the refuted SHAPE rather than at a repair verb, got '
+      + JSON.stringify(env.refusal_route));
+    const sibling = schema.refuse('chains_red', {});
+    assert(sibling.auto_remediable === undefined,
+      'R4 CELL: an auto-remediable sibling gains NO stamp — presence of the flag is itself the '
+      + 'never-repair signal, got ' + JSON.stringify(sibling.auto_remediable));
+  }
+}
+
 // The four hint tables now share ONE accessor with ONE fallback chain.
 {
   for (const rel of ['scripts/kaola-workflow-adaptive-node.js', 'scripts/kaola-workflow-plan-validator.js',
