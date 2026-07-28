@@ -21593,11 +21593,12 @@ scenario(() => {
   // (bx.js@v1 gate-approved); ga:1 blocks on ax.js. Pinned here: the #385 staleness NAMED at repair
   // dispatch (the base_stale advisory on the P1 refusal, with real recorded/current heads), the
   // producer-slice gate (reanchor_not_attempt_producer, zero-write), the argument guards, and the
-  // SPLIT/REPLAN guard registration. NOT pinned here (blocked by a defect reported through the
-  // workflow): the provenance-gated GREEN arc — route: rebind-base on the P1/P3/P4 refusals and the
-  // re-anchor itself — because the leg-base ref lineage the R1 proof anchors on is deleted at
-  // lane-group completion (LEG-BARRIER-TEARDOWN-DROPS-REF pins the deletion), before any gate can
-  // settle, so proveReanchorProvenance can never hold at repair time.
+  // SPLIT/REPLAN guard registration. The provenance-gated GREEN arc — route: rebind-base on a P-refusal
+  // and the re-anchor itself — is pinned separately, by #840-REBIND-BASE-POST-TEARDOWN-GREEN below. The
+  // leg-base REF the R1 proof used to read is still deleted at lane-group completion
+  // (LEG-BARRIER-TEARDOWN-DROPS-REF pins that deletion) and a post-dominating gate can only settle
+  // after that completion, so the leg lineage R1 proves from has to OUTLIVE the ref in a durable,
+  // tamper-bound record; #840-REBIND-BASE-PROVENANCE-FAIL-CLOSED pins that it stays fail-closed.
   // -------------------------------------------------------------------------
   scenario(() => {
     const w = drive683({ gbPass: true, seedFiles: { 'rogue.js': '// rogue v1\n' } });
@@ -21656,6 +21657,200 @@ scenario(() => {
       '#829-VERB-GUARD: rebind-base is registered in SPLIT_GUARDED_SUBCOMMANDS + REPLAN_GUARDED_SUBCOMMANDS');
   });
 
+  // =========================================================================
+  // #840 — THE POST-TEARDOWN RE-ANCHOR.
+  //
+  // teardownLeg deletes refs/kaola-workflow/leg-base/<project>/<node> at lane-group completion, and a
+  // post-dominating gate can only SETTLE after that completion. So at repair time the ref is always
+  // gone: R1 (proveReanchorProvenance) can never hold, `route: rebind-base` never attaches, and the
+  // bounded re-anchor verb always refuses reanchor_provenance_unprovable. The refusal is zero-write, so
+  // nothing is laundered — but the recovery collapses back to "re-plan", which is exactly the posture
+  // the verb exists to replace. The leg lineage R1 proves from must therefore OUTLIVE the deleted ref
+  // in a durable, tamper-bound record, and the proof must stay fail-closed when that record is absent
+  // or does not match.
+  //
+  // THE SHAPE THAT MAKES THE GREEN ARC REACHABLE (why this fixture is not drive683's default). The verb
+  // re-anchors a base that is stale THROUGH the merge while the tree is still EXACTLY the reviewed
+  // candidate (that is R2). A repair refusal that ALSO satisfies R2 therefore needs a P3
+  // (candidate_delta_unattributed) whose offending path is unchanged since review and enters the proof
+  // only through the WRITER'S STALE BASE. wc supplies it: it is dependency-ORDERED after both gates (a
+  // write-set overlap the freeze wall permits — the N4a shape) and declares ax.js, which is inside
+  // ga:1's reviewed producer slice, so the merged sibling bx.js has an owner that overlaps the slice,
+  // the P3 disjointness clause cannot attribute it, and the repair refuses with the tree untouched.
+  // =========================================================================
+  const LANE_OVERLAP_840 = {
+    extraNodes: [
+      '| wc       | tdd-guide     | ga,gb   | ax.js bx.js  | 1 | sequence |',
+      '| gc       | code-reviewer | wc      | —            | 1 | sequence |',
+    ],
+    finalizeDeps: 'gc',
+  };
+  const provOpts840 = w => ({
+    planPath: w.planPath, project: PROJECT_683, repoRoot: w.repoRoot,
+    readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+    cacheExists: p => fs.existsSync(p),
+    readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
+  });
+  const git840 = (repoRoot, a) => {
+    try { return String(execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8' })).trim(); }
+    catch (_) { return ''; }
+  };
+  const legBaseRefSha840 = (repoRoot, id) => git840(repoRoot,
+    ['rev-parse', '--verify', '--quiet', 'refs/kaola-workflow/leg-base/' + PROJECT_683 + '/' + id + '^{commit}']);
+
+  // -------------------------------------------------------------------------
+  // #840-REBIND-BASE-POST-TEARDOWN-GREEN — the arc the shipped suite could not express: a repair routed
+  // to a lane-group member AFTER group completion receives route: rebind-base, and the verb SUCCEEDS
+  // (nonce rotated, P-guards asserted, record honest), leaving a repair that actually completes.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const w = drive683(LANE_OVERLAP_840);
+    const { R, P, attempt683, refSha683, ledger683, nonceFor } = w;
+    const mergeSha = git840(w.repoRoot, ['log', '--merges', '-F', '--grep=kw-synth: ', '-1', '--format=%H']);
+    const rebinds840 = () => (attempt683('ga:1').rebind || []);
+    require683Setup(/^[0-9a-f]{40}$/.test(mergeSha) && w.cga.attempt_id === 'ga:1'
+      && w.cga.lifecycle_settled === true, '840 lane_overlap_setup',
+      { repoRoot: w.repoRoot, mergeSha, cga: w.cga });
+
+    // (1) THE LINEAGE OUTLIVES THE REF. The teardown pin is UNCHANGED — the leg-base ref is still
+    //     deleted at group completion — and yet R1 must still prove this node's base predates the merge.
+    assert(legBaseRefSha840(w.repoRoot, 'wa') === '',
+      '#840-GREEN: the leg-base ref is STILL deleted at group completion (LEG-BARRIER-TEARDOWN-DROPS-REF '
+      + 'is preserved — the fix adds a surviving lineage record, it does not leak the ref)');
+    const prov = proveReanchorProvenance(provOpts840(w), 'wa');
+    assert(prov.ok === true && /^[0-9a-f]{40}$/.test(String(prov.legBase || ''))
+      && Array.isArray(prov.merges) && prov.merges.includes(mergeSha),
+      '#840-GREEN: proveReanchorProvenance HOLDS after teardown — the leg lineage is read from a durable '
+      + 'record that outlives the deleted ref, and it still names the kw-synth merge sitting above the '
+      + 'branch-point, got ' + JSON.stringify(prov));
+
+    // (2) THE ROUTE ATTACHES. The P3 refusal fires with the tree still byte-identical to the reviewed
+    //     candidate — the exact state the bounded re-anchor exists for — so it must name that verb.
+    const baseBefore = refSha683('wa');
+    const rep = R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(rep.result === 'repair_requires_replan' && rep.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(rep.paths) === JSON.stringify(['bx.js']),
+      '#840-ROUTE: setup — the stale-leg-era-base P3 refusal fires while the tree is still exactly the '
+      + 'reviewed candidate, got ' + JSON.stringify(rep));
+    assert(rep.route === 'rebind-base',
+      '#840-ROUTE: the P3 refusal NAMES the legal alternative (route: rebind-base) instead of leaving a '
+      + 're-plan as the only exit, got ' + JSON.stringify({ reason: rep.reason, route: rep.route }));
+    assert(rep.base_stale === true && rep.base_freshness && rep.base_freshness.stale === true,
+      '#840-ROUTE: the #385 stale-base advisory still rides alongside the route, got '
+      + JSON.stringify(rep.base_freshness));
+    assert(rebinds840().length === 0 && refSha683('wa') === baseBefore && ledger683('wa') === 'complete',
+      '#840-ROUTE: the routed refusal is ZERO durable mutation');
+
+    // (3) THE VERB SUCCEEDS. Base advances to the reviewed merged parent, the ref AND the base file move
+    //     together (the base file is the nonce source, so the nonce rotates), and the append-only record
+    //     names exactly what the re-anchor absorbed, attributed to every declared owner.
+    const nonceBefore = nonceFor('wa');
+    const rb = R(['rebind-base', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(rb.result === 'ok' && rb.route === 'rebind-base' && rb.nonce_rotated === true
+      && rb.base_before === baseBefore && rb.base_after === mergeSha,
+      '#840-GREEN: the bounded re-anchor SUCCEEDS on a real post-teardown repair — it advances the '
+      + 'leg-era base to the reviewed merged parent, got ' + JSON.stringify(rb));
+    assert(refSha683('wa') === mergeSha
+      && fs.readFileSync(path.join(w.cacheDir, 'barrier-base-wa'), 'utf8').trim() === mergeSha
+      && nonceFor('wa') !== nonceBefore,
+      '#840-GREEN: the anchored ref AND the base file both land on the reviewed merged parent, and the '
+      + 'nonce rotates with them');
+    const rec = rebinds840();
+    const rec0 = rec[0] || {};
+    assert(rec.length === 1 && rec0.generation === 1 && rec0.settled === true
+      && rec0.aborted === false && rec0.base_before === baseBefore && rec0.base_after === mergeSha
+      && rec0.producer_bindings && rec0.producer_bindings.wa
+      && rec0.producer_bindings.wa.baseline === mergeSha,
+      '#840-GREEN: exactly ONE settled, non-aborted rebind record chains the leg-era base to the merged '
+      + 'parent and moves the effective binding with it, got ' + JSON.stringify(rec));
+    assert(JSON.stringify((rec0.absorbed || []).map(a => a.path + '@' + a.owner))
+        === JSON.stringify(['bx.js@wb'])
+      && JSON.stringify(rec0.attributed_to) === JSON.stringify(['wb', 'wc']),
+      '#840-GREEN: the record stays honest about what the re-anchor absorbs — the merged sibling bx.js, '
+      + 'attributed to BOTH of its declared owners, got '
+      + JSON.stringify({ absorbed: rec0.absorbed, attributed_to: rec0.attributed_to }));
+
+    // (4) THE ONE-RE-ANCHOR-PER-LEG-ERA BOUND SURVIVES THE FIX. The recorded base is no longer the
+    //     leg-era base the lineage recorded, so a second call refuses — zero-write. Without this the
+    //     fix would have turned R1 into a rubber stamp.
+    const rb2 = R(['rebind-base', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(rb2.result === 'refuse' && rb2.reason === 'reanchor_provenance_unprovable',
+      '#840-BOUND: the verb stays ONE re-anchor per leg era — the second call refuses '
+      + 'reanchor_provenance_unprovable, got ' + JSON.stringify(rb2));
+    assert(rebinds840().length === 1 && refSha683('wa') === mergeSha,
+      '#840-BOUND: the second call is ZERO-WRITE');
+
+    // (5) THE OPERATOR HINT IS NO LONGER CIRCULAR. It used to send the operator back to repair-node to
+    //     "let its rebind refuse with route: rebind-base" — the same dead condition it was raised from.
+    const hint840 = String(rb2.operator_hint || '');
+    assert(hint840 !== '' && !/let its rebind refuse with route/i.test(hint840),
+      '#840-HINT: the reanchor_provenance_unprovable hint must not route the operator back into the '
+      + 'condition it just refused on, got ' + JSON.stringify(hint840));
+    assert(/lane-group/i.test(hint840)
+      && /(lineage|leg-era|leg era|leg branch-point)/i.test(hint840)
+      && /zero-write/i.test(hint840) && /hand update-ref/i.test(hint840),
+      '#840-HINT: the hint NAMES the actual precondition (this node ran as a lane-group leg AND its '
+      + 'recorded base is still that leg-era base) and keeps the zero-write / no-hand-surgery doctrine, '
+      + 'got ' + JSON.stringify(hint840));
+
+    // (6) THE RE-ANCHOR IS A REAL EXIT. The repair that refused in (2) now completes against the
+    //     re-anchored base: the routed alternative is not a rename of "re-plan".
+    const rep2 = R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(rep2.result === 'ok' && rep2.repaired === 'wa'
+      && ledger683('wa') === 'in_progress' && ledger683('ga') === 'pending',
+      '#840-RECOVERY: after the re-anchor the SAME repair completes — pre-fix this arc dead-ended in '
+      + 'repair_requires_replan, got '
+      + JSON.stringify({ rep2, wa: ledger683('wa'), ga: ledger683('ga') }));
+  });
+
+  // -------------------------------------------------------------------------
+  // #840-REBIND-BASE-PROVENANCE-FAIL-CLOSED — the surviving lineage record may never become a rubber
+  // stamp. Provenance is a PER-NODE claim about THIS node's leg era, not "a lane-group merge happened
+  // somewhere in this run", and a recorded base that does not match the lineage still refuses
+  // zero-write. Hand update-ref stays forbidden, so the shapes that would launder it are pinned here.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const w = drive683(LANE_OVERLAP_840);
+    const { R, P, attempt683, refSha683 } = w;
+    const opts840 = provOpts840(w);
+    const mergeSha = git840(w.repoRoot, ['log', '--merges', '-F', '--grep=kw-synth: ', '-1', '--format=%H']);
+    const legBranchPoint = git840(w.repoRoot, ['rev-parse', mergeSha + '^1']);
+
+    // (1) A node that never ran as a lane-group leg has no lineage — even though a kw-synth merge does
+    //     sit above it in this very run, and even though it has a recorded barrier base.
+    const provGa = proveReanchorProvenance(opts840, 'ga');
+    assert(provGa.ok === false,
+      '#840-FAILCLOSED: a gate node that never ran as a lane-group leg cannot prove re-anchor '
+      + 'provenance — "a merge exists above HEAD" is not lineage, got ' + JSON.stringify(provGa));
+
+    // (2) ...and the claim is keyed on the NODE, not on the base sha: a foreign node id whose recorded
+    //     base is a byte-copy of a real leg member's base cannot borrow that member's lineage.
+    fs.writeFileSync(path.join(w.cacheDir, 'barrier-base-ghost'),
+      fs.readFileSync(path.join(w.cacheDir, 'barrier-base-wa'), 'utf8'));
+    const provGhost = proveReanchorProvenance(opts840, 'ghost');
+    assert(provGhost.ok === false,
+      '#840-FAILCLOSED: lineage is a per-NODE record — copying a leg member\'s recorded base into '
+      + 'another node\'s anchor does not confer its provenance, got ' + JSON.stringify(provGhost));
+
+    // (3) MISMATCH. The recorded base is hand-moved to the REAL leg branch-point (the merge's first
+    //     parent) — a sha that genuinely predates the merge. It is still not the leg-era base the
+    //     lineage recorded for this node, so the proof refuses and NOTHING moves.
+    const before = refSha683('wa');
+    assert(/^[0-9a-f]{40}$/.test(legBranchPoint) && legBranchPoint !== before,
+      '#840-FAILCLOSED: setup — the merge\'s first parent IS the leg branch-point and differs from the '
+      + 'recorded (synthetic) barrier base, got ' + JSON.stringify({ legBranchPoint, before }));
+    fs.writeFileSync(path.join(w.cacheDir, 'barrier-base-wa'), legBranchPoint);
+    assert(proveReanchorProvenance(opts840, 'wa').ok === false,
+      '#840-FAILCLOSED: a recorded base that does not match this node\'s journaled leg-era base fails R1, '
+      + 'got ' + JSON.stringify(proveReanchorProvenance(opts840, 'wa')));
+    const rb = R(['rebind-base', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(rb.result === 'refuse' && rb.reason === 'reanchor_provenance_unprovable',
+      '#840-FAILCLOSED: the verb refuses reanchor_provenance_unprovable on a mismatched lineage, got '
+      + JSON.stringify(rb));
+    assert((attempt683('ga:1').rebind || []).length === 0 && refSha683('wa') === before,
+      '#840-FAILCLOSED: the refusal is ZERO-WRITE — no journal record, the anchored ref unmoved');
+  });
+
   // -------------------------------------------------------------------------
   // #829-TRIPLE-PINS — the R2 measuring stick, direct-call against the SAME real-git shape
   // (drive683): the merge commit carries EXACTLY the current (reviewed) production surface, compared
@@ -21693,9 +21888,9 @@ scenario(() => {
   // stale-base advisory NAMED, zero mutation. The route list feeding all three P-refusals
   // (P1 candidate_residue_changed / P3 candidate_delta_unattributed / P4 rebind_limit_reached) and
   // the shared refusalExtras spread are pinned at the source: reaching P4 through real git costs five
-  // proven rebinds, and the route itself is currently unreachable at repair time (the leg-base ref
-  // lineage is deleted at lane-group completion — see the VERB scenario's defect note), so the
-  // behavioral route assertions live in the defect report, not the green suite.
+  // proven rebinds. The BEHAVIORAL route attach is pinned by #840-REBIND-BASE-POST-TEARDOWN-GREEN
+  // below, on the one refusal shape whose routed target verb can itself succeed — a P3 whose offending
+  // path is unchanged since review and enters the proof only through the writer's stale leg-era base.
   // -------------------------------------------------------------------------
   scenario(() => {
     const w = drive683();
