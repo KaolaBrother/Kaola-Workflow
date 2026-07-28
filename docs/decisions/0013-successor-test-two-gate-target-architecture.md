@@ -177,15 +177,47 @@ vocabulary is part of this ADR: adding a code means amending the ADR — deliber
 heavy, the anti-growth ratchet. Target: the vocabulary collapses to family granularity
 and is located 100% at the two loci.
 
+**The enumeration, machine-readable.** The ratchet is only real if a build step can read
+it, so the vocabulary is carried here as a parseable block rather than as English. This
+fenced list is the single left-hand side of the three-way equality invariant: the
+registry's key set, the sweep's cell set, and this block must be equal, and a code
+present in any two but not the third fails the build.
+
+```kernel-refusal-vocabulary
+kernel_write_failed        L1
+kernel_cas_lost            L1
+kernel_integrity_broken    L1
+kernel_lock_held           L1
+kernel_evidence_missing    L1
+sink_verdict               L2
+consent_required           A3
+```
+
+Two clarifications the prose above left implicit. First, **the A3 consent valve is a
+third refusing locus** — `consent_required` is a refusal by every mechanical definition,
+and P2's "located 100% at L1/L2" is read as "L1/L2 plus the A3 family", which T8 already
+establishes as the one legitimate mid-run interrupt. Second, **`kernel_evidence_missing`
+is a fifth L1 family**, ratified rather than folded: the transition table's
+`close(unit) → evidence recorded (L1)` row already requires it, and folding it into
+`kernel_write_failed` would make "the write did not take" also mean "the write was never
+attempted", conflating a failed atomic replace with an absent record and weakening the
+very diagnostic the route resolver keys on.
+
 **Layer 3 — Free orchestration.** Scheduling, fan-out width, ordering, speculation, halt
 handling: agent judgment guided by skill prose. No typed refusal shapes any of it.
 
 ### The kernel state machine, drawn
 
 The design change is visible as a state-machine change. **Unit states:** `pending → open
-→ done`, plus `halted` (the A3 valve) and `abandoned` (speculative discard / epoch
-supersession). **Run states:** `planning → executing → sinking → archived`, with
-`replanning` as an epoch fork that rejoins `executing`. The full transition table:
+→ done`, plus `halted` (the A3 valve), `abandoned` (speculative discard / epoch
+supersession), and **`n/a`** — a unit the frozen plan declares will not run (a
+conditional arm not taken, a gate with nothing to certify). `n/a` is terminal, is
+reachable from `pending` at freeze or at selector resolution, and is load-bearing today:
+it gates `--gate-verify` and maps to a completed row in the task mirror. It is named here
+because an unnamed reachable state is exactly the "undeclared state" this decision
+levels at the 474 refusals — the diagnosis has to apply to its own table first.
+**Run states:** `planning → executing → sinking → archived`, with `replanning` as an
+epoch fork that rejoins `executing`. The full transition table:
 
 | Transition | Actor | Guard and its verb |
 |---|---|---|
@@ -244,9 +276,12 @@ T9, a theorem of A2 — and each of its working parts has a named home in the fo
   (T1), which is exactly the data that makes disjointness *provable* at plan time. The
   planner's `parallel_safe` antichains are a kernel fact, not ceremony.
 - **Toolbox (Layer 1):** the readiness tool answers with the **whole ready frontier**
-  (transitive closure), never a single next node — the answer itself invites co-opening.
-  Critical-path-first ordering and tier right-sizing remain scheduling *advice* from the
-  same tool.
+  (transitive closure) — the answer itself invites co-opening. The frontier is the
+  authority; any single-node field is an explicitly-labelled convenience projection of
+  it (`readySet[0]`), never an independent answer, and the single-node open verb is the
+  one-member case of the frontier open verb, never a separate serial door. Critical-path
+  ordering is an **emitted tool answer** — an `order` field on the frontier — not skill
+  prose, so the advice travels with the data it ranks.
 - **Isolation (T9a):** co-opened write legs get worktrees; the join reconciles
   mechanically when disjoint and by intent (synthesizer) on real conflict.
 - **Sink (Layer 2):** attribution over the union of declared write sets is where
@@ -378,7 +413,10 @@ one-rule-one-wording; the single adaptive path.
   telemetry before/after. The test-side companion is the **spawn census**: per-suite
   real process counts are reported, the necessary set is ~10% of today's, and a
   tighten-only ratchet (no growth in unclassified spawn sites) holds the line while
-  conversion proceeds.
+  conversion proceeds. **Ordering is load-bearing:** the minimal outcome recorder and an
+  economics baseline must land with the registry batch, not with the reporter — a
+  before/after whose "before" is captured after the deletions it measures is not a
+  measurement. M2's reporter may follow M3; M2's *recorder* may not.
 - **P5 — Prose census.** The six routing surfaces' line count and the contract
   validators' needle-pin count drop in proportion to the refusal census (T11). If the
   prompts do **not** shrink as refusals demote, choreography is surviving its refusal —
@@ -397,3 +435,41 @@ one-rule-one-wording; the single adaptive path.
 - **Drift discovered late** (sink-only hardness). Mitigated by T6 instruments at every
   boundary; a steering signal ignored N times is itself visible in M2 telemetry.
 - **Git-as-journal costs.** M4 is explicitly evaluate-first.
+
+## Amendment log
+
+Amendments are recorded here rather than applied silently: the enumerated vocabulary is
+part of this decision, so changing it is itself a decision.
+
+### 2026-07-28 — five amendments, from the coverage audit of the migration plan
+
+A four-source audit of the migration plan against this decision checked 186 commitments
+and found 91 gaps or partials, concentrated at Layer 0 and in the acceptance predicates.
+Five findings were defects **in this text**, not in the plan, and are fixed above.
+
+1. **The enumeration was not machine-readable** (§ Layer 2). The anti-growth ratchet is a
+   three-way equality between this decision, the registry, and the sweep — and this side
+   of it was English prose in a parenthetical, so the guard could not be built. Added the
+   fenced `kernel-refusal-vocabulary` block.
+2. **`kernel_evidence_missing` ratified as a fifth L1 family.** The prose enumerated four
+   L1 families while the derived registry needed five; the transition table's
+   `close(unit) → evidence recorded (L1)` row already required the fifth. Folding it into
+   `kernel_write_failed` would conflate a failed write with an absent record.
+3. **The A3 consent valve named as a third refusing locus.** P2's "100% at L1/L2" is read
+   as "L1/L2 plus the A3 family". T8 already establishes it as the one legitimate mid-run
+   interrupt; leaving it unnamed made P2 unsatisfiable by construction.
+4. **`n/a` added to the unit states** (§ the kernel state machine, drawn). It is reachable
+   and load-bearing today. An unnamed reachable state is precisely the "undeclared state"
+   this decision levels at the 474 refusals; P6 cannot be asserted over a table that omits
+   one.
+5. **T9's readiness sentence amended to the achievable form** (§ the parallel structure).
+   "Never a single next node" read as a prohibition on a surface that is load-bearing
+   today. The *purpose* — the answer invites co-opening — is preserved by making the
+   frontier authoritative and any single-node field an explicitly-labelled projection of
+   it, and by promoting critical-path ordering from skill prose to an emitted `order`
+   field. Honoring the literal text would have required deleting a working capability and
+   migrating every caller mid-campaign.
+
+Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
+recorder must land with the registry batch; only the reporter may follow M3. A before/after
+whose "before" is captured after the deletions it measures is not a measurement.
