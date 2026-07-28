@@ -168,8 +168,14 @@ conforming-intent input: they normalize it, remedy it, or answer with advice and
 recommended next step.
 
 **Layer 2 — Two hard gates.** A small, enumerated refusal set at L1 and L2 — nothing
-else refuses. Target: the refusal census drops by roughly an order of magnitude and is
-located 100% at the two loci.
+else refuses. The taxonomy is by **family, not incident**: single-digit code counts per
+locus (L1: kernel write failed / CAS lost / integrity broken / lock held; L2: one
+composite sink verdict whose payload enumerates ALL its findings in one pass — red
+tests, unattributed paths, unsettled review, missing consent — the report-all shape),
+with specificity carried in the payload, never by minting a new code. The enumerated
+vocabulary is part of this ADR: adding a code means amending the ADR — deliberately
+heavy, the anti-growth ratchet. Target: the vocabulary collapses to family granularity
+and is located 100% at the two loci.
 
 **Layer 3 — Free orchestration.** Scheduling, fan-out width, ordering, speculation, halt
 handling: agent judgment guided by skill prose. No typed refusal shapes any of it.
@@ -287,8 +293,11 @@ six surfaces.
 
 ## Standing admission rules (in force from acceptance, before any migration)
 
-- **R1 — Locus.** A new refusal must sit at L1 or L2. A mid-run refusal proposal ships
-  instead as an advisory or a tool.
+- **R1 — Locus and severity.** A new refusal must sit at L1 or L2, **and** be crucial
+  there: proceeding would irreversibly corrupt or lose a kernel record, let
+  unverified / unreviewed / unconsented content reach mainline, or override a human
+  values call. A condition recoverable in place ships as an advisory even at the two
+  loci; a mid-run refusal proposal ships as an advisory or a tool.
 - **R2 — Green arc, bidirectional.** Adding *or removing* a refusal requires a pinned
   green traversal — the legal path through, not only the refusing path. Three of the four
   2026-07-28 defects shipped with refusal pins only; the #778 physical dedup broke the
@@ -338,7 +347,10 @@ one-rule-one-wording; the single adaptive path.
   mid-finalize); a fresh session given only the kernel resumes to completion. This
   becomes a suite scenario, not a hope. **If P1 fails on the kernel alone, T1 is wrong
   and the kernel spec must grow — grow the kernel, never the police.**
-- **P2 — Census.** Refusal codes reduced ~an order of magnitude, located 100% at L1/L2.
+- **P2 — Census.** The enumerated refusal vocabulary collapses to family granularity —
+  on the order of a dozen codes, not fifty — located 100% at L1/L2 (plus the A3 consent
+  family), every one carrying a route. Specific conditions appear as payload findings,
+  never as new codes.
 - **P3 — Wedge extinction.** Permanent mid-run stuck states (the #839 class) are
   impossible by construction: nothing mid-run refuses hard.
 - **P4 — Economics.** Tokens and wall-clock per equivalent issue drop, measured by M2
