@@ -357,6 +357,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   const SINK = path.join(__dirname, 'kaola-workflow-sink-merge.js');
   const env476 = Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_REMOTE_TIMEOUT_MS: '500' });
   const run = (script, argv, cwd) => {
+    // Drives the REAL subprocess CLI rather than the module, exactly as the acceptance requires: what
+    // is proven is that --help prints usage and exits 0, and that an unrecognized flag maps to an
+    // unknown_flag refusal and exit 1. Usage text, argv and exit codes exist only at this boundary.
+    // spawn-class: cli-contract
     try { return { code: 0, out: execFileSync('node', [script, ...argv], { cwd, encoding: 'utf8', env: env476 }) }; }
     catch (e) { return { code: (e.status == null ? 1 : e.status), out: String(e.stdout || '') + String(e.stderr || '') }; }
   };
@@ -450,6 +454,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_CLASSIFIER_BACKOFF_MS: '0'
     }, extraEnv || {});
     try {
+      // The shared envelope vehicle for the claim CLI in this scenario: everything this site itself
+      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+      // domain checks live in the callers.
+      // spawn-class: cli-contract
       const out = execFileSync('node', [CLAIM, ...argv], { cwd, encoding: 'utf8', env: e });
       const lines = out.trim().split('\n').filter(l => l.trim());
       const last = lines[lines.length - 1];
@@ -592,6 +600,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     delete e.KAOLA_WORKFLOW_OFFLINE;
     const tmpCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-519cwd-')));
     try {
+      // The shared envelope vehicle for the classifier CLI in this scenario: everything this site itself
+      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+      // domain checks live in the callers.
+      // spawn-class: cli-contract
       const out = execFileSync('node', [CLASSIFIER, 'classify', '--issue', '77'], { cwd: tmpCwd, encoding: 'utf8', env: e });
       const lines = out.trim().split('\n').filter(l => l.trim());
       return lines.length ? JSON.parse(lines[lines.length - 1]) : null;
@@ -711,6 +723,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     // use a temp dir as cwd so active-folders scanning doesn't see real state
     const tmpCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-b2cwd-')));
     try {
+      // The shared envelope vehicle for the classifier CLI in this scenario: everything this site itself
+      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+      // domain checks live in the callers.
+      // spawn-class: cli-contract
       const out = execFileSync('node', [CLASSIFIER, 'classify', '--issue', '99'], {
         cwd: tmpCwd, encoding: 'utf8', env: e
       });
@@ -820,6 +836,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500'
     });
     try {
+      // The shared envelope vehicle for the claim resume CLI in this scenario: everything this site itself
+      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+      // domain checks live in the callers.
+      // spawn-class: cli-contract
       const out = execFileSync('node', [CLAIM, 'resume', ...argv], { cwd: repoDir, encoding: 'utf8', env: e });
       const lines = out.trim().split('\n').filter(l => l.trim());
       const last = lines[lines.length - 1];
@@ -916,6 +936,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     if (!('KAOLA_PATH' in (extraEnv || {}))) delete e.KAOLA_PATH;
     // spawnSync (not execFileSync) so stderr is captured uniformly on BOTH success and failure —
     // needed to assert the --workflow-path warn-and-ignore notice even on an acquiring (exit 0) run.
+    // The shared envelope vehicle for the claim CLI in this scenario: everything this site itself
+    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+    // domain checks live in the callers.
+    // spawn-class: cli-contract
     const res = spawnS538('node', [CLAIM538, ...argv], { cwd, encoding: 'utf8', env: e });
     const stdout = String(res.stdout || '');
     const stderr = String(res.stderr || '');
@@ -1235,6 +1259,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 
     // Freeze via plan-validator so plan_hash is stamped (needed for --finalize-check).
     try {
+      // --freeze stamps plan_hash into workflow-plan.md in its own process and EXITS; the finalize
+      // process below re-reads that file and re-verifies the stamp from disk with no shared heap.
+      // spawn-class: durable-handoff
       execFS522('node', [PLAN_VALIDATOR522, planPath, '--freeze', '--json'],
         { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) { /* freeze may fail in this minimal repo; gate still needs the plan */ }
@@ -1319,6 +1346,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
       KAOLA_WORKTREE_NATIVE: '0',
     }, extraEnv || {});
+    // A fresh finalize process re-derives its whole gate verdict from durable state alone — the plan
+    // frozen by an earlier process, the receipts on disk, and the git tree. That reconstruction from
+    // bytes is the property; in one heap the already-parsed plan would answer instead of the file.
+    // spawn-class: durable-handoff
     const result = spawnS522(
       process.execPath, [CLAIM522, 'finalize', '--project', project, '--keep-worktree', ...(extraArgs || [])],
       { cwd: wtRoot, encoding: 'utf8', timeout: 30000, env: e }
@@ -1552,6 +1583,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     const preHash = require(PLAN_VALIDATOR816).computePlanHash(planBody);
     fs.writeFileSync(wtPlanPath, '<!-- plan_hash: ' + preHash + ' -->\n\n' + planBody);
     try {
+      // --freeze stamps plan_hash into workflow-plan.md in its own process and EXITS; the finalize
+      // process below re-reads that file and re-verifies the stamp from disk with no shared heap.
+      // spawn-class: durable-handoff
       execFS816('node', [PLAN_VALIDATOR816, wtPlanPath, '--freeze', '--json'],
         { cwd: wtRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) {}
@@ -1668,6 +1702,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
     });
+    // A fresh finalize process re-derives its whole gate verdict from durable state alone — the plan
+    // frozen by an earlier process, the receipts on disk, and the git tree. That reconstruction from
+    // bytes is the property; in one heap the already-parsed plan would answer instead of the file.
+    // spawn-class: durable-handoff
     const r = spawnS816(process.execPath,
       [CLAIM816, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
       { cwd: fx.wtRoot, encoding: 'utf8', timeout: 60000, env: e });
@@ -2138,6 +2176,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     }, extraEnv || {});
     const tmpCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-536-cwd-')));
     try {
+      // The shared envelope vehicle for the classifier CLI in this scenario: everything this site itself
+      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+      // domain checks live in the callers.
+      // spawn-class: cli-contract
       const out = execFileSync('node', [CLASSIFIER, 'classify', '--issue', '536999'], {
         cwd: tmpCwd, encoding: 'utf8', env: e
       });
@@ -2461,6 +2503,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
     }, extraEnv || {});
     try {
+      // The shared envelope vehicle for the claim CLI in this scenario: everything this site itself
+      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+      // domain checks live in the callers.
+      // spawn-class: cli-contract
       const out = ef579('node', [CLAIM579, ...argv], { cwd: repo579, encoding: 'utf8', env: env579 });
       return { code: 0, out };
     } catch (err) {
@@ -4705,6 +4751,10 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 
   function runRelease735(fx) {
+    // The shared envelope vehicle for the claim release CLI in this scenario: everything this site itself
+    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+    // domain checks live in the callers.
+    // spawn-class: cli-contract
     const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
       '--project', fx.project, '--json'], {
       cwd: fx.root, encoding: 'utf8',
@@ -4931,6 +4981,10 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 
   function runRelease755(fx) {
+    // The shared envelope vehicle for the claim release CLI in this scenario: everything this site itself
+    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+    // domain checks live in the callers.
+    // spawn-class: cli-contract
     const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
       '--project', fx.project, '--json'], {
       cwd: fx.root, encoding: 'utf8',
@@ -4954,6 +5008,10 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[]\\n'); }",
     ].join('\n'));
+    // The shared envelope vehicle for the claim watch-pr CLI in this scenario: everything this site itself
+    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+    // domain checks live in the callers.
+    // spawn-class: cli-contract
     const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'watch-pr', '--json'], {
       cwd: fx.root, encoding: 'utf8',
       env: Object.assign({}, gitEnv755, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: shim }),
@@ -5205,6 +5263,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     const preHash = require(PLAN_VALIDATOR837).computePlanHash(planBody);
     fs.writeFileSync(wtPlanPath, '<!-- plan_hash: ' + preHash + ' -->\n\n' + planBody);
     try {
+      // --freeze stamps plan_hash into workflow-plan.md in its own process and EXITS; the finalize
+      // process below re-reads that file and re-verifies the stamp from disk with no shared heap.
+      // spawn-class: durable-handoff
       execFS837('node', [PLAN_VALIDATOR837, wtPlanPath, '--freeze', '--json'],
         { cwd: wtRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) {}
@@ -5317,6 +5378,10 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
     });
+    // A fresh finalize process re-derives its whole gate verdict from durable state alone — the plan
+    // frozen by an earlier process, the receipts on disk, and the git tree. That reconstruction from
+    // bytes is the property; in one heap the already-parsed plan would answer instead of the file.
+    // spawn-class: durable-handoff
     const r = spawnS837(process.execPath,
       [CLAIM837, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
       { cwd: fx.wtRoot, encoding: 'utf8', timeout: 60000, env: e });
@@ -5551,6 +5616,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 
   // --- P6: `--check` is documented on the usage surface -----------------------------------------
   {
+    // A usage-string contract: `--help` must exit 0 and its stdout must document the flag. The usage
+    // text is only observable as a real process's stdout.
+    // spawn-class: cli-contract
     const h = spawnS837(process.execPath, [CLAIM837, '--help'],
       { encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     assert(h.status === 0 && /--check/.test(String(h.stdout || '')),
@@ -5713,6 +5781,10 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen825,
     }, extraEnv || {});
     delete e.KAOLA_PATH;
+    // The shared envelope vehicle for the claim CLI in this scenario: everything this site itself
+    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
+    // domain checks live in the callers.
+    // spawn-class: cli-contract
     const res = spawnS825('node', [CLAIM825, ...argv], { cwd: repo825, encoding: 'utf8', env: e });
     const stdout = String(res.stdout || '');
     const stderr = String(res.stderr || '');
