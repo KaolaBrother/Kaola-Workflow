@@ -46,7 +46,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -968,6 +968,10 @@ function buildTransition(id, ledgerStatus, reason, note) {
 // timings write failure must never refuse or alter a transition. .cache/ is already a
 // barrier-exempt workflow band, so this adds no validator surface. The ledger/plan
 // formats are deliberately unchanged (the ledger has multiple parser consumers).
+//
+// The filename comes from the kernel's PARENT_OWNED_SIDECARS source, not from a literal here:
+// this file is one of the SIDECAR WRITERS, and the whole point of the set is that the writers
+// and the leg capture sweep read ONE list.
 // ---------------------------------------------------------------------------
 function appendNodeTiming(planPath, node, event) {
   try {
@@ -975,10 +979,56 @@ function appendNodeTiming(planPath, node, event) {
     const cacheDir = path.join(path.dirname(planPath), '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.appendFileSync(
-      path.join(cacheDir, 'node-timings.jsonl'),
+      path.join(cacheDir, NODE_TIMINGS_LOG_NAME),
       JSON.stringify({ node: node, event: event, ts: new Date().toISOString() }) + '\n'
     );
   } catch (_) { /* best-effort: telemetry never blocks a lifecycle transition */ }
+}
+
+// ---------------------------------------------------------------------------
+// appendOutcomeRecord (ADR 0013 M2) — the refusal/outcome RECORDER's write half.
+//
+// Appends ONE canonical `buildOutcomeRecord` line to
+// kaola-workflow/{project}/.cache/outcome-log.jsonl. This is the third parent-owned run
+// sidecar and behaves exactly like its two siblings: append-only, error-swallowing, read by
+// nothing in the runtime.
+//
+// THREE PROPERTIES ARE LOAD-BEARING AND ALL THREE ARE PROVED BY THE SUITE, NOT ASSERTED HERE:
+//
+//   1. FAIL-OPEN. Every failure mode — an unwritable path, a `.cache` that is a file, a full
+//      disk, a builder that returned null — returns false and leaves the caller's outcome
+//      untouched. Telemetry that could refuse would be a mid-run serializer, which is the
+//      class ADR 0013's P3 exists to make impossible.
+//   2. IT CREATES NO DIRECTORY. The append happens only into a `.cache/` that ALREADY exists,
+//      so a measurement can never be the reason a folder appears on disk, and a read-only verb
+//      run against a project folder that was never opened stays a pure read.
+//   3. A REFUSAL NEVER CREATES THE LOG. This is the rule that keeps the recorder compatible
+//      with the runtime's zero-write refusal contracts, and it is derived from the outcome
+//      itself rather than from a hand-kept list of exempt subcommands — a list would be one
+//      more compliance mirror, and it would be wrong the moment a verb was added.
+//
+//      Several refusals are contractually PURE NO-OPS, byte for byte, and are checked that way
+//      (the sink-owned final-fix register ladder is asserted against the whole worktree
+//      porcelain). Creating a file during such a call would break the contract for a
+//      measurement, which inverts the priority. A SUCCESS has already written whatever it
+//      writes, so seeding the log there costs nothing — and in any real run a success precedes
+//      every refusal, so by the time a refusal ladder fires the log exists and the whole ladder
+//      IS recorded. What is lost is narrow and named: a refusal in a run that has not yet had
+//      one successful lifecycle call goes unmeasured.
+//
+// The catch here is what discharges the fail-open obligation for `buildOutcomeRecord`, which
+// deliberately has none of its own — see its header.
+// ---------------------------------------------------------------------------
+function appendOutcomeRecord(cacheDir, record) {
+  if (!record) return false;
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(cacheDir)) return false;
+    const logPath = path.join(cacheDir, OUTCOME_LOG_NAME);
+    if (record.result !== 'ok' && !fs.existsSync(logPath)) return false;
+    fs.appendFileSync(logPath, JSON.stringify(record) + '\n');
+    return true;
+  } catch (_) { return false; /* best-effort: the recorder never alters an outcome */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,7 +1093,7 @@ function appendProvenanceLog(planPath, event, nodeId, nonce, extra) {
     };
     if (extra && typeof extra === 'object') Object.assign(entry, extra);
     fs.appendFileSync(
-      path.join(cacheDir, 'provenance-log.jsonl'),
+      path.join(cacheDir, PROVENANCE_LOG_NAME),
       JSON.stringify(entry) + '\n'
     );
   } catch (_) { /* best-effort: provenance log never blocks a lifecycle transition */ }
@@ -2762,7 +2812,7 @@ function appendCloseSidecarsOnce(opts, nodeId) {
   // making the next legitimate close observable without duplicating retries of this close.
   let timingState = null;
   try {
-    const content = readFile(path.join(cacheDir, 'node-timings.jsonl'));
+    const content = readFile(path.join(cacheDir, NODE_TIMINGS_LOG_NAME));
     for (const line of String(content || '').split('\n')) {
       let event; try { event = JSON.parse(line); } catch (_) { continue; }
       if (!event || event.node !== nodeId) continue;
@@ -2776,7 +2826,7 @@ function appendCloseSidecarsOnce(opts, nodeId) {
   const nonce = readNonce(planPath, nodeId, readFile);
   let provenancePresent = false;
   try {
-    const content = readFile(path.join(cacheDir, 'provenance-log.jsonl'));
+    const content = readFile(path.join(cacheDir, PROVENANCE_LOG_NAME));
     provenancePresent = String(content || '').split('\n').some(line => {
       let event; try { event = JSON.parse(line); } catch (_) { return false; }
       return event && event.event === 'close' && event.nodeId === nodeId
@@ -7023,7 +7073,7 @@ function runOrient(opts) {
   // Purely ADDITIVE (no existing field removed/renamed), so every JSON-parsing caller is byte-unaffected.
   let dispatchFidelity = { maxSimultaneousOpen: 0, everConcurrent: false };
   try {
-    dispatchFidelity = deriveMaxSimultaneousOpen(readFile(path.join(path.dirname(planPath), '.cache', 'node-timings.jsonl')));
+    dispatchFidelity = deriveMaxSimultaneousOpen(readFile(path.join(path.dirname(planPath), '.cache', NODE_TIMINGS_LOG_NAME)));
   } catch (_) { /* absent/unreadable telemetry → zeroed trace, never a refuse */ }
 
   // #763: the SHARED CONTEXT PACKET. Regenerated (best-effort, idempotent) on every orient — see
@@ -12002,9 +12052,9 @@ function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
 // :disjoint) → a MECHANICAL octopus merge, NO agent (do not inflate the clean win). Steps:
 //   (1) SCRIPT-OWNED CAPTURE: commit each leg's uncommitted work on its own branch (the merge only sees
 //       commits; robust even if the agent forgot to commit — `add -A` then commit, mirroring the leg
-//       barrier's snapshotWorktree capture semantics). The sweep EXCLUDES the parent-owned run-telemetry
-//       sidecar (.cache/node-timings.jsonl): a leg must never ADD that path, or every leg branch adds it
-//       independently and the octopus merge fails add/add on scheduler residue.
+//       barrier's snapshotWorktree capture semantics). The sweep EXCLUDES every PARENT_OWNED_SIDECARS
+//       member: a leg must never ADD one, or every leg branch adds the same path independently and the
+//       octopus merge fails add/add on scheduler residue.
 //   (2) OCTOPUS MERGE the leg branches into HEAD (`merge --no-ff` → one commit M, parents = HEAD + every
 //       leg head; the spike proved this for disjoint legs). The caller asserts the parent is CLEAN of
 //       production paths first (the parent-clean fence) so a floated own-lane slip fails closed BEFORE
@@ -12022,22 +12072,32 @@ function synthesizeLevel(root, legs, groupId, planPath) {
   const QUIET = { stdio: ['ignore', 'ignore', 'ignore'] };
   const ids = Object.keys(legs || {});
   if (!ids.length) return { ok: false, reason: 'no_leg_branches' };
-  // Run telemetry (.cache/node-timings.jsonl) is PARENT-OWNED: the parent worktree copy is the one
-  // deriveMaxSimultaneousOpen reads, and a leg must never ADD it. When a leg-side invocation dirties
-  // the leg's own copy, sweeping it into the capture commit makes EVERY leg branch ADD the same path
-  // independently — the octopus merge then fails add/add on workflow-generated residue, and the
-  // parent-owned `leg_committed` append below writes a file the merge is about to carry (git refuses
-  // an untracked-over-tracked overwrite). The legs are checkouts of the same tree, so the repo-relative
-  // path resolves identically inside each leg; exclude it from the sweep and neither failure mode can
-  // arise. Derivation is fail-open (a planPath outside root yields no exclusion). There is NO
-  // merge-side telemetry guard: when the derivation yields nothing, the failure it prevents simply
-  // re-appears as the generic `merge_conflict` refusal at the octopus merge below — loud, but the
-  // original failure rather than a backstop.
-  let telemetryRel = null;
+  // Run sidecars are PARENT-OWNED: the parent worktree copy is the one every reader reads, and a leg
+  // must never ADD one. When a leg-side invocation dirties the leg's own copy, sweeping it into the
+  // capture commit makes EVERY leg branch ADD the same path independently — the octopus merge then
+  // fails add/add on workflow-generated residue, and the parent-owned `leg_committed` append below
+  // writes a file the merge is about to carry (git refuses an untracked-over-tracked overwrite). The
+  // legs are checkouts of the same tree, so the repo-relative path resolves identically inside each
+  // leg; exclude them from the sweep and neither failure mode can arise.
+  //
+  // THE EXCLUSION IS A SET, DERIVED FROM THE KERNEL, NOT A LIST OF PATHS TYPED HERE. Every sidecar
+  // this runtime appends to is written by the SAME lifecycle invocations, so every one of them has
+  // this defect the moment it exists; hard-coding one path fixes one instance and leaves the next
+  // sidecar to rediscover the bug. PARENT_OWNED_SIDECARS is the one list the writers and this sweep
+  // both read, so a new sidecar is covered by being added to it — one edit, in the kernel.
+  //
+  // Derivation is fail-open (a planPath outside root yields no exclusions). There is NO merge-side
+  // sidecar guard: when the derivation yields nothing, the failure it prevents simply re-appears as
+  // the generic `merge_conflict` refusal at the octopus merge below — loud, but the original failure
+  // rather than a backstop.
+  const sidecarRels = [];
   if (planPath) {
-    const rel = path.relative(root, path.join(path.dirname(planPath), '.cache', 'node-timings.jsonl'));
-    if (rel && !path.isAbsolute(rel) && rel !== '..' && rel.indexOf('..' + path.sep) !== 0) {
-      telemetryRel = rel.split(path.sep).join('/');
+    const projectDir = path.dirname(planPath);
+    for (const sidecar of PARENT_OWNED_SIDECARS) {
+      const rel = path.relative(root, path.join(projectDir, ...String(sidecar).split('/')));
+      if (rel && !path.isAbsolute(rel) && rel !== '..' && rel.indexOf('..' + path.sep) !== 0) {
+        sidecarRels.push(rel.split(path.sep).join('/'));
+      }
     }
   }
   // (1) script-owned capture. Emits `leg_committed` per leg (AC17 telemetry: the leg-lifecycle event
@@ -12060,12 +12120,16 @@ function synthesizeLevel(root, legs, groupId, planPath) {
     }
     if (dirty) {
       try {
-        // `add -A` MINUS the parent-owned run-telemetry sidecar (see the exclusion above) — the sweep
-        // still captures every real write, evidence file included.
-        if (telemetryRel) execFileSync('git', ['-C', leg.legPath, 'add', '-A', '--', '.', ':(exclude)' + telemetryRel], QUIET);
-        else execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
+        // `add -A` MINUS every parent-owned sidecar (see the exclusion above) — the sweep still
+        // captures every real write, evidence file included.
+        if (sidecarRels.length) {
+          execFileSync('git', ['-C', leg.legPath, 'add', '-A', '--', '.',
+            ...sidecarRels.map(rel => ':(exclude)' + rel)], QUIET);
+        } else {
+          execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
+        }
         // The excluded sweep can leave NOTHING staged — the member committed its own work and the only
-        // residue was the excluded telemetry sidecar. Committing an empty stage would fail the capture
+        // residue was excluded sidecars. Committing an empty stage would fail the capture
         // for a leg that is, correctly, already fully committed; skip the commit instead.
         let staged = true;
         try { execFileSync('git', ['-C', leg.legPath, 'diff', '--cached', '--quiet'], QUIET); staged = false; } catch (_) { staged = true; }
@@ -16808,6 +16872,38 @@ function main() {
   const writeFile = makeLedgerChainWriteFile(rawWriteFile, { planPath, statePath, cacheDir, readFile, subcommand });
   const cacheExists = (fpath) => fs.existsSync(fpath);
 
+  // ---------------------------------------------------------------------------
+  // ADR 0013 M2 — THE OUTCOME RECORDER, wired at every point main() emits a terminating
+  // envelope. ONE closure, called from each of them, because the guard prologue's refusals are
+  // exactly the wedge class the campaign most needs counted: a run that never reaches a
+  // subcommand body because a fence, a lock or a split-authority guard turned it away is the
+  // most expensive refusal there is, and recording only the dispatched bodies would measure
+  // everything except it.
+  //
+  // NOT hooked: the three argv usage errors above (--json / --project / invalid_project). They
+  // are explicitly outside the enumerated vocabulary, and the last of them has no legal cache
+  // directory to write into — its whole finding is that the project segment is illegal.
+  //
+  // The catch is the fail-open boundary, and it wraps the BUILDER too. `buildOutcomeRecord`
+  // deliberately carries no catch of its own so a programming error inside it is a real
+  // exception that the suite sees; here, at the runtime edge, that exception must not be able
+  // to change an outcome, so it is absorbed. A recorder that could refuse would be a mid-run
+  // serializer, which is the class P3 exists to make impossible.
+  // ---------------------------------------------------------------------------
+  const outcomeStartedAt = Date.now();
+  const recordOutcome = (envelope) => {
+    try {
+      appendOutcomeRecord(cacheDir, buildOutcomeRecord({
+        script: 'adaptive-node',
+        op: subcommand,
+        project: project,
+        node: nodeId,
+        envelope: envelope,
+        duration_ms: Date.now() - outcomeStartedAt,
+      }));
+    } catch (_) { /* fail-open: telemetry never refuses, wedges or alters an outcome */ }
+  };
+
   // #699: fence before worktree mirroring, any scheduler-lock creation, stdin
   // consumption, or summary-envelope caching. record-evidence --verify and
   // orient are read-only; orient is still projected through the fence so the
@@ -16820,6 +16916,11 @@ function main() {
       projectReplanFence = readProjectReplanFence(statePath, cacheDir, readFile);
       if (!projectReplanFence.ok || projectReplanFence.fenced) {
         const out = replanOrientation(projectReplanFence, project);
+        // The fence's zero-write posture is ENUMERATED (no worktree mirror, no scheduler lock, no
+        // stdin consumption, no summary-envelope cache) and an append to a `preference`-ruled
+        // sidecar is none of those. Recording here is deliberate: a fenced run is the wedge shape
+        // M2 exists to count, and a measurement that skipped it would omit its own subject.
+        recordOutcome(out);
         process.stdout.write(JSON.stringify(out) + '\n');
         process.exitCode = 1;
         return;
@@ -16832,6 +16933,7 @@ function main() {
           const out = replanOrientation(Object.assign({}, projectReplanFence, { ok: false, fenced: true,
             reason: authority && authority.reason || 'current_epoch_authority_invalid' }), project);
           if (authority && authority.detail) out.detail = authority.detail;
+          recordOutcome(out);
           process.stdout.write(JSON.stringify(out) + '\n');
           process.exitCode = 1;
           return;
@@ -16901,6 +17003,7 @@ function main() {
             worktreePath: recordedWorktree,
             detail: 'a linked worktree is recorded for this project but this mutating lifecycle command is running from the MAIN repo root — the ledger / .cache evidence / barrier baselines would diverge from where the role agents write',
           }));
+          recordOutcome(out);
           process.stdout.write(JSON.stringify(out) + '\n');
           process.exitCode = 1;
           return;
@@ -16933,6 +17036,7 @@ function main() {
         holder: schedulerLock.holder || null,
         lockPath,
       }));
+      recordOutcome(out);
       process.stdout.write(JSON.stringify(out) + '\n');
       process.exitCode = 1;
       return;
@@ -17297,6 +17401,11 @@ function main() {
   // reason. Success envelopes (no reason) are untouched.
   result = decorateOperatorHint(result);
 
+  // ADR 0013 M2: the recorder sits AT the single output point, after the hint decoration, so the
+  // record it writes describes the envelope the caller actually receives — including the family,
+  // locus and route `stampRefusalEnvelope` already resolved onto it.
+  recordOutcome(result);
+
   // #605: refresh the derived run-progress mirror at the MAIN root after a ledger mutation, but ONLY on
   // a linked-worktree run (mainRoot differs from the worktree cwd; a serial in-repo run's ledger is
   // already root-visible) and only when the op did not refuse (no ledger write to mirror). #612: the
@@ -17342,6 +17451,7 @@ function main() {
     if (err && err.ledgerChainTamper) {
       const out = decorateOperatorHint(refuse(err.ledgerChainTamper, {
         detail: 'ledger tamper-evidence chain broke — the ## Node Ledger was edited out of band' }));
+      recordOutcome(out);
       process.stdout.write(JSON.stringify(out) + '\n');
       process.exitCode = 1;
     } else {
@@ -17393,6 +17503,11 @@ module.exports = {
   // #424/#433: exported for testing the provenance log + evidence seeding.
   appendProvenanceLog,
   seedEvidenceFile,
+  // ADR 0013 M2: the outcome recorder's write half. Exported so the FAIL-OPEN contract is
+  // testable directly — a fault has to be injected AT the write, and asserting it through a
+  // lifecycle verb alone cannot distinguish "the write failed and was absorbed" from "the write
+  // was never attempted".
+  appendOutcomeRecord,
   // #727: the single role-kind selector for the reviewer-contract domain_outcome vocabulary.
   allowedDomainOutcomes,
   // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.
