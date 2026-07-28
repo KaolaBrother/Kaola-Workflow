@@ -4938,6 +4938,28 @@ function activeReplayRelief(journal, nodes, ledgerStatuses) {
   return { exempt, preserved };
 }
 
+// RELIEF FOLLOWS THE RECORD. The journal-global replay relief above exists for exactly one job: to
+// keep an attempt's OWN recorded producer bindings readable while a live replay holds their ledger
+// rows non-terminal. It must never manufacture admission for a producer the attempt never bound.
+// That distinction is load-bearing once the recorded key set is trusted instead of re-derived: with
+// the relief unscoped, a binding STRIPPED from a settled attempt reads clean, because the stripped
+// producer is still admitted into the proof by somebody ELSE's replay. Scoping the relief to the
+// attempt's own recorded keys keeps the strip refused (its producer is neither terminal nor
+// relieved, so `history_valid` fails) while re-deriving nothing — the record decides who is
+// relieved, the ledger decides whether the rest are terminal. An attempt that records no bindings
+// at all (a legacy shape) has no record to follow and keeps the unscoped relief it always had.
+function reliefScopedToBindings(relief, attempt) {
+  const bindings = attempt && attempt.producer_bindings;
+  if (!bindings || typeof bindings !== 'object') {
+    return { preserved: [...relief.preserved], exempt: [...relief.exempt] };
+  }
+  const bound = new Set(Object.keys(bindings));
+  return {
+    preserved: [...relief.preserved].filter(id => bound.has(id)),
+    exempt: [...relief.exempt].filter(id => bound.has(id)),
+  };
+}
+
 function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
   const crypto = require('crypto');
   const byId = new Map((nodes || []).map(node => [node.id, node]));
@@ -4984,28 +5006,31 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
     const selectedWriter = attempt.repair && attempt.repair.selected_writer;
     const consumedWriter = attempt.consumed_by;
     const writer = selectedWriter || consumedWriter;
-    const hasProducerBindings = Object.prototype.hasOwnProperty.call(attempt, 'producer_bindings');
-    const bindingKeys = hasProducerBindings ? Object.keys(attempt.producer_bindings || {}).sort() : [];
+    const bindingKeys = Object.keys(attempt.producer_bindings || {}).sort();
     // #739: an in-plan descendant-replay record lets this attempt bind to a NON-maximal upstream owner with
     // its reopened descendant cone exempt from the graph-maximal + all-complete requirements. Recompute and
     // bound the cone against the frozen graph (never trust the record); an unsound record fails the read.
     const replayCheck = validatedReplayExempt(attempt, nodes);
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
-    // A settled historical attempt owns its immutable attempt-time producer proof. If a later gate
-    // legitimately reopens that producer, retain the older executed slice from its bindings. The
-    // actively repaired attempt remains narrower: its proven selected writer, PLUS any owner/cone member
-    // of an ACTIVE validated replay recorded anywhere in this journal (#748 — the replay's ledger
-    // mutation is journal-global, so the STATUS relief it grants must be too), may be nonterminal. The
-    // journal-global set is passed as statusRelief, NOT merged into replayExempt: it may admit a row the
-    // replay moved, and must never waive THIS attempt's graph-maximal writer-binding proof.
+    // TRUST THE RECORD, PROVE THE WRITER. The settle transaction RECORDED producer_bindings from the
+    // view that was live at the time; no later read can rebuild that view (intra-epoch growth is
+    // append-only and unversioned), so recomputing a slice here and refusing on inequality was a
+    // second opinion about a fact already inside the ledger-chain tamper boundary — and every
+    // divergence between the two was a wedge. The recorded KEY SET is therefore read, never re-derived.
+    //
+    // The recorded `selected_writer` is NOT in that category: it names the node a repair will hand a
+    // fresh baseline to, so it stays PROVEN graph-maximal against the frozen graph + ledger below.
+    // The proof is seeded with the proven writer, PLUS any owner/cone member of an ACTIVE validated
+    // replay recorded anywhere in this journal (#748 — the replay's ledger mutation is journal-global,
+    // so the STATUS relief it grants must be too). The journal-global set is passed as statusRelief,
+    // NOT merged into replayExempt: it may admit a row the replay moved, and must never waive THIS
+    // attempt's graph-maximal writer-binding proof. Where a writer is recorded the seed is that
+    // writer ALONE, never the recorded key set — otherwise a record would admit its own non-terminal
+    // producers, which is precisely the hole the schema-2 twin used to carry.
+    const scopedRelief = reliefScopedToBindings(relief, attempt);
     const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledgerStatuses,
-      (writer ? [writer] : bindingKeys).concat([...relief.preserved]),
-      replayCheck.replayExempt || [], relief.exempt);
-    if (hasProducerBindings) {
-      if (!proof.history_valid || JSON.stringify(bindingKeys) !== JSON.stringify(proof.producer_slice)) {
-        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
-      }
-    }
+      (writer ? [writer] : bindingKeys).concat(scopedRelief.preserved),
+      replayCheck.replayExempt || [], scopedRelief.exempt);
     if (selectedWriter != null || consumedWriter != null) {
       if (!writer || !byId.has(writer) || !nodeWriteSetNonempty(byId.get(writer)) || !proof.ok
         || (consumedWriter != null && consumedWriter !== writer)) {
@@ -5454,10 +5479,9 @@ function reviewJournalV2MatchesPlan(journal, planContent, projection) {
   // view that is INVARIANT across execution-time growth, or a settled attempt stops matching the
   // moment the plan grows. The FREEZE view (parseNodes — spine only) is that invariant for the GATE;
   // the EXECUTION view (planNodesWithExpansions) is NOT — a re-expansion appends new fixer units to
-  // the milestone. The producer-BINDING comparison below is the carve-out: the settle path records
-  // that slice from the execution view at settle time, so neither view alone re-derives it — the
-  // check is the interval envelope documented there (freeze ⊆ recorded ⊆ exec), which covers both
-  // the #759-gap milestone-wall shape and the #756 post-settle re-expansion shape.
+  // the milestone. The producer BINDINGS are no longer re-derived from any view at all — the
+  // recorded key set is read (see the writer proof below), so the freeze/execution split governs
+  // the GATE identity and the writer proof only.
   const nodes = validator.parseNodes(planContent);
   const byId = new Map(nodes.map(node => [node.id, node]));
   // The ROUTE recomputation is the ONE exception to the freeze view pinned above. That invariance
@@ -5503,43 +5527,35 @@ function reviewJournalV2MatchesPlan(journal, planContent, projection) {
       || reviewSchema.canonicalJson(attempt.logical_gate) !== reviewSchema.canonicalJson(expectedGate)) {
       return { ok: false, reason: 'review_journal_gate_identity_mismatch' };
     }
-    const bindingKeys = Object.keys(attempt.producer_bindings || {}).sort();
-    // #739: validate any in-plan descendant-replay record (fail closed on a forged one) and, for a
-    // derived (certified_producers-empty) gate, keep the reset descendant cone in the expected slice so
-    // bindingKeys still matches while those descendants sit at pending mid-replay.
+    // #739: validate any in-plan descendant-replay record (fail closed on a forged one); the cone it
+    // legitimately reset is consumed by the writer proof below, never by a key-set comparison.
     const replayCheck = validatedReplayExempt(attempt, nodes);
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
-    // #759-gap + #756, reconciled as an INTERVAL envelope. The settle path records the slice from
-    // the execution view AT SETTLE TIME; two legitimate histories diverge from every view we can
-    // recompute NOW: (a) a spine wall certifying an expansion milestone binds the milestone's
-    // COMPOSED UNITS (invisible to the freeze view, which under-derives to [] — the #759-gap wedge);
-    // (b) a settled attempt re-read AFTER the milestone re-expands is over-derived by the current
-    // execution view (the growth postdates the recording — the #756 wedge). The settle-time view
-    // itself is not reconstructible (intra-epoch growth is append-only and unversioned), so the
-    // check accepts the recorded slice iff it equals the freeze-view derivation OR the
-    // execution-view derivation, OR lies between them (freeze ⊆ recorded ⊆ exec) — machine-legit
-    // drift is exactly append-only growth inside that interval. On a spine-only plan the two views
-    // coincide and the rule collapses to the original exact equality, so every tamper pin (strip,
-    // forge, corrupt) keeps its teeth; the bounded residual — a key-strip that stays inside the
-    // interval on a growth-shaped plan — is the price of admitting growth, and is named for the
-    // derive-and-refuse redesign.
-    const execViewNodes = parseNodesFromContent(planContent);
-    const deriveSlice = view => uniqueMaximalReviewProducer(view, expectedGate.members,
-      (attempt.repair && attempt.repair.selected_writer) || attempt.consumed_by || '',
-      ledger, bindingKeys.concat([...relief.preserved]),
-      replayCheck.replayExempt || [], relief.exempt).producer_slice.slice().sort();
-    // #748: the journal-global set is statusRelief (admission only), never merged into replayExempt.
-    const freezeExpected = expectedGate.certified_producers.length
-      ? expectedGate.certified_producers.slice().sort() : deriveSlice(nodes);
-    const execExpected = expectedGate.certified_producers.length
-      ? expectedGate.certified_producers.slice().sort() : deriveSlice(execViewNodes);
-    const keysCanon = reviewSchema.canonicalJson(bindingKeys);
-    const isSubset = (a, b) => a.every(id => b.includes(id));
-    const identityOk = keysCanon === reviewSchema.canonicalJson(freezeExpected)
-      || keysCanon === reviewSchema.canonicalJson(execExpected)
-      || (isSubset(freezeExpected, bindingKeys) && isSubset(bindingKeys, execExpected));
-    if (!identityOk) {
-      return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+    // TRUST THE RECORD, PROVE THE WRITER — one policy, shared byte-for-byte with the schema-1 twin
+    // (reviewJournalIdentityMatchesPlan). The recorded `producer_bindings` key set is READ, not
+    // re-derived: settle wrote it from the view live at that moment, and that view is not
+    // reconstructible (intra-epoch growth is append-only and unversioned), so any recomputation here
+    // is a second opinion about a fact already inside the ledger-chain tamper boundary. The two
+    // shapes that used to need an interval envelope — a spine wall binding an expansion milestone's
+    // composed units (the freeze view under-derives to []) and a settled attempt re-read after its
+    // milestone re-expands (the execution view over-derives) — are simply the record, and read clean.
+    //
+    // What is NOT trusted is the recorded `selected_writer`: it names the node a repair will hand a
+    // fresh baseline to, so it stays proven the unique maximal producer of this gate against the
+    // frozen graph + ledger. Seeding that proof with the recorded bindings would let a record admit
+    // its own non-terminal producers, so it is seeded with the proven writer alone (#748 relief is
+    // still journal-global, and still statusRelief-only so it never waives the maximality clause).
+    const selectedWriter = attempt.repair && attempt.repair.selected_writer;
+    const consumedWriter = attempt.consumed_by;
+    const writer = selectedWriter || consumedWriter;
+    if (selectedWriter != null || consumedWriter != null) {
+      const scopedRelief = reliefScopedToBindings(relief, attempt);
+      const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledger,
+        [writer].concat(scopedRelief.preserved), replayCheck.replayExempt || [], scopedRelief.exempt);
+      if (!writer || !byId.has(writer) || !nodeWriteSetNonempty(byId.get(writer)) || !proof.ok
+        || (consumedWriter != null && consumedWriter !== writer)) {
+        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+      }
     }
     const expectedRoutes = (attempt.receipts || []).flatMap(receipt =>
       schema2RouteCandidates(receipt.findings || [], routeNodes, receipt.node_id));

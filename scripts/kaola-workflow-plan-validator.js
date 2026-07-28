@@ -3201,11 +3201,18 @@ function verifyVerdictBlock(content, opts) {
     }
     const currentCandidate = currentSchema2Candidate();
     const wholeStale = !currentCandidate || receipts.some(receipt => receipt.candidate_digest !== currentCandidate);
-    // An investigation-mode gate certifies NOTHING (certified_producers empty by construction,
-    // deriveGateEffect maps every outcome to 'none', and it post-dominates no producer) — its
-    // receipt binds the pre-write tree by design, so whole-candidate freshness has no launderable
-    // meaning and would wedge any run whose writes legitimately touched surfaces the gate read.
-    if (wholeStale && gateMode !== 'investigation' && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
+    // Freshness binds the RECORD, not a second opinion about it. A gate certifies producers iff one
+    // of its own normalized receipts RECORDED a gate_effect other than 'none' — the runtime wrote
+    // that effect (paired with certifier_digest) once, from the deriveGateEffect it actually
+    // dispatched under. Re-deriving the gate mode from the current plan view instead diverges from
+    // the receipt in both directions: a receipt recording 'none' certifies NOTHING (its receipt
+    // binds the pre-write tree by design and no scoped arm can rescue it — a permanent finalize
+    // wedge once the view re-derives change_gate), and a receipt recording a certifying effect must
+    // keep its staleness wall even where the view now re-derives `investigation`. Fail closed: an
+    // absent or unrecognized recorded value counts as certifying.
+    const recordedCertifying = !receipts.length || receipts.some(receipt =>
+      String(receipt.gate_effect == null ? '' : receipt.gate_effect) !== 'none');
+    if (wholeStale && recordedCertifying && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
       return { ok: false, nodeId: node.id, role: node.role, found: true,
         reason: 'schema-2 certifier receipt is stale for the current candidate' };
     }
