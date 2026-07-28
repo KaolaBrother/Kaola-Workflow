@@ -28,6 +28,8 @@
 //            'decision_id_conflict:' plus an additive `conflicts` field ([{id, hits}]).
 //            #749 legacy-claim admission refusals carry an additive typed
 //            `reason:'legacy_claim_upgrade_required'` (state lacks the epoch lineage envelope).
+//            A never-frozen draft carrying `consent_halt: pending` in its ## Node Ledger refuses
+//            with `reason:'decoy_consent_halt'` (a fresh run cannot start already halted).
 //
 // 2-state only: branch on validator --json `result` ('in-grammar'|'refuse'), NEVER on `decision`.
 // decision:ask is audit METADATA that freezes-and-proceeds — NO needs_user_approval, NO --authorized.
@@ -694,6 +696,34 @@ function runHandoff(opts) {
     const storedHash = planForHash
       ? ((planForHash.match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/) || [])[1] || null)
       : null;
+
+    // Step 0.86: the DECOY consent-halt fence. `consent_halt: pending` in the `## Node Ledger` is the
+    // durable consent valve — every mutating adaptive-node subcommand refuses `halt_pending` while it
+    // is set. That is correct for a run that actually halted, and a wedge for one that has not started:
+    // there is nothing to consent TO, and the run's very first open-next refuses on a halt no human
+    // raised. It is a real, observed shape — a planner that copies its skeleton from an ARCHIVED plan
+    // (where the marker legitimately survives) carries the line into a brand-new ledger — and
+    // `computePlanHash` covers `## Meta` + `## Nodes` only, so the marker rides the freeze unremarked.
+    // The freeze path is the only place that can tell FRESH from RESUMED, and `storedHash === null` is
+    // exactly that discriminator: an unfrozen draft has never run, so a marker on it cannot be a real
+    // halt. Refuse (zero mutation, before the validator and the freeze) and NAME the marker so the
+    // planner can repair its own draft through the bounded repair loop; an already-frozen plan is
+    // untouched, so a genuinely halted run still resumes.
+    if (!storedHash && planForHash && adaptiveSchema.readDurableConsentHalt(planForHash)) {
+      return {
+        handoff_status: 'plan_invalid',
+        result: 'refuse',
+        reason: 'decoy_consent_halt',
+        errors: ['decoy_consent_halt: the plan draft carries "' + adaptiveSchema.CONSENT_HALT_MARKER
+          + '" in its ## Node Ledger, but nothing has run yet — a fresh run cannot be halted for a '
+          + 'consent no one asked for, and the first open-next would refuse halt_pending. The marker '
+          + 'is written by write-halt and cleared by clear-halt; it is never authored. Remove the '
+          + '"' + adaptiveSchema.CONSENT_HALT_MARKER + '" line from the ## Node Ledger section and '
+          + 're-submit (it is most likely copied in from an archived plan used as a skeleton).'],
+        validator_verdict: null,
+      };
+    }
+
     if (storedHash) {
       let computedHash = null;
       try { computedHash = require(validatorPath).computePlanHash(planForHash); } catch (_) { computedHash = null; }
@@ -899,7 +929,13 @@ function runHandoff(opts) {
     };
   }
 
-  const firstNode = nextAction.nextNode;
+  // `nextNode` is the SERIAL-OPENABLE projection of the ready set and therefore never names an
+  // expansion point. A spine plan whose first milestone has no upstream probe is rooted at a point,
+  // so at freeze it has NO serially-openable node at all — and `first_node` here is purely ADVISORY
+  // (plan-run opens the first node, not this handoff). Fall back to the ready expansion point: the
+  // run's genuine first act on such a plan is `expand-open` against it. Only a plan with neither a
+  // serially-openable node nor a ready expansion point is the "no first node" dead end.
+  const firstNode = nextAction.nextNode || (nextAction.expansionPending || [])[0] || null;
   if (!firstNode) {
     return {
       handoff_status: 'plan_invalid',

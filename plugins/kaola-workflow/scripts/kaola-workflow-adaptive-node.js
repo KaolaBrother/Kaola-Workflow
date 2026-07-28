@@ -286,6 +286,8 @@ const OPERATOR_HINT_REGISTRY = {
     'Node ' + (ctx.nodeId || '<id>') + ' is not in the current ready set (its dependencies are not all complete). Open the ready frontier next-action reports instead.',
   no_ready_node: () =>
     'No ready node to open (all are blocked or done). Run orient to confirm whether the plan is complete or wedged.',
+  expansion_point_not_openable: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is an expansion point: it holds no work of its own and is never opened through the normal node lifecycle. Compose and open its frontier instead: ' + ADAPTIVE_NODE_SCRIPT + ' expand-open --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json (orient reports it on expansionPending).',
   node_not_in_ledger: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' is not present in the ## Node Ledger. Check the node id, or re-freeze the plan so the ledger carries every node.',
   baseline_failed: (ctx) =>
@@ -334,7 +336,7 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- the bounded re-anchor verb (route: rebind-base) ---
   reanchor_provenance_unprovable: (ctx) =>
-    'The barrier base of ' + (ctx.node_id || ctx.nodeId || '<id>') + ' cannot be PROVEN to predate a lane-group merge (' + (ctx.detail || 'no leg-base lineage') + '). rebind-base refuses zero-write; hand update-ref stays forbidden. If the base is genuinely stale through a lane-group merge, re-run repair-node and let its rebind refuse with route: rebind-base; otherwise a re-plan is the exit.',
+    'The barrier base of ' + (ctx.node_id || ctx.nodeId || '<id>') + ' cannot be PROVEN to predate a lane-group merge (' + (ctx.detail || 'no leg lineage') + '). The precondition is BOTH halves of that proof: ' + (ctx.node_id || ctx.nodeId || '<id>') + ' ran as a lane-group leg (its leg branch-point is journaled at the group merge and outlives the torn-down leg-base ref) AND its recorded base is STILL that leg-era base — a base already re-anchored, hand-moved, or never leg-era fails it, and one re-anchor per leg era is the bound. rebind-base refuses zero-write here and hand update-ref stays forbidden; with no matching lineage a re-plan is the exit.',
   rebind_base_not_reviewed: (ctx) =>
     'The reviewed merged parent is no longer the current tree for ' + (ctx.node_id || ctx.nodeId || '<id>') + ' — the re-anchor would bind the repair to an unreviewed tree. A re-plan (or a fresh repair-node run whose own rebind proof passes) is the exit; never hand-edit the barrier ref.',
   reanchor_not_attempt_producer: (ctx) =>
@@ -595,6 +597,35 @@ const OPERATOR_HINT_REGISTRY = {
 };
 
 // ---------------------------------------------------------------------------
+// DEVIATION_ROUTES — the typed `route:` verb for a refusal that fires because the intended action
+// falls OUTSIDE the frozen shape. A prose hint tells the operator what went wrong; the route names
+// the ONE legal recorded verb that resolves it, so an out-of-shape refusal is a fork in the road
+// rather than a dead end.
+//
+// The mapping is DERIVED from the barrier reason precedence the plan validator already owns, so
+// the two cannot drift. Keyed by reason and stamped at the single emit-time decorator below —
+// never scattered across the many close_transition_disallowed / node_not_in_ledger emit sites, so
+// a new emit site inherits its route for free.
+//
+// `foreign_archive` is deliberately ABSENT: writing another run's archive is not curable by
+// reverting the overflow, by amending the surface, or by reshaping the spine, so naming any verb
+// would misdirect. A reason with no entry gains no route — that silence is information.
+// ---------------------------------------------------------------------------
+const DEVIATION_ROUTES = {
+  // Out-of-set writes: discard them and re-land inside the declared set.
+  write_set_overflow: 'revert-overflow',
+  write_set_granularity: 'revert-overflow',
+  lockfile_write: 'revert-overflow',
+  mirror_write: 'revert-overflow',
+  count_bump: 'revert-overflow',
+  // Writes nobody declared: attribute them onto a surface and re-review, rather than discard.
+  unattributed_write: 'amend-surface',
+  // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which is a
+  // spine change — a node-level fix cannot conjure a reviewer the frozen plan never contained.
+  sensitive_write_unreviewed: 'shape_refutation',
+};
+
+// ---------------------------------------------------------------------------
 // getOperatorHint(reason, ctx) (#445 / D-445-01 §1-2) — the single emit-time
 // accessor. Looks up `reason` in OPERATOR_HINT_REGISTRY, calls the template with
 // the emit context, and returns the one-sentence string. A reason with no
@@ -627,6 +658,12 @@ function getOperatorHint(reason, ctx) {
 // operator_hint is itself the "there is a next step" signal. Existing consumers
 // reading result/reason are unaffected (purely additive). Idempotent: never
 // overwrites an operator_hint a callee already set.
+//
+// #838 — the same seam also stamps the typed deviation `route` from
+// DEVIATION_ROUTES, under identical rules: actionable envelopes only, reason
+// required, idempotent (a route a callee already decided always wins — it knows
+// the concrete situation, the table is only the default), and a reason outside
+// the table gains nothing.
 // ---------------------------------------------------------------------------
 function decorateOperatorHint(envelope) {
   if (!envelope || typeof envelope !== 'object') return envelope;
@@ -635,6 +672,8 @@ function decorateOperatorHint(envelope) {
     || envelope.result === 'warn';
   if (!actionable) return envelope;
   if (!envelope.reason) return envelope;
+  const route = DEVIATION_ROUTES[envelope.reason];
+  if (route && !envelope.route) envelope.route = route;
   if (typeof envelope.operator_hint === 'string' && envelope.operator_hint) return envelope;
   envelope.operator_hint = getOperatorHint(envelope.reason, envelope);
   return envelope;
@@ -7222,6 +7261,18 @@ function runOpenNext(opts) {
     }
   }
 
+  // An expansion point is NEVER opened through the normal node lifecycle: it holds no work of its
+  // own, and `expand-open` — which composes AND opens its whole frontier in one transaction — is its
+  // single entry. next-action withholds the role from `nextNode`, so neither implicit door (the
+  // fallthrough above, the fused advance in close-and-open-next) can reach one. This is the EXPLICIT
+  // door: `--node-id <point>` resolves against `readySet`, which still carries the point because the
+  // stall refusal and the terminal derivation depend on it. Refuse by construction — before the
+  // review-open probe, the baseline and the ledger flip — so "a point is not serially openable" is a
+  // property of the command rather than an ordering accident of the ready-set projection.
+  if (targetNode && targetNode.role === require('./kaola-workflow-plan-validator').SPINE_EXPANSION_ROLE) {
+    return { result: 'refuse', reason: 'expansion_point_not_openable', nodeId: targetNode.id };
+  }
+
   // Reviewer-v2 identity must be proven and its canonical context persisted
   // before the first baseline/ledger mutation. Non-review and verified legacy
   // nodes return an inert descriptor.
@@ -9177,14 +9228,56 @@ function reconcilePendingRebind(opts, attempt, state, nodeId, writerPaths, now) 
       + ') nor base_after (' + record.base_after + ') of the unsettled rebind — restore it from the recorded pair' };
 }
 
+// LEG_LINEAGE_KEY — the review journal's journal-level record of every lane-group leg's branch-point.
+// The leg-base REF the R1 proof used to read is deleted by teardownLeg at group completion, and a
+// post-dominating gate can only settle AFTER that completion — so the ref is always gone by repair
+// time and the lineage it anchored has to outlive it. It lives in the review journal (the run's
+// digest-bound integrity anchor, snapshotted per epoch and never hand-edited), NOT in a best-effort
+// sidecar: a fail-closed provenance proof may not be backed by a record anything can rewrite.
+// Shape: { <node-id>: { leg_base, branch_point, merge, group_id } }, all 40-hex.
+//   leg_base     — the member's RECORDED barrier base as of the merge (the parentless synthetic
+//                  snapshot commit `--record-base` anchors). R1 requires the on-disk base to still
+//                  equal it, which is what bounds the verb to ONE re-anchor per leg era (after a
+//                  successful rebind the base IS the merge, so the next call mismatches) and what
+//                  refuses a hand-moved base.
+//   branch_point — the real commit the legs branched from (the leg manifest's `baseline`). This is
+//                  the ancestor R1 proves against and the diff anchor `legBase` the caller consumes.
+//   merge        — the lane-group synthesis commit the record was written at.
+const LEG_LINEAGE_KEY = 'leg_lineage';
+
+function readLegLineageRecord(opts, nodeId) {
+  let content;
+  try { content = opts.readFile(opts.planPath); }
+  catch (_) { return { ok: false, detail: 'the frozen plan is unreadable' }; }
+  const state = readReviewJournal(opts, content);
+  if (!state.ok) {
+    return { ok: false, detail: 'the review journal (the leg lineage anchor) is unreadable: ' + state.reason };
+  }
+  if (!state.journal) return { ok: false, detail: 'no review journal — no lane-group leg lineage' };
+  const lineage = state.journal[LEG_LINEAGE_KEY];
+  const record = (lineage && typeof lineage === 'object' && !Array.isArray(lineage)) ? lineage[nodeId] : null;
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { ok: false, detail: 'no journaled leg lineage — ' + nodeId + ' never ran as a lane-group leg' };
+  }
+  const hex40 = v => /^[0-9a-f]{40}$/i.test(String(v || ''));
+  if (!hex40(record.leg_base) || !hex40(record.branch_point) || !hex40(record.merge)) {
+    return { ok: false, detail: 'the journaled leg lineage for ' + nodeId + ' is malformed' };
+  }
+  return { ok: true, leg_base: String(record.leg_base).toLowerCase(),
+    branch_point: String(record.branch_point).toLowerCase(), merge: String(record.merge).toLowerCase() };
+}
+
 // proveReanchorProvenance — R1 of the re-anchor proof: "this node's recorded base PROVABLY predates
 // a lane-group merge". Fully git-checkable, read-only, never throws:
-//   (1) the recorded barrier base IS the node's leg-base ref — the node ran as a lane-group leg and
-//       its base was never re-anchored (a prior re-anchor fails this, which is also what BOUNDS the
-//       verb to one re-anchor per leg-era base);
+//   (1) the node has a journaled leg lineage AND the recorded barrier base is still the leg-era base
+//       that lineage records — the node ran as a lane-group leg and its base was never re-anchored
+//       (a prior re-anchor fails this, which is also what BOUNDS the verb to one re-anchor per
+//       leg-era base; so does a hand-moved base, including one hand-moved to the real branch-point);
 //   (2) the leg branch-point is a strict ancestor of HEAD;
 //   (3) a lane-group synthesis merge (`kw-synth: ` commit, the level_merged telemetry's git anchor)
-//       sits in base..HEAD.
+//       sits in branch-point..HEAD.
+// The claim is per-NODE: "a lane-group merge happened somewhere in this run" is not lineage, and a
+// foreign node cannot borrow a leg member's lineage by copying its recorded base.
 // Returns { ok:true, legBase, merges } (merges newest-first) or { ok:false, detail }.
 function proveReanchorProvenance(opts, nodeId) {
   try {
@@ -9195,15 +9288,14 @@ function proveReanchorProvenance(opts, nodeId) {
     if (!/^[0-9a-f]{40}$/i.test(base)) {
       return { ok: false, detail: 'no recorded barrier base for ' + nodeId };
     }
-    const legSha = resolveRefSha(root, legBaseRef(opts.project, nodeId));
-    if (!legSha) {
-      return { ok: false, detail: 'no leg-base ref — ' + nodeId + ' never ran as a lane-group leg' };
+    const lineage = readLegLineageRecord(opts, nodeId);
+    if (!lineage.ok) return { ok: false, detail: lineage.detail };
+    if (lineage.leg_base !== base.toLowerCase()) {
+      return { ok: false, detail: 'the recorded base is not the leg-era base ' + nodeId + '\'s lineage records (already re-anchored, or hand-moved)' };
     }
-    if (legSha.toLowerCase() !== base.toLowerCase()) {
-      return { ok: false, detail: 'the recorded base is not the leg branch-point (already re-anchored, or never leg-era)' };
-    }
+    const branchPoint = lineage.branch_point;
     try {
-      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', base, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', branchPoint, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) {
       return { ok: false, detail: 'the leg branch-point is not an ancestor of HEAD' };
     }
@@ -9212,22 +9304,59 @@ function proveReanchorProvenance(opts, nodeId) {
       head = String(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
     } catch (_) { head = ''; }
-    if (head && head.toLowerCase() === base.toLowerCase()) {
+    if (head && head.toLowerCase() === branchPoint) {
       return { ok: false, detail: 'the leg branch-point IS the current head — no merge above it' };
     }
     let merges = [];
     try {
-      const out = execFileSync('git', ['-C', root, 'log', '--format=%H', '--merges', '-F', '--grep=kw-synth: ', base + '..HEAD'],
+      const out = execFileSync('git', ['-C', root, 'log', '--format=%H', '--merges', '-F', '--grep=kw-synth: ', branchPoint + '..HEAD'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
       merges = String(out).split('\n').map(s => s.trim()).filter(s => /^[0-9a-f]{40}$/i.test(s));
     } catch (_) { merges = []; }
     if (!merges.length) {
       return { ok: false, detail: 'no lane-group synthesis merge above the leg branch-point' };
     }
-    return { ok: true, legBase: base, merges };
+    return { ok: true, legBase: branchPoint, merges };
   } catch (err) {
     return { ok: false, detail: String((err && err.message) || err) };
   }
+}
+
+// recordLegLineage — journal the lane-group leg lineage at the LAST-MEMBER MERGE, the one moment both
+// halves are still in hand: the live legs manifest (each member's branch-point) and the synthesis
+// merge commit. Runs BEFORE the teardown loop that deletes the leg-base refs, so a crash in between
+// leaves the record already durable. Last-write-wins per member (an idempotent synthesizer re-run
+// re-journals the same pair). FAIL-SOFT by design: the CONSUMER is fail-closed — an absent or
+// mismatched record refuses zero-write — so a journal that cannot be written costs the re-anchor
+// route, never correctness, and must not brick a close that has already merged.
+function recordLegLineage(opts, planContent, legsManifest, mergedCommit, groupId) {
+  try {
+    const hex40 = v => /^[0-9a-f]{40}$/i.test(String(v || ''));
+    if (!hex40(mergedCommit) || !legsManifest) return;
+    const state = readReviewJournal(opts, planContent);
+    if (!state.ok || !state.journal || !state.journalPath) return;
+    const existing = state.journal[LEG_LINEAGE_KEY];
+    const lineage = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
+    let changed = false;
+    for (const id of Object.keys(legsManifest).sort()) {
+      const leg = legsManifest[id] || {};
+      if (!hex40(leg.baseline)) continue;
+      let legBase = '';
+      try { legBase = String(opts.readFile(writerBarrierAnchors(opts, id).baseFile) || '').trim(); }
+      catch (_) { legBase = ''; }
+      if (!hex40(legBase)) continue;
+      lineage[id] = {
+        leg_base: legBase.toLowerCase(),
+        branch_point: String(leg.baseline).toLowerCase(),
+        merge: String(mergedCommit).toLowerCase(),
+        group_id: groupId || null,
+      };
+      changed = true;
+    }
+    if (!changed) return;
+    state.journal[LEG_LINEAGE_KEY] = lineage;
+    writeReviewJournal(opts, state);
+  } catch (_) { /* fail-soft: the consumer refuses zero-write without a record */ }
 }
 
 // runRebindBase — the bounded RE-ANCHOR verb (route: rebind-base). The machine-owned form of the one
@@ -11898,25 +12027,10 @@ function runOpenReady(opts) {
   // tamper + cycle + unique-sink + role-library + depends_on resolvability. Any non-ok refuses with
   // zero mutation. (Without this, an emptied write node's declared_write_set is reclassified read-only
   // by isReadOnlyNode and fans out concurrently — the #387 repro.)
-  // serialExclude: honored when a caller (runExpandOpen) names ids whose in_progress state is the
-  // transaction's own container, never a peer serial node — any OTHER live serial node still refuses.
-  // #759-gap (2/2): an expansion point whose frontier is ALREADY composed+opened is the container of
-  // THIS running set, not a peer — its in_progress row must not fence the frontier's own
-  // open/top-up lifecycle (close-node carries no coordination refusal, so only this site needs it).
-  let openReadySerialExclude = opts._serialExclude;
-  try {
-    const v = require('./kaola-workflow-plan-validator');
-    const c = readFile(planPath);
-    if (v.parsePlanForm(c).form === 'spine') {
-      const ledger = readLedgerStatuses(c);
-      const recs = v.parseExpansionRecords(c);
-      const points = new Set(parseNodesFromContent(c).filter(n => n.role === v.SPINE_EXPANSION_ROLE).map(n => n.id));
-      const containers = Object.keys(ledger).filter(id => ledger[id] === 'in_progress' && points.has(id)
-        && recs.records.some(r => r.point === id && v.expansionRecordOpened(recs, r.id)));
-      if (containers.length) openReadySerialExclude = (openReadySerialExclude || []).concat(containers);
-    }
-  } catch (_) { /* fail-closed: no exclusion */ }
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: openReadySerialExclude });
+  // serialExclude: honored when a CALLER names ids whose in_progress state the transaction itself is
+  // invalidating (the re-expansion path names the sink), never a peer serial node — any OTHER live
+  // serial node still refuses.
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
   const reviewOpen = reviewFanoutTopUpAllowance(opts, readFile(planPath));
@@ -13399,6 +13513,12 @@ function closeGroupMember(ctx) {
     // identical). Read the legs from the live running-set's lane_group (authoritative on disk), not lg.
     const legsManifest = running.lane_group && running.lane_group.legs;
     if (legsManifest && Object.keys(legsManifest).length) {
+      // #840: journal each member's leg lineage FIRST. teardownLeg below deletes the leg-base ref the
+      // re-anchor proof used to read, and a post-dominating gate can only settle after this close — so
+      // without a record that outlives the ref, rebind-base is unreachable and the only exit from a
+      // stale-through-the-merge base is a re-plan. Written before the teardown, into the digest-bound
+      // review journal, and fail-soft (the proof stays fail-closed without it).
+      recordLegLineage(opts, currentPlan, legsManifest, mergedCommit, lg.group_id);
       let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
       for (const id of Object.keys(legsManifest)) {
         const leg = legsManifest[id];
@@ -14237,14 +14357,8 @@ function runExpandOpen(opts) {
   // excl-serial). Expansion is a MUTATING subcommand and is not exempt from any layer. No
   // excl-scheduler: like open-ready, this command OWNS the running-set open. ==
   // #761: the RE-OPEN path forwards `_serialExclude` (only ever the sink id) so the guard does not
-  // refuse over the live sink the re-open is invalidating. Absent for every expand-open caller.
-  // #759-gap: the serial open path (runOpenNext / the fused advance) leaves the expansion POINT
-  // itself in_progress when the orchestrator is about to compose its frontier (readySet keeps
-  // SPINE_EXPANSION_ROLE for stall/terminal derivation). The point is the container being expanded,
-  // never a peer serial node its own expansion would race — exclude exactly that one id from the
-  // serial surface (any OTHER live serial node still refuses), and carry it on opts so the Phase-2
-  // open-ready inside this same transaction honors it too.
-  opts._serialExclude = (opts._serialExclude || []).concat(nodeId ? [nodeId] : []);
+  // refuse over the live sink the re-open is invalidating. Absent for every other expand-open caller —
+  // the point itself is never serially opened, so it can never be its own live serial row.
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
@@ -14524,10 +14638,6 @@ function rollForwardExpansions(opts) {
 function runExpandClose(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, now } = opts;
 
-  // #759-gap: the serial open path leaves the expansion POINT itself in_progress while its frontier
-  // settles (see runExpandOpen). The point is the container being discharged, never a peer serial
-  // node — exclude exactly that one id (any OTHER live serial node still refuses).
-  opts._serialExclude = (opts._serialExclude || []).concat(nodeId ? [nodeId] : []);
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
