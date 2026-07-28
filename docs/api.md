@@ -33,6 +33,57 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Impact**: No active folder is created; `claim: 'none'`; exit non-zero. The `reasoning` field names the error code and signal from the final failed attempt. The `reasoning_class` field is `'classifier_error'`.
 - **On `result: 'refuse'`**: Hard stop — do not retry; diagnose the underlying condition named by `reasoning`.
 
+### Gate 1: the typed selection record at claim (issue #825, ADR 0013)
+
+Selection is orchestrator-owned. `cmdStartup` (and `cmdPickNext`, which delegates to it) gains two flags:
+
+| Flag | Values | Default |
+| --- | --- | --- |
+| `--target-source` | `user_directed` \| `orchestrator_selected` | `user_directed` |
+| `--selection-record` | path to a JSON record | — |
+
+`--target-source orchestrator_selected` declares a **no-target-originated** claim: the orchestrator surveyed, ranked, and then claims with a resolved `--target-issue` / `--target-issues`. That is the only mode the gate refuses in; `user_directed` (the default) is an explicit-target claim.
+
+**Required record fields** (exactly six, validated fields-present-and-non-empty — a whitespace-only string, an empty array, and an empty object all count as empty; nothing deeper is validated):
+`selection_mode`, `selection_bundle`, `selection_priority_basis`, `selection_rejected`, `selection_disjointness`, `clarifications`.
+
+**Typed refusals** — both exit 1 and are ZERO-WRITE (resolved before any project folder, branch, worktree, or forge call). Both carry `status`/`verdict` set to the code, `claim: 'none'`, and a non-empty `reasoning`:
+
+| Code | Condition |
+| --- | --- |
+| `selection_record_missing` | `--target-source orchestrator_selected` with no `--selection-record`, OR a `--selection-record <path>` that is absent/unreadable |
+| `selection_record_invalid` | record present but unparseable JSON, or any of the six fields absent / empty / whitespace-only |
+
+**On every acquiring claim** (scalar AND bundle):
+
+1. The record is persisted at `kaola-workflow/<project>/.cache/origin/selection-record.json`. An orchestrator-supplied file is copied through **byte-unchanged** (the authored `selection_priority_basis` is the record; re-serializing it would turn a rationale into a stub). A `user_directed` claim supplies none, so startup synthesizes the DEGENERATE record itself with `selection_mode: "explicit-target"` and every other required field non-empty.
+2. `selection_record_digest: <64 lowercase hex>` is stamped into `kaola-workflow/<project>/workflow-state.md` as its own line. The value is `sha256` of the bytes of the PERSISTED record file.
+3. The same digest is echoed on the emitted claim JSON as `selection_record_digest`.
+
+**`.origin/` staging fold (same claim transaction).** Pre-claim reconnaissance has no durable home — the project folder does not exist yet — so the origin phase stages findings under `kaola-workflow/.origin/<target-key>/`, where `<target-key>` is the PROJECT NAME the claim resolves to (`issue-<N>` for a scalar claim, `bundle-<a>-<b>[-<c>]` for a bundle). If that directory exists at claim time its whole subtree is moved into `kaola-workflow/<project>/.cache/origin/` preserving relative layout and byte content (`survey.md` → `.cache/origin/survey.md`, `probes/seams.json` → `.cache/origin/probes/seams.json`), and the staging directory is removed. Absent staging is a clean no-op — `kaola-workflow/.origin/` is never manufactured when nothing was staged — and the fold never blocks the claim.
+
+**Planning Evidence.** When the frozen plan carries no `## Meta` selection block, `kaola-workflow-adaptive-handoff.js` folds the six fields of `.cache/origin/selection-record.json` into `## Planning Evidence`. This is the reporting end, not a gate: a missing or corrupt record never blocks the freeze, because the claim already refused zero-write on an invalid one.
+
+### Adaptive handoff: `--clarification-required` (issue #825, ADR 0013)
+
+```
+node kaola-workflow-adaptive-handoff.js --clarification-required --question "..." \
+     [--context-refs "a,b"] [--round N] --json
+```
+
+Emits the typed clarification return, sets exit code 1, and touches **no filesystem path** — it is legal PRE-claim, when no project folder exists, and post-claim/pre-freeze. `--context-refs` is comma-split into an array. Handled before the `--project`/`--plan` arity check, mirroring the `--survey-verdict` fail-closed branch.
+
+Builder: `clarificationRequired(question, contextRefs, round)` (pure; exported alongside `CLARIFICATION_ROUND_CAP = 3`).
+
+| Input | Return |
+| --- | --- |
+| round 1–3, non-empty question | `{handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round, cap}` |
+| round omitted / non-finite | treated as round 1 (never "already exhausted") |
+| round > 3 | `{handoff_status: 'clarification_exhausted', result: 'escalate', posture: 'stop_and_ask', round, cap: 3}` |
+| question `''` / `'   '` / `null` / `undefined` | fails CLOSED to the same `clarification_exhausted` / `stop_and_ask` shape |
+
+The orchestrator asks the user, appends the answer to the selection record's `clarifications`, and re-dispatches the planner with the answer in the brief. `surveyVerdict` / `SURVEY_VERDICTS` (`backlog_empty`, `selection_indeterminate`) are unchanged — #825 re-homed their EMITTER to the orchestrator, it did not retire the vocabulary.
+
 ### Bundle claim: `--target-issues` / `KAOLA_TARGET_ISSUES` (issue #328)
 
 The startup/claim path accepts a multi-issue bundle target alongside the existing single-issue `--target-issue N` flag.
@@ -3701,7 +3752,7 @@ claim_planner_attested: <value>
 
 The column-0 status field is always written, even when `attested` — a clean result is a positive statement, not an absence. Called in `cmdFinalize` immediately after `checkDispatchAttestations`, before `computeGoalCheck`. `appendClosureBlock`'s field set independently carries the same attestation field in the archived `workflow-state.md`'s `## Closure` block (see `docs/workflow-state-contract.md`), so the archive carries two durable, mutually-reinforcing copies of the attestation outcome. The presence guard is ALSO the legacy-tolerance rule (#816): an archived section carrying the retired finalize-seam field is left byte-identical. **Known residual:** a summary that pre-seeds a column-0 `## Attestation` heading before finalize suppresses the append (the presence guard exists for crash-resume idempotence, not tamper-resistance) — fenced by the `## Closure` block + stdout receipt still carrying the true field in the same run, and by finalize prose forbidding removal/summarization of the section; see `docs/decisions/D-653-01.md`.
 
-**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since the no-target survey only runs on the auto-bundle branch. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
+**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since the orchestrator-owned no-target survey only runs on the auto-bundle branch. Since #825 the machine-readable selection record lives separately at .cache/origin/selection-record.json and is bound by Gate 1; this sidecar stays the human-readable docking artifact and its probe is unchanged. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
 
 Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`

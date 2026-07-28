@@ -241,6 +241,74 @@ function surveyVerdict(status, reasoning) {
 }
 
 // ---------------------------------------------------------------------------
+// #825 (B4): the typed clarification channel.
+//
+// The planner is a synthesist, not a selector: when the brief is genuinely under-determined it must
+// have a TYPED way to say so instead of guessing or silently widening scope. This return joins the
+// escalate family beside surveyVerdict's backlog_empty / selection_indeterminate. It is legal
+// PRE-claim (nothing written yet) and post-claim/pre-freeze (claim held, plan unfrozen), which is
+// exactly why the builder and its CLI touch NO filesystem at all — they are the one return that can
+// fire before a project folder exists.
+//
+// The channel is BOUNDED at three round-trips. Past the cap the return degrades to the stop+ask
+// posture rather than looping: a fourth ask is a design failure, not a question. An empty or absent
+// question fails CLOSED to the same posture — a channel that cannot name its question cannot be
+// answered. Pure verdict-builder: builds the shape only, touches nothing.
+// ---------------------------------------------------------------------------
+// #825 (B2): the orchestrator-authored selection record the claim persisted at Gate 1. Read-only,
+// best-effort — Planning Evidence REPORTS the selection, it does not re-gate it (the claim already
+// refused zero-write on a missing/invalid record, which is where that judgment belongs).
+function readOriginSelectionRecord(readFile, recordPath) {
+  try {
+    const parsed = JSON.parse(readFile(recordPath));
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// One durable state line per field: collapse any newline so an authored value can never inject a
+// forged `key: value` line into workflow-state.md.
+function originSelectionValue(value) {
+  if (value == null) return '—';
+  const flat = (Array.isArray(value) ? value.join('; ') : String(value)).replace(/[\r\n]+/g, ' ').trim();
+  return flat.length ? flat : '—';
+}
+
+const CLARIFICATION_ROUND_CAP = 3;
+function clarificationRequired(question, contextRefs, round) {
+  const refs = Array.isArray(contextRefs)
+    ? contextRefs.map(String)
+    : (contextRefs == null || String(contextRefs).trim() === '' ? [] : [String(contextRefs)]);
+  const n = Number(round);
+  const resolvedRound = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+  const asked = typeof question === 'string' ? question : (question == null ? '' : String(question));
+  if (asked.trim() === '' || resolvedRound > CLARIFICATION_ROUND_CAP) {
+    return {
+      handoff_status: 'clarification_exhausted',
+      result: 'escalate',
+      posture: 'stop_and_ask',
+      round: resolvedRound,
+      cap: CLARIFICATION_ROUND_CAP,
+      question: asked,
+      context_refs: refs,
+      reasoning: asked.trim() === ''
+        ? 'clarification requested with no question — failing closed to the stop+ask posture'
+        : 'clarification round ' + resolvedRound + ' exceeds the cap of ' + CLARIFICATION_ROUND_CAP
+          + ' — stop and ask the user directly instead of looping',
+    };
+  }
+  return {
+    handoff_status: 'clarification_required',
+    result: 'escalate',
+    question: asked,
+    context_refs: refs,
+    round: resolvedRound,
+    cap: CLARIFICATION_ROUND_CAP,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // splicePlanningEvidence — insert/replace ## Planning Evidence in state content.
 //
 // Anchor: insert immediately BEFORE ## Last Updated (fallback: before ## Sink;
@@ -1020,6 +1088,20 @@ function runHandoff(opts) {
     peFields.push({ line: 'selection_priority_basis: ' + (selection.priority_basis || '—') });
     peFields.push({ line: 'selection_rejected: ' + (selection.rejected || '—') });
     peFields.push({ line: 'selection_disjointness: ' + (selection.disjointness || '—') });
+  } else {
+    // #825: selection is ORCHESTRATOR-owned now, so the record the claim bound at Gate 1 — not a
+    // planner-authored `## Meta` block — is the source. Folded only when the plan carries no
+    // `## Meta` selection, so a legacy plan that still declares one keeps its exact behavior.
+    // Best-effort: a missing/corrupt record never blocks the freeze (the claim already refused
+    // zero-write if it was invalid; this is the reporting end, not the gate).
+    const record = readOriginSelectionRecord(readFile,
+      path.join(path.dirname(statePath), '.cache', 'origin', 'selection-record.json'));
+    if (record) {
+      for (const field of ['selection_mode', 'selection_bundle', 'selection_priority_basis',
+        'selection_rejected', 'selection_disjointness', 'clarifications']) {
+        peFields.push({ line: field + ': ' + originSelectionValue(record[field]) });
+      }
+    }
   }
 
   let currentState = readFile(statePath);
@@ -1176,7 +1258,11 @@ function main() {
       '  --state-mtime   optional injectable clock → recorded_at in Planning Evidence\n' +
       '  --survey-verdict <backlog_empty|selection_indeterminate> [--reason "..."]\n' +
       '                  #789: emit a no-target survey pre-claim verdict (fail closed, NO claim,\n' +
-      '                  NO state write) and exit non-zero; the orchestrator acts on the escalate\n'
+      '                  NO state write) and exit non-zero; the orchestrator acts on the escalate\n' +
+      '  --clarification-required --question "..." [--context-refs a,b] [--round N]\n' +
+      '                  emit the typed clarification return (escalate family, NO fs touched — it\n' +
+      '                  is legal pre-claim). Bounded at 3 round-trips; past the cap, or with an\n' +
+      '                  empty question, it degrades to clarification_exhausted / stop_and_ask\n'
     );
     return;
   }
@@ -1190,6 +1276,23 @@ function main() {
     const reasonIdx = args.indexOf('--reason');
     const reason = reasonIdx >= 0 && reasonIdx + 1 < args.length ? args[reasonIdx + 1] : '';
     process.stdout.write(JSON.stringify(surveyVerdict(status, reason)) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  // #825 (B4): the typed clarification return. Handled HERE — before the --project/--plan arity
+  // check — because it is legal PRE-claim, when no project folder exists at all. Like the survey
+  // verdict above it reads and writes NO filesystem path, which IS its fail-closed-no-state
+  // guarantee.
+  if (args.includes('--clarification-required')) {
+    const qIdx = args.indexOf('--question');
+    const question = qIdx >= 0 && qIdx + 1 < args.length ? args[qIdx + 1] : '';
+    const refsIdx = args.indexOf('--context-refs');
+    const refsRaw = refsIdx >= 0 && refsIdx + 1 < args.length ? args[refsIdx + 1] : '';
+    const contextRefs = String(refsRaw).split(',').map(s => s.trim()).filter(Boolean);
+    const roundIdx = args.indexOf('--round');
+    const round = roundIdx >= 0 && roundIdx + 1 < args.length ? args[roundIdx + 1] : undefined;
+    process.stdout.write(JSON.stringify(clarificationRequired(question, contextRefs, round)) + '\n');
     process.exitCode = 1;
     return;
   }
@@ -1312,4 +1415,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };
+module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, clarificationRequired, CLARIFICATION_ROUND_CAP, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };

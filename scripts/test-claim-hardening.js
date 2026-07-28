@@ -5633,6 +5633,330 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#837(P9): the prose must name the re-typed inner reason it can still return');
     assert(skeleton.includes('finalize_mirror_refused'),
       '#837(P9): the finalize prose must keep the top-level reason the four contract validators pin');
+}}
+
+// ---------------------------------------------------------------------------
+// #825 (B1 + B2): Gate 1 — the typed selection record at claim, and the pre-claim
+// `.origin/<target-key>/` staging fold.
+//
+// Selection/survey moves OUT of the planner and INTO the orchestrator, and the only thing that
+// makes that safe is a SCRIPT refusal at the commitment point (ADR 0006's planner-first lock was
+// prose + contract-pins only). So `startup` gains two flags:
+//
+//   --target-source <user_directed|orchestrator_selected>   (default: user_directed)
+//   --selection-record <path>                                (JSON, orchestrator-authored)
+//
+// and the gate is: an ORCHESTRATOR-SELECTED claim without a VALID record REFUSES, zero-write.
+//   * flag absent, or path unreadable          → `selection_record_missing`
+//   * unparseable, or any required field
+//     absent / empty / whitespace-only         → `selection_record_invalid`
+// Required fields (fields-present-and-non-empty, nothing deeper): selection_mode,
+// selection_bundle, selection_priority_basis, selection_rejected, selection_disjointness,
+// clarifications.
+//
+// On EVERY acquiring claim the record becomes durable state: it is persisted at
+// kaola-workflow/<project>/.cache/origin/selection-record.json and its sha256 is stamped into
+// workflow-state.md as `selection_record_digest:`. An EXPLICIT-target claim supplies no record —
+// startup writes the DEGENERATE one itself (`selection_mode: explicit-target`), so the field is
+// never optional and never empty.
+//
+// B1: pre-claim reconnaissance has no durable home (the project folder does not exist yet), so it
+// stages under kaola-workflow/.origin/<target-key>/ and the claim FOLDS it into
+// kaola-workflow/<project>/.cache/origin/ and REMOVES the staging dir. <target-key> is the project
+// name the claim resolves to (issue-<N> / bundle-<a>-<b>). Absent staging is a clean no-op.
+//
+// RED (pre-impl): --target-source/--selection-record are unknown flags, nothing refuses, no record
+// is persisted, no digest is stamped, and .origin/ staging survives untouched beside the claim.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync: spawnS825 } = require('child_process');
+  const crypto825 = require('crypto');
+  const CLAIM825 = path.join(__dirname, 'kaola-workflow-claim.js');
+
+  const REQUIRED_RECORD_FIELDS_825 = [
+    'selection_mode', 'selection_bundle', 'selection_priority_basis',
+    'selection_rejected', 'selection_disjointness', 'clarifications',
+  ];
+
+  function goodRecord825(mode) {
+    return {
+      selection_mode: mode || 'no-target-survey',
+      selection_bundle: 'issue-825',
+      selection_priority_basis: 'roadmap ## Active Work frontier row 1 (Next Step: implement)',
+      selection_rejected: '#826 — lower frontier rank; #832 — co-tenant lane live',
+      selection_disjointness: 'single issue; no write-set overlap with the live lane',
+      clarifications: 'none',
+    };
+  }
+
+  // Minimal git repo + a green mock classifier, mirroring the #770/#538 fixture above.
+  const repo825 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-825-repo-')));
+  const g825 = (a) => { try { spawnS825('git', ['-C', repo825, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
+  g825(['init']); g825(['config', 'user.email', 't@t']); g825(['config', 'user.name', 't']); g825(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repo825, '.gitignore'), '.kw/\n'); g825(['add', '-A']); g825(['commit', '-m', 'init']);
+
+  const mocks825 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-825-mocks-')));
+  const mockGreen825 = path.join(mocks825, 'mock-green.js');
+  fs.writeFileSync(mockGreen825,
+    'process.stdout.write(JSON.stringify({ verdict: "green", reasoning: "ok" }) + "\\n");\n' +
+    'process.exit(0);\n'
+  );
+
+  function runClaim825(argv, extraEnv) {
+    const e = Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+      KAOLA_CLASSIFIER_TIMEOUT_MS: '500',
+      KAOLA_CLASSIFIER_BACKOFF_MS: '0',
+      KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen825,
+    }, extraEnv || {});
+    delete e.KAOLA_PATH;
+    const res = spawnS825('node', [CLAIM825, ...argv], { cwd: repo825, encoding: 'utf8', env: e });
+    const stdout = String(res.stdout || '');
+    const stderr = String(res.stderr || '');
+    let json = null;
+    const lines = stdout.trim().split('\n').filter(l => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) { try { json = JSON.parse(lines[i]); break; } catch (_) {} }
+    return { code: res.status == null ? 1 : res.status, json, stderr, raw: stdout + stderr };
+  }
+
+  function projDir825(issueN) { return path.join(repo825, 'kaola-workflow', 'issue-' + issueN); }
+  function stateOf825(issueN) {
+    const p = path.join(projDir825(issueN), 'workflow-state.md');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  }
+  function recordPath825(issueN) {
+    return path.join(projDir825(issueN), '.cache', 'origin', 'selection-record.json');
+  }
+  function branchesFor825(issueN) {
+    const r = spawnS825('git', ['-C', repo825, 'branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' });
+    return String(r.stdout || '').trim();
+  }
+  function cleanup825(issueN) {
+    try { fs.rmSync(projDir825(issueN), { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(repo825, 'kaola-workflow', '.origin'), { recursive: true, force: true }); } catch (_) {}
+    try { spawnS825('git', ['-C', repo825, 'checkout', '-f', 'master'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    try { spawnS825('git', ['-C', repo825, 'checkout', '-f', 'main'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    for (const b of String(spawnS825('git', ['-C', repo825, 'branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' }).stdout || '')
+      .split('\n').map(s => s.replace(/^[*+ ]+/, '').trim()).filter(Boolean)) {
+      try { spawnS825('git', ['-C', repo825, 'worktree', 'remove', '--force', path.join(repo825, '..', b)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+      try { spawnS825('git', ['-C', repo825, 'branch', '-D', b], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    }
+    try { spawnS825('git', ['-C', repo825, 'worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+  }
+  // A refusal must leave NOTHING behind: no project folder, no branch, no record, no .origin fold.
+  function assertZeroWrite825(issueN, label, r) {
+    assert(!fs.existsSync(projDir825(issueN)),
+      label + ': the refusal must create NO project folder (zero-write gate), got ' + projDir825(issueN));
+    assert(branchesFor825(issueN) === '',
+      label + ': the refusal must create NO claim branch, got ' + JSON.stringify(branchesFor825(issueN)));
+    assert(r.code === 1, label + ': the refusal must exit 1, got ' + r.code + ' raw=' + r.raw.trim());
+  }
+
+  try {
+    // --- (a) GATE: orchestrator-selected claim with NO --selection-record → selection_record_missing
+    {
+      cleanup825(82501);
+      const r = runClaim825(['startup', '--target-issue', '82501', '--target-source', 'orchestrator_selected']);
+      assert(r.json && (r.json.status === 'selection_record_missing' || r.json.verdict === 'selection_record_missing'),
+        '#825(a): an orchestrator-selected claim without --selection-record must refuse '
+          + 'selection_record_missing, got ' + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      assert(r.json && r.json.claim === 'none',
+        '#825(a): the refusal must report claim:none, got ' + JSON.stringify(r.json && r.json.claim));
+      assert(r.json && typeof r.json.reasoning === 'string' && r.json.reasoning.length > 0,
+        '#825(a): the refusal must carry a reasoning line (sibling-refusal uniformity), got ' + JSON.stringify(r.json));
+      assertZeroWrite825(82501, '#825(a)', r);
+      cleanup825(82501);
+    }
+
+    // --- (b) GATE: --selection-record pointing at a path that does not exist → selection_record_missing
+    {
+      cleanup825(82502);
+      const r = runClaim825(['startup', '--target-issue', '82502', '--target-source', 'orchestrator_selected',
+        '--selection-record', path.join(mocks825, 'does-not-exist.json')]);
+      assert(r.json && (r.json.status === 'selection_record_missing' || r.json.verdict === 'selection_record_missing'),
+        '#825(b): an unreadable --selection-record path must refuse selection_record_missing, got '
+          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      assertZeroWrite825(82502, '#825(b)', r);
+      cleanup825(82502);
+    }
+
+    // --- (c) GATE: a record with an EMPTY required field → selection_record_invalid, zero-write.
+    // One case per required field: the validation is fields-present-and-non-empty, so every field
+    // must be load-bearing (a check that only looks at selection_mode would pass 5 of these).
+    {
+      let i = 0;
+      for (const fieldName of REQUIRED_RECORD_FIELDS_825) {
+        const issueN = 82510 + (i++);
+        cleanup825(issueN);
+        const rec = goodRecord825();
+        rec[fieldName] = '   ';   // whitespace-only counts as empty
+        const recPath = path.join(mocks825, 'rec-empty-' + fieldName + '.json');
+        fs.writeFileSync(recPath, JSON.stringify(rec, null, 2) + '\n');
+        const r = runClaim825(['startup', '--target-issue', String(issueN), '--target-source', 'orchestrator_selected',
+          '--selection-record', recPath]);
+        assert(r.json && (r.json.status === 'selection_record_invalid' || r.json.verdict === 'selection_record_invalid'),
+          '#825(c): an EMPTY `' + fieldName + '` must refuse selection_record_invalid, got '
+            + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+        assertZeroWrite825(issueN, '#825(c) empty ' + fieldName, r);
+        cleanup825(issueN);
+      }
+    }
+
+    // --- (d) GATE: a record with a required field ABSENT → selection_record_invalid, zero-write.
+    {
+      let i = 0;
+      for (const fieldName of REQUIRED_RECORD_FIELDS_825) {
+        const issueN = 82520 + (i++);
+        cleanup825(issueN);
+        const rec = goodRecord825();
+        delete rec[fieldName];
+        const recPath = path.join(mocks825, 'rec-absent-' + fieldName + '.json');
+        fs.writeFileSync(recPath, JSON.stringify(rec, null, 2) + '\n');
+        const r = runClaim825(['startup', '--target-issue', String(issueN), '--target-source', 'orchestrator_selected',
+          '--selection-record', recPath]);
+        assert(r.json && (r.json.status === 'selection_record_invalid' || r.json.verdict === 'selection_record_invalid'),
+          '#825(d): an ABSENT `' + fieldName + '` must refuse selection_record_invalid, got '
+            + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+        assertZeroWrite825(issueN, '#825(d) absent ' + fieldName, r);
+        cleanup825(issueN);
+      }
+    }
+
+    // --- (e) GATE: unparseable record bytes → selection_record_invalid, zero-write.
+    {
+      cleanup825(82530);
+      const recPath = path.join(mocks825, 'rec-garbage.json');
+      fs.writeFileSync(recPath, 'not json at all\n');
+      const r = runClaim825(['startup', '--target-issue', '82530', '--target-source', 'orchestrator_selected',
+        '--selection-record', recPath]);
+      assert(r.json && (r.json.status === 'selection_record_invalid' || r.json.verdict === 'selection_record_invalid'),
+        '#825(e): an unparseable record must refuse selection_record_invalid, got '
+          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      assertZeroWrite825(82530, '#825(e)', r);
+      cleanup825(82530);
+    }
+
+    // --- (f) pick-next carries the same gate (it delegates to the startup claim path).
+    {
+      cleanup825(82531);
+      const r = runClaim825(['pick-next', '--target-issue', '82531', '--target-source', 'orchestrator_selected']);
+      assert(r.json && (r.json.status === 'selection_record_missing' || r.json.verdict === 'selection_record_missing'),
+        '#825(f): pick-next must carry the SAME Gate 1 refusal as startup, got '
+          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      assertZeroWrite825(82531, '#825(f)', r);
+      cleanup825(82531);
+    }
+
+    // --- (g) HAPPY PATH: a valid record ACQUIRES, is persisted byte-identically, and its sha256
+    // is stamped into workflow-state.md.
+    {
+      cleanup825(82540);
+      const recPath = path.join(mocks825, 'rec-good.json');
+      const bytes = JSON.stringify(goodRecord825(), null, 2) + '\n';
+      fs.writeFileSync(recPath, bytes);
+      const r = runClaim825(['startup', '--target-issue', '82540', '--target-source', 'orchestrator_selected',
+        '--selection-record', recPath]);
+      assert(r.json && r.json.status === 'acquired',
+        '#825(g): a VALID selection record must acquire, got ' + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      const persisted = recordPath825(82540);
+      assert(fs.existsSync(persisted),
+        '#825(g): the record must be persisted at <project>/.cache/origin/selection-record.json, missing ' + persisted);
+      const persistedBytes = fs.existsSync(persisted) ? fs.readFileSync(persisted, 'utf8') : '';
+      let parsed = null; try { parsed = JSON.parse(persistedBytes); } catch (_) {}
+      assert(parsed && REQUIRED_RECORD_FIELDS_825.every(f => typeof parsed[f] === 'string' ? parsed[f].trim().length > 0 : parsed[f] != null),
+        '#825(g): the persisted record must carry every required field non-empty, got ' + JSON.stringify(parsed));
+      assert(parsed && parsed.selection_priority_basis === goodRecord825().selection_priority_basis,
+        '#825(g): the persisted record must be the ORCHESTRATOR-authored one (not a synthesized stub), got '
+          + JSON.stringify(parsed && parsed.selection_priority_basis));
+      const digest = crypto825.createHash('sha256').update(persistedBytes).digest('hex');
+      const state = stateOf825(82540);
+      const m = state.match(/^selection_record_digest:\s*(\S+)\s*$/m);
+      assert(m !== null,
+        '#825(g): workflow-state.md must carry a selection_record_digest line, got:\n' + state);
+      assert(m && m[1].toLowerCase() === digest,
+        '#825(g): the stamped digest must be the sha256 of the PERSISTED record bytes, expected '
+          + digest + ' got ' + JSON.stringify(m && m[1]));
+      assert(r.json && String(r.json.selection_record_digest || '').toLowerCase() === digest,
+        '#825(g): the emitted claim JSON must surface selection_record_digest, got '
+          + JSON.stringify(r.json && r.json.selection_record_digest));
+      cleanup825(82540);
+    }
+
+    // --- (h) DEGENERATE record: an EXPLICIT-target claim supplies no record; startup writes one
+    // itself with selection_mode: explicit-target, so the durable field is never optional.
+    {
+      cleanup825(82541);
+      const r = runClaim825(['startup', '--target-issue', '82541']);
+      assert(r.json && r.json.status === 'acquired',
+        '#825(h): an explicit-target claim must still acquire with NO --selection-record, got '
+          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      const persisted = recordPath825(82541);
+      assert(fs.existsSync(persisted),
+        '#825(h): the explicit-target claim must write the DEGENERATE record itself, missing ' + persisted);
+      let parsed = null; try { parsed = JSON.parse(fs.readFileSync(persisted, 'utf8')); } catch (_) {}
+      assert(parsed && parsed.selection_mode === 'explicit-target',
+        '#825(h): the degenerate record must carry selection_mode: explicit-target, got '
+          + JSON.stringify(parsed && parsed.selection_mode));
+      const emptyFields = parsed
+        ? REQUIRED_RECORD_FIELDS_825.filter(f => parsed[f] == null || (typeof parsed[f] === 'string' && parsed[f].trim() === ''))
+        : REQUIRED_RECORD_FIELDS_825;
+      assert(emptyFields.length === 0,
+        '#825(h): the degenerate record must still carry EVERY required field non-empty, empty/absent: '
+          + JSON.stringify(emptyFields) + ' record=' + JSON.stringify(parsed));
+      const state = stateOf825(82541);
+      assert(/^selection_record_digest:\s*[0-9a-f]{64}\s*$/m.test(state),
+        '#825(h): the explicit-target claim must stamp a selection_record_digest too, got:\n' + state);
+      cleanup825(82541);
+    }
+
+    // --- (i) B1 FOLD: pre-claim staging at kaola-workflow/.origin/<target-key>/ is moved into
+    // <project>/.cache/origin/ (relative layout preserved) and the staging dir is REMOVED.
+    {
+      cleanup825(82542);
+      const staging = path.join(repo825, 'kaola-workflow', '.origin', 'issue-82542');
+      fs.mkdirSync(path.join(staging, 'probes'), { recursive: true });
+      fs.writeFileSync(path.join(staging, 'survey.md'), '# survey\nfindings\n');
+      fs.writeFileSync(path.join(staging, 'probes', 'seams.json'), '{"seam":"claim.js:1647"}\n');
+      const r = runClaim825(['startup', '--target-issue', '82542']);
+      assert(r.json && r.json.status === 'acquired',
+        '#825(i): a claim with pre-claim staging present must still acquire, got '
+          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      const originDir = path.join(projDir825(82542), '.cache', 'origin');
+      assert(fs.existsSync(path.join(originDir, 'survey.md')),
+        '#825(i): staged evidence must be folded into <project>/.cache/origin/, missing '
+          + path.join(originDir, 'survey.md'));
+      assert(fs.existsSync(path.join(originDir, 'probes', 'seams.json')),
+        '#825(i): the fold must preserve the staged relative layout, missing '
+          + path.join(originDir, 'probes', 'seams.json'));
+      assert(fs.existsSync(path.join(originDir, 'survey.md'))
+        && fs.readFileSync(path.join(originDir, 'survey.md'), 'utf8') === '# survey\nfindings\n',
+        '#825(i): the folded evidence bytes must survive intact');
+      assert(!fs.existsSync(staging),
+        '#825(i): the staging dir kaola-workflow/.origin/<target-key>/ must be REMOVED after the fold, still at ' + staging);
+      cleanup825(82542);
+    }
+
+    // --- (j) B1 NO-OP CONTROL: absent staging is not a refusal and creates no .origin residue.
+    {
+      cleanup825(82543);
+      const r = runClaim825(['startup', '--target-issue', '82543']);
+      assert(r.json && r.json.status === 'acquired',
+        '#825(j): a claim with NO pre-claim staging must acquire unchanged, got '
+          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
+      assert(!fs.existsSync(path.join(repo825, 'kaola-workflow', '.origin')),
+        '#825(j): the fold must not manufacture a kaola-workflow/.origin/ dir when nothing was staged');
+      cleanup825(82543);
+    }
+  } finally {
+    try {
+      for (const b of String(spawnS825('git', ['-C', repo825, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout || '')
+        .split('\n').filter(l => l.startsWith('worktree ')).map(l => l.slice(9).trim())) {
+        if (b !== repo825) { try { spawnS825('git', ['-C', repo825, 'worktree', 'remove', '--force', b], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} }
+      }
+    } catch (_) {}
+    fs.rmSync(repo825, { recursive: true, force: true });
+    fs.rmSync(mocks825, { recursive: true, force: true });
   }
 }
 

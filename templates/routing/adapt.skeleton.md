@@ -362,21 +362,46 @@ dispatch below. Resolve the shape FIRST, before the authoring guard.
      one-line summary of it as the title. State the new number aloud.
   3. If more than one plausibly matches, or the forge cannot be reached (including
      `KAOLA_WORKFLOW_OFFLINE=1`), STOP and ask the user which issue to use. Never guess, and
-     never fall through to the no-target survey.
+     never fall through to the orchestrator-owned no-target survey.
   The described task then enters as an explicit target, and the description travels on as the
   planner's binding scope. The no-target survey does NOT run on this shape, so roadmap priority
   cannot outrank the work the user asked for.
-- **Empty (no target)** — dispatch in no-target survey mode: the `workflow-planner` runs the
-  backlog survey itself, selects the work, and claims it in the same dispatch. Do NOT resolve or
-  pre-select a target here.
+- **Empty (no target)** — the ORCHESTRATOR already ran the no-target survey and selected the work
+  before entering here (see the router's selection contract). Enter with the resolved target plus
+  the `--selection-record` path it authored; the planner never re-ranks the backlog.
+
+## Origin evidence and the selection record
+
+Selection is orchestrator-owned, and the claim script is the commitment point: an
+orchestrator-originated claim carries `--target-source orchestrator_selected --selection-record
+<path>` or refuses `selection_record_missing` with zero side effects. On an acquiring claim the
+record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
+stamped into `workflow-state.md` as `selection_record_digest:`, and any pre-claim reconnaissance
+staged under `kaola-workflow/.origin/<target-key>/` is folded into the same `.cache/origin/`
+directory.
+
+Hand the planner **evidence PATHS, never conclusions**: name the files under
+`kaola-workflow/{project}/.cache/origin/` (and the staged `kaola-workflow/.origin/<target-key>/`
+paths pre-claim) in the brief and let it read them. Cite what you FOUND; never dictate what the
+plan must CONCLUDE. A brief carrying a pre-authored `## Nodes` table, an `AUTHOR EXACTLY`, or a
+`do not redesign` is refused `planner_control_boundary_violation` before anything is written — the
+control boundary is unchanged, and it is exactly what keeps a synthesizer synthesizing.
+
+**`clarification_required`.** When the brief is genuinely under-determined the planner returns
+`{handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round}`
+instead of guessing. It is legal PRE-claim (nothing written) and post-claim/pre-freeze (claim held,
+plan unfrozen). ASK THE USER the question verbatim, append the answer to the selection record's
+`clarifications` field, and re-dispatch the planner with the answer in the brief. The channel is
+bounded at THREE round-trips; a fourth returns `clarification_exhausted` with a `stop_and_ask`
+posture — stop and take the design question to the user rather than looping.
 <!-- REGION:command -->
 
 ## Front end: claim + author (the `workflow-planner` subagent)
 
 ONE enforced dispatch: the main session never runs the claim or authoring write but keeps every
 judgment. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
-issue a task description resolved to under the Entry contract above — or with NO target at all,
-in which case the planner selects the work itself in its no-target survey mode. The planner
+issue a task description resolved to under the Entry contract above — always a RESOLVED target,
+because the orchestrator settled the selection before entering. The planner
 RETURNS `{project}`. **Re-entry:** a *frozen*
 plan never reaches adapt (it resumes via `/kaola-workflow-plan-run`), but an authored-but-NOT-frozen
 plan (no `plan_hash`) does — re-run the planner+handoff (it MAY overwrite an unfrozen invalid plan,
@@ -400,8 +425,8 @@ The persisted detection paths are `.codex/agents/kaola-workflow/` for a trusted 
 and `~/.codex/agents/kaola-workflow/` for the global default; the preflight alone resolves precedence.
 
 The router enters with the agent-selected target for fresh adaptive work — an issue number, an issue
-set, or the issue a task description resolved to under the Entry contract above — or with NO target
-at all, in which case the planner selects the work itself in its no-target survey mode. The planner
+set, or the issue a task description resolved to under the Entry contract above — always a RESOLVED
+target, because the orchestrator settled the selection before entering. The planner
 RETURNS the `{project}` used after. **Re-entry (unfrozen plan):** an *authored-but-NOT-frozen* plan (a prior
 governance refusal / declined ask / abort — no `plan_hash`) routes back here; SKIP the freshness gate
 + planner delegation and re-run the planner+handoff on the existing plan (the planner MAY overwrite an unfrozen plan; never a frozen one); the handoff freezes mechanically. A pre-freeze exit
@@ -495,7 +520,7 @@ Render both target slots from the entry shape; never leave a placeholder literal
 | Issue number / project | that issue number or project name | `none` |
 | Issue set | the comma-separated set | `none` |
 | Task description | the issue it resolved to under the Entry contract | the user's description, verbatim, on one line |
-| No target | `none — no target named; run no-target survey mode and select the work yourself` | `none` |
+| No target | the issue the orchestrator-owned no-target survey selected, plus `Selection record: <path>` | `none` |
 <!-- REGION:command -->
 
 This is an **isolated, self-contained control-plane brief**: never inherit the full conversation. A

@@ -154,6 +154,19 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'validat
 // n5 (#653 finding D): selection-evidence docking must reach the next SKILL; the
 // observed_gap_unseeded refusal and run-gap manual-seed prose must reach the finalize/plan-run SKILLs.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection-evidence');
+// #825: Gate 1 + the typed clarification channel are runtime-neutral rules, so the Codex SKILL
+// pack must speak both or the codex runtime silently loses a refusal the script still enforces.
+// The re-pin is bidirectional in the SAME diff: the retired planner-first lock is asserted ABSENT
+// from the codex planner profile beside the new positive pins.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection_record_missing');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--selection-record');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'clarification_required');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.cache/origin/');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'clarification_required');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'do not author a node to re-derive it');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'Consume evidence, never accept a conclusion');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'planner_control_boundary_violation');
+assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'No-target survey mode');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'observed_gap_unseeded');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'run-gaps-manual.md');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');

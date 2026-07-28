@@ -71,9 +71,10 @@ Use `$ARGUMENTS` as either:
 
 - Do not implement, review, fix, or finalize work in this router.
 - Do not invoke phase agents from this router — including on the no-issue-named branch: that
-  branch dispatches nothing itself. It routes with no target to the adaptive front end, whose
-  `workflow-planner` (dispatched by that command, never by this router) owns the pre-claim
-  backlog survey, selection, and claim in ONE dispatch.
+  branch dispatches nothing itself. THIS router (the orchestrator) owns the pre-claim backlog
+  reading and the selection; it then routes with no target to the adaptive front end, whose
+  `workflow-planner` (dispatched by that command, never by this router) runs the claim and
+  authors the DAG in ONE dispatch.
 - Do not advance the run while any `Required Agent Compliance` row is
   `pending`, missing, or lacks evidence/skip reason.
 - Prefer `workflow-state.md` for exact resume position.
@@ -117,18 +118,21 @@ do not auto-pick; the agent owns this decision.
   no-argument case → this is the **auto-bundle entry**. Resolve the path intent first
   (Step 0a-1), then leave `KAOLA_TARGET_ISSUE` / `KAOLA_TARGET_ISSUES` UNSET and route
   straight to the adaptive front-end entry (Step 0a-2; Step 0c's *Auto-bundle entry* below
-  documents the selection contract): the `workflow-planner`, dispatched by
-  `/kaola-workflow-adapt` with no target, runs its own no-target backlog survey, selects a
-  single issue by default — or a high-confidence same-scope bundle when every bundle rule is
-  met — jointly with how it decomposes the work, then claims + authors + freezes in ONE
-  dispatch. Skip steps 1–4 below on this branch — there is no router-selected target to
-  validate or state.
+  documents the selection contract): YOU rank the backlog and select — one issue by default, or
+  a high-confidence same-scope bundle when every bundle rule is met — record the selection in a
+  typed selection record, and route to `/kaola-workflow-adapt` carrying the resolved target,
+  the record path, and the reconnaissance evidence paths. The `workflow-planner` then claims +
+  authors + freezes in ONE dispatch. Skip steps 1–4 below on this branch — there is no
+  router-VALIDATED target to state; you state the SELECTED one instead.
 
-On the no-target branch (the user named neither an issue nor a task), **the
-`workflow-planner` is the SOLE backlog reader** — the router does NOT scan the backlog or
-select a target itself. The planner reads `ROADMAP.md`, the forge issue list, active
-folders, and archived summaries — its own *No-target survey mode* section lists the sources
-— then claims what it selects. Do not duplicate the scan here.
+On the no-target branch (the user named neither an issue nor a task), **the ORCHESTRATOR is the
+backlog reader** — selection is orchestrator-owned and is never delegated to the planner. Read
+`ROADMAP.md` (its `## Active Work` table's `Next Step` column and any `### Project rules` block),
+each `kaola-workflow/.roadmap/issue-*.md`, the forge issue list, active folders and each non-owned
+lane's `lane_bucket`, and archived summaries. Rank them by the precedence in Step 0c below, claim
+through Gate 1, then dispatch the `workflow-planner` with the resolved target, the selection record,
+and the reconnaissance evidence PATHS. The planner shapes what you selected — its own *Origin inputs*
+section states what it consumes and what it refuses — and never ranks the backlog itself.
 
 1. If the user named a specific issue number or project — in `$ARGUMENTS` or in the prompt — set `KAOLA_TARGET_ISSUE` to THAT issue and go to step 3. A named target is never substituted: do not read, adopt, or fall back to an active folder's issue in its place.
 2. ONLY when the user named no issue and no project: if exactly one active folder is already present, read its issue number from `node "$CLAIM_JS" status` (`active[0].issue_number`) and set `KAOLA_TARGET_ISSUE` to that value before calling startup. The script will return `verdict: owned`; proceed to routing. Do not skip the startup call. If a target WAS named and it differs from the active folder's issue, keep the named target — co-active folders are supported, and the named issue gets its own lane.
@@ -164,38 +168,153 @@ and pass `--target-issues 42,47,53` (project/branch `bundle-42-47-53`, sorted
 
 ### Auto-bundle entry
 
-**Single-issue is the default here.** On this branch the planner selects ONE issue unless
+**Single-issue is the default here.** On this branch the ORCHESTRATOR selects ONE issue unless
 EVERY bundle rule below is met; it never manufactures a bundle. The heading names the entry
 point, not the expected outcome.
 
 This is the **no-target branch of Step 0** — the user named neither an issue nor a task. The
-router dispatches nothing itself. It routes with no target to the adaptive front end
-(Step 0a-2): the `workflow-planner`, dispatched by `/kaola-workflow-adapt` with no issue,
-surveys the backlog itself (the sources are documented in its own contract — roadmap sources,
-remote open issues + dependency labels, active folders, archived summaries) and selects a
-single `primary_issue` — or a high-confidence same-scope bundle when every rule below holds —
-jointly with how it decomposes the work, then claims + authors + freezes in ONE dispatch.
+router dispatches no phase agent, but it DOES own the selection: read the backlog sources
+(roadmap sources, remote open issues + dependency labels, active folders, archived summaries),
+rank by the precedence below, and settle a single `primary_issue` — or a high-confidence
+same-scope bundle when every rule below holds. Then claim through Gate 1 and route to the
+adaptive front end (Step 0a-2), where the `workflow-planner` authors + freezes in ONE dispatch.
 
 A bundle requires ALL of: every candidate open + unclaimed, no dependency unresolved outside
 the set, a shared coherent scope signal, and a count at or below `KAOLA_BUNDLE_MAX_ISSUES`
-(default 8). If any rule fails, or confidence is not high, the planner selects a single
-`primary_issue` → single-issue selection.
+(default 8). If any rule fails, or confidence is not high, select a single `primary_issue` →
+single-issue selection.
 
-**The main orchestrator STATES the selected issue set aloud once the planner returns it.**
+**The main orchestrator STATES the selected issue set aloud BEFORE it claims.**
 Scripts validate but never select or substitute issues.
 
-**Goal context (`KAOLA_GOAL`).** When set, export it once before `/workflow-next`; the planner
-passes it into its own selection as a soft filter (it adds a `goal_alignment` field, never
-excludes on mismatch), and it also flows into `cmdFinalize` as `goal_check: satisfied`.
+**Goal context (`KAOLA_GOAL`).** When set, export it once before `/workflow-next`; treat it as a
+soft filter inside the chosen priority tier (record a `goal_alignment` note, never exclude on
+mismatch, and never let it outrank an open, actionable roadmap frontier issue), and it also flows
+into `cmdFinalize` as `goal_check: satisfied`.
 
-**Selection record.** There is no router-side selection to persist on this branch: the
-`workflow-planner` records its own single-issue/bundle choice, rejected candidates, and
-disjointness reasoning as a durable selection record surfaced through the frozen plan's
-`## Planning Evidence` (see `agents/workflow-planner.md` for the full selection contract),
-and writes the same record to the sidecar
-`kaola-workflow/{project}/.cache/selection-evidence.md` with a leading
-`selection_mode: auto-bundle|single-issue` line. The planner is that sidecar's only writer,
-so it exists only on this no-target branch — a user-named claim legitimately has none.
+### Clustering ranking precedence
+
+First **rank** candidates by the roadmap priority frontier, THEN group by scope. The ranking
+precedence is strict and ordered:
+
+1. **Priority / drive-order tier (hard rank, first).** A cluster that contains or advances the
+   roadmap's top-priority frontier issue (per `### Project rules` and the `Next Step` drive-order)
+   outranks every lower-priority cluster. A `### Project rules` guardrail (e.g. "X must not preempt the
+   correctness frontier Y") is a HARD constraint: while a higher-priority frontier issue is open and
+   actionable, the guarded-against issue must NOT be recommended.
+2. **Scope-cohesion (second).** Within the highest available priority tier, prefer the most coherent
+   same-scope cluster.
+3. **Actionability (within-tier tiebreak ONLY).** Ease of verification / cleanest write-lanes /
+   smallest dependency surface breaks ties *between equally-prioritized* clusters. Actionability NEVER
+   promotes a lower-priority cluster over a higher-priority one. "Closest actionable proxy" is an
+   explicit anti-pattern: do not substitute an easier lower-priority issue for an open, actionable
+   frontier issue.
+
+Group the candidates within the winning priority tier by coherent scope signal (same subsystem or area
+label; same named feature or failing workflow; explicit dependency relation inside the group;
+compatible expected write areas one adaptive DAG can cover). Exclude from any bundle: issues that are
+closed or already claimed (in an active folder or a live bundle's `issue_numbers`); issues classified
+red against active work; issues whose dependencies fall outside the bundle and are not already closed.
+
+### Co-Tenant Mode: Disjoint Issue Selection
+
+When reading active folders, each non-owned lane carries a `lane_bucket` classification in the
+claim-status report. Use it to shape the candidate pool before any other selection step:
+
+- **`mine`** — this session owns the lane; operate normally.
+- **`live`** — another live session is working in this lane. Leave it entirely untouched and exclude
+  all of its issues from the candidate pool.
+- **`stale`** — a resumable leftover from a prior, inactive session. Treat its issues as ordinary
+  unclaimed candidates for overlap purposes.
+- **`ambiguous`** — liveness cannot be determined. Do not include this lane's issues in any
+  recommendation; record the ambiguity and ask.
+
+**Per-lane precedence ladder (first match wins, applied independently per lane):**
+1. An explicit per-issue resume instruction (e.g. "resume issue N") makes the lane `stale` (resumable)
+   regardless of marker age — this beats all other signals.
+2. A blanket co-tenant signal in the user prompt (e.g. "another session is working") makes all
+   non-owned, non-explicitly-resumed lanes `live`.
+3. The liveness heuristic from `lane_bucket`: a fresh marker → `ambiguous`; an old or absent marker →
+   `stale`.
+4. No signal → ask.
+
+Combine the `live`-lane issue exclusion with the write-set overlap verdict when building the candidate
+pool: a bundle is eligible only when its issues are not occupied by any `live` lane AND its write areas
+do not conflict with active work. When all candidates are occupied by `live` or `ambiguous` lanes, emit
+the `backlog_empty` verdict rather than recommending occupied work.
+
+### Bundle Selection Rules
+
+**Default: single issue.** If confidence is not high, select single-issue mode — do not manufacture
+a bundle. Auto-bundle only when ALL of the following are true:
+
+- The set sits in the **highest open-and-actionable priority tier** the roadmap drives: no open,
+  actionable, higher-priority frontier issue is being skipped in its favor (honor every
+  `### Project rules` guardrail; see the Frontier-Blocked Rule below);
+- All issues are open and unclaimed;
+- No issue is classified red against active work;
+- Dependencies are either inside the bundle or already closed;
+- Issues share a coherent scope signal;
+- Expected write areas are compatible with one adaptive DAG;
+- Issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 8).
+
+### Frontier-Blocked Rule
+
+When the roadmap's top-priority frontier issue is genuinely blocked or unverifiable —
+unclaimed-but-red against active work, has an open external dependency outside any claimable bundle, or
+its acceptance is unverifiable in this run — you may fall to the next-priority actionable item, but
+ONLY after saying so **explicitly** in the selection record:
+
+- State in `selection_priority_basis` WHICH frontier issue you skipped and the **concrete reason** it
+  is blocked/unverifiable ("frontier blocked because…"), then name the next-priority item you fell to.
+- List the skipped frontier issue in `selection_rejected` with that same blocking reason.
+- Never silently substitute an easier, lower-priority, more-cohesive cluster for an open and actionable
+  frontier issue and call it the "closest actionable proxy." Silent substitution is forbidden; an
+  explicit, reasoned fall-through is required.
+
+A frontier issue that is open AND actionable AND verifiable is NOT blocked — select it (or its
+frontier-advancing cluster) even if a lower-priority cluster is more cohesive or easier to verify.
+
+### Empty backlog / indeterminate selection — the pre-claim verdicts
+
+Selection runs BEFORE any claim, so an empty or ambiguous backlog must fail closed WITHOUT claiming or
+writing any state. State the typed verdict and STOP:
+
+- **`backlog_empty`** — after the full survey there is no claimable, unblocked, same-scope bundle:
+  every open issue is already claimed, classified red, has an unresolved external dependency, is
+  occupied by a `live`/`ambiguous` lane, or the backlog has no open issues at all. Do NOT emit this
+  merely because confidence is low or the bundles are suboptimal — only when no issue passes all bundle
+  rules.
+- **`selection_indeterminate`** — selection cannot be resolved determinately (e.g. an `ambiguous`
+  co-tenant lane blocks the frontier, or the priority signal is genuinely contradictory).
+
+Both join the `target_indeterminate` verdict family (`result: 'escalate'`, `claim: 'none'`). A CLEAN
+selection — frontier honored, no ambiguity — claims autonomously; only ambiguity or a policy conflict
+asks the user first.
+
+### Gate 1 — the typed selection record at claim
+**Selection record.** The selection is the orchestrator's, so the orchestrator persists it. Author a
+JSON record with exactly six non-empty fields — `selection_mode`, `selection_bundle`,
+`selection_priority_basis`, `selection_rejected`, `selection_disjointness`, and `clarifications` (the
+questions asked and the answers received, or `none`) — and pass it to the claim as
+`--target-source orchestrator_selected --selection-record <path>`. Startup refuses
+`selection_record_missing` when the flag or the file is absent, and `selection_record_invalid` when
+the record is unparseable or any of the six fields is empty; both refuse with zero side effects, so a
+missing record never half-claims. On an acquiring claim startup copies the record verbatim to
+`kaola-workflow/{project}/.cache/origin/selection-record.json`, stamps its sha256 into
+`workflow-state.md` as `selection_record_digest:`, and folds any pre-claim reconnaissance staged under
+`kaola-workflow/.origin/<target-key>/` into that same `.cache/origin/` directory (`<target-key>` is the
+project name the claim resolves to). A user-named claim passes neither flag and startup writes the
+degenerate record (`selection_mode: explicit-target`) itself, so the durable field is never optional.
+
+Everything BEFORE that claim is free: dispatch read-only agents, read what you need, and ask the user
+when the pick is genuinely ambiguous — just land the findings in files under
+`kaola-workflow/.origin/<target-key>/`, never only in run context. Nothing else is regulated until
+the commitment point, and the commitment point is a script refusal rather than a convention. The
+router may also dock a human-readable `kaola-workflow/{project}/.cache/selection-evidence.md` with a
+leading `selection_mode: auto-bundle|single-issue` line; the orchestrator is that sidecar's only
+writer, so it exists only on this no-target branch — a user-named claim legitimately has none.
+
 
 ### Bundle closure
 
@@ -229,8 +348,8 @@ the Step 0b inline startup. The `workflow-planner` subagent — dispatched by
 validates the issue when the user named one (Step 0), or passes NO target on the auto-bundle
 entry, then hands off either way. This keeps the router free of *phase-agent* and *claim*
 dispatch (Router Rules) — there is no router-side dispatch at all, on either branch — while the
-reasoning-tier front end owns the backlog survey (when no target was named), the claim, and the DAG
-authoring:
+reasoning-tier front end owns the claim and the DAG authoring (the backlog reading and the
+selection stayed here, with the orchestrator):
 
 1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the
    target issue and contains `kaola-workflow/{project}/workflow-plan.md`, run `watch-pr` once, then
@@ -252,8 +371,9 @@ authoring:
 
    **No target (auto-bundle entry):** when neither `KAOLA_TARGET_ISSUE` nor
    `KAOLA_TARGET_ISSUES` was set and the user described no task (Step 0's no-issue-named
-   branch), route to `/kaola-workflow-adapt` with no argument. The planner's no-target
-   survey mode runs the backlog survey, selection, and claim itself before authoring — see
+   branch), route to `/kaola-workflow-adapt` carrying the target YOU selected, the
+   `--selection-record` path, and the reconnaissance evidence paths. The orchestrator owns the
+   selection; the planner runs the claim and authors — see
    "Startup Step 0c — Bundle Lane" above, *Auto-bundle entry*.
 
    **Bundle:** when `KAOLA_TARGET_ISSUES` is set (multi-issue bundle), route to

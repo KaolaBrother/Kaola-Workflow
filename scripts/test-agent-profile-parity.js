@@ -145,6 +145,24 @@ const FEATURE_TOKENS = [
   // it.
   'Custody decides the implement roles, not order',
   'test_custody_exemption',
+  // #825 (B3): the planner narrows to a synthesist/shaper. Two levers replace the retired
+  // no-target survey mode and BOTH must reach the codex/forge planners, which read only the tomls:
+  //   * the shape-around-cited-evidence obligation — the DAG starts where reconnaissance stopped,
+  //     so a read node that re-derives cited evidence is the forbidden redundancy. Polarity is
+  //     load-bearing on the second token: the whole point is that cited findings are INPUTS the
+  //     planner may judge insufficient, never conclusions it must adopt, so a bare "consume
+  //     evidence" would let the control-boundary inversion sit beside it.
+  //   * the typed clarification return — without it in the toml the codex planner has no way to
+  //     say "under-determined" and falls back to guessing, which is the failure B3 exists to stop.
+  // NOTE on the RETIRED survey tokens above ('No-target survey mode', 'closest actionable proxy',
+  // 'frontier blocked because', 'selection_bundle'/'selection_priority_basis'/'selection_rejected'/
+  // 'selection_disjointness'): this guard only enforces a token for a profile when the token
+  // APPEARS in that .md, so they self-disable the moment the survey block leaves the .md. They are
+  // left in place deliberately — deleting them would also delete the parity coverage for any
+  // fragment of that vocabulary the orchestrator hand-back leaves behind in the profile.
+  'do not author a node to re-derive it',
+  'Consume evidence, never accept a conclusion',
+  'clarification_required',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
