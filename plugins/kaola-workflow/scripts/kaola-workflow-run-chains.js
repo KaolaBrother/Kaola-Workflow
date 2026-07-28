@@ -672,10 +672,11 @@ function isEditionCouplingPath(rel, cwd, forgeRefs) {
   // The Oracle Kernel's per-forge copies are GENERATED from the one canonical source
   // (edition-sync --materialize-kernel) and are committed ONLY so a fresh clone's Codex plugin
   // entrypoints can resolve their `__dirname` sibling (the marketplace install runs no post-clone
-  // step). They are byte-identical by construction and re-verified by `edition-sync --check`, so a
-  // kernel change stays claude-sufficient even though it now touches plugins/ paths. Without this
-  // clause the committed mirrors would re-couple every kernel diff to all four chains and undo the
-  // frequency win. Matched rename-safely: the kernel is base-named in every tree, so a literal
+  // step). Their byte-identity is not assumed: `edition-sync --check` and `validate-script-sync`
+  // both assert the four COMMITTED copies are one blob, so a kernel change stays claude-sufficient
+  // even though it touches plugins/ paths. Without this clause the committed mirrors would re-couple
+  // every kernel diff to all four chains and undo the frequency win.
+  // Matched rename-safely: the kernel is base-named in every tree, so a literal
   // `kaola-workflow-adaptive-schema` would be rewritten to a nonexistent name in the forge ports.
   if (/^plugins\/[^/]+\/scripts\/[^/]*-adaptive-schema\.js$/.test(p)) return false;
   if (p.indexOf('plugins/') === 0) return true;             // any edition tree (codex twin + both forges)
@@ -683,13 +684,16 @@ function isEditionCouplingPath(rel, cwd, forgeRefs) {
   if (forgeRefs && forgeRefs.has(p)) return true;           // a script a forge chain executes
   const m = /^scripts\/(.+\.(?:js|sh))$/.exec(p);
   if (m) {
-    // #788: the Oracle Kernel is a single canonical source (#778). Its forge copies are gitignored and
-    // materialized byte-identically on demand (edition-sync --materialize-kernel), so they CANNOT
-    // drift — a change to the canonical kernel is claude-sufficient, NOT edition-coupling. The
-    // existsSync mirror check below would otherwise treat the materialized-on-disk copy as a codex
-    // mirror and force all four (fragilely: depending on whether a materialize had run). The kernel is
-    // layout-agnostic (pure digests / lock / atomic-write) and the claude chain materializes + loads
-    // the forge ports through validate-script-sync, so passing there is proof for all.
+    // The Oracle Kernel has a single canonical source, and a change to it is claude-sufficient, NOT
+    // edition-coupling. The existsSync mirror check below would otherwise treat the per-forge copy as
+    // a codex mirror and force all four. Two things make the narrower scope sound: the kernel is
+    // layout-agnostic (pure digests / lock / atomic-write), and the claude chain materializes the
+    // forge copies and then POLICES them through validate-script-sync — both the working-tree byte
+    // group and the committed-blob parity check — so passing there is proof for all four trees.
+    // CAUTION: an earlier version of this note justified the exemption with "the forge copies are
+    // gitignored ... so they CANNOT drift". They are tracked, they can drift, and they did — that
+    // claim was dead prose for a release. The exemption rests on the POLICING named above; if that
+    // ever stops running in the claude chain, this clause must go with it.
     if (m[1].endsWith('-adaptive-schema.js')) return false;  // rename-safe: kernel is base-named in all trees
     try { if (fs.existsSync(path.join(cwd, 'plugins', 'kaola-workflow', 'scripts', m[1]))) return true; } catch (_) {}
   }

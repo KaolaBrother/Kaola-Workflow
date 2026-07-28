@@ -21,9 +21,7 @@ let failed = 0, passed = 0;
 function assert(cond, msg) { if (cond) { passed++; return; } failed++; process.stderr.write('FAIL: ' + msg + '\n'); }
 
 // Issue #699 registration guard: replan is canonical<->Codex byte-identical, and closure-contract
-// stays byte-identical across all four editions. (The former adaptive-schema 4-tree group is RETIRED:
-// the kernel is de-duplicated to one committed source and materialized per-forge on demand, so there
-// is nothing left to byte-police — its group must be ABSENT here.)
+// stays byte-identical across all four editions.
 assert((sync.COMMON_SCRIPTS || []).includes('kaola-workflow-replan.js'),
   '#699: COMMON_SCRIPTS enrolls kaola-workflow-replan.js');
 for (const base of ['kaola-workflow-closure-contract.js']) {
@@ -31,8 +29,96 @@ for (const base of ['kaola-workflow-closure-contract.js']) {
   assert(group && group.files.length === 4,
     '#699: ' + base + ' remains a four-edition byte-identical group');
 }
-assert(!(sync.BYTE_IDENTICAL_GROUPS || []).some(g => (g.files || []).some(f => f === 'scripts/kaola-workflow-adaptive-schema.js')),
-  '#778: the adaptive-schema byte-identical group is retired (kernel de-duplicated to one committed source)');
+
+// --- CROSS-EDITION DRIFT ANCHOR (rationale inversion: gitignored -> tracked) -------------------
+// This assertion used to demand the OPPOSITE — that the adaptive-schema group be ABSENT, because the
+// forge copies were gitignored and "one committed copy = nothing to police". The copies were tracked
+// again, the assertion was not revisited, and it then actively PINNED the hole: appending a line to
+// the gitea kernel copy passed validate-script-sync, edition-sync --check and validate-workflow-
+// contracts. A guard whose premise is "the file is not committed" must be re-derived from git, not
+// from a comment — so the premise is asserted here directly.
+const kernelGroup = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => (g.files || []).some(f => f === 'scripts/kaola-workflow-adaptive-schema.js'));
+assert(kernelGroup && kernelGroup.files.length === 4,
+  'XED-1: the adaptive-schema kernel is a four-edition byte-identical group (its forge copies are TRACKED, so they are policed)');
+assert(Array.isArray(sync.KERNEL_COPIES) && sync.KERNEL_COPIES.length === 4
+  && sync.KERNEL_COPIES[0] === 'scripts/kaola-workflow-adaptive-schema.js',
+  'XED-1: KERNEL_COPIES single-sources the four kernel paths, canonical first');
+assert(kernelGroup && kernelGroup.files === sync.KERNEL_COPIES,
+  'XED-1: the kernel byte group and the committed-parity check read the SAME path list');
+// The premise itself, measured: every kernel copy must be tracked by git. If a future change
+// re-gitignores them, THIS fails and forces the policing question to be re-answered deliberately.
+{
+  const tracked = new Set(
+    require('child_process')
+      .execFileSync('git', ['-C', repoRoot, 'ls-files', '--', ...sync.KERNEL_COPIES], { encoding: 'utf8' })
+      .split('\n').map(s => s.trim()).filter(Boolean));
+  for (const rel of sync.KERNEL_COPIES) {
+    assert(tracked.has(rel),
+      'XED-1: ' + rel + ' is tracked by git — consumers clone committed bytes, so an untracked copy changes what must be policed');
+  }
+}
+// The committed-blob half exists, is exported, and is GREEN at HEAD.
+assert(typeof sync.checkCommittedKernelParity === 'function',
+  'XED-1: checkCommittedKernelParity is exported (shared by validate-script-sync and edition-sync --check)');
+{
+  const res = sync.checkCommittedKernelParity(repoRoot);
+  assert(res.skipped === null, 'XED-1: committed kernel parity runs (not skipped) inside a git checkout, got skip=' + res.skipped);
+  assert(res.drift.length === 0, 'XED-1: the four committed kernel blobs are one object at HEAD, got ' + JSON.stringify(res.drift));
+}
+// MUTATION: the committed check must REJECT a repo whose committed kernel copies disagree. Built as a
+// throwaway git repo so the assertion is proven armed rather than merely green (a check that only ever
+// sees a healthy tree is indistinguishable from a check that always passes).
+{
+  const git = (cwd, args) => require('child_process').execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-parity-'));
+  try {
+    git(tmp, ['init', '-q']);
+    git(tmp, ['config', 'user.email', 't@t']);
+    git(tmp, ['config', 'user.name', 't']);
+    for (const rel of sync.KERNEL_COPIES) {
+      fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
+      fs.writeFileSync(path.join(tmp, rel), 'module.exports = {};\n');
+    }
+    git(tmp, ['add', '-A']);
+    git(tmp, ['commit', '-qm', 'clean']);
+    let res = sync.checkCommittedKernelParity(tmp);
+    assert(res.drift.length === 0 && res.skipped === null,
+      'XED-1 MUTATION: a correctly-synced committed tree must PASS, got ' + JSON.stringify(res));
+
+    // (a) one forge copy drifts in the COMMIT — the exact XED-1 mutation.
+    const gitea = sync.KERNEL_COPIES[3];
+    fs.appendFileSync(path.join(tmp, gitea), '// drift\n');
+    git(tmp, ['add', '-A']);
+    git(tmp, ['commit', '-qm', 'drift']);
+    res = sync.checkCommittedKernelParity(tmp);
+    assert(res.drift.length === 1 && res.drift[0].includes(gitea),
+      'XED-1 MUTATION: a drifted COMMITTED forge kernel copy must be REJECTED and NAMED, got ' + JSON.stringify(res.drift));
+
+    // (b) the working tree being repaired (as the --materialize-kernel chain preamble does) must
+    // NOT launder the drifted commit — this is the whole reason the check reads git.
+    fs.copyFileSync(path.join(tmp, sync.KERNEL_COPIES[0]), path.join(tmp, gitea));
+    res = sync.checkCommittedKernelParity(tmp);
+    assert(res.drift.length === 1,
+      'XED-1 MUTATION: repairing the WORKING COPY must not clear a drifted COMMIT (the materialize-preamble laundering path), got ' + JSON.stringify(res.drift));
+
+    // (c) a forge copy that is not committed at all is the fresh-clone module-resolution failure.
+    git(tmp, ['rm', '-q', '--cached', gitea]);
+    git(tmp, ['commit', '-qm', 'untrack']);
+    res = sync.checkCommittedKernelParity(tmp);
+    assert(res.drift.length === 1 && /NOT COMMITTED/.test(res.drift[0]),
+      'XED-1 MUTATION: an uncommitted forge kernel copy must be REJECTED, got ' + JSON.stringify(res.drift));
+
+    // (d) no git history at all -> SKIP, reported, never a false RED.
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-parity-nogit-'));
+    try {
+      res = sync.checkCommittedKernelParity(bare);
+      assert(res.drift.length === 0 && typeof res.skipped === 'string',
+        'XED-1 MUTATION: a non-checkout must SKIP with a reason, not fail, got ' + JSON.stringify(res));
+    } finally { fs.rmSync(bare, { recursive: true, force: true }); }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 // 1) The family generalizes beyond the classifier to the divergent cross-required hand-ports.
 const fam = sync.FORGE_EXPORT_SUPERSET_FAMILY;
