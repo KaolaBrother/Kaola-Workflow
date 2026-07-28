@@ -297,8 +297,22 @@ for (const file of nextSurfaces796) {
   assertIncludes(file, 'Single-issue is the default here');
   // The selection-evidence sidecar has a NAMED writer, so surface prose, the claim-side probe, and
   // the walkthrough legs tell one story instead of asserting a file nobody was told to write.
-  assertIncludes(file, 'The planner is that sidecar');
+  // #825 re-homed that writer: selection is orchestrator-owned, so the router IS the writer now.
+  assertIncludes(file, 'the orchestrator is that sidecar');
   assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
+  // #825 (B2): the ranking rules MOVED here from the planner profile — one wording, re-homed, not
+  // paraphrased. Pin the five load-bearing literals so a later reword cannot quietly soften them,
+  // and pin the retired heading's absence so the survey block cannot creep back onto the router.
+  for (const relocated of ['Bundle Selection Rules', 'lane_bucket', '### Project rules',
+    'frontier blocked because', 'closest actionable proxy']) {
+    assertIncludes(file, relocated);
+  }
+  // #825 (Gate 1): the orchestrator authors the record, so the surface must name the flag it
+  // passes and the typed refusal it gets without one.
+  assertIncludes(file, '--selection-record');
+  assertIncludes(file, 'selection_record_missing');
+  assertIncludes(file, 'selection_mode');
+  assertNotIncludes(file, "planner's no-target survey mode");
   // The FRONT-END-ENTRY enumeration must carry the described-task case too — not just the Step 0
   // selection branch above. These are different sections, and pinning only the selection branch is
   // what let the gap ship: the three SKILL surfaces kept the selection branch but never gained the
@@ -329,19 +343,46 @@ assertNotIncludes('templates/routing/next.skeleton.md', 'What You May Read');
 for (const file of adaptSurfaces486) {
   assertIncludes(file, 'Entry contract');
   assertIncludes(file, 'Binding scope:');
-  assertIncludes(file, 'no target named; run no-target survey mode');
+  // #825: the no-target slot renders the ORCHESTRATOR-selected issue now, not an instruction to
+  // the planner to go survey.
+  assertIncludes(file, 'the orchestrator-owned no-target survey selected');
+  // #825 (B3/B4): evidence flows in as PATHS and the planner has a typed way to say
+  // under-determined. Both must reach all six adapt surfaces or one runtime loses the channel.
+  assertIncludes(file, '.cache/origin/');
+  assertIncludes(file, 'clarification_required');
+  assertIncludes(file, 'planner_control_boundary_violation');
 }
 
-// #796: the workflow-planner profile is the cited home of the no-target survey, so the framing the
-// router now points at must actually be there — default-first, with the bundle as the exception.
-assertBefore('agents/workflow-planner.md', 'Default: single issue',
-  'Auto-bundle only when ALL of the following are true');
+// #825 (B3 + B5): the planner is a SYNTHESIST — selection left the profile for the orchestrator
+// surfaces. The re-pin is bidirectional in ONE diff: the retired lock is asserted ABSENT from
+// every planner profile (a positive pin alone would let the old block creep back beside the new
+// prose), and the two obligations that replace it are asserted PRESENT. Node-level
+// non-redundancy is deliberately NOT asserted anywhere: it is not mechanically decidable, so it
+// stays a prose obligation and never becomes a validator refusal code.
+const plannerProfiles825 = [
+  'agents/workflow-planner.md',
+  'plugins/kaola-workflow/agents/workflow-planner.toml',
+  'plugins/kaola-workflow-gitlab/agents/workflow-planner.toml',
+  'plugins/kaola-workflow-gitea/agents/workflow-planner.toml',
+];
+for (const profile of plannerProfiles825) {
+  assertNotIncludes(profile, 'No-target survey mode');
+  assertIncludes(profile, 'do not author a node to re-derive it');
+  assertIncludes(profile, 'Consume evidence, never accept a conclusion');
+  assertIncludes(profile, 'clarification_required');
+  // The control boundary is UNCHANGED and stays load-bearing: narrowing the planner must not
+  // open it to a pre-authored DAG.
+  assertIncludes(profile, 'planner_control_boundary_violation');
+}
+assertNotIncludes('agents/workflow-planner.md', 'surveys the backlog itself');
 assertNotIncludes('agents/workflow-planner.md', 'selects a bundle jointly with how it decomposes');
-// The sidecar disposition, pinned at both machine ends so prose and probe cannot drift apart: the
-// profile instructs the write, and the claim still probes the file the closure receipt reports.
-assertIncludes('agents/workflow-planner.md', '.cache/selection-evidence.md');
-assertIncludes('agents/workflow-planner.md', 'selection_mode: auto-bundle');
-assertIncludes('agents/workflow-planner.md', 'selection_mode: single-issue');
+// #825 (Gate 1): the commitment point is a SCRIPT refusal now, not prose — pin both typed codes
+// and the durable anchor they produce, at the machine end that emits them.
+assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_missing');
+assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_invalid');
+assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_digest');
+assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'clarification_required');
+assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'CLARIFICATION_ROUND_CAP');
 assertIncludes('scripts/kaola-workflow-claim.js', 'probeSelectionEvidence');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection-evidence.md');
 
@@ -899,7 +940,9 @@ assertIncludes('commands/workflow-next.md', 'Skip this entire step');
 // workflow-planner's own no-target survey mode owns the backlog survey. Pin the no-target
 // hand-off contract and assert the retired scout vocabulary never resurfaces.
 assertIncludes('commands/workflow-next.md', 'No target (auto-bundle entry)');
-assertIncludes('commands/workflow-next.md', "planner's no-target survey mode");
+// #825: the survey is the ORCHESTRATOR's now — the router states the selection contract itself
+// instead of pointing at a planner section that no longer exists.
+assertIncludes('commands/workflow-next.md', 'the ORCHESTRATOR is the');
 assertNotIncludes('commands/workflow-next.md', 'issue-scout');
 assertNotIncludes('commands/workflow-next.md', 'ISSUE_SCOUT_MODEL');
 // adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance

@@ -1,8 +1,21 @@
 # 6. Planner-first entry before DAG shaping
 
 Date: 2026-06-08
-Status: Accepted
+Status: Superseded in part by ADR 0013 (#825, 2026-07-28)
 Issue: #287
+
+> **Supersession note (ADR 0013, #825).** The *entry lock* below — "nothing happens before
+> the planner runs; the planner owns backlog survey, selection, claim, and authoring in one
+> dispatch" — is superseded. ADR 0013 replaces it with (a) no claim, no plan authoring, and
+> no tracked-file write before Gate 1, a SCRIPT refusal in `claim.js startup`, and (b) briefs
+> that carry evidence, never prescriptions. Net enforcement is stronger: this ADR's own
+> `## Enforcement` section records that the lock was behavioral rather than runtime-scriptable,
+> and Gate 1 is exactly the runtime refusal it said did not exist.
+>
+> **What is NOT superseded, and is deliberately retained:** the control boundary and the
+> `planner_control_boundary_violation` refusal. The diagnosis in `## Context` below — a main
+> session that prescribes the `## Nodes` table turns a designer into a transcriber — is the
+> measured history that keeps that refusal load-bearing under ADR 0013's freedom principle.
 Related: ADR 0003 (adaptive front-end planner), ADR 0004 (script-owned mechanical
 transitions, #255), ADR 0005 (plan-run owns node lifecycle, #272)
 

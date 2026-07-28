@@ -100,6 +100,11 @@ const KNOWN_VALUE_FLAGS = new Set([
   'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers', 'base',
   // #603: the Codex dispatch mode the startup surface passes from preflight detection.
   'codexDispatchMode',
+  // #825 (Gate 1): the free-origin commitment point. `--target-source` declares whether the claim
+  // was ORIGINATED by an orchestrator survey (`orchestrator_selected`) or named by the user
+  // (`user_directed`, the default); `--selection-record` carries the typed selection record the
+  // orchestrator authored during the free sensing phase.
+  'targetSource', 'selectionRecord',
 ]);
 
 // #775 (Codex 0.145 re-baseline): --codex-dispatch-mode is now a WARN-AND-IGNORE shim, mirroring
@@ -756,6 +761,11 @@ function writeState(root, data) {
     'claim_ts: ' + claimTs
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
+  // #825 (Gate 1): the durable anchor for the typed selection record — sha256 of the bytes
+  // persisted at `<project>/.cache/origin/selection-record.json`. Written ONLY when the claim
+  // carried one (every startup/pick-next-originated claim does, explicit-target included, via the
+  // degenerate record); direct crash-reclaim callers stay byte-identical.
+  if (data.selection_record_digest) lines.push('selection_record_digest: ' + data.selection_record_digest);
   // #603: persist the Codex dispatch mode so the adaptive dispatch cards read it at open time. Written
   // ONLY when present (flag absent → field absent). Post-#775 the persisted value is diagnostic-only — the effective mode is
   // always v2-task-name (resolveCodexDispatchMode ignores it); non-codex + un-flagged runs stay byte-identical.
@@ -988,6 +998,9 @@ function claimProject(root, args) {
       // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
       // was absent → writeState omits the field).
       codex_dispatch_mode: args.codexDispatchMode,
+      // #825 (Gate 1): the selection-record digest resolved BEFORE this claim ran (undefined for
+      // direct crash-reclaim callers → writeState omits the field).
+      selection_record_digest: args.selectionRecordDigest,
       status: 'active',
       full_name: projectInfo.full_name,
       project_html_url: projectInfo.html_url
@@ -1155,6 +1168,9 @@ function claimBundle(root, opts) {
       runtime: opts.runtime || 'claude',
       // #603: thread the pre-validated Codex dispatch mode (bundle path mirrors the scalar claim).
       codex_dispatch_mode: opts.codexDispatchMode,
+      // #825 (Gate 1): the bundle lane is exactly the shape a no-target survey produces, so it
+      // carries the same selection-record anchor as the scalar claim.
+      selection_record_digest: opts.selectionRecordDigest,
       status: 'active',
       full_name: projectInfo.full_name,
       project_html_url: projectInfo.html_url
@@ -1350,8 +1366,179 @@ function claimExplicitBundle(root, args) {
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     runtime: args.runtime || 'claude',
-    attestPlannerSpawn: args.attestPlannerSpawn // #370: honor the planner attest back-fill on the bundle path
+    attestPlannerSpawn: args.attestPlannerSpawn, // #370: honor the planner attest back-fill on the bundle path
+    selectionRecordDigest: args.selectionRecordDigest // #825: Gate 1's durable anchor
   });
+}
+
+// ---------------------------------------------------------------------------
+// #825 (B1 + B2) — the free-origin commitment point.
+//
+// Selection is ORCHESTRATOR-owned now: the origin phase may dispatch read-only agents and ask the
+// user before anything is claimed, and the only thing that keeps that freedom safe is a SCRIPT
+// refusal at the commitment point (ADR 0006's planner-first lock was prose + contract-pins only,
+// and prose cannot refuse). Gate 1 is that refusal: a claim ORIGINATED by an orchestrator survey
+// must arrive carrying the typed selection record, or it does not claim at all.
+//
+// Two typed refusals, both zero-write (resolved BEFORE any folder / branch / worktree / forge call):
+//   selection_record_missing — `--target-source orchestrator_selected` with no `--selection-record`,
+//                              or a `--selection-record` path that is absent/unreadable.
+//   selection_record_invalid — the record is present but unparseable, or any required field is
+//                              absent / empty / whitespace-only.
+// Nothing deeper is validated: the fields carry the orchestrator's REASONING, and a script that
+// graded reasoning would be re-deciding the thing the human/agent already decided.
+// ---------------------------------------------------------------------------
+const SELECTION_RECORD_FIELDS = Object.freeze([
+  'selection_mode',
+  'selection_bundle',
+  'selection_priority_basis',
+  'selection_rejected',
+  'selection_disjointness',
+  'clarifications',
+]);
+const SELECTION_RECORD_RELPATH = path.join('.cache', 'origin', 'selection-record.json');
+const ORIGIN_STAGING_DIRNAME = '.origin';
+
+// Fields-present-and-non-empty. A whitespace-only string is EMPTY (an orchestrator that typed a
+// space into `selection_rejected` recorded nothing); an empty array/object is empty for the same
+// reason. Anything else non-null with content counts.
+function selectionRecordFieldEmpty(value) {
+  if (value == null) return true;
+  if (typeof value === 'string') return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return String(value).trim().length === 0;
+}
+
+// An EXPLICIT-target claim carries no orchestrator record, so startup synthesizes the DEGENERATE
+// one itself: the durable field is never optional and never empty, which is what makes a later
+// reader able to tell "explicit target" apart from "record lost".
+function buildDegenerateSelectionRecord(label) {
+  const target = String(label || 'none').trim() || 'none';
+  return {
+    selection_mode: 'explicit-target',
+    selection_bundle: target,
+    selection_priority_basis: 'n/a — explicit target; the caller named ' + target + ', no backlog ranking ran',
+    selection_rejected: 'n/a — explicit target; no alternatives were ranked',
+    selection_disjointness: 'n/a — explicit target; the claim gate itself is the disjointness check',
+    clarifications: 'none',
+  };
+}
+
+function serializeSelectionRecord(record) {
+  return JSON.stringify(record, null, 2) + '\n';
+}
+
+function digestSelectionRecord(bytes) {
+  return require('crypto').createHash('sha256').update(String(bytes), 'utf8').digest('hex');
+}
+
+function selectionRecordRefusal(status, reasoning) {
+  return {
+    status,
+    verdict: status,
+    result: 'refuse',
+    claim: 'none',
+    project: null,
+    issue: null,
+    reasoning,
+  };
+}
+
+// Resolve Gate 1 with ZERO side effects. Returns { refusal } or { bytes, digest }.
+// `label` names the resolved target(s) for the degenerate record.
+function resolveSelectionGate(args, label) {
+  const targetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim();
+  const orchestratorSelected = targetSource === 'orchestrator_selected';
+  const recordPath = args.selectionRecord == null ? '' : String(args.selectionRecord).trim();
+
+  if (!recordPath) {
+    if (orchestratorSelected) {
+      return {
+        refusal: selectionRecordRefusal('selection_record_missing',
+          '--target-source orchestrator_selected declares a no-target-originated claim, which must carry '
+          + '--selection-record <path>: the orchestrator owns selection now, so the typed record IS the '
+          + 'commitment-point evidence. Refusing with zero side effects.'),
+      };
+    }
+    const bytes = serializeSelectionRecord(buildDegenerateSelectionRecord(label));
+    return { bytes, digest: digestSelectionRecord(bytes) };
+  }
+
+  let raw;
+  try {
+    raw = fs.readFileSync(recordPath, 'utf8');
+  } catch (e) {
+    return {
+      refusal: selectionRecordRefusal('selection_record_missing',
+        '--selection-record ' + recordPath + ' is absent or unreadable ('
+        + ((e && e.code) || (e && e.message) || 'unreadable') + '); refusing with zero side effects.'),
+    };
+  }
+
+  let record = null;
+  try { record = JSON.parse(raw); } catch (_) { record = null; }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return {
+      refusal: selectionRecordRefusal('selection_record_invalid',
+        '--selection-record ' + recordPath + ' is not a JSON object; refusing with zero side effects.'),
+    };
+  }
+  const empty = SELECTION_RECORD_FIELDS.filter(f => selectionRecordFieldEmpty(record[f]));
+  if (empty.length) {
+    return {
+      refusal: selectionRecordRefusal('selection_record_invalid',
+        '--selection-record ' + recordPath + ' is missing or empty in required field(s): '
+        + empty.join(', ') + '. Every field of the selection record is load-bearing evidence; '
+        + 'refusing with zero side effects.'),
+    };
+  }
+  // Byte-through: the orchestrator's OWN wording is the record. Re-serializing it here would turn
+  // an authored rationale into a normalized stub.
+  return { bytes: raw, digest: digestSelectionRecord(raw) };
+}
+
+function selectionRecordPath(root, project) {
+  return path.join(projectDir(root, project), SELECTION_RECORD_RELPATH);
+}
+
+function persistSelectionRecord(root, project, bytes) {
+  const dest = selectionRecordPath(root, project);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  writeFile(dest, bytes);
+  return dest;
+}
+
+// B1: pre-claim reconnaissance has no durable home — the project folder does not exist until the
+// claim creates it — so the origin phase stages findings under
+// `kaola-workflow/.origin/<target-key>/`, where <target-key> is the PROJECT NAME the claim will
+// resolve to. This folds that subtree into `<project>/.cache/origin/` (relative layout preserved)
+// and REMOVES the staging dir, so evidence lands in durable files instead of run context.
+// Absent staging is a clean no-op, and the fold NEVER blocks the claim.
+function foldOriginStaging(root, project) {
+  const originRoot = path.join(root, 'kaola-workflow', ORIGIN_STAGING_DIRNAME);
+  const staging = path.join(originRoot, project);
+  try {
+    if (!fs.existsSync(staging) || !fs.statSync(staging).isDirectory()) return false;
+    copyDir(staging, path.join(projectDir(root, project), '.cache', 'origin'));
+    fs.rmSync(staging, { recursive: true, force: true });
+    // Leave no empty staging root behind — an inert `.origin/` reads as "recon pending".
+    try { if (fs.readdirSync(originRoot).length === 0) fs.rmdirSync(originRoot); } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Called on EVERY acquiring startup/pick-next claim, scalar and bundle alike: fold the staged
+// evidence first, then persist the gate-validated record over it (the record is the authority, so
+// a staged file of the same name never wins), then surface the digest on the emitted claim JSON.
+function completeSelectionOrigin(root, result, gate) {
+  if (!result || result.status !== 'acquired' || !result.project || !gate || !gate.bytes) return result;
+  try { foldOriginStaging(root, result.project); } catch (_) {}
+  try { persistSelectionRecord(root, result.project, gate.bytes); } catch (_) {}
+  result.selection_record_digest = gate.digest;
+  return result;
 }
 
 function claimExplicitTarget(root, args) {
@@ -1438,6 +1625,23 @@ function cmdStartup() {
     delete args.codexDispatchMode;
   }
 
+  // #825 (Gate 1): the commitment point. Resolved BEFORE any claim mutation — an orchestrator-
+  // originated claim without a valid typed selection record refuses zero-write; an explicit-target
+  // claim gets the degenerate record synthesized here so the durable field is never optional.
+  const selectionLabel = bundleTargets
+    ? bundleTargets.map(n => '#' + n).join(', ')
+    : (scalarTarget ? '#' + scalarTarget : 'none');
+  const selectionGate = resolveSelectionGate(args, selectionLabel);
+  if (selectionGate.refusal) {
+    output(selectionGate.refusal, 1);
+    return;
+  }
+  args.selectionRecordDigest = selectionGate.digest;
+  // The emitted `target_source` is a RECORD of how this claim originated, so it echoes the
+  // discriminator the gate just resolved rather than the historical constant.
+  const resolvedTargetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim()
+    === 'orchestrator_selected' ? 'orchestrator_selected' : 'user_directed';
+
   // #328: bundle path
   if (bundleTargets) {
     const result = claimExplicitBundle(root, args);
@@ -1466,7 +1670,7 @@ function cmdStartup() {
         output({
           verdict: 'target_set_mismatch', status: 'target_set_mismatch', claim: 'none',
           selected_project: result.project || null, selected_issue: null,
-          target_source: 'user_directed',
+          target_source: resolvedTargetSource,
           declared_set: declared, claimed_set: claimed,
           reasoning: 'bundle claim persisted issue set ' + JSON.stringify(claimed) +
             ' does not match the declared --target-issues ' + JSON.stringify(declared) +
@@ -1475,12 +1679,15 @@ function cmdStartup() {
         return;
       }
     }
+    // #825: fold the staged origin evidence + persist the gate-validated record under the claimed
+    // bundle project, then surface its digest on the emitted claim JSON.
+    completeSelectionOrigin(root, result, selectionGate);
     output(Object.assign({
       verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
       claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
       selected_project: result.project || null,
       selected_issue: result.issue || null,
-      target_source: 'user_directed',
+      target_source: resolvedTargetSource,
       worktree_path: result.worktree_path || ''
     }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
     return;
@@ -1493,12 +1700,15 @@ function cmdStartup() {
     return;
   }
   const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: scalarTarget }));
+  // #825: fold the staged origin evidence + persist the gate-validated record under the claimed
+  // project, then surface its digest on the emitted claim JSON.
+  completeSelectionOrigin(root, result, selectionGate);
   output(Object.assign({
     verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
     claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
     selected_project: result.project || null,
     selected_issue: result.issue || null,
-    target_source: 'user_directed',
+    target_source: resolvedTargetSource,
     worktree_path: result.folder ? (result.folder.worktree_path || '') : (result.worktree_path || '')
   }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
 }

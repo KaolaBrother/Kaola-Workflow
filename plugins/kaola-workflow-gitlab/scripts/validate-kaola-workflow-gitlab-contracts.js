@@ -348,6 +348,43 @@ assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('observed_gap_unseeded'),
   'GitLab finalize skill must document the observed_gap_unseeded refusal (#653)'
 );
+// #825 (B2/B3/B4): selection is orchestrator-owned and the commitment point is a SCRIPT refusal.
+// Freedom is sized for the weakest harness, so this edition gets IDENTICAL enforcement: the router
+// surfaces must name the Gate 1 flag and its typed refusal, the adapt surfaces must carry the
+// evidence PATH + the typed clarification return, and the forge claim port must actually emit the
+// refusals. The re-pin is bidirectional in the SAME diff — the retired planner-first lock is
+// asserted ABSENT from the edition planner profile beside every positive pin.
+for (const f of ['/commands/workflow-next.md', '/skills/kaola-workflow-next/SKILL.md']) {
+  assert(
+    read(pluginRoot + f).includes('selection_record_missing') &&
+    read(pluginRoot + f).includes('--selection-record') &&
+    read(pluginRoot + f).includes('selection_mode'),
+    'GitLab next surface ' + f + ' must document the Gate 1 selection record (#825)'
+  );
+}
+for (const f of ['/commands/kaola-workflow-adapt.md', '/skills/kaola-workflow-adapt/SKILL.md']) {
+  assert(
+    read(pluginRoot + f).includes('clarification_required') &&
+    read(pluginRoot + f).includes('.cache/origin/') &&
+    read(pluginRoot + f).includes('planner_control_boundary_violation'),
+    'GitLab adapt surface ' + f + ' must carry the evidence path + typed clarification return (#825)'
+  );
+}
+assert(
+  read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_missing') &&
+  read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_invalid') &&
+  read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_digest'),
+  'GitLab claim port must carry the Gate 1 refusals + the record digest (#825)'
+);
+assert(
+  read('agents/workflow-planner.md').includes('clarification_required') &&
+  read(pluginRoot + '/agents/workflow-planner.toml').includes('clarification_required') &&
+  read(pluginRoot + '/agents/workflow-planner.toml').includes('do not author a node to re-derive it') &&
+  read(pluginRoot + '/agents/workflow-planner.toml').includes('Consume evidence, never accept a conclusion') &&
+  read(pluginRoot + '/agents/workflow-planner.toml').includes('planner_control_boundary_violation') &&
+  !read(pluginRoot + '/agents/workflow-planner.toml').includes('No-target survey mode'),
+  'GitLab planner profile must be the narrowed synthesist: obligation + clarification present, survey mode absent (#825)'
+);
 assert(
   read(pluginRoot + '/commands/kaola-workflow-plan-run.md').includes('run-gaps-manual.md') &&
   read(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md').includes('run-gaps-manual.md'),
