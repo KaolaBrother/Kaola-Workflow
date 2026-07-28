@@ -1910,6 +1910,14 @@ node scripts/kaola-workflow-replan.js extend-consent \
 node scripts/kaola-workflow-replan.js verify-snapshots --project <project> --json
 ```
 
+`verify-snapshots` emits a typed envelope and its exit code tracks the verdict: `{ result: 'ok',
+ok: true, snapshots: [...] }` and exit 0 when the lineage verifies, `{ result: 'refuse', reason,
+ok: false, ... }` and exit **1** when it does not. The `reason` is the library predicate's own token,
+passed through verbatim — the CLI never reclassifies it. Note the split in shape: the exported
+`verifyAllEpochSnapshots(projectDir)` used in-process by `claim.js` and `kaola-workflow-adaptive-node.js`
+answers in the bare `{ ok, reason }` predicate form; the `result`/exit-code envelope is added at the
+CLI boundary only, so a shell caller may treat a non-zero exit as a failed verification.
+
 Schema-2 epoch 1 recognizes exactly two active-authority forms. `planless` means epoch 1,
 `active_plan_hash: none`, Planning Evidence hash/first-node fields all `none`, no
 `workflow-plan.md`, and no epoch snapshot. `planned` means epoch 1 with one frozen plan whose exact
