@@ -333,20 +333,25 @@ six surfaces.
 ### The process boundary obeys the same razor
 
 Test-time process spawns are priced like refusals: a real child process adds evidence
-only where the property under test lives **at the process boundary**. Four classes
+only where the property under test lives **at the process boundary**. Five classes
 qualify: the **CLI shell contract** (argv → handler → envelope → exit code — proven
 once per subcommand, not once per scenario); **U-ground concurrency** observables
 (multi-process lock and atomic-write contention); **I-ground crash** semantics (kill
-mid-write, restart, recover — the P1 kill test); and **environment/install** probes.
+mid-write, restart, recover — the P1 kill test); **environment/install** probes; and
+the **cross-process durable handoff** — one process writes a kernel record and EXITS,
+the next re-reads it from disk with no shared heap. That last class is the successor
+test (A1) executed rather than asserted, and it is added by amendment 8; see there for
+why it is not optional.
 Every other assertion is function behavior plus file state, reachable in-process
 through the `module.exports` APIs all eight CLIs already publish — the pattern the
 three newest suites prove (`test-adaptive-handoff`: 0 spawn sites;
 `test-oracle-kernel`: 0; `test-replan`: 11), while the three pre-pattern heavyweights
 hold ~1,100 static spawn sites (785 / 197 / 126) — exactly the suites behind the fast
 gate's rotating slice, each spawn paying node startup plus a 7–17k-line parse for no
-added evidence. The necessary set is ~10% of the current census; conversion also
-removes the material basis of the "suite cannot be parallelized" constraint (spawn
-contention). Production composition is already in-process (aggregators `require` their
+added evidence. **Two claims in the preceding sentences were refuted by measurement and
+are retracted by amendment 8: the per-spawn startup cost, and the parallelization
+premise below.** The necessary set is larger than the ~10% first estimated here, because
+the fifth class is populous. Production composition is already in-process (aggregators `require` their
 siblings' pure functions); the residual production subprocess cost — 56 `git` execs in
 the node lifecycle plus the validator shell in barrier choreography — is a bounded,
 separate lever, not part of this claim.
@@ -489,6 +494,51 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
    after A3 was named a third locus, and banned mid-run refusal proposals without excepting
    the valve T8 retains — so the standing rule contradicted the amendment two sections
    above it. One rule, one wording.
+
+8. **A fifth spawn class: the cross-process durable handoff. Two cost claims retracted.**
+   § *The process boundary obeys the same razor* named four qualifying classes and
+   mandated in-process conversion of everything else. Applied to the node-CLI spawn
+   sites, that mandate collided head-on with **`D-523-01` (Accepted, 2026-06-18,
+   measured and still live)**, which found those exact spawns irreducible. Two live
+   records, same sites, opposite verdicts.
+
+   The collision resolves against this ADR on all three counts, and the evidence is
+   measured, not argued:
+
+   - **The cost premise is refuted, twice, independently.** "Each spawn paying node
+     startup … for no added evidence" — startup is ~30 ms of a ~935 ms adaptive-node CLI
+     call, about **3%**. D-523-01's H1 measured the per-spawn tax at 0.02–0.05 s, below
+     its own refute threshold, in June. Re-measured 2026-07-28 on today's tree: same
+     answer.
+   - **The parallelization premise is refuted on today's code.** "Conversion also removes
+     the material basis of the 'suite cannot be parallelized' constraint (spawn
+     contention)" is false: conversion removes CALL SITES, not PROCESSES. Measured across
+     a 58% call-site reduction — walkthrough 3,755 spawns before and after,
+     `test-adaptive-node` 3,986 before and after, wall clock 437 s → 436 s. The suite's
+     actual serializer is its 15-member `sharedTmp` isolation group, which sharding
+     already splits; fixture repos are per-scenario `mkdtemp` and never touch the real
+     `.git/index`.
+   - **The coverage cost is real.** D-523-01's H3, CONFIRMED: the cross-process on-disk
+     state handoff — one process writes ledger + baseline and exits, the next re-reads
+     it — **IS the property under test**. Collapsing it re-introduces the in-process
+     false-green class the #292 discipline exists to prevent.
+
+   So the mandate proposed trading measured coverage for a measured non-improvement,
+   which axiom 1 forbids outright. The deeper error is that the four-class vocabulary had
+   **no home for "writes and exits, then re-reads"** — an omission in this ADR, not a
+   licence to override a measured decision. Naming the fifth class is what makes the
+   exemption *declared* rather than silent, and it is not a carve-out: it is **A1, the
+   successor test, executed instead of asserted.** A fresh process resuming from durable
+   state alone is this document's founding axiom; a test that spawns a second process to
+   re-read what the first one wrote is that axiom under measurement. Deleting those
+   spawns would delete the only place A1 is empirically checked.
+
+   `D-523-01` therefore stands, unsuperseded. What this ADR keeps is the razor itself —
+   a spawn must be justified by a property living at the process boundary; the fifth
+   class is such a property. The already-landed call-site reduction (2,056 → 872 sites,
+   −58%, entirely in git *arrangement* code where nothing is asserted) is unaffected and
+   retained. **This amendment was authored by the orchestrator on the evidence above and
+   is open to reversal by the repo owner.**
 
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after
