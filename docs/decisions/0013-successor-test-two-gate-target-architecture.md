@@ -278,8 +278,11 @@ six surfaces.
 ## Migration — staged, each stage independently valuable, no big-bang
 
 - **M1.** Land #833–#837 (already convergent: derive-at-read, trust-records,
-  writer-normalize, report-all, consent classes). Point-fix only live wedges first
-  (#839, which names itself the bounded fix pending #834).
+  writer-normalize, report-all, consent classes). Point-fix only live defects first:
+  #839 (which names itself the bounded fix pending #834) and #832 (the one pure L1
+  kernel-write-integrity defect on the open list — archive-time kernel writes silently
+  fail and report `done`, destroying two of T1's four records; P1 cannot be authored as
+  a suite scenario until it is fixed).
 - **M2.** Refusal telemetry: each refusal event records (code, triage wall-clock,
   re-dispatch?, phase). Yields the real frequency × interruption-cost ranking; the
   campaign becomes data-driven instead of audit-anecdote-driven.
