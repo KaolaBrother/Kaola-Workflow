@@ -360,9 +360,17 @@ choices, or ambiguity that blocks correctness.
    the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) before the
    transaction archives `workflow-state.md`.
 
+   Preconditions are a CHECKLIST, not a ladder: `finalize --check --json` evaluates EVERY precondition in
+   one read-only pass and reports all of them together, so N unmet preconditions come back from ONE
+   invocation instead of one refusal per re-run. It emits `{ project, ok, checks, reasons }` (exit 0 when
+   `ok`), where `checks` always carries `mirror`, `workflow_state`, `implementation_commit`,
+   `staging_guard`, `validation`, and `dirty_paths`, and `reasons` names the most specific token per UNMET
+   precondition. It makes zero side effect — clear every reason it lists, then run the transaction once.
+
    Typed refusals the transaction can return, each with no further side effect:
-   `finalize_mirror_refused` with `inner_reason: ledger_regression` (the main copy carries a staler ledger
-   than the worktree — sync worktree→main FIRST, never bypass), `implementation_commit_missing`
+   `finalize_mirror_refused` with `inner_reason: mirror_sync_failed` (the transaction OWNS the
+   worktree→main project-folder sync and could not perform it — make the main checkout writable and
+   re-run; never hand-copy a staler main ledger over the worktree), `implementation_commit_missing`
    (implementation-shaped changes are uncommitted and the branch carries no implementation commit — author
    it yourself and re-run; the machinery authors only the finalize bookkeeping commit),
    `staging_guard_foreign_archive` / `staging_guard_multi_project` (split the commit),
@@ -381,11 +389,12 @@ choices, or ambiguity that blocks correctness.
    summarize this section away, and never rewrite a legacy section carrying retired fields.
 
    **Finalization recovery contract (tribal knowledge).** Three recovery rules are binding,
-   not optional lore: (1) **sync order is worktree→main BEFORE the mirror** — the worktree holds the
-   *complete* ledger and the main copy is stale, so sync worktree→main first; the mirror only pushes
-   Finalization artifacts INTO the worktree and never overwrites a complete worktree ledger with
-   a staler main copy (the transaction's guard enforces this — on a refusal, sync worktree→main, do
-   not bypass it); (2) **the machinery never authors the implementation commit** — if it is missing
+   not optional lore: (1) **the transaction owns the project-folder sync** — the worktree holds the
+   *complete* ledger and the main copy is stale, and repairing that is machinery work, not yours: the
+   transaction syncs the worktree project folder up into main itself, then pushes Finalization artifacts
+   INTO the worktree, and never overwrites a complete worktree ledger with a staler main copy. Do not
+   hand-copy in either direction; a `mirror_sync_failed` refusal means the main checkout is unwritable —
+   fix that and re-run; (2) **the machinery never authors the implementation commit** — if it is missing
    at finalize, the transaction surfaces it and stops, and so do you: do not cover for it; (3) **after a
    sink-merge rebase detour, repair the MAIN checkout** named in the failure's `git -C <path>` line, never
    `cd` the deleted worktree, and finish with `--force-with-lease`.

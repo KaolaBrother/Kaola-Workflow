@@ -810,14 +810,16 @@ for (const forge of ['', '-gitlab', '-gitea']) {
   assert(!exists('plugins/kaola-workflow' + forge + '/agents/contractor.toml'),
     'plugins/kaola-workflow' + forge + '/agents/contractor.toml must be retired');
 }
-// #399/#816: the Step-8a artifact mirror now lives INSIDE cmdFinalize and must still run the
-// ledger-regression guard BEFORE the copy, still refusing with the sync-order recovery phrase.
-// Pin both so a change that drops the guard or the recovery note cannot silently return — the
-// 2026-06-11 audit reproduced the clobber live.
+// #399/#816: the Step-8a artifact mirror lives INSIDE cmdFinalize and must still run the
+// ledger-regression guard BEFORE the copy. #837 SUBTRACTS the operator obligation the guard used to
+// raise (the "sync worktree→main FIRST" recovery phrase): the transaction performs that sync itself,
+// and the refusal survives only for a sync the script cannot perform. Pin the guard, the retained
+// top-level reason, and the re-typed inner reason, so a change that drops the guard or silently
+// re-opens the operator obligation cannot pass — the 2026-06-11 audit reproduced the clobber live.
 assertIncludes('scripts/kaola-workflow-claim.js', 'kaola-workflow-ledger-compare.js');
 assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'finalize_mirror_refused',");
 assertIncludes('scripts/kaola-workflow-claim.js', 'if (!verdict.safe) {');
-assertIncludes('scripts/kaola-workflow-claim.js', 'worktree→main FIRST, then re-run finalize');
+assertIncludes('scripts/kaola-workflow-claim.js', "inner_reason: 'mirror_sync_failed',");
 // #816: the folded transaction — mirror, archive/close, roadmap staging, commit gate — plus the
 // two typed guardrails that carry over. Dropping any of them reds the chain.
 assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'implementation_commit_missing',");

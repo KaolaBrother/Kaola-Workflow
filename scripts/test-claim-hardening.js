@@ -1701,7 +1701,14 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fx); }
   }
 
-  // --- T2: the ledger-regression guard refuses INSIDE the transaction --------------------------
+  // --- T2: the ledger-regression guard is REPAIRED INSIDE the transaction -----------------------
+  // SUPERSEDED BY #837. T2 used to pin `finalize_mirror_refused`/`ledger_regression` as an OPERATOR
+  // obligation ("sync worktree→main FIRST, then re-run"). #837 subtracts that obligation: the
+  // staler main copy is a blocker the workflow manufactured out of its own commit policy, so the
+  // transaction now performs the worktree→main sync itself and proceeds. The INVARIANT T2 actually
+  // guards is unchanged and re-asserted below — a staler main copy must NEVER be allowed to regress
+  // the complete worktree ledger. The refusal branch itself survives, re-typed as
+  // `inner_reason: mirror_sync_failed`, and is covered by #837(P5).
   {
     const fx = mk816('issue-816b');
     try {
@@ -1709,16 +1716,18 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       const mainPlan = path.join(fx.mainProjDir, 'workflow-plan.md');
       fs.writeFileSync(mainPlan, fs.readFileSync(mainPlan, 'utf8').replace(/\| complete \|/g, '| pending |'));
       const r = runFinalize816(fx);
-      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused'
-        && r.json.inner_reason === 'ledger_regression',
-        '#816(T2): a staler MAIN ledger must refuse finalize_mirror_refused/ledger_regression, got status='
+      assert(r.status === 0 && r.json && r.json.reason !== 'finalize_mirror_refused',
+        '#816(T2): a staler MAIN ledger is repaired by the transaction, not refused, got status='
         + r.status + ' json=' + JSON.stringify(r.json));
-      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
-        '#816(T2): the refused mirror must leave the live project folder in place (no archive side effect)');
+      assert(r.json && r.json.finalize_transaction
+        && r.json.finalize_transaction.ledger_compare === 'synced_from_worktree',
+        '#816(T2): the transaction ledger must record the script-performed worktree→main sync, got '
+        + JSON.stringify(r.json && r.json.finalize_transaction));
       let wtPlan = '';
-      try { wtPlan = fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8'); } catch (_) {}
+      const archivedPlan = path.join(fx.wtRoot, 'kaola-workflow', 'archive', 'issue-816b', 'workflow-plan.md');
+      try { wtPlan = fs.readFileSync(archivedPlan, 'utf8'); } catch (_) {}
       assert(!!wtPlan && !/\| pending \|/.test(wtPlan),
-        '#816(T2): the refusal must happen BEFORE the copy — the worktree ledger stays complete');
+        '#816(T2): the staler main copy must NEVER regress the complete worktree ledger');
     } finally { cleanup816(fx); }
   }
 
@@ -5079,6 +5088,551 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         '#755 sweep: the automatic cleanup must not be silent about the downgrade, got '
           + JSON.stringify(entry));
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
+// --- #837: the finalize refusal LADDER is subtracted -------------------------------------------
+// cmdFinalize's preconditions surfaced as a SERIAL ladder: each refusal was observable only after
+// the previous one was cleared, so an operator paid one full finalize round-trip per unmet
+// precondition and learned exactly one new fact each time. Two subtractions, one generator:
+//
+//   (1) ONE PRECONDITION REPORT. `finalize --project P --check` evaluates EVERY precondition in a
+//       single READ-ONLY pass and reports all of them together, reusing cmdVerifySink's
+//       `{ project, ok, checks, reasons }` emit shape. N unmet preconditions ⇒ N reasons in ONE
+//       invocation. The check pass MUST NOT reuse the mutating Step-8a mirror.
+//
+//   (2) SCRIPT-OWNED MIRROR SYNC. The worktree→main project-folder sync is a STEP INSIDE the
+//       transaction, not an operator `rsync -a`. A main copy carrying a staler ledger is repaired
+//       by the script and finalize proceeds. `finalize_mirror_refused` is RETAINED (all four
+//       contract validators pin its literal) but RE-TYPED: `inner_reason: mirror_sync_failed`,
+//       reachable only when the script's own sync cannot be performed — fail-closed, zero-write.
+//
+// Out of scope by owner decision D4 and deliberately NOT covered here: the "ordering paradox"
+// (refuted — the validation gate addresses the committed+working landable tree, so it is invariant
+// across stage→commit, and `validated_at_head` has no parser), consent classes (split out), and the
+// compliance rung (that state is deleted elsewhere; it is not a cmdFinalize rung in the first place).
+//
+// Fixture is the #816 shape — a REAL `git worktree add` linked worktree — because both subtractions
+// are about the main-checkout ↔ linked-worktree seam and neither is observable without it.
+{
+  const { execFileSync: execFS837, spawnSync: spawnS837 } = require('child_process');
+  const CLAIM837 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const PLAN_VALIDATOR837 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const REPO837 = path.resolve(__dirname, '..');
+
+  const GIT_ENV837 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const g837 = (cwd, args) => {
+    try {
+      execFS837('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV837 });
+      return true;
+    } catch (_) { return false; }
+  };
+  const gOut837 = (cwd, args) => {
+    const r = spawnS837('git', ['-C', cwd, ...args], { encoding: 'utf8', env: GIT_ENV837 });
+    return String(r.stdout || '').trim();
+  };
+  const read837 = rel => { try { return fs.readFileSync(path.join(REPO837, rel), 'utf8'); } catch (_) { return ''; } };
+
+  // Build a self-host repo whose feature branch lives in a REAL linked worktree, finalize-ready.
+  function mk837(project) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-837-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+
+    g837(mainRoot, ['init', '-b', 'main']);
+    g837(mainRoot, ['config', 'user.email', 't@t.com']);
+    g837(mainRoot, ['config', 'user.name', 'Test']);
+    g837(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:kaola-workflow:claude': 'true',
+        'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true',
+        'test:kaola-workflow:gitea': 'true'
+      }
+    }) + '\n');
+    g837(mainRoot, ['add', 'package.json']);
+    g837(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
+    g837(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+
+    const anchors = buildClaimAnchors(wtRoot, {
+      issue_number: 837,
+      branch: 'workflow/' + project,
+      worktree_path: wtRoot,
+      claim_ts: '2026-01-01T00:00:00Z',
+      session_marker: 'fixture-837',
+    });
+
+    const planBody = [
+      '# Workflow Plan — ' + project,
+      '',
+      '## Meta',
+      'plan_form: spine',
+      'labels: enhancement',
+      '',
+      '## Nodes',
+      '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| impl | implementer | — | impl.txt | 1 | sequence |',
+      '| rv | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |',
+      '',
+      '## Node Ledger',
+      '',
+      '| id | status |',
+      '|---|---|',
+      '| impl | complete |',
+      '| rv | complete |',
+      '| done | complete |',
+      '',
+      '## Required Agent Compliance',
+      '',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|---|---|---|---|',
+      '| implementer (impl) | invoked | fixture | |',
+      '| code-reviewer (rv) | invoked | fixture | |',
+      '| finalize (done) | invoked | fixture | |',
+      ''
+    ].join('\n');
+
+    const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
+    const wtCacheDir = path.join(wtProjDir, '.cache');
+    fs.mkdirSync(wtCacheDir, { recursive: true });
+    const wtPlanPath = path.join(wtProjDir, 'workflow-plan.md');
+    const preHash = require(PLAN_VALIDATOR837).computePlanHash(planBody);
+    fs.writeFileSync(wtPlanPath, '<!-- plan_hash: ' + preHash + ' -->\n\n' + planBody);
+    try {
+      execFS837('node', [PLAN_VALIDATOR837, wtPlanPath, '--freeze', '--json'],
+        { cwd: wtRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) {}
+    const planHash = (fs.readFileSync(wtPlanPath, 'utf8')
+      .match(/<!-- plan_hash: ([0-9a-f]{64}) -->/) || [])[1];
+    assert(!!planHash, '#837 fixture: adaptive plan freezes with a plan hash');
+
+    const stateText = [
+      '# Kaola-Workflow State',
+      '',
+      '## Project',
+      'name: ' + project,
+      'status: active',
+      '',
+      '## Current Position',
+      'phase: adaptive',
+      'phase_name: Adaptive',
+      'workflow_path: adaptive',
+      'step: start',
+      'next_command: /kaola-workflow-plan-run ' + project,
+      'next_skill: kaola-workflow-plan-run ' + project,
+      '',
+      '## Pending Gates',
+      '- workflow-plan',
+      '',
+      '## Last Evidence',
+      'last_command: startup',
+      'last_result: folder_claimed',
+      '',
+      '## Last Updated',
+      new Date().toISOString(),
+      '',
+      '## Planning Evidence',
+      'plan_hash: ' + planHash,
+      'decision: auto-run',
+      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
+      'first_node_id: impl',
+      'first_node_role: implementer',
+      '',
+      '## Epoch Lineage',
+      'epoch_schema_version: ' + anchors.epoch_schema_version,
+      'claim_repository_id: ' + anchors.claim_repository_id,
+      'claim_identity_digest: ' + anchors.claim_identity_digest,
+      'claim_root_object_format: ' + anchors.claim_root_object_format,
+      'claim_root_base_commit: ' + anchors.claim_root_base_commit,
+      'claim_root_base_tree: ' + anchors.claim_root_base_tree,
+      'claim_root_base_digest: ' + anchors.claim_root_base_digest,
+      'epoch_lineage_id: ' + anchors.epoch_lineage_id,
+      'plan_epoch: 1',
+      'active_plan_hash: ' + planHash,
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'automatic_review_replans: 0',
+      'authorized_epoch_ceiling: 2',
+      'case_b_exemption_consumed: false',
+      'replan_status: none',
+      'replan_transaction_id: none',
+      'replan_phase: none',
+      'active_snapshot_manifest_digest: none',
+      '',
+      '## Sink',
+      'branch: workflow/' + project,
+      'base_branch: main',
+      'issue_number: 837',
+      'sink: merge',
+      'run_posture: worktree',
+      'worktree_path: ' + wtRoot,
+      'main_root: ' + mainRoot,
+      'session_marker: fixture-837',
+      'claim_ts: 2026-01-01T00:00:00Z',
+      ''
+    ].join('\n');
+    const tasksText = JSON.stringify({
+      source_plan_hash: planHash,
+      tasks: [
+        { id: 'impl', role: 'implementer', ledger_status: 'complete', status: 'completed' },
+        { id: 'rv', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+        { id: 'done', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+      ],
+    }) + '\n';
+    fs.writeFileSync(path.join(wtProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(wtProjDir, 'workflow-tasks.json'), tasksText);
+
+    fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
+    g837(wtRoot, ['add', '-A']);
+    g837(wtRoot, ['commit', '-m', 'feat: impl for ' + project]);
+    const headSha = gOut837(wtRoot, ['rev-parse', 'HEAD']);
+
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(mainProjDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-plan.md'), fs.readFileSync(wtPlanPath, 'utf8'));
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-tasks.json'), tasksText);
+
+    fs.writeFileSync(path.join(wtCacheDir, 'chain-receipt.json'), JSON.stringify({
+      headSha,
+      chains: [
+        { name: 'claude', exitCode: 0, accepted_red: false },
+        { name: 'codex', exitCode: 0, accepted_red: false },
+        { name: 'gitlab', exitCode: 0, accepted_red: false },
+        { name: 'gitea', exitCode: 0, accepted_red: false }
+      ]
+    }) + '\n');
+
+    return { base, mainRoot, wtRoot, project, headSha, wtCacheDir, mainProjDir, wtProjDir };
+  }
+
+  function runFinalize837(fx, extraArgs) {
+    const e = Object.assign({}, process.env, GIT_ENV837, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    });
+    const r = spawnS837(process.execPath,
+      [CLAIM837, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
+      { cwd: fx.wtRoot, encoding: 'utf8', timeout: 60000, env: e });
+    let json = null;
+    try {
+      const lines = String(r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
+  }
+  // The ONE-PASS precondition report.
+  const runCheck837 = fx => runFinalize837(fx, ['--check', '--json']);
+  const cleanup837 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
+  const stalePlan837 = fx => {
+    const p = path.join(fx.mainProjDir, 'workflow-plan.md');
+    fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace(/\| complete \|/g, '| pending |'));
+  };
+  const REQUIRED_CHECK_KEYS_837 = [
+    'mirror', 'workflow_state', 'implementation_commit', 'staging_guard', 'validation', 'dirty_paths'
+  ];
+
+  // --- P1: `--check` is a REGISTERED flag and a READ-ONLY full report on a finalize-ready run ----
+  // `--check` must be registered in parseArgs; an unregistered long flag is turned into a typed
+  // `unknown_flag` refusal by main() before any subcommand body runs, so the flag cannot exist at
+  // all until it is registered. The report reuses cmdVerifySink's { project, ok, checks, reasons }.
+  {
+    const fx = mk837('issue-837a');
+    try {
+      // Main-only Finalization artifact + main-only residue: the mutating Step-8a mirror would copy
+      // BOTH into the worktree. A check pass must copy neither.
+      fs.writeFileSync(path.join(fx.mainProjDir, 'finalization-summary.md'), '# Finalization\n');
+      fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      const beforeHead = gOut837(fx.wtRoot, ['rev-parse', 'HEAD']);
+      const beforeStatus = gOut837(fx.wtRoot, ['status', '--porcelain']);
+
+      const r = runCheck837(fx);
+      assert(!(r.json && r.json.reason === 'unknown_flag'),
+        '#837(P1): `finalize --check` must be a REGISTERED flag, not an unknown_flag refusal, got '
+        + JSON.stringify(r.json));
+      assert(r.status === 0 && r.json && r.json.ok === true,
+        '#837(P1): a finalize-ready run must report ok:true and exit 0, got status=' + r.status
+        + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+      assert(r.json && r.json.project === fx.project,
+        '#837(P1): the report must name the project (cmdVerifySink emit shape), got ' + JSON.stringify(r.json));
+      assert(r.json && Array.isArray(r.json.reasons) && r.json.reasons.length === 0,
+        '#837(P1): a finalize-ready run must report ZERO unmet preconditions, got '
+        + JSON.stringify(r.json && r.json.reasons));
+      const missingKeys = REQUIRED_CHECK_KEYS_837.filter(k => !(r.json && r.json.checks && k in r.json.checks));
+      assert(missingKeys.length === 0,
+        '#837(P1): the report must carry every precondition key even when all pass, missing '
+        + JSON.stringify(missingKeys) + ' from ' + JSON.stringify(r.json && r.json.checks));
+
+      // ZERO WRITE — the check pass must not run the mutating mirror, archive, or commit.
+      assert(!fs.existsSync(path.join(fx.wtProjDir, 'finalization-summary.md')),
+        '#837(P1): --check must NOT run the Step-8a artifact mirror (main-only artifact appeared in the worktree)');
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'CHANGELOG.md')),
+        '#837(P1): --check must NOT mirror main residue into the worktree');
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
+        '#837(P1): --check must NOT archive');
+      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+        '#837(P1): --check must leave the live project folder in place');
+      assert(gOut837(fx.wtRoot, ['rev-parse', 'HEAD']) === beforeHead,
+        '#837(P1): --check must author no commit');
+      assert(gOut837(fx.wtRoot, ['status', '--porcelain']) === beforeStatus,
+        '#837(P1): --check must leave the working tree byte-unchanged, got:\n'
+        + gOut837(fx.wtRoot, ['status', '--porcelain']));
+    } finally { cleanup837(fx); }
+  }
+
+  // --- P2: N unmet preconditions are reported in ONE invocation (the ladder becomes a checklist) -
+  // Three simultaneous faults that the SERIAL ladder can only surface one at a time:
+  //   (a) implementation commit missing   (b) two projects staged   (c) no chain receipt
+  {
+    const fx = mk837('issue-837b');
+    try {
+      // (a) rewind the branch so no implementation commit exists and impl.txt is uncommitted
+      g837(fx.wtRoot, ['reset', '--soft', 'main']);
+      g837(fx.wtRoot, ['reset']);
+      // (b) a FOREIGN project's live folder staged alongside this one
+      const foreign = path.join(fx.wtRoot, 'kaola-workflow', 'issue-999999');
+      fs.mkdirSync(foreign, { recursive: true });
+      fs.writeFileSync(path.join(foreign, 'workflow-state.md'), 'name: issue-999999\n');
+      fs.writeFileSync(path.join(fx.wtProjDir, '.cache', 'own.md'), 'own evidence\n');
+      g837(fx.wtRoot, ['add', '--', 'kaola-workflow/issue-999999',
+        'kaola-workflow/' + fx.project + '/.cache/own.md']);
+      // (c) the validation gate has nothing to read
+      fs.unlinkSync(path.join(fx.wtCacheDir, 'chain-receipt.json'));
+      // Main-side residue, so the read-only property is re-checked on the multi-fault path too.
+      fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+
+      const r = runCheck837(fx);
+      const reasons = (r.json && r.json.reasons) || [];
+      assert(r.status !== 0 && r.json && r.json.ok === false,
+        '#837(P2): unmet preconditions must report ok:false and exit non-zero, got status=' + r.status
+        + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+      assert(reasons.includes('implementation_commit_missing'),
+        '#837(P2): rung 1 must be reported, got ' + JSON.stringify(reasons));
+      assert(reasons.includes('staging_guard_multi_project'),
+        '#837(P2): rung 2 must be reported IN THE SAME pass, got ' + JSON.stringify(reasons));
+      assert(reasons.includes('chains_unverified'),
+        '#837(P2): rung 3 must be reported IN THE SAME pass, got ' + JSON.stringify(reasons));
+      assert(reasons.length >= 3,
+        '#837(P2): ALL N unmet preconditions come back from ONE invocation, got ' + JSON.stringify(reasons));
+      const checks = (r.json && r.json.checks) || {};
+      assert(checks.implementation_commit === 'missing',
+        '#837(P2): checks.implementation_commit must carry the probe state, got ' + JSON.stringify(checks));
+      assert(checks.staging_guard === 'staging_guard_multi_project',
+        '#837(P2): checks.staging_guard must carry the guard reason, got ' + JSON.stringify(checks));
+      assert(checks.validation === 'chains_unverified',
+        '#837(P2): checks.validation must carry the validation gate inner reason, got ' + JSON.stringify(checks));
+      assert(Array.isArray(checks.dirty_paths) && checks.dirty_paths.includes('impl.txt'),
+        '#837(P2): checks.dirty_paths must name the uncommitted implementation paths, got '
+        + JSON.stringify(checks.dirty_paths));
+      assert(Array.isArray(checks.dirty_paths) && !checks.dirty_paths.includes('CHANGELOG.md'),
+        '#837(P2): --check must not manufacture its own dirt (main residue was mirrored), got '
+        + JSON.stringify(checks.dirty_paths));
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'CHANGELOG.md')),
+        '#837(P2): --check must stay read-only even when preconditions fail');
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
+        '#837(P2): a failing --check must archive nothing');
+
+      // CONTROL — subtracting the ladder must not loosen the fail-closed anchor underneath it. A
+      // PLAIN finalize (no --check) still REFUSES on the same faults, still keys its top-level
+      // reason to the first unmet rung, and still makes zero irreversible side effect. `--check` is
+      // an added pre-flight surface, never a replacement for the transaction's own gates.
+      // (A refusal emit that ALSO carries the full checks object is a superset and stays legal.)
+      const ladder = runFinalize837(fx);
+      assert(ladder.status !== 0 && ladder.json && ladder.json.reason === 'implementation_commit_missing',
+        '#837(P2 control): the plain ladder still refuses at the first rung, got ' + JSON.stringify(ladder.json));
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project))
+        && fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+        '#837(P2 control): the refusing transaction must still archive nothing');
+      assert(!/^chore: (finalize|archive) /m.test(gOut837(fx.wtRoot, ['log', '--format=%s', '-5'])),
+        '#837(P2 control): the refusing transaction must still author no bookkeeping commit');
+    } finally { cleanup837(fx); }
+  }
+
+  // --- P3: the worktree→main sync is a SCRIPT STEP — a staler main ledger no longer refuses ------
+  // Before: `finalize_mirror_refused`/`ledger_regression` and an operator hint that said "sync
+  // worktree→main FIRST". The measured run hand-rolled that `rsync -a` three times.
+  {
+    const fx = mk837('issue-837c');
+    try {
+      stalePlan837(fx);
+      const r = runFinalize837(fx);
+      assert(r.status === 0,
+        '#837(P3): a staler MAIN ledger must be REPAIRED by the transaction, not refused, got status='
+        + r.status + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+      assert(!(r.json && r.json.reason === 'finalize_mirror_refused'),
+        '#837(P3): ledger_regression is no longer an operator obligation, got ' + JSON.stringify(r.json));
+      const tx = r.json && r.json.finalize_transaction;
+      assert(tx && tx.ledger_compare === 'synced_from_worktree',
+        '#837(P3): the transaction ledger must record that the script performed the worktree→main sync, got '
+        + JSON.stringify(tx));
+      const archivedPlan = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, 'workflow-plan.md');
+      const archivedText = fs.existsSync(archivedPlan) ? fs.readFileSync(archivedPlan, 'utf8') : '';
+      assert(archivedText && !/\| pending \|/.test(archivedText),
+        '#837(P3): the sync must never regress the worktree ledger with the staler main copy');
+      const mainPlanPath837 = path.join(fx.mainProjDir, 'workflow-plan.md');
+      const mainText = fs.existsSync(mainPlanPath837) ? fs.readFileSync(mainPlanPath837, 'utf8') : '';
+      assert(!/\| pending \|/.test(mainText),
+        '#837(P3): the MAIN project folder must be synced UP from the worktree by the script — '
+        + 'that sync is the operator rsync this issue subtracts');
+      assert(mainText === archivedText,
+        '#837(P3): after the script-owned sync the two copies of the ledger authority are identical');
+    } finally { cleanup837(fx); }
+  }
+
+  // --- P4: `--check` REPORTS the pending sync without performing it and without counting it ------
+  // A staler main copy is machinery-repairable, so it is reported as state, never as an unmet
+  // precondition the operator owes. And a read-only pass must not perform the repair either.
+  {
+    const fx = mk837('issue-837d');
+    try {
+      stalePlan837(fx);
+      const r = runCheck837(fx);
+      const reasons = (r.json && r.json.reasons) || [];
+      assert(r.status === 0 && r.json && r.json.ok === true,
+        '#837(P4): a staler main ledger is script-repairable and must not fail the check, got status='
+        + r.status + ' json=' + JSON.stringify(r.json));
+      assert(!reasons.includes('ledger_regression') && !reasons.includes('finalize_mirror_refused'),
+        '#837(P4): a script-owned repair is never an operator-owed precondition, got ' + JSON.stringify(reasons));
+      assert(r.json && r.json.checks && r.json.checks.mirror === 'sync_required',
+        '#837(P4): the report must still SHOW that the transaction will sync worktree→main, got '
+        + JSON.stringify(r.json && r.json.checks));
+      assert(/\| pending \|/.test(fs.readFileSync(path.join(fx.mainProjDir, 'workflow-plan.md'), 'utf8')),
+        '#837(P4): --check must REPORT the pending sync, never perform it');
+      assert(!/\| pending \|/.test(fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8')),
+        '#837(P4): --check must not touch the worktree ledger either');
+    } finally { cleanup837(fx); }
+  }
+
+  // --- P5: the RE-TYPED refusal — an UNPERFORMABLE sync still refuses, fail-closed and zero-write -
+  // Subtracting the operator obligation must not subtract the fail-closed anchor: when the script
+  // cannot perform the sync it owes, it refuses with the SAME top-level reason the four contract
+  // validators pin (`finalize_mirror_refused`) under a new inner reason, and makes no side effect.
+  if (!(process.getuid && process.getuid() === 0)) {
+    const fx = mk837('issue-837e');
+    const mainPlan = path.join(fx.mainProjDir, 'workflow-plan.md');
+    try {
+      stalePlan837(fx);
+      fs.chmodSync(mainPlan, 0o400);
+      fs.chmodSync(fx.mainProjDir, 0o500);   // no write, no create, no rename into the dest
+      const r = runFinalize837(fx);
+      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused',
+        '#837(P5): an unperformable sync must keep the pinned top-level reason, got status=' + r.status
+        + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+      assert(r.json && r.json.inner_reason === 'mirror_sync_failed',
+        '#837(P5): the refusal is RE-TYPED — ledger_regression was an operator obligation, '
+        + 'mirror_sync_failed is a machine failure, got ' + JSON.stringify(r.json));
+      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+        '#837(P5): the refusal must make no archive side effect');
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
+        '#837(P5): the refusal must not archive');
+      assert(!/^chore: (finalize|archive) /m.test(gOut837(fx.wtRoot, ['log', '--format=%s', '-5'])),
+        '#837(P5): the refusal must land BEFORE any bookkeeping commit');
+      const wtPlan = fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8');
+      assert(!/\| pending \|/.test(wtPlan),
+        '#837(P5): a failed sync must never let the staler main copy through onto the worktree ledger');
+    } finally {
+      try { fs.chmodSync(fx.mainProjDir, 0o755); } catch (_) {}
+      try { fs.chmodSync(mainPlan, 0o644); } catch (_) {}
+      cleanup837(fx);
+    }
+  }
+
+  // --- P6: `--check` is documented on the usage surface -----------------------------------------
+  {
+    const h = spawnS837(process.execPath, [CLAIM837, '--help'],
+      { encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert(h.status === 0 && /--check/.test(String(h.stdout || '')),
+      '#837(P6): the USAGE string must document finalize --check, got:\n' + String(h.stdout || '').slice(0, 600));
+  }
+
+  // --- P7: the contract-validator pins must NOT rot ---------------------------------------------
+  // All four validate-*-contracts.js assert the LITERAL `reason: 'finalize_mirror_refused',` and
+  // `reason: 'implementation_commit_missing',` inside the claim script of their OWN tree. The
+  // subtraction deliberately RETAINS both tokens (the mirror refusal is re-typed, not removed), so
+  // the pins stay valid with zero validator edits — and these asserts fail loudly if a future edit
+  // deletes either side of that agreement.
+  {
+    const CLAIM_TREES_837 = [
+      'scripts/kaola-workflow-claim.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-claim.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js',
+    ];
+    const VALIDATORS_837 = [
+      'scripts/validate-workflow-contracts.js',
+      'plugins/kaola-workflow/scripts/validate-workflow-contracts.js',
+      'plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js',
+      'plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js',
+    ];
+    for (const rel of CLAIM_TREES_837) {
+      const src = read837(rel);
+      assert(src.includes("reason: 'finalize_mirror_refused',"),
+        '#837(P7): ' + rel + ' must RETAIN the pinned finalize_mirror_refused literal (re-typed, not removed)');
+      assert(src.includes("reason: 'implementation_commit_missing',"),
+        '#837(P7): ' + rel + ' must retain the pinned implementation_commit_missing literal');
+    }
+    for (const rel of VALIDATORS_837) {
+      const src = read837(rel);
+      assert(src.includes("reason: 'finalize_mirror_refused',"),
+        '#837(P7): ' + rel + ' must keep pinning finalize_mirror_refused — the needle must not be dropped');
+      assert(src.includes("reason: 'implementation_commit_missing',"),
+        '#837(P7): ' + rel + ' must keep pinning implementation_commit_missing');
+    }
+  }
+
+  // --- P8: cross-edition parity — claim.js is a DIVERGENT HAND-PORT per forge -------------------
+  // `npm run sync:editions` byte-copies only the codex twin; the gitlab/gitea claim ports are hand-
+  // ported. Both subtractions must land in all four trees or the forge chains ship the old ladder.
+  {
+    const CLAIM_TREES_837 = [
+      'scripts/kaola-workflow-claim.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-claim.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js',
+    ];
+    for (const rel of CLAIM_TREES_837) {
+      const src = read837(rel);
+      assert(src.includes('mirror_sync_failed'),
+        '#837(P8): ' + rel + ' must carry the re-typed mirror_sync_failed inner reason');
+      assert(src.includes('--check'),
+        '#837(P8): ' + rel + ' must register + document the one-pass --check precondition report');
+    }
+  }
+
+  // --- P9: the operator-rsync instruction leaves the generated finalize prose --------------------
+  // The six finalize surfaces are BYTE-GENERATED from templates/routing/finalize.skeleton.md, so
+  // the skeleton is the only authoring surface. Its "sync worktree→main FIRST" recovery instruction
+  // describes an obligation the script now owns; leaving it in ships a manual step that no longer
+  // exists, and the `--check` report has to be reachable from the prose to be used at all.
+  {
+    const skeleton = read837('templates/routing/finalize.skeleton.md');
+    assert(skeleton.length > 0, '#837(P9): the finalize routing skeleton must be readable');
+    assert(!/sync worktree→main first/i.test(skeleton),
+      '#837(P9): the operator "sync worktree→main FIRST" instruction must be gone — the transaction '
+      + 'owns that sync now');
+    assert(!/on a refusal, sync worktree→main/i.test(skeleton),
+      '#837(P9): the refusal-recovery rsync instruction must be gone from the finalize prose');
+    // `--check` alone is NOT a valid needle here — the skeleton's run-gap scanner section already
+    // uses that token for an unrelated call. Pin the finalize invocation itself.
+    assert(skeleton.includes('finalize --check'),
+      '#837(P9): the finalize prose must surface the one-pass `finalize --check` precondition report '
+      + 'as an invocation the operator can actually copy');
+    assert(/precondition/i.test(skeleton),
+      '#837(P9): the prose must describe the report as a PRECONDITION checklist, not a ladder rung');
+    assert(skeleton.includes('mirror_sync_failed'),
+      '#837(P9): the prose must name the re-typed inner reason it can still return');
+    assert(skeleton.includes('finalize_mirror_refused'),
+      '#837(P9): the finalize prose must keep the top-level reason the four contract validators pin');
   }
 }
 

@@ -138,6 +138,12 @@ function parseArgs(argv) {
     if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
     // #395.5 (D1): OPT-IN exit gate — cmdFinalize exits 4 on ok:false; DEFAULT stays exit 0.
     if (key === '--strict') { args.strict = true; continue; }
+    // #837: `finalize --check` — the ONE-PASS precondition report. Read-only: it evaluates every
+    // finalize precondition together and emits cmdVerifySink's { project, ok, checks, reasons }
+    // shape, so N unmet preconditions come back from ONE invocation instead of one refusal per
+    // round-trip. Must be a REGISTERED boolean flag: main()'s unknown_flag guard refuses any
+    // unrecognized long flag with zero mutation, so the flag cannot exist until it is parsed here.
+    if (key === '--check') { args.check = true; continue; }
     // #333: keep-open partial-close archive — stamp-only (lane mechanics deferred to #336).
     if (key === '--keep-open') { args.keepOpen = true; continue; }
     // #336: --keep-issue-open is the design-specified cmdFinalize keep-open flag; the
@@ -2688,34 +2694,56 @@ const FINALIZE_MIRROR_DEST_OWNED = new Set(['workflow-state.md', 'workflow-tasks
 // relative paths it AUTHORED. That list is machinery-manufactured state: a caller that probes the
 // worktree for operator dirt must subtract it, or the transaction reads its own mirror as proof the
 // operator failed to commit something (see probeImplementationCommit).
-function mirrorResidueOutsideProject(mainRoot, root) {
-  const authored = [];
+// #837: the READ-ONLY half of the residue mirror. Returns the relative paths the mirror WOULD
+// author in the worktree, without copying anything, so `finalize --check` can predict the
+// transaction's own manufactured dirt (and subtract it from operator dirt) without performing it.
+function listResidueOutsideProject(mainRoot) {
+  const rels = [];
   try {
     const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
     for (const rel of parsePorcelainPaths(status)) {
       if (rel.startsWith('kaola-workflow/')) continue;
-      const from = path.join(mainRoot, rel);
       let st = null;
-      try { st = fs.lstatSync(from); } catch (_) { continue; }
+      try { st = fs.lstatSync(path.join(mainRoot, rel)); } catch (_) { continue; }
       if (!st.isFile()) continue;
-      const to = path.join(root, rel);
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.copyFileSync(from, to);
-      authored.push(rel);
+      rels.push(rel);
     }
   } catch (_) { /* no git / unreadable status — the project-dir mirror above still stands */ }
+  return rels;
+}
+
+function mirrorResidueOutsideProject(mainRoot, root) {
+  const authored = [];
+  for (const rel of listResidueOutsideProject(mainRoot)) {
+    const to = path.join(root, rel);
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(path.join(mainRoot, rel), to);
+    } catch (_) { continue; }
+    authored.push(rel);
+  }
   return authored;
 }
 
-// Step 8a — artifact mirror. Direction is ALWAYS main checkout → linked worktree: the worktree
-// holds the complete ledger and the main copy is the one carrying the Finalization artifacts the
-// orchestrator just authored. Before copying, the ledger-regression guard refuses to push a STALER
-// main plan over a MORE-COMPLETE worktree ledger — a refusal means sync worktree→main first, never
-// bypass. Returns one of:
+// Step 8a — artifact mirror. The FINAL copy direction is always main checkout → linked worktree:
+// the worktree holds the complete ledger and the main copy is the one carrying the Finalization
+// artifacts the orchestrator just authored. Before copying, the ledger-regression guard checks
+// whether that copy would push a STALER main plan over a MORE-COMPLETE worktree ledger.
+//
+// #837: when it would, the transaction OWNS the repair. It merge-copies the worktree project dir
+// UP into main (worktree wins), re-compares, and only then runs the main→worktree copy. That
+// worktree→main sync used to be an operator `rsync -a` demanded by a typed refusal — a blocker the
+// workflow manufactured for itself out of its own commit policy, so it is a repair obligation
+// discharged before the gate, never an operator obligation. The refusal is RETAINED and RE-TYPED:
+// it is now reachable only when the script CANNOT perform the sync it owes (`mirror_sync_failed`),
+// which stays fail-closed and zero-write on the worktree side.
+// Returns one of:
 //   { mirror: 'not_needed' | 'source_absent' | 'skipped_post_archive' | 'mirrored',
 //     ledger_compare: <token>, mirrored_paths: [<rel>…] }
-//   { refused: true, inner_reason: 'ledger_regression', detail }
+//   { refused: true, inner_reason: 'mirror_sync_failed', detail }
+// `mirrored_paths` names ONLY the non-`kaola-workflow/` residue this function authored in the
+// worktree — the caller must treat those paths as its own, never as operator dirt.
 // `mirrored_paths` names ONLY the non-`kaola-workflow/` residue this function authored in the
 // worktree — the caller must treat those paths as its own, never as operator dirt.
 function mirrorFinalizationArtifacts(root, project) {
@@ -2750,14 +2778,37 @@ function mirrorFinalizationArtifacts(root, project) {
       try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.PLAN_FILE), 'utf8'); } catch (_) {}
       const verdict = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText);
       if (!verdict.safe) {
-        return {
-          refused: true,
-          inner_reason: 'ledger_regression',
-          detail: 'main copy carries ' + verdict.sourceComplete + ' complete node(s); the worktree ledger carries '
-            + verdict.destComplete
-        };
+        // #837 — the script performs the worktree→main sync itself. Merge-copy (worktree wins) so
+        // main-only Finalization artifacts the orchestrator just authored survive, then re-compare
+        // against the repaired source. A sync the script cannot perform is a MACHINE failure, not
+        // an operator obligation: refuse fail-closed under the pinned top-level reason, with the
+        // worktree ledger untouched (nothing has been copied INTO the worktree at this point).
+        let syncFailure = null;
+        try {
+          mergeCopyDir(destDir, srcDir);
+        } catch (e) {
+          if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+          syncFailure = String((e && e.message) || e).slice(0, 400);
+        }
+        let after = null;
+        if (!syncFailure) {
+          try { after = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText); }
+          catch (e) { syncFailure = String((e && e.message) || e).slice(0, 400); }
+        }
+        if (syncFailure || !after || !after.safe) {
+          return {
+            refused: true,
+            inner_reason: 'mirror_sync_failed',
+            detail: 'the transaction could not sync the worktree project folder up into the main '
+              + 'checkout (main copy carries ' + verdict.sourceComplete + ' complete node(s); the '
+              + 'worktree ledger carries ' + verdict.destComplete + ')'
+              + (syncFailure ? ': ' + syncFailure : '')
+          };
+        }
+        ledgerCompare = 'synced_from_worktree';
+      } else {
+        ledgerCompare = 'pass';
       }
-      ledgerCompare = 'pass';
     } catch (e) {
       // A programmer error (missing/renamed export — the cross-edition drift class) must not be
       // swallowed into a silent bypass of the guard.
@@ -2900,10 +2951,258 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
   }, 1);
 }
 
+// ─── #837: the finalize preconditions, evaluated as ONE checklist ─────────────────────────────
+// The preconditions used to surface only as a SERIAL refusal ladder: each one was observable only
+// after the previous had been cleared, so an operator paid a full finalize round-trip per unmet
+// precondition and learned exactly one new fact each time. Nothing is learned one-refusal-at-a-time
+// that cannot be learned in one pass, so the pass below evaluates EVERY precondition and reports
+// them together. It is STRICTLY READ-ONLY — it never runs the mutating Step-8a mirror — and the
+// ladder inside cmdFinalize consumes the same pure probes, so the checklist and the transaction can
+// never disagree about what a rung says.
+
+// Read-only classification of what Step 8a WILL do. Mirrors mirrorFinalizationArtifacts' own
+// branch order exactly, minus every write.
+//   'not_needed' | 'ready' | 'sync_required' | 'sync_failed' | 'source_absent' | 'skipped_post_archive'
+function probeFinalizeMirror(root, project) {
+  let mainRoot = null;
+  try {
+    mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    if (mainRoot === fs.realpathSync(root)) return { state: 'not_needed', mainRoot: null };
+  } catch (_) { return { state: 'not_needed', mainRoot: null }; }
+  const srcDir = path.join(mainRoot, 'kaola-workflow', project);
+  const destDir = path.join(root, 'kaola-workflow', project);
+  if (!fs.existsSync(destDir) && findArchiveAuthorities(root, project).length > 0) {
+    return { state: 'skipped_post_archive', mainRoot };
+  }
+  if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot };
+  const srcPlan = path.join(srcDir, adaptiveSchema.PLAN_FILE);
+  if (!fs.existsSync(srcPlan)) return { state: 'ready', mainRoot };
+  try {
+    const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
+    let destText = null;
+    try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.PLAN_FILE), 'utf8'); } catch (_) {}
+    const verdict = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText);
+    if (verdict.safe) return { state: 'ready', mainRoot };
+    // A pending worktree→main sync is machinery-repairable, so it is REPORTED as state, never as an
+    // operator-owed precondition — unless the destination is provably unwritable, in which case the
+    // transaction will hit the fail-closed mirror_sync_failed refusal and the operator should know.
+    let writable = true;
+    try {
+      fs.accessSync(srcDir, fs.constants.W_OK);
+      if (fs.existsSync(srcPlan)) fs.accessSync(srcPlan, fs.constants.W_OK);
+    } catch (_) { writable = false; }
+    return { state: writable ? 'sync_required' : 'sync_failed', mainRoot };
+  } catch (e) {
+    if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+    return { state: 'ready', mainRoot };
+  }
+}
+
+// The workflow_state rung as a pure resolution. Returns the authority the rest of the transaction
+// reads, plus the inner reason when no authority can be proven.
+function resolveFinalizeAuthority(root, project) {
+  const liveDir = projectDir(root, project);
+  let livePresent = false;
+  try {
+    fs.lstatSync(liveDir);
+    livePresent = true;
+  } catch (error) {
+    // Only a genuinely absent directory enters the source-missing crash-resume
+    // path. An unreadable entry remains live authority and fails type proof below.
+    livePresent = !error || error.code !== 'ENOENT';
+  }
+  const candidates = livePresent ? [liveDir] : findArchiveAuthorities(root, project);
+  const authorityDir = candidates.length === 1 ? candidates[0] : null;
+  const statePath = authorityDir ? path.join(authorityDir, 'workflow-state.md') : null;
+  let authorityState = '';
+  let innerReason = null;
+  if (!livePresent && candidates.length > 1) {
+    innerReason = 'archive_authority_ambiguous';
+  } else if (!authorityDir) {
+    innerReason = 'archive_authority_missing';
+  } else {
+    let authorityStat = null;
+    try { authorityStat = fs.lstatSync(authorityDir); } catch (_) {}
+    if (!authorityStat || !authorityStat.isDirectory() || authorityStat.isSymbolicLink()) {
+      innerReason = 'archive_authority_invalid_type';
+    }
+    let stateStat = null;
+    try { if (!innerReason) stateStat = fs.lstatSync(statePath); }
+    catch (error) { innerReason = error && error.code === 'ENOENT' ? 'state_missing' : 'state_unreadable'; }
+    if (!innerReason && (!stateStat || !stateStat.isFile() || stateStat.isSymbolicLink())) {
+      innerReason = 'state_invalid_type';
+    }
+    if (!innerReason) {
+      try { authorityState = fs.readFileSync(statePath, 'utf8'); }
+      catch (_) { innerReason = 'state_unreadable'; }
+    }
+    if (!innerReason && !livePresent && field(authorityState, 'status') !== 'closed') {
+      innerReason = 'archive_state_not_closed';
+    }
+  }
+  return { livePresent, authorityDir, authorityState, innerReason };
+}
+
+// The workflow_state rung's operator hint, kept in ONE place so the ladder emit and the checklist
+// can never drift apart.
+function finalizeAuthorityHint(livePresent, innerReason) {
+  if (livePresent) {
+    return 'Restore workflow-state.md as a readable regular file before Finalization. No archive or closure side effect was made.';
+  }
+  if (innerReason === 'archive_state_not_closed') {
+    return 'Restore the live project and complete Finalization from its verified gates. Only an archive already stamped status: closed by the finalize transaction may resume source-missing; no closure side effect was made.';
+  }
+  if (innerReason === 'archive_authority_ambiguous') {
+    return 'Multiple exact/suffixed archives match this project, so no current transaction authority can be proven. Restore the live project or retain exactly the archive for the interrupted finalize transaction; no closure side effect was made.';
+  }
+  return 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.';
+}
+
+// The #522 finalize validation gate as a pure probe: shells the plan-validator's --finalize-check
+// (read-only — its landable-tree snapshot lives in an index OUTSIDE the repo) and returns the typed
+// verdict. Returns { ok: true } or { ok: false, gate?, inner_reason, operator_hint, errors }.
+function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
+  const planPath = path.join(authorityDir, adaptiveSchema.PLAN_FILE);
+  if (!fs.existsSync(planPath)) {
+    // Adaptive is the only workflow path. A finalize with NO frozen workflow-plan.md present is an
+    // unconditional typed refusal — there is no sibling verifier to shell and no N/A pass. A stale
+    // non-adaptive workflow_path field is reported for diagnostics but does not change the verdict.
+    return {
+      ok: false,
+      gate: 'workflow_path',
+      inner_reason: 'adaptive_plan_missing',
+      workflow_path: field(authorityState, 'workflow_path') || adaptiveSchema.ADAPTIVE_PATH,
+      operator_hint: 'Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.',
+      errors: ['adaptive_plan_missing']
+    };
+  }
+  const validatorScript = path.join(__dirname, 'kaola-gitea-workflow-plan-validator.js');
+  let gateResult = null;
+  let gateError = null;
+  try {
+    // #539: forward --base to the whole-plan --finalize-check ONLY, so the attribution sweep can
+    // scope to a project's OWN diff on a SHARED multi-issue branch. The per-node --barrier-check
+    // STILL rejects --base (the anti-laundering guard) — unchanged.
+    const validatorArgv = [validatorScript, planPath, '--finalize-check', '--json'];
+    if (base) validatorArgv.push('--base', base);
+    const raw = execFileSync(process.execPath, validatorArgv,
+      { cwd: root, encoding: 'utf8', timeout: 120000 });
+    gateResult = JSON.parse(raw.trim());
+  } catch (e) {
+    // Non-zero exit from validator means a refusal — parse its JSON output.
+    const stdout = e && e.stdout ? String(e.stdout).trim() : '';
+    try { gateResult = JSON.parse(stdout); } catch (_) { gateError = stdout || String(e && e.message || e); }
+  }
+  if (!gateResult || gateResult.result !== 'pass') {
+    const innerReason = (gateResult && gateResult.reason) || gateError || 'validator_error';
+    return {
+      ok: false,
+      inner_reason: innerReason,
+      operator_hint: (gateResult && gateResult.operator_hint)
+        || 'Resolve the inner refusal, then re-run finalize. No archive commit was made.',
+      errors: (gateResult && gateResult.errors) || [innerReason]
+    };
+  }
+  return { ok: true };
+}
+
+// ONE pass over EVERY finalize precondition. Returns { checks, reasons }:
+//   checks.mirror                — what Step 8a will do (never performed here)
+//   checks.workflow_state        — 'ok' or the workflow_state rung's inner reason
+//   checks.implementation_commit — the probe state, or 'not_checked' outside the commit-gate lane
+//   checks.staging_guard         — 'ok' or the guard's reason
+//   checks.validation            — 'pass' or the plan-validator --finalize-check inner reason
+//   checks.dirty_paths           — uncommitted non-`kaola-workflow/` paths in the run root
+// `reasons` carries the MOST SPECIFIC token per UNMET precondition — an inner reason wherever the
+// ladder has one — and is EMPTY when the run is finalize-ready. Nothing here short-circuits: a
+// failed rung never hides a later one, which is the whole point of the subtraction. A pending
+// worktree→main sync is machinery-repairable and is therefore reported as state, never as a reason.
+function evaluateFinalizePreconditions(root, project, opts) {
+  const options = opts || {};
+  const reasons = [];
+  const checks = {
+    mirror: 'not_needed',
+    workflow_state: 'ok',
+    implementation_commit: 'not_checked',
+    staging_guard: 'ok',
+    validation: 'pass',
+    dirty_paths: []
+  };
+
+  const mirror = probeFinalizeMirror(root, project);
+  checks.mirror = mirror.state;
+  if (mirror.state === 'sync_failed') reasons.push('mirror_sync_failed');
+
+  // Dirt the transaction's own Step-8a residue mirror WILL manufacture in the worktree. Subtracted
+  // before anything is read as operator dirt: state the workflow produces by its own commit policy
+  // is a repair obligation it already discharged, never evidence against the operator.
+  const wouldMirror = mirror.mainRoot ? listResidueOutsideProject(mirror.mainRoot) : [];
+  const authored = new Set(wouldMirror);
+  try {
+    const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    checks.dirty_paths = parsePorcelainPaths(status)
+      .filter(p => !p.startsWith('kaola-workflow/') && !authored.has(p));
+  } catch (_) { checks.dirty_paths = []; }
+
+  const authority = resolveFinalizeAuthority(root, project);
+  if (authority.innerReason) {
+    checks.workflow_state = authority.innerReason;
+    reasons.push(authority.innerReason);
+  }
+
+  // The implementation-commit and staging rungs are scoped exactly as the transaction scopes them:
+  // to the lane that owns the commit gate (a --keep-worktree run in a linked worktree). An in-place
+  // run's dirt belongs to the orchestrator, so both rungs read 'not_checked'/'ok' there.
+  if (options.keepWorktree) {
+    let linked = false;
+    try { linked = fs.realpathSync(mainRootFromCoord(getCoordRoot(root))) !== fs.realpathSync(root); }
+    catch (_) { linked = false; }
+    if (linked) {
+      const implProbe = probeImplementationCommit(root, field(authority.authorityState, 'base_branch'), wouldMirror);
+      checks.implementation_commit = implProbe.state;
+      if (implProbe.state === 'missing') reasons.push('implementation_commit_missing');
+      const guard = checkFinalizeStagingGuard(root, project);
+      if (!guard.ok) {
+        checks.staging_guard = guard.reason;
+        reasons.push(guard.reason);
+      }
+    }
+  }
+
+  // The validation gate needs a proven authority to read the frozen plan from. Without one the
+  // workflow_state rung above already owns the refusal, so report the gate as unevaluated rather
+  // than inventing a second verdict for the same missing artifact.
+  if (!authority.authorityDir) {
+    checks.validation = 'not_checked';
+  } else {
+    const gate = probeFinalizeValidationGate(root, authority.authorityDir, authority.authorityState,
+      options.base || null);
+    if (!gate.ok) {
+      checks.validation = gate.inner_reason;
+      reasons.push(gate.inner_reason);
+    }
+  }
+
+  return { checks, reasons };
+}
 function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
+  // #837: `--check` is the one-pass PRE-FLIGHT — every precondition evaluated together, read-only,
+  // zero side effect, emitted in cmdVerifySink's { project, ok, checks, reasons } shape. It is an
+  // ADDED surface, never a replacement: the transaction below keeps every one of its own
+  // fail-closed gates, so a caller that skips the pre-flight is refused exactly as before.
+  if (args.check) {
+    const report = evaluateFinalizePreconditions(root, args.project, {
+      keepWorktree: !!args.keepWorktree,
+      base: args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null
+    });
+    const ok = report.reasons.length === 0;
+    output({ project: args.project, ok, checks: report.checks, reasons: report.reasons }, ok ? 0 : 1);
+    return;
+  }
   // #816: the transaction ledger — one object recording every step of the mechanical residue, so
   // a crash-resumed re-entry (pre-archive / post-archive-pre-commit / post-commit) is observable
   // from the emit alone.
@@ -2920,8 +3219,9 @@ function cmdFinalize() {
   // implementation probe so the machinery never reads its own mirror as operator dirt.
   let mirroredResiduePaths = [];
   // Step 8a — artifact mirror, BEFORE any gate reads the authority and before any side effect.
-  // A ledger regression is a typed refusal: the transaction never overwrites a complete worktree
-  // ledger with a staler main copy.
+  // #837: a staler main copy is REPAIRED here (the transaction syncs worktree→main itself); the
+  // refusal survives only for a sync the script cannot perform, and stays zero-write on the
+  // worktree side — the complete worktree ledger is never overwritten with a staler main copy.
   {
     const mirror = mirrorFinalizationArtifacts(root, args.project);
     if (mirror.refused) {
@@ -2931,8 +3231,10 @@ function cmdFinalize() {
         inner_reason: mirror.inner_reason,
         project: args.project,
         detail: mirror.detail,
-        operator_hint: 'The main checkout carries a staler ledger than the linked worktree. Sync '
-          + 'worktree→main FIRST, then re-run finalize. No archive or closure side effect was made.',
+        operator_hint: 'The transaction owns the worktree→main project-folder sync and could not '
+          + 'perform it — the main checkout is unwritable or its copy could not be repaired. Make '
+          + 'the main checkout writable, then re-run finalize. Never hand-copy a staler main ledger '
+          + 'over the worktree. No archive or closure side effect was made.',
         errors: [mirror.inner_reason]
       }, 1);
       return;
@@ -2943,74 +3245,28 @@ function cmdFinalize() {
     finalizeTx.residue_mirrored = mirroredResiduePaths.length;
   }
   const folder = activeByProject(root, args.project);
-  const finalizeLiveDir = projectDir(root, args.project);
-  let finalizeLiveSourcePresent = false;
-  try {
-    fs.lstatSync(finalizeLiveDir);
-    finalizeLiveSourcePresent = true;
-  } catch (error) {
-    // Only a genuinely absent directory enters the source-missing crash-resume
-    // path. An unreadable entry remains live authority and fails type proof below.
-    finalizeLiveSourcePresent = !error || error.code !== 'ENOENT';
-  }
-  let finalizeAuthorityDir = null;
-  let finalizeAuthorityState = '';
   // Finalization may legitimately resume after archiveProjectDir has already moved the live
   // source, but plan absence must never turn a malformed LIVE source into that crash-resume
   // exemption. Prove that the selected authority has a readable regular state file before any
   // gate or archive side effect. A source-missing archive is a narrow crash-resume exemption:
   // archiveProjectDir must already have terminal-stamped it closed before the rename. An active,
   // abandoned, or otherwise nonterminal manual move is not proof that the live finalize gates ran.
-  {
-    const authorityCandidates = finalizeLiveSourcePresent
-      ? [finalizeLiveDir]
-      : findArchiveAuthorities(root, args.project);
-    finalizeAuthorityDir = authorityCandidates.length === 1 ? authorityCandidates[0] : null;
-    const authorityStatePath = finalizeAuthorityDir
-      ? path.join(finalizeAuthorityDir, 'workflow-state.md') : null;
-    let innerReason = null;
-    if (!finalizeLiveSourcePresent && authorityCandidates.length > 1) {
-      innerReason = 'archive_authority_ambiguous';
-    } else if (!finalizeAuthorityDir) {
-      innerReason = 'archive_authority_missing';
-    } else {
-      let authorityStat = null;
-      try { authorityStat = fs.lstatSync(finalizeAuthorityDir); } catch (_) {}
-      if (!authorityStat || !authorityStat.isDirectory() || authorityStat.isSymbolicLink()) {
-        innerReason = 'archive_authority_invalid_type';
-      }
-      let stateStat = null;
-      try { if (!innerReason) stateStat = fs.lstatSync(authorityStatePath); }
-      catch (error) { innerReason = error && error.code === 'ENOENT' ? 'state_missing' : 'state_unreadable'; }
-      if (!innerReason && (!stateStat || !stateStat.isFile() || stateStat.isSymbolicLink())) {
-        innerReason = 'state_invalid_type';
-      }
-      if (!innerReason) {
-        try { finalizeAuthorityState = fs.readFileSync(authorityStatePath, 'utf8'); }
-        catch (_) { innerReason = 'state_unreadable'; }
-      }
-      if (!innerReason && !finalizeLiveSourcePresent
-          && field(finalizeAuthorityState, 'status') !== 'closed') {
-        innerReason = 'archive_state_not_closed';
-      }
-    }
-    if (innerReason) {
-      output({
-        result: 'refuse',
-        reason: 'finalize_gate_unverified',
-        gate: 'workflow_state',
-        inner_reason: innerReason,
-        operator_hint: finalizeLiveSourcePresent
-          ? 'Restore workflow-state.md as a readable regular file before Finalization. No archive or closure side effect was made.'
-          : (innerReason === 'archive_state_not_closed'
-            ? 'Restore the live project and complete Finalization from its verified gates. Only an archive already stamped status: closed by the finalize transaction may resume source-missing; no closure side effect was made.'
-            : (innerReason === 'archive_authority_ambiguous'
-              ? 'Multiple exact/suffixed archives match this project, so no current transaction authority can be proven. Restore the live project or retain exactly the archive for the interrupted finalize transaction; no closure side effect was made.'
-              : 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.')),
-        errors: [innerReason]
-      }, 1);
-      return;
-    }
+  // #837: resolved by the SAME pure helper the one-pass `--check` report reads, so the checklist
+  // and the ladder can never disagree about this rung.
+  const finalizeAuthority = resolveFinalizeAuthority(root, args.project);
+  const finalizeLiveSourcePresent = finalizeAuthority.livePresent;
+  const finalizeAuthorityDir = finalizeAuthority.authorityDir;
+  const finalizeAuthorityState = finalizeAuthority.authorityState;
+  if (finalizeAuthority.innerReason) {
+    output({
+      result: 'refuse',
+      reason: 'finalize_gate_unverified',
+      gate: 'workflow_state',
+      inner_reason: finalizeAuthority.innerReason,
+      operator_hint: finalizeAuthorityHint(finalizeLiveSourcePresent, finalizeAuthority.innerReason),
+      errors: [finalizeAuthority.innerReason]
+    }, 1);
+    return;
   }
   // Re-plan fencing is a pre-side-effect finalization gate. A partial epoch
   // transition may be resumed only by the transaction authority; archive,
@@ -3124,58 +3380,20 @@ function cmdFinalize() {
   // so no side effect has occurred on refusal. Adaptive is the only workflow path, so a finalize
   // with NO frozen workflow-plan.md present is an unconditional typed `adaptive_plan_missing`
   // refusal — there is no retired fast/full verifier to shell and no N/A pass.
+  // #837: probed by the SAME pure helper the one-pass `--check` report reads. `--base` is sourced
+  // from the flag and/or KAOLA_FINALIZE_BASE env, defaulting to UNSET (→ the validator's `main`
+  // default). The per-node --barrier-check STILL rejects --base (the anti-laundering guard).
   {
-    const authorityPlanPath = path.join(finalizeAuthorityDir, adaptiveSchema.PLAN_FILE);
-    if (fs.existsSync(authorityPlanPath)) {
-      const validatorScript = path.join(__dirname, 'kaola-gitea-workflow-plan-validator.js');
-      let gateResult = null;
-      let gateError = null;
-      try {
-        // #539: forward --base to the whole-plan --finalize-check ONLY, so the attribution sweep
-        // can scope to a project's OWN diff on a SHARED multi-issue branch. Sourced from --base <ref>
-        // and/or KAOLA_FINALIZE_BASE env, defaulting to UNSET (→ the validator's `main` default —
-        // byte-equivalent to today for branch-per-issue runs, so existing tests stay green). The
-        // per-node --barrier-check STILL rejects --base (the anti-laundering guard) — unchanged.
-        const finalizeBase = args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null;
-        const validatorArgv = [validatorScript, authorityPlanPath, '--finalize-check', '--json'];
-        if (finalizeBase) validatorArgv.push('--base', finalizeBase);
-        const raw = execFileSync(process.execPath, validatorArgv,
-          { cwd: root, encoding: 'utf8', timeout: 120000 });
-        gateResult = JSON.parse(raw.trim());
-      } catch (e) {
-        // Non-zero exit from validator means a refusal — parse its JSON output.
-        const stdout = e && e.stdout ? String(e.stdout).trim() : '';
-        try { gateResult = JSON.parse(stdout); } catch (_) { gateError = stdout || String(e && e.message || e); }
-      }
-      if (!gateResult || gateResult.result !== 'pass') {
-        const innerReason = (gateResult && gateResult.reason) || gateError || 'validator_error';
-        const innerHint = (gateResult && gateResult.operator_hint) ||
-          'Resolve the inner refusal, then re-run finalize. No archive commit was made.';
-        output({
-          result: 'refuse',
-          reason: 'finalize_gate_unverified',
-          inner_reason: innerReason,
-          operator_hint: innerHint,
-          errors: (gateResult && gateResult.errors) || [innerReason]
-        }, 1);
-        return;
-      }
-    } else {
-      // Adaptive is the only workflow path. A finalize with NO frozen workflow-plan.md
-      // present is an unconditional typed `adaptive_plan_missing` refusal — the fast/full
-      // paths and their verifiers were retired, so there is no sibling verifier to shell
-      // and no N/A pass. Placed BEFORE any archive/close side effect. A stale non-adaptive
-      // workflow_path field is reported for diagnostics but does not change the verdict.
-      const workflowPath = field(finalizeAuthorityState, 'workflow_path');
-      output({
-        result: 'refuse',
-        reason: 'finalize_gate_unverified',
-        gate: 'workflow_path',
-        inner_reason: 'adaptive_plan_missing',
-        workflow_path: workflowPath || adaptiveSchema.ADAPTIVE_PATH,
-        operator_hint: 'Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.',
-        errors: ['adaptive_plan_missing']
-      }, 1);
+    const gate = probeFinalizeValidationGate(root, finalizeAuthorityDir, finalizeAuthorityState,
+      args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null);
+    if (!gate.ok) {
+      const emit = { result: 'refuse', reason: 'finalize_gate_unverified' };
+      if (gate.gate) emit.gate = gate.gate;
+      emit.inner_reason = gate.inner_reason;
+      if (gate.workflow_path) emit.workflow_path = gate.workflow_path;
+      emit.operator_hint = gate.operator_hint;
+      emit.errors = gate.errors;
+      output(emit, 1);
       return;
     }
   }
@@ -4925,6 +5143,11 @@ const USAGE = 'usage: kaola-gitea-workflow-claim.js <claim|authoring-allowed|rel
   + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr|pr] [--workflow-path VALUE (retired, ignored)]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
   + '         [--attest-planner-spawn]\n'
+  + '  finalize --project P --check [--json]\n'
+  + '               ONE read-only pass over EVERY finalize precondition (mirror, workflow_state,\n'
+  + '               implementation_commit, staging_guard, validation, dirty_paths). Emits\n'
+  + '               { project, ok, checks, reasons }; exit 0 when ok. Reports ALL unmet\n'
+  + '               preconditions together instead of one refusal per re-run. Zero side effects.\n'
   + '  --help, -h   print this usage and exit (no side effects).';
 
 function main() {

@@ -2447,11 +2447,40 @@ orchestrator; mechanical floors ride scripts — no judgment-forbidden agent in 
    residue and authors `chore: finalize {project}`. Never a blind `git add -A`: a foreign project's
    paths are never staged by the transaction.
 
+### `finalize --check` — one-pass precondition report
+
+Preconditions are a CHECKLIST, not a ladder. `finalize --project P --keep-worktree --check --json`
+evaluates EVERY precondition in ONE read-only pass and emits `cmdVerifySink`'s shape — exit 0 when
+`ok`, non-zero otherwise. Nothing is short-circuited: N unmet preconditions come back from ONE
+invocation. It makes zero side effect (it never runs the mutating Step-8a mirror).
+
+```json
+{
+  "project": "issue-837",
+  "ok": false,
+  "checks": {
+    "mirror": "not_needed|ready|sync_required|sync_failed|source_absent|skipped_post_archive",
+    "workflow_state": "ok|state_missing|state_unreadable|state_invalid_type|archive_authority_missing|archive_authority_ambiguous|archive_authority_invalid_type|archive_state_not_closed",
+    "implementation_commit": "not_checked|not_applicable|committed|missing|indeterminate",
+    "staging_guard": "ok|staging_guard_multi_project|staging_guard_foreign_archive",
+    "validation": "pass|not_checked|<plan-validator --finalize-check inner reason>",
+    "dirty_paths": ["impl.txt"]
+  },
+  "reasons": ["implementation_commit_missing", "staging_guard_multi_project", "chains_unverified"]
+}
+```
+
+`reasons` names the MOST SPECIFIC token per UNMET precondition and is empty when the run is
+finalize-ready. `checks.mirror: sync_required` is state, never a reason: a pending worktree→main
+sync is machinery-repairable and the transaction performs it itself. The `implementation_commit`
+and `staging_guard` rungs are lane-scoped exactly as the transaction scopes them (a
+`--keep-worktree` run inside a linked worktree); outside that lane they read `not_checked`/`ok`.
+
 ### Typed refusals (each with no further side effect)
 
 | reason | meaning |
 |--------|---------|
-| `finalize_mirror_refused` (`inner_reason: ledger_regression`) | the main copy carries a staler ledger than the worktree — sync worktree→main FIRST, never bypass |
+| `finalize_mirror_refused` (`inner_reason: mirror_sync_failed`) | the transaction owns the worktree→main project-folder sync and could not perform it (the main checkout is unwritable). A staler main copy is otherwise REPAIRED by the transaction, never handed back as an operator obligation |
 | `implementation_commit_missing` | implementation-shaped changes are uncommitted and the branch carries no implementation commit. The machinery **never authors the implementation commit** — it surfaces and stops |
 | `staging_guard_foreign_archive` / `staging_guard_multi_project` | the single-project staging rule (moved here from command prose) — split the commit |
 | `finalize_gate_unverified` | the pre-existing dual-mode validation gate |
@@ -2464,7 +2493,7 @@ Emitted alongside `closure_receipt`, so a crash-resumed run is readable from the
 ```json
 {
   "mirror": "not_needed|source_absent|skipped_post_archive|mirrored",
-  "ledger_compare": "not_needed|pass|skipped_no_plan|skipped_no_script",
+  "ledger_compare": "not_needed|pass|synced_from_worktree|skipped_no_plan|skipped_no_script",
   "impl_commit": "not_checked|not_applicable|committed|indeterminate",
   "roadmap_staged": true,
   "archive_commit": "skipped|nothing_to_commit|committed|deferred_to_sink|skipped_gitignored|failed",
