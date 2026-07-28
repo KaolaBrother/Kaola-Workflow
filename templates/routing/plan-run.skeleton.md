@@ -259,8 +259,11 @@ naming every gate role the plan would otherwise have dispatched: `adversarial-ve
 
 For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`, an inline gate reviewing its
 own writer-context is no gate: do NOT dispatch the gate node inline and silently record a self-issued
-`verdict: pass`. Instead route through the consent-halt valve (`write-halt --reason consent`) and
-await operator resolution before the gate node is considered satisfied.
+`verdict: pass`. Instead route through the consent-halt valve
+(`write-halt --reason consent --consent-class <action>:<target>`) and await operator resolution
+before the gate node is considered satisfied. A class already granted in this claim proceeds on the
+standing grant — journaled, not re-asked. A different target is a different class and asks again, and
+every grant dies at the next re-plan epoch or restart. Omitting `--consent-class` always asks.
 
 Everywhere else execution mode is your judgment, per unit — dispatch production, keep decisions.
 Delegating discretionary production is the default; mechanical execution, a fully-specified small
@@ -457,8 +460,8 @@ Two refusal families, two different moves:
 - `substitute_unknown_role`, `substitute_kind_mismatch`, `substitute_not_superset`,
   `substitute_token_contract_mismatch`, `substitute_node_closed`,
   `substitute_evidence_reset_failed` — no in-kind role covers the brief, or the node's evidence
-  cannot be safely reset, so escalate with `write-halt --reason consent` rather than dispatching
-  anyway.
+  cannot be safely reset, so escalate with
+  `write-halt --reason consent --consent-class <action>:<target>` rather than dispatching anyway.
 
 <!-- PIN: reviewer-contract-v2-execution -->
 #### Reviewer Contract Envelope, Validation, and Convergence
