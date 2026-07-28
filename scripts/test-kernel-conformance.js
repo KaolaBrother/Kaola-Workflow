@@ -378,7 +378,7 @@ const NON_ATOMIC_EXEMPT = [
   },
   {
     file: 'kaola-workflow-adaptive-node.js', api: 'appendFileSync', klass: 'append-only',
-    why: 'node-timings.jsonl and provenance-log.jsonl are preference artifacts whose writers swallow every error and whose readers report diagnostics, never verdicts',
+    why: 'node-timings.jsonl, provenance-log.jsonl and outcome-log.jsonl are the parent-owned run sidecars — preference artifacts whose writers swallow every error and whose readers report diagnostics, never verdicts',
   },
   {
     file: 'kaola-workflow-adaptive-node.js', api: 'copyFileSync', klass: 'mirror-copy',

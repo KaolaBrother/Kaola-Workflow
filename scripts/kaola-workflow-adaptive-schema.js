@@ -5579,6 +5579,177 @@ function finalizeSinkStatus(nodes, statusOf) {
 }
 
 // ===========================================================================
+// M2 — THE OUTCOME RECORDER, AND THE PARENT-OWNED SIDECAR SET IT JOINS.
+//
+// ADR 0013's M2 is the MEASUREMENT stage: every refusal and every lifecycle outcome is
+// recorded, so the migration can rank codes by real frequency x interruption cost instead of
+// by audit anecdote. P4 makes the ordering load-bearing — the recorder lands WITH the registry
+// batch, because a "before" captured after the deletions it measures is not a measurement.
+//
+// This is the RECORDER only. It writes events; nothing in the runtime reads them back and no
+// gate consults them. The reporting/ranking layer is M3 and follows.
+//
+// FAIL-OPEN IS A HARD REQUIREMENT, not a nicety. Telemetry that can refuse, wedge or slow a run
+// would itself be a mid-run serializer — exactly the class T9 and P3 exist to delete. So the
+// write half swallows every error, and a run whose recorder cannot write simply proceeds
+// unmeasured.
+//
+// ---------------------------------------------------------------------------
+// THE PARENT-OWNED SIDECAR SET — why a SET, and not a second hard-coded path.
+//
+// A run sidecar is written by whichever process happens to make the lifecycle call. Under a
+// co-opened write frontier that process may be running inside a LEG worktree, which is a
+// checkout of the same tree — so the repo-relative sidecar path resolves INSIDE the leg and the
+// leg's own copy is what gets dirtied. The synthesizer's per-leg capture sweep (`git add -A`)
+// then stages that path in EVERY leg independently, and the octopus merge fails add/add on
+// workflow-generated residue: a `merge_conflict` on a frontier that has nothing to do with
+// telemetry. There is no merge-side backstop; the failure surfaces as the generic refusal.
+//
+// The parent's copy is the authoritative one (it is the copy a reader reads), so the cure is to
+// keep every member OUT of the leg capture entirely. That cure has to be a SET, in the kernel,
+// read by both the writers and the capture sweep: a second hard-coded path beside the first
+// fixes one instance and leaves the NEXT sidecar to rediscover the same bug — the
+// one-call-site-at-a-time pattern that made the archive family recur four times.
+//
+// MEMBERSHIP RULE, and it is mechanically checkable: a member is parent-owned run telemetry —
+// an append-only sidecar whose writer swallows every error, that no gate reads, and that the
+// Layer-0 ruling below classifies `preference`. The last clause is the guard that matters:
+// excluding a `record` path from the capture sweep would silently DROP leg-authored kernel
+// content from the merge, turning a merge fix into an evidence-loss defect.
+// `scripts/test-outcome-recorder.js` asserts that over the whole set.
+// ===========================================================================
+const NODE_TIMINGS_LOG_NAME = 'node-timings.jsonl';
+const PROVENANCE_LOG_NAME = 'provenance-log.jsonl';
+const DISPATCH_LOG_NAME = 'dispatch-log.jsonl';
+const OUTCOME_LOG_NAME = 'outcome-log.jsonl';
+
+// Project-relative (`kaola-workflow/{project}/`-relative) paths, POSIX separators. ORDER IS NOT
+// SIGNIFICANT — this is a membership set, not a precedence list.
+const PARENT_OWNED_SIDECARS = Object.freeze([
+  '.cache/' + NODE_TIMINGS_LOG_NAME,
+  '.cache/' + PROVENANCE_LOG_NAME,
+  '.cache/' + DISPATCH_LOG_NAME,
+  '.cache/' + OUTCOME_LOG_NAME,
+]);
+
+// isParentOwnedSidecar(relPath) — TOTAL membership test over project-relative paths. Normalizes
+// separators and a leading `./` so a caller that built the path with path.join on Windows, or
+// with a relative prefix, gets the same answer.
+function isParentOwnedSidecar(relPath) {
+  const rel = String(relPath == null ? '' : relPath)
+    .replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  return PARENT_OWNED_SIDECARS.indexOf(rel) >= 0;
+}
+
+// ---------------------------------------------------------------------------
+// THE RECORD SHAPE.
+//
+// ONE JSON object per line, UNIFORM: every key is present on every line, in a fixed order, so a
+// consumer can `split('\n').map(JSON.parse)` and project columns without presence-testing. The
+// M2 brief names four things to capture — (code, triage wall-clock, re-dispatch?, phase) — and
+// only two of them are observable AT the emit point. That is a genuine underspecification in the
+// ADR, and it is resolved here by recording what makes the other two DERIVABLE rather than by
+// fabricating them:
+//
+//   * `reason` / `condition` / `family` / `locus` / `route`  — the code, at both granularities
+//     the dual-emission migration needs, plus its machine-readable exit.
+//   * `op`      — the PHASE. The subcommand is the phase in this runtime: there is no coarser
+//     phase field a lifecycle call carries, and a finer one would be invented.
+//   * `ts` + `ms` — the invocation's end instant and its own wall-clock. TRIAGE wall-clock is an
+//     INTER-EVENT property (the gap between a refusal and the next recorded event for the same
+//     project) and re-dispatch is another (a repeated `op`/`node` pair after a refusal). Neither
+//     exists at the emit point; both are a subtraction over consecutive lines, which is M3's job.
+// ---------------------------------------------------------------------------
+const OUTCOME_LOG_SCHEMA_VERSION = 1;
+// The envelope `result` values this runtime emits. Anything else records as 'other' rather than
+// being dropped: an unrecognised result is itself a measurement.
+const OUTCOME_RESULTS = Object.freeze(['ok', 'refuse', 'halt', 'warn']);
+// How the emitted token related to the enumerated vocabulary, which is the P2 census metric:
+//   'family'       — it classified into one of the seven kernel families;
+//   'excluded'     — a rule deliberately states it is NOT in the vocabulary (advisory / tool
+//                    outcome / usage error), so the silence is intentional;
+//   'unclassified' — nothing matched. This is the remaining-migration-work signal, and counting
+//                    it is the whole reason the field exists.
+const OUTCOME_CLASSIFICATIONS = Object.freeze(['family', 'excluded', 'unclassified']);
+
+// buildOutcomeRecord(input) — PURE. `{ script, op, project, node, envelope, ts, duration_ms }` in,
+// one canonical record object out, or `null` when there is no phase to attribute the event to.
+//
+// THERE IS DELIBERATELY NO try/catch IN THIS BODY, and that is the point. A recorder that
+// swallowed its own programming errors would go dead silently and every suite that only asserts
+// "the verb still succeeded" would stay green over a corpse — which is exactly how seven hint
+// bodies once threw ReferenceError while 541 assertions passed. The fail-open obligation is
+// discharged by the CALLER (the append helper wraps this in a catch), and the suite calls this
+// function DIRECTLY and asserts a fully-populated record, so a dead layer is red.
+function buildOutcomeRecord(input) {
+  const i = isPlainObject(input) ? input : {};
+  const envelope = isPlainObject(i.envelope) ? i.envelope : {};
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+  const op = str(i.op);
+  if (!op) return null;   // an event with no phase cannot be ranked; recording it would be noise
+
+  const rawResult = str(envelope.result) || 'ok';
+  const result = OUTCOME_RESULTS.indexOf(rawResult) >= 0 ? rawResult : 'other';
+  const ms = Number(i.duration_ms);
+
+  // Only an ACTIONABLE outcome carries a family projection — the same predicate
+  // stampRefusalEnvelope uses, so the recorder and the envelope agree by construction.
+  const actionable = result === 'refuse' || result === 'halt' || result === 'warn';
+  const reason = str(envelope.reason);
+  const condition = actionable ? (str(envelope.condition) || reason) : null;
+
+  let family = null;
+  let locus = null;
+  let route = null;
+  let classified = null;
+  if (actionable) {
+    const hit = classifyRefusalCondition(condition);
+    family = str(envelope.refusal_family) || (hit && hit.family ? hit.family : null);
+    if (family) classified = 'family';
+    else if (hit) classified = 'excluded';
+    else classified = 'unclassified';
+
+    locus = str(envelope.refusal_locus);
+    if (family && !locus) {
+      const row = KERNEL_REFUSAL_REGISTRY[family];
+      locus = row ? row.locus : null;
+    }
+
+    // Prefer the route the envelope was already stamped with; re-resolve only when the caller
+    // never went through `refuse()`. The classifier's derived discriminator widens the payload
+    // exactly as stampRefusalEnvelope widens it, so both paths resolve the same verb.
+    if (isPlainObject(envelope.refusal_route)) {
+      route = routeKey(envelope.refusal_route);
+    } else if (family) {
+      const patch = (hit && isPlainObject(hit.patch)) ? hit.patch : {};
+      const payload = Object.assign({}, patch, envelope);
+      for (const key of Object.keys(patch)) {
+        if (envelope[key] == null) payload[key] = patch[key];
+      }
+      route = routeKey(resolveRoute(family, payload));
+    }
+  }
+
+  return {
+    v: OUTCOME_LOG_SCHEMA_VERSION,
+    ts: str(i.ts) || new Date().toISOString(),
+    script: str(i.script) || 'unknown',
+    op: op,
+    project: str(i.project),
+    node: str(i.node),
+    result: result,
+    reason: reason,
+    condition: condition,
+    family: family,
+    locus: locus,
+    route: route || null,
+    classified: classified,
+    ms: Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : null,
+  };
+}
+
+// ===========================================================================
 // THE LAYER-0 DURABLE-ARTIFACT REGISTRY (the four-record ruling).
 //
 // The durable kernel is EXACTLY four records — plan / position / evidence / forge — and every
@@ -5711,12 +5882,14 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
     'transient O_EXCL coordination; ABSENCE is the normal unlocked state between invocations'],
   ['.cache/active-batch.json', 'preference', null, 'script',
     'no writer remains since #364; the running-set is its successor and every reader treats absence as the normal case'],
-  ['.cache/node-timings.jsonl', 'preference', null, 'script',
+  ['.cache/' + NODE_TIMINGS_LOG_NAME, 'preference', null, 'script',
     'best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict'],
-  ['.cache/provenance-log.jsonl', 'preference', null, 'script',
+  ['.cache/' + PROVENANCE_LOG_NAME, 'preference', null, 'script',
     'best-effort audit trail, writer swallows every error; no gate reads it'],
-  ['.cache/dispatch-log.jsonl', 'preference', null, 'script',
+  ['.cache/' + DISPATCH_LOG_NAME, 'preference', null, 'script',
     'hook-written spawn log; the attestation check is WARN-FIRST, so absence degrades to a warning, never a wrong outcome'],
+  ['.cache/' + OUTCOME_LOG_NAME, 'preference', null, 'script',
+    'the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label'],
   ['.cache/wedged-attestation.json', 'preference', null, 'script',
     'historical residue; no producer and no consumer remains in the tree'],
   ['fast-summary.md', 'preference', null, 'agent',
@@ -6045,6 +6218,19 @@ module.exports = {
   // pushed?" and one reading of the unique terminal sink row.
   deriveSinkProgressFromState,
   finalizeSinkStatus,
+  // ADR 0013 M2 — the outcome recorder's PURE half plus the parent-owned sidecar set. The set is
+  // the ONE list both the sidecar writers and the leg capture sweep read; the builder is the one
+  // record shape every edition emits.
+  NODE_TIMINGS_LOG_NAME,
+  PROVENANCE_LOG_NAME,
+  DISPATCH_LOG_NAME,
+  OUTCOME_LOG_NAME,
+  PARENT_OWNED_SIDECARS,
+  isParentOwnedSidecar,
+  OUTCOME_LOG_SCHEMA_VERSION,
+  OUTCOME_RESULTS,
+  OUTCOME_CLASSIFICATIONS,
+  buildOutcomeRecord,
   // The Layer-0 durable-artifact registry (ADR 0013 T1/T2): the machine-readable ruling of every
   // durable artifact as record / derivable / preference, the total classifier over it, the T2
   // record predicate, and the absolute->project-relative mapper the write interception uses.
