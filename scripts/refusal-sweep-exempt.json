@@ -12,7 +12,13 @@
     "",
     "`cells` exempts the TIER-B arc only (provoke -> follow the route -> arrive green). TIER A",
     "— route resolution, verb existence, R4 discipline, payload validation — is armed for EVERY",
-    "cell and admits no exemptions at all."
+    "cell and admits no exemptions at all.",
+    "",
+    "THE CELL-KEYED WHY PINS ARE TIER A. The hint layer being ALIVE, the no-fabricated-fields",
+    "rule, hint/route agreement and cell closure are armed for every cell and CANNOT be exempted",
+    "here — the blanket `*` entry below does not reach them. A hint that throws used to degrade",
+    "silently to the caller's generic fallback, so an entire dead hint layer once read green",
+    "across 541 assertions; an exemption door on that pin would reopen exactly that hole."
   ],
   "cells": [
     {

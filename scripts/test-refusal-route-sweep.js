@@ -343,6 +343,16 @@ for (const [label, keys, values] of PARITY_TABLES) {
 // (3) CELL DERIVATION — cells are (code x discriminator value), READ OFF the payload
 //     schema. The cell set is derived, so a family that gains a discriminator value gains
 //     its cells automatically. Walking seven codes would prove almost nothing.
+//
+// EACH CELL CARRIES THREE PAYLOADS, and the split is what makes the WHY-slot pins bite:
+//   payload  — the full probe. Route resolution and route/hint agreement read this.
+//   minimal  — THE DISCRIMINATOR ALONE (plus whatever the cell's own identity requires,
+//              and nothing else). Rendering this must invent NOTHING: a discriminator that
+//              does not carry the family's typical fields must render nothing for them,
+//              never `unknown`, `null`, `n/a` or ` ? `.
+//   rich     — minimal plus ONE distinctive field the family already renders, with the
+//              sentinel this cell expects to see in the output. The negative pin alone is
+//              satisfiable by rendering nothing at all; `probe` is the positive half.
 // ===========================================================================
 
 function deriveCells() {
@@ -354,36 +364,64 @@ function deriveCells() {
   // kernel_write_failed — record x {retry, environment}. The environment arm is the whole
   // point of "the route is a function of the payload": same code, different exit.
   for (const record of REFUSAL_PAYLOAD_SCHEMAS.kernel_write_failed.values) {
-    push('kernel_write_failed', record + ':retry', { record: record, target: 'snapshot', detail: 'probe' });
-    push('kernel_write_failed', record + ':environment', { record: record, errno: 'ENOSPC', path: '/tmp/x' });
+    push('kernel_write_failed', record + ':retry', { record: record, target: 'snapshot', detail: 'probe' },
+      { disc: record, minimal: { record: record },
+        rich: { record: record, target: 'zzz-probe-target' }, probe: 'zzz-probe-target' });
+    // The errno SELECTS the environment arm, so it is part of this cell's identity and the
+    // minimal payload carries it. Everything else stays out.
+    push('kernel_write_failed', record + ':environment', { record: record, errno: 'ENOSPC', path: '/tmp/x' },
+      { disc: record, minimal: { record: record, errno: 'ENOSPC' },
+        rich: { record: record, errno: 'ENOSPC' }, probe: 'ENOSPC' });
   }
   for (const record of REFUSAL_PAYLOAD_SCHEMAS.kernel_cas_lost.values) {
-    push('kernel_cas_lost', record, { record: record, field: 'status', expected: 'a', found: 'b' });
+    push('kernel_cas_lost', record, { record: record, field: 'status', expected: 'a', found: 'b' },
+      { disc: record, minimal: { record: record },
+        rich: { record: record, field: 'zzz_probe_field' }, probe: 'zzz_probe_field' });
   }
   for (const kind of REFUSAL_PAYLOAD_SCHEMAS.kernel_integrity_broken.values) {
-    push('kernel_integrity_broken', kind, { kind: kind, anchor: 'plan_hash', broken_at: 'probe' });
+    push('kernel_integrity_broken', kind, { kind: kind, anchor: 'plan_hash', broken_at: 'probe' },
+      { disc: kind, minimal: { kind: kind },
+        rich: { kind: kind, anchor: 'plan_hash' }, probe: 'plan_hash' });
   }
   for (const kind of LOCK_KINDS) {
     for (const stale of [false, true]) {
       push('kernel_lock_held', kind + ':' + (stale ? 'stale' : 'live'),
-        { kind: kind, stale: stale, holder: { pid: 4242 }, occupying_project: 'issue-1' });
+        { kind: kind, stale: stale, holder: { pid: 4242 }, occupying_project: 'issue-1' },
+        // `stale` is the schema's declared SECONDARY discriminator: it selects the arm, so it
+        // is part of this cell's identity and rides in the minimal payload. The WHY key is
+        // still `${code}/${kind}` — the secondary split belongs to the FACT, not the WHY.
+        { disc: kind, minimal: stale ? { kind: kind, stale: true } : { kind: kind },
+          rich: stale ? { kind: kind, stale: true, holder: { pid: 424242 } } : { kind: kind, holder: { pid: 424242 } },
+          probe: '424242' });
     }
   }
   for (const rk of REFUSAL_PAYLOAD_SCHEMAS.kernel_evidence_missing.values) {
-    push('kernel_evidence_missing', rk, { record_kind: rk, defect: 'absent', expected_path: '.cache/n1.md' });
+    push('kernel_evidence_missing', rk, { record_kind: rk, defect: 'absent', expected_path: '.cache/n1.md' },
+      { disc: rk, minimal: { record_kind: rk },
+        rich: { record_kind: rk, expected_path: '.cache/zzz-probe.md' }, probe: '.cache/zzz-probe.md' });
   }
   for (const kind of SINK_FINDING_KINDS) {
-    push('sink_verdict', kind, { scope: 'plan', findings: [{ kind: kind, detail: 'probe' }] });
+    push('sink_verdict', kind, { scope: 'plan', findings: [{ kind: kind, detail: 'probe' }] },
+      { disc: kind, minimal: { findings: [{ kind: kind }] },
+        rich: { scope: 'release', findings: [{ kind: kind }] }, probe: kind });
   }
   for (const subtype of SINK_UNATTRIBUTED_SUBTYPES) {
     push('sink_verdict', 'unattributed_paths:' + subtype,
       { scope: 'plan', findings: [{ kind: 'unattributed_paths', subtype: subtype, detail: 'probe' }] },
       // The deliberate `foreign_archive` silence: no verb resolves the write of another run's
       // archive, so naming one would misdirect. Silence is information; the sweep knows it.
-      { route_may_be_null: subtype === 'foreign_archive', per_finding: true });
+      // The SUBTYPE is the field that carries the actual defect here — `unattributed_paths`
+      // alone tells an operator nothing — so it is this cell's positive probe.
+      { route_may_be_null: subtype === 'foreign_archive', per_finding: true,
+        disc: 'unattributed_paths',
+        minimal: { findings: [{ kind: 'unattributed_paths', subtype: subtype }] },
+        rich: { scope: 'release', findings: [{ kind: 'unattributed_paths', subtype: subtype }] },
+        probe: subtype });
   }
   for (const kind of CONSENT_KINDS) {
-    push('consent_required', kind, { kind: kind, ask: 'probe', options: ['a', 'b'] });
+    push('consent_required', kind, { kind: kind, ask: 'probe', options: ['a', 'b'] },
+      { disc: kind, minimal: { kind: kind },
+        rich: { kind: kind, ask: 'zzz probe ask' }, probe: 'zzz probe ask' });
   }
   return cells;
 }
@@ -470,6 +508,532 @@ for (const kind of SINK_FINDING_KINDS) {
   const top = resolveRoute('sink_verdict', { scope: 'plan', findings: [] });
   assert(top && top.script === 'claim' && top.verb === 'finalize' && /--check/.test(top.args),
     'SINK: the composite top-level route must be the read-all-again finalize --check verb');
+}
+
+// ===========================================================================
+// (3A) THE CELL-KEYED WHY CONTRACT — the presence gate.
+//
+// WHY THIS GATE EXISTS, LITERALLY. An earlier attempt at this slot deleted all seven inline
+// `hint` bodies, replaced each with a call to a helper it never wrote, and shipped. Every
+// family hint threw ReferenceError at call time — and THE SUITE STAYED GREEN, because
+// `composeOperatorHint` wraps `row.hint(merged)` in `try { … } catch (_) { /* fall through
+// to the generic fallback */ }`. The whole hint layer was dead and 541 assertions passed.
+//
+// So: each dependent block below is gated on presence, and the GATE ITSELF IS THE RED —
+// one named failure per missing symbol instead of a TypeError that takes the sweep with it.
+// What makes a gated block trustworthy WHILE the contract is absent is not the gate; it is
+// the mutation battery in (9), which feeds every checker defined here a deliberately broken
+// input UNCONDITIONALLY, on every run. A guard is evidence only once mutation-proven.
+// ===========================================================================
+
+function isPlainObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+const CONTRACT = [
+  { name: 'REFUSAL_WHY', ok: isPlainObj(REFUSAL_WHY) && Object.keys(REFUSAL_WHY).length > 0,
+    what: 'the cell-keyed WHY map, keyed `${code}/${discriminatorValue}`, non-empty' },
+  { name: 'refusalCellKey', ok: !!refusalCellKey,
+    what: 'refusalCellKey(code, payload) -> `${code}/${discriminatorValue}`' },
+  { name: 'assertCellClosure', ok: !!assertCellClosure,
+    what: 'assertCellClosure() -> { ok, missing, stale }' },
+  { name: 'routeProse', ok: !!routeProse,
+    what: 'routeProse(route) -> the GENERATED exit sentence every hint ends with' },
+  { name: 'refusalFact', ok: !!refusalFact,
+    what: 'refusalFact(code, payload) -> the FACT clause (what happened), rendered from the payload alone' },
+];
+for (const sym of CONTRACT) {
+  if (!sym.ok) PENDING_CONTRACT.push(sym.name);
+  assert(sym.ok, 'CONTRACT: the kernel must export ' + sym.name + ' — ' + sym.what
+    + '. Until it lands the cell-keyed WHY slot does not exist; the blocks that depend on it cannot run, '
+    + 'and their checkers are proved armed by the mutation battery rather than by this gate');
+}
+
+// ===========================================================================
+// (3B) PIN 1 — THE HINT LAYER IS ALIVE.
+//
+// Called DIRECTLY off KERNEL_REFUSAL_REGISTRY, never through `composeOperatorHint`, whose
+// catch is exactly what hid the failure. Reading the layer through the accessor that
+// swallows its errors is measuring the swallow, not the layer.
+// ===========================================================================
+
+// probeFamilyHint(row, payload) — PURE, and deliberately NOT the production accessor: a hint
+// that throws is REPORTED, never degraded. It calls twice because a hint that is not a pure
+// function of its payload is a second way for this layer to be quietly wrong.
+function probeFamilyHint(row, payload) {
+  if (!row || typeof row.hint !== 'function') {
+    return { ok: false, threw: false, value: null, error: 'the registry row carries no hint() FUNCTION' };
+  }
+  let a, b;
+  try { a = row.hint(payload); b = row.hint(payload); }
+  catch (e) {
+    return { ok: false, threw: true, value: null,
+      error: 'hint() THREW ' + ((e && e.name) || 'Error') + ': ' + ((e && e.message) || String(e))
+        + ' — this is the exact failure composeOperatorHint swallows' };
+  }
+  if (typeof a !== 'string') {
+    return { ok: false, threw: false, value: a, error: 'hint() returned ' + (a === null ? 'null' : typeof a) + ', not a string' };
+  }
+  if (!a.trim()) return { ok: false, threw: false, value: a, error: 'hint() returned an empty string' };
+  if (a !== b) {
+    return { ok: false, threw: false, value: a,
+      error: 'hint() is not a pure function of its payload — two calls on the same payload disagreed' };
+  }
+  return { ok: true, threw: false, value: a, error: null };
+}
+
+for (const cell of CELLS) {
+  const row = KERNEL_REFUSAL_REGISTRY[cell.code];
+  const bad = [];
+  for (const shape of [['payload', cell.payload], ['minimal', cell.minimal], ['rich', cell.rich]]) {
+    const probe = probeFamilyHint(row, shape[1]);
+    if (!probe.ok) bad.push(shape[0] + ' — ' + probe.error);
+  }
+  assert(bad.length === 0,
+    'HINT ALIVE ' + cell.cell + ': the family hint must render for this cell when called DIRECTLY off '
+      + 'KERNEL_REFUSAL_REGISTRY (a hint that throws is a dead layer, not a fallback) — ' + bad.join(' | '));
+}
+
+// --- 1B: composeOperatorHint must not MASK a throwing hint ---------------------------
+//
+// The registry is frozen, so the mutation is installed on an UNFROZEN COMPILED COPY of the
+// kernel: the same source text with every `Object.freeze(` stripped, compiled at the real
+// path (the module has no load-time side effects and no relative requires). That keeps the
+// mutation END-TO-END — it patches production behaviour, not a stand-in for it — and it
+// survives any rewrite of the hint bodies, because it keys on nothing inside them.
+const NodeModule = require('module');
+function loadUnfrozenKernel() {
+  try {
+    const file = path.join(REPO, 'scripts', 'kaola-workflow-adaptive-schema.js');
+    const src = fs.readFileSync(file, 'utf8').split('Object.freeze(').join('(');
+    const m = new NodeModule(file, null);
+    m.filename = file;
+    m.paths = NodeModule._nodeModulePaths(path.dirname(file));
+    m._compile(src, file);
+    return { ok: true, kernel: m.exports, error: null };
+  } catch (e) { return { ok: false, kernel: null, error: (e && e.message) || String(e) }; }
+}
+
+function callComposeHint(kernel, reason, generic) {
+  try { return { threw: false, value: kernel.composeOperatorHint(reason, {}, {}, generic) }; }
+  catch (e) { return { threw: true, value: null, error: (e && e.message) || String(e) }; }
+}
+
+// classifyHintFailureHandling(outcome, generic) — PURE. A hint that throws is a PROGRAMMING
+// ERROR; the one thing that must never happen is that it becomes indistinguishable from a
+// working layer. Throwing is detected; returning something other than the caller's generic
+// fallback is detected; silently returning the generic fallback is MASKED.
+function classifyHintFailureHandling(outcome, generic) {
+  if (!outcome) return { detected: false, mode: 'no_outcome' };
+  if (outcome.threw) return { detected: true, mode: 'threw' };
+  if (outcome.value === generic) return { detected: false, mode: 'silent_generic_fallback' };
+  if (typeof outcome.value === 'string' && outcome.value.trim()) return { detected: true, mode: 'distinct_value' };
+  return { detected: false, mode: 'no_output' };
+}
+
+// One legacy condition per family, each of which classifies to that family. The BASELINE
+// assertion proves the condition really reaches the family hint before the mutation, so a
+// red below can never be the probe missing its target.
+const THROW_PROBE_CONDITIONS = {
+  kernel_write_failed: 'freeze_failed',
+  kernel_cas_lost: 'replan_parent_plan_changed',
+  kernel_integrity_broken: 'plan_integrity_failed',
+  kernel_lock_held: 'scheduler_lock_stale',
+  kernel_evidence_missing: 'evidence_absent',
+  sink_verdict: 'gate_unsatisfied',
+  consent_required: 'halt_pending',
+};
+const MASK_GENERIC = 'ZZZ-CALLER-GENERIC-FALLBACK';
+{
+  const loaded = loadUnfrozenKernel();
+  assert(loaded.ok, 'MASK PROBE: the sweep must be able to compile an UNFROZEN copy of the kernel in order to '
+    + 'install a throwing hint — without it the swallow is untestable. ' + loaded.error);
+  if (loaded.ok) {
+    const k = loaded.kernel;
+    assert(k.KERNEL_REFUSAL_REGISTRY && !Object.isFrozen(k.KERNEL_REFUSAL_REGISTRY),
+      'MASK PROBE: the compiled copy must be MUTABLE, else the mutation is never installed and every assertion below reads vacuously green');
+    for (const family of KERNEL_REFUSAL_VOCABULARY) {
+      const cond = THROW_PROBE_CONDITIONS[family];
+      const row = k.KERNEL_REFUSAL_REGISTRY[family];
+      if (typeof cond !== 'string' || !row) {
+        assert(false, 'MASK PROBE[' + family + ']: every enumerated family needs a legacy condition that classifies to it');
+        continue;
+      }
+      const original = row.hint;
+      const base = callComposeHint(k, cond, MASK_GENERIC);
+      assert(!base.threw && typeof base.value === 'string' && base.value !== MASK_GENERIC,
+        'MASK PROBE[' + family + ']: the probe condition "' + cond + '" must reach THIS family hint before any mutation '
+          + '— otherwise the two assertions below are vacuous');
+
+      let installed = false;
+      try {
+        row.hint = () => { throw new ReferenceError('composeRefusalHint is not defined'); };
+        installed = row.hint !== original;
+      } catch (_) { installed = false; }
+      const thrown = installed ? callComposeHint(k, cond, MASK_GENERIC) : null;
+      try { row.hint = () => ''; } catch (_) { /* reported through `installed` */ }
+      const unrenderable = installed ? callComposeHint(k, cond, MASK_GENERIC) : null;
+      try { row.hint = original; } catch (_) { /* the copy is discarded either way */ }
+
+      const verdict = classifyHintFailureHandling(thrown, MASK_GENERIC);
+      assert(installed && verdict.detected,
+        'MASK[' + family + ']: a family hint that THROWS must be a DETECTABLE condition, not a silent downgrade — '
+          + 'composeOperatorHint returned ' + JSON.stringify(thrown && thrown.value) + ' (mode: ' + verdict.mode + '). '
+          + 'This is the exact hole that let an entire dead hint layer ship green');
+      assert(installed && !(thrown && unrenderable && thrown.threw === false && unrenderable.threw === false
+        && thrown.value === unrenderable.value),
+        'MASK[' + family + ']: a hint that THROWS (a programming error) and a hint that returns nothing renderable '
+          + '(a payload it cannot render) must not be handled identically — a catch that cannot tell them apart '
+          + 'reports neither');
+    }
+  }
+}
+
+// ===========================================================================
+// (3C) PIN 2 — NO FABRICATED FIELDS.
+//
+// A discriminator that does not carry the family's typical fields must render NOTHING for
+// them. Measured defect: `kernel_lock_held` with `kind:'project_claim'` rendered "held by a
+// LIVE holder (unknown subcommand, pid ? on unknown host, since unknown time)" — four
+// placeholders where a truthful template said something true. Placeholders are worse than
+// silence: they read as measurements.
+// ===========================================================================
+
+const FABRICATED_TOKENS = Object.freeze([
+  { label: '<unknown>', re: /<unknown>/i },
+  { label: 'unknown', re: /\bunknown\b/i },
+  { label: 'undefined', re: /\bundefined\b/i },
+  { label: 'null', re: /\bnull\b/i },
+  { label: 'n/a', re: /\bn\/a\b/i },
+  { label: ' ? ', re: / \? / },
+  { label: 'NaN', re: /\bNaN\b/ },
+]);
+
+// checkNoFabricatedFields(text) — PURE.
+function checkNoFabricatedFields(text) {
+  if (typeof text !== 'string') return ['the text did not render'];
+  const errors = [];
+  for (const t of FABRICATED_TOKENS) {
+    if (t.re.test(text)) errors.push('FABRICATED "' + t.label + '" — a field the payload never carried was rendered as a placeholder');
+  }
+  return errors;
+}
+
+// checkFieldRendered(text, probe) — PURE, the POSITIVE half. The negative pin alone is
+// satisfied by rendering nothing at all, which is a different way to be useless.
+function checkFieldRendered(text, probe) {
+  if (typeof text !== 'string') return ['the text did not render'];
+  if (typeof probe !== 'string' || !probe) return ['no probe value supplied — the positive check went vacuous'];
+  if (text.indexOf(probe) < 0) {
+    return ['DROPPED FIELD — the payload CARRIES "' + probe + '" and the rendered text never mentions it'];
+  }
+  return [];
+}
+
+for (const cell of CELLS) {
+  const row = KERNEL_REFUSAL_REGISTRY[cell.code];
+  const probe = probeFamilyHint(row, cell.minimal);
+  const errors = probe.ok ? checkNoFabricatedFields(probe.value) : ['the hint did not render — ' + probe.error];
+  assert(errors.length === 0,
+    'MINIMAL ' + cell.cell + ': rendering the DISCRIMINATOR ALONE must invent nothing — ' + errors.join(' | ')
+      + ' :: rendered ' + JSON.stringify(probe.value));
+}
+for (const cell of CELLS) {
+  const row = KERNEL_REFUSAL_REGISTRY[cell.code];
+  const probe = probeFamilyHint(row, cell.rich);
+  const errors = probe.ok ? checkFieldRendered(probe.value, cell.probe) : ['the hint did not render — ' + probe.error];
+  assert(errors.length === 0,
+    'CARRIED ' + cell.cell + ': ' + errors.join(' | ') + ' :: rendered ' + JSON.stringify(probe.value));
+}
+
+// ===========================================================================
+// (3D) PIN 3 — THE HINT CANNOT CONTRADICT ITS OWN ROUTE.
+//
+// Route and hint are resolved from THE SAME PAYLOAD, and the hint's exit sentence must be
+// exactly `routeProse(route)`. This is the structural reason the migration is worth doing:
+// a hint whose prose is written by hand can drift from the verb the machine resolved, and
+// nothing notices. Generated prose cannot drift from its own input.
+// ===========================================================================
+
+// checkHintRouteAgreement(hint, route, prose) — PURE.
+function checkHintRouteAgreement(hint, route, prose) {
+  if (typeof hint !== 'string' || !hint.trim()) return ['the hint did not render'];
+  // A deliberate null route (the `foreign_archive` silence) demands no exit sentence; that
+  // cell's null-ness is pinned by the Tier-A walk above.
+  if (route === null || route === undefined) return [];
+  if (typeof prose !== 'string' || !prose.trim()) {
+    return ['routeProse() rendered NOTHING for a live route — the exit sentence cannot be checked'];
+  }
+  const errors = [];
+  if (hint.length < prose.length || hint.slice(hint.length - prose.length) !== prose) {
+    errors.push('EXIT SENTENCE — the hint does not END with routeProse(route). expected tail '
+      + JSON.stringify(prose) + ', got tail ' + JSON.stringify(hint.slice(-Math.max(prose.length, 48))));
+  }
+  if (route.script && hint.indexOf(route.verb) < 0) {
+    errors.push('VERB CONTRADICTION — the hint never names "' + route.verb + '", the verb its own route points at');
+  }
+  return errors;
+}
+
+// checkRouteProse(prose, route) — PURE. The prose is byte-copied into every edition, so it
+// names a SCRIPT ID and a bare verb, never an edition filename.
+function checkRouteProse(prose, route) {
+  if (route === null || route === undefined) {
+    return prose === '' ? []
+      : ['routeProse() must be TOTAL and render the EMPTY STRING for an absent route — got ' + JSON.stringify(prose)];
+  }
+  if (typeof prose !== 'string' || !prose.trim()) return ['routeProse() rendered nothing for a live route'];
+  const errors = [];
+  if (route.script) {
+    if (prose.indexOf(route.verb) < 0) errors.push('the prose never names the verb "' + route.verb + '"');
+    if (prose.indexOf(route.script) < 0) errors.push('the prose never names the script id "' + route.script + '"');
+  }
+  if (/kaola-(workflow|gitlab|gitea)-/.test(prose)) {
+    errors.push('the prose names an EDITION script FILENAME — this text is byte-copied into every edition, so it would be wrong in three of four');
+  }
+  return errors.concat(checkNoFabricatedFields(prose));
+}
+
+// The hint is the FAMILY hint, so the route it must agree with is the FAMILY route resolved
+// from the same payload — `row.route(payload)`, which is what `resolveRoute` is. The
+// per-finding routes inside the composite are a different resolver with no hint of their
+// own; the Tier-A walk above is what proves their shape and their deliberate nulls.
+function cellRoute(cell) { return resolveRoute(cell.code, cell.payload); }
+function safeCall(fn, arg) {
+  try { return { ok: true, value: fn(arg), error: null }; }
+  catch (e) { return { ok: false, value: null, error: ((e && e.name) || 'Error') + ': ' + ((e && e.message) || String(e)) }; }
+}
+
+if (routeProse) {
+  for (const cell of CELLS) {
+    const row = KERNEL_REFUSAL_REGISTRY[cell.code];
+    const route = cellRoute(cell);
+    const hint = probeFamilyHint(row, cell.payload);
+    const prose = safeCall(routeProse, route);
+    const errors = !hint.ok ? ['the hint did not render — ' + hint.error]
+      : !prose.ok ? ['routeProse() THREW — ' + prose.error]
+        : checkHintRouteAgreement(hint.value, route, prose.value);
+    assert(errors.length === 0, 'ROUTE AGREEMENT ' + cell.cell + ': ' + errors.join(' | '));
+  }
+  for (const cell of CELLS) {
+    const route = cellRoute(cell);
+    const prose = safeCall(routeProse, route);
+    const errors = prose.ok ? checkRouteProse(prose.value, route) : ['routeProse() THREW — ' + prose.error];
+    assert(errors.length === 0, 'ROUTE PROSE ' + cell.cell + ': ' + errors.join(' | ')
+      + ' :: rendered ' + JSON.stringify(prose.value));
+  }
+  // Total and deterministic: the prose is generated, so the same route must generate the
+  // same sentence, and an absent route must not be an exception path.
+  for (const probe of [null, undefined, 'not-a-route', 42, {}]) {
+    assert(safeCall(routeProse, probe).ok,
+      'ROUTE PROSE: routeProse() must be TOTAL — it threw on ' + JSON.stringify(probe === undefined ? 'undefined' : probe));
+  }
+  {
+    const r = { verb: 'orient', script: 'adaptive-node', args: '--project <P> --json' };
+    assert(safeCall(routeProse, r).value === safeCall(routeProse, r).value,
+      'ROUTE PROSE: routeProse() must be a pure function of its route — two calls disagreed');
+  }
+}
+
+// ===========================================================================
+// (3E) PIN 4 — CELL CLOSURE, BOTH DIRECTIONS.
+//
+// `missing` = a live cell with no WHY clause. `stale` = a WHY key that is not a live cell.
+// A closure check that catches only one direction lets the map rot silently: one direction
+// alone lets a renamed discriminator leave its old clause behind, reading green forever
+// while the live cell falls back to nothing.
+//
+// The `${code}/*` fallback key is LEGAL (it is what refusalCellKey emits for a discriminator
+// the family does not declare) but it does NOT satisfy a live cell — otherwise seven
+// wildcards would close the whole map and the cell-keyed slot would be a slot in name only.
+// ===========================================================================
+
+function deriveLiveCellKeys() {
+  const keys = [];
+  for (const code of KERNEL_REFUSAL_VOCABULARY) {
+    for (const value of REFUSAL_PAYLOAD_SCHEMAS[code].values) keys.push(code + '/' + value);
+  }
+  return keys;
+}
+const LIVE_CELL_KEYS = deriveLiveCellKeys();
+const WILDCARD_KEYS = KERNEL_REFUSAL_VOCABULARY.map(c => c + '/*');
+
+assert(LIVE_CELL_KEYS.length >= 40 && LIVE_CELL_KEYS.length === new Set(LIVE_CELL_KEYS).size,
+  'CLOSURE: the live-cell key set must be derived non-vacuously and be duplicate-free — got ' + LIVE_CELL_KEYS.length);
+
+// computeClosure(whyKeys, liveKeys, wildcardKeys) — PURE, the sweep's own independent
+// derivation. It exists so that `assertCellClosure()` is checked against a second opinion
+// rather than trusted: a production closure that hardcodes `{ ok: true }` disagrees here.
+function computeClosure(whyKeys, liveKeys, wildcardKeys) {
+  const have = new Set(whyKeys || []);
+  const live = new Set(liveKeys || []);
+  const wild = new Set(wildcardKeys || []);
+  const missing = [], stale = [];
+  for (const k of live) if (!have.has(k)) missing.push(k);
+  for (const k of have) if (!live.has(k) && !wild.has(k)) stale.push(k);
+  return { ok: missing.length === 0 && stale.length === 0, missing: missing.sort(), stale: stale.sort() };
+}
+
+// checkCellKey(actual, expected) — PURE.
+function checkCellKey(actual, expected) {
+  if (typeof actual !== 'string' || !actual) return ['refusalCellKey() returned no key'];
+  if (actual !== expected) return ['CELL KEY — expected "' + expected + '", got "' + actual + '"'];
+  return [];
+}
+
+// renderWhyClause(entry, payload) — PURE. The clause may be a static string or a function of
+// the payload; either way the LOAD-BEARING property is the same, so the pin does not force
+// the shape.
+function renderWhyClause(entry, payload) {
+  if (typeof entry === 'string') {
+    return entry.trim() ? { ok: true, value: entry, error: null } : { ok: false, value: entry, error: 'the WHY clause is an empty string' };
+  }
+  if (typeof entry === 'function') {
+    let v;
+    try { v = entry(payload); }
+    catch (e) { return { ok: false, value: null, error: 'the WHY clause THREW ' + ((e && e.name) || 'Error') + ': ' + ((e && e.message) || String(e)) }; }
+    if (typeof v !== 'string' || !v.trim()) return { ok: false, value: v, error: 'the WHY clause rendered nothing' };
+    return { ok: true, value: v, error: null };
+  }
+  return { ok: false, value: entry, error: 'the WHY clause is neither a string nor a function of the payload' };
+}
+
+if (refusalCellKey) {
+  for (const cell of CELLS) {
+    const errors = [];
+    for (const shape of [['payload', cell.payload], ['minimal', cell.minimal], ['rich', cell.rich]]) {
+      const got = safeCall(p => refusalCellKey(cell.code, p), shape[1]);
+      if (!got.ok) { errors.push(shape[0] + ' — refusalCellKey() THREW ' + got.error); continue; }
+      const e = checkCellKey(got.value, cell.code + '/' + cell.disc);
+      if (e.length) errors.push(shape[0] + ' — ' + e.join('; '));
+    }
+    assert(errors.length === 0, 'CELL KEY ' + cell.cell + ': every payload shape of one cell must key to the SAME '
+      + '`${code}/${discriminatorValue}` — ' + errors.join(' | '));
+  }
+  // The fallback, both ways in: an absent discriminator and an UNDECLARED discriminator value
+  // both land on `${code}/*`. A code outside the enumerated vocabulary has no cell at all.
+  assert(refusalCellKey('kernel_lock_held', {}) === 'kernel_lock_held/*',
+    'CELL KEY: an ABSENT discriminator must fall back to the `${code}/*` key, not to a guessed value');
+  assert(refusalCellKey('kernel_lock_held', { kind: 'zzz_not_a_kind' }) === 'kernel_lock_held/*',
+    'CELL KEY: an UNDECLARED discriminator value must fall back to the `${code}/*` key — inventing a cell for it '
+      + 'is how a stale key becomes invisible to the closure check');
+  assert(refusalCellKey('zzz_not_a_family', { kind: 'scheduler' }) === null,
+    'CELL KEY: a code outside KERNEL_REFUSAL_VOCABULARY has no cell — it must return null, never a fabricated key');
+  assert(safeCall(p => refusalCellKey('kernel_lock_held', p), null).ok
+    && safeCall(p => refusalCellKey('kernel_lock_held', p), 'nope').ok,
+    'CELL KEY: refusalCellKey() must be TOTAL — a non-object payload must not throw');
+}
+
+if (assertCellClosure && isPlainObj(REFUSAL_WHY)) {
+  const got = safeCall(() => assertCellClosure());
+  assert(got.ok, 'CLOSURE: assertCellClosure() must be TOTAL — it threw: ' + got.error);
+  const res = got.ok ? got.value : null;
+  assert(isPlainObj(res) && typeof res.ok === 'boolean' && Array.isArray(res.missing) && Array.isArray(res.stale),
+    'CLOSURE: assertCellClosure() must return { ok, missing[], stale[] } — got ' + JSON.stringify(res));
+  if (isPlainObj(res) && Array.isArray(res.missing) && Array.isArray(res.stale)) {
+    assert(res.ok === true && res.missing.length === 0 && res.stale.length === 0,
+      'CLOSURE: the WHY map must be CLOSED over the live cell set — missing ' + JSON.stringify(res.missing)
+        + ', stale ' + JSON.stringify(res.stale));
+    // The second opinion. A production closure that hardcodes ok:true disagrees with this.
+    const mine = computeClosure(Object.keys(REFUSAL_WHY), LIVE_CELL_KEYS, WILDCARD_KEYS);
+    assert(JSON.stringify(res.missing.slice().sort()) === JSON.stringify(mine.missing)
+      && JSON.stringify(res.stale.slice().sort()) === JSON.stringify(mine.stale),
+      'CLOSURE: assertCellClosure() must AGREE with the sweep\'s own derivation from the payload schemas — '
+        + 'production said ' + JSON.stringify({ missing: res.missing, stale: res.stale })
+        + ', the sweep derived ' + JSON.stringify({ missing: mine.missing, stale: mine.stale }));
+  }
+  // Every key refusalCellKey can emit must resolve, or the fallback path renders no WHY at all.
+  for (const wildcard of WILDCARD_KEYS) {
+    assert(Object.prototype.hasOwnProperty.call(REFUSAL_WHY, wildcard),
+      'CLOSURE: the `' + wildcard + '` fallback clause must exist — refusalCellKey() emits that key for any '
+        + 'discriminator the family does not declare, and a key with no clause is a hint with no WHY');
+  }
+}
+
+// --- 4B: closure mutation-proved on the PRODUCTION function, both directions -----------
+// Same unfrozen-copy technique as the mask probe: delete a clause and the live cell must
+// surface in `missing`; add a clause for an undeclared discriminator value and it must
+// surface in `stale`.
+if (assertCellClosure) {
+  const loaded = loadUnfrozenKernel();
+  assert(loaded.ok, 'CLOSURE MUTATION: the sweep must be able to compile an unfrozen kernel copy — ' + loaded.error);
+  if (loaded.ok && loaded.kernel.REFUSAL_WHY && typeof loaded.kernel.assertCellClosure === 'function') {
+    const k = loaded.kernel;
+    const victim = LIVE_CELL_KEYS[0];
+    const intruder = 'kernel_lock_held/zzz_not_a_declared_kind';
+
+    let deleted = false;
+    try { delete k.REFUSAL_WHY[victim]; deleted = !Object.prototype.hasOwnProperty.call(k.REFUSAL_WHY, victim); } catch (_) { deleted = false; }
+    const afterDelete = safeCall(() => k.assertCellClosure());
+    assert(deleted && afterDelete.ok && afterDelete.value && afterDelete.value.ok === false
+      && (afterDelete.value.missing || []).indexOf(victim) >= 0,
+      'CLOSURE MUTATION (missing): deleting the "' + victim + '" clause must surface it in `missing` — got '
+        + JSON.stringify(afterDelete.value) + (deleted ? '' : ' [the deletion did not take]'));
+
+    let added = false;
+    try { k.REFUSAL_WHY[victim] = 'restored for the second direction'; k.REFUSAL_WHY[intruder] = 'a clause for a value no schema declares'; added = k.REFUSAL_WHY[intruder] != null; } catch (_) { added = false; }
+    const afterAdd = safeCall(() => k.assertCellClosure());
+    assert(added && afterAdd.ok && afterAdd.value && afterAdd.value.ok === false
+      && (afterAdd.value.stale || []).indexOf(intruder) >= 0,
+      'CLOSURE MUTATION (stale): a clause keyed to an UNDECLARED discriminator value must surface in `stale` — got '
+        + JSON.stringify(afterAdd.value) + (added ? '' : ' [the insertion did not take]'));
+
+    // …and the wildcard must NOT be reported stale, or the fallback becomes unusable.
+    let wild = false;
+    try { delete k.REFUSAL_WHY[intruder]; k.REFUSAL_WHY['kernel_lock_held/*'] = 'the declared fallback'; wild = true; } catch (_) { wild = false; }
+    const afterWild = safeCall(() => k.assertCellClosure());
+    assert(wild && afterWild.ok && afterWild.value
+      && (afterWild.value.stale || []).indexOf('kernel_lock_held/*') < 0,
+      'CLOSURE MUTATION (wildcard): the `${code}/*` fallback key is LEGAL and must never be reported stale — got '
+        + JSON.stringify(afterWild.value));
+  }
+}
+
+// --- 4C: the WHY clause and the FACT clause are actually IN the rendered hint ----------
+// A cell-keyed map nothing reads is a map, not a slot.
+if (refusalCellKey && isPlainObj(REFUSAL_WHY)) {
+  for (const cell of CELLS) {
+    const row = KERNEL_REFUSAL_REGISTRY[cell.code];
+    const hint = probeFamilyHint(row, cell.payload);
+    const key = safeCall(p => refusalCellKey(cell.code, p), cell.payload);
+    const entry = key.ok && key.value ? REFUSAL_WHY[key.value] : undefined;
+    const clause = renderWhyClause(entry, cell.payload);
+    const errors = [];
+    if (!hint.ok) errors.push('the hint did not render — ' + hint.error);
+    if (!key.ok) errors.push('refusalCellKey() THREW — ' + key.error);
+    else if (entry === undefined) errors.push('no WHY clause is registered at "' + key.value + '"');
+    else if (!clause.ok) errors.push(clause.error);
+    else if (hint.ok && hint.value.indexOf(clause.value) < 0) {
+      errors.push('the hint does not CONTAIN its own cell\'s WHY clause ' + JSON.stringify(clause.value)
+        + ' — the slot is keyed but unread');
+    }
+    assert(errors.length === 0, 'WHY CLAUSE ' + cell.cell + ': ' + errors.join(' | '));
+  }
+}
+
+if (refusalFact) {
+  for (const cell of CELLS) {
+    const row = KERNEL_REFUSAL_REGISTRY[cell.code];
+    const errors = [];
+    const full = safeCall(p => refusalFact(cell.code, p), cell.payload);
+    const minimal = safeCall(p => refusalFact(cell.code, p), cell.minimal);
+    if (!full.ok) errors.push('refusalFact() THREW on the full payload — ' + full.error);
+    else if (typeof full.value !== 'string' || !full.value.trim()) errors.push('refusalFact() rendered nothing for a live cell');
+    if (!minimal.ok) errors.push('refusalFact() THREW on the minimal payload — ' + minimal.error);
+    else errors.push.apply(errors, checkNoFabricatedFields(minimal.value).map(e => 'minimal payload: ' + e));
+    const hint = probeFamilyHint(row, cell.payload);
+    if (full.ok && typeof full.value === 'string' && full.value.trim() && hint.ok
+      && hint.value.indexOf(full.value) < 0) {
+      errors.push('the hint does not CONTAIN the fact ' + JSON.stringify(full.value)
+        + ' — the operator would be reading two different accounts of the same refusal');
+    }
+    if (full.ok && typeof full.value === 'string' && /kaola-(workflow|gitlab|gitea)-/.test(full.value)) {
+      errors.push('the fact names an EDITION script filename — this text is byte-copied into every edition');
+    }
+    assert(errors.length === 0, 'FACT ' + cell.cell + ': ' + errors.join(' | '));
+  }
+  assert(refusalFact('zzz_not_a_family', { kind: 'scheduler' }) === null,
+    'FACT: a code outside KERNEL_REFUSAL_VOCABULARY has no fact — it must return null, never a fabricated sentence');
+  assert(safeCall(p => refusalFact('kernel_lock_held', p), null).ok,
+    'FACT: refusalFact() must be TOTAL — a non-object payload must not throw');
 }
 
 // ===========================================================================
@@ -746,6 +1310,202 @@ for (const cond of emitted) {
   // The emitted-condition scan must see all seven shapes, not just `reason:`.
   const shapeProbe = scanEmittedConditions.call(null, []);
   assert(shapeProbe.size === 0, 'MUTATION: the census scan over an empty file set must be empty');
+
+  // ---------------------------------------------------------------------
+  // THE WHY-SLOT CHECKERS. These run UNCONDITIONALLY — including while the contract is
+  // still absent and the blocks that use them are gated off — because a gated block proves
+  // nothing about whether its guard has teeth. This is the half of the suite that would
+  // have caught the dead hint layer.
+  // ---------------------------------------------------------------------
+
+  // PIN 1 — probeFamilyHint. The FIRST case is the exact failure that shipped green: seven
+  // hint bodies deleted, each replaced by a call to a helper nobody wrote.
+  {
+    const thrower = { hint: () => { throw new ReferenceError('composeRefusalHint is not defined'); } };
+    const p = probeFamilyHint(thrower, { kind: 'scheduler' });
+    assert(!p.ok && p.threw && /ReferenceError/.test(p.error),
+      'MUTATION: probeFamilyHint must REJECT (and NAME) a hint that throws ReferenceError — this is the dead-layer class');
+  }
+  assert(!probeFamilyHint({ hint: () => '' }, {}).ok,
+    'MUTATION: probeFamilyHint must REJECT a hint that renders an empty string');
+  assert(!probeFamilyHint({ hint: () => '   ' }, {}).ok,
+    'MUTATION: probeFamilyHint must REJECT a hint that renders only whitespace');
+  assert(!probeFamilyHint({ hint: () => 42 }, {}).ok,
+    'MUTATION: probeFamilyHint must REJECT a hint that returns a non-string');
+  assert(!probeFamilyHint({ hint: () => null }, {}).ok,
+    'MUTATION: probeFamilyHint must REJECT a hint that returns null');
+  assert(!probeFamilyHint({}, {}).ok,
+    'MUTATION: probeFamilyHint must REJECT a registry row with no hint() function');
+  assert(!probeFamilyHint(null, {}).ok,
+    'MUTATION: probeFamilyHint must REJECT an absent registry row');
+  {
+    let n = 0;
+    const impure = probeFamilyHint({ hint: () => 'a hint that changes every call #' + (n++) }, {});
+    assert(!impure.ok && /pure function/.test(impure.error),
+      'MUTATION: probeFamilyHint must REJECT a hint that is not a pure function of its payload');
+  }
+  assert(probeFamilyHint({ hint: () => 'A durable plan write did not take. Re-run the retry verb.' }, {}).ok,
+    'MUTATION: probeFamilyHint must ACCEPT a live hint (a guard that rejects everything proves nothing)');
+
+  // PIN 1B — classifyHintFailureHandling. The swallow is masked ONLY when the caller's own
+  // generic fallback comes back with nothing else having happened.
+  assert(classifyHintFailureHandling({ threw: false, value: 'G' }, 'G').detected === false,
+    'MUTATION: classifyHintFailureHandling must report a silent downgrade to the generic fallback as MASKED');
+  assert(classifyHintFailureHandling({ threw: false, value: 'G' }, 'G').mode === 'silent_generic_fallback',
+    'MUTATION: the masked case must be NAMED, so the failure message points at the swallow');
+  assert(classifyHintFailureHandling({ threw: true, error: 'boom' }, 'G').detected === true,
+    'MUTATION: classifyHintFailureHandling must report a PROPAGATED throw as detected');
+  assert(classifyHintFailureHandling({ threw: false, value: 'hint render failed: ReferenceError' }, 'G').detected === true,
+    'MUTATION: a value that is NOT the caller\'s generic fallback is a detectable condition');
+  assert(classifyHintFailureHandling({ threw: false, value: '' }, 'G').detected === false,
+    'MUTATION: an empty return is not a detectable condition either');
+  assert(classifyHintFailureHandling(null, 'G').detected === false,
+    'MUTATION: classifyHintFailureHandling must REJECT an absent outcome rather than pass it');
+
+  // The unfrozen-copy machinery is itself load-bearing: if it silently stopped mutating, the
+  // mask probe and the closure mutation would both read vacuously green.
+  {
+    const probe = loadUnfrozenKernel();
+    assert(probe.ok && probe.kernel && Array.isArray(probe.kernel.KERNEL_REFUSAL_VOCABULARY)
+      && probe.kernel.KERNEL_REFUSAL_VOCABULARY.length === KERNEL_REFUSAL_VOCABULARY.length,
+      'MUTATION: the unfrozen kernel copy must compile and expose the same vocabulary as the real module');
+    assert(probe.ok && !Object.isFrozen(probe.kernel.KERNEL_REFUSAL_REGISTRY)
+      && !Object.isFrozen(probe.kernel.KERNEL_REFUSAL_REGISTRY.consent_required),
+      'MUTATION: the copy must be mutable AT BOTH LEVELS (registry and row), else no hint can be swapped');
+    assert(Object.isFrozen(KERNEL_REFUSAL_REGISTRY),
+      'MUTATION: the REAL registry must still be frozen — the copy is what gets mutated, never the module under test');
+    if (probe.ok) {
+      let swapped = false;
+      try { probe.kernel.KERNEL_REFUSAL_REGISTRY.consent_required.hint = () => 'swapped'; swapped = probe.kernel.KERNEL_REFUSAL_REGISTRY.consent_required.hint({}) === 'swapped'; } catch (_) { swapped = false; }
+      assert(swapped, 'MUTATION: installing a replacement hint on the copy must actually take');
+      assert(KERNEL_REFUSAL_REGISTRY.consent_required.hint({ kind: 'halt_fence' }) !== 'swapped',
+        'MUTATION: mutating the copy must NOT leak into the real registry the rest of the sweep reads');
+    }
+  }
+
+  // PIN 2 — checkNoFabricatedFields, one deliberately broken input per banned token.
+  for (const probe of [
+    ['unknown', 'held by a LIVE holder (unknown subcommand)'],
+    ['<unknown>', 'the holder is <unknown> right now'],
+    ['undefined', 'the record is undefined at this seam'],
+    ['null', 'the transition demanded null and found null'],
+    ['n/a', 'held since n/a on this host'],
+    [' ? ', 'pid ? on that host'],
+    ['NaN', 'held for NaN ms'],
+  ]) {
+    assert(checkNoFabricatedFields(probe[1]).some(e => e.indexOf(probe[0]) >= 0),
+      'MUTATION: checkNoFabricatedFields must REJECT the fabricated placeholder "' + probe[0] + '"');
+  }
+  assert(checkNoFabricatedFields('Another owner holds the project_claim resource; wait for it or resume the run that owns it.').length === 0,
+    'MUTATION: checkNoFabricatedFields must ACCEPT a sentence that renders only what the payload carried');
+  assert(checkNoFabricatedFields(undefined).length > 0,
+    'MUTATION: checkNoFabricatedFields must REJECT a non-string rather than pass vacuously');
+
+  // PIN 2 — checkFieldRendered, the positive half (and its own vacuity guard).
+  assert(checkFieldRendered('the record is plan', 'zzz-probe-target').some(e => /DROPPED FIELD/.test(e)),
+    'MUTATION: checkFieldRendered must REJECT a rendering that drops a field the payload carried');
+  assert(checkFieldRendered('the target is zzz-probe-target', 'zzz-probe-target').length === 0,
+    'MUTATION: checkFieldRendered must ACCEPT a rendering that carries the field');
+  assert(checkFieldRendered('anything at all', '').length > 0,
+    'MUTATION: checkFieldRendered must REJECT an EMPTY probe — a positive check with no expected value is vacuous');
+  assert(checkFieldRendered(null, 'x').length > 0,
+    'MUTATION: checkFieldRendered must REJECT a non-string rendering');
+
+  // PIN 3 — checkHintRouteAgreement. The headline case: a hint whose exit sentence is
+  // well-formed but names a DIFFERENT verb than the route the machine resolved.
+  {
+    const prose = 'Run: adaptive-node orient --project <P> --json';
+    const route = { verb: 'reopen-node', script: 'adaptive-node', args: '--project <P> --json' };
+    assert(checkHintRouteAgreement('The ledger row moved under this transition. ' + prose, route, prose)
+      .some(e => /VERB CONTRADICTION/.test(e)),
+      'MUTATION: checkHintRouteAgreement must REJECT a hint naming a different verb than its own route');
+    assert(checkHintRouteAgreement(prose + ' — and then some trailing prose.',
+      { verb: 'orient', script: 'adaptive-node', args: '--project <P> --json' }, prose)
+      .some(e => /EXIT SENTENCE/.test(e)),
+      'MUTATION: checkHintRouteAgreement must REJECT a hint that does not END with routeProse(route)');
+    assert(checkHintRouteAgreement('The ledger row moved under this transition. ' + prose,
+      { verb: 'orient', script: 'adaptive-node', args: '--project <P> --json' }, prose).length === 0,
+      'MUTATION: checkHintRouteAgreement must ACCEPT a hint whose exit sentence IS its route\'s prose');
+    assert(checkHintRouteAgreement('anything', { verb: 'orient', script: 'adaptive-node', args: '' }, '').length > 0,
+      'MUTATION: checkHintRouteAgreement must REJECT empty prose for a LIVE route rather than skip the cell');
+    assert(checkHintRouteAgreement('', { verb: 'orient', script: 'adaptive-node', args: '' }, 'x').length > 0,
+      'MUTATION: checkHintRouteAgreement must REJECT an absent hint');
+    assert(checkHintRouteAgreement('a hint with a deliberately silent route', null, '').length === 0,
+      'MUTATION: checkHintRouteAgreement must ACCEPT a deliberate null route (the foreign_archive silence)');
+  }
+
+  // PIN 3 — checkRouteProse.
+  {
+    const route = { verb: 'orient', script: 'adaptive-node', args: '--project <P> --json' };
+    assert(checkRouteProse('Run: adaptive-node --project <P> --json', route).some(e => /never names the verb/.test(e)),
+      'MUTATION: checkRouteProse must REJECT prose that never names its route\'s verb');
+    assert(checkRouteProse('Run: orient --project <P> --json', route).some(e => /never names the script id/.test(e)),
+      'MUTATION: checkRouteProse must REJECT prose that never names its route\'s script id');
+    assert(checkRouteProse('Run: node scripts/kaola-workflow-adaptive-node.js orient', route).some(e => /EDITION script FILENAME/.test(e)),
+      'MUTATION: checkRouteProse must REJECT an edition FILENAME — this text is byte-copied into every edition');
+    assert(checkRouteProse('Run: adaptive-node orient --project unknown', route).some(e => /FABRICATED/.test(e)),
+      'MUTATION: checkRouteProse must REJECT a fabricated placeholder inside the generated prose');
+    assert(checkRouteProse('Run: adaptive-node orient --project <P> --json', route).length === 0,
+      'MUTATION: checkRouteProse must ACCEPT well-formed forge-neutral prose');
+    assert(checkRouteProse('something', null).length > 0,
+      'MUTATION: checkRouteProse must REJECT non-empty prose for an ABSENT route');
+    assert(checkRouteProse('', null).length === 0,
+      'MUTATION: checkRouteProse must ACCEPT the empty string for an absent route (total, not an exception path)');
+    assert(checkRouteProse('', route).length > 0,
+      'MUTATION: checkRouteProse must REJECT empty prose for a live route');
+  }
+
+  // PIN 4 — computeClosure, BOTH directions plus the wildcard carve-out.
+  {
+    const live = ['kernel_lock_held/scheduler', 'kernel_lock_held/replan_fence'];
+    const wild = ['kernel_lock_held/*'];
+    assert(computeClosure(['kernel_lock_held/scheduler'], live, wild).missing
+      .indexOf('kernel_lock_held/replan_fence') >= 0,
+      'MUTATION: computeClosure must REJECT a live cell with NO why clause (the `missing` direction)');
+    assert(computeClosure(live.concat(['kernel_lock_held/zzz_not_a_kind']), live, wild).stale
+      .indexOf('kernel_lock_held/zzz_not_a_kind') >= 0,
+      'MUTATION: computeClosure must REJECT a WHY key that is not a live cell (the `stale` direction)');
+    assert(computeClosure(live.concat(wild), live, wild).ok,
+      'MUTATION: computeClosure must ACCEPT the legal `${code}/*` fallback key as non-stale');
+    assert(computeClosure(live, live, wild).ok,
+      'MUTATION: computeClosure must ACCEPT an exactly-closed map');
+    assert(!computeClosure([], live, wild).ok,
+      'MUTATION: computeClosure must REJECT an EMPTY map — a slot nobody filled is not closed');
+    // A wildcard must NOT satisfy a live cell, or seven keys would close the whole map.
+    assert(computeClosure(wild, live, wild).missing.length === live.length,
+      'MUTATION: computeClosure must NOT let the `${code}/*` fallback satisfy a live cell — otherwise the '
+        + 'cell-keyed slot is a slot in name only');
+  }
+
+  // PIN 4 — checkCellKey and renderWhyClause.
+  assert(checkCellKey('kernel_lock_held/*', 'kernel_lock_held/scheduler').some(e => /CELL KEY/.test(e)),
+    'MUTATION: checkCellKey must REJECT a key that is not the cell\'s own');
+  assert(checkCellKey(null, 'kernel_lock_held/scheduler').length > 0,
+    'MUTATION: checkCellKey must REJECT an absent key');
+  assert(checkCellKey('kernel_lock_held/scheduler', 'kernel_lock_held/scheduler').length === 0,
+    'MUTATION: checkCellKey must ACCEPT the matching key');
+  assert(!renderWhyClause(undefined, {}).ok,
+    'MUTATION: renderWhyClause must REJECT an absent clause');
+  assert(!renderWhyClause('', {}).ok,
+    'MUTATION: renderWhyClause must REJECT an empty clause');
+  assert(!renderWhyClause(() => { throw new ReferenceError('composeRefusalHint is not defined'); }, {}).ok,
+    'MUTATION: renderWhyClause must REJECT a clause FUNCTION that throws — the same dead-layer class one level down');
+  assert(!renderWhyClause(() => 42, {}).ok,
+    'MUTATION: renderWhyClause must REJECT a clause function that renders a non-string');
+  assert(!renderWhyClause(17, {}).ok,
+    'MUTATION: renderWhyClause must REJECT a clause that is neither a string nor a function');
+  assert(renderWhyClause('because the newer state would be destroyed', {}).ok,
+    'MUTATION: renderWhyClause must ACCEPT a static string clause');
+  assert(renderWhyClause((p) => 'because ' + p.kind + ' is held elsewhere', { kind: 'scheduler' }).value
+    === 'because scheduler is held elsewhere',
+    'MUTATION: renderWhyClause must ACCEPT a clause function and render it against the payload');
+
+  // safeCall is the total-call harness the gated blocks use; a broken harness would report
+  // every production throw as a pass.
+  assert(safeCall(() => { throw new Error('boom'); }).ok === false,
+    'MUTATION: safeCall must REPORT a throw rather than swallow it');
+  assert(safeCall(() => 'fine').value === 'fine',
+    'MUTATION: safeCall must pass a clean return through unchanged');
 }
 
 // ===========================================================================
@@ -764,6 +1524,12 @@ console.log('  classified=' + classified + '  explicitly_out_of_vocabulary=' + e
   + '  ' + Object.keys(perFamily).sort().map(f => f + '=' + perFamily[f]).join(' '));
 console.log('  P2 target: enumerated <= 12 ' + (KERNEL_REFUSAL_VOCABULARY.length <= 12 ? 'OK' : 'FAIL')
   + '   locus 100% L1/L2/A3 OK   retained_legacy -> 0   distinct_condition_values -> 0');
+console.log('  WHY SLOT — live_cells=' + LIVE_CELL_KEYS.length
+  + '  why_clauses=' + (isPlainObj(REFUSAL_WHY) ? Object.keys(REFUSAL_WHY).length : 0)
+  + '  pending_contract=' + (PENDING_CONTRACT.length ? PENDING_CONTRACT.join(',') : 'none')
+  + (PENDING_CONTRACT.length
+    ? '   [the blocks keyed on these symbols cannot run; their checkers are armed by the mutation battery]'
+    : ''));
 
 if (failed) {
   console.error('\nRefusal route sweep FAILED: ' + failed + ' failure(s), ' + passed + ' passed.');
