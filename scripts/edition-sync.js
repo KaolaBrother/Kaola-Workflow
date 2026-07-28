@@ -19,6 +19,10 @@
 //             aggregator port from canonical and assert byte-equality with the
 //             committed file. A hand-edit to a generated port (the #347 class) or a
 //             canonical edit not propagated turns the chain RED. Exit 1 on mismatch.
+//             ALSO asserts the four COMMITTED Oracle Kernel blobs are one object (the
+//             cross-edition drift anchor) — the gitlab/gitea chains run no other drift
+//             guard, and that check must read git rather than the working tree because
+//             the chains' own --materialize-kernel preamble repairs the working copy first.
 //
 // SCOPE (locked 2026-06-10, "incremental generation"): only the five forge
 // AGGREGATOR ports are generated — they carry NO forge vocabulary beyond script
@@ -37,7 +41,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS } = require('./validate-script-sync');
+const { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, checkCommittedKernelParity } = require('./validate-script-sync');
 
 const REPO = path.resolve(__dirname, '..');
 const FORGES = ['gitlab', 'gitea'];
@@ -60,11 +64,16 @@ const codexRel = base => 'plugins/kaola-workflow/scripts/' + base;
 const forgeBase = (base, forge) => base.replace(/^kaola-workflow-/, `kaola-${forge}-workflow-`);
 const forgeRel = (base, forge) => `plugins/kaola-workflow-${forge}/scripts/${forgeBase(base, forge)}`;
 
-// Materialized shared kernel(s): a byte-identical-across-all-editions module de-duplicated to ONE
-// committed source in scripts/ and materialized into each forge tree ON DEMAND (install/test-time).
-// This list is DELIBERATELY DECOUPLED from validate-script-sync's BYTE_IDENTICAL_GROUPS: with a
-// single committed copy there is nothing left to police, so that group is retired — and retiring it
-// must NOT silently disable the materializer (step (c) of --write iterates BYTE_IDENTICAL_GROUPS).
+// Materialized shared kernel(s): a byte-identical-across-all-editions module with ONE canonical
+// source in scripts/, GENERATED into each forge tree here and COMMITTED there (the Codex/forge
+// install is `git clone` + marketplace add with no post-clone step, so the sibling copy must exist in
+// the clone). Because the copies are TRACKED, they are also POLICED — by validate-script-sync's
+// 'adaptive-schema kernel copies' byte group and its checkCommittedKernelParity() companion. Read
+// that group's note before changing this: the claim "one committed copy, nothing to police" is what
+// let a real drift pass every guard once, and it stops being true the moment the copies are tracked.
+// This list stays DELIBERATELY DECOUPLED from BYTE_IDENTICAL_GROUPS (step (c) of --write iterates
+// that list) so a change to the POLICING can never silently disable the MATERIALIZER — the two
+// concerns are independent, which is why enrolling the byte group above does not retire this entry.
 // The forge copy keeps the CANONICAL base name (no rename), so its tree path is built directly here,
 // not via forgeRel (which would rename the base). Forge 'codex' = the plugins/kaola-workflow/ tree.
 const MATERIALIZED_SHARED = [
@@ -145,6 +154,14 @@ function syncIfDrift(rootDir, rel, content) {
 // rename-normalized forge aggregator ports.) ---
 function runCheck() {
   const mismatches = [];
+  // The materialized kernel is the other thing only this script's own generator produces, and the
+  // gitlab/gitea chains run NO other drift guard (validate-script-sync is claude/codex-only), so the
+  // committed-parity half of the cross-edition anchor is asserted here too. It reads git, NOT the
+  // working tree, deliberately: this very script's `--materialize-kernel` preamble runs first in every
+  // chain and would have already repaired a drifted working copy, hiding the drifted commit consumers
+  // actually clone. Single-sourced from validate-script-sync so the two callers cannot diverge.
+  const committedKernel = checkCommittedKernelParity(REPO);
+  for (const d of committedKernel.drift) mismatches.push(d);
   for (const base of GENERATED_AGGREGATORS) {
     const canon = readFile(canonRel(base));
     for (const forge of FORGES) {
@@ -169,6 +186,8 @@ function runCheck() {
   }
   console.log('edition-sync: ' + (GENERATED_AGGREGATORS.length * FORGES.length)
     + ' forge aggregator ports in parity with canonical.');
+  console.log('edition-sync: committed kernel parity '
+    + (committedKernel.skipped ? 'SKIPPED (' + committedKernel.skipped + ').' : 'verified at HEAD.'));
 }
 
 function firstDiff(expected, actual) {

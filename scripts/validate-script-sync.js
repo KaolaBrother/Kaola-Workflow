@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const claudeDir = path.join(repoRoot, 'scripts');
@@ -89,6 +90,17 @@ const COMMON_SCRIPTS = [
   // #435: run-gap capture gate. Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-gap-sweep.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-gap-sweep.js',
+];
+
+// The four committed copies of the Oracle Kernel, canonical FIRST. Single-sourced here because two
+// different checks consume it: the working-tree byte group below, and checkCommittedKernelParity()
+// (which reads git's committed blobs). edition-sync's MATERIALIZED_SHARED stays deliberately
+// decoupled from this list — the materializer must keep working even if this policing changes.
+const KERNEL_COPIES = [
+  'scripts/kaola-workflow-adaptive-schema.js',
+  'plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js',
+  'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js',
+  'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -180,12 +192,29 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/hooks/kaola-workflow-subagent-dispatch-log.sh',
     ],
   },
-  // NOTE: the former 'adaptive-schema constant copies' 4-tree byte-identical group is RETIRED.
-  // The kernel (kaola-workflow-adaptive-schema.js) is de-duplicated to ONE committed source in
-  // scripts/; the three forge copies are gitignored, materialized on demand from canonical by
-  // `edition-sync.js --materialize-kernel` (and install.sh). One committed copy = nothing to police
-  // here, so nothing byte-drifts. The materializer is DECOUPLED from this list (see edition-sync's
-  // MATERIALIZED_SHARED) so this retirement cannot silently disable it.
+  {
+    // THE CROSS-EDITION DRIFT ANCHOR. The Oracle Kernel (kaola-workflow-adaptive-schema.js) has ONE
+    // canonical source in scripts/; the three forge copies are GENERATED from it
+    // (`edition-sync.js --materialize-kernel`) and COMMITTED, because the Codex/forge install path
+    // is `git clone` + marketplace add with NO post-clone step — a consumer executes whatever kernel
+    // bytes are committed, resolved as a `__dirname` sibling of the plugin entrypoints.
+    //
+    // RATIONALE INVERSION (this group was RETIRED once, and that is how a real drift survived): the
+    // retirement said "the three forge copies are gitignored ... one committed copy = nothing to
+    // police here". That was true when written and became FALSE the moment the copies were tracked
+    // again — after which appending a line to the gitea copy passed validate-script-sync,
+    // `edition-sync --check` AND validate-workflow-contracts. Tracked copies are policed copies.
+    // Do not retire this group again without first checking `git ls-files` for the forge copies.
+    //
+    // This group is the WORKING-TREE half of the anchor. It is NOT sufficient on its own: every test
+    // chain begins with an `edition-sync.js --materialize-kernel` preamble that silently rewrites a
+    // drifted forge copy from canonical, so by the time this check runs in-chain the working tree has
+    // already been repaired and a drifted COMMIT is invisible here. checkCommittedKernelParity()
+    // below is the half that reads the COMMITTED blobs and therefore cannot be laundered by the
+    // preamble. Both halves are required; neither replaces the other.
+    label: 'adaptive-schema kernel copies (cross-edition drift anchor)',
+    files: KERNEL_COPIES,
+  },
   {
     // issue #266 AC-B: Codex agent-profile freshness preflight. Authored require-free
     // (only fs + path + inline regex) so it qualifies as a true 4-tree byte-identical
@@ -397,6 +426,55 @@ function checkByteIdenticalGroup(group, rootDir) {
   return { missing, drift };
 }
 
+// THE COMMITTED half of the cross-edition drift anchor.
+//
+// Why a second check at all, when BYTE_IDENTICAL_GROUPS already byte-compares the same four files:
+// every chain in package.json starts with `node scripts/edition-sync.js --materialize-kernel`, whose
+// job is to overwrite each forge kernel copy from canonical. That preamble REPAIRS a drifted working
+// copy in place, so a working-tree comparison downstream of it can only ever be green. What it does
+// NOT touch is git — so a kernel copy that drifted in a COMMIT stays drifted, and that is exactly the
+// artifact consumers get: the Codex/forge install path is `git clone` + marketplace add with no
+// post-clone step. The working-tree check catches an uncommitted mistake; this one catches the
+// shipped one, and only this one survives the preamble.
+//
+// Reads committed blob OIDs with a single `git ls-tree HEAD -- <paths>` and asserts all four are the
+// same object. SKIPS (never fails) when there is no git checkout or no HEAD to read — a source
+// tarball or an unborn repo has no commits to police — and the skip is always REPORTED, never silent.
+// Fails closed on everything else, including a kernel copy absent from HEAD (a forge copy that is not
+// committed is a fresh-clone `Cannot find module './kaola-workflow-adaptive-schema'` at every plugin
+// entrypoint, which is the original reason these copies are tracked).
+function checkCommittedKernelParity(rootDir) {
+  const drift = [];
+  let out;
+  try {
+    execFileSync('git', ['-C', rootDir, 'rev-parse', '--verify', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    out = execFileSync('git', ['-C', rootDir, 'ls-tree', 'HEAD', '--', ...KERNEL_COPIES],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) {
+    return { drift, skipped: 'no git checkout or no HEAD commit to read' };
+  }
+  const oidByPath = new Map();
+  for (const line of out.split('\n')) {
+    const m = /^\d+\s+blob\s+([0-9a-f]+)\t(.+)$/.exec(line);
+    if (m) oidByPath.set(m[2], m[1]);
+  }
+  const [canonical, ...copies] = KERNEL_COPIES;
+  const canonicalOid = oidByPath.get(canonical);
+  if (!canonicalOid) {
+    drift.push(`committed kernel parity: ${canonical} is not committed at HEAD — the canonical Oracle Kernel must be tracked`);
+    return { drift, skipped: null };
+  }
+  for (const copy of copies) {
+    const oid = oidByPath.get(copy);
+    if (!oid) {
+      drift.push(`committed kernel parity: ${copy} is NOT COMMITTED at HEAD — a fresh clone's plugin entrypoints cannot resolve their kernel sibling; run \`npm run sync:editions\` and commit the copy`);
+    } else if (oid !== canonicalOid) {
+      drift.push(`committed kernel parity: ${copy} (blob ${oid.slice(0, 12)}) differs from ${canonical} (blob ${canonicalOid.slice(0, 12)}) IN THE COMMIT — consumers clone these bytes; run \`npm run sync:editions\` and commit the regenerated copies`);
+    }
+  }
+  return { drift, skipped: null };
+}
+
 // Normalize a base-named reference body into its forge-renamed form: every
 // `kaola-workflow-<NAME>` token becomes `kaola-<forge>-workflow-<NAME>`. Bounded by a
 // non-name-char lookahead so it never partial-matches a longer token or the
@@ -533,8 +611,17 @@ if (require.main === module) {
     }
   }
 
+  // Cross-edition drift anchor, COMMITTED half: the working-tree byte group above is repaired by the
+  // chains' `edition-sync --materialize-kernel` preamble before it ever runs, so the shipped bytes are
+  // checked here against git. A skip (no checkout / no HEAD) is reported, never silent.
+  const committedKernel = checkCommittedKernelParity(repoRoot);
+  for (const d of committedKernel.drift) drift.push(d);
+
   if (missing.length === 0 && drift.length === 0) {
     console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, 2 hooks.json families (config + hooks dir), and ${FORGE_EXPORT_SUPERSET_FAMILY.length} forge export-superset families in sync.`);
+    console.log(committedKernel.skipped
+      ? `    committed kernel parity: SKIPPED (${committedKernel.skipped})`
+      : `    committed kernel parity: ${KERNEL_COPIES.length} Oracle Kernel copies identical at HEAD.`);
     process.exit(0);
   }
 
@@ -545,13 +632,20 @@ if (require.main === module) {
   if (drift.length > 0) {
     console.error('Out of sync (scripts/ vs plugins/kaola-workflow/scripts/):');
     for (const d of drift) console.error(`  - ${d}`);
-    console.error('');
-    console.error('Fix: copy the canonical version. Example:');
-    console.error('  for f in ' + drift.join(' ') + '; do');
-    console.error('    cp "scripts/$f" "plugins/kaola-workflow/scripts/$f"');
-    console.error('  done');
+    // The cp snippet is only meaningful for COMMON_SCRIPTS drift, whose entries are bare
+    // basenames. Every other producer (byte groups, rename families, export supersets, committed
+    // kernel parity) reports a full sentence carrying its OWN remediation, and splicing those into
+    // `for f in ...` rendered an un-runnable command that contradicted the real fix.
+    const commonDrift = drift.filter(d => COMMON_SCRIPTS.includes(d));
+    if (commonDrift.length > 0) {
+      console.error('');
+      console.error('Fix: copy the canonical version. Example:');
+      console.error('  for f in ' + commonDrift.join(' ') + '; do');
+      console.error('    cp "scripts/$f" "plugins/kaola-workflow/scripts/$f"');
+      console.error('  done');
+    }
   }
   process.exit(1);
 }
 
-module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, HOOKS_JSON_FAMILY, normalizeHooksJson, checkNormalizedFamily, checkByteIdenticalGroup, FORGE_CLASSIFIER_EXPORT_SUPERSET, FORGE_EXPORT_SUPERSET_FAMILY, forgeClassifierExportDrift };
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, HOOKS_JSON_FAMILY, normalizeHooksJson, checkNormalizedFamily, checkByteIdenticalGroup, FORGE_CLASSIFIER_EXPORT_SUPERSET, FORGE_EXPORT_SUPERSET_FAMILY, forgeClassifierExportDrift, KERNEL_COPIES, checkCommittedKernelParity };

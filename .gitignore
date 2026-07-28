@@ -21,7 +21,16 @@ kaola-workflow/issue-55/
 # Oracle Kernel (kaola-workflow-adaptive-schema.js): ONE canonical source in scripts/, with the
 # three per-forge tree copies GENERATED from it (`node scripts/edition-sync.js --materialize-kernel`,
 # folded into `--write` and the forge test chains) and COMMITTED — the same generated-but-committed
-# posture as every other forge aggregator port, enforced by `edition-sync.js --check`.
+# posture as every other forge aggregator port.
+#
+# Their parity is enforced by TWO checks, both in `validate-script-sync.js`: the
+# 'adaptive-schema kernel copies' byte group (working tree) and `checkCommittedKernelParity()`, which
+# compares the four COMMITTED git blobs and is also called from `edition-sync.js --check` so the
+# gitlab/gitea chains cover it. The committed check is the load-bearing one: every chain begins with
+# `--materialize-kernel`, which rewrites a drifted forge copy from canonical, so a working-tree
+# comparison alone is always repaired before it runs and a drifted COMMIT — the bytes a consumer
+# clones — goes unseen. This note previously credited `edition-sync.js --check` alone; it did not
+# check the kernel at all, and a one-line edit to the gitea copy passed every guard.
 #
 # They are committed and NOT ignored because the Codex install path is `git clone` + `codex plugin
 # marketplace add <clone>`, which runs no post-clone step: the plugin scripts resolve the kernel as a
