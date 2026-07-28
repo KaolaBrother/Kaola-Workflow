@@ -2551,14 +2551,15 @@ function splitInlineTomlFields(body) {
   return fields.filter(Boolean);
 }
 
-// #775 (Codex 0.145 re-baseline): multi_agent_v2 settings moved from [features.multi_agent_v2]
-// (0.142/0.144) to the unified top-level [agents] table, and V1 (the [features] multi_agent flag,
-// the scalar/inline-object multi_agent_v2 shapes, and the non_code_mode_only / hide_spawn_agent_metadata
-// / tool_namespace transport sub-grammar) is retired — there is no V1 fallback and no transport-mode
-// gate anymore. [agents] is a genuine top-level TOML table (never a [features] scalar/inline-object),
-// so this is a plain table/assignment scan with none of the old dual-shape ambiguity tracking.
+// #775 (Codex 0.145 re-baseline): V1 (the [features] multi_agent flag and the non_code_mode_only /
+// hide_spawn_agent_metadata / tool_namespace transport sub-grammar) is retired — there is no V1
+// fallback and no transport-mode gate anymore. The MultiAgentV2 switch lives at
+// `features.multi_agent_v2.enabled`, read in the three shapes Codex accepts: the
+// [features.multi_agent_v2] sub-table, the inline `multi_agent_v2 = { enabled = true, ... }` under
+// [features], and a bare `multi_agent_v2 = true` (plus their dotted-root equivalents) — hence the
+// inline-table parser below and the dual-shape ambiguity tracking in detectCodexDispatchMode.
 // Reads ONLY the `enabled` flag; parseMultiAgentV2NumericFields below reads the concurrency/
-// wait-timeout fields from the same table. multi_agent_v2 stays a CHECKED required engine feature
+// wait-timeout fields from the same feature. multi_agent_v2 stays a CHECKED required engine feature
 // (codex_multi_agent_v2_required refuses when it is absent/false) — see the preflight gate this
 // installer keeps byte-in-lock-step with.
 function parseInlineTomlTableAssignments(value) {
@@ -2653,7 +2654,7 @@ function detectCodexDispatchMode(configContent) {
 }
 
 // #775: the legacy `[features] multi_agent` (v1) flag and the V1/V2 dual-feature OR-join are
-// retired — multi_agent_v2 (now the [agents] table) is the ONLY dispatch contract, so
+// retired — multi_agent_v2 (`features.multi_agent_v2`) is the ONLY dispatch contract, so
 // deriveDispatchPosture below gates on detectCodexDispatchMode's `multi_agent_v2_enabled` alone.
 
 // Root-level `model_reasoning_effort` (NOT the per-profile agents/*.toml field of the
@@ -2706,7 +2707,7 @@ function dispatchPostureRemediation(posture) {
     + 'for proactive delegation.';
 }
 
-// #775: gates ONLY on multi_agent_v2_enabled (the [agents] table) — v1 is retired, so there is no
+// #775: gates ONLY on multi_agent_v2_enabled (`features.multi_agent_v2`) — v1 is retired, so there is no
 // more OR-join with a legacy feature flag. `multi_agent_enabled` mirrors multi_agent_v2_enabled
 // (kept as a distinct output field for back-compat shape; there is only one feature now).
 function deriveDispatchPosture(configContent) {
@@ -2764,10 +2765,10 @@ const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'default_wait_timeout_ms',
 ];
 
-// #775: parses the four MultiAgentV2ConfigToml numeric fields from the unified top-level
-// [agents] table (moved from [features.multi_agent_v2] pre-0.145). [agents] is a genuine TOML
-// table — no more inline-object/scalar dual-shape grammar. `max_threads` is a back-compat alias
-// for `max_concurrent_threads_per_session` (same field); first occurrence of either name wins.
+// #775: parses the four MultiAgentV2ConfigToml numeric fields from `features.multi_agent_v2`, in
+// the same three shapes the enable flag is read in: the [features.multi_agent_v2] sub-table, the
+// inline `multi_agent_v2 = { ... }` under [features], and the dotted root form. There is NO
+// `max_threads` alias — MULTI_AGENT_V2_NUMERIC_FIELDS above is the closed field list.
 // Same first-match/fail-to-absent discipline as the rest of this file: a non-integer or repeated
 // value is treated as not-configured rather than guessed at.
 function parseMultiAgentV2NumericFields(configContent) {

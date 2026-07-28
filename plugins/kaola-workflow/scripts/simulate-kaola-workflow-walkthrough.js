@@ -1548,10 +1548,10 @@ function testCodexDispatchPosture598() {
 // below must still exit 0 and must NEVER change the install's own exit code.
 // ---------------------------------------------------------------------------
 // #775: the concurrency/wait-timeout arithmetic itself is UNCHANGED (cap INCLUSIVE of the root
-// session; width = cap-1; observed default 4 -> width 3) — only the config location moved from
-// [features.multi_agent_v2] to the unified top-level [agents] table, and max_threads is now a
-// valid back-compat alias for max_concurrent_threads_per_session (not an error). The installer
-// never writes [agents] enabled=true itself (D2), so a fresh install always reports the
+// session; width = cap-1; observed default 4 -> width 3) — the bounds are read from
+// `features.multi_agent_v2`, and `max_threads` is NOT an alias for
+// max_concurrent_threads_per_session (Codex rejects it once V2 is on). The installer
+// never writes the enable flag itself (D2), so a fresh install always reports the
 // documentation-only recommended-config note with no concrete width line.
 function testCodexMultiAgentV2Bounds611() {
   const boundsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-611-bounds-home-'));
