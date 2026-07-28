@@ -1732,12 +1732,18 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
   const { generateMirror: generateMirror746 } = require('./kaola-gitea-workflow-task-mirror');
   const sinkScript746 = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   const nodeRows746 = [
-    { id: 'n1-impl', role: 'implementer', status: 'complete', compliance: 'pending' },
-    { id: 'n2-finalize', role: 'finalize', status: 'in_progress', compliance: 'pending' },
+    // n2-finalize depends on n1-impl (the builder chains depends_on), so `complete` above a
+    // `pending` dependency is the ledger-progress drift.
+    { id: 'n1-impl', role: 'implementer', status: 'pending', compliance: 'pending' },
+    { id: 'n2-finalize', role: 'finalize', status: 'complete', compliance: 'pending' },
   ];
-  // Ledger + compliance sit OUTSIDE computePlanHash coverage, so a compliance row can drift
-  // `pending` against a `complete` ledger row while the stored plan hash stays valid — the exact
-  // post-run out-of-sync shape verifyCurrentEpochAuthority refuses as state_compliance_progress_invalid.
+  // Ledger + compliance sit OUTSIDE computePlanHash coverage, so a ledger row can drift against
+  // its own dependencies while the stored plan hash stays valid — the post-run out-of-sync shape
+  // verifyCurrentEpochAuthority refuses as state_ledger_progress_invalid.
+  // (#833: this fixture used to drive the same shape through state_compliance_progress_invalid;
+  // that tier is retired with the stored compliance table, so the vehicle moved to the ledger
+  // tier. The property under test — a sink must never report status:sinked over an authority
+  // refusal it silently skipped — is unchanged.)
   const schema2Plan746 = (rows) => {
     const lines = [
       '# Workflow Plan — sink-test', '', '## Meta', 'project: sink-test', 'labels: test', '',
@@ -1853,8 +1859,8 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
       const p = parseLast746(r.stdout);
       assert.strictEqual(r.status, 1, '#746-gitea-a: a swallowed epoch-authority refusal must exit 1, got ' + r.status + '\nstdout: ' + r.stdout);
       assert.ok(p.result === 'refuse' && p.reason === 'sink_incomplete' && p.step === 'finalize'
-        && p.archive_refusal === 'state_compliance_progress_invalid',
-        '#746-gitea-a: typed refusal (sink_incomplete/finalize/state_compliance_progress_invalid) required, got ' + JSON.stringify(p));
+        && p.archive_refusal === 'state_ledger_progress_invalid',
+        '#746-gitea-a: typed refusal (sink_incomplete/finalize/state_ledger_progress_invalid) required, got ' + JSON.stringify(p));
       assert.ok(fs.existsSync(path.join(root, 'kaola-workflow', project, 'workflow-state.md')),
         '#746-gitea-a: the live project folder must survive the refusal');
       assert.ok(!fs.existsSync(path.join(root, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
