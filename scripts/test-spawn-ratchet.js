@@ -23,8 +23,12 @@
 //
 // What it does
 // ------------
-//   1. Enumerates every synchronous child-process call site in `scripts/test-*.js` plus
-//      `scripts/simulate-workflow-walkthrough.js`.
+//   1. Enumerates every synchronous child-process call site in the suite files of the root
+//      `scripts/` tree AND of every `plugins/*/scripts/` edition tree — `test-*.js` plus any
+//      `simulate-*walkthrough*.js`. The edition walkthroughs are INDEPENDENT hand-written
+//      suites (they are not in edition-sync's GENERATED_AGGREGATORS, so nothing regenerates
+//      them from the root one); leaving them out let ~30% of the repo's spawn sites grow
+//      without limit.
 //   2. A site is CLASSIFIED when its own line, or the line immediately above it, carries a
 //      line comment naming exactly one of the four class tokens above. The annotation form
 //      is a `//` comment holding the word `spawn-class`, a colon, then one token — nothing
@@ -65,11 +69,43 @@ function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Files the ratchet is defined over: the hand-rolled suites plus the walkthrough. */
+/** Is this basename a suite file the ratchet is defined over? */
+function isSuiteFile(base) {
+  if (/^test-.+\.js$/.test(base)) return true;
+  return /^simulate-.*walkthrough.*\.js$/.test(base);
+}
+
+// Every suite directory in the repo: the root `scripts/` tree plus each edition tree under
+// plugins/<edition>/scripts/. Returned repo-relative so the baseline keys one row per real
+// file — a basename-keyed baseline would let one forge's row silently exempt another's file.
+function suiteDirs() {
+  const dirs = [scriptsDir];
+  const pluginsDir = path.join(repoRoot, 'plugins');
+  let entries = [];
+  try {
+    entries = fs.readdirSync(pluginsDir).sort();
+  } catch (_) {
+    return dirs; // a consumer checkout without the edition trees ratchets the root alone
+  }
+  for (const name of entries) {
+    const dir = path.join(pluginsDir, name, 'scripts');
+    try {
+      if (fs.statSync(dir).isDirectory()) dirs.push(dir);
+    } catch (_) { /* plugin without a scripts/ tree */ }
+  }
+  return dirs;
+}
+
+/** Files the ratchet is defined over, repo-relative and POSIX-separated. */
 function coveredFiles() {
-  return fs.readdirSync(scriptsDir)
-    .filter(f => (/^test-.+\.js$/.test(f) || f === 'simulate-workflow-walkthrough.js'))
-    .sort();
+  const out = [];
+  for (const dir of suiteDirs()) {
+    const rel = path.relative(repoRoot, dir).split(path.sep).join('/');
+    for (const base of fs.readdirSync(dir).sort()) {
+      if (isSuiteFile(base)) out.push(rel + '/' + base);
+    }
+  }
+  return out.sort();
 }
 
 /**
@@ -148,7 +184,7 @@ function enumerateFile(text) {
 function measure() {
   const measured = {};
   for (const file of coveredFiles()) {
-    const text = fs.readFileSync(path.join(scriptsDir, file), 'utf8');
+    const text = fs.readFileSync(path.join(repoRoot, file), 'utf8');
     measured[file] = enumerateFile(text);
   }
   return measured;
@@ -207,7 +243,7 @@ function main() {
     totalClassified += m.classified;
 
     for (const bad of m.badTokens) {
-      failures.push('scripts/' + file + ':' + bad.line
+      failures.push(file + ':' + bad.line
         + ': unrecognised spawn class ' + JSON.stringify(bad.token)
         + ' — the vocabulary is closed to: ' + VALID_CLASSES.join(', '));
     }
@@ -215,7 +251,7 @@ function main() {
     const allowed = Object.prototype.hasOwnProperty.call(baseline.files, file)
       ? Number(baseline.files[file]) : 0;
     if (m.unclassified > allowed) {
-      failures.push('scripts/' + file + ': ' + m.unclassified
+      failures.push(file + ': ' + m.unclassified
         + ' unclassified spawn sites exceeds the baseline of ' + allowed
         + '\n    the ratchet is tighten-only: classify the new site(s) with one of '
         + VALID_CLASSES.join(' / ')
@@ -232,8 +268,8 @@ function main() {
   // deletion is the strongest possible tightening.
   for (const file of Object.keys(baseline.files)) {
     if (!Object.prototype.hasOwnProperty.call(measured, file)) {
-      console.log('spawn-ratchet: baseline entry for scripts/' + file
-        + ' is stale (file gone) — drop the row when convenient');
+      console.log('spawn-ratchet: baseline entry for ' + file
+        + ' is stale (file gone, or a pre-migration bare basename) — drop the row when convenient');
     }
   }
 
@@ -242,7 +278,7 @@ function main() {
   if (failures.length || argv.indexOf('--verbose') !== -1) {
     for (const r of rows) {
       const slack = r.allowed - r.unclassified;
-      console.log('  ' + r.file.padEnd(40)
+      console.log('  ' + r.file.padEnd(58)
         + ' sites=' + String(r.sites).padStart(4)
         + '  classified=' + String(r.classified).padStart(4)
         + '  unclassified=' + String(r.unclassified).padStart(4)
@@ -269,4 +305,7 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { enumerateFile, measure, coveredFiles, VALID_CLASSES, SYNC_APIS, BASELINE_PATH };
+module.exports = {
+  enumerateFile, measure, coveredFiles, suiteDirs, isSuiteFile,
+  VALID_CLASSES, SYNC_APIS, BASELINE_PATH,
+};
