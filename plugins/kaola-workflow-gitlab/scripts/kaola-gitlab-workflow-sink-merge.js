@@ -974,7 +974,31 @@ function disposeSinkJournals(mainRoot, project, archiveDestRel) {
       process.stderr.write('sink-merge --sink: WARNING: failed to dispose sink journal ' + p + ': ' + (e.message || String(e)) + '\n');
     }
   }
+  // #832: resolveSinkReceiptPath's last fallback returns the ARCHIVE receipt path when main holds
+  // no live folder, and writeSinkReceipt mkdir -p's it — so the sink itself manufactures a bare
+  // `kaola-workflow/archive/<project>/.cache/` skeleton. That is precisely the residue the incident
+  // left on main, and an existence-only audit read it as a satisfactory archive. Prune it once the
+  // journals are gone. Fail-soft and tightly scoped: a folder holding ANYTHING besides an empty
+  // .cache/ is a real archive and is never touched, and a prune failure never affects the sink.
+  pruneSinkArchiveSkeleton(mainRoot, project);
   return allDisposed;
+}
+
+// #832: remove an archive folder the sink's own journal writer created and nothing else ever filled.
+// Returns true only when the skeleton was actually removed.
+function pruneSinkArchiveSkeleton(mainRoot, project) {
+  const dir = path.join(mainRoot, 'kaola-workflow', 'archive', project);
+  try {
+    const entries = fs.readdirSync(dir);
+    if (entries.length === 1 && entries[0] === '.cache') {
+      if (fs.readdirSync(path.join(dir, '.cache')).length > 0) return false;
+      fs.rmdirSync(path.join(dir, '.cache'));
+    } else if (entries.length !== 0) {
+      return false;
+    }
+    fs.rmdirSync(dir);
+    return true;
+  } catch (_) { return false; }
 }
 
 // #694: read the CURRENT run's claim_ts from workflow-state.md (## Sink block). A project name is
@@ -1534,9 +1558,24 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         if (fs.existsSync(path.join(mainRoot, rp))) return true;
         try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + rp], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch (_) { return false; }
       });
-      const commitPaths = [ps].concat(stagedRoadmap, liveTracked ? [livePathspec] : []);
-      const excludes = [exRcpt, exFb, exLiveRcpt, exLiveFb];
+      // #832: a consumer whose .gitignore covers the archive band makes `git add <archive>` a
+      // REFUSAL ("The following paths are ignored by one of your .gitignore files"), not a commit —
+      // and an ignored pathspec aborts the whole add/commit, so the roadmap bookkeeping riding
+      // alongside it never lands either. Probe the refusal explicitly, drop the ignored pathspec so
+      // the rest still commits, and record the honest token instead of reporting done. Existence-
+      // gated so a probe only runs against an archive that is actually on disk.
+      let archiveIgnored = false;
       if (fs.existsSync(archiveDir)) {
+        try {
+          // exit 0 = ignored; exit 1 = not ignored; anything else = probe fault (not a refusal).
+          execFileSync('git', ['-C', mainRoot, 'check-ignore', '-q', '--', archiveRel],
+            { stdio: ['ignore', 'ignore', 'ignore'] });
+          archiveIgnored = true;
+        } catch (_) { archiveIgnored = false; }
+      }
+      const commitPaths = (archiveIgnored ? [] : [ps]).concat(stagedRoadmap, liveTracked ? [livePathspec] : []);
+      const excludes = [exRcpt, exFb, exLiveRcpt, exLiveFb];
+      if (fs.existsSync(archiveDir) && commitPaths.length > 0) {
         try { execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' }); } catch (_) {}
         let hasStaged = false;
         try { execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ...commitPaths, ...excludes], { stdio: 'ignore' }); }
@@ -1550,7 +1589,17 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // HEAD from the merge; a genuinely-absent archive proceeds as before) — never a false refusal.
       let archiveAtHead = false;
       try { const t = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', 'HEAD:' + archiveRel], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); archiveAtHead = (t === 'tree'); } catch (_) { archiveAtHead = false; }
-      if (receipt.archive_dest && !archiveAtHead) {
+      // #832: an archive the consumer's .gitignore covers can NEVER reach HEAD, so the #700
+      // never-committed refusal below would brick every such repo. That is not the remedy the
+      // incident asks for — the sink still completes; it just stops claiming a commit git refused.
+      if (archiveIgnored) {
+        receipt.archive_commit = 'skipped_gitignored';
+        process.stderr.write('sink-merge --sink: WARNING: ' + archiveRel + ' is covered by this repository\'s '
+          + '.gitignore — git REFUSES to track the run archive, so it was NOT committed. The archive exists on '
+          + 'disk only and will not survive a fresh clone. Un-ignore kaola-workflow/archive/ to make run '
+          + 'archives durable.\n');
+      }
+      if (receipt.archive_dest && !archiveAtHead && !archiveIgnored) {
         receipt.archive_commit = 'failed';
         receipt.updated_at = new Date().toISOString();
         writeSinkReceipt(receiptPath, receipt);

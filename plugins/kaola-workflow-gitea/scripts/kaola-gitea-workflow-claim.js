@@ -371,9 +371,23 @@ function provisionWorktree(root, project, branch) {
   return { path: wtPath, branch };
 }
 
+// #832: the ONE choke point every destructive caller funnels through (the sink's pre-checkout
+// removal, its terminal teardown, the legacy non---sink Step 3, cmdFinalize's own removal, and
+// release/discard). The archive-presence precondition lives HERE and nowhere else: per-call-site
+// probes are exactly why #676/#707/#746/#497 each fixed one site and left the family alive.
+// Existence-only, on the plain archive/<project> path, no git state involved — when the run's
+// archive exists ONLY inside the tree about to be deleted, `git worktree remove --force` would
+// destroy the run's only evidence trail. Refuse with a typed reason and touch nothing.
 function removeWorktree(root, project, folder) {
   const wtPath = (folder && folder.worktree_path) || worktreePathFor(root, project);
   if (!wtPath || !fs.existsSync(wtPath)) return { removed: false, reason: 'missing' };
+  if (isSafeName(project)) {
+    const wtArchive = path.join(wtPath, 'kaola-workflow', 'archive', project);
+    const rootArchive = path.join(root, 'kaola-workflow', 'archive', project);
+    if (fs.existsSync(wtArchive) && !fs.existsSync(rootArchive)) {
+      return { removed: false, reason: 'archive_only_in_worktree', path: wtPath };
+    }
+  }
   try {
     execFileSync('git', ['worktree', 'remove', '--force', '--', wtPath], {
       cwd: root,
@@ -1557,9 +1571,28 @@ function archiveDirDirty(root, project) {
 function detectFinalizeIncomplete(root, project) {
   if (!project) return null;
   const archiveDir = path.join(root, 'kaola-workflow', 'archive', project);
-  if (!fs.existsSync(archiveDir)) return null;
-  if (archiveDirDirty(root, project)) return { incomplete: true, reason: 'archived_impl_uncommitted' };
-  return { incomplete: false, reason: 'already_finalized' };
+  if (fs.existsSync(archiveDir)) {
+    if (archiveDirDirty(root, project)) return { incomplete: true, reason: 'archived_impl_uncommitted' };
+    return { incomplete: false, reason: 'already_finalized' };
+  }
+  // #832: the archive resolves against MAIN's project root, so a resume invoked from a LINKED
+  // worktree finds nothing locally even though the run finalized. Main's copy is deliberately
+  // UNTRACKED there until the sink's archive_commit step lands it, so its git-dirty state says
+  // nothing about this worktree's transaction — probe the property that does: the branch still
+  // carrying the live folder means the transaction's own `chore: archive` commit (which removes it)
+  // never landed, so the finalize is resumable. Otherwise the worktree side is settled and the
+  // archive commit belongs to the sink, not to a re-run of finalize.
+  try {
+    const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    if (path.resolve(main) === path.resolve(root)) return null;
+    if (!fs.existsSync(path.join(main, 'kaola-workflow', 'archive', project))) return null;
+    const liveRef = 'HEAD:kaola-workflow/' + project + '/workflow-state.md';
+    try {
+      execFileSync('git', ['-C', root, 'cat-file', '-e', liveRef], { stdio: ['ignore', 'ignore', 'ignore'] });
+      return { incomplete: true, reason: 'archived_impl_uncommitted' };
+    } catch (_) { /* not on the branch — the archive commit landed (or the folder was never tracked) */ }
+    return { incomplete: false, reason: 'already_finalized' };
+  } catch (_) { return null; }
 }
 
 function cmdResume() {
@@ -2043,13 +2076,15 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
 
   let dest;
   if (isLinkedRun) {
-    // #426: branch on keepWorktree.
-    // - Non-keep-worktree: archive goes to MAIN first (durable before worktree removal).
-    // - Keep-worktree: archive goes to LINKED WORKTREE (worktree is kept + merged into main;
-    //   writing to main as untracked files would block sink-merge's git checkout).
-    const keepWorktree = !!(opts && opts.keepWorktree);
-    const archiveParent = keepWorktree ? linkedRoot : mainRoot;
-    const archiveBase = path.join(archiveParent, 'kaola-workflow', 'archive');
+    // #832: ONE resolution rule — the archive ALWAYS lands under MAIN's project root, regardless of
+    // invocation cwd and regardless of keepWorktree. The former per-call-site derivation sent a
+    // `--keep-worktree` archive into the linked worktree (the documented node-cwd locus), and the
+    // sink removed that worktree at cleanup — destroying the run's whole evidence trail. There is no
+    // valid case for archiving into a tree the sink is about to delete. The archive is untracked on
+    // main until the sink's archive_commit step lands it; it never collides with `git checkout`
+    // because the feature branch no longer carries the archive path (cmdFinalize cannot stage a path
+    // outside its own worktree, so it defers the commit to the sink).
+    const archiveBase = path.join(mainRoot, 'kaola-workflow', 'archive');
     fs.mkdirSync(archiveBase, { recursive: true });
     dest = path.join(archiveBase, project + (suffix || ''));
     if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
@@ -2149,6 +2184,29 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // failure, so the outcome is never silently laundered as a fully-verified archive.
     ...(authorityDowngraded ? { authority_downgraded: authorityDowngraded } : {}),
   };
+}
+
+// #832: classify the fate of an archive destination the CALLING root cannot commit, so a receipt
+// never claims success for an operation git refused. Returns 'skipped_gitignored' when the
+// consumer's .gitignore covers the archive band (`git add` is a refusal, not a commit — the exact
+// silent-false-claim the incident produced), 'deferred_to_sink' when the archive is main-resident
+// and awaiting the sink's own archive_commit step, or null when the caller's ordinary
+// staged/committed accounting applies. Existence of the dest is not re-probed: the caller only
+// reaches here with the dest archiveProjectDir just wrote.
+function classifyArchiveDisposition(mainRoot, dest) {
+  if (!mainRoot || !dest) return null;
+  let rel;
+  try { rel = path.relative(mainRoot, dest); } catch (_) { return null; }
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  const relPosix = rel.split(path.sep).join('/');
+  try {
+    // exit 0 = the path IS ignored; exit 1 = not ignored; anything else = probe fault. Only a
+    // proven refusal earns the skipped_gitignored token — a probe fault must not manufacture one.
+    execFileSync('git', ['-C', mainRoot, 'check-ignore', '-q', '--', relPosix],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    return 'skipped_gitignored';
+  } catch (_) { /* not ignored (or unprobeable) — the sink commits it from main */ }
+  return 'deferred_to_sink';
 }
 
 function archiveProjectDirSafely(root, project, statusValue, suffix, opts) {
@@ -3483,6 +3541,17 @@ function cmdFinalize() {
       } catch (_) { /* staging failure — do NOT cascade into a commit */ }
       finalizeTx.roadmap_staged = fs.existsSync(path.join(root, 'kaola-workflow', '.roadmap'))
         || fs.existsSync(path.join(root, 'kaola-workflow', 'ROADMAP.md'));
+      // #832: the ARCHIVE's fate is decided here, independently of whatever else the commit below
+      // carries. The old code read `git diff --cached --quiet` with NO pathspec, so the roadmap
+      // staging alone made hasStaged true and the transaction recorded archive_commit:'committed'
+      // even when git had refused the archive outright ("The following paths are ignored by one of
+      // your .gitignore files"). A refused operation must never be reported as a success.
+      const archiveDisposition = classifyArchiveDisposition(mainRoot2, result.dest);
+      if (archiveDisposition === 'skipped_gitignored') {
+        process.stderr.write('kaola-gitea-workflow-claim finalize: WARNING: kaola-workflow/archive is covered by this '
+          + 'repository\'s .gitignore — the archive for ' + args.project + ' was written to '
+          + result.dest + ' but git REFUSES to track it. It is on disk only; nothing was committed.\n');
+      }
       let hasStaged = false;
       try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
       catch (e) { if (e && e.status === 1) hasStaged = true; }
@@ -3493,10 +3562,8 @@ function cmdFinalize() {
           emitFinalizeCommitFailure(args.project, 'archive', committed, finalizeTx);
           return;
         }
-        finalizeTx.archive_commit = 'committed';
-      } else {
-        finalizeTx.archive_commit = 'nothing_to_commit';
       }
+      finalizeTx.archive_commit = archiveDisposition || (hasStaged ? 'committed' : 'nothing_to_commit');
       // #816 Step 8 — the commit gate. The sink receives only committed work, so whatever the
       // mirror + Finalization left in the worktree lands in ONE `chore: finalize <project>` commit.
       // The staged set is SCOPED, never a blind `-A`: this project's own bookkeeping plus the

@@ -1689,7 +1689,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       assert(r.status === 0,
         '#816(T1): the one-call finalize transaction must succeed (got ' + r.status +
         ', json=' + JSON.stringify(r.json) + ', stderr=' + String(r.stderr || '').slice(0, 400) + ')');
-      const archived = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project);
+      // #832: the archive resolves against MAIN's project root regardless of invocation cwd.
+      const archived = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project);
       assert(fs.existsSync(path.join(archived, 'finalization-summary.md')),
         '#816(T1): cmdFinalize must mirror main-authored Finalization artifacts into the worktree before archiving');
       assert(fs.existsSync(path.join(archived, '.cache', 'final-validation.md')),
@@ -1853,7 +1854,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     const fxa = mk816('issue-816f');
     try {
       const r = runFinalize816(fxa);
-      assert(r.status === 0 && fs.existsSync(path.join(fxa.wtRoot, 'kaola-workflow', 'archive', fxa.project)),
+      // #832: main-anchored destination.
+      assert(r.status === 0 && fs.existsSync(path.join(fxa.mainRoot, 'kaola-workflow', 'archive', fxa.project)),
         '#816(T6a): pre-archive re-entry runs the whole transaction, got ' + JSON.stringify(r.json));
     } finally { cleanup816(fxa); }
 
@@ -1903,7 +1905,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       // finalize` bookkeeping. Hand-regenerating the receipt here (as this test used to) would have
       // proved only that a repaired receipt unblocks the gate, never that the re-entry is
       // recoverable without one — which is the property the transaction actually claims.
-      const archCache = path.join(fxc.wtRoot, 'kaola-workflow', 'archive', fxc.project, '.cache');
+      // #832: main-anchored destination.
+      const archCache = path.join(fxc.mainRoot, 'kaola-workflow', 'archive', fxc.project, '.cache');
       const carried = JSON.parse(fs.readFileSync(path.join(archCache, 'chain-receipt.json'), 'utf8'));
       assert(String(carried.headSha || '').trim() === fxc.headSha
         && String(carried.headSha || '').trim() !== headAfterFirst,
@@ -2006,8 +2009,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       const warnings = (receipt && receipt.warnings) || [];
       assert(!warnings.some(w => /contractor/i.test(String(w))),
         '#816(T7): no contractor ATTESTATION WARNING may be emitted, got ' + JSON.stringify(warnings));
+      // #832: main-anchored destination.
       const archivedSummary = fs.readFileSync(
-        path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, 'finalization-summary.md'), 'utf8');
+        path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, 'finalization-summary.md'), 'utf8');
       assert(!/finalize_contractor_attested/.test(archivedSummary),
         '#816(T7): the archived ## Attestation block must not write the retired field, got:\n' + archivedSummary);
     } finally { cleanup816(fx); }
@@ -2029,8 +2033,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       fs.writeFileSync(path.join(fx.wtProjDir, 'finalization-summary.md'), legacy);
       const r = runFinalize816(fx);
       assert(r.status === 0, '#816(T7b): a legacy attestation section must never block finalize, got ' + JSON.stringify(r.json));
+      // #832: main-anchored destination.
       const after = fs.readFileSync(
-        path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, 'finalization-summary.md'), 'utf8');
+        path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, 'finalization-summary.md'), 'utf8');
       assert(after.indexOf(legacy.trimEnd()) === 0,
         '#816(T7b): a legacy ## Attestation section is tolerated VERBATIM, never rewritten. Got:\n' + after);
     } finally { cleanup816(fx); }
@@ -2047,7 +2052,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       const receipt = r.json && r.json.closure_receipt;
       assert(receipt && !('finalize_contractor_attested' in receipt),
         '#816(T8): the retired flag must back-fill nothing');
-      const archivedLog = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, '.cache', 'dispatch-log.jsonl');
+      // #832: main-anchored destination.
+      const archivedLog = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, '.cache', 'dispatch-log.jsonl');
       assert(!fs.existsSync(archivedLog) || !/"agent_type":"contractor"/.test(fs.readFileSync(archivedLog, 'utf8')),
         '#816(T8): no contractor dispatch marker may be back-filled');
     } finally { cleanup816(fx); }

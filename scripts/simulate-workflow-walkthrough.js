@@ -6553,10 +6553,17 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
       encoding: 'utf8'
     });
     const showOutput = showResult.stdout;
-    // Must include finalized project's archive (dest of rename)
+    // #832: the archive resolves against MAIN's project root, so it is NOT in the feature branch's
+    // commit at all — it is on main's disk, and the sink's own archive_commit step lands it there.
+    // (This assertion used to require the opposite; it pinned the destination the sink then deleted.)
     assert(
-      /kaola-workflow\/archive\/issue-701\//.test(showOutput),
-      'committed HEAD must include issue-701 archive files\ngit show output:\n' + showOutput
+      !/kaola-workflow\/archive\/issue-701\//.test(showOutput),
+      'committed HEAD must NOT carry the issue-701 archive — it resolves against MAIN (#832)'
+        + '\ngit show output:\n' + showOutput
+    );
+    assert(
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-701', 'workflow-state.md')),
+      '#832: main must hold the issue-701 archive after finalize --keep-worktree'
     );
     // Must include ROADMAP.md regeneration
     assert(
@@ -8620,9 +8627,15 @@ function testE2EGitHubMergeFullChain() {
       claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
     ], { cwd: wt850, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
     assert(finResult.status === 0, 'finalize --keep-worktree should exit 0\nstderr: ' + finResult.stderr);
+    // #832: the archive resolves against MAIN's project root — never into the linked worktree the
+    // sink removes at cleanup.
     assert(
-      fs.existsSync(path.join(wt850, 'kaola-workflow', 'archive', 'issue-850')),
-      'archive must exist in linked worktree after finalize --keep-worktree'
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-850')),
+      'archive must exist in MAIN after finalize --keep-worktree (#832)'
+    );
+    assert(
+      !fs.existsSync(path.join(wt850, 'kaola-workflow', 'archive', 'issue-850')),
+      'archive must NOT be written into the linked worktree (#832)'
     );
     assert(
       !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-850')),
@@ -8630,15 +8643,17 @@ function testE2EGitHubMergeFullChain() {
     );
     assert(fs.existsSync(wt850), 'linked worktree must survive --keep-worktree finalize');
 
-    // Verify that finalize --keep-worktree committed the archive to the feature branch
+    // Verify that finalize --keep-worktree removed the live folder from the feature branch
     const liveInTree = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/issue-850/workflow-state.md'],
       { cwd: wt850, encoding: 'utf8' });
     assert(liveInTree.status !== 0,
       'live workflow-state.md must NOT be in feature branch HEAD after finalize --keep-worktree');
+    // #832: ...and the archive is main-resident, so it is NOT on the feature branch. The sink's own
+    // archive_commit step lands it on the default branch (asserted after sink-merge below).
     const archiveInTree = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/archive/issue-850'],
       { cwd: wt850, encoding: 'utf8' });
-    assert(archiveInTree.status === 0,
-      'kaola-workflow/archive/issue-850 must exist in feature branch HEAD after finalize --keep-worktree');
+    assert(archiveInTree.status !== 0,
+      '#832: kaola-workflow/archive/issue-850 must NOT be on the feature branch — it resolves against MAIN');
 
     // #333: the ## Closure append must land INSIDE the `chore: archive` commit (commit-last
     // ordering). After the FIRST finalize --keep-worktree the feature worktree must be clean —
@@ -8647,7 +8662,7 @@ function testE2EGitHubMergeFullChain() {
       { cwd: wt850, encoding: 'utf8' }).stdout.trim();
     assert(cleanAfterFinalize === '',
       '#333: feature worktree must be clean after finalize --keep-worktree (## Closure append inside commit), got: ' + cleanAfterFinalize);
-    const archivedState850 = fs.readFileSync(path.join(wt850, 'kaola-workflow', 'archive', 'issue-850', 'workflow-state.md'), 'utf8');
+    const archivedState850 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-850', 'workflow-state.md'), 'utf8');
     assert(/^## Closure$/m.test(archivedState850),
       '#333: archived state must carry a ## Closure block after finalize --keep-worktree');
 
@@ -10980,7 +10995,8 @@ function testKeepOpenMergeFullChain() {
     // The roadmap source must STILL exist in the worktree (preserved, not unlinked).
     assert(fs.existsSync(path.join(wtRoadmapDir, 'issue-860.md')),
       '#336: keep-open finalize must preserve kaola-workflow/.roadmap/issue-860.md in the worktree');
-    const archived860 = fs.readFileSync(path.join(wt860, 'kaola-workflow', 'archive', 'issue-860', 'workflow-state.md'), 'utf8');
+    // #832: the archive resolves against MAIN's project root, never the linked worktree.
+    const archived860 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-860', 'workflow-state.md'), 'utf8');
     assert(archived860.includes('last_result: closed_keep_open') && archived860.includes('issue_action: comment_keep_open'),
       '#336: archived state must carry closed_keep_open + issue_action: comment_keep_open');
 
@@ -11125,7 +11141,8 @@ function testKeepOpenFinalizeFlagAlias() {
       '#336: --keep-issue-open FLAG must yield ok closure invariants (no roadmap-source-absent false fire), got: ' + JSON.stringify(finJson.closure_invariants));
     assert(fs.existsSync(path.join(wtRoadmapDir, 'issue-861.md')),
       '#336: --keep-issue-open FLAG must preserve kaola-workflow/.roadmap/issue-861.md');
-    const archived861 = fs.readFileSync(path.join(wt861, 'kaola-workflow', 'archive', 'issue-861', 'workflow-state.md'), 'utf8');
+    // #832: the archive resolves against MAIN's project root, never the linked worktree.
+    const archived861 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-861', 'workflow-state.md'), 'utf8');
     assert(archived861.includes('last_result: closed_keep_open'),
       '#336: --keep-issue-open FLAG must stamp last_result: closed_keep_open');
     console.log('testKeepOpenFinalizeFlagAlias: PASSED');
