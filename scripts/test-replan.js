@@ -1463,11 +1463,15 @@ scenario(() => {
     ok(verified.ok && verified.binding_status === 'schema2_projection_bound',
       'schema-2 manifest recursively cross-binds projection, child, attestation, transaction, state, and live plan');
     equal(verified.manifest.schema_version, 2, 'new full snapshot seal uses schema 2');
+    // The plan record was written to disk by an earlier process; this re-reads it through the
+    // real CLI with no shared heap — the successor path, executed.
+    // spawn-class: durable-handoff
     const resumeCheck = spawnSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
       path.join(fx.projectDir, 'workflow-plan.md'), '--resume-check', '--json'], {
       cwd: fx.root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
     });
     equal(resumeCheck.status, 0, 'projection-bound committed child passes focused --resume-check');
+    // spawn-class: durable-handoff
     const candidateHash = spawnSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
       path.join(fx.projectDir, 'workflow-plan.md'), '--candidate-hash', '--json'], {
       cwd: fx.root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
@@ -1476,6 +1480,7 @@ scenario(() => {
     fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'), [
       'verdict: pass', 'validated_candidate_hash: ' + candidatePayload.validated_candidate_hash, '',
     ].join('\n'));
+    // spawn-class: durable-handoff
     const finalizeCheck = spawnSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
       path.join(fx.projectDir, 'workflow-plan.md'), '--finalize-check', '--json', '--base', 'main'], {
       cwd: fx.root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
@@ -2211,6 +2216,7 @@ scenario(() => {
 
     // (f) THE VERB IS REACHABLE FROM THE CLI, which is the only form a route can name. A route
     //     that resolves to an in-process function nobody can invoke is still a dead end.
+    // spawn-class: cli-contract
     const cli = args => spawnSync(process.execPath,
       [path.join(__dirname, 'kaola-workflow-replan.js'), ...args],
       { cwd: fx.root, encoding: 'utf8', env: gitEnv });
@@ -2463,6 +2469,7 @@ scenario(() => {
 scenario(() => {
   const fx = initFixture();
   try {
+    // spawn-class: cli-contract
     const run = args => spawnSync(process.execPath,
       [path.join(__dirname, 'kaola-workflow-replan.js'), ...args],
       { cwd: fx.root, encoding: 'utf8', env: gitEnv });

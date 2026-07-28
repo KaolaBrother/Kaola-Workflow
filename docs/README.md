@@ -13,6 +13,7 @@
   - [0012 — The finalize seam is orchestrator-owned; its mechanical residue is one transaction](decisions/0012-finalize-seam-is-orchestrator-owned.md)
   - [0013 — The Successor Test and the Two-Gate Target Architecture: axioms A1–A3, the four-record durable kernel, oracles as tools, refusal legal only at kernel-integrity + sink, parallel-by-default as theorem, prompts re-derived by the same razor](decisions/0013-successor-test-two-gate-target-architecture.md)
   - [0014 — Free origin: orchestrator-owned selection behind a typed commitment gate (supersedes 0006's entry lock; retains its control boundary)](decisions/0014-free-origin.md)
+  - [0015 — Kernel journaling as commits: rejected (the kernel is not always in git's index, co-opened legs would put it in the octopus conflict surface, and the threat model is not adversarial); the `## Expansion Records` integrity hole is closed directly instead](decisions/0015-kernel-journaling-as-commits-rejected.md)
   - [D-419-01 — Parallelism v3 Part 1: one coordination kernel (serial = running-set max=1); Part 3: scheduler-default posture](decisions/D-419-01.md)
   - [D-419-02 — Parallelism v3 Part 2: lane-attributed disjoint write parallelism (#376 graduation); Part 4: consent-gated speculative gate overlap](decisions/D-419-02.md)
   - [D-420-01 — Goal-Driven Automation Part 1: autopilot loop (scout→claim→plan→run→finalize, confidence-threshold gating, typed stop conditions); Part 3: goal-conditioned bundles (optional `goal:` in `## Meta`, hash-covered, finalize AC-vs-goal check)](decisions/D-420-01.md)

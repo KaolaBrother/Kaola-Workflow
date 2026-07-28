@@ -5578,6 +5578,207 @@ function finalizeSinkStatus(nodes, statusOf) {
   return { id, status, live: status === 'in_progress' };
 }
 
+// ===========================================================================
+// THE LAYER-0 DURABLE-ARTIFACT REGISTRY (the four-record ruling).
+//
+// The durable kernel is EXACTLY four records — plan / position / evidence / forge — and every
+// other durable artifact a run leaves on disk is either DERIVABLE from those four or a
+// PREFERENCE a successor is free to re-decide. That is a claim about every file in a project
+// folder, so it is only meaningful once every file is ruled. This table is the machine-readable
+// form of the ruling; the prose form — with the derivation written out for every `derivable` row
+// and the loss-safety argument for every `preference` row — lives in
+// `docs/workflow-state-contract.md` § Layer-0 durable-artifact ruling, and
+// `scripts/test-kernel-conformance.js` asserts the two are EQUAL row-for-row, in order. A row
+// present in one and not the other fails the build.
+//
+// Each row is `[matcher, ruling, record, writer, note]`:
+//   * `matcher`  — a project-relative path (POSIX separators, no leading slash) or a RegExp over it.
+//   * `ruling`   — 'record' | 'derivable' | 'preference'.
+//   * `record`   — for 'record' rows only: which of the four ('plan' | 'position' | 'evidence' |
+//                  'forge'). null otherwise. A 'record' row with a null owner is a FIFTH record
+//                  wearing a label, and the conformance suite rejects it.
+//   * `writer`   — 'script' | 'agent'. DESCRIPTIVE, not the atomicity switch: it names who authors
+//                  the CONTENT. The atomic-write obligation keys on `ruling === 'record'` and binds
+//                  every SCRIPT write to such a path, whoever authored the content — an agent's own
+//                  shell redirection cannot be made atomic by this runtime, but the moment a script
+//                  writes a record the obligation applies.
+//   * `note`     — one line. For 'derivable', the DERIVATION (function + inputs). For 'preference',
+//                  why it is safe to lose across a resume. For 'record', which question it answers.
+//
+// Ordering is significant: the FIRST matching row wins. Every literal-string matcher therefore
+// precedes any pattern that could swallow it, and the two broad bands (the `.cache/origin/`
+// reconnaissance band and the free-form evidence band) sit LAST, after every narrower rule.
+// `test-kernel-conformance.js` proves that mechanically: each literal row must classify to itself.
+// ===========================================================================
+const KERNEL_RULINGS = Object.freeze(['record', 'derivable', 'preference']);
+const KERNEL_RECORDS = Object.freeze(['plan', 'position', 'evidence', 'forge']);
+
+const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
+  // ---- Plan -------------------------------------------------------------------------------
+  ['workflow-plan.md', 'record', 'plan', 'script',
+    'goal, decomposition, per-unit write sets + dependencies, epoch lineage — and, in ## Node Ledger, the position'],
+  ['.cache/' + LEDGER_CHAIN_JOURNAL_NAME, 'record', 'plan', 'script',
+    'the tamper-evidence chain over the ledger transitions; with a head stamped in the plan its absence is unrecoverable by construction'],
+  ['.cache/acceptance-anchor.json', 'record', 'plan', 'script',
+    'holds the acceptance surface BYTES across repair iterations that have already overwritten the plan that carried them'],
+  ['.cache/' + REPLAN_TRANSACTION_NAME, 'record', 'plan', 'script',
+    'the only statement of which of the 41 durable epoch-fork writes have landed; an interrupted fork is unresumable without it'],
+  [REPLAN_PLAN_NEXT_NAME, 'record', 'plan', 'script',
+    'the authored child plan before activation — the sole copy of the next epoch; it sits beside the parent at the project root, not under .cache/'],
+  ['.cache/' + REPLAN_PLANNER_PACKET_NAME, 'record', 'plan', 'script',
+    'the snapshot-authority projection the child is bound to; the child cannot be re-verified without it'],
+  ['.cache/' + REPLAN_PLANNER_ATTESTATION_NAME, 'record', 'plan', 'script',
+    'the planner attestation covering the child image'],
+  [/^\.cache\/epochs\/[^/]+\/manifest\.json$/, 'record', 'plan', 'script',
+    'the sealed parent epoch identity — the live tree no longer holds the parent plan'],
+  [/^\.cache\/committed-transactions\/[^/]+\.json$/, 'record', 'plan', 'script',
+    'the rotated committed-transaction receipts that survive the live transaction reset — the lineage predecessor chain'],
+
+  // ---- Position ---------------------------------------------------------------------------
+  ['workflow-state.md', 'record', 'position', 'script',
+    'the resume pointer: status, phase, step, pending gates, sink mode, branch, worktree, epoch fields, halt markers'],
+  ['.cache/' + RUNNING_SET_NAME, 'record', 'position', 'script',
+    "carries state:'opening' — written BEFORE any ledger flip, so the crash window it names is by construction absent from the ledger"],
+  [/^\.cache\/barrier-base-[^/]+$/, 'record', 'position', 'script',
+    'the baseline tree SHA observed at open; a point-in-time observation the advancing tree destroys'],
+  [/^\.cache\/barrier-open-[^/]+$/, 'record', 'position', 'script',
+    'the HEAD SHA at open; the staleness half of the same observation'],
+
+  // ---- Evidence ---------------------------------------------------------------------------
+  ['.cache/' + EPOCH_CONSENT_EXTENSIONS_NAME, 'record', 'evidence', 'script',
+    'the hash-chained record of human consent grants; the cached ceiling in workflow-state.md is DERIVED from it, never the reverse'],
+  ['.cache/review-attempts.json', 'record', 'evidence', 'script',
+    'the settlement state of the adversarial-review oracle: which failure is unconsumed, which repair consumed it, the per-gate repair count'],
+  ['.cache/chain-receipt.json', 'record', 'evidence', 'script',
+    'the tests-green oracle receipt (npm repo kind), candidate-bound'],
+  ['.cache/' + FINAL_FIX_REGISTER_NAME, 'record', 'evidence', 'script',
+    'an extension of the Evidence record: the attribution source for fixes produced during finalization'],
+  ['.cache/replan-source.json', 'record', 'evidence', 'script',
+    'the settled, unconsumed review outcome that authorizes an epoch fork'],
+  ['.cache/role-substitutions.json', 'record', 'evidence', 'script',
+    'the durable divergence between the frozen role cell and what actually ran; folds into the compliance row at close'],
+  ['.cache/run-gaps.json', 'record', 'evidence', 'script',
+    'the run-gap sweep result; its writer refuses to overwrite a prior cycle, so it is durable gap evidence'],
+  ['.cache/origin/selection-record.json', 'record', 'evidence', 'script',
+    'the gate-validated selection record; the degenerate form exists so "explicit target" is distinguishable from "record lost"'],
+  [/^\.cache\/replan-sources\/[^/]+\.json$/, 'record', 'evidence', 'script',
+    'the rotated source-authority history a later epoch re-verifies its predecessor against'],
+  [/^\.cache\/review-contexts\/[^/]+\.json$/, 'record', 'evidence', 'script',
+    'the canonical gate context a receipt binds to'],
+  [/^\.cache\/review-receipts\//, 'record', 'evidence', 'script',
+    'the normalized member receipts the reducer votes over'],
+  [/^\.cache\/review-claim-roots\/[^/]+\.json$/, 'record', 'evidence', 'script',
+    'the claim-root binding a receipt was taken against'],
+  [/^\.cache\/review-certifiers\//, 'record', 'evidence', 'script',
+    'certifier identity bound into the gate receipt'],
+  [/^\.cache\/review-findings\//, 'record', 'evidence', 'script',
+    'the immutable finding set a gate settled on'],
+  [/^\.cache\/validation-vectors\/[^/]+\.json$/, 'record', 'evidence', 'script',
+    'local validation-runner receipts: exact command, environment digests, repeated results, bound candidate'],
+  [/^\.cache\/epochs\/[^/]+\/files\//, 'record', 'evidence', 'script',
+    'the immutable parent proof tree; cross-epoch review history indexes into it'],
+  ['.cache/final-validation.md', 'record', 'evidence', 'agent',
+    'the tests-green oracle receipt (consumer repo kind), candidate-hash bound; recorded by the agent, not a producer script'],
+  ['.cache/selection-evidence.md', 'record', 'evidence', 'agent',
+    'the no-target selection rationale, docked verbatim; not faithfully reconstructible after the claim'],
+  ['.cache/run-gaps-manual.md', 'record', 'evidence', 'agent',
+    'agent/operator-authored gap items — an input no script can regenerate'],
+  ['.cache/shape-refutation.md', 'record', 'evidence', 'agent',
+    'the refutation packet a shape re-plan cites as its diagnosis source'],
+  ['finalization-summary.md', 'record', 'evidence', 'agent',
+    'the terminal artifact; the script-owned ## Attestation section is appended to it presence-guarded'],
+
+  // ---- Forge ------------------------------------------------------------------------------
+  ['.cache/sink-receipt.json', 'record', 'forge', 'script',
+    'step-by-step record of what has already reached the outside world; disposed at terminal success, when the forge itself becomes the authority'],
+  ['.cache/sink-fallback.json', 'record', 'forge', 'script',
+    'the sink fallback journal, same lifetime rule as sink-receipt.json'],
+
+  // ---- Derivable --------------------------------------------------------------------------
+  ['.cache/findings-route.json', 'derivable', null, 'script',
+    'runRouteFindings(.cache/<gate>.md, workflow-plan.md) — re-run `route-findings --project P --node-id N`; no script reads it back'],
+  ['.cache/run-progress.json', 'derivable', null, 'script',
+    'buildRunProgress(workflow-plan.md, op) — a pure function of the plan; no script reads it back'],
+  ['workflow-tasks.json', 'derivable', null, 'script',
+    'generateMirror({ planContent }) in kaola-workflow-task-mirror.js regenerates the Codex task mirror from ## Nodes + ## Node Ledger'],
+  [/^\.cache\/epoch-projections\//, 'derivable', null, 'script',
+    'ensureOwnerProjection(plan, planHash, point, parseExpansionRecords(plan)) for each discharged point — leaves/records come from ## Expansion Records, discharged points from ## Node Ledger; only discharged_at is unrecoverable and foldOwnerProjection never reads it'],
+  [/^\.cache\/[a-z-]+-envelope\.json$/, 'derivable', null, 'script',
+    'the cached stdout of a --summary subcommand invocation; re-run the subcommand (the read-only emitters are idempotent). No script reads it back'],
+
+  // ---- Preference -------------------------------------------------------------------------
+  ['.cache/' + SCHEDULER_LOCK_NAME, 'preference', null, 'script',
+    'transient O_EXCL coordination; ABSENCE is the normal unlocked state between invocations'],
+  ['.cache/active-batch.json', 'preference', null, 'script',
+    'no writer remains since #364; the running-set is its successor and every reader treats absence as the normal case'],
+  ['.cache/node-timings.jsonl', 'preference', null, 'script',
+    'best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict'],
+  ['.cache/provenance-log.jsonl', 'preference', null, 'script',
+    'best-effort audit trail, writer swallows every error; no gate reads it'],
+  ['.cache/dispatch-log.jsonl', 'preference', null, 'script',
+    'hook-written spawn log; the attestation check is WARN-FIRST, so absence degrades to a warning, never a wrong outcome'],
+  ['.cache/wedged-attestation.json', 'preference', null, 'script',
+    'historical residue; no producer and no consumer remains in the tree'],
+  ['fast-summary.md', 'preference', null, 'agent',
+    'legacy marker, never newly authored; both readers (classifier scope parse, router folder detection) are tolerant'],
+  [/^phase[0-9]+-[a-z-]+\.md$/, 'preference', null, 'agent',
+    'retired fast/full-path phase artifacts; never newly authored, read only tolerantly'],
+  [/^\.cache\/\.cache\//, 'preference', null, 'agent',
+    'historical double-nested .cache residue from a fixed path-join defect; no writer, no reader'],
+
+  // ---- The two broad bands, LAST by construction -------------------------------------------
+  [/^\.cache\/origin\//, 'record', 'evidence', 'agent',
+    'pre-claim reconnaissance folded into the project at claim time'],
+  [/^\.cache\/[^/]+\.(?:md|log|txt|json|jsonl|diff|patch)$/, 'record', 'evidence', 'agent',
+    'the free-form evidence band: per-node evidence and the attachments it cites — what was produced, how verified, where it lives'],
+  [/^[^/]+\.md$/, 'record', 'evidence', 'agent',
+    'the project-root prose band: agent-authored run reports docked beside the plan'],
+]);
+
+// classifyDurableArtifact — total over project-relative paths. Returns the first matching registry
+// row, or `{ ruling: 'unclassified' }` for a path no row covers. Callers MUST treat 'unclassified'
+// as a failure, never as a default ruling: an unclassified durable artifact inherits neither the
+// atomic-write obligation nor resume coverage, which is the exact defect this registry closes.
+function classifyDurableArtifact(relPath) {
+  const rel = String(relPath == null ? '' : relPath).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  if (!rel) return { path: rel, ruling: 'unclassified', record: null, writer: null, note: null, matcher: null };
+  for (const [matcher, ruling, record, writer, note] of KERNEL_ARTIFACT_REGISTRY) {
+    const hit = (typeof matcher === 'string') ? (rel === matcher) : matcher.test(rel);
+    if (hit) return { path: rel, ruling, record, writer, note, matcher: String(matcher) };
+  }
+  return { path: rel, ruling: 'unclassified', record: null, writer: null, note: null, matcher: null };
+}
+
+// isKernelRecordPath — the atomicity predicate. TRUE exactly for the durable artifacts ruled
+// `record`, i.e. the ones whose writes must be atomic and whose loss breaks resume-from-durable-state.
+function isKernelRecordPath(relPath) {
+  return classifyDurableArtifact(relPath).ruling === 'record';
+}
+
+// Folder names directly under `kaola-workflow/` (or under `kaola-workflow/archive/`) that are NOT
+// project folders. `archive/exports/` holds worktree-diff salvage patches keyed by issue, not run
+// state, so a path inside it is not a durable kernel artifact of any project.
+const NON_PROJECT_FOLDERS = Object.freeze(['archive', 'exports']);
+
+// projectRelativeArtifactPath — map an ABSOLUTE path to its `kaola-workflow/{project}/`-relative
+// form, or null when the path is not inside a workflow project folder. Archive folders map to the
+// same relative space as live ones (an archived run is the same artifact set, stamped terminal), and
+// a leg worktree's mirror of the project folder maps identically — the write-set band is what makes
+// a path a kernel artifact, not which checkout it sits in.
+function projectRelativeArtifactPath(absPath) {
+  const norm = String(absPath == null ? '' : absPath).replace(/\\/g, '/');
+  const parts = norm.split('/');
+  const idx = parts.lastIndexOf('kaola-workflow');
+  if (idx < 0) return null;
+  let rest = parts.slice(idx + 1);
+  if (rest[0] === 'archive') rest = rest.slice(1);
+  // rest[0] is now the project folder name; anything shallower is shared root state, not a project.
+  if (rest.length < 2) return null;
+  if (rest[0].startsWith('.')) return null;   // .roadmap/, .locks/, .origin/ staging — not project state
+  if (NON_PROJECT_FOLDERS.includes(rest[0])) return null;
+  return rest.slice(1).join('/');
+}
+
 module.exports = {
   LANE_STALENESS_MS,
   SHARED_STATE_FIELDS,
@@ -5844,4 +6045,13 @@ module.exports = {
   // pushed?" and one reading of the unique terminal sink row.
   deriveSinkProgressFromState,
   finalizeSinkStatus,
+  // The Layer-0 durable-artifact registry (ADR 0013 T1/T2): the machine-readable ruling of every
+  // durable artifact as record / derivable / preference, the total classifier over it, the T2
+  // record predicate, and the absolute->project-relative mapper the write interception uses.
+  KERNEL_RULINGS,
+  KERNEL_RECORDS,
+  KERNEL_ARTIFACT_REGISTRY,
+  classifyDurableArtifact,
+  isKernelRecordPath,
+  projectRelativeArtifactPath,
 };

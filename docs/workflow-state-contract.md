@@ -4,6 +4,155 @@ This map is the detailed state inventory for Kaola-Workflow. Keep root memory
 files such as `CLAUDE.md` and `AGENTS.md` limited to durable invariants and link
 here for the full contract.
 
+## Layer-0 Durable-Artifact Ruling
+
+The durable kernel is **exactly four records** — Plan, Position, Evidence, Forge chain — because a
+successor resuming from durable state alone has exactly four questions: *what are we doing*, *where
+are we*, *what is already done and why should I believe it*, and *what has already reached the
+outside world*. Every other durable artifact a run leaves behind is therefore either **derivable**
+from those four or a **preference** the successor is free to re-decide.
+
+That claim is only worth anything once it has been applied to every file a run actually writes, so
+the table below rules all of them. It is generated from — and machine-checked against — the
+`KERNEL_ARTIFACT_REGISTRY` in `scripts/kaola-workflow-adaptive-schema.js`;
+`scripts/test-kernel-conformance.js` asserts the two are equal row for row, in order, and that the
+ruling is TOTAL over both a real archived-run corpus and every artifact name the production scripts
+declare. Do not edit one side alone.
+
+The three rulings carry different burdens of proof, and the burden is the point:
+
+- **record** — names WHICH of the four it is. A record row with no owner is a fifth record wearing a
+  label. Every script write to a `record` path must go through the crash-safe atomic replace
+  (`writeFileAtomicReplace`: temp + fsync + rename), because half a plan is worse than no plan.
+- **derivable** — states the DERIVATION: the function and its inputs, such that a successor could
+  regenerate the artifact from the four records. An unproven "derivable" is a fifth record wearing a
+  label too, and is the more dangerous kind, because it also excuses itself from atomic writes.
+- **preference** — states why losing it across a resume is safe: no gate reads it, or its reader
+  treats absence as the normal case, or nothing writes it any more.
+
+Matchers are project-relative paths (or patterns over them) under `kaola-workflow/{project}/`; an
+archived run maps to the same relative space, and so does a leg worktree's mirror — the band a path
+sits in is what makes it a kernel artifact, not which checkout holds it. The first matching row
+wins, and the two broad bands at the end exist to catch what the named rows do not.
+
+| Artifact | Ruling | Record | Writer | Why — the derivation, the loss-safety argument, or the question it answers |
+| --- | --- | --- | --- | --- |
+| `workflow-plan.md` | record | plan | script | goal, decomposition, per-unit write sets + dependencies, epoch lineage — and, in ## Node Ledger, the position |
+| `.cache/ledger-chain.json` | record | plan | script | the tamper-evidence chain over the ledger transitions; with a head stamped in the plan its absence is unrecoverable by construction |
+| `.cache/acceptance-anchor.json` | record | plan | script | holds the acceptance surface BYTES across repair iterations that have already overwritten the plan that carried them |
+| `.cache/replan-transaction.json` | record | plan | script | the only statement of which of the 41 durable epoch-fork writes have landed; an interrupted fork is unresumable without it |
+| `workflow-plan.next.md` | record | plan | script | the authored child plan before activation — the sole copy of the next epoch; it sits beside the parent at the project root, not under .cache/ |
+| `.cache/replan-planner-packet.json` | record | plan | script | the snapshot-authority projection the child is bound to; the child cannot be re-verified without it |
+| `.cache/replan-planner-attestation.json` | record | plan | script | the planner attestation covering the child image |
+| `/^\.cache\/epochs\/[^/]+\/manifest\.json$/` | record | plan | script | the sealed parent epoch identity — the live tree no longer holds the parent plan |
+| `/^\.cache\/committed-transactions\/[^/]+\.json$/` | record | plan | script | the rotated committed-transaction receipts that survive the live transaction reset — the lineage predecessor chain |
+| `workflow-state.md` | record | position | script | the resume pointer: status, phase, step, pending gates, sink mode, branch, worktree, epoch fields, halt markers |
+| `.cache/running-set.json` | record | position | script | carries state:'opening' — written BEFORE any ledger flip, so the crash window it names is by construction absent from the ledger |
+| `/^\.cache\/barrier-base-[^/]+$/` | record | position | script | the baseline tree SHA observed at open; a point-in-time observation the advancing tree destroys |
+| `/^\.cache\/barrier-open-[^/]+$/` | record | position | script | the HEAD SHA at open; the staleness half of the same observation |
+| `.cache/epoch-consent-extensions.json` | record | evidence | script | the hash-chained record of human consent grants; the cached ceiling in workflow-state.md is DERIVED from it, never the reverse |
+| `.cache/review-attempts.json` | record | evidence | script | the settlement state of the adversarial-review oracle: which failure is unconsumed, which repair consumed it, the per-gate repair count |
+| `.cache/chain-receipt.json` | record | evidence | script | the tests-green oracle receipt (npm repo kind), candidate-bound |
+| `.cache/final-fixes.json` | record | evidence | script | an extension of the Evidence record: the attribution source for fixes produced during finalization |
+| `.cache/replan-source.json` | record | evidence | script | the settled, unconsumed review outcome that authorizes an epoch fork |
+| `.cache/role-substitutions.json` | record | evidence | script | the durable divergence between the frozen role cell and what actually ran; folds into the compliance row at close |
+| `.cache/run-gaps.json` | record | evidence | script | the run-gap sweep result; its writer refuses to overwrite a prior cycle, so it is durable gap evidence |
+| `.cache/origin/selection-record.json` | record | evidence | script | the gate-validated selection record; the degenerate form exists so "explicit target" is distinguishable from "record lost" |
+| `/^\.cache\/replan-sources\/[^/]+\.json$/` | record | evidence | script | the rotated source-authority history a later epoch re-verifies its predecessor against |
+| `/^\.cache\/review-contexts\/[^/]+\.json$/` | record | evidence | script | the canonical gate context a receipt binds to |
+| `/^\.cache\/review-receipts\//` | record | evidence | script | the normalized member receipts the reducer votes over |
+| `/^\.cache\/review-claim-roots\/[^/]+\.json$/` | record | evidence | script | the claim-root binding a receipt was taken against |
+| `/^\.cache\/review-certifiers\//` | record | evidence | script | certifier identity bound into the gate receipt |
+| `/^\.cache\/review-findings\//` | record | evidence | script | the immutable finding set a gate settled on |
+| `/^\.cache\/validation-vectors\/[^/]+\.json$/` | record | evidence | script | local validation-runner receipts: exact command, environment digests, repeated results, bound candidate |
+| `/^\.cache\/epochs\/[^/]+\/files\//` | record | evidence | script | the immutable parent proof tree; cross-epoch review history indexes into it |
+| `.cache/final-validation.md` | record | evidence | agent | the tests-green oracle receipt (consumer repo kind), candidate-hash bound; recorded by the agent, not a producer script |
+| `.cache/selection-evidence.md` | record | evidence | agent | the no-target selection rationale, docked verbatim; not faithfully reconstructible after the claim |
+| `.cache/run-gaps-manual.md` | record | evidence | agent | agent/operator-authored gap items — an input no script can regenerate |
+| `.cache/shape-refutation.md` | record | evidence | agent | the refutation packet a shape re-plan cites as its diagnosis source |
+| `finalization-summary.md` | record | evidence | agent | the terminal artifact; the script-owned ## Attestation section is appended to it presence-guarded |
+| `.cache/sink-receipt.json` | record | forge | script | step-by-step record of what has already reached the outside world; disposed at terminal success, when the forge itself becomes the authority |
+| `.cache/sink-fallback.json` | record | forge | script | the sink fallback journal, same lifetime rule as sink-receipt.json |
+| `.cache/findings-route.json` | derivable | — | script | runRouteFindings(.cache/<gate>.md, workflow-plan.md) — re-run `route-findings --project P --node-id N`; no script reads it back |
+| `.cache/run-progress.json` | derivable | — | script | buildRunProgress(workflow-plan.md, op) — a pure function of the plan; no script reads it back |
+| `workflow-tasks.json` | derivable | — | script | generateMirror({ planContent }) in kaola-workflow-task-mirror.js regenerates the Codex task mirror from ## Nodes + ## Node Ledger |
+| `/^\.cache\/epoch-projections\//` | derivable | — | script | ensureOwnerProjection(plan, planHash, point, parseExpansionRecords(plan)) for each discharged point — leaves/records come from ## Expansion Records, discharged points from ## Node Ledger; only discharged_at is unrecoverable and foldOwnerProjection never reads it |
+| `/^\.cache\/[a-z-]+-envelope\.json$/` | derivable | — | script | the cached stdout of a --summary subcommand invocation; re-run the subcommand (the read-only emitters are idempotent). No script reads it back |
+| `.cache/scheduler.lock` | preference | — | script | transient O_EXCL coordination; ABSENCE is the normal unlocked state between invocations |
+| `.cache/active-batch.json` | preference | — | script | no writer remains since #364; the running-set is its successor and every reader treats absence as the normal case |
+| `.cache/node-timings.jsonl` | preference | — | script | best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict |
+| `.cache/provenance-log.jsonl` | preference | — | script | best-effort audit trail, writer swallows every error; no gate reads it |
+| `.cache/dispatch-log.jsonl` | preference | — | script | hook-written spawn log; the attestation check is WARN-FIRST, so absence degrades to a warning, never a wrong outcome |
+| `.cache/wedged-attestation.json` | preference | — | script | historical residue; no producer and no consumer remains in the tree |
+| `fast-summary.md` | preference | — | agent | legacy marker, never newly authored; both readers (classifier scope parse, router folder detection) are tolerant |
+| `/^phase[0-9]+-[a-z-]+\.md$/` | preference | — | agent | retired fast/full-path phase artifacts; never newly authored, read only tolerantly |
+| `/^\.cache\/\.cache\//` | preference | — | agent | historical double-nested .cache residue from a fixed path-join defect; no writer, no reader |
+| `/^\.cache\/origin\//` | record | evidence | agent | pre-claim reconnaissance folded into the project at claim time |
+| `/^\.cache\/[^/]+\.(?:md\|log\|txt\|json\|jsonl\|diff\|patch)$/` | record | evidence | agent | the free-form evidence band: per-node evidence and the attachments it cites — what was produced, how verified, where it lives |
+| `/^[^/]+\.md$/` | record | evidence | agent | the project-root prose band: agent-authored run reports docked beside the plan |
+
+### The two contested rulings
+
+`review-attempts.json` and `replan-transaction.json` are both described above as *authoritative*,
+so ruling them is a substantive claim rather than bookkeeping. Both are **records**, and the
+argument in each case is information loss, not preference:
+
+- **`review-attempts.json` → Evidence.** The Node Ledger carries one status per node. A gate that
+  failed, was repaired and re-closed is `complete` in the ledger — byte-identical to a gate that
+  passed first time. So the ledger cannot answer which failure is still unconsumed, which repair
+  consumed which failure, or how many repairs a gate has already spent; the per-gate repair count
+  that bounds the repair loop is unrecoverable from the plan alone. It is the settled state of the
+  adversarial-review oracle, which is precisely "what is already done and why should I believe it".
+- **`replan-transaction.json` → Plan.** A re-plan epoch fork lands 41 durable writes. Interrupted
+  halfway, the tree is a partial mixture of parent and child state, and nothing else on disk says
+  how far the fork got — the parent plan is byte-identical whether the fork started or not. It is
+  the epoch-lineage half of the Plan record, and `resume` is the only legal mutation while it is
+  present.
+
+### The derivations, written out
+
+Each `derivable` row above is one of these five, and each names a producer that regenerates it from
+the four records:
+
+- **`.cache/findings-route.json`** — `route-findings --project P --node-id N` recomputes the routing
+  table from the gate's own `.cache/<gate>.md` evidence plus the frozen plan. No script reads the
+  file back; it exists for a reader.
+- **`.cache/run-progress.json`** — `buildRunProgress(planContent, op)` is a pure function of the
+  plan's `## Nodes` and `## Node Ledger`. No script reads it back.
+- **`workflow-tasks.json`** — `generateMirror({ planContent })` in `kaola-workflow-task-mirror.js`
+  regenerates the Codex task mirror from the same two sections.
+- **`.cache/epoch-projections/`** — `ensureOwnerProjection` rebuilds an entry from
+  `parseExpansionRecords(plan)` for each discharged expansion point; leaves and records come from
+  `## Expansion Records`, the discharged point set from the Node Ledger. Only `discharged_at` is
+  unrecoverable, and it is inert: `foldOwnerProjection` reads `point` and `leaves` and nothing else,
+  so a re-derived projection differs only in a timestamp and its digest over that timestamp, and
+  folds to the identical `leaf_to_milestone` map.
+- **`.cache/<op>-envelope.json`** — the cached stdout of a `--summary` invocation of a read-only
+  emitter. Re-running the subcommand reproduces it; no script reads it back.
+
+### Atomicity, and the exempt classes
+
+The atomic-write obligation is checked in both directions at runtime, not by inspection:
+`scripts/kernel-write-observer.js` is preloaded into vehicle suites that drive the real production
+writers, and every filesystem write landing in a project folder is recorded with its calling frame.
+Completeness — no production writer reaches a `record` path off the atomic path — and scoping — the
+atomic replace is used on the kernel and not off it — are then adjudicated over that stream.
+
+Two classes are exempt, each because the torn-write argument is discharged another way:
+
+- **`exclusive-create-verified`** (the re-plan snapshot and transaction writers) — the write creates
+  a path that does not yet exist with `O_EXCL`, fsyncs it, and verifies the bytes against a recorded
+  digest before the manifest seals. A torn create fails verification instead of replacing a live
+  record.
+- **`mirror-copy`** (the main↔worktree project mirror, the archive copy, the sink-staged union) —
+  these copy from a source folder that is still on disk when they run, so a torn destination is
+  re-derived by re-running the idempotent copy rather than lost.
+
+One residual is recorded rather than hidden: `mirror-copy` discharges the obligation by
+re-derivation, and the completeness gate that follows the archive copy checks EXISTENCE, not
+digest — so a copy torn by a crash is re-derivable but is not currently *detected* as torn. Closing
+that means giving the archive gate a digest comparison.
+
 ## Durable Sources
 
 - Forge issues (GitHub, GitLab, or Gitea) are the canonical backlog and closure source when online.

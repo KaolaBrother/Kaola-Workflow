@@ -9,13 +9,18 @@
 // Why
 // ---
 // A real child process adds evidence only where the property under test lives AT the
-// process boundary. Exactly four boundary-property classes qualify:
+// process boundary. Exactly five boundary-property classes qualify:
 //
-//   cli-contract   argv -> handler -> envelope -> exit code (once per subcommand, not
-//                  once per scenario)
-//   concurrency    multi-process lock / atomic-write contention
-//   crash          kill mid-write, restart, recover
-//   environment    install / materialization / PATH probes
+//   cli-contract     argv -> handler -> envelope -> exit code (once per subcommand, not
+//                    once per scenario)
+//   concurrency      multi-process lock / atomic-write contention
+//   crash            kill mid-write, restart, recover
+//   environment      install / materialization / PATH probes
+//   durable-handoff  one process writes a kernel record and EXITS; the next re-reads it
+//                    from disk with no shared heap. This is the successor axiom (A1)
+//                    EXECUTED rather than asserted, and collapsing it in-process is a
+//                    measured coverage regression, not a saving — see ADR 0013
+//                    amendment 8 and D-523-01 H3.
 //
 // Everything else is function behavior plus file state, reachable in-process through the
 // module.exports APIs the runtime CLIs already publish. This check does not convert
@@ -30,7 +35,7 @@
 //      them from the root one); leaving them out let ~30% of the repo's spawn sites grow
 //      without limit.
 //   2. A site is CLASSIFIED when its own line, or the line immediately above it, carries a
-//      line comment naming exactly one of the four class tokens above. The annotation form
+//      line comment naming exactly one of the five class tokens above. The annotation form
 //      is a `//` comment holding the word `spawn-class`, a colon, then one token — nothing
 //      else on the comment. Put any rationale on a separate comment line.
 //   3. Unclassified sites are counted per file and compared against the committed baseline
@@ -40,27 +45,27 @@
 //      only maintenance path. A file with no baseline entry has an implicit baseline of 0 —
 //      enforcement is default-on and exempt-BY-BASELINE, never an opt-in allowlist.
 //   5. An unrecognised class token is RED. The vocabulary is closed: widening it means
-//      amending the architecture decision that named the four classes, deliberately.
+//      amending the architecture decision that named the classes, deliberately.
 //
-// A new spawn site therefore ships either classified as one of the four, or not at all.
+// A new spawn site therefore ships either classified as one of the five, or not at all.
 //
-// UNRESOLVED, and NOT for a conversion wave to settle on its own
-// --------------------------------------------------------------
-// The node-CLI slice — a suite spawning one of this repo's own CLIs — is where ADR 0013 says
-// conversion belongs, and it is also where docs/decisions/D-523-01.md says conversion is a
-// COVERAGE REGRESSION. That record measured the question and concluded that the cross-process
-// on-disk handoff (one process writes the ledger + baseline and exits, the next re-reads it)
-// IS the property under test, and that collapsing those spawns into one process re-introduces
-// the in-process false-green class the discipline exists to prevent. It also measured the
-// speed premise away: bare process startup is ~3% of a ~935ms adaptive-node CLI call, so
-// removing the process removes almost none of the cost.
+// RESOLVED — the node-CLI slice is NOT converted, and `durable-handoff` is why
+// -----------------------------------------------------------------------------
+// The node-CLI slice — a suite spawning one of this repo's own CLIs — was where ADR 0013
+// said conversion belongs and where `docs/decisions/D-523-01.md` said conversion is a
+// COVERAGE REGRESSION. Two live records, same sites, opposite verdicts. Settled by ADR 0013
+// amendment 8, AGAINST conversion, on measurement:
 //
-// Both documents are live and they disagree about the same sites. That is a values call about
-// what counts as evidence, not a fact a codemod can settle, so this wave deliberately left the
-// node slice alone and converted only the git ARRANGEMENT slice, where nothing is asserted.
-// Whoever picks the node slice up should resolve the conflict explicitly first — and note that
-// "one process writes and exits, the next re-reads" has no home in the four-class vocabulary,
-// so an honest resolution may require amending the class list rather than annotating around it.
+//   * the speed premise is refuted — bare process startup is ~30ms of a ~935ms adaptive-node
+//     CLI call (~3%), measured independently in June and again 2026-07-28;
+//   * the parallelization premise is refuted — a 58% call-site reduction moved the spawn
+//     count NOT AT ALL (walkthrough 3,755 before and after; test-adaptive-node 3,986 before
+//     and after; wall clock 437s -> 436s). Conversion removes call sites, not processes;
+//   * the coverage cost is real — D-523-01's H3, CONFIRMED.
+//
+// The four-class vocabulary simply had no home for "writes and exits, then re-reads". That
+// was an omission, not a licence to override a measured decision, so the fifth class names
+// it. Annotate such a site `durable-handoff` rather than converting it. D-523-01 stands.
 //
 // Usage
 //   node scripts/test-spawn-ratchet.js
@@ -77,7 +82,7 @@ const BASELINE_PATH = path.join(scriptsDir, 'spawn-ratchet-baseline.json');
 const SYNC_APIS = ['spawnSync', 'execFileSync', 'execSync'];
 
 // The CLOSED class vocabulary. Adding an entry here is an architecture change.
-const VALID_CLASSES = ['cli-contract', 'concurrency', 'crash', 'environment'];
+const VALID_CLASSES = ['cli-contract', 'concurrency', 'crash', 'durable-handoff', 'environment'];
 
 // A `//` comment whose whole payload is the marker word, a colon, and one token.
 // (Written with character classes so this file's own source carries no annotation.)

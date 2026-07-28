@@ -706,7 +706,13 @@ function main(argv) {
     const rel = flagValue('--write-baseline') || DEFAULT_BASELINE;
     const result = census();
     const abs = path.isAbsolute(rel) ? rel : path.join(REPO, rel);
-    fs.writeFileSync(abs, JSON.stringify(result, null, 2) + '\n');
+    // Atomic replace, not a plain write. A torn baseline does not read as absent — it reads
+    // as a SHORTER census, i.e. as if the surfaces had already shrunk, which silently
+    // flatters every later measurement taken against it. The "before" snapshot cannot be
+    // recaptured once the deletions it measures have started, so a partial write here is
+    // unrecoverable in exactly the way the kernel-write obligation exists to prevent.
+    require('./kaola-workflow-adaptive-schema.js').writeFileAtomicReplace(
+      abs, JSON.stringify(result, null, 2) + '\n');
     console.log(JSON.stringify({
       result: 'ok', wrote: rel, commit: result.captured_at_commit,
       distinct_conditions: result.refusal_census.distinct_conditions,

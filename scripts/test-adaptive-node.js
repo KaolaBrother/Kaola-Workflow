@@ -24000,6 +24000,10 @@ scenario(() => {
     delete env.KAOLA_AGENT_DIR;
     env.HOME = path.join(layoutTmp, 'hermetic-home');
     Object.assign(env, extraEnv || {});
+    // A HERMETIC probe: the runtime env vars are deleted and HOME is repointed, so what is
+    // under test is resolution against a fresh environment. In-process this cannot be done
+    // honestly — the parent's own HOME and require cache are already resolved.
+    // spawn-class: environment
     const r = spawnSync(process.execPath, ['-e', script], { cwd: layoutTmp, env, encoding: 'utf8' });
     try { return JSON.parse(String(r.stdout).trim()); }
     catch (_) { return { ok: false, reason: 'probe_crash: ' + String(r.stderr || r.stdout).split('\n')[0] }; }
