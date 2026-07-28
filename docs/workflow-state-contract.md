@@ -51,6 +51,7 @@ wins, and the two broad bands at the end exist to catch what the named rows do n
 | `/^\.cache\/barrier-base-[^/]+$/` | record | position | script | the baseline tree SHA observed at open; a point-in-time observation the advancing tree destroys |
 | `/^\.cache\/barrier-open-[^/]+$/` | record | position | script | the HEAD SHA at open; the staleness half of the same observation |
 | `.cache/epoch-consent-extensions.json` | record | evidence | script | the hash-chained record of human consent grants; the cached ceiling in workflow-state.md is DERIVED from it, never the reverse |
+| `.cache/consent-grants.json` | record | evidence | script | the standing-consent journal: which classes the human granted, under which claim scope, and every application that rode one. A RECORD because the A3 valve READS it to decide whether to raise at all, and a human answer is not recomputable from the other three |
 | `.cache/review-attempts.json` | record | evidence | script | the settlement state of the adversarial-review oracle: which failure is unconsumed, which repair consumed it, the per-gate repair count |
 | `.cache/chain-receipt.json` | record | evidence | script | the tests-green oracle receipt (npm repo kind), candidate-bound |
 | `.cache/final-fixes.json` | record | evidence | script | an extension of the Evidence record: the attribution source for fixes produced during finalization |

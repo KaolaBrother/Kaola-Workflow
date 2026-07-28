@@ -371,6 +371,10 @@ const REPLAN_PLAN_NEXT_NAME = 'workflow-plan.next.md';
 const REPLAN_PLANNER_PACKET_NAME = 'replan-planner-packet.json';
 const REPLAN_PLANNER_ATTESTATION_NAME = 'replan-planner-attestation.json';
 const EPOCH_CONSENT_EXTENSIONS_NAME = 'epoch-consent-extensions.json';
+// The standing-consent journal: which consent CLASSES (action + target) the human has granted
+// inside this claim, which scope they were granted under, and every application that rode one.
+// Sibling of EPOCH_CONSENT_EXTENSIONS_NAME (the ceiling ledger) — same subject, different question.
+const CONSENT_GRANTS_NAME = 'consent-grants.json';
 const REPLAN_PHASES = Object.freeze([
   'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
 ]);
@@ -6018,6 +6022,8 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
   // ---- Evidence ---------------------------------------------------------------------------
   ['.cache/' + EPOCH_CONSENT_EXTENSIONS_NAME, 'record', 'evidence', 'script',
     'the hash-chained record of human consent grants; the cached ceiling in workflow-state.md is DERIVED from it, never the reverse'],
+  ['.cache/' + CONSENT_GRANTS_NAME, 'record', 'evidence', 'script',
+    'the standing-consent journal: which classes the human granted, under which claim scope, and every application that rode one. A RECORD because the A3 valve READS it to decide whether to raise at all, and a human answer is not recomputable from the other three'],
   ['.cache/review-attempts.json', 'record', 'evidence', 'script',
     'the settlement state of the adversarial-review oracle: which failure is unconsumed, which repair consumed it, the per-gate repair count'],
   ['.cache/chain-receipt.json', 'record', 'evidence', 'script',
@@ -6216,6 +6222,7 @@ module.exports = {
   REPLAN_PLANNER_PACKET_NAME,
   REPLAN_PLANNER_ATTESTATION_NAME,
   EPOCH_CONSENT_EXTENSIONS_NAME,
+  CONSENT_GRANTS_NAME,
   REPLAN_PHASES,
   REPLAN_STATUSES,
   REPLAN_CAS_SEAMS,

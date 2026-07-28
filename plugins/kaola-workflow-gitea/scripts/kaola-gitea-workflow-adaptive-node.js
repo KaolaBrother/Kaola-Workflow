@@ -7180,11 +7180,17 @@ function runOrient(opts) {
     }
   } catch (_) { contextPacket = null; }
 
+  // #846: the standing consent grants live in this claim, and how many applications rode each.
+  // ALWAYS an array (empty, never absent, when nothing has been granted) — this is the surface a
+  // successor with ZERO conversational context reads to see what the human has already answered.
+  const consentGrants = consentGrantsView(path.join(path.dirname(planPath), '.cache'), readFile);
+
   return {
     result: 'ok',
     resumeCheck,
     nextAction,
     consentHalt,
+    consentGrants,
     escalatedToFull,
     bundleId,
     issueNumbers,
@@ -8436,12 +8442,134 @@ function computeTriage(barrierOut, cacheDir, nodeId, readFile) {
   }
 }
 
+// ===========================================================================
+// STANDING CONSENT CLASSES — the A3 valve, minus the re-asking.
+//
+// The valve is not the problem; asking the SAME question twice is. A granted consent records a
+// CLASS (an ACTION plus its TARGET, e.g. `patch-installed-tooling:~/.claude/agents`), and a later
+// request naming a class the human has already answered proceeds on that standing grant instead of
+// stopping the run again. Nothing here widens WHAT may be consented to: a class nobody has granted
+// still halts, a different TARGET is a different class, and `security` / `integrity` are different
+// questions that a consent grant never answers.
+//
+// NO NEW REFUSAL CODE, and none is needed: this is the A3 valve, which already has a locus. The
+// whole change is a LOOKUP BEFORE THE VALVE RAISES plus the journal that makes each application
+// auditable — every arm is an `ok` envelope carrying `standing_grant: true|false`.
+//
+// DURABILITY (A1). The journal is a durable `.cache/` record, not a process cache: a successor
+// with zero conversational context reads the same grants (via `orient`) that the process which
+// asked the question wrote. It is ruled `record`/evidence in KERNEL_ARTIFACT_REGISTRY because the
+// valve READS it to decide whether to raise — a gate decision — and because a human's answer is
+// not recomputable from the plan, the position or the forge.
+//
+// LIFETIME = THE CLAIM. Every entry is bound to a SCOPE digest over the claim identity, the epoch
+// lineage, the plan epoch + active plan hash, and the re-plan status/transaction. A re-plan epoch,
+// a discard+restart (new claim identity) and a new candidate digest each move that digest, and the
+// first verb to observe the move REVOKES every live grant. Revocation is durable and TERMINAL for
+// the claim: it is written into the journal, so restoring the surrounding scalars cannot resurrect
+// a grant, and a class already revoked here is never re-granted inside this claim — the valve
+// simply keeps asking for it. That is the narrow reading, and narrow is the direction this feature
+// is allowed to be wrong in: it can only ever cause one more question, never one fewer.
+// ===========================================================================
+const CONSENT_GRANT_SCHEMA_VERSION = 1;
+
+function consentGrantsPath(cacheDir) {
+  return path.join(cacheDir, reviewSchema.CONSENT_GRANTS_NAME);
+}
+
+// The scope a grant is bound to. Six fields, all from the position record: any of them moving means
+// the plan/claim the human consented under is no longer the one in front of us.
+function consentScopeDigest(stateContent) {
+  const f = reviewSchema.parseStateFields(stateContent || '');
+  return sha256Hex(canonicalJson({
+    claim: f.claim_identity_digest || 'none',
+    lineage: f.epoch_lineage_id || 'none',
+    epoch: f.plan_epoch || 'none',
+    plan_hash: f.active_plan_hash || 'none',
+    replan_status: f.replan_status || 'none',
+    replan_tx: f.replan_transaction_id || 'none',
+  }));
+}
+
+// Read the journal, or null when there is none. ABSENCE is the normal state: a run that never uses
+// the valve never creates this file, so the whole mechanism costs nothing until a human says yes.
+function readConsentStore(cacheDir, readFile) {
+  let raw = null;
+  try { raw = readFile(consentGrantsPath(cacheDir)); } catch (_) { return null; }
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (_) { return null; }
+  if (!parsed || !Array.isArray(parsed.journal)) return null;
+  return parsed;
+}
+
+function writeConsentStore(cacheDir, writeFile, store) {
+  writeFile(consentGrantsPath(cacheDir), JSON.stringify(store, null, 2) + '\n');
+}
+
+// The fold. ONE append-only array is the whole state: walking it in order yields, per class,
+// whether it is live and how many applications rode the current grant. A derived count cannot
+// drift from the journal that justifies it, which is the point of not keeping a second counter.
+function foldConsentGrants(store) {
+  const byClass = new Map();
+  for (const entry of (store && store.journal) || []) {
+    if (!entry || typeof entry.class !== 'string' || !entry.class) continue;
+    const row = byClass.get(entry.class) || { class: entry.class, state: 'none', applications: 0 };
+    if (entry.event === 'granted' && row.state !== 'revoked') { row.state = 'live'; row.applications = 0; }
+    else if (entry.event === 'revoked') { row.state = 'revoked'; }
+    else if (entry.event === 'applied' && row.state === 'live') { row.applications += 1; }
+    byClass.set(entry.class, row);
+  }
+  return byClass;
+}
+
+// The successor-facing view: live grants only, always an array. A revoked class is absent, not
+// listed as dead — the journal on disk holds the history for anyone auditing it.
+function consentGrantsView(cacheDir, readFile) {
+  const store = readConsentStore(cacheDir, readFile);
+  const out = [];
+  for (const row of foldConsentGrants(store).values()) {
+    if (row.state === 'live') out.push({ class: row.class, applications: row.applications });
+  }
+  return out;
+}
+
+// The revocation seam. Called once per invocation, BEFORE the re-plan fence emits — a new candidate
+// digest is observable only while that fence stands, and a revocation deferred until the fence lifts
+// would be a revocation that never happened. Monotone (it only ever revokes), idempotent, and a
+// no-op with zero writes when there is no journal, so it can never change any other outcome.
+function syncConsentScope(cacheDir, statePath, readFile, writeFile) {
+  const store = readConsentStore(cacheDir, readFile);
+  if (!store) return null;
+  let stateContent = '';
+  try { stateContent = readFile(statePath); } catch (_) {}
+  const scope = consentScopeDigest(stateContent);
+  if (store.scope === scope) return store;
+  // The entry carries no cause field: a moved scope stamp is the ONLY thing that revokes, so a
+  // token naming it would restate what the pair (event, scope) already says.
+  const ts = new Date().toISOString();
+  for (const row of foldConsentGrants(store).values()) {
+    if (row.state === 'live') store.journal.push({ ts, event: 'revoked', class: row.class });
+  }
+  store.pending = null;
+  store.scope = scope;
+  writeConsentStore(cacheDir, writeFile, store);
+  return store;
+}
+
 // ---------------------------------------------------------------------------
 // runWriteHalt — MUTATES state + ledger.
 // Writes escalated_to_full + consent_halt markers. Idempotent.
+//
+// #846: `--reason consent --consent-class <action>:<target>` first LOOKS UP the class. Covered by a
+// live standing grant → nothing halts, the application is journaled, and the envelope says
+// `standing_grant: true`. Not covered → the halt lands exactly as it always has, the envelope says
+// `standing_grant: false`, and the class rides the pending request so that `clear-halt` can grant
+// EXACTLY the question that was put. `standing_grant` is unconditional and boolean on every arm:
+// a valve that is silent about which of the two things it did cannot be audited.
 // ---------------------------------------------------------------------------
 function runWriteHalt(opts) {
   const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut } = opts;
+  const consentClass = opts.consentClass ? String(opts.consentClass).trim() : '';
 
   // #463 (write-overlap): `merge_conflict` joins the allowlist — a consent-style, resumable halt.
   // `integrity` is the R4 halt: a hash, back-link, lineage or authority anchor did not verify, and
@@ -8452,6 +8580,30 @@ function runWriteHalt(opts) {
   const validReasons = ['consent', 'security', 'test_thrash', 'merge_conflict', 'integrity'];
   if (!validReasons.includes(reason)) {
     return { result: 'refuse', reason: 'invalid_reason', validReasons };
+  }
+
+  const consentCacheDir = path.join(path.dirname(planPath), '.cache');
+
+  // #846 — THE LOOKUP BEFORE THE VALVE RAISES. Only `consent` consults it: a standing consent grant
+  // changes how often ONE question is put, never which questions may be skipped, so `security` and
+  // the R4 `integrity` halt are untouched here even when the caller names a granted class.
+  if (reason === 'consent' && consentClass && typeof writeFile === 'function') {
+    const store = readConsentStore(consentCacheDir, readFile);
+    const row = store ? foldConsentGrants(store).get(consentClass) : null;
+    if (row && row.state === 'live') {
+      // Design answer 3: EVERY application is journaled, not just the grant. A standing grant applied
+      // invisibly is indistinguishable from no valve at all.
+      store.journal.push({ ts: new Date().toISOString(), event: 'applied', class: consentClass, node: nodeId || null });
+      writeConsentStore(consentCacheDir, writeFile, store);
+      return {
+        result: 'ok',
+        halt: 'not_raised',
+        standing_grant: true,
+        consent_class: consentClass,
+        applications: row.applications + 1,
+        markers: [],
+      };
+    }
   }
 
   // #743: a halt is an IN-PLACE stop-and-ask — the run stays where it is and waits for the
@@ -8499,14 +8651,29 @@ function runWriteHalt(opts) {
   // flip); surface that with a halt note + refresh the mirror (AC4 lists write-halt).
 
   // #440: attach triage when a barrierOut is provided (--triage-json path or caller-injected).
-  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const cacheDir = consentCacheDir;
   const triage = computeTriage(barrierOut || null, cacheDir, nodeId, readFile);
+
+  // #846: the class rides the PENDING request. This is the only thing clear-halt can later grant —
+  // a grant assembled from anything else would be a grant the human never saw the question for.
+  // Recorded for `consent` alone, so clearing a security halt can never mint a consent grant.
+  if (reason === 'consent' && consentClass && typeof writeFile === 'function') {
+    let stateForScope = '';
+    try { stateForScope = readFile(statePath); } catch (_) {}
+    const store = readConsentStore(cacheDir, readFile)
+      || { schema_version: CONSENT_GRANT_SCHEMA_VERSION, scope: consentScopeDigest(stateForScope), pending: null, journal: [] };
+    store.pending = { class: consentClass, node: nodeId || null, at: new Date().toISOString() };
+    writeConsentStore(cacheDir, writeFile, store);
+  }
 
   return {
     result: 'ok',
     halt: 'written',
     markers,
     triage,
+    // #846: unconditional, so a reader never has to infer "no standing grant" from an absent field.
+    standing_grant: false,
+    consent_class: consentClass || null,
     // #445 (D-445-01 §2): a halt is an actionable outcome — surface the one-sentence operator
     // pointer at the top level even though the write itself succeeded (result: ok).
     operator_hint: getOperatorHint('halt_written', { nodeId, reason }),
@@ -8593,10 +8760,36 @@ function runClearHalt(opts) {
   // #373: best-effort telemetry — the halt was cleared.
   appendNodeTiming(planPath, 'clear-halt', 'halt_cleared');
 
+  // #846 — the human's "yes" becomes a STANDING grant for exactly the class the PENDING halt
+  // recorded. There is deliberately NO class flag on this verb: the grant is the answer to the
+  // question that was actually put, so it is structurally impossible to widen it at clear time, and
+  // a halt raised without a class grants nothing at all (nothing is granted by omission).
+  //
+  // A class already REVOKED inside this claim is not re-granted — see the scope note above. The
+  // halt still clears and the work still proceeds; only the STANDING part is withheld, so the
+  // valve degrades to asking every time rather than to a grant made under a vanished plan.
+  let standingGrantRecorded = null;
+  if (reason === 'consent' && typeof writeFile === 'function') {
+    const consentCacheDir = path.join(path.dirname(planPath), '.cache');
+    const store = readConsentStore(consentCacheDir, readFile);
+    const pendingClass = store && store.pending && typeof store.pending.class === 'string'
+      ? store.pending.class : null;
+    if (pendingClass) {
+      const row = foldConsentGrants(store).get(pendingClass);
+      if (!row || row.state !== 'revoked') {
+        store.journal.push({ ts: new Date().toISOString(), event: 'granted', class: pendingClass });
+        standingGrantRecorded = pendingClass;
+      }
+      store.pending = null;
+      writeConsentStore(consentCacheDir, writeFile, store);
+    }
+  }
+
   return {
     result: 'ok',
     halt: 'cleared',
     reason,
+    standing_grant_recorded: standingGrantRecorded,
     taskMirror: refreshTaskMirror(project, shell),
   };
 }
@@ -16974,6 +17167,11 @@ function main() {
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
       '  write-halt          --project P --node-id N --reason consent|security|test_thrash|merge_conflict|integrity\n' +
+      '                      [--consent-class <action>:<target>]  (consent only: names the CLASS. A class already granted\n' +
+      '                      inside this claim proceeds on the standing grant — nothing halts, the application is journaled.\n' +
+      '                      An ungranted class, a different TARGET, or a classless raise halts exactly as before.)\n' +
+      '  clear-halt          --project P --reason consent|security  (grants the class the PENDING consent halt recorded;\n' +
+      '                      no class flag, so a grant can never be widened past the question the human saw)\n' +
       '  unlock              --project P --holder <pid|none>  (remove a scheduler.lock left by a DEAD holder; refuses while the holder is live)\n' +
       '  reopen-node         --project P --node-id N\n' +
       '  repair-node         --project P --attempt-id A --node-id N\n' +
@@ -17047,6 +17245,9 @@ function main() {
   const attemptId = attemptIdIdx >= 0 ? args[attemptIdIdx + 1] : null;
   const holderIdx = args.indexOf('--holder');
   const holderArg = holderIdx >= 0 ? args[holderIdx + 1] : null;
+  // #846: the consent CLASS (an ACTION plus its TARGET) a consent halt is being raised for.
+  const consentClassIdx = args.indexOf('--consent-class');
+  const consentClass = consentClassIdx >= 0 ? args[consentClassIdx + 1] : null;
   const maxIdx   = args.indexOf('--max');
   const maxArg   = maxIdx >= 0 ? parseInt(args[maxIdx + 1], 10) : null;
 
@@ -17110,6 +17311,14 @@ function main() {
       && !(subcommand === 'record-evidence' && args.includes('--verify'));
     if (subcommand === 'orient' || guardedMutation) {
       projectReplanFence = readProjectReplanFence(statePath, cacheDir, readFile);
+      // #846: revoke standing consent grants whose claim scope has moved — BEFORE the fence emits.
+      // A new candidate digest is observable ONLY while the fence stands (every mutating verb is
+      // turned away by it), so a revocation deferred until the fence lifts is a revocation that
+      // never happens: the scalars are back to what they were and a comparison would resurrect the
+      // grant silently. The fence's enumerated zero-write posture is about worktree mirroring,
+      // scheduler locks, stdin and envelope caches; this is none of those, it is monotone (it can
+      // only ever revoke), and it is a no-op with zero writes for any project that has no journal.
+      try { syncConsentScope(cacheDir, statePath, readFile, writeFile); } catch (_) { /* never alters an outcome */ }
       if (!projectReplanFence.ok || projectReplanFence.fenced) {
         const out = replanOrientation(projectReplanFence, project);
         // The fence's zero-write posture is ENUMERATED (no worktree mirror, no scheduler lock, no
@@ -17465,7 +17674,7 @@ function main() {
           triageBarrierOut = JSON.parse(raw);
         } catch (_) { /* omit triage on parse error — degrade gracefully */ }
       }
-      result = runWriteHalt({ planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut: triageBarrierOut });
+      result = runWriteHalt({ planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut: triageBarrierOut, consentClass });
     }
   } else if (subcommand === 'clear-halt') {
     if (!reason) {
@@ -17681,6 +17890,13 @@ module.exports = {
   readRoleSubstitutions,
   activeRoleSubstitution,
   removeDurableConsentHalt,
+  // #846: the standing-consent journal seam — the scope binding, the fold, the successor view and
+  // the revocation sync, exported so each can be pinned without driving the whole CLI.
+  consentScopeDigest,
+  readConsentStore,
+  foldConsentGrants,
+  consentGrantsView,
+  syncConsentScope,
   checkEvidenceShape,
   // The single evidence-token reader behind both the shape gate's content-token branches and the
   // schema-2 review required-token loop. Exported so the "refuse on missing MEANING, not on
