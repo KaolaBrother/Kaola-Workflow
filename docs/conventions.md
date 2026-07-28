@@ -423,6 +423,55 @@ Every typed refusal/halt/warn envelope emitted by the three aggregators (`adapti
 
 The human channel (`operator_hint`) and the machine channel (`proposed_repair`, D-440-01) name the SAME #424/#434 primitives — one vocabulary, two channels.
 
+## Refusal admission (tighten-only) — ADR 0013
+
+Four standing rules govern every addition **or removal** of a typed refusal, plus the route contract
+that binds every refusal surviving them. They are **tighten-only**: they constrain what may become a
+refusal and what an admitted one must carry — they never license skipping, weakening, or routing
+around a refusal, gate, or barrier that already ships.
+
+Two loci are legal, and nothing else refuses: **L1 — kernel-write integrity** (an atomic write, forge
+operation, or CAS that factually did not take) and **L2 — the sink** (red tests, an unattributed diff,
+an unsettled review, or missing consent for an irreversible act — before anything reaches mainline).
+
+- **R1 — Locus and severity.** A new typed refusal must sit at L1 or L2, **and** be crucial there:
+  proceeding would irreversibly corrupt or lose a kernel record, let unverified / unreviewed /
+  unconsented content reach mainline, or override a human values call. A condition recoverable in
+  place ships as an advisory **even at the two loci**. A mid-run refusal proposal ships as an advisory
+  or a tool verb — answer / advise / normalize / remedy / report-all.
+- **R2 — Green arc, bidirectional.** Adding *or removing* a refusal requires a pinned green traversal:
+  a test of the LEGAL path THROUGH the mechanism, not only the refusing path. Pins on the refusing
+  path alone are not evidence that the way through still exists.
+- **R3 — Missing-tool test.** If the agent's next step after a refusal is a deterministic
+  transformation, the script performs that transformation (normalize / remedy) and the refusal
+  retires. A refusal whose remedy is mechanical is a missing tool wearing a uniform.
+- **R4 — Meaning-vs-form discriminator.** Auto-remedy applies only to *non-canonical form of correct
+  content*. A deviation that is itself evidence — a hash mismatch, an unattributed diff, a
+  ledger-chain break — is never auto-repaired; repairing it would launder the signal. R4 bounds R3:
+  **R3 never overrides R4.**
+
+**The route contract — binding on every refusal that survives R1–R4.** Each L1/L2 refusal envelope
+carries a typed `route` from a CLOSED vocabulary: an in-grammar verb (the next legal subcommand with
+its arguments), `consent` (a human decides), or `environment` (the blocker is outside the runtime —
+disk, forge, network). The prose hint of the section above stays as commentary; **the route is the
+machine-readable exit.** An R4-protected refusal routes to an investigation or discard verb, NEVER to
+an auto-repair — the signal must not be laundered. A refusal whose route cannot be named does not
+ship: it is a wedge with a label.
+
+**Family taxonomy.** Refusals are taxonomised **by family, not incident**, with single-digit code
+counts per locus — L1: kernel write failed / CAS lost / integrity broken / lock held; L2: ONE
+composite sink verdict whose payload enumerates ALL its findings in one pass (the report-all shape).
+Specificity is carried in the refusal payload, **never by minting a new code**; adding a code means
+amending the decision record, which is deliberately heavy — it is the anti-growth ratchet.
+
+**Enforcement is review-time today, and that is scope, not an open question.** The mechanical half —
+one registry keyed by reason code, and a sweep that walks every registered code, provokes the refusal,
+follows its recorded route and arrives green, default-on with an exempt list carrying a one-line
+reason per entry, never an opt-in allowlist — is later batch tooling. Until it lands these rules bind
+at review.
+
+Rationale and full derivation: `docs/decisions/0013-successor-test-two-gate-target-architecture.md`.
+
 ## Plan-run skeleton and reference cards (#445 / D-445-01 §4–5)
 
 The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL packs, per the #400 six-surface rule) are reduced to a ~150-line LOOP SKELETON. Rare-branch prose (resume, governance, repair-routing, reopen-complete-node, frontier-batch) lives ONCE under `docs/plan-run-cards/` and is NOT replicated across the six surfaces.
