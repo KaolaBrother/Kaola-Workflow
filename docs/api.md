@@ -1229,7 +1229,8 @@ The ONE commitment point for a fix produced **during finalization**. HOW the fix
 | `files` | string[] | exact repo-relative paths (no directory or glob tokens) |
 | `rerun` | object | `{ command, exit_code, candidate_hash }` — `command` MUST equal `failed_command`, `exit_code` MUST be `0`, `candidate_hash` MUST equal the recomputed current candidate (`--candidate-hash --json`) |
 | `role` | string? | the producing role. **Audit-only**: recorded, never adjudicated — test custody stays prose |
-| `recertification` | object? | `{ attempt_id, candidate_digest }` — required only for a PRODUCTION surface |
+
+There is **no field that admits a production surface** (see **The scope wall** below). An unknown key such as `recertification` is deliberately NOT a shape fault — complaining about a receipt binding would tell the operator that a better receipt is the cure — so it is ignored on submission and never recorded.
 
 **Register:** `kaola-workflow/{project}/.cache/final-fixes.json`, digest-bound and plan-bound.
 
@@ -1240,13 +1241,13 @@ The ONE commitment point for a fix produced **during finalization**. HOW the fix
   "entries": [
     { "ordinal": 1, "failed_command": "…", "fix_commit": "<sha>", "files": ["…"],
       "surface_class": "validation-apparatus", "rerun": { "command": "…", "exit_code": 0, "candidate_hash": "<64hex>" },
-      "recertification": null, "role": "tdd-guide", "recorded_at": "<iso8601>" }
+      "role": "tdd-guide", "recorded_at": "<iso8601>" }
   ],
   "digest": "<64hex over { schema_version, plan_hash, entries }>"
 }
 ```
 
-**Surface classes.** `classifyFinalFixSurface` splits the touched paths. VALIDATION APPARATUS — the machinery that judges the product: the `#424` allowband (`docs/**`, root `README.md`/`CHANGELOG.md`, the active project tree), conventional test layouts (`tests?/`, `__tests__/`, `spec/`, `*.test.*`, `*.spec.*`), this repo's own `test-*.js` / `simulate-*.js` naming, fixture/mock/snapshot directories, and build-tooling basenames (`package.json`, lockfiles, `tsconfig.json`, `jest.config.*`, `Makefile`, …). PRODUCTION — everything else. **An unrecognized path is PRODUCTION** and a mixed entry is PRODUCTION as a whole; the conservative default is the safety argument, so an unanticipated surface fails toward the re-certification wall rather than through the cheap path.
+**Surface classes.** `classifyFinalFixSurface` splits the touched paths. VALIDATION APPARATUS — the machinery that judges the product: the `#424` allowband (`docs/**`, root `README.md`/`CHANGELOG.md`, the active project tree), conventional test layouts (`tests?/`, `__tests__/`, `spec/`, `*.test.*`, `*.spec.*`), this repo's own `test-*.js` / `simulate-*.js` naming, fixture/mock/snapshot directories, and build-tooling basenames (`package.json`, lockfiles, `tsconfig.json`, `jest.config.*`, `Makefile`, …). PRODUCTION — everything else. **An unrecognized path is PRODUCTION** and a mixed entry is PRODUCTION as a whole; the conservative default is the safety argument, so an unanticipated surface fails onto the hard production wall rather than through the cheap path.
 
 **Refusal ladder** — precedence-ordered, top to bottom, EVERY refusal **zero-write** (no register created or modified, the frozen plan byte-identical, git HEAD unmoved, `git status --porcelain` unchanged). Exit code 1.
 
@@ -1255,10 +1256,14 @@ The ONE commitment point for a fix produced **during finalization**. HOW the fix
 | `final_fix_sink_not_live` | the plan's unique terminal `finalize` row is not `in_progress` — this run is not in finalization | `sink_node`, `sink_status` |
 | `final_fix_after_sink_started` | the derived sink progress is not `pristine`. **The lane's hard close.** Three-valued and fail-closed: `started` AND `unknown` both refuse, because a false `pristine` after a push would rewrite a shipped run. After the push, recovery is a follow-up issue, never a history rewrite | `sink_progress: "started" \| "unknown"` |
 | `final_fix_unverified` | `rerun` absent/malformed; `rerun.command !== failed_command` (a receipt for another command is a rubber stamp); `rerun.exit_code !== 0`; `rerun.candidate_hash` ≠ the recomputed current candidate; `fix_commit` unresolvable | `recorded_candidate_hash`, `current_candidate_hash` |
-| `final_fix_production_surface` | the entry touches production behavior AND its re-certification receipt does not verify | `recertification: "missing" \| "unresolved" \| "unsettled" \| "stale"`, `production_paths[]`, `route: "shape_refutation"` |
+| `final_fix_production_surface` | the entry touches production behavior — **unconditionally**, whatever paperwork it carries | `production_paths[]`, `route: "shape_refutation"` |
 | `final_fix_register_unverified` | an EXISTING register does not verify — appending to it would launder the out-of-band edit | `register_reason` |
 
-**Re-certification (D-826-01 — the scope wall was widened, not deleted).** The filed issue rejected production-behavior paths outright; the owner overrode that and admits them behind a **bound re-certification receipt**, which is now the load-bearing safeguard that replaces the wall. `verifyFinalFixRecertification(entry, journal, expectedCandidateDigest)` reads the run's own review journal through the existing `readReviewJournal` (inside the ledger-chain tamper boundary — never a parallel settlement store) and discriminates four failure states: `missing` (no receipt on the entry), `unresolved` (the `attempt_id` names an attempt the journal does not carry, or there is no journal), `unsettled` (the attempt exists but did not settle `pass`), `stale` (a settled PASS over a DIFFERENT candidate — the receipt-replay — or an entry whose recorded digest disagrees with the attempt it cites). Only a settled PASS bound to the post-fix candidate, agreed by entry AND journal, admits.
+**The scope wall (D-826-01) — HARD, and unconditional.** The lane records **validation apparatus only**. A finalize-time fix that touches PRODUCTION behavior is refused `final_fix_production_surface`, full stop: no receipt, no entry field and no verifier admits it, and because nothing is consulted, nothing can change the verdict — the SAME fix submitted with and without a re-certification receipt produces a byte-identical refusal (same `reason`, `production_paths`, `route`, `detail`, `operator_hint`). Under ADR 0013's **R4** — auto-remedy covers only a non-canonical FORM of correct content — a behavior change arriving after every reviewer is discharged is not bad form but a **deviation that is itself evidence**: evidence that the certification standing over this candidate no longer describes it. Admitting it behind a receipt would LAUNDER that signal, converting a fact about the run into a receipt saying the opposite; R4 always beats R3, so the deviation is reported, never repaired.
+
+**The wall is not a dead end — that is what the route is for.** The refusal carries the typed exit `route: "shape_refutation"`: when no authority in the frozen plan can certify the change, the SHAPE is what is refuted, and the re-plan epoch is the recorded way out. The refusal is zero-write like every other rung, so it is a fork, not a trap.
+
+The wall is re-proved on the READ side too: `verifyFinalFixEntry` refuses a recorded `surface_class: "production"` entry with the same `final_fix_production_surface` reason (surfaced through `final_fix_register_unverified`'s `register_reason`), so a register edited out of band to carry one never verifies. A written register therefore only ever holds `surface_class: "validation-apparatus"` entries, and they keep the cheap path unchanged — the bound green rerun receipt alone, no re-review.
 
 **No per-run cap.** Each entry carries its own green rerun receipt, and that receipt is the natural bound.
 
