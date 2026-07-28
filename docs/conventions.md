@@ -492,7 +492,7 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
   | `governance.md` | Planner freeze/governance-ack handshake, `governance_ack_stale`, risk-assessment |
   | `repair-routing.md` | `route-findings` consumption (D-446-01), `revert-overflow` / `repair-node` choice, plan-repair via `--freeze` |
   | `reopen-complete-node.md` | Reopening a `complete` writer — `repair-node` vs `reopen-node`, baseline-reuse rules, the reopen-needs-allDone trap |
-  | `frontier-batch.md` | Parallel frontier fan-out — the running-set scheduler (`open-ready` / `close-node` / `reconcile-running-set`); default-on disjoint write co-open in isolated legs (D-542-01), serial-degrade only for non-disjoint/uncertain frontiers or hosts without worktree support |
+  | `frontier-batch.md` | Parallel frontier fan-out — the running-set scheduler (`open-ready` / `close-node` / `reconcile-running-set`); default-on disjoint write co-open in isolated legs (D-542-01), serial-degrade only for write sets that are not provably exact-file-disjoint, or a failed worktree-support probe |
   | `speculative-open.md` | Speculative open (`speculative_open_policy: consent`) — `open-ready --speculative-consent` / `discard-speculative`, read and write graduation |
   | `join-protocol.md` | Wait budgets, long-poll join loop, escalation ladder, writer kill-safety (`reconcile-running-set`), typed `delegation_outcome`, frontier dispatch + slot awareness (#611) |
 
