@@ -217,8 +217,8 @@ Two clarifications the prose above left implicit. First, **the A3 consent valve 
 third refusing locus** — `consent_required` is a refusal by every mechanical definition,
 and P2's "located 100% at L1/L2" is read as "L1/L2 plus the A3 family", which T8 already
 establishes as the one legitimate mid-run interrupt. Second, **`kernel_evidence_missing`
-is a fifth L1 family**, ratified rather than folded: the transition table's
-`close(unit) → evidence recorded (L1)` row already requires it, and folding it into
+is a fifth L1 family**, ratified rather than folded: the drawn machine's
+`edge open -> done … evidence recorded (L1)` row already requires it, and folding it into
 `kernel_write_failed` would make "the write did not take" also mean "the write was never
 attempted", conflating a failed atomic replace with an absent record and weakening the
 very diagnostic the route resolver keys on.
@@ -228,37 +228,92 @@ handling: agent judgment guided by skill prose. No typed refusal shapes any of i
 
 ### The kernel state machine, drawn
 
-The design change is visible as a state-machine change. **Unit states:** `pending → open
-→ done`, plus `halted` (the A3 valve), `abandoned` (speculative discard / epoch
-supersession), and **`n/a`** — a unit the frozen plan declares will not run (a
-conditional arm not taken, a gate with nothing to certify). `n/a` is terminal, is
-reachable from `pending` at freeze or at selector resolution, and is load-bearing today:
-it gates `--gate-verify` and maps to a completed row in the task mirror. It is named here
-because an unnamed reachable state is exactly the "undeclared state" this decision
-levels at the 474 refusals — the diagnosis has to apply to its own table first.
-**Run states:** `planning → executing → sinking → archived`, with `replanning` as an
-epoch fork that rejoins `executing`. The full transition table:
+The design change is visible as a state-machine change, so the machine is drawn here —
+once, as a **parseable fenced block** rather than as a markdown table, for the reason
+amendment 9 settled for the refusal vocabulary: an info-string is a contract, a heading is
+a rendering choice, and a long ADR holds many pipe tables a table regex can wander into.
+`scripts/test-kernel-state-machine.js` parses this fence and asserts it against what the
+code actually reaches, in both directions.
 
-| Transition | Actor | Guard and its verb |
-|---|---|---|
-| freeze (plan → kernel) | planner | grammar lint (**advise**); kernel write (**L1**) |
-| open(unit) | agent | readiness closure (**answer**, whole frontier); worktree isolation (T9a) |
-| close(unit) | agent | evidence recorded (**L1**); steering instruments (**advise**, T6) |
-| halt / clear-halt | agent ↔ human | consent (**A3**) |
-| replan (epoch fork) | planner | parent snapshot (**L1**) |
-| sink | agent | tests + attribution + review + consent (**refuse, L2**) |
-| archive | agent | forge chain settled (**L1**) |
+**Unit states** are carried by the `## Node Ledger` status column, whose enum is the
+schema's `LEDGER_STATUSES`; the drawn names are the design names and the fence records the
+mapping, so a status added to the enum without a drawn state fails the build, and a drawn
+state naming no status is a phantom and fails too. **`n/a`** — a unit the plan declares
+will not run (a conditional arm not taken, a gate with nothing to certify) — is terminal
+and load-bearing today: it gates `--gate-verify` and maps to a completed row in the task
+mirror. **`halted`** is not a ledger status at all: it is the durable `consent_halt:
+pending` marker overlaying an *open* unit, and the halted row deliberately stays
+`in_progress`. **Run states** are carried by `workflow-state.md`'s `status:` field where
+one exists, by a named durable field where one exists, and are otherwise marked
+`derived:` — flagged rather than implied, because a state with no durable witness is
+exactly the kind this decision refuses to leave unnamed.
+
+The fence's grammar is two row shapes:
+
+```
+state <name> | <scope> | <carrier> | terminal|live
+edge  <from> -> <to> | <actor> | <verbs> | <evidence> | <guard and its verb>
+```
+
+`scope` is `unit` or `run`. `carrier` is `ledger:<status>`, `marker:<token>`,
+`state:<status-value>`, `field:<durable-field>`, `derived:<why>` (no single durable
+witness — the honest label), or `none:<why>` (an initial state: the record does not exist
+yet). `verbs` are `<script>:<verb>` tokens that must resolve in that script's own
+argv dispatch — the #840 dead-verb class, caught at build time. `evidence` names *which
+mechanical check backs the row*: `ledger-splice` (a `spliceLedgerNode` call site with a
+matching `allowFrom` → status pair), `ledger-append` (rows created mid-run), `plan-freeze`,
+`halt-marker`, `state-stamp`, `epoch-snapshot`, `forge`.
+
+```kernel-state-machine
+state absent      | unit | none:no ledger row exists yet                        | live
+state pending     | unit | ledger:pending                                       | live
+state open        | unit | ledger:in_progress                                   | live
+state done        | unit | ledger:complete                                      | live
+state n/a         | unit | ledger:n/a                                           | terminal
+state halted      | unit | marker:consent_halt                                  | live
+state unclaimed   | run  | none:no project folder exists yet                    | live
+state planning    | run  | state:active                                         | live
+state executing   | run  | derived:status active, frozen plan, ledger advancing | live
+state replanning  | run  | field:replan_status                                  | live
+state sinking     | run  | derived:status active, sink transaction open         | live
+state archived    | run  | state:closed                                         | terminal
+state discarded   | run  | state:abandoned                                      | terminal
+edge absent -> pending | planner | plan-validator:--freeze | plan-freeze | grammar lint (advise); kernel write (L1) — the frozen plan authors the ## Node Ledger rows
+edge absent -> pending | agent | adaptive-node:amend-surface, adaptive-node:expand-open, adaptive-node:reexpand-open | ledger-append | units enter the machine AFTER freeze too: expansion appends pending unit rows mid-run
+edge pending -> open | agent | adaptive-node:amend-surface, adaptive-node:close-and-open-next, adaptive-node:expand-open, adaptive-node:open-next, adaptive-node:open-ready, adaptive-node:reconcile-running-set, adaptive-node:reexpand-open, adaptive-node:reopen-node, adaptive-node:repair-node | ledger-splice | readiness closure (answer, whole frontier); worktree isolation (T9a)
+edge pending -> done | agent | adaptive-node:expand-close | ledger-splice | an expansion point discharges without ever being opened as work of its own
+edge pending -> n/a | agent | adaptive-node:close-and-open-next, adaptive-node:close-node | ledger-splice | selector resolution folds the arms not taken (answer)
+edge open -> done | agent | adaptive-node:close-node, adaptive-node:close-and-open-next, adaptive-node:expand-close | ledger-splice | evidence recorded (L1); steering instruments (advise, T6)
+edge open -> pending | agent | adaptive-node:amend-surface, adaptive-node:close-and-open-next, adaptive-node:close-node, adaptive-node:discard-speculative, adaptive-node:reconcile-running-set, adaptive-node:reexpand-open, adaptive-node:reopen-node, adaptive-node:repair-node | ledger-splice | a review fold, a speculative discard, a crashed open rolled back, or a repair reset
+edge open -> n/a | agent | adaptive-node:close-and-open-next, adaptive-node:close-node | ledger-splice | selector resolution folds an arm that was already open
+edge done -> pending | agent | adaptive-node:amend-surface, adaptive-node:close-and-open-next, adaptive-node:close-node, adaptive-node:reexpand-open, adaptive-node:reopen-node, adaptive-node:repair-node | ledger-splice | repair / re-expansion re-opens a settled unit and its post-dominating gates
+edge open -> halted | agent | adaptive-node:write-halt | halt-marker | consent (A3) — the durable consent_halt marker; the ledger row stays in_progress
+edge halted -> open | agent | adaptive-node:clear-halt | halt-marker | the human's answer clears the marker; only reason consent|security clears
+edge halted -> discarded | orchestrator | claim:discard, claim:release | state-stamp | a TERMINAL halt (test_thrash, integrity) has no in-run clearance — clear-halt accepts only consent|security — so its one named exit is discarding the run (A3)
+edge unclaimed -> planning | orchestrator | claim:startup, claim:pick-next | state-stamp | explicit --target-issue plus a validated selection record, else refuse with zero side effects; kernel write (L1)
+edge planning -> executing | planner | plan-validator:--freeze | plan-freeze | grammar lint (advise); kernel write (L1)
+edge executing -> replanning | planner | replan:prepare, replan:shape-refutation | epoch-snapshot | a settled typed review outcome; parent snapshot (L1)
+edge replanning -> executing | planner | replan:resume | epoch-snapshot | candidate / claim-root / frontier CAS seams verified (L1)
+edge replanning -> executing | agent | replan:abort | epoch-snapshot | abortable ONLY before the parent snapshot; past that the exit is resume or a claim-level discard
+edge replanning -> discarded | orchestrator | claim:discard, claim:release | state-stamp | the past-snapshot exit when neither resume nor abort applies (A3)
+edge executing -> sinking | agent | claim:finalize | forge | tests + attribution + review + consent (refuse, L2)
+edge sinking -> archived | agent | claim:finalize, sink-merge:--sink | state-stamp | forge chain settled (L1)
+edge planning -> discarded | orchestrator | claim:discard, claim:release | state-stamp | the claim is released and the folder archived; no forge side effect (A3)
+edge executing -> discarded | orchestrator | claim:discard, claim:release | state-stamp | the same exit mid-run (A3)
+```
 
 Contrast with today: the ~474 typed refusals are, structurally, **hundreds of undeclared
 states** — each "run in condition X, refused" (stale, mismatched, wedged, unroutable) is
 a state the drawn machine does not name, and several have no legal exit at all (#839's
 permanent wedge, #840's dead verb are literally reachable states with no drawn
-transition out). A state machine that cannot be drawn is not a state machine. The table
+transition out). A state machine that cannot be drawn is not a state machine. The fence
 above is required to stay **exhaustive**: every reachable condition has a named
 transition out, and a proposed mechanism that would create a condition without one is
-rejected by construction (it would violate P3). This also answers the standing question
-"is a state machine enough?": *as the durable contract, yes — this one; as police, no
-machine is needed at all.*
+rejected by construction (it would violate P3). That requirement is now mechanical rather
+than editorial — every `live` state must carry at least one outgoing edge and every
+`terminal` state exactly none, and both halves are cross-checked against the code's own
+splice sites. This also answers the standing question "is a state machine enough?": *as
+the durable contract, yes — this one; as police, no machine is needed at all.*
 
 ### Every refusal names its exit — the route contract
 
@@ -300,7 +355,7 @@ quietly dropped — see amendment 9.
 
 `kernel_evidence_missing` is a **deliberate +1** to the four L1 families named in Layer 2
 above, and is flagged as such rather than absorbed silently. Its justification is this
-ADR's own transition table — `close(unit) | evidence recorded (**L1**)` — plus the #825
+ADR's own drawn machine — `edge open -> done … evidence recorded (L1)` — plus the #825
 verdict on the claim boundary, which rules in the same language that a lost selection
 rationale is an irreversible kernel-record loss. `kernel_write_failed` means *the write
 did not take*; this means *the write was never made and the content no longer exists to
@@ -470,10 +525,14 @@ one-rule-one-wording; the single adaptive path.
   prompts do **not** shrink as refusals demote, choreography is surviving its refusal —
   a violation of T11 to be hunted, not tolerated.
 - **P6 — Drawn-machine exhaustiveness.** Every reachable run condition appears in the
-  transition table with a named exit; a walkthrough scenario asserts no reachable
-  condition lacks one (the mechanical form of "no undeclared states"). The route
-  contract's registry sweep is its per-refusal refinement: every surviving reason code
-  is walked refusal → route → green, so an exit-less refusal cannot ship.
+  drawn machine with a named exit; `scripts/test-kernel-state-machine.js` parses the
+  `kernel-state-machine` fence and asserts no reachable condition lacks one (the
+  mechanical form of "no undeclared states"), in both directions — a state or transition
+  the code reaches and the fence omits is red, and so is a drawn state or transition the
+  code cannot reach, since a machine with phantom states is as undeclared as one with
+  missing states. The route contract's registry sweep is its per-refusal refinement:
+  every surviving reason code is walked refusal → route → green, so an exit-less refusal
+  cannot ship.
 
 ## Risks
 
@@ -600,6 +659,78 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
    in their union, which is precisely the class no per-branch check can see. It was
    caught by an adversarial re-verification that diffed the two ADR versions against each
    other rather than reviewing either alone.
+
+10. **The drawn machine was not exhaustive, and now it is checked instead of claimed.**
+    Amendment 4 added `n/a` to the unit states after it was found reachable and unnamed.
+    That was one instance, repaired by hand; P6 asserts the *property*, and a property
+    re-established by hand each time it is violated is not a property. Enumerating the
+    ledger's own `spliceLedgerNode` call sites — 25 of them, yielding 7 distinct
+    `allowFrom → status` pairs — against the seven-row table found the omission was
+    systematic, not incidental:
+
+    - **The claim/select transition was absent entirely.** The table began at `freeze`, so
+      the run's *first* kernel write had no row: `claim startup` / `pick-next` creates the
+      project folder and `workflow-state.md`, refuses without an explicit `--target-issue`
+      and a validated selection record, and stamps `status: active`. That is a kernel
+      write with an L1 guard and an A3-adjacent commitment, and it was undrawn. Now
+      `edge unclaimed -> planning`.
+    - **Every backward edge was absent.** The table drew `pending → open → done` with
+      `done` implicitly terminal, while the code moves `complete → pending` from six
+      subcommands (`reopen-node`, `repair-node`, `reexpand-open`, `amend-surface`, and the
+      review fold inside both close verbs) and `in_progress → pending` from eight. Repair
+      and re-expansion — the whole recovery surface — were literally undrawn state
+      transitions, which is the #839/#840 diagnosis applied to this document.
+    - **`pending → done` and `open → n/a` were absent.** `expand-close` discharges an
+      expansion point that was never opened; selector resolution folds an arm that was
+      *already open*, not only a pending one. The prose said "reachable from `pending` …
+      at selector resolution" and the code's `allowFrom` is `['pending', 'in_progress']`.
+    - **Mid-run row creation was absent.** `expand-open` appends `pending` rows to a frozen
+      ledger, so units enter the machine after freeze. The table's only entry point was
+      `freeze`, which quietly asserted a fixed unit set.
+    - **Verbs were absent from the rows, and the omission hid live routes.** A transition is
+      not fully drawn by its endpoints: `amend-surface` reaches `runReExpandOpen`, and
+      `reconcile-running-set` reaches the expansion frontier's `runOpenReady` through the
+      same `openExpansionFrontier` helper `expand-open` uses, so both perform ledger moves
+      the reader would attribute only to the recovery verbs. Naming the verb on each row is
+      what makes the drawing usable as a route, and the check derives that column from the
+      call graph rather than trusting it.
+    - **One phantom: `abandoned` was drawn as a unit state and is not one.** Nothing in the
+      lifecycle ever stamps a unit `abandoned`; `abandoned` is a *run* `status:` value
+      written by `claim discard` / `claim release`. The two mechanisms the prose cited for
+      it do something else — speculative discard resets the row `in_progress → pending`,
+      and epoch supersession freezes the parent epoch under `.cache/epochs/{ordinal}/`
+      without touching any row status. Reclassified as the run state `discarded`. A
+      phantom state is the same defect as a missing one — it makes the drawing and the
+      system disagree — and it is the half a hand audit reliably misses, because nothing
+      ever fails on account of a state that never occurs.
+    - **`halted` had no honest exit.** `write-halt` accepts five reasons; `clear-halt`
+      accepts two. A `test_thrash` or `integrity` halt therefore cannot be cleared by the
+      runtime that raised it — deliberately, since auto-clearing an integrity halt would
+      launder the signal (R4). But that makes `halted` a reachable state whose drawn exit
+      does not apply to it, which is the #839 wedge shape. The exit exists and is now
+      drawn: `edge halted -> discarded`, a claim-level discard, an A3 call.
+
+    The table is replaced by a fenced `kernel-state-machine` block, for amendment 9's
+    reason and not for a new one: the vocabulary it settled has exactly one left-hand side
+    because a fence is keyed by an info-string, and the machine now needs the same property
+    for the same purpose. `scripts/test-kernel-state-machine.js` parses it and checks the
+    claim mechanically — every code-reachable `(from → to)` pair must appear as a
+    `ledger-splice` edge and every `ledger-splice` edge must be code-reachable; every
+    ledger status must map to exactly one drawn state and back; every `terminal` state must
+    have zero outgoing edges *and* zero outgoing splice pairs in the code; every `live`
+    state must have at least one outgoing edge; every verb named must resolve in its
+    script's own argv dispatch; and every subcommand that reaches a ledger write must be
+    named on the edge it produces. The parser and the checks are mutation-proved against
+    this file itself: deleting a row turns the suite red naming the row, and adding a row
+    for a transition the code cannot reach turns it red naming the phantom.
+
+    Why it mattered enough to be worth mechanizing: this section is the one place the
+    decision claims a *complete* description of the runtime, and every other claim in the
+    document leans on it. P3 ("wedge extinction … impossible by construction") is only
+    meaningful over a table that names every condition; R1 ("a new refusal must sit at L1,
+    L2 or A3") is only checkable if the loci are the whole space. An incomplete drawing
+    does not merely under-describe — it makes the decision's own guarantees unfalsifiable,
+    which is precisely the charge this ADR levels at the 474 refusals it replaces.
 
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after
