@@ -27280,6 +27280,287 @@ scenario(() => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// #841 — the RE-ISSUED DISPATCH CARD. #819 shipped the DERIVATION half (codexTaskNameForNode follows
+// the dispatch target, pinned by T4/T4b above) but never its DELIVERY. `buildDispatch` runs at exactly
+// three sites, all openers, and every one of them resolves its target from the readySet — an
+// `in_progress` row is not in it, so after a MID-NODE substitution no code path rebuilds the card.
+// `orient` stays silent too (the reset preserves the binding header, so requires_redispatch is false),
+// and the only card on disk is the envelope the CONSUMED open wrote.
+//
+// That leaves the orchestrator with two moves, and the plan-run surfaces forbid both: re-present the
+// consumed identity from the stale envelope (the runtime rejects it — the v2 task name is already
+// taken), or hand-derive the new one, which is the improvisation "NEVER improvise a task name" names.
+//
+// ACCEPTANCE: a substitution re-issues the card MECHANICALLY. `substitute-role`'s ok payload carries
+// the card-grade spawn fields for the dispatch target, and every one of them agrees with the card
+// `buildDispatch` builds for the same node once the record exists — so the two can never drift and the
+// orchestrator never has to author a spawn parameter.
+//
+// The tests below deliberately do NOT repeat #819-T13's shortcut of modelling re-dispatch as a direct
+// evidence write: that bypasses the card layer entirely, which is why the shipped suite is green over
+// this gap. Here the second spawn is driven from the emitted card and from nothing else.
+// ---------------------------------------------------------------------------
+
+// The spawn parameters an orchestrator may not improvise: the identity trio the plan-run prose names
+// by key (`agent_type` to dispatch, `agent_type_frozen` for what the plan froze, `role_substituted`),
+// the substitution basis, the derived task identity + dispatch mode, and every tier-derived spawn
+// parameter (effort, Codex profile, wait budget, opencode variant). Expected VALUES are never
+// transcribed here — each is compared against `buildDispatch`'s own output for the same node.
+const REISSUED_CARD_KEYS = [
+  'agent_type', 'agent_type_frozen', 'role_substituted', 'role_substitution_basis',
+  'codex_task_name', 'codex_dispatch_mode',
+  'codex_model', 'codex_model_source', 'codex_reasoning_effort', 'codex_reasoning_effort_source',
+  'codex_profile_mode', 'codex_profile_tier', 'codex_profile_compatible',
+  'wait_budget_minutes', 'wait_budget_source',
+  'opencode_variant', 'opencode_variant_source',
+];
+
+// #841-A/B/C — the payload contract, on the exact row the issue is about: a node already `in_progress`
+// whose dispatched role self-persisted a capability_gap. Fresh record, idempotent replay, and the
+// refusal arm.
+scenario(() => {
+  const { runSubstituteRole, buildDispatch } = require('./kaola-workflow-adaptive-node');
+  const dirs = [];
+  const nodeInfo = { id: 'n1', role: 'code-explorer', model: 'standard', declared_write_set: '—' };
+  try {
+    // A — the fresh record.
+    {
+      const f = subroleFixture({ status: 'in_progress', evidence: SUBROLE_GAP_BODY }); dirs.push(f.dir);
+      const ctx = { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: SUBROLE_NONCE };
+
+      // The identity the runtime has ALREADY consumed — the card the open emitted, built by the
+      // shipped opener logic rather than transcribed.
+      const consumedCard = subroleCall('#841-A consumed card', () => buildDispatch(nodeInfo, ctx));
+      assert(consumedCard.codex_task_name === 'n1_code_explorer',
+        '#841-A: fixture precondition — the pre-substitution identity is the frozen one, got '
+        + JSON.stringify(consumedCard.codex_task_name));
+
+      const swap = subroleCall('#841-A substitute mid-node',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(swap.result === 'ok' && swap.evidence_reset === true,
+        '#841-A: fixture precondition — the mid-node gap body must reset and swap, got ' + JSON.stringify(swap));
+
+      // The card the three openers WOULD emit now that the record exists. This is the single source of
+      // truth for every expected value below; the payload must not be able to drift from it.
+      const reference = subroleCall('#841-A reference card', () => buildDispatch(nodeInfo, ctx));
+
+      assert(typeof swap.codex_task_name === 'string' && swap.codex_task_name !== '',
+        '#841-A: the ok payload must RE-ISSUE the dispatch identity — with no codex_task_name on the '
+        + 'payload and no opener able to reach an in_progress row, the orchestrator has nothing to '
+        + 'spawn from but the consumed envelope or an improvised name, got '
+        + JSON.stringify(swap.codex_task_name));
+      assert(swap.codex_task_name !== consumedCard.codex_task_name,
+        '#841-A: the re-issued identity must be FRESH — re-presenting the consumed one is the spawn '
+        + 'failure this issue exists for, got ' + JSON.stringify(swap.codex_task_name));
+      assert(swap.codex_task_name === reference.codex_task_name,
+        '#841-A: the re-issued identity must be the one buildDispatch derives for the dispatch target, '
+        + 'so the payload and the openers can never disagree.\ngot:      '
+        + JSON.stringify(swap.codex_task_name) + '\nexpected: ' + JSON.stringify(reference.codex_task_name));
+
+      for (const k of REISSUED_CARD_KEYS) {
+        assert(Object.prototype.hasOwnProperty.call(swap, k),
+          '#841-A: the ok payload is missing the card-grade spawn field "' + k + '" — the plan-run '
+          + 'mandate forbids improvising a task name, omitting agent_type, or dropping the effort '
+          + 'tier, so every one of them has to be ON the re-issued card. payload keys: '
+          + JSON.stringify(Object.keys(swap).sort()));
+        assert(JSON.stringify(swap[k]) === JSON.stringify(reference[k]),
+          '#841-A: "' + k + '" must equal what buildDispatch emits for this node.\ngot:      '
+          + JSON.stringify(swap[k]) + '\nexpected: ' + JSON.stringify(reference[k]));
+      }
+      assert(swap.role_substitution_basis === swap.basis,
+        '#841-A: the card\'s basis and the record\'s basis are one value, got '
+        + JSON.stringify(swap.role_substitution_basis) + ' vs ' + JSON.stringify(swap.basis));
+
+      // Nothing the payload and the card share may disagree — an extra card-named key carrying a
+      // different value would be a second, contradicting source of spawn truth.
+      for (const k of Object.keys(swap)) {
+        if (!Object.prototype.hasOwnProperty.call(reference, k)) continue;
+        assert(JSON.stringify(swap[k]) === JSON.stringify(reference[k]),
+          '#841-A: the payload and the dispatch card disagree on "' + k + '": '
+          + JSON.stringify(swap[k]) + ' vs ' + JSON.stringify(reference[k]));
+      }
+
+      // B — the crash-resume replay hands back the SAME card. An orchestrator that lost the payload
+      // between the record and the spawn re-runs the identical command; a replay that answered with
+      // less than the first call would leave it in exactly the improvisation this issue closes.
+      const replay = subroleCall('#841-B replay',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'investigator' }, 'p1'));
+      assert(replay.result === 'ok' && replay.idempotent === true,
+        '#841-B: fixture precondition — the second identical call is an idempotent replay, got '
+        + JSON.stringify(replay));
+      for (const k of REISSUED_CARD_KEYS) {
+        assert(Object.prototype.hasOwnProperty.call(replay, k),
+          '#841-B: the idempotent-replay return must carry "' + k + '" too — a crash between the '
+          + 'record and the spawn is resumed by re-running this command, and that resume must yield a '
+          + 'dispatchable card. replay keys: ' + JSON.stringify(Object.keys(replay).sort()));
+        assert(JSON.stringify(replay[k]) === JSON.stringify(swap[k]),
+          '#841-B: "' + k + '" must be identical across the replay (the card is a pure function of the '
+          + 'node and the active record — a counter or timestamp input would break crash-resume).\n'
+          + 'got:      ' + JSON.stringify(replay[k]) + '\nexpected: ' + JSON.stringify(swap[k]));
+      }
+    }
+
+    // C — the guard the #819 pin owns, restated for the payload: nothing about re-issuing a card may
+    // reach a node with no substitution on record, and a REFUSED swap must not hand out a card at all
+    // (a dispatchable card behind a refusal is a spawn the workflow never authorised).
+    {
+      // The MEASURED key set of an unsubstituted card at this commit — the same golden list #819-T6
+      // pins, restated here so a fix that leaks a key into buildDispatch reds in its own issue's suite.
+      const GOLDEN_DISPATCH_KEYS = [
+        'agent_type', 'codex_dispatch_mode', 'codex_model', 'codex_model_source',
+        'codex_profile_compatible', 'codex_profile_mode', 'codex_profile_tier',
+        'codex_reasoning_effort', 'codex_reasoning_effort_source', 'codex_task_name',
+        'declared_write_set', 'evidence_file', 'forge_rider', 'guards', 'model', 'model_display',
+        'node_id', 'nonce', 'opencode_variant', 'opencode_variant_source', 'required_tokens',
+        'role', 'wait_budget_minutes', 'wait_budget_source', 'working_dir',
+      ];
+      const f = subroleFixture({ status: 'in_progress', evidence: SUBROLE_GAP_BODY }); dirs.push(f.dir);
+      const d = subroleCall('#841-C unsubstituted card', () => buildDispatch(nodeInfo,
+        { planPath: f.planPath, evidence_file: '.cache/n1.md', nonce: SUBROLE_NONCE }));
+      assert(JSON.stringify(Object.keys(d).sort()) === JSON.stringify(GOLDEN_DISPATCH_KEYS),
+        '#841-C: an unsubstituted card must stay BYTE-IDENTICAL — re-issuing a card for a substituted '
+        + 'node may not add a key to the card of a node that has none.\ngot:      '
+        + JSON.stringify(Object.keys(d).sort()) + '\nexpected: ' + JSON.stringify(GOLDEN_DISPATCH_KEYS));
+      assert(d.codex_task_name === 'n1_code_explorer',
+        '#841-C: and its identity is unchanged, got ' + JSON.stringify(d.codex_task_name));
+
+      const refused = subroleCall('#841-C refused swap',
+        () => runSubstituteRole({ planPath: f.planPath, nodeId: 'n1', toRole: 'code-explorer' }, 'p1'));
+      assert(refused.result === 'refuse' && refused.reason === 'substitute_self_noop',
+        '#841-C: fixture precondition — a swap to the frozen role refuses, got ' + JSON.stringify(refused));
+      for (const k of ['codex_task_name', 'agent_type', 'role_substituted', 'role_substitution_basis']) {
+        assert(!Object.prototype.hasOwnProperty.call(refused, k),
+          '#841-C: a REFUSED swap must carry no card field ("' + k + '" present) — nothing was recorded, '
+          + 'so a card handed back here would be a spawn identity for a substitution that never happened');
+      }
+    }
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// #841-D — THE END-TO-END PROOF, driven THROUGH the card layer. #819-T13 proves the same recovery can
+// close, but it models re-dispatch as a direct write into the evidence file, so the dispatch identity
+// is never asked for and the gap this issue names cannot show up there. Here the second spawn takes
+// every parameter from the re-issued card, against a runtime model where a v2 task name may be
+// consumed exactly once — which is what makes the stale card mechanically detectable rather than a
+// matter of prose.
+scenario(() => {
+  const { runSubstituteRole, runCloseNode, buildDispatch } = require('./kaola-workflow-adaptive-node');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-841-e2e-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-841');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(
+      ['| n1 | in_progress | |', '| review | pending | |', '| done | pending | |'],
+      ['| n1 | code-explorer | — | — | 1 | sequence |',
+        '| review | code-reviewer | n1 | — | 1 | sequence |',
+        '| done | finalize | review | CHANGELOG.md | 1 | sequence |']);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-n1'), SUBROLE_SHA + '\n');
+    const evidencePath = path.join(cacheDir, 'n1.md');
+
+    // The node exactly as the frozen plan declares it, so the reference card below is built from the
+    // plan rather than from a hand-written stand-in.
+    const parsed = planValidator.planNodesWithExpansions(fs.readFileSync(planPath, 'utf8'))
+      .find(n => n.id === 'n1');
+    assert(!!parsed && parsed.role === 'code-explorer',
+      '#841-D: fixture precondition — n1 parses out of the frozen plan, got ' + JSON.stringify(parsed && parsed.role));
+    const nodeInfo = {
+      id: parsed.id, role: parsed.role, model: parsed.model, declared_write_set: parsed.writeSetRaw,
+    };
+    const ctx = { planPath, evidence_file: '.cache/n1.md', nonce: SUBROLE_NONCE };
+
+    // The runtime model: a v2 task identity may be consumed exactly ONCE. Re-presenting a consumed
+    // name is the observed "already exists" spawn failure; an absent name is the improvisation the
+    // plan-run surfaces forbid. Both are refusals here, so neither can pass silently.
+    const consumed = new Set();
+    const spawn = (taskName, agentType) => {
+      if (typeof taskName !== 'string' || taskName === '') {
+        return { ok: false, error: 'no task name on the card; improvising one is forbidden' };
+      }
+      if (!agentType) return { ok: false, error: 'no agent_type on the card' };
+      if (consumed.has(taskName)) return { ok: false, error: 'task "' + taskName + '" already exists' };
+      consumed.add(taskName);
+      return { ok: true, task_name: taskName, agent_type: agentType };
+    };
+
+    // 1. The open dispatches the frozen role and CONSUMES its identity, and the CLI caches the whole
+    //    envelope at .cache/<op>-envelope.json — the only card that will exist on disk from here on.
+    const openCard = subroleCall('#841-D open card', () => buildDispatch(nodeInfo, ctx));
+    const first = spawn(openCard.codex_task_name, openCard.agent_type);
+    assert(first.ok === true && first.agent_type === 'code-explorer',
+      '#841-D: fixture precondition — the first spawn consumes the frozen identity, got ' + JSON.stringify(first));
+    fs.writeFileSync(path.join(cacheDir, 'open-next-envelope.json'),
+      JSON.stringify({ result: 'ok', opened: 'n1', dispatch: openCard }) + '\n');
+
+    // 2. The dispatched role hits a capability gap and self-persists it.
+    fs.writeFileSync(evidencePath, SUBROLE_GAP_BODY);
+    const swap = subroleCall('#841-D substitute',
+      () => runSubstituteRole({ planPath, nodeId: 'n1', toRole: 'investigator' }, 'issue-841'));
+    assert(swap.result === 'ok' && swap.evidence_reset === true,
+      '#841-D: fixture precondition — the gap body resets and swaps, got ' + JSON.stringify(swap));
+
+    // 3. "Go get the card first" sends the orchestrator to the cached envelope — which still holds the
+    //    identity the runtime consumed in step 1. This is the dead end, and it must stay one.
+    const onDisk = JSON.parse(fs.readFileSync(path.join(cacheDir, 'open-next-envelope.json'), 'utf8')).dispatch;
+    const stale = spawn(onDisk.codex_task_name, onDisk.agent_type);
+    assert(stale.ok === false && /already exists/.test(stale.error),
+      '#841-D: fixture premise — the only card on disk still carries the CONSUMED identity, so obeying '
+      + '"every spawn parameter comes from the dispatch card" re-presents it and the spawn fails, got '
+      + JSON.stringify(stale));
+    assert(onDisk.agent_type === 'code-explorer',
+      '#841-D: fixture premise — and it still names the role that just gapped, got ' + JSON.stringify(onDisk.agent_type));
+
+    // 4. THE ACCEPTANCE. The re-issued card comes off the substitution's own return, and the second
+    //    spawn takes every parameter from it. No name is derived anywhere in this test.
+    const reissued = spawn(swap.codex_task_name, swap.agent_type);
+    assert(reissued.ok === true,
+      '#841-D: the substitution must hand back a spawnable card — with no codex_task_name/agent_type '
+      + 'on the payload, no opener able to re-card an in_progress row, and a stale envelope on disk, '
+      + 'the re-dispatch has no non-improvised source at all. spawn said: ' + JSON.stringify(reissued.error)
+      + '; payload keys: ' + JSON.stringify(Object.keys(swap).sort()));
+    assert(reissued.agent_type === 'investigator',
+      '#841-D: the re-issued card must dispatch the SUBSTITUTE, got ' + JSON.stringify(reissued.agent_type));
+    assert(reissued.task_name !== openCard.codex_task_name,
+      '#841-D: under a fresh identity, not the consumed one, got ' + JSON.stringify(reissued.task_name));
+    const reference = subroleCall('#841-D reference card', () => buildDispatch(nodeInfo, ctx));
+    assert(swap.codex_task_name === reference.codex_task_name
+      && swap.agent_type === reference.agent_type
+      && swap.agent_type_frozen === reference.agent_type_frozen
+      && swap.role_substituted === reference.role_substituted,
+      '#841-D: and it must be the SAME card the openers would build now that the record exists.\n'
+      + 'got:      ' + JSON.stringify({ codex_task_name: swap.codex_task_name, agent_type: swap.agent_type,
+        agent_type_frozen: swap.agent_type_frozen, role_substituted: swap.role_substituted })
+      + '\nexpected: ' + JSON.stringify({ codex_task_name: reference.codex_task_name, agent_type: reference.agent_type,
+        agent_type_frozen: reference.agent_type_frozen, role_substituted: reference.role_substituted }));
+
+    // 5. The spawned substitute delivers into the file the reset left behind, and the run finishes.
+    const reseeded = fs.readFileSync(evidencePath, 'utf8');
+    fs.writeFileSync(evidencePath,
+      reseeded.replace(/^findings: *$/m, 'findings: delivered by the role spawned from the re-issued card ('
+        + (reissued.agent_type || 'NO agent_type ON THE CARD') + ' as '
+        + (reissued.task_name || 'NO task name ON THE CARD') + ')'));
+    const closed = subroleCall('#841-D close', () => runCloseNode({
+      planPath, project: 'issue-841', nodeId: 'n1',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+    }));
+    assert(closed.result === 'ok' && closed.closed === 'n1',
+      '#841-D: the node must close after the CARD-DISPATCHED substitute delivers — the recovery is '
+      + 'only real if the run reaches the end of it, got ' + JSON.stringify(closed));
+    const after = fs.readFileSync(planPath, 'utf8');
+    assert(/role_substituted: code-explorer→investigator/.test(after),
+      '#841-D: and the compliance row still records what actually ran');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 
 if (failed > 0) {
