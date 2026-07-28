@@ -17,6 +17,9 @@ const planValidator = require('./kaola-workflow-plan-validator');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 
 let passed = 0;
 let failed = 0;
@@ -1789,7 +1792,7 @@ function assert(condition, message) {
     const first = runV776(f.repoRoot, [VALIDATOR776, f.planPath, '--record-base', '--node-id', 'impl', '--json']);
     assert(first.exitCode === 0 && first.result === 'ok' && !first.reused,
       'T-RECORDBASE-ORDER-b: token-present/base-absent is skipped by the reuse branch and re-snapshots, got ' + JSON.stringify(first));
-    const headNow = execFileSync('git', ['-C', f.repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const headNow = G.exec(f.repoRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     assert(fs.readFileSync(f.tokenFile, 'utf8').trim() === headNow,
       'T-RECORDBASE-ORDER-b: the orphan token is RE-STAMPED to the live HEAD');
     fs.writeFileSync(path.join(f.repoRoot, 'src', 'b.js'), '// b\n');

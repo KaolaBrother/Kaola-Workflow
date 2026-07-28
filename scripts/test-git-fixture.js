@@ -50,11 +50,34 @@
 // (test-spawn-census) installs pass-through wrappers onto the child_process module object,
 // and a require-time destructure would capture whichever binding happened to exist first.
 // Reading the property per call makes this library countable no matter the require order.
+//
+// The same late binding is a HAZARD in one place, so it is written down rather than left to
+// be rediscovered: scripts/test-run-chains.js deliberately replaces
+// `child_process.spawnSync` to intercept the chain runner. A fixture call routed through
+// `git()` inside that file's patched window would be intercepted too. Its git fixture calls
+// are all on the execFileSync side, which it does NOT patch, so nothing is intercepted
+// today — but a future conversion there must check the patch before using `git`/`raw`.
 function spawnGit(args, opts) {
   return require('child_process').spawnSync('git', args, opts);
 }
 
-const DEFAULT_OPTS = { encoding: 'utf8' };
+// The execFileSync half. It is a genuinely different contract from spawnSync — it RETURNS
+// stdout and THROWS on a non-zero exit — so it gets its own entry point rather than a flag
+// on the one above. Options are forwarded exactly, including `undefined`: execFileSync's own
+// default already pipes stdout and inherits stderr, which is what an inline call with no
+// options was getting, and substituting a default here would silently turn a Buffer return
+// into a string.
+function execGit(args, opts) {
+  return require('child_process').execFileSync('git', args, opts);
+}
+
+// Options are passed through VERBATIM whenever the caller supplies them, and defaulted only
+// when they do not. Merging a default under a caller's object would be a silent semantic
+// change: `{ stdio: 'pipe' }` alone yields Buffer stdout, and quietly folding
+// `encoding: 'utf8'` into it would turn that into a string under a caller that may be
+// reading `.stdout` as bytes. The default exists solely so a bare `git(repo, args)` does not
+// inherit the parent's stdio and spray the suite's output.
+const NO_OPTS = { encoding: 'utf8' };
 
 /** Normalise `paths` given as a string or an array into an argv tail. */
 function pathArgs(paths) {
@@ -68,7 +91,25 @@ function pathArgs(paths) {
  */
 function git(repo, args, opts) {
   return spawnGit(['-C', String(repo)].concat(args.map(String)),
-    Object.assign({}, DEFAULT_OPTS, opts || {}));
+    opts === undefined ? NO_OPTS : opts);
+}
+
+/**
+ * git with NO `-C`: for the calls whose repo is an argument rather than a working
+ * directory — `init --bare <path>`, `clone <src> <dest>`, `--version` probes.
+ */
+function raw(args, opts) {
+  return spawnGit(args.map(String), opts === undefined ? NO_OPTS : opts);
+}
+
+/** `execFileSync('git', ['-C', repo, ...args], opts)` — returns stdout, throws on failure. */
+function exec(repo, args, opts) {
+  return execGit(['-C', String(repo)].concat(args.map(String)), opts);
+}
+
+/** execFileSync git with NO `-C`, for calls whose repo is an argument or that need none. */
+function execRaw(args, opts) {
+  return execGit(args.map(String), opts);
 }
 
 /** As `git`, but throws with the child's own stderr when the command fails. */
@@ -96,8 +137,7 @@ function init(repo, o) {
   const opt = o || {};
   const args = ['init'];
   if (opt.branch) args.push('-b', String(opt.branch));
-  const r = spawnGit(['-C', String(repo)].concat(args),
-    Object.assign({}, DEFAULT_OPTS, opt.spawn || {}));
+  const r = git(repo, args, opt.spawn);
   if (opt.identity !== false) {
     git(repo, ['config', 'user.email', opt.email || 'test@example.com'], opt.spawn);
     git(repo, ['config', 'user.name', opt.name || 'Test User'], opt.spawn);
@@ -107,14 +147,13 @@ function init(repo, o) {
 
 /** `git init --bare <dir>` — the argument is the repo being CREATED, not a cwd. */
 function initBare(dir, opts) {
-  return spawnGit(['init', '--bare', String(dir)],
-    Object.assign({}, DEFAULT_OPTS, opts || {}));
+  return spawnGit(['init', '--bare', String(dir)], opts === undefined ? NO_OPTS : opts);
 }
 
 /** `git clone <src> <dest>`. */
 function clone(src, dest, extraArgs, opts) {
   return spawnGit(['clone'].concat((extraArgs || []).map(String), [String(src), String(dest)]),
-    Object.assign({}, DEFAULT_OPTS, opts || {}));
+    opts === undefined ? NO_OPTS : opts);
 }
 
 /** `git add <paths>` — defaults to `-A`. */
@@ -157,7 +196,7 @@ function remoteAdd(repo, name, url, opts) {
 }
 
 module.exports = {
-  git, gitOk, out,
+  git, raw, exec, execRaw, gitOk, out,
   init, initBare, clone,
   add, commit, commitAll, commitPaths,
   head, checkout, remoteAdd,
