@@ -180,8 +180,12 @@ and is located 100% at the two loci.
 **The enumeration, machine-readable.** The ratchet is only real if a build step can read
 it, so the vocabulary is carried here as a parseable block rather than as English. This
 fenced list is the single left-hand side of the three-way equality invariant: the
-registry's key set, the sweep's cell set, and this block must be equal, and a code
-present in any two but not the third fails the build.
+registry's key set, the vocabulary constant, and this block must be equal, and a code
+present in any two but not the third fails the build. The sweep's **cell** set is a
+different set and is deliberately NOT part of this equality — cells are derived, one per
+(code x declared discriminator value), so a family that gains a discriminator value gains
+its cells automatically. Deriving them is what makes the sweep meaningful: walking seven
+codes would prove almost nothing.
 
 ```kernel-refusal-vocabulary
 kernel_write_failed        L1
@@ -349,11 +353,11 @@ separate lever, not part of this claim.
 
 ## Standing admission rules (in force from acceptance, before any migration)
 
-- **R1 — Locus and severity.** A new refusal must sit at L1 or L2, **and** be crucial
+- **R1 — Locus and severity.** A new refusal must sit at L1, L2, or A3, **and** be crucial
   there: proceeding would irreversibly corrupt or lose a kernel record, let
   unverified / unreviewed / unconsented content reach mainline, or override a human
-  values call. A condition recoverable in place ships as an advisory even at the two
-  loci; a mid-run refusal proposal ships as an advisory or a tool.
+  values call. A condition recoverable in place ships as an advisory even at those loci;
+  a mid-run refusal proposal other than the A3 valve ships as an advisory or a tool.
 - **R2 — Green arc, bidirectional.** Adding *or removing* a refusal requires a pinned
   green traversal — the legal path through, not only the refusing path. Three of the four
   2026-07-28 defects shipped with refusal pins only; the #778 physical dedup broke the
@@ -469,6 +473,22 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
    it, and by promoting critical-path ordering from skill prose to an emitted `order`
    field. Honoring the literal text would have required deleting a working capability and
    migrating every caller mid-campaign.
+
+6. **The three-way equality corrected: it is over CODE SETS, not the cell set.** Amendment 1
+   as first written named "the registry's key set, the sweep's cell set, and this block" as
+   the three equal sets. That is false against the shipped sweep, which compares the ADR
+   list, `Object.keys(KERNEL_REFUSAL_REGISTRY)` and `KERNEL_REFUSAL_VOCABULARY` — three code
+   sets — and derives cells separately as (code x declared discriminator value). Measured:
+   7 codes, 64 cells. They could not be equal, and asserting they must be would have made
+   the invariant either unsatisfiable or meaningless depending on which reading a later
+   implementer picked. Found by an adversarial re-verification that traced the claim to
+   source instead of inheriting it from this document — which is the failure mode worth
+   naming: **an imported claim carries no evidence with it, so importing is exactly where
+   the check is most needed.**
+7. **R1's own locus set aligned with amendment 3.** R1 still read "must sit at L1 or L2"
+   after A3 was named a third locus, and banned mid-run refusal proposals without excepting
+   the valve T8 retains — so the standing rule contradicted the amendment two sections
+   above it. One rule, one wording.
 
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after
