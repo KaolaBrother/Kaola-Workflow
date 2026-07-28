@@ -430,15 +430,18 @@ that binds every refusal surviving them. They are **tighten-only**: they constra
 refusal and what an admitted one must carry — they never license skipping, weakening, or routing
 around a refusal, gate, or barrier that already ships.
 
-Two loci are legal, and nothing else refuses: **L1 — kernel-write integrity** (an atomic write, forge
-operation, or CAS that factually did not take) and **L2 — the sink** (red tests, an unattributed diff,
-an unsettled review, or missing consent for an irreversible act — before anything reaches mainline).
+Three loci are legal, and nothing else refuses: **L1 — kernel-write integrity** (an atomic write,
+forge operation, or CAS that factually did not take, or a kernel evidence record absent where
+proceeding would lose it irrecoverably), **L2 — the sink** (red tests, an unattributed diff, an
+unsettled review, or missing consent for an irreversible act — before anything reaches mainline),
+and **A3 — the consent valve** (an irreversible or value-laden call no script may make — the one
+legitimate mid-run interrupt).
 
-- **R1 — Locus and severity.** A new typed refusal must sit at L1 or L2, **and** be crucial there:
-  proceeding would irreversibly corrupt or lose a kernel record, let unverified / unreviewed /
+- **R1 — Locus and severity.** A new typed refusal must sit at L1, L2, or A3, **and** be crucial
+  there: proceeding would irreversibly corrupt or lose a kernel record, let unverified / unreviewed /
   unconsented content reach mainline, or override a human values call. A condition recoverable in
-  place ships as an advisory **even at the two loci**. A mid-run refusal proposal ships as an advisory
-  or a tool verb — answer / advise / normalize / remedy / report-all.
+  place ships as an advisory **even at those loci**. A mid-run refusal proposal other than the A3
+  valve ships as an advisory or a tool verb — answer / advise / normalize / remedy / report-all.
 - **R2 — Green arc, bidirectional.** Adding *or removing* a refusal requires a pinned green traversal:
   a test of the LEGAL path THROUGH the mechanism, not only the refusing path. Pins on the refusing
   path alone are not evidence that the way through still exists.
@@ -450,19 +453,23 @@ an unsettled review, or missing consent for an irreversible act — before anyth
   ledger-chain break — is never auto-repaired; repairing it would launder the signal. R4 bounds R3:
   **R3 never overrides R4.**
 
-**The route contract — binding on every refusal that survives R1–R4.** Each L1/L2 refusal envelope
-carries a typed `route` from a CLOSED vocabulary: an in-grammar verb (the next legal subcommand with
-its arguments), `consent` (a human decides), or `environment` (the blocker is outside the runtime —
-disk, forge, network). The prose hint of the section above stays as commentary; **the route is the
-machine-readable exit.** An R4-protected refusal routes to an investigation or discard verb, NEVER to
-an auto-repair — the signal must not be laundered. A refusal whose route cannot be named does not
-ship: it is a wedge with a label.
+**The route contract — binding on every refusal that survives R1–R4.** Every refusal envelope in the
+vocabulary — L1, L2 and A3 alike — carries a typed `route` from a CLOSED vocabulary: an in-grammar
+verb (the next legal subcommand with its arguments), `consent` (a human decides), or `environment`
+(the blocker is outside the runtime — disk, forge, network). The prose hint of the section above
+stays as commentary; **the route is the machine-readable exit.** An R4-protected refusal routes to an
+investigation or discard verb, NEVER to an auto-repair — the signal must not be laundered. A refusal
+whose route cannot be named does not ship: it is a wedge with a label.
 
 **Family taxonomy.** Refusals are taxonomised **by family, not incident**, with single-digit code
-counts per locus — L1: kernel write failed / CAS lost / integrity broken / lock held; L2: ONE
-composite sink verdict whose payload enumerates ALL its findings in one pass (the report-all shape).
-Specificity is carried in the refusal payload, **never by minting a new code**; adding a code means
-amending the decision record, which is deliberately heavy — it is the anti-growth ratchet.
+counts per locus — L1: kernel write failed / CAS lost / integrity broken / lock held / evidence
+missing; L2: ONE composite sink verdict whose payload enumerates ALL its findings in one pass (the
+report-all shape); A3: ONE consent-required family. Specificity is carried in the refusal payload,
+**never by minting a new code**; adding a code means amending the decision record, which is
+deliberately heavy — it is the anti-growth ratchet. The enumerated vocabulary itself is the ADR's
+fenced `kernel-refusal-vocabulary` block — that block, the registry's key set and the vocabulary
+constant must be equal, and the sweep's cells are derived from those codes and their payload-schema
+discriminators — so the list above is a reader's summary, never the source.
 
 **Enforcement is review-time today, and that is scope, not an open question.** The mechanical half —
 one registry keyed by reason code, and a sweep that walks every registered code, provokes the refusal,
