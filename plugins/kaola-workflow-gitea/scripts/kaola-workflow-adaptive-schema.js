@@ -1478,6 +1478,38 @@ function readDurableConsentHalt(planContent) {
   return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
 }
 
+// The DECOY consent-halt detector — ONE rule, ONE wording, shared by BOTH freeze doors: the
+// adaptive-handoff entry and `plan-validator --freeze`, the writer the handoff shells and a
+// documented public CLI in its own right. A guard living at only one door is a guard on one of two
+// doors, and two copies of one refusal is how the typed reason acquires a second spelling; the token
+// and the operator prose therefore live HERE, beside the marker they are about.
+//
+// The discriminator is NEVER-FROZEN, not the marker alone. A GENUINE halt sits on a FROZEN, mid-run
+// plan whose marker write-halt wrote; that plan must still re-freeze (the plan-repair path) and must
+// still carry the marker out the other side, or the fix converts the consent valve into a freeze
+// refusal. An UNFROZEN draft has never run, so a marker on it cannot be a real halt: it is copied in
+// from an archived plan used as a skeleton, and because computePlanHash covers `## Meta` + `## Nodes`
+// only it would ride the freeze unremarked and wedge the run's very first open-next on halt_pending.
+//
+// REFUSE rather than strip: stripping would silently clear a consent the user may still be owed.
+// PURE (no fs, content only). Returns null when there is nothing to refuse, else the typed
+// { reason, error } the caller emits verbatim.
+const DECOY_CONSENT_HALT_REASON = 'decoy_consent_halt';
+function detectDecoyConsentHalt(planContent) {
+  const text = String(planContent || '');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(text)) return null;
+  if (!readDurableConsentHalt(text)) return null;
+  return {
+    reason: DECOY_CONSENT_HALT_REASON,
+    error: DECOY_CONSENT_HALT_REASON + ': the plan draft carries "' + CONSENT_HALT_MARKER
+      + '" in its ## Node Ledger, but nothing has run yet — a fresh run cannot be halted for a '
+      + 'consent no one asked for, and the first open-next would refuse halt_pending. The marker '
+      + 'is written by write-halt and cleared by clear-halt; it is never authored. Remove the '
+      + '"' + CONSENT_HALT_MARKER + '" line from the ## Node Ledger section and '
+      + 're-submit (it is most likely copied in from an archived plan used as a skeleton).',
+  };
+}
+
 // #334: the NON-DELEGABLE main-session gate role. A first-class plan node that is NEVER
 // dispatched as a subagent: the main session itself performs the acceptance check (e.g. a
 // GPU/visual confirmation that needs human eyes or main-session-only tooling), records
@@ -6063,6 +6095,8 @@ module.exports = {
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
+  DECOY_CONSENT_HALT_REASON,
+  detectDecoyConsentHalt,
   MAIN_SESSION_GATE_ROLE,
   ROLE_KINDS,
   ROLE_CAPABILITY_MANIFEST,
