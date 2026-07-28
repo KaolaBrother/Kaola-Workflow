@@ -3261,6 +3261,258 @@ const FWW_WARNING = {
     'T-DECOY-HALT CONTROL: ...and no marker is invented on the clean path');
 }
 
+// ---------------------------------------------------------------------------
+// T-DECOY-HALT-CLI — the SECOND freeze entry: `plan-validator --freeze` itself.
+//
+// The fence above lives at the adaptive-handoff entry (Step 0.86). But the handoff is a
+// CONVENIENCE over the freeze writer, not the writer: `kaola-workflow-plan-validator.js --freeze`
+// is the script that stamps `plan_hash` and replaces workflow-plan.md on disk, and it is a
+// documented public CLI — the planner/operator chain `--freeze-checked` then
+// `--freeze --governance-ack <hash>` is exactly the two-spawn sequence the handoff shells
+// internally, and it is reachable directly.
+//
+// So a guard that lives ONLY at the handoff is a guard on one of two doors. Run the documented
+// direct chain on a draft that copied `consent_halt: pending` out of an archived plan's ledger and
+// the decoy freezes: `computePlanHash` covers `## Meta` + `## Nodes` only, so the marker rides the
+// freeze unremarked, and the run's very first `open-next` then refuses `halt_pending` on a halt no
+// human ever raised. That is the identical wedge, entered through the other door.
+//
+// The four pins below, in the order they matter:
+//   (1) `--freeze` on an UNFROZEN draft carrying the marker REFUSES, with the SAME typed reason the
+//       handoff fence emits. One rule, one wording: a second spelling of this refusal (a
+//       `consent_halt_decoy`, a `halt_marker_on_draft`) is itself the defect, so the pin is on the
+//       exact token, not on a regex over the prose. Every writing arm of --freeze is covered
+//       (bare, --governance-ack, --repair) — a fence installed in one arm leaks through the others.
+//   (2) the refusal is ZERO-WRITE: no plan_hash stamped, the draft byte-identical, no file created.
+//   (3) a GENUINE halt is untouched. A real consent halt sits on a FROZEN, mid-run plan; the
+//       marker is written by write-halt, never authored. The mid-run re-freeze must still succeed
+//       and must still carry the marker out the other side, or the fix converts the consent valve
+//       itself into a freeze refusal. This arm is GREEN today by construction and stays green.
+//   (4) the two entries AGREE. Same draft bytes in, same typed reason out, whichever door was used.
+//
+// The fixture is a real freezable schema-2 spine driven through the REAL validator subprocess in a
+// real temp dir (the #641 block's shape) — the CLI is what the finding is about, so stubbing it
+// would pin the stub.
+// ---------------------------------------------------------------------------
+{
+  const VALIDATOR_CLI = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const schemaCli = require('./kaola-workflow-adaptive-schema');
+
+  const cliRow = n => '| ' + n.id + ' | ' + n.role + ' | ' + (n.depends_on || '—') + ' | '
+    + (n.write_set || '—') + ' | 1 | ' + (n.shape || 'sequence') + ' | ' + (n.observes || '—') + ' | '
+    + (n.gate_claim || '—') + ' | ' + (n.gate_surface || '—') + ' | ' + (n.gate_aggregation || '—')
+    + ' | ' + (n.certifies || '—') + ' |';
+  const CLI_NODES = [
+    { id: 'seed', role: 'code-explorer' },
+    { id: 'child-review', role: 'code-reviewer', depends_on: 'seed',
+      gate_claim: 'current code candidate is approved', gate_surface: 'full code candidate',
+      gate_aggregation: 'sequence' },
+    { id: 'finalize', role: 'finalize', depends_on: 'child-review' },
+  ];
+
+  // `halt` places the marker inside `## Node Ledger` (the only place it fences); `statuses` moves
+  // rows off `pending`; `hash` stamps the frozen marker (outside every hash-covered section).
+  function cliPlanBody(opts, hash) {
+    const st = (opts && opts.statuses) || {};
+    return [
+      '# Workflow Plan — test-project', '',
+      ...(hash ? ['<!-- plan_hash: ' + hash + ' -->', ''] : []),
+      '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'contract_version: 2',
+      'epoch_schema_version: 2', 'plan_epoch: 2',
+      'epoch_lineage_id: ' + '1'.repeat(64), 'parent_plan_hash: ' + '2'.repeat(64),
+      'parent_snapshot_manifest_digest: pending', 'claim_root_base_digest: ' + '3'.repeat(64),
+      'source_evidence_digest: ' + '5'.repeat(64), 'transition_reason: review_repair_requires_replan',
+      'planner_binding: dispatch-decoy', 'labels: area:scripts', 'sink: CHANGELOG.md',
+      'code_certifier: child-review', 'security_certifier: none',
+      'inherited_frontier_digest: ' + '4'.repeat(64), 'inherited_frontier_classes: code',
+      'validation_command: node scripts/test-plan-validator.js', 'validation_timeout_minutes: 30', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      ...CLI_NODES.map(cliRow), '',
+      '## Design', '',
+      'Decompose: a child epoch over the inherited frontier; the sequence edges are gate/data '
+        + 'dependencies (S1). Done: the named certifier clears the inherited frontier.', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      ...CLI_NODES.map(n => '| ' + n.id + ' | ' + (st[n.id] || 'pending') + ' |'),
+      ...((opts && opts.halt) ? [schemaCli.CONSENT_HALT_MARKER] : []), '',
+    ].join('\n') + '\n';
+  }
+  const cliPlan = opts => ((opts && opts.frozen)
+    ? stampFrozen(h => cliPlanBody(opts, h))
+    : cliPlanBody(opts, null));
+
+  // A real project dir, because --freeze is a real atomic file replace.
+  function inTempProject(planContent, fn) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-decoy-cli-'));
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planContent);
+    try { return fn(planPath, proj); }
+    finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  const DRAFT_DECOY = cliPlan({ halt: true });
+  assert(schemaCli.readDurableConsentHalt(DRAFT_DECOY) === true,
+    'T-DECOY-HALT-CLI FIXTURE: the marker is ledger-scoped — the same read every mutating '
+    + 'subcommand fences on');
+  assert(!/<!--\s*plan_hash:/.test(DRAFT_DECOY) && !/in_progress|complete/.test(DRAFT_DECOY),
+    'T-DECOY-HALT-CLI FIXTURE: the draft is UNFROZEN and has never run — there is no halt to '
+    + 'consent to');
+  // The ack is computed locally, never read back from --freeze-checked: the ack arm must stay
+  // exercisable even if the fix also fences the read-only check.
+  const DRAFT_ACK = realComputePlanHash(DRAFT_DECOY);
+
+  // Every arm of the freeze WRITER. --freeze-checked is deliberately absent: it writes nothing, so
+  // whether it refuses early or defers to --freeze is the implementer's call, not a contract.
+  const FREEZE_ARMS = [
+    ['--freeze --governance-ack (the documented direct chain)',
+      p => [p, '--freeze', '--governance-ack', DRAFT_ACK, '--json']],
+    ['--freeze (bare)', p => [p, '--freeze', '--json']],
+    ['--freeze --repair', p => [p, '--freeze', '--repair', '--json']],
+  ];
+
+  const cliReasons = {};
+  for (const [label, argv] of FREEZE_ARMS) {
+    inTempProject(DRAFT_DECOY, (planPath, proj) => {
+      const beforeBytes = fs.readFileSync(planPath, 'utf8');
+      const beforeLs = fs.readdirSync(proj).sort().join(',');
+      const v = shellHandoff(VALIDATOR_CLI, argv(planPath));
+      const afterBytes = fs.readFileSync(planPath, 'utf8');
+      cliReasons[label] = v.reason;
+
+      // (1) TYPED refusal, one wording with the handoff fence.
+      assert(v.result === 'refuse' && v.reason === 'decoy_consent_halt',
+        'T-DECOY-HALT-CLI (1) ' + label + ': freezing a never-frozen draft that carries '
+        + '"' + schemaCli.CONSENT_HALT_MARKER + '" in its ## Node Ledger must refuse with the SAME '
+        + 'typed reason the handoff fence uses (decoy_consent_halt) — otherwise the direct CLI '
+        + 'freezes a halt no human raised and the first open-next wedges on halt_pending. got '
+        + JSON.stringify({ result: v.result, reason: v.reason, frozen: v.frozen }));
+      assert(v.frozen !== true && v.exitCode !== 0,
+        'T-DECOY-HALT-CLI (1) ' + label + ': the refusal reports frozen:false and exits non-zero, so '
+        + 'a shelling caller cannot read it as a freeze, got '
+        + JSON.stringify({ frozen: v.frozen, exitCode: v.exitCode }));
+      const errBlob = (v.errors || []).join('\n');
+      assert(errBlob.includes(schemaCli.CONSENT_HALT_MARKER) && errBlob.includes('## Node Ledger'),
+        'T-DECOY-HALT-CLI (1) ' + label + ': the refusal NAMES the offending line and the section it '
+        + 'sits in, so the planner can repair its own draft through the bounded repair loop, got '
+        + JSON.stringify(v.errors));
+
+      // (2) ZERO-WRITE. A refusal that half-froze would leave a stamped decoy behind.
+      assert(afterBytes === beforeBytes,
+        'T-DECOY-HALT-CLI (2) ' + label + ': the refused freeze leaves the draft BYTE-IDENTICAL');
+      assert(!/<!--\s*plan_hash:/.test(afterBytes),
+        'T-DECOY-HALT-CLI (2) ' + label + ': no plan_hash is stamped by a refused freeze');
+      assert(fs.readdirSync(proj).sort().join(',') === beforeLs,
+        'T-DECOY-HALT-CLI (2) ' + label + ': the refused freeze creates no files in the project dir, '
+        + 'got ' + fs.readdirSync(proj).sort().join(','));
+    });
+  }
+
+  // (3) NEGATIVE — a GENUINE halt is a FROZEN, mid-run plan whose marker write-halt wrote. The
+  // mid-run re-freeze (the plan-repair path) must still freeze AND must still carry the marker out
+  // the other side. Break this and the fix has disarmed the consent valve it was meant to protect.
+  const GENUINE_HALT = cliPlan({ halt: true, frozen: true,
+    statuses: { seed: 'complete', 'child-review': 'in_progress' } });
+  assert(schemaCli.readDurableConsentHalt(GENUINE_HALT) === true
+    && /<!--\s*plan_hash:/.test(GENUINE_HALT) && /in_progress/.test(GENUINE_HALT),
+    'T-DECOY-HALT-CLI (3) FIXTURE: the genuine-halt fixture is frozen, mid-run and halted');
+  const GENUINE_ACK = realComputePlanHash(GENUINE_HALT);
+  const GENUINE_ARMS = [
+    ['--freeze --governance-ack', p => [p, '--freeze', '--governance-ack', GENUINE_ACK, '--json']],
+    ['--freeze (bare)', p => [p, '--freeze', '--json']],
+    ['--freeze --repair', p => [p, '--freeze', '--repair', '--json']],
+  ];
+  for (const [label, argv] of GENUINE_ARMS) {
+    inTempProject(GENUINE_HALT, (planPath) => {
+      const v = shellHandoff(VALIDATOR_CLI, argv(planPath));
+      const after = fs.readFileSync(planPath, 'utf8');
+      assert(v.result === 'in-grammar' && v.frozen === true && v.reason !== 'decoy_consent_halt',
+        'T-DECOY-HALT-CLI (3) ' + label + ': a GENUINE halt (frozen + mid-run) still re-freezes — '
+        + 'the decoy fence must key on never-frozen, not on the marker alone, got '
+        + JSON.stringify({ result: v.result, reason: v.reason, frozen: v.frozen, errors: v.errors }));
+      assert(schemaCli.readDurableConsentHalt(after) === true,
+        'T-DECOY-HALT-CLI (3) ' + label + ': ...and the halt marker SURVIVES the re-freeze — '
+        + 'stripping it would silently clear a consent the user is still owed');
+    });
+  }
+
+  // (3b) ...and the handoff door is unchanged on the same genuinely-halted plan: it does not fence.
+  {
+    const written3b = {};
+    const r3b = runHandoff({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', json: true,
+      shell: makeShellStub({
+        'kaola-workflow-plan-validator.js:--freeze-checked': {
+          exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: GENUINE_ACK,
+          frozen: false, governance: { decision: 'auto-run', risk: {} }, risk: {},
+        },
+        'kaola-workflow-plan-validator.js:--freeze': {
+          exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: GENUINE_ACK,
+          frozen: true, resumeOk: true, risk: {},
+        },
+        'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+        'git:add': { exitCode: 0 },
+        'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: GENUINE_ACK,
+          dest: '/wt/kaola-workflow/test-project' },
+      }),
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return GENUINE_HALT;
+        if (fpath.endsWith('workflow-state.md')) return makeStateContent({ issueNumber: 42 });
+        return '';
+      },
+      writeFile: (fpath, content) => { written3b[fpath] = content; },
+      stateMtime: undefined,
+    });
+    assert(r3b.reason !== 'decoy_consent_halt',
+      'T-DECOY-HALT-CLI (3b): the handoff still does NOT fence a genuinely halted FROZEN plan, got '
+      + JSON.stringify({ handoff_status: r3b.handoff_status, reason: r3b.reason }));
+  }
+
+  // (4) THE TWO DOORS AGREE. Same draft bytes, both entries, one typed reason. The handoff fence
+  // fires before any spawn, so a stub shell that refuses every call cannot mask it.
+  {
+    const written4 = {};
+    const handoff4 = runHandoff({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', json: true,
+      shell: () => ({ exitCode: 1, result: 'refuse', errors: ['stub: no spawn expected'] }),
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return DRAFT_DECOY;
+        if (fpath.endsWith('workflow-state.md')) return makeStateContent({ issueNumber: 42 });
+        return '';
+      },
+      writeFile: (fpath, content) => { written4[fpath] = content; },
+      stateMtime: undefined,
+    });
+    assert(handoff4.reason === 'decoy_consent_halt' && handoff4.result === 'refuse',
+      'T-DECOY-HALT-CLI (4) BASELINE: the handoff door refuses this exact draft decoy_consent_halt, '
+      + 'got ' + JSON.stringify({ handoff_status: handoff4.handoff_status, reason: handoff4.reason }));
+    assert(Object.keys(written4).length === 0,
+      'T-DECOY-HALT-CLI (4) BASELINE: ...writing nothing');
+    const viaCli = inTempProject(DRAFT_DECOY, (planPath) =>
+      shellHandoff(VALIDATOR_CLI, [planPath, '--freeze', '--governance-ack', DRAFT_ACK, '--json']));
+    assert(viaCli.reason === handoff4.reason,
+      'T-DECOY-HALT-CLI (4): freezing through adaptive-handoff and freezing through '
+      + 'plan-validator --freeze must produce the SAME typed refusal for the SAME draft — one rule, '
+      + 'one wording. handoff=' + JSON.stringify(handoff4.reason)
+      + ' plan-validator=' + JSON.stringify(viaCli.reason));
+    for (const [label, reason] of Object.entries(cliReasons)) {
+      assert(reason === handoff4.reason,
+        'T-DECOY-HALT-CLI (4): every --freeze arm agrees with the handoff wording — ' + label
+        + ' gave ' + JSON.stringify(reason) + ', handoff gave ' + JSON.stringify(handoff4.reason));
+    }
+  }
+}
+
 // T-825 (B4): the typed clarification channel.
 //
 // The planner narrows to a synthesist; when the brief is genuinely under-determined it must have a
