@@ -5,6 +5,12 @@
 // uncapped copy), and branch args reject a leading-dash/NUL so a malformed ref can't reach git as a
 // flag. REMOTE_TIMEOUT_MS resolves at module load, so the timeout env is set BEFORE require.
 
+// Advisory spawn census. Installed before ANY child_process binding is taken (here or in a
+// required module) so the counted wrappers are what gets bound. Pass-through and fail-open:
+// it can change no assertion and fail no run.
+const spawnCensus = require('./test-spawn-census');
+spawnCensus.install('test-claim-hardening');
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -5965,6 +5971,8 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.rmSync(mocks825, { recursive: true, force: true });
   }
 }
+
+spawnCensus.report();
 
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
