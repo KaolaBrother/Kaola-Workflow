@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 'use strict';
+// Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
+// file destructures child_process so the counted wrappers are what it binds. Advisory,
+// pass-through and fail-open: the require itself is guarded, so a census that is absent
+// or faulty can change no assertion and fail no run.
+try { require('./test-spawn-census').install('simulate-kaola-workflow-walkthrough'); } catch (_) { /* advisory only */ }
 
 const fs = require('fs');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const os = require('os');
 const path = require('path');
 const { createHash } = require('crypto');
@@ -2385,9 +2393,7 @@ function testCodexFinalizeArchiveVerifiesBeforeDelete() {
     initGitRepo(tmp);
     const wtPath = path.join(kwRoot, 'issue-426cx');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-426cx', '--', wtPath, 'HEAD'], {
-      cwd: tmp, encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-426cx', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     // Project dir with NO workflow-state.md — verifyArchiveComplete fails, source must survive.
     const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426cx');
     fs.mkdirSync(projDir, { recursive: true });
@@ -2410,7 +2416,7 @@ function testCodexFinalizeArchiveVerifiesBeforeDelete() {
     );
     console.log('testCodexFinalizeArchiveVerifiesBeforeDelete: PASSED');
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -2906,7 +2912,7 @@ function testCodexReplanEditionContract699() {
 
   const fenceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-codex-fence-')));
   try {
-    spawnSync('git', ['init', '-q'], { cwd: fenceRoot, encoding: 'utf8' });
+    G.git(fenceRoot, ['init', '-q'], { encoding: 'utf8' });
     const project = 'issue-n5-codex-fence';
     const projectDir = path.join(fenceRoot, 'kaola-workflow', project);
     const cacheDir = path.join(projectDir, '.cache');

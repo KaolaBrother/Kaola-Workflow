@@ -72,6 +72,9 @@ const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merg
 const schema = require('./kaola-workflow-adaptive-schema');
 const validator = require('./kaola-workflow-plan-validator');
 const { generateMirror } = require('./kaola-workflow-task-mirror');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 
 let passed = 0;
 let failed = 0;
@@ -87,14 +90,14 @@ function makeTmpRoot() { return fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-'
 function git(cwd, args) { return spawnSync('git', ['-C', cwd].concat(args), { encoding: 'utf8' }); }
 
 function initGitRepoWithBareRemote(tmp) {
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+  G.git(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+  G.git(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
   git(tmp, ['add', 'README.md']);
   git(tmp, ['commit', '-m', 'init']);
   const remotePath = tmp + '-remote';
-  spawnSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+  G.raw(['init', '--bare', remotePath], { encoding: 'utf8' });
   git(tmp, ['remote', 'add', 'origin', remotePath]);
   git(tmp, ['push', '-u', 'origin', 'main']);
   return remotePath;
@@ -498,9 +501,9 @@ function suffixedArchiveRel(tmpRoot, project) {
   const tmpRoot = fs.realpathSync(makeTmpRoot());
   try {
     // Minimal in-place repo: .roadmap sources for both members + a mirror + a live bundle project.
-    spawnSync('git', ['init', '-b', 'main'], { cwd: tmpRoot, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpRoot, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmpRoot, encoding: 'utf8' });
+    G.git(tmpRoot, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
     const roadmapDir = path.join(tmpRoot, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapDir, { recursive: true });
     fs.writeFileSync(path.join(roadmapDir, 'issue-' + keepN + '.md'), roadmapSource(keepN));

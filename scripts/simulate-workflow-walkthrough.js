@@ -5,6 +5,9 @@
 // counted wrappers are what this file (and anything it requires) binds. Pass-through and
 // fail-open: it can change no assertion and fail no run.
 const spawnCensus = require('./test-spawn-census');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 spawnCensus.install('simulate-workflow-walkthrough');
 
 const fs = require('fs');
@@ -545,9 +548,9 @@ function testRepairFinalizationRoute() {
 function testSinkPrUsesFinalizationSummary() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pr-fin-'));
   try {
-    spawnSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
-    spawnSync('git', ['-C', tmp, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
-    spawnSync('git', ['-C', tmp, 'config', 'user.name', 'Test User'], { stdio: 'pipe' });
+    G.git(tmp, ['init'], { stdio: 'pipe' });
+    G.git(tmp, ['config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
+    G.git(tmp, ['config', 'user.name', 'Test User'], { stdio: 'pipe' });
     const kwDir = path.join(tmp, 'kaola-workflow', 'issue-2830');
     fs.mkdirSync(kwDir, { recursive: true });
     fs.writeFileSync(path.join(kwDir, 'workflow-state.md'), [
@@ -562,8 +565,8 @@ function testSinkPrUsesFinalizationSummary() {
     ].join('\n') + '\n');
     // Plant finalization-summary.md (the new canonical file)
     fs.writeFileSync(path.join(kwDir, 'finalization-summary.md'), '# Finalization Summary\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { stdio: 'pipe' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { stdio: 'pipe' });
+    G.git(tmp, ['add', '-A'], { stdio: 'pipe' });
+    G.git(tmp, ['commit', '-m', 'initial'], { stdio: 'pipe' });
 
     const result = spawnSync(process.execPath, [
       sinkPrScript,
@@ -2354,30 +2357,30 @@ function testMetricOptimizerContract() {
       runLegacyFreeze(planValidatorScript, planPath, grepo);
       fs.mkdirSync(path.join(grepo, 'src'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = 0;\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'baseline'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'baseline'], { encoding: 'utf8' });
       // record the optimize node's baseline AFTER the baseline commit.
       const rb = runNode(planValidatorScript, [planPath, '--record-base', '--node-id', 'opt'], grepo);
       assert(rb.status === 0, 'AC5: --record-base for the optimize node must exit 0, got ' + rb.status + ' ' + rb.stderr);
       // ≥3 intermediate commit/revert cycles, all inside the declared write set (src/hot.js).
       for (let k = 1; k <= 3; k++) {
         fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = ' + k + '; // iter ' + k + '\n');
-        spawnSync('git', ['add', 'src/hot.js'], { cwd: grepo, encoding: 'utf8' });
-        spawnSync('git', ['commit', '-m', 'kw-opt(opt) iter ' + k], { cwd: grepo, encoding: 'utf8' });
+        G.git(grepo, ['add', 'src/hot.js'], { encoding: 'utf8' });
+        G.git(grepo, ['commit', '-m', 'kw-opt(opt) iter ' + k], { encoding: 'utf8' });
         // reject-and-revert this iteration (scoped restore, never reset --hard), then commit the revert.
-        spawnSync('git', ['restore', '--source=HEAD~1', '--', 'src/hot.js'], { cwd: grepo, encoding: 'utf8' });
-        spawnSync('git', ['commit', '-am', 'kw-opt(opt) revert iter ' + k], { cwd: grepo, encoding: 'utf8' });
+        G.git(grepo, ['restore', '--source=HEAD~1', '--', 'src/hot.js'], { encoding: 'utf8' });
+        G.git(grepo, ['commit', '-am', 'kw-opt(opt) revert iter ' + k], { encoding: 'utf8' });
       }
       // final accepted iteration: a net change confined to src/hot.js.
       fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = 42; // final accepted\n');
-      spawnSync('git', ['commit', '-am', 'kw-opt(opt) iter final: 0 -> 42'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['commit', '-am', 'kw-opt(opt) iter final: 0 -> 42'], { encoding: 'utf8' });
       const bc = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'opt', '--json'], grepo);
       assert(bc.status === 0 && JSON.parse(bc.stdout).result === 'pass',
         'AC5: after ≥3 commit/revert cycles + an unchanged declared write set, the per-node net-diff barrier must pass, got status ' + bc.status + ' ' + bc.stdout);
       // control: a net write OUTSIDE the declared set (an intermediate commit that escaped the lane) refuses.
       fs.writeFileSync(path.join(grepo, 'src', 'stray.js'), 'escaped\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'stray out-of-lane write'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'stray out-of-lane write'], { encoding: 'utf8' });
       const bc2 = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'opt', '--json'], grepo);
       assert(bc2.status === 1 && /stray\.js/.test(bc2.stdout),
         'AC5 control: a net out-of-lane write must still refuse (the barrier attributes the net diff, not the commit count), got status ' + bc2.status + ' ' + bc2.stdout);
@@ -2871,21 +2874,21 @@ function testAdaptiveGateBarrierEnforcement() {
         '## Node Ledger', '', '| id | status |', '|---|---|',
         '| impl | complete |', '| rv | complete |', '| done | complete |', ''].join('\n'));
       runLegacyFreeze(planValidatorScript, planPath, grepo);
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'plan'], { encoding: 'utf8' });
       // Surprise sensitive write + a declared write, committed (cumulative diff vs origin/main base).
       fs.mkdirSync(path.join(grepo, 'src', 'auth'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'src', 'auth', 'session.js'), 'x\n');
       fs.mkdirSync(path.join(grepo, 'lib'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'lib', 'foo.js'), 'x\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'impl'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'impl'], { encoding: 'utf8' });
       let r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
       assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
         '--barrier-check must refuse (exit 1) a surprise sensitive write, got status ' + r.status + ' ' + r.stdout);
       // Clean control: revert the surprise file; only the declared write remains.
-      spawnSync('git', ['rm', '-q', 'src/auth/session.js'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'drop surprise'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['rm', '-q', 'src/auth/session.js'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'drop surprise'], { encoding: 'utf8' });
       r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
         '--barrier-check must pass (exit 0) a clean run, got status ' + r.status + ' ' + r.stdout);
@@ -2893,8 +2896,8 @@ function testAdaptiveGateBarrierEnforcement() {
       // the ledger while its declared file (lib/foo.js, committed) is in the diff -> whole-plan barrier
       // refuses. Pre-fix all three phase6 gates returned 0 and unreviewed code would merge.
       fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('| impl | complete |', '| impl | n/a |'));
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'ledger'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'ledger'], { encoding: 'utf8' });
       r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
       assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
         'Fix#1 end-to-end: an n/a producer whose declared file is in the git diff must refuse, got status ' + r.status + ' ' + r.stdout);
@@ -2975,8 +2978,8 @@ function testAdaptivePerInstanceBarrier() {
       const planPath = path.join(proj, 'workflow-plan.md');
       fs.writeFileSync(planPath, mkPlan());
       runLegacyFreeze(planValidatorScript, planPath, grepo);
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'plan'], { encoding: 'utf8' });
       // node a starts -> record its baseline (resume-safe, persisted in .cache).
       const rb = runNode(planValidatorScript, [planPath, '--record-base', '--node-id', 'a'], grepo);
       assert(rb.status === 0, '--record-base must exit 0, got ' + rb.status + ' ' + rb.stderr);
@@ -3048,8 +3051,8 @@ function testAdaptivePerInstanceBarrierHardening() {
       const sidecars = fs.readdirSync(proj).filter(f => /^\.workflow-plan\.md\..*\.tmp$/.test(f));
       assert(sidecars.length === 0, '#389: --freeze must leave no .tmp sidecar (atomic replace), got ' + JSON.stringify(sidecars));
     }
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'plan'], { encoding: 'utf8' });
     return { grepo, planPath };
   };
   const cleanup = g => { fs.rmSync(g, { recursive: true, force: true }); fs.rmSync(g + '-remote', { recursive: true, force: true }); };
@@ -3088,8 +3091,8 @@ function testAdaptivePerInstanceBarrierHardening() {
     try {
       assert(rec(planPath, 'a', grepo).status === 0, '(3) record-base a');
       w(grepo, 'ccc/z.js', 'z\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'oops'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'oops'], { encoding: 'utf8' });
       const r = bc(planPath, 'a', grepo);
       assert(r.status === 1 && /ccc\/z\.js/.test(r.stdout),
         'v3.21.0 (3): a COMMITTED out-of-lane write must still refuse, got ' + r.stdout);
@@ -3148,8 +3151,8 @@ function testAdaptivePerInstanceBarrierHardening() {
   { const { grepo, planPath } = mkRepo(PLAN, true);
     try {
       w(grepo, '.gitignore', 'dist/\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'gitignore'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'gitignore'], { encoding: 'utf8' });
       assert(rec(planPath, 'a', grepo).status === 0, '(8) record-base a');
       w(grepo, 'aaa/x.js', 'x\n');                // own lane (landable)
       w(grepo, 'dist/bundle.js', 'gen\n');        // UNTRACKED gitignored generated artifact (never lands)
@@ -3164,11 +3167,11 @@ function testAdaptivePerInstanceBarrierHardening() {
   { const { grepo, planPath } = mkRepo(PLAN, true);
     try {
       w(grepo, 'bbb/y.js', 'orig\n');                          // node b's declared lane
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'track bbb'], { cwd: grepo, encoding: 'utf8' }); // now TRACKED
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'track bbb'], { encoding: 'utf8' }); // now TRACKED
       w(grepo, '.gitignore', 'bbb/\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'ignore bbb'], { cwd: grepo, encoding: 'utf8' }); // gitignored but still tracked
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'ignore bbb'], { encoding: 'utf8' }); // gitignored but still tracked
       assert(rec(planPath, 'a', grepo).status === 0, '(9) record-base a');
       w(grepo, 'aaa/x.js', 'x\n');                             // own lane
       w(grepo, 'bbb/y.js', 'orig\noverflow\n');                // modify tracked-but-gitignored SIBLING lane
@@ -3185,7 +3188,7 @@ function testAdaptivePerInstanceBarrierHardening() {
       w(grepo, 'prior/uncommitted.js', 'leftover\n');          // prior node's uncommitted source
       assert(rec(planPath, 'a', grepo).status === 0, '(10) record-base a');
       w(grepo, 'aaa/x.js', 'x\n');                             // own lane only
-      spawnSync('git', ['gc', '--prune=now'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['gc', '--prune=now'], { encoding: 'utf8' });
       const r = bc(planPath, 'a', grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
         'v3.21.0 (10): the ref-anchored base must survive `git gc --prune=now` (no brick), got status ' + r.status + ' ' + r.stdout);
@@ -3199,8 +3202,8 @@ function testAdaptivePerInstanceBarrierHardening() {
     try {
       assert(rec(planPath, 'a', grepo).status === 0, '(11) record-base a @ T0');
       w(grepo, 'unrelated/serial.js', 'serial work\n');     // a DIFFERENT node's legitimate landed work
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'unrelated serial commit'], { cwd: grepo, encoding: 'utf8' }); // HEAD advances
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'unrelated serial commit'], { encoding: 'utf8' }); // HEAD advances
       const rb = rec(planPath, 'a', grepo);
       const parsed = JSON.parse(rb.stdout);
       assert(rb.status === 0 && parsed.reused === true, '#385 (11): re-record must still REUSE the base (idempotent), got ' + rb.stdout);
@@ -3445,22 +3448,22 @@ function testBundle424432433ValidatorGates() {
       fs.writeFileSync(path.join(grepo, 'package.json'), JSON.stringify({ scripts: {
         'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
         'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } }) + '\n');
-      spawnSync('git', ['-C', grepo, 'add', 'package.json'], { encoding: 'utf8' });
-      spawnSync('git', ['-C', grepo, 'commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
+      G.git(grepo, ['add', 'package.json'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
     }
     // Branch off main BEFORE the plan commit so the finalize sweep's `git diff main...HEAD` reflects
     // the real diverged-feature-branch topology (the plan + every node/orphan commit is on the branch).
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-424'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-424'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-424');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, FPLAN + ledgerRows(ledger));
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'plan'], { encoding: 'utf8' });
     return { grepo, planPath, proj };
   };
   const cleanup = g => { fs.rmSync(g, { recursive: true, force: true }); fs.rmSync(g + '-remote', { recursive: true, force: true }); };
-  const headOf = g => spawnSync('git', ['-C', g, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+  const headOf = g => G.git(g, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   const writeReceipt = (proj, obj) => {
     fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
     fs.writeFileSync(path.join(proj, '.cache', 'chain-receipt.json'), JSON.stringify(obj));
@@ -3527,8 +3530,8 @@ function testBundle424432433ValidatorGates() {
       // node a's only branch change (aaa/x.js) is covered by complete node a → sweep clean.
       fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'impl a'], { encoding: 'utf8' });
       writeReceipt(proj, { headSha: headOf(grepo), chains: [
         { name: 'claude', exitCode: 0, accepted_red: false },
         { name: 'codex', exitCode: 1, accepted_red: true, accepted_red_issue: '234' }] });
@@ -3565,15 +3568,15 @@ function testBundle424432433ValidatorGates() {
     try {
       fs.mkdirSync(path.join(grepo, 'docs'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'docs', 'architecture.md'), 'arch v1\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'docs v1'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'docs v1'], { encoding: 'utf8' });
       const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
       writeReceipt(proj, { headSha: headOf(grepo), codeTreeHash: h0, validationTestConsumes: [],
         chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       // a docs-only change (inert prose) — code tree unchanged.
       fs.writeFileSync(path.join(grepo, 'docs', 'architecture.md'), 'arch v2 CHANGED\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'docs only'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'docs only'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
         '#547 (c): a docs-only commit after the chains ran must stay FRESH (no re-run), got status ' + r.status + ' ' + r.stdout);
@@ -3587,8 +3590,8 @@ function testBundle424432433ValidatorGates() {
       writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'clean', codeTreeHash: h0, validationTestConsumes: [],
         chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 1;\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'code change'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'code change'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'chains_stale'
@@ -3607,8 +3610,8 @@ function testBundle424432433ValidatorGates() {
       for (let i = 0; i < 25; i++) {
         fs.writeFileSync(path.join(grepo, 'many', 'file-' + String(i).padStart(2, '0') + '.js'), 'module.exports = ' + i + ';\n');
       }
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'many code changes'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'many code changes'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       const out = JSON.parse(r.stdout);
       const expectedPaths = Array.from({ length: 20 }, (_, i) => 'many/file-' + String(i).padStart(2, '0') + '.js');
@@ -3628,8 +3631,8 @@ function testBundle424432433ValidatorGates() {
         chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       fs.mkdirSync(path.join(grepo, 'docs'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'docs', 'custom.md'), 'contracted prose\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'validation prose change'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'validation prose change'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'chains_stale'
@@ -3648,8 +3651,8 @@ function testBundle424432433ValidatorGates() {
       fs.mkdirSync(path.join(grepo, 'docs'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'docs', 'custom.md'), 'contracted prose\n');
       fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 2;\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'mixed stale change'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'mixed stale change'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'chains_stale'
@@ -3665,8 +3668,8 @@ function testBundle424432433ValidatorGates() {
       writeReceipt(proj, { headSha: '0000000000000000000000000000000000000001', workTreeHash: 'clean',
         codeTreeHash: h0, validationTestConsumes: [], chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 3;\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'code change after bad receipt head'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'code change after bad receipt head'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'chains_stale'
@@ -3681,8 +3684,8 @@ function testBundle424432433ValidatorGates() {
       writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'dirty', codeTreeHash: h0, validationTestConsumes: [],
         chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 4;\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'code change after dirty receipt'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'code change after dirty receipt'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'chains_stale'
@@ -3712,8 +3715,8 @@ function testBundle424432433ValidatorGates() {
     fs.writeFileSync(path.join(grepo, 'package.json'), JSON.stringify({ scripts: {
       'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
       'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } }) + '\n');
-    spawnSync('git', ['-C', grepo, 'add', '.gitignore', 'package.json'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', grepo, 'commit', '-m', 'ignore root .cache + self-host chains'], { encoding: 'utf8' });
+    G.git(grepo, ['add', '.gitignore', 'package.json'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'ignore root .cache + self-host chains'], { encoding: 'utf8' });
     return grepo;
   };
   const writeRootReceipt = (grepo, obj) => {
@@ -3759,8 +3762,8 @@ function testBundle424432433ValidatorGates() {
     try {
       writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
       fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 651;\n');
-      spawnSync('git', ['-C', grepo, 'add', 'newcode.js'], { encoding: 'utf8' });
-      spawnSync('git', ['-C', grepo, 'commit', '-m', 'code after receipt'], { encoding: 'utf8' });
+      G.git(grepo, ['add', 'newcode.js'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'code after receipt'], { encoding: 'utf8' });
       const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'chains_stale'
@@ -3822,8 +3825,8 @@ function testBundle424432433ValidatorGates() {
       const c1 = headOf(grepo);
       writeRootReceipt(grepo, { headSha: c1, workTreeHash: 'clean', chains: greenChains651() });
       fs.writeFileSync(path.join(grepo, 'later.js'), 'module.exports = 652;\n');
-      spawnSync('git', ['-C', grepo, 'add', 'later.js'], { encoding: 'utf8' });
-      spawnSync('git', ['-C', grepo, 'commit', '-m', 'later work'], { encoding: 'utf8' });
+      G.git(grepo, ['add', 'later.js'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'later work'], { encoding: 'utf8' });
       const rPass = runNode(planValidatorScript, ['--release-check', '--json', '--candidate', c1], grepo);
       const outPass = JSON.parse(rPass.stdout);
       assert(rPass.status === 0 && outPass.result === 'pass' && outPass.candidate === c1,
@@ -3876,8 +3879,8 @@ function testBundle424432433ValidatorGates() {
     try {
       initGitRepo(grepo);
       fs.writeFileSync(path.join(grepo, '.gitignore'), '/.cache/\n');
-      spawnSync('git', ['-C', grepo, 'add', '.gitignore'], { encoding: 'utf8' });
-      spawnSync('git', ['-C', grepo, 'commit', '-m', 'ignore root .cache'], { encoding: 'utf8' });
+      G.git(grepo, ['add', '.gitignore'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'ignore root .cache'], { encoding: 'utf8' });
       writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
       const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
       assert(r.status === 1 && JSON.parse(r.stdout).reason === 'repo_kind_undetermined',
@@ -3891,8 +3894,8 @@ function testBundle424432433ValidatorGates() {
       // orphan production write covered by no node's declared set, outside the band.
       fs.mkdirSync(path.join(grepo, 'orphan'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'orphan', 'residue.js'), 'crash residue\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'orphan residue'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'orphan residue'], { encoding: 'utf8' });
       writeReceipt(proj, { headSha: headOf(grepo), chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
       const out = JSON.parse(r.stdout);
@@ -3916,8 +3919,8 @@ function testBundle424432433ValidatorGates() {
       // node a's only branch change (aaa/x.js) is covered by complete node a → sweep clean.
       fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'impl a'], { encoding: 'utf8' });
       const ch = JSON.parse(runNode(planValidatorScript, [planPath, '--candidate-hash', '--json'], grepo).stdout).validated_candidate_hash;
       writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + ch + '\nxcodebuild test: exit 0 (126 + 74 tests).\n');
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
@@ -3949,8 +3952,8 @@ function testBundle424432433ValidatorGates() {
     try {
       fs.mkdirSync(path.join(grepo, 'orphan'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'orphan', 'residue.js'), 'crash residue\n');
-      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'orphan residue'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'orphan residue'], { encoding: 'utf8' });
       // #653: the fixture binds a CURRENT (matching) hash so the refusal below is the SWEEP's —
       // proving the sweep still runs behind a satisfied validation gate.
       const ch = JSON.parse(runNode(planValidatorScript, [planPath, '--candidate-hash', '--json'], grepo).stdout).validated_candidate_hash;
@@ -4019,8 +4022,8 @@ function testBundle424432433ValidatorGates() {
   const commitImpl = grepo => {
     fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true });
     fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'impl a'], { encoding: 'utf8' });
   };
 
   // --- #653 (a) LEGACY SHAPE FAIL-CLOSED: pass verdict but NO validated_candidate_hash →
@@ -4155,7 +4158,7 @@ function testBundle424432433NodeSeeding() {
 
     const grepo = adaptiveTmp('bundle433-seed-git');
     initGitRepoWithBareRemote(grepo);
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-433-seed'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-433-seed'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-433-seed');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -4163,8 +4166,8 @@ function testBundle424432433NodeSeeding() {
     // freeze the plan (stamps plan_hash so --resume-check passes)
     const fz = runLegacyFreeze(planValidatorScript, planPath, grepo);
     assert(fz.status === 0, '#433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen plan'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen plan'], { encoding: 'utf8' });
     const cacheDir = path.join(proj, '.cache');
 
     try {
@@ -5661,21 +5664,21 @@ const GIT_ISOLATION_ENV = {
 
 function initGitRepo(tmp) {
   const env = { ...process.env, ...GIT_ISOLATION_ENV };
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8', env });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8', env });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8', env });
+  G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8', env });
+  G.git(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8', env });
+  G.git(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8', env });
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8', env });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8', env });
+  G.git(tmp, ['add', 'README.md'], { encoding: 'utf8', env });
+  G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8', env });
 }
 
 function initGitRepoWithBareRemote(tmp) {
   initGitRepo(tmp);
   const remotePath = tmp + '-remote';
   const env = { ...process.env, ...GIT_ISOLATION_ENV };
-  spawnSync('git', ['init', '--bare', remotePath], { env });
-  spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath], { env });
-  spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'main'], { env });
+  G.raw(['init', '--bare', remotePath], { env });
+  G.git(tmp, ['remote', 'add', 'origin', remotePath], { env });
+  G.git(tmp, ['push', '-u', 'origin', 'main'], { env });
   return remotePath;
 }
 
@@ -5826,8 +5829,8 @@ function testWorktreeNativeDefaultOff() {
     initGitRepo(tmp);
     // Commit a .gitignore so the bin/ shim + kaola-workflow/ folder don't dirty the tree
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
-    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'add gitignore'], { encoding: 'utf8' });
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     const result = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
@@ -5835,10 +5838,10 @@ function testWorktreeNativeDefaultOff() {
     assert(result.worktree_path === '', 'worktree_path must be empty when KAOLA_WORKTREE_NATIVE=0, got: ' + JSON.stringify(result.worktree_path));
     assert(result.worktree_error === undefined, 'worktree_error must be absent when KAOLA_WORKTREE_NATIVE=0 (gate-off path must not surface error field)');
     // Case A: in-place branch must be created and checked out
-    const headBranch = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headBranch = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headBranch === 'workflow/issue-505', 'NATIVE=0 must checkout in-place branch workflow/issue-505, got: ' + headBranch);
     // Tree must be clean (all untracked entries should be gitignored)
-    const status = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    const status = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
     assert(status === '', 'tree must be clean after in-place claim, got: ' + JSON.stringify(status));
     // State file must record base_branch: main
     const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
@@ -5858,8 +5861,8 @@ function testWorktreeNativeInPlaceIdempotentReclaim() {
   try {
     initGitRepo(tmp);
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
-    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'add gitignore'], { encoding: 'utf8' });
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     // First claim
@@ -5869,12 +5872,12 @@ function testWorktreeNativeInPlaceIdempotentReclaim() {
     const projDir = path.join(tmp, 'kaola-workflow', 'issue-505');
     fs.rmSync(projDir, { recursive: true, force: true });
     // Verify HEAD is still on feature branch
-    const headAfterRemove = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headAfterRemove = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headAfterRemove === 'workflow/issue-505', 'HEAD should still be on workflow/issue-505 after folder removal, got: ' + headAfterRemove);
     // Re-claim: should use existing branch (not -b), no error, base_branch empty
     const second = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(second.claim === 'acquired', 'second claim should acquire (idempotent), got: ' + JSON.stringify(second));
-    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headAfter = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headAfter === 'workflow/issue-505', 'HEAD should remain workflow/issue-505 after re-claim, got: ' + headAfter);
     // base_branch should be empty (cur === branch guard prevents recording feature as its own base)
     const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
@@ -5918,10 +5921,10 @@ function testWorktreeNativeDirtyTreeRefusal() {
     // No project folder should be created
     assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-505')), 'project folder must not be created on dirty_tree_refused');
     // No feature branch should be created
-    const branchCheck = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    const branchCheck = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
     assert(branchCheck.status !== 0, 'feature branch must not be created on dirty_tree_refused');
     // HEAD must remain on main
-    const head = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const head = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(head === 'main', 'HEAD must remain on main after dirty_tree_refused, got: ' + head);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -5956,7 +5959,7 @@ function testTreeDirtyFailsClosedOnProbeFault() {
     const parsed = JSON.parse(lastLine);
     assert(parsed.status === 'dirty_tree_refused', '#557: an unprobeable tree must fail CLOSED (dirty_tree_refused), got: ' + JSON.stringify(parsed.status));
     assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-557')), '#557: no project folder on the fail-closed refusal');
-    const branchCheck = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-557'], { encoding: 'utf8' });
+    const branchCheck = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-557'], { encoding: 'utf8' });
     assert(branchCheck.status !== 0, '#557: no feature branch on the fail-closed refusal');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -5971,17 +5974,17 @@ function testWorktreeNativeDetachedHeadRecordOnly() {
   try {
     initGitRepo(tmp);
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
-    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'add gitignore'], { encoding: 'utf8' });
     // Enter detached HEAD state
-    const sha = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    spawnSync('git', ['-C', tmp, 'checkout', '--detach', sha], { encoding: 'utf8' });
+    const sha = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['checkout', '--detach', sha], { encoding: 'utf8' });
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     const result = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(result.claim === 'acquired', 'detached HEAD must still acquire, got: ' + JSON.stringify(result));
     // No feature branch should be created
-    const branchCheck = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    const branchCheck = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
     assert(branchCheck.status !== 0, 'feature branch must not be created in detached HEAD mode');
     // State file: base_branch should be absent or empty
     const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
@@ -6004,24 +6007,24 @@ function testWorktreeNativeDiscardRestoresBase() {
   try {
     initGitRepo(tmp);
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
-    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'add gitignore'], { encoding: 'utf8' });
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     // Claim: should create workflow/issue-505 and base_branch: main
     const claimed = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(claimed.claim === 'acquired', 'startup must acquire, got: ' + JSON.stringify(claimed));
     // Verify we are on the feature branch
-    const headOnFeature = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headOnFeature = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headOnFeature === 'workflow/issue-505', 'should be on feature branch before release, got: ' + headOnFeature);
     // Release from tmp root (NOT from inside the project folder)
     const releaseResult = runClaimOnlineLastJson(['release', '--project', 'issue-505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(releaseResult.released === true, 'release must succeed, got: ' + JSON.stringify(releaseResult));
     // HEAD must be restored to main
-    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headAfter = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headAfter === 'main', 'HEAD must be restored to main after discard, got: ' + headAfter);
     // workflow/issue-505 branch must be deleted
-    const branchGone = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    const branchGone = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
     assert(branchGone.status !== 0, 'workflow/issue-505 branch must be deleted after discard');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -6037,13 +6040,13 @@ function testWorktreeNativeDiscardRestoresNonDefaultBase() {
   try {
     initGitRepo(tmp);
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
-    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'add gitignore'], { encoding: 'utf8' });
     // Create and checkout a non-default base branch 'develop'
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'develop'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'develop'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'DEV.md'), 'dev\n');
-    spawnSync('git', ['-C', tmp, 'add', 'DEV.md'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'dev commit'], { encoding: 'utf8' });
+    G.git(tmp, ['add', 'DEV.md'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'dev commit'], { encoding: 'utf8' });
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     // Claim from develop -> base_branch should be 'develop'
@@ -6056,10 +6059,10 @@ function testWorktreeNativeDiscardRestoresNonDefaultBase() {
     const releaseResult = runClaimOnlineLastJson(['release', '--project', 'issue-505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(releaseResult.released === true, 'release must succeed, got: ' + JSON.stringify(releaseResult));
     // HEAD must be restored to 'develop' (not 'main')
-    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headAfter = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headAfter === 'develop', 'HEAD must be restored to develop (recorded base_branch) after discard, got: ' + headAfter);
     // workflow/issue-505 branch must be deleted
-    const branchGone = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    const branchGone = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
     assert(branchGone.status !== 0, 'workflow/issue-505 branch must be deleted after discard (develop base)');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -6313,10 +6316,7 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
     // Create linked worktree
     const wtPath = path.join(kwRoot, 'issue-701');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-701', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-701', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
 
     // Plant active folder inside the linked worktree (mirrors main copy)
     plantActiveFolder(wtPath, 'issue-701', 701, null);
@@ -6378,9 +6378,7 @@ function testArchiveDestinationResolvesAgainstMain832() {
     plantActiveFolder(tmp, project, 8321, null);
     const wtPath = path.join(kwRoot, project);
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], {
-      cwd: tmp, encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     plantActiveFolder(wtPath, project, 8321, null);
     seedAdaptiveFinalizeFixture(tmp, project);
     seedAdaptiveFinalizeFixture(wtPath, project);
@@ -6426,7 +6424,7 @@ function testArchiveDestinationResolvesAgainstMain832() {
     );
 
     // (3) THE INCIDENT: the sink removes the linked worktree at cleanup. The run record survives.
-    spawnSync('git', ['worktree', 'remove', '--force', '--', wtPath], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'remove', '--force', '--', wtPath], { encoding: 'utf8' });
     assert(
       !fs.existsSync(wtPath),
       '#832: precondition — the worktree teardown the sink performs actually removed the tree'
@@ -6436,7 +6434,7 @@ function testArchiveDestinationResolvesAgainstMain832() {
       '#832: the run archive must SURVIVE the sink\'s worktree removal — this is the data loss'
     );
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -6464,14 +6462,12 @@ function testArchiveCommitHonestUnderGitignore832() {
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'kaola-workflow/archive/\n');
     plantActiveFolder(tmp, project, 8322, null);
     plantRoadmapIssue(tmp, 8322, '');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant + gitignore archive'], { encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'plant + gitignore archive'], { encoding: 'utf8' });
 
     const wtPath = path.join(kwRoot, project);
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], {
-      cwd: tmp, encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     plantActiveFolder(wtPath, project, 8322, null);
     seedAdaptiveFinalizeFixture(tmp, project);
     seedAdaptiveFinalizeFixture(wtPath, project);
@@ -6488,7 +6484,7 @@ function testArchiveCommitHonestUnderGitignore832() {
     const out = emitted.length ? JSON.parse(emitted[emitted.length - 1]) : {};
 
     // Precondition — git genuinely refused: no archive path reached the feature branch HEAD.
-    const tree = spawnSync('git', ['-C', wtPath, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).stdout || '';
+    const tree = G.git(wtPath, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).stdout || '';
     assert(
       !/kaola-workflow\/archive\//.test(tree),
       '#832: precondition — the ignored archive genuinely never reached HEAD; got:\n' + tree
@@ -6509,7 +6505,7 @@ function testArchiveCommitHonestUnderGitignore832() {
       '#832: the archive must survive on disk after an honest skipped_gitignored; dest=' + JSON.stringify(out.dest)
     );
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', '--', path.join(kwRoot, project)], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', '--', path.join(kwRoot, project)], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -6524,15 +6520,12 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
     // Plant active folder and roadmap issue in main worktree, then commit
     plantActiveFolder(tmp, 'issue-701', 701, null);
     plantRoadmapIssue(tmp, 701, '');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant'], { encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'plant'], { encoding: 'utf8' });
     // Create linked worktree on a feature branch
     const wtPath = path.join(kwRoot, 'issue-701');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-701', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-701', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     // Mirror active folder in linked worktree
     plantActiveFolder(wtPath, 'issue-701', 701, null);
     seedAdaptiveFinalizeFixture(tmp, 'issue-701');
@@ -6554,10 +6547,7 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
     );
     // --keep-worktree causes an archive commit on the feature branch; check what was committed
     // Use --no-renames so renamed files show as both delete (source) and add (dest) paths
-    const showResult = spawnSync('git', ['show', 'HEAD', '--name-only', '--no-renames'], {
-      cwd: wtPath,
-      encoding: 'utf8'
-    });
+    const showResult = G.git(wtPath, ['show', 'HEAD', '--name-only', '--no-renames'], { encoding: 'utf8' });
     const showOutput = showResult.stdout;
     // #832: the archive resolves against MAIN's project root, so it is NOT in the feature branch's
     // commit at all — it is on main's disk, and the sink's own archive_commit step lands it there.
@@ -6587,7 +6577,7 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
       'committed HEAD must NOT include foreign archive kaola-workflow/archive/issue-999/\ngit show output:\n' + showOutput
     );
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-701'], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', kwRoot + '/issue-701'], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -6642,10 +6632,7 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
     // Create linked worktree
     const wtPath = path.join(kwRoot, 'issue-703');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-703', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-703', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
 
     // Plant active folder inside the linked worktree
     plantActiveFolder(wtPath, 'issue-703', 703, null);
@@ -6687,13 +6674,13 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
       releaseJson.discard_archive_committed === true,
       '#715: release must report discard_archive_committed:true, got: ' + JSON.stringify(releaseJson)
     );
-    const porcelainAfterRelease = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
+    const porcelainAfterRelease = G.git(tmp, ['status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
     assert(
       !porcelainAfterRelease.split('\n').some(l => l.includes('.discarded-')),
       '#715: no .discarded- path may remain in git status after release; got:\n' + porcelainAfterRelease
     );
     const discardRel = path.relative(tmp, releaseJson.dest).split(path.sep).join('/');
-    const discardAtHead = spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'HEAD:' + discardRel], { encoding: 'utf8' }).stdout.trim();
+    const discardAtHead = G.git(tmp, ['cat-file', '-t', 'HEAD:' + discardRel], { encoding: 'utf8' }).stdout.trim();
     assert(
       discardAtHead === 'tree',
       '#715: the discarded archive must be committed at HEAD (a tree); got ' + JSON.stringify(discardAtHead) + ' for ' + discardRel
@@ -6704,14 +6691,14 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
     // The gh shim planted above is untracked fixture residue the OFFLINE sink never calls —
     // remove it so only genuinely workflow-owned paths remain for the preflight to classify.
     fs.rmSync(path.join(tmp, 'bin'), { recursive: true, force: true });
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-704'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-704'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-704.txt'), 'impl\n');
-    spawnSync('git', ['-C', tmp, 'add', 'impl-704.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 704'], {
+    G.git(tmp, ['add', 'impl-704.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: impl 704'], {
       encoding: 'utf8',
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
     const sinkAfterRelease = spawnSync(process.execPath, [
       sinkMergeScript,
       '--sink',
@@ -6752,7 +6739,7 @@ function testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase() {
   try {
     initGitRepo(tmp);
     // In-place posture: the run lives on the feature branch in the MAIN checkout.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-801'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     plantActiveFolder(tmp, 'issue-801', 801, null);
@@ -6771,13 +6758,13 @@ function testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase() {
 
     // The in-place base restore must proceed (the release's OWN fresh archive dest is exempt from
     // the dirty gate) — HEAD moves to the base and the discarded feature branch is deleted.
-    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headAfter = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(
       headAfter === 'main',
       '#715 F1: release on the feature branch must restore the base checkout, got HEAD=' + headAfter +
         ' json=' + JSON.stringify(releaseJson)
     );
-    const branchList = spawnSync('git', ['-C', tmp, 'branch', '--list', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim();
+    const branchList = G.git(tmp, ['branch', '--list', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim();
     assert(
       branchList === '',
       '#715 F1: the discarded feature branch must be deleted after the restore, got: ' + JSON.stringify(branchList)
@@ -6793,19 +6780,19 @@ function testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase() {
       '#715 F1: release must disclose the receiving branch (discard_archive_branch === main), got: ' + JSON.stringify(releaseJson)
     );
     const discardRel = path.relative(tmp, releaseJson.dest).split(path.sep).join('/');
-    const atBase = spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + discardRel], { encoding: 'utf8' }).stdout.trim();
+    const atBase = G.git(tmp, ['cat-file', '-t', 'main:' + discardRel], { encoding: 'utf8' }).stdout.trim();
     assert(
       atBase === 'tree',
       '#715 F1: the discard archive must be a tree at the BASE branch HEAD (main:' + discardRel + '), got ' + JSON.stringify(atBase)
     );
-    const porcelain = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
+    const porcelain = G.git(tmp, ['status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
     assert(
       !porcelain.split('\n').some(l => l.includes('.discarded-')),
       '#715 F1: no .discarded- residue may remain on base after the commit; got:\n' + porcelain
     );
     // Orphan proof inverted: after the (release-performed) checkout+branch-delete cleanup, the
     // archive stays REACHABLE from the base ref.
-    const revList = spawnSync('git', ['-C', tmp, 'rev-list', 'main', '--', discardRel], { encoding: 'utf8' }).stdout.trim();
+    const revList = G.git(tmp, ['rev-list', 'main', '--', discardRel], { encoding: 'utf8' }).stdout.trim();
     assert(
       revList !== '',
       '#715 F1: the discard archive commit must stay reachable from the base ref (git rev-list main -- ' + discardRel + ')'
@@ -6834,17 +6821,17 @@ function testWatchPrClosedSweepSkipsCommitOffBaseBranch() {
       "else { process.stdout.write('[\\n'); }"
     ]);
     // An unrelated non-base branch carrying its own commit, checked out.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/other-lane'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/other-lane'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     fs.writeFileSync(path.join(tmp, 'other.txt'), 'other\n');
-    spawnSync('git', ['-C', tmp, 'add', 'other.txt'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'other lane work'], {
+    G.git(tmp, ['add', 'other.txt'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'other lane work'], {
       encoding: 'utf8',
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
-    const otherTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
-    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const otherTipBefore = G.git(tmp, ['rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
 
     const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-offbase');
     fs.mkdirSync(projDir, { recursive: true });
@@ -6874,12 +6861,12 @@ function testWatchPrClosedSweepSkipsCommitOffBaseBranch() {
       '#715 F1: the cleanup entry must disclose the current (non-receiving) branch, got: ' + JSON.stringify(entry)
     );
     // Neither ref moved: no commit was swept onto the unrelated branch, none onto the base.
-    const otherTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
+    const otherTipAfter = G.git(tmp, ['rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
     assert(
       otherTipAfter === otherTipBefore,
       '#715 F1: the non-base branch tip must be unchanged by the sweep; before=' + otherTipBefore + ' after=' + otherTipAfter
     );
-    const mainTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(
       mainTipAfter === mainTipBefore,
       '#715 F1: the base ref must be unchanged by an off-base sweep; before=' + mainTipBefore + ' after=' + mainTipAfter
@@ -6920,7 +6907,7 @@ function plantActiveFolderWithBase(root, project, issueNumber, branch, baseBranc
 }
 
 function gitLogAllSubjects(root) {
-  return spawnSync('git', ['-C', root, 'log', '--all', '--format=%s'], { encoding: 'utf8' }).stdout;
+  return G.git(root, ['log', '--all', '--format=%s'], { encoding: 'utf8' }).stdout;
 }
 
 function testReleaseDetachedHeadLyingBaseSkipsArchiveCommit() {
@@ -6932,15 +6919,15 @@ function testReleaseDetachedHeadLyingBaseSkipsArchiveCommit() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-detached-lying-base-')));
   try {
     initGitRepo(tmp);
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-801'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'HEAD');
-    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-    spawnSync('git', ['-C', tmp, 'checkout', '--detach', 'HEAD'], {
+    const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['checkout', '--detach', 'HEAD'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
-    const detachedTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const detachedTipBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 
     const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-801', '--reason', 'test'], {
       cwd: tmp,
@@ -6964,12 +6951,12 @@ function testReleaseDetachedHeadLyingBaseSkipsArchiveCommit() {
     );
     // No commit anywhere: the detached HEAD tip and the main ref tip are both byte-unchanged,
     // and no chore commit exists on ANY ref.
-    const detachedTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const detachedTipAfter = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(
       detachedTipAfter === detachedTipBefore,
       '#715 N5-A: the detached HEAD must NOT receive the archive commit; before=' + detachedTipBefore + ' after=' + detachedTipAfter
     );
-    const mainTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(
       mainTipAfter === mainTipBefore,
       '#715 N5-A: the main ref tip must be unchanged; before=' + mainTipBefore + ' after=' + mainTipAfter
@@ -6985,14 +6972,14 @@ function testReleaseDetachedHeadLyingBaseSkipsArchiveCommit() {
       residue.length === 1,
       '#715 N5-A: the skipped archive must remain on disk as recoverable residue, got: ' + JSON.stringify(residue)
     );
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
     const rel = 'kaola-workflow/archive/' + residue[0];
-    spawnSync('git', ['-C', tmp, 'add', '-A', '--', rel], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'manual recovery', '--', rel], {
+    G.git(tmp, ['add', '-A', '--', rel], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'manual recovery', '--', rel], {
       encoding: 'utf8',
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
-    const recovered = spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).stdout.trim();
+    const recovered = G.git(tmp, ['cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).stdout.trim();
     assert(
       recovered === 'tree',
       '#715 N5-A: the residue must stay manually recoverable on the base branch, got ' + JSON.stringify(recovered)
@@ -7010,12 +6997,12 @@ function testReleaseOnFeatureBranchLyingBaseNamesDiscardedBranchSkips() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-lying-base-discarded-')));
   try {
     initGitRepo(tmp);
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-801'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'workflow/issue-801');
-    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-    const featTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const featTipBefore = G.git(tmp, ['rev-parse', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim();
 
     const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-801', '--reason', 'test'], {
       cwd: tmp,
@@ -7046,8 +7033,8 @@ function testReleaseOnFeatureBranchLyingBaseNamesDiscardedBranchSkips() {
     // No chore commit on ANY ref: both tips byte-unchanged, nothing in the log, and the archive
     // is a tree at NEITHER the discarded feature branch nor main.
     assert(
-      spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore &&
-        spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim() === featTipBefore,
+      G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore &&
+        G.git(tmp, ['rev-parse', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim() === featTipBefore,
       '#715 N5-A: both ref tips must be unchanged (no commit on the discarded branch, none on main)'
     );
     assert(
@@ -7062,8 +7049,8 @@ function testReleaseOnFeatureBranchLyingBaseNamesDiscardedBranchSkips() {
     );
     const rel = 'kaola-workflow/archive/' + residue[0];
     assert(
-      spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'workflow/issue-801:' + rel], { encoding: 'utf8' }).status !== 0 &&
-        spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).status !== 0,
+      G.git(tmp, ['cat-file', '-t', 'workflow/issue-801:' + rel], { encoding: 'utf8' }).status !== 0 &&
+        G.git(tmp, ['cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).status !== 0,
       '#715 N5-A: the archive must be a tree at NEITHER the discarded branch nor main'
     );
   } finally {
@@ -7089,11 +7076,11 @@ function testWatchPrClosedSweepDetachedLyingBaseHeadSkips() {
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
     ]);
-    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-    spawnSync('git', ['-C', tmp, 'checkout', '--detach', 'HEAD'], {
+    const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['checkout', '--detach', 'HEAD'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
-    const detachedTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const detachedTipBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 
     const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-detached-lying-base');
     fs.mkdirSync(projDir, { recursive: true });
@@ -7125,8 +7112,8 @@ function testWatchPrClosedSweepDetachedLyingBaseHeadSkips() {
       '#715 N5-A: the cleanup entry must disclose the (non-receiving) detached HEAD sentinel, got: ' + JSON.stringify(entry)
     );
     assert(
-      spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim() === detachedTipBefore &&
-        spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore,
+      G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim() === detachedTipBefore &&
+        G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore,
       '#715 N5-A: the detached HEAD and the base ref tip must both be unchanged'
     );
     assert(
@@ -7165,17 +7152,17 @@ function testWatchPrClosedSweepArbitraryLaneLyingBaseSkips() {
       "else { process.stdout.write('[\\n'); }"
     ]);
     // An unrelated non-base branch carrying its own commit, checked out.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/other-lane'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/other-lane'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     fs.writeFileSync(path.join(tmp, 'other.txt'), 'other\n');
-    spawnSync('git', ['-C', tmp, 'add', 'other.txt'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'other lane work'], {
+    G.git(tmp, ['add', 'other.txt'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'other lane work'], {
       encoding: 'utf8',
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
-    const otherTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
-    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const otherTipBefore = G.git(tmp, ['rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
 
     const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-lane-lying-base');
     fs.mkdirSync(projDir, { recursive: true });
@@ -7207,8 +7194,8 @@ function testWatchPrClosedSweepArbitraryLaneLyingBaseSkips() {
       '#715 N5-A: the cleanup entry must disclose the current (non-receiving) lane, got: ' + JSON.stringify(entry)
     );
     assert(
-      spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim() === otherTipBefore &&
-        spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore,
+      G.git(tmp, ['rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim() === otherTipBefore &&
+        G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore,
       '#715 N5-A: both ref tips must be unchanged (no commit on the arbitrary lane, none on the base)'
     );
     assert(
@@ -7238,15 +7225,15 @@ function testReleaseHeadRepointRaceDowngradesArchiveCommit() {
   const shimDir = tmp + '.shim-bin'; // OUTSIDE the repo — shim files are not workflow-owned dirt
   try {
     initGitRepo(tmp);
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-801'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'main');
     // Pre-create the race branch at main's tip so the interleave has somewhere to land.
-    spawnSync('git', ['-C', tmp, 'branch', 'race', 'main'], {
+    G.git(tmp, ['branch', 'race', 'main'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
-    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
 
     // git shim: pass every call through except the helper's `add -A`, after which HEAD is
     // re-pointed to refs/heads/race (the RC1 interleave, deterministic — no probabilistic racing).
@@ -7295,7 +7282,7 @@ function testReleaseHeadRepointRaceDowngradesArchiveCommit() {
       !JSON.stringify(releaseJson).includes('"discard_archive_branch":"main"'),
       '#715 N5-B: the emit must never name the stale pre-race branch as the receiver, got: ' + JSON.stringify(releaseJson)
     );
-    const mainTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(
       mainTipAfter === mainTipBefore,
       '#715 N5-B: the base ref tip must be unchanged by the raced commit; before=' + mainTipBefore + ' after=' + mainTipAfter
@@ -7305,17 +7292,17 @@ function testReleaseHeadRepointRaceDowngradesArchiveCommit() {
     assert(residue.length === 1, '#715 N5-B: the raced archive must still exist, got: ' + JSON.stringify(residue));
     const rel = 'kaola-workflow/archive/' + residue[0];
     assert(
-      spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).status !== 0,
+      G.git(tmp, ['cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).status !== 0,
       '#715 N5-B: the archive must NOT be a tree at the base branch'
     );
     assert(
-      spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'race:' + rel], { encoding: 'utf8' }).stdout.trim() === 'tree',
+      G.git(tmp, ['cat-file', '-t', 'race:' + rel], { encoding: 'utf8' }).stdout.trim() === 'tree',
       '#715 N5-B: the off-base commit stays recoverable on the actual receiving branch (race:' + rel + ')'
     );
     assert(
-      spawnSync('git', ['-C', tmp, 'log', '-1', '--format=%s', 'race'], { encoding: 'utf8' }).stdout.trim() === 'chore: discard archive issue-801',
+      G.git(tmp, ['log', '-1', '--format=%s', 'race'], { encoding: 'utf8' }).stdout.trim() === 'chore: discard archive issue-801',
       '#715 N5-B: the raced commit landed on race (recoverable residue), got: ' +
-        spawnSync('git', ['-C', tmp, 'log', '-1', '--format=%s', 'race'], { encoding: 'utf8' }).stdout.trim()
+        G.git(tmp, ['log', '-1', '--format=%s', 'race'], { encoding: 'utf8' }).stdout.trim()
     );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -7336,21 +7323,18 @@ function testSinkMergeFromLinkedWorktree() {
     initGitRepo(tmp);
     const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-941');
     fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-941', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-941', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
 
     // Add a real commit on the feature branch so the merge fast-forwards main.
     fs.writeFileSync(path.join(wtPath, 'feature.txt'), 'feature\n');
-    spawnSync('git', ['add', 'feature.txt'], { cwd: wtPath, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feature commit'], { cwd: wtPath, encoding: 'utf8' });
+    G.git(wtPath, ['add', 'feature.txt'], { encoding: 'utf8' });
+    G.git(wtPath, ['commit', '-m', 'feature commit'], { encoding: 'utf8' });
 
     // Plant active folder in main worktree so Step 0 sees the worktree to remove.
     plantActiveFolder(tmp, 'issue-941', 941, null);
 
-    const mainBefore = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
-    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-941'], { cwd: wtPath, encoding: 'utf8' }).stdout.trim();
+    const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const featureHead = G.git(wtPath, ['rev-parse', 'workflow/issue-941'], { encoding: 'utf8' }).stdout.trim();
     assert(mainBefore !== featureHead, 'precondition: main should lag the feature branch');
 
     const result = spawnSync(process.execPath, [
@@ -7373,16 +7357,14 @@ function testSinkMergeFromLinkedWorktree() {
       'sink-merge from linked worktree must not hit branch-locked error\nstderr: ' + result.stderr
     );
 
-    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(
       mainAfter === featureHead,
       'main should advance to feature branch HEAD after sink-merge from linked worktree\n' +
       'before: ' + mainBefore + '\nfeature: ' + featureHead + '\nafter: ' + mainAfter
     );
 
-    const branchList = spawnSync('git', ['branch', '--list', 'workflow/issue-941'], {
-      cwd: tmp, encoding: 'utf8'
-    }).stdout.trim();
+    const branchList = G.git(tmp, ['branch', '--list', 'workflow/issue-941'], { encoding: 'utf8' }).stdout.trim();
     assert(
       branchList === '',
       'feature branch should be deleted after sink-merge (Step 9), got: ' + JSON.stringify(branchList)
@@ -7433,25 +7415,25 @@ function testSinkRefusesStaleReceipt() {
       fs.mkdirSync(archiveCache, { recursive: true });
       // Write a stale receipt WITHOUT branch_head — simulates an old-cycle or pre-#518 receipt.
       fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceiptNoHead());
-      spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'chore: record prior-slice sink receipt'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'chore: record prior-slice sink receipt'], { encoding: 'utf8' });
       // feature branch with a deliverable NOT yet merged to main
-      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['branch', branch], { encoding: 'utf8' });
+      G.git(tmp, ['switch', branch], { encoding: 'utf8' });
       fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
-      spawnSync('git', ['add', 'DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'feat: slice deliverable'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
-      const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'feat: slice deliverable'], { encoding: 'utf8' });
+      G.git(tmp, ['switch', 'main'], { encoding: 'utf8' });
+      const mainBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 
       // The cycle-identity check sees no branch_head → isNewCycle=true → reinit → merge runs fresh.
       const result = runSink(tmp);
       const parsed = parseLast(result.stdout);
       assert(parsed.status === 'sinked', '#518-A: absent branch_head must trigger cycle reinit → merge runs → status:sinked, got ' + JSON.stringify(parsed));
       assert(result.status === 0, '#518-A: cycle reinit sink must exit 0, got ' + result.status);
-      const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      const mainAfter = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
       assert(mainAfter !== mainBefore, '#518-A: main must advance after cycle reinit sink');
-      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status === 0, '#518-A: the deliverable must be on main after cycle reinit sink');
+      assert(G.git(tmp, ['cat-file', '-e', 'main:DELIVERABLE.txt'], { encoding: 'utf8' }).status === 0, '#518-A: the deliverable must be on main after cycle reinit sink');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -7465,30 +7447,30 @@ function testSinkRefusesStaleReceipt() {
     try {
       initGitRepo(tmp);
       // Create feature branch and capture its tip BEFORE writing the receipt.
-      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['branch', branch], { encoding: 'utf8' });
+      G.git(tmp, ['switch', branch], { encoding: 'utf8' });
       fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
-      spawnSync('git', ['add', 'DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'feat: slice deliverable'], { cwd: tmp, encoding: 'utf8' });
-      const featureTip = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'feat: slice deliverable'], { encoding: 'utf8' });
+      const featureTip = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
       // Switch back to main WITHOUT merging (branch is NOT an ancestor of main).
-      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['switch', 'main'], { encoding: 'utf8' });
 
       // Write receipt with branch_head matching the CURRENT feature tip → cycle-identity passes.
       const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
       fs.mkdirSync(archiveCache, { recursive: true });
       fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceiptNoHead({ branch_head: featureTip }));
-      spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'chore: record same-cycle sink receipt'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'chore: record same-cycle sink receipt'], { encoding: 'utf8' });
       // Capture mainBefore AFTER the receipt commit (that commit advanced main; sink must not further advance).
-      const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      const mainBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 
       const result = runSink(tmp);
       const parsed = parseLast(result.stdout);
       assert(parsed.status !== 'sinked', '#484-B: same-tip unmerged receipt must NOT emit status:sinked, got ' + JSON.stringify(parsed));
       assert(parsed.result === 'refuse' && parsed.reason === 'stale_sink_receipt', '#484-B: ancestry backstop must refuse stale_sink_receipt, got ' + JSON.stringify(parsed));
       assert(result.status !== 0, '#484-B: ancestry backstop refusal must exit non-zero, got ' + result.status);
-      const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      const mainAfter = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
       assert(mainAfter === mainBefore, '#484-B: main must NOT advance on ancestry backstop refusal');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -7503,21 +7485,21 @@ function testSinkRefusesStaleReceipt() {
       const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
       fs.mkdirSync(archiveCache, { recursive: true });
       fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceiptNoHead());
-      spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'chore: record prior-slice sink receipt'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'chore: record prior-slice sink receipt'], { encoding: 'utf8' });
+      G.git(tmp, ['branch', branch], { encoding: 'utf8' });
+      G.git(tmp, ['switch', branch], { encoding: 'utf8' });
       fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
-      spawnSync('git', ['add', 'DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'feat: slice deliverable'], { cwd: tmp, encoding: 'utf8' });
-      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'feat: slice deliverable'], { encoding: 'utf8' });
+      G.git(tmp, ['switch', 'main'], { encoding: 'utf8' });
       // the branch genuinely landed (a real prior merge)
-      spawnSync('git', ['merge', '--ff-only', branch], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['merge', '--ff-only', branch], { encoding: 'utf8' });
 
       const result = runSink(tmp);
       const parsed = parseLast(result.stdout);
       assert(parsed.result !== 'refuse' || parsed.reason !== 'stale_sink_receipt', '#484-C: a genuinely-merged branch must NOT be false-refused as stale, got ' + JSON.stringify(parsed));
-      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status === 0, '#484-C: precondition — the deliverable is on main');
+      assert(G.git(tmp, ['cat-file', '-e', 'main:DELIVERABLE.txt'], { encoding: 'utf8' }).status === 0, '#484-C: precondition — the deliverable is on main');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -7534,10 +7516,10 @@ function testAssertWorktreeCleanFailsClosedOnProbeFault() {
   try {
     initGitRepo(tmp);
     // Provision a CLEAN linked worktree on a feature branch (no uncommitted changes).
-    spawnSync('git', ['branch', 'workflow/issue-9496'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['branch', 'workflow/issue-9496'], { encoding: 'utf8' });
     const wt = path.join(tmp, '.kw', 'wt-9496');
-    spawnSync('git', ['worktree', 'add', wt, 'workflow/issue-9496'], { cwd: tmp, encoding: 'utf8' });
-    const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['worktree', 'add', wt, 'workflow/issue-9496'], { encoding: 'utf8' });
+    const mainBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 
     // Inject a probe fault: the worktree status probe throws. A fail-OPEN guard would treat this as
     // clean and proceed to the destructive worktree removal; a fail-CLOSED guard must refuse.
@@ -7552,7 +7534,7 @@ function testAssertWorktreeCleanFailsClosedOnProbeFault() {
     assert(/(could not|cannot) (be )?verif|unprovable/i.test(result.stderr || ''), '#496: refusal must name the unverifiable-clean cause, got stderr: ' + result.stderr);
     // The worktree (and any work in it) must survive the refusal.
     assert(fs.existsSync(wt), '#496: a probe-fault refusal must NOT remove the worktree, got removed: ' + wt);
-    const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === mainBefore, '#496: main must NOT advance on a probe-fault refusal');
 
     // Guard A (not over-broad): a genuinely-CLEAN worktree with NO injected fault still proceeds past
@@ -7568,7 +7550,7 @@ function testAssertWorktreeCleanFailsClosedOnProbeFault() {
     assert(!/(could not|cannot) (be )?verif|unprovable/i.test(ok.stderr || ''), '#496: a clean worktree with no injected fault must NOT trip the fail-closed probe guard, got stderr: ' + ok.stderr);
     console.log('testAssertWorktreeCleanFailsClosedOnProbeFault: PASSED');
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9496')], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9496')], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -7584,10 +7566,10 @@ function testAssertWorktreeCleanFailsClosedOnListProbeFault() {
   try {
     initGitRepo(tmp);
     // Provision a CLEAN linked worktree on a feature branch (no uncommitted changes).
-    spawnSync('git', ['branch', 'workflow/issue-9506'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['branch', 'workflow/issue-9506'], { encoding: 'utf8' });
     const wt = path.join(tmp, '.kw', 'wt-9506');
-    spawnSync('git', ['worktree', 'add', wt, 'workflow/issue-9506'], { cwd: tmp, encoding: 'utf8' });
-    const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['worktree', 'add', wt, 'workflow/issue-9506'], { encoding: 'utf8' });
+    const mainBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 
     // Inject a list-probe fault: `git worktree list` throws. A fail-OPEN guard returns silently
     // as "nothing to guard"; a fail-CLOSED guard must refuse (cannot prove safety → reject).
@@ -7602,7 +7584,7 @@ function testAssertWorktreeCleanFailsClosedOnListProbeFault() {
     assert(/worktree list|enumerate worktree/i.test(result.stderr || ''), '#506: refusal must name the unverifiable worktree-list cause, got stderr: ' + result.stderr);
     // The worktree (and any work in it) must survive the refusal.
     assert(fs.existsSync(wt), '#506: a list-probe-fault refusal must NOT remove the worktree, got removed: ' + wt);
-    const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === mainBefore, '#506: main must NOT advance on a list-probe-fault refusal');
 
     // Guard A (not over-broad): a genuinely-CLEAN worktree with NO injected fault still proceeds
@@ -7618,7 +7600,7 @@ function testAssertWorktreeCleanFailsClosedOnListProbeFault() {
     assert(!/worktree list|enumerate worktree/i.test(ok.stderr || ''), '#506: a clean worktree with no injected list fault must NOT trip the fail-closed list guard, got stderr: ' + ok.stderr);
     console.log('testAssertWorktreeCleanFailsClosedOnListProbeFault: PASSED');
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9506')], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9506')], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -7634,13 +7616,13 @@ function testSinkRefusesOnPushMainFailure() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pushfail-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9497'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-9497'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9497'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-9497'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
-    spawnSync('git', ['-C', tmp, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'push', 'origin', 'workflow/issue-9497'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    G.git(tmp, ['push', 'origin', 'workflow/issue-9497'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--branch', 'workflow/issue-9497', '--project', 'issue-9497', '--sink', '--json',
@@ -7686,11 +7668,11 @@ function testSinkRefusesOnPushUpstreamFailure() {
     // A feature branch with a real (unpushed) commit and NO upstream configured — the forced push
     // failure below means `git push -u` never actually runs, so branch@{u} never resolves and the
     // parity check genuinely fails (this is not a fabricated assertion — it is the real git state).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9499'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9499'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
-    spawnSync('git', ['-C', tmp, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--branch', 'workflow/issue-9499', '--project', 'issue-9499', '--sink', '--json',
@@ -7741,11 +7723,11 @@ function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
   // The canonical worktree convention path (worktreePathFor): mainRoot/.kw/worktrees/<project>.
   const wtPath = path.join(tmp, '.kw', 'worktrees', project);
   try {
-    spawnSync('git', ['-C', tmp, 'branch', branch], { encoding: 'utf8' });
-    spawnSync('git', ['worktree', 'add', wtPath, branch], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['branch', branch], { encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', wtPath, branch], { encoding: 'utf8' });
     fs.writeFileSync(path.join(wtPath, 'DELIVERABLE.txt'), 'deliverable\n');
-    spawnSync('git', ['-C', wtPath, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: deliverable'], {
+    G.git(wtPath, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    G.git(wtPath, ['commit', '-m', 'feat: deliverable'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
     });
@@ -7811,22 +7793,22 @@ function testSinkTransactionStampsPublishedHeadAfterRebase() {
   const project = 'issue-9502';
   const branch = 'workflow/' + project;
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', branch], { env });
+    G.git(tmp, ['checkout', '-b', branch], { env });
     fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
-    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 9502'], { env });
-    const preRebaseHead = spawnSync('git', ['-C', tmp, 'rev-parse', branch], { encoding: 'utf8', env }).stdout.trim();
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', branch], { env });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { env });
+    G.git(tmp, ['add', 'feat.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'feat: impl 9502'], { env });
+    const preRebaseHead = G.git(tmp, ['rev-parse', branch], { encoding: 'utf8', env }).stdout.trim();
+    G.git(tmp, ['push', '-u', 'origin', branch], { env });
+    G.git(tmp, ['checkout', 'main'], { env });
 
     // Advance origin/main concurrently (via a fresh clone) so the feature branch is NOT
     // fast-forwardable and doRebase genuinely rewrites its commits (a new SHA post-rebase).
-    spawnSync('git', ['clone', remotePath, clone], { env });
-    spawnSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { env });
+    G.raw(['clone', remotePath, clone], { env });
+    G.git(clone, ['checkout', '-B', 'main', 'origin/main'], { env });
     fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
-    spawnSync('git', ['-C', clone, 'add', '-A'], { env });
-    spawnSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { env });
-    spawnSync('git', ['-C', clone, 'push', 'origin', 'main'], { env });
+    G.git(clone, ['add', '-A'], { env });
+    G.git(clone, ['commit', '-m', 'concurrent main advance'], { env });
+    G.git(clone, ['push', 'origin', 'main'], { env });
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--branch', branch, '--project', project, '--sink', '--json',
@@ -7873,13 +7855,13 @@ function testSinkRefusesOnCloseFailure() {
     "process.stdout.write('\\n'); process.exit(0);",
   ].join('\n'));
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9498'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-9498'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9498'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-9498'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
-    spawnSync('git', ['-C', tmp, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'push', 'origin', 'workflow/issue-9498'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    G.git(tmp, ['push', 'origin', 'workflow/issue-9498'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--branch', 'workflow/issue-9498', '--project', 'issue-9498', '--issue', '9498', '--sink', '--json',
@@ -8033,9 +8015,7 @@ function testStaleWorktreeCheck() {
       // Create branch and linked worktree for issue 200 (closed)
       const wtPath = path.join(kwRoot, 'issue-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
       const entry = result.stale_worktrees.find(x => x.issue_number === 200);
       assert(entry != null, 'sc1: issue 200 must appear in stale_worktrees, got: ' + JSON.stringify(result.stale_worktrees));
@@ -8058,9 +8038,7 @@ function testStaleWorktreeCheck() {
       // Create branch and linked worktree for issue 300 (open, but archived)
       const wtPath = path.join(kwRoot, 'issue-300');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-300', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-300', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       // Create archive directory to trigger isArchived=true
       fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-300'), { recursive: true });
       const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
@@ -8083,9 +8061,7 @@ function testStaleWorktreeCheck() {
       // Create branch and linked worktree for issue 100 (open)
       const wtPath = path.join(kwRoot, 'issue-100');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-100', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-100', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       // Plant active folder so issue 100 appears in activeSet
       plantActiveFolder(tmp, 'issue-100', 100, null);
       const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
@@ -8110,9 +8086,7 @@ function testStaleWorktreeCheck() {
       // Register worktree for issue 200 (closed), then delete the directory without git
       const wtPath = path.join(kwRoot, 'issue-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       // Delete directory without using git worktree remove — git metadata survives
       fs.rmSync(wtPath, { recursive: true, force: true });
       const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
@@ -8133,7 +8107,7 @@ function testStaleWorktreeCheck() {
       initGitRepo(tmp);
       writeGhShimForStale(binDir);
       // Create local branch for issue 400 (closed) without adding a worktree
-      spawnSync('git', ['branch', 'workflow/issue-400'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['branch', 'workflow/issue-400'], { encoding: 'utf8' });
       const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
       const entry = result.stale_branches.find(x => x.issue_number === 400);
       assert(entry != null, 'sc5: issue 400 must appear in stale_branches, got: ' + JSON.stringify(result.stale_branches));
@@ -8151,9 +8125,7 @@ function testStaleWorktreeCheck() {
       // Register worktree for issue 500
       const wtPath = path.join(kwRoot, 'issue-500');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-500', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-500', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       // Create archive directory to trigger isArchived=true
       fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-500'), { recursive: true });
       // Use runNode which sets KAOLA_WORKFLOW_OFFLINE=1; no gh shim needed
@@ -8191,9 +8163,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       const out = runClaimOnline(['stale-worktree-cleanup'], tmp, binDir);
       assert(out.dry_run === true, 'sc1: dry_run must be true, got: ' + JSON.stringify(out));
       assert(Array.isArray(out.would_remove) && out.would_remove.some(p => p === wtPath),
@@ -8217,9 +8187,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
       assert(out.dry_run === false, 'sc2: dry_run must be false, got: ' + JSON.stringify(out));
       assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
@@ -8243,9 +8211,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
       assert(Array.isArray(out.skipped_dirty) && out.skipped_dirty.some(p => p === wtPath),
@@ -8269,9 +8235,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive'], tmp, binDir);
       assert(Array.isArray(out.stashed) && out.stashed.some(p => p === wtPath),
@@ -8279,7 +8243,7 @@ function testStaleWorktreeCleanup() {
       assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
         'sc4: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
       assert(!fs.existsSync(wtPath), 'sc4: worktree dir must be removed after archive+execute');
-      const stashList = execFileSync('git', ['-C', tmp, 'stash', 'list'], { encoding: 'utf8' });
+      const stashList = G.exec(tmp, ['stash', 'list'], { encoding: 'utf8' });
       assert(stashList.includes('kaola-cleanup-issue-200'),
         'sc4: stash list must contain kaola-cleanup-issue-200, got: ' + stashList);
     } finally {
@@ -8298,9 +8262,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       // Modify a tracked file so git diff HEAD is non-empty
       fs.writeFileSync(path.join(wtPath, 'README.md'), 'modified-for-export\n');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
@@ -8328,9 +8290,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--force'], tmp, binDir);
       assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
@@ -8356,9 +8316,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--keep-branch'], tmp, binDir);
       assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
         'sc7: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
@@ -8366,8 +8324,7 @@ function testStaleWorktreeCleanup() {
         'sc7: deleted_branch must be empty with --keep-branch, got: ' + JSON.stringify(out.deleted_branch));
       assert(!fs.existsSync(wtPath), 'sc7: worktree dir must be removed');
       // Branch must still exist
-      execFileSync('git', ['-C', tmp, 'rev-parse', '--verify', 'refs/heads/workflow/issue-200'],
-        { stdio: 'pipe' });
+      G.exec(tmp, ['rev-parse', '--verify', 'refs/heads/workflow/issue-200'], { stdio: 'pipe' });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
       try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
@@ -8385,9 +8342,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
       // Make stashWorktree fail: read the real gitdir from the worktree's .git file
       // and place an index.lock there so git stash push fails
@@ -8419,9 +8374,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       // No tracked changes — only an untracked file. git diff HEAD is empty.
       fs.writeFileSync(path.join(wtPath, 'untracked.txt'), 'hello untracked\n');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
@@ -8450,9 +8403,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'README.md'), 'modified tracked content\n'); // tracked change
       fs.writeFileSync(path.join(wtPath, 'new-untracked.txt'), 'new file\n');          // untracked
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
@@ -8482,9 +8433,7 @@ function testStaleWorktreeCleanup() {
       writeGhShim(binDir);
       const wtPath = path.join(kwRoot, 'wt-cleanup-200');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
-        cwd: tmp, encoding: 'utf8'
-      });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive', '--export'], tmp, binDir);
       assert(Array.isArray(out.stashed) && out.stashed.some(p => p === wtPath),
@@ -8509,9 +8458,9 @@ async function testSinkPrLeavesCleanWorktree() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pr-clean-'));
   try {
     // Init git repo with user config
-    spawnSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
-    spawnSync('git', ['-C', tmp, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
-    spawnSync('git', ['-C', tmp, 'config', 'user.name', 'Test User'], { stdio: 'pipe' });
+    G.git(tmp, ['init'], { stdio: 'pipe' });
+    G.git(tmp, ['config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
+    G.git(tmp, ['config', 'user.name', 'Test User'], { stdio: 'pipe' });
     // Write workflow state and summary
     const kwDir = path.join(tmp, 'kaola-workflow', 'issue-82');
     fs.mkdirSync(kwDir, { recursive: true });
@@ -8527,8 +8476,8 @@ async function testSinkPrLeavesCleanWorktree() {
     ].join('\n') + '\n');
     fs.writeFileSync(path.join(kwDir, 'finalization-summary.md'), '# Finalization Summary\n');
     // Initial commit so HEAD exists and worktree is clean
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { stdio: 'pipe' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { stdio: 'pipe' });
+    G.git(tmp, ['add', '-A'], { stdio: 'pipe' });
+    G.git(tmp, ['commit', '-m', 'initial'], { stdio: 'pipe' });
     // Run sink-pr in OFFLINE mode
     const result = spawnSync(process.execPath, [
       sinkPrScript,
@@ -8543,15 +8492,14 @@ async function testSinkPrLeavesCleanWorktree() {
     assert(result.status === 0,
       'sink-pr offline should exit 0, got ' + result.status + '. stderr: ' + result.stderr);
     // Worktree must be clean (no tracked modifications)
-    const status = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'],
-      { stdio: 'pipe' });
+    const status = G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], { stdio: 'pipe' });
     assert(status.stdout.toString().trim() === '',
       'worktree must be clean after sink-pr. got: ' + JSON.stringify(status.stdout.toString()));
     // workflow-state.md must contain pr_url
     const stateContents = fs.readFileSync(path.join(kwDir, 'workflow-state.md'), 'utf8');
     assert(stateContents.includes('pr_url:'), 'workflow-state.md must record pr_url');
     // Exactly 2 commits: initial + metadata follow-up
-    const revCount = spawnSync('git', ['-C', tmp, 'rev-list', '--count', 'HEAD'], { stdio: 'pipe' });
+    const revCount = G.git(tmp, ['rev-list', '--count', 'HEAD'], { stdio: 'pipe' });
     assert(revCount.stdout.toString().trim() === '2',
       'expected 2 commits (initial + metadata), got: ' + revCount.stdout.toString().trim());
   } finally {
@@ -8602,8 +8550,8 @@ function testE2EGitHubMergeFullChain() {
 
     // Step 2: feature commit on linked worktree branch
     fs.writeFileSync(path.join(wt850, 'feature-850.txt'), 'feature\n');
-    spawnSync('git', ['add', 'feature-850.txt'], { cwd: wt850 });
-    spawnSync('git', ['commit', '-m', 'feat: issue 850'], { cwd: wt850 });
+    G.git(wt850, ['add', 'feature-850.txt']);
+    G.git(wt850, ['commit', '-m', 'feat: issue 850']);
 
     // Step 3: worktree-finalize (cwd=tmp, reads worktree_path from main active folder)
     const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-850'], tmp, binDir);
@@ -8616,10 +8564,10 @@ function testE2EGitHubMergeFullChain() {
     // #29: second worktree-finalize on a clean index must not create a commit (no-diff branch).
     // The copied files are identical — git add stages nothing, diff --cached --quiet exits 0,
     // so the commit is skipped. HEAD count must be unchanged.
-    const headCountBefore = spawnSync('git', ['rev-list', '--count', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const headCountBefore = G.git(wt850, ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     const wfResult2 = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-850'], tmp, binDir);
     assert(wfResult2.finalized === true, 'second worktree-finalize (no-diff path) must return finalized:true');
-    const headCountAfter = spawnSync('git', ['rev-list', '--count', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const headCountAfter = G.git(wt850, ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headCountAfter === headCountBefore,
       'second worktree-finalize must not create a commit (no-diff branch); HEAD count was ' +
       headCountBefore + ', now ' + headCountAfter);
@@ -8650,22 +8598,19 @@ function testE2EGitHubMergeFullChain() {
     assert(fs.existsSync(wt850), 'linked worktree must survive --keep-worktree finalize');
 
     // Verify that finalize --keep-worktree removed the live folder from the feature branch
-    const liveInTree = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/issue-850/workflow-state.md'],
-      { cwd: wt850, encoding: 'utf8' });
+    const liveInTree = G.git(wt850, ['cat-file', '-e', 'HEAD:kaola-workflow/issue-850/workflow-state.md'], { encoding: 'utf8' });
     assert(liveInTree.status !== 0,
       'live workflow-state.md must NOT be in feature branch HEAD after finalize --keep-worktree');
     // #832: ...and the archive is main-resident, so it is NOT on the feature branch. The sink's own
     // archive_commit step lands it on the default branch (asserted after sink-merge below).
-    const archiveInTree = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/archive/issue-850'],
-      { cwd: wt850, encoding: 'utf8' });
+    const archiveInTree = G.git(wt850, ['cat-file', '-e', 'HEAD:kaola-workflow/archive/issue-850'], { encoding: 'utf8' });
     assert(archiveInTree.status !== 0,
       '#832: kaola-workflow/archive/issue-850 must NOT be on the feature branch — it resolves against MAIN');
 
     // #333: the ## Closure append must land INSIDE the `chore: archive` commit (commit-last
     // ordering). After the FIRST finalize --keep-worktree the feature worktree must be clean —
     // a dirty append would break the #217 second-finalize no-new-commit assert below.
-    const cleanAfterFinalize = spawnSync('git', ['status', '--porcelain'],
-      { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const cleanAfterFinalize = G.git(wt850, ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
     assert(cleanAfterFinalize === '',
       '#333: feature worktree must be clean after finalize --keep-worktree (## Closure append inside commit), got: ' + cleanAfterFinalize);
     const archivedState850 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-850', 'workflow-state.md'), 'utf8');
@@ -8673,17 +8618,16 @@ function testE2EGitHubMergeFullChain() {
       '#333: archived state must carry a ## Closure block after finalize --keep-worktree');
 
     // issue #217: a second finalize --keep-worktree on a clean index must be a no-op (not crash)
-    const headBefore2nd = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const headBefore2nd = G.git(wt850, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     const finResult2 = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
     ], { cwd: wt850, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
     assert(finResult2.status === 0, 'second finalize --keep-worktree must exit 0 (idempotent)\nstderr: ' + finResult2.stderr);
-    const headAfter2nd = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const headAfter2nd = G.git(wt850, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(headAfter2nd === headBefore2nd, 'second finalize --keep-worktree must not create a commit, HEAD changed: ' + headBefore2nd + ' -> ' + headAfter2nd);
 
     // Capture feature HEAD before sink-merge removes the worktree
-    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-850'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-850'], { encoding: 'utf8' }).stdout.trim();
 
     // Step 5: sink-merge (cwd=wt850, OFFLINE)
     const smResult = spawnSync(process.execPath, [
@@ -8692,16 +8636,13 @@ function testE2EGitHubMergeFullChain() {
     assert(smResult.status === 0,
       'sink-merge should exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
 
-    const mainAfter = spawnSync('git', ['rev-parse', 'main'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === featureHead,
       'main must advance to feature HEAD after sink-merge, got: ' + mainAfter);
-    const branchList = spawnSync('git', ['branch', '--list', 'workflow/issue-850'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const branchList = G.git(tmp, ['branch', '--list', 'workflow/issue-850'], { encoding: 'utf8' }).stdout.trim();
     assert(branchList === '', 'workflow/issue-850 branch must be deleted after sink-merge');
     assert(!fs.existsSync(wt850), 'linked worktree must be removed by sink-merge');
-    const gitStatus = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const gitStatus = G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim();
     assert(gitStatus === '', 'main worktree must be clean after sink-merge, got: ' + gitStatus);
     assert(
       !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-850')),
@@ -8723,13 +8664,13 @@ function testSinkMergeRefusesLiveFolder() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-refuse-live-')));
   try {
     initGitRepo(tmp);
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-910'], { cwd: tmp });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-910']);
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-910'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-910', 'workflow-state.md'), 'status: active\n');
-    spawnSync('git', ['add', 'kaola-workflow/'], { cwd: tmp });
-    spawnSync('git', ['commit', '-m', 'feat: issue 910'], { cwd: tmp });
-    spawnSync('git', ['checkout', 'main'], { cwd: tmp });
-    const mainBefore = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['add', 'kaola-workflow/']);
+    G.git(tmp, ['commit', '-m', 'feat: issue 910']);
+    G.git(tmp, ['checkout', 'main']);
+    const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-910', '--branch', 'workflow/issue-910'], {
       cwd: tmp,
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
@@ -8737,7 +8678,7 @@ function testSinkMergeRefusesLiveFolder() {
     });
     assert(result.status !== 0, 'sink-merge must refuse when live folder present, got status: ' + result.status);
     assert((result.stderr || '').includes('finalize before sink-merge'), 'stderr must include "finalize before sink-merge", got: ' + result.stderr);
-    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === mainBefore, 'main SHA must be unchanged after guard fires, before: ' + mainBefore + ' after: ' + mainAfter);
     console.log('testSinkMergeRefusesLiveFolder: PASSED');
   } finally {
@@ -8763,11 +8704,11 @@ function testSinkRefusesLingeringLaneGroup() {
   }
   function setupRepo(tmp) {
     initGitRepo(tmp);
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-9552'], { cwd: tmp });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9552']);
     fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    spawnSync('git', ['add', 'feature.txt'], { cwd: tmp });
-    spawnSync('git', ['commit', '-m', 'feat: issue 9552'], { cwd: tmp });
-    spawnSync('git', ['checkout', 'main'], { cwd: tmp });
+    G.git(tmp, ['add', 'feature.txt']);
+    G.git(tmp, ['commit', '-m', 'feat: issue 9552']);
+    G.git(tmp, ['checkout', 'main']);
   }
   // ---- RED-1 (LIVE location): a lingering lane_group in kaola-workflow/<project>/.cache blocks the sink. ----
   {
@@ -8777,13 +8718,13 @@ function testSinkRefusesLingeringLaneGroup() {
       const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
       fs.mkdirSync(cacheDir, { recursive: true });
       fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       const result = runSink(tmp);
       assert(result.status !== 0, '#552-sink RED-1 (live): must refuse (exit non-zero) on a lingering lane_group, got status ' + result.status);
       const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
       assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
         '#552-sink RED-1 (live): typed refusal lingering_lane_group, got ' + JSON.stringify(parsed));
-      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       assert(mainBefore === mainAfter, '#552-sink RED-1 (live): main must NOT advance, before ' + mainBefore + ' after ' + mainAfter);
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
@@ -8795,13 +8736,13 @@ function testSinkRefusesLingeringLaneGroup() {
       const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9552', '.cache');
       fs.mkdirSync(archCache, { recursive: true });
       fs.writeFileSync(path.join(archCache, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       const result = runSink(tmp);
       assert(result.status !== 0, '#552-sink RED-2 (archive): must refuse on a lingering lane_group in the archive, got status ' + result.status);
       const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
       assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
         '#552-sink RED-2 (archive): typed refusal lingering_lane_group via dual-location read, got ' + JSON.stringify(parsed));
-      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       assert(mainBefore === mainAfter, '#552-sink RED-2 (archive): main must NOT advance');
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
@@ -8842,11 +8783,11 @@ function testSinkLegacyPathRefusesLingeringLaneGroup() {
   }
   function setupRepo(tmp) {
     initGitRepo(tmp);
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-9561'], { cwd: tmp });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9561']);
     fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    spawnSync('git', ['add', 'feature.txt'], { cwd: tmp });
-    spawnSync('git', ['commit', '-m', 'feat: issue 9561'], { cwd: tmp });
-    spawnSync('git', ['checkout', 'main'], { cwd: tmp });
+    G.git(tmp, ['add', 'feature.txt']);
+    G.git(tmp, ['commit', '-m', 'feat: issue 9561']);
+    G.git(tmp, ['checkout', 'main']);
   }
   // ---- RED-1 (LIVE location): a lingering lane_group in kaola-workflow/<project>/.cache blocks the legacy sink. ----
   {
@@ -8856,13 +8797,13 @@ function testSinkLegacyPathRefusesLingeringLaneGroup() {
       const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9561', '.cache');
       fs.mkdirSync(cacheDir, { recursive: true });
       fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       const result = runLegacySink(tmp);
       assert(result.status !== 0, '#561 legacy RED-1 (live): must refuse on a lingering lane_group, got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
       const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
       assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
         '#561 legacy RED-1 (live): typed refusal lingering_lane_group on the non---sink path, got ' + JSON.stringify(parsed));
-      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       assert(mainBefore === mainAfter, '#561 legacy RED-1 (live): main must NOT advance, before ' + mainBefore + ' after ' + mainAfter);
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
@@ -8874,13 +8815,13 @@ function testSinkLegacyPathRefusesLingeringLaneGroup() {
       const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9561', '.cache');
       fs.mkdirSync(archCache, { recursive: true });
       fs.writeFileSync(path.join(archCache, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       const result = runLegacySink(tmp);
       assert(result.status !== 0, '#561 legacy RED-2 (archive): must refuse via the archive read, got status ' + result.status);
       const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
       assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
         '#561 legacy RED-2 (archive): typed refusal via dual-location read, got ' + JSON.stringify(parsed));
-      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
       assert(mainBefore === mainAfter, '#561 legacy RED-2 (archive): main must NOT advance');
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
@@ -8910,9 +8851,9 @@ function testSinkLegacyPathRefusesLingeringLaneGroup() {
 function testSinkRefusesDirtyWorktree() {
   function setup(tmp) {
     initGitRepo(tmp);
-    spawnSync('git', ['branch', 'workflow/issue-9562'], { cwd: tmp });
+    G.git(tmp, ['branch', 'workflow/issue-9562']);
     const wt = path.join(tmp, '.kw', 'wt-9562');
-    spawnSync('git', ['worktree', 'add', wt, 'workflow/issue-9562'], { cwd: tmp });
+    G.git(tmp, ['worktree', 'add', wt, 'workflow/issue-9562']);
     return wt;
   }
   function runSink(tmp) {
@@ -8933,7 +8874,7 @@ function testSinkRefusesDirtyWorktree() {
         '#562 RED: typed refusal worktree_dirty on the --sink path, got ' + JSON.stringify(parsed));
       assert(fs.existsSync(wt), '#562 RED: a worktree_dirty refusal must NOT remove the worktree');
     } finally {
-      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9562')], { encoding: 'utf8' }); } catch (_) {}
+      try { G.git(tmp, ['worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9562')], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
@@ -8948,7 +8889,7 @@ function testSinkRefusesDirtyWorktree() {
       assert(parsed.reason !== 'worktree_dirty',
         '#562 GREEN: a clean worktree must NOT trip the worktree_dirty guard, got ' + JSON.stringify(parsed));
     } finally {
-      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9562')], { encoding: 'utf8' }); } catch (_) {}
+      try { G.git(tmp, ['worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9562')], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
@@ -9045,12 +8986,12 @@ function testSinkMergeBlocksUnpushedCommits() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-block-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-911']);
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-911']);
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-911']);
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-911']);
     fs.writeFileSync(path.join(tmp, 'unpushed.txt'), 'test');
-    spawnSync('git', ['-C', tmp, 'add', 'unpushed.txt']);
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'unpushed commit', '--allow-empty-message', '--no-edit'], { env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
-    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['add', 'unpushed.txt']);
+    G.git(tmp, ['commit', '-m', 'unpushed commit', '--allow-empty-message', '--no-edit'], { env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
+    const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-911', '--branch', 'workflow/issue-911'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -9059,7 +9000,7 @@ function testSinkMergeBlocksUnpushedCommits() {
     assert(result.status !== 0, 'sink-merge must refuse when branch has unpushed commits, got status: ' + result.status);
     assert((result.stderr || '').includes('workflow/issue-911'), 'stderr must include branch name, got: ' + result.stderr);
     assert((result.stderr || '').includes('unpushed'), 'stderr must include "unpushed", got: ' + result.stderr);
-    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainBefore === mainAfter, 'main must not advance when guard blocks, got: ' + mainAfter);
     console.log('testSinkMergeBlocksUnpushedCommits: PASSED');
   } finally {
@@ -9076,14 +9017,14 @@ function testSinkMergeAutoPushesWhenNoUpstream() {
   const remotePath = initGitRepoWithBareRemote(tmp);
   const genv = { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' };
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-913']);
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-913']);
     // A real (non-workflow) impl commit so assertBranchHasNonWorkflowChanges passes. The branch
     // is a descendant of origin/main → alreadyUpToDate (no rebase / no recursive npm test).
     fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    spawnSync('git', ['-C', tmp, 'add', 'feature.txt']);
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: real impl'], { env: genv });
+    G.git(tmp, ['add', 'feature.txt']);
+    G.git(tmp, ['commit', '-m', 'feat: real impl'], { env: genv });
     // DELIBERATELY do NOT push the branch / set upstream (the #323 gap).
-    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-913', '--branch', 'workflow/issue-913'], {
       cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0' }
     });
@@ -9091,7 +9032,7 @@ function testSinkMergeAutoPushesWhenNoUpstream() {
       '#323: sink-merge must NOT abort on a no-upstream branch (auto-push self-heal), got stderr: ' + result.stderr);
     assert(result.status === 0,
       '#323: sink-merge completes without a manual git push -u, got status ' + result.status + '\nstderr: ' + result.stderr);
-    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainBefore !== mainAfter, '#323: main advanced (FF to the feature commit)');
     // status 0 + main advanced + no "no upstream tracking ref" abort proves the auto push -u
     // self-heal ran: without it, assertBranchPushedToUpstream would have thrown (status 1).
@@ -9108,18 +9049,18 @@ function testSinkMergeOfflineSkipsPublishGuard() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-offline-')));
   try {
     initGitRepo(tmp);
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-912']);
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-912']);
     fs.writeFileSync(path.join(tmp, 'local.txt'), 'test');
-    spawnSync('git', ['-C', tmp, 'add', 'local.txt']);
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'local commit'], { env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
-    const featureHead = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    G.git(tmp, ['add', 'local.txt']);
+    G.git(tmp, ['commit', '-m', 'local commit'], { env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
+    const featureHead = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-912', '--branch', 'workflow/issue-912'], {
       cwd: tmp,
       encoding: 'utf8',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
     });
     assert(result.status === 0, 'sink-merge must succeed when OFFLINE=1 even with no upstream, got: ' + result.status + '\nstderr: ' + result.stderr);
-    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === featureHead, 'main must advance to feature HEAD after offline sink-merge, got: ' + mainAfter);
     console.log('testSinkMergeOfflineSkipsPublishGuard: PASSED');
   } finally {
@@ -9134,26 +9075,26 @@ function testSinkMergeNonDefaultBranchMaster() {
   const remotePath = tmp + '-remote';
   const env = { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
   try {
-    spawnSync('git', ['init', '-b', 'master', tmp], { env });
+    G.raw(['init', '-b', 'master', tmp], { env });
     fs.writeFileSync(path.join(tmp, 'README.md'), 'seed');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'seed'], { env });
-    spawnSync('git', ['init', '--bare', '-b', 'master', remotePath], { env });
-    spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath], { env });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'master'], { env });
-    spawnSync('git', ['-C', tmp, 'remote', 'set-head', 'origin', 'master'], { env }); // origin/HEAD → master (defaultBranch resolves it offline)
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-3502'], { env });
+    G.git(tmp, ['add', '-A'], { env });
+    G.git(tmp, ['commit', '-m', 'seed'], { env });
+    G.raw(['init', '--bare', '-b', 'master', remotePath], { env });
+    G.git(tmp, ['remote', 'add', 'origin', remotePath], { env });
+    G.git(tmp, ['push', '-u', 'origin', 'master'], { env });
+    G.git(tmp, ['remote', 'set-head', 'origin', 'master'], { env }); // origin/HEAD → master (defaultBranch resolves it offline)
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-3502'], { env });
     fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
-    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 3502'], { env });
-    const masterBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'master'], { encoding: 'utf8', env }).stdout.trim();
+    G.git(tmp, ['add', 'feat.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'feat: impl 3502'], { env });
+    const masterBefore = G.git(tmp, ['rev-parse', 'master'], { encoding: 'utf8', env }).stdout.trim();
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-3502', '--branch', 'workflow/issue-3502'], {
       cwd: tmp, encoding: 'utf8', env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' }
     });
     assert(result.status === 0, '#350: sink-merge merges on a master default branch (offline), got status ' + result.status + '\nstderr: ' + result.stderr);
-    const masterAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'master'], { encoding: 'utf8', env }).stdout.trim();
+    const masterAfter = G.git(tmp, ['rev-parse', 'master'], { encoding: 'utf8', env }).stdout.trim();
     assert(masterBefore !== masterAfter, '#350: master (the resolved default branch) advanced via FF — not a hardcoded main');
-    const mainBranch = spawnSync('git', ['-C', tmp, 'branch', '--list', 'main'], { encoding: 'utf8', env }).stdout.trim();
+    const mainBranch = G.git(tmp, ['branch', '--list', 'main'], { encoding: 'utf8', env }).stdout.trim();
     assert(mainBranch === '', '#350: sink-merge did NOT fall back to / create a hardcoded main branch');
     console.log('testSinkMergeNonDefaultBranchMaster: PASSED');
   } finally {
@@ -9173,26 +9114,26 @@ function testSinkMergeReRebasesOnFfRace() {
   const clone = tmp + '-clone';
   const env = { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-3501'], { env });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-3501'], { env });
     fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
-    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 3501'], { env });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-3501'], { env });
+    G.git(tmp, ['add', 'feat.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'feat: impl 3501'], { env });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-3501'], { env });
     // Prepare a clone with a committed-but-unpushed advance to main (pushed mid-flight by the hook).
     // (The bare remote's symbolic HEAD is 'master' under GIT_CONFIG_NOSYSTEM, so clone checks out no
     // branch — explicitly materialize local 'main' from origin/main before committing to it.)
-    spawnSync('git', ['clone', remotePath, clone], { env });
-    spawnSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { env });
+    G.raw(['clone', remotePath, clone], { env });
+    G.git(clone, ['checkout', '-B', 'main', 'origin/main'], { env });
     fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
-    spawnSync('git', ['-C', clone, 'add', '-A'], { env });
-    spawnSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { env });
+    G.git(clone, ['add', '-A'], { env });
+    G.git(clone, ['commit', '-m', 'concurrent main advance'], { env });
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-3501', '--branch', 'workflow/issue-3501'], {
       cwd: tmp, encoding: 'utf8',
       env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1', KAOLA_WORKFLOW_FF_RACE_PUSH_DIR: clone }
     });
     assert(result.status === 0, '#350: sink-merge recovers from a mid-flight origin advance via re-rebase, got status ' + result.status + '\nstderr: ' + result.stderr);
-    spawnSync('git', ['-C', tmp, 'fetch', '-q', 'origin'], { env }); // read the authoritative remote state, not the stale tracking ref
-    const log = spawnSync('git', ['-C', tmp, 'log', '--oneline', 'origin/main'], { encoding: 'utf8', env }).stdout;
+    G.git(tmp, ['fetch', '-q', 'origin'], { env }); // read the authoritative remote state, not the stale tracking ref
+    const log = G.git(tmp, ['log', '--oneline', 'origin/main'], { encoding: 'utf8', env }).stdout;
     assert(/impl 3501/.test(log), '#350: feature commit landed on origin/main after re-rebase, got log: ' + log);
     assert(/concurrent main advance/.test(log), '#350: concurrent main advance preserved (feature rebased onto it)');
     console.log('testSinkMergeReRebasesOnFfRace: PASSED');
@@ -9229,26 +9170,26 @@ function testSinkMergeConsumerRepoSkipsNpmTestGate() {
     // origin/main carries it and the rebased feature branch keeps it.
     fs.writeFileSync(path.join(tmp, 'package.json'),
       JSON.stringify({ name: 'consumer-product', version: '1.0.0', scripts: { test: 'echo unrelated-consumer-suite' } }, null, 2) + '\n');
-    spawnSync('git', ['-C', tmp, 'add', 'package.json'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: consumer package.json (no chain scripts)'], { env });
-    spawnSync('git', ['-C', tmp, 'push', 'origin', 'main'], { env });
+    G.git(tmp, ['add', 'package.json'], { env });
+    G.git(tmp, ['commit', '-m', 'chore: consumer package.json (no chain scripts)'], { env });
+    G.git(tmp, ['push', 'origin', 'main'], { env });
 
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-5480'], { env });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-5480'], { env });
     fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
-    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 5480'], { env });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-5480'], { env });
+    G.git(tmp, ['add', 'feat.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'feat: impl 5480'], { env });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-5480'], { env });
 
     // Advance origin/main BEFORE the sink so its own `git fetch` sees the drift and alreadyUpToDate
     // is FALSE — forcing doRebase → runTestGate (the path under test). (The bare remote's symbolic
     // HEAD is 'master' under GIT_CONFIG_NOSYSTEM, so the clone checks out no branch — explicitly
     // materialize local 'main' from origin/main before committing to it.)
-    spawnSync('git', ['clone', remotePath, clone], { env });
-    spawnSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { env });
+    G.raw(['clone', remotePath, clone], { env });
+    G.git(clone, ['checkout', '-B', 'main', 'origin/main'], { env });
     fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
-    spawnSync('git', ['-C', clone, 'add', '-A'], { env });
-    spawnSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { env });
-    spawnSync('git', ['-C', clone, 'push', 'origin', 'main'], { env });
+    G.git(clone, ['add', '-A'], { env });
+    G.git(clone, ['commit', '-m', 'concurrent main advance'], { env });
+    G.git(clone, ['push', 'origin', 'main'], { env });
 
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-5480', '--branch', 'workflow/issue-5480'], {
       cwd: tmp, encoding: 'utf8',
@@ -9260,8 +9201,8 @@ function testSinkMergeConsumerRepoSkipsNpmTestGate() {
     assert(!fs.existsSync(npmSentinel),
       '#548: a CONSUMER repo (no test:kaola-workflow:* script) must NOT invoke `npm test` in the post-rebase gate; sentinel: ' +
       (fs.existsSync(npmSentinel) ? fs.readFileSync(npmSentinel, 'utf8') : '(absent)'));
-    spawnSync('git', ['-C', tmp, 'fetch', '-q', 'origin'], { env }); // authoritative remote state
-    const log = spawnSync('git', ['-C', tmp, 'log', '--oneline', 'origin/main'], { encoding: 'utf8', env }).stdout;
+    G.git(tmp, ['fetch', '-q', 'origin'], { env }); // authoritative remote state
+    const log = G.git(tmp, ['log', '--oneline', 'origin/main'], { encoding: 'utf8', env }).stdout;
     assert(/impl 5480/.test(log), '#548: feature commit landed on origin/main after the rebase, got log: ' + log);
     assert(/concurrent main advance/.test(log), '#548: concurrent main advance preserved (feature rebased onto it), got log: ' + log);
     console.log('testSinkMergeConsumerRepoSkipsNpmTestGate: PASSED');
@@ -9295,11 +9236,11 @@ function testSinkMergeBareRemoteDeleteOrder() {
   const env = { ...process.env, ...GIT_ISOLATION_ENV, PATH: binDir + ':' + process.env.PATH,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
   try {
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4140'], { env });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-4140'], { env });
     fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
-    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 4140'], { env });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-4140'], { env });
+    G.git(tmp, ['add', 'feat.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'feat: impl 4140'], { env });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-4140'], { env });
     fs.writeFileSync(traceLog, ''); // reset the trace right before the sink call
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-4140', '--branch', 'workflow/issue-4140'], {
       cwd: tmp, encoding: 'utf8',
@@ -9317,7 +9258,7 @@ function testSinkMergeBareRemoteDeleteOrder() {
     assert(iAncestor < iBranchD, '#414: `merge-base --is-ancestor` must fire BEFORE `branch -D`');
     // No spurious branch-worktree-resolved: the local feature branch is gone and the receipt's
     // branch_removed is 'removed' (the #397.1 fix), so no closure violation is recorded.
-    const branchList = spawnSync('git', ['-C', tmp, 'branch', '--list', 'workflow/issue-4140'], { encoding: 'utf8', env }).stdout.trim();
+    const branchList = G.git(tmp, ['branch', '--list', 'workflow/issue-4140'], { encoding: 'utf8', env }).stdout.trim();
     assert(branchList === '', '#414: local feature branch must be deleted (no leftover → no branch-worktree-resolved alarm), got: ' + branchList);
     assert(!/branch-worktree-resolved/.test(result.stdout + result.stderr),
       '#414: no spurious branch-worktree-resolved violation, got:\n' + result.stdout + result.stderr);
@@ -9361,10 +9302,10 @@ function testE2EGitHubPrFullChain() {
 
     // Step 3: plant finalization-summary.md (required by sink-pr appendSummary)
     fs.writeFileSync(path.join(kwDir860, 'finalization-summary.md'), '# Finalization Summary\n');
-    spawnSync('git', ['add', '-A'], { cwd: wt860 });
-    const diff = spawnSync('git', ['-C', wt860, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+    G.git(wt860, ['add', '-A']);
+    const diff = G.git(wt860, ['diff', '--cached', '--quiet'], { stdio: 'pipe' });
     if (diff.status !== 0) {
-      spawnSync('git', ['commit', '-m', 'chore: pre-sink-pr state'], { cwd: wt860 });
+      G.git(wt860, ['commit', '-m', 'chore: pre-sink-pr state']);
     }
 
     // Step 4: sink-pr (cwd=wt860, OFFLINE) — production ordering: sink-pr runs before finalize/archive
@@ -9376,8 +9317,7 @@ function testE2EGitHubPrFullChain() {
 
     const linkedState = fs.readFileSync(path.join(kwDir860, 'workflow-state.md'), 'utf8');
     assert(linkedState.includes('pr_url:'), 'linked worktree workflow-state.md must contain pr_url after sink-pr');
-    const prStatus = spawnSync('git', ['-C', wt860, 'status', '--porcelain', '--untracked-files=no'],
-      { stdio: 'pipe' });
+    const prStatus = G.git(wt860, ['status', '--porcelain', '--untracked-files=no'], { stdio: 'pipe' });
     assert(prStatus.stdout.toString().trim() === '', 'linked worktree must be clean after sink-pr');
 
     // test-only: mirror linked-worktree state to main; production runs sink-pr before finalize from main worktree
@@ -9447,8 +9387,8 @@ function testParallelIssueIndependence() {
 
     // Step 2: feature commit on 870 branch only
     fs.writeFileSync(path.join(wt870, 'feature-870.txt'), 'feature\n');
-    spawnSync('git', ['add', 'feature-870.txt'], { cwd: wt870 });
-    spawnSync('git', ['commit', '-m', 'feat: issue 870'], { cwd: wt870 });
+    G.git(wt870, ['add', 'feature-870.txt']);
+    G.git(wt870, ['commit', '-m', 'feat: issue 870']);
 
     // Step 3: worktree-finalize 870 (cwd=tmp)
     const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-870'], tmp, binDir);
@@ -9465,8 +9405,7 @@ function testParallelIssueIndependence() {
       'finalize 870 --keep-worktree should exit 0\nstderr: ' + finResult.stderr);
 
     // Capture feature HEAD before sink-merge removes the worktree
-    const feature870Head = spawnSync('git', ['rev-parse', 'workflow/issue-870'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const feature870Head = G.git(tmp, ['rev-parse', 'workflow/issue-870'], { encoding: 'utf8' }).stdout.trim();
 
     // Step 5: sink-merge 870 (cwd=wt870, OFFLINE)
     const smResult = spawnSync(process.execPath, [
@@ -9475,13 +9414,11 @@ function testParallelIssueIndependence() {
     assert(smResult.status === 0,
       'sink-merge 870 should exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
 
-    const mainAfter870 = spawnSync('git', ['rev-parse', 'main'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter870 = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter870 === feature870Head,
       'main must advance to 870 feature HEAD after sink-merge, got: ' + mainAfter870);
 
-    const branch870 = spawnSync('git', ['branch', '--list', 'workflow/issue-870'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const branch870 = G.git(tmp, ['branch', '--list', 'workflow/issue-870'], { encoding: 'utf8' }).stdout.trim();
     assert(branch870 === '', 'workflow/issue-870 must be deleted after sink-merge');
     assert(!fs.existsSync(wt870), 'wt870 must be removed by sink-merge');
 
@@ -9495,8 +9432,7 @@ function testParallelIssueIndependence() {
       path.join(tmp, 'kaola-workflow', 'issue-871', 'workflow-state.md'), 'utf8'
     );
     assert(state871.includes('status: active'), 'issue-871 state must still be active');
-    const branch871 = spawnSync('git', ['branch', '--list', 'workflow/issue-871'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const branch871 = G.git(tmp, ['branch', '--list', 'workflow/issue-871'], { encoding: 'utf8' }).stdout.trim();
     assert(branch871 !== '', 'workflow/issue-871 branch must still exist');
 
     console.log('testParallelIssueIndependence: PASSED');
@@ -9576,15 +9512,12 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
     // MAIN's status (D entries) in the clean assertion added below.
     plantRoadmapIssue(tmp, 911, '');
     // Commit so .roadmap/ is on HEAD (the gate check used by the regression fix).
-    spawnSync('git', ['-C', tmp, 'add', path.join('kaola-workflow', '.roadmap', 'issue-911.md')], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant'], { encoding: 'utf8' });
+    G.git(tmp, ['add', path.join('kaola-workflow', '.roadmap', 'issue-911.md')], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'plant'], { encoding: 'utf8' });
     // Create linked worktree on a feature branch
     const wtPath = path.join(kwRoot, 'issue-911');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-911', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-911', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     // Active folder lives only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-911', 911, null);
     seedAdaptiveFinalizeFixture(wtPath, 'issue-911');
@@ -9621,10 +9554,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
       'linked-worktree finalize must delete .roadmap source in linked tree'
     );
     // --keep-worktree causes an archive commit on the feature branch; deletion must be staged there
-    const showResult = spawnSync('git', ['show', 'HEAD', '--name-status'], {
-      cwd: wtPath,
-      encoding: 'utf8'
-    });
+    const showResult = G.git(wtPath, ['show', 'HEAD', '--name-status'], { encoding: 'utf8' });
     assert(
       /^D\s+kaola-workflow\/\.roadmap\/issue-911\.md$/m.test(showResult.stdout),
       'deletion of kaola-workflow/.roadmap/issue-911.md must appear in archive commit\ngit show output:\n' + showResult.stdout
@@ -9632,7 +9562,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
     // Regression lock (#297 R1): committed-on-HEAD path must NOT leave MAIN dirty.
     // With the gated fix, rm --cached is skipped; the archive commit on the feature
     // branch handles deletion, so MAIN's index is untouched.
-    const mainStatusResult = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'], {
+    const mainStatusResult = G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], {
       encoding: 'utf8'
     });
     assert(
@@ -9640,7 +9570,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
       'testFinalizeFromLinkedWorktreeCleansRoadmapEntry: main-repo `git status --porcelain --untracked-files=no` must be empty after finalize (regression lock for #297 R1), got: "' + mainStatusResult.stdout.trim() + '"'
     );
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-911'], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', kwRoot + '/issue-911'], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -9664,21 +9594,18 @@ function testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource() {
     // kaola-workflow/.roadmap/issue-921.md (it is not committed on HEAD yet).
     const wtPath = path.join(kwRoot, 'issue-921');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-921', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-921', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     // Plant the active folder only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-921', 921, null);
     seedAdaptiveFinalizeFixture(wtPath, 'issue-921');
     // THEN create kaola-workflow/.roadmap/issue-921.md in the MAIN tree and
     // `git add` it WITHOUT committing — reproducing adaptive-handoff Step 5.
     plantRoadmapIssue(tmp, 921, '');
-    spawnSync('git', ['-C', tmp, 'add', path.join('kaola-workflow', '.roadmap', 'issue-921.md')], {
+    G.git(tmp, ['add', path.join('kaola-workflow', '.roadmap', 'issue-921.md')], {
       encoding: 'utf8'
     });
     // PRE-FIX sanity: the main index must show a staged ADD (non-empty status).
-    const preStatus = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'], {
+    const preStatus = G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], {
       encoding: 'utf8'
     });
     assert(
@@ -9696,7 +9623,7 @@ function testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource() {
       '#297 finalize from linked worktree must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
     );
     // POST-FIX assertion: main-repo index must be clean (mirrors sink-merge.js:73 EXACTLY).
-    const postStatus = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'], {
+    const postStatus = G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], {
       encoding: 'utf8'
     });
     assert(
@@ -9705,7 +9632,7 @@ function testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource() {
     );
     console.log('testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource: PASSED');
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-921'], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', kwRoot + '/issue-921'], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -10582,13 +10509,11 @@ function testSinkMergeEmitsClosureReceipt() {
     initGitRepo(tmp);
     const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-164r');
     fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-164r', '--', wtPath, 'HEAD'], {
-      cwd: tmp, encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-164r', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     // Feature commit so the merge is a real FF.
     fs.writeFileSync(path.join(wtPath, 'feature-164r.txt'), 'feature\n');
-    spawnSync('git', ['add', 'feature-164r.txt'], { cwd: wtPath, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feat: issue 164r'], { cwd: wtPath, encoding: 'utf8' });
+    G.git(wtPath, ['add', 'feature-164r.txt'], { encoding: 'utf8' });
+    G.git(wtPath, ['commit', '-m', 'feat: issue 164r'], { encoding: 'utf8' });
     // No plantActiveFolder: without a live active folder, active-folder-absent is satisfied.
     // Plant the archive that cmdFinalize would have created in production (finalize runs
     // BEFORE sink-merge). mainRoot resolves to tmp for this linked worktree, so sink-merge
@@ -10825,16 +10750,16 @@ function testSinkMergeMockabilityAndReceipt() {
     ]);
 
     // Create a feature branch, push it upstream.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-164m'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-164m'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-164m.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmp, 'add', 'feature-164m.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 164m'], {
+    G.git(tmp, ['add', 'feature-164m.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: issue 164m'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
     });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-164m'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-164m'], { encoding: 'utf8' });
     // Return to main so checkout in sink-merge works.
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const mockJs = path.join(binDir, 'gh.js');
     const result = spawnSync(process.execPath, [
@@ -10965,8 +10890,8 @@ function testKeepOpenMergeFullChain() {
 
     // Feature commit + the roadmap source committed on the branch.
     fs.writeFileSync(path.join(wt860, 'feature-860.txt'), 'feature\n');
-    spawnSync('git', ['-C', wt860, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', wt860, 'commit', '-m', 'feat: issue 860 + roadmap source'], {
+    G.git(wt860, ['add', '-A'], { encoding: 'utf8' });
+    G.git(wt860, ['commit', '-m', 'feat: issue 860 + roadmap source'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
     });
@@ -11006,20 +10931,20 @@ function testKeepOpenMergeFullChain() {
     assert(archived860.includes('last_result: closed_keep_open') && archived860.includes('issue_action: comment_keep_open'),
       '#336: archived state must carry closed_keep_open + issue_action: comment_keep_open');
 
-    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-860'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-860'], { encoding: 'utf8' }).stdout.trim();
 
     // sink-merge --keep-issue-open (OFFLINE).
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-860', '--branch', 'workflow/issue-860', '--issue', '860', '--keep-issue-open'
     ], { cwd: wt860, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
     assert(smResult.status === 0, 'keep-open sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
-    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === featureHead, '#336: main must advance to feature HEAD after keep-open sink-merge');
     assert(!fs.existsSync(wt860), '#336: keep-open sink-merge must remove the worktree');
-    const branchList = spawnSync('git', ['branch', '--list', 'workflow/issue-860'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const branchList = G.git(tmp, ['branch', '--list', 'workflow/issue-860'], { encoding: 'utf8' }).stdout.trim();
     assert(branchList === '', '#336: keep-open sink-merge must delete the branch');
     // The preserved roadmap source must be on main's HEAD (committed on the branch, now merged).
-    const onHead = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/.roadmap/issue-860.md'], { cwd: tmp, encoding: 'utf8' });
+    const onHead = G.git(tmp, ['cat-file', '-e', 'HEAD:kaola-workflow/.roadmap/issue-860.md'], { encoding: 'utf8' });
     assert(onHead.status === 0, '#336: kaola-workflow/.roadmap/issue-860.md must survive on main HEAD after keep-open sink-merge');
     const smJson = JSON.parse(smResult.stdout.trim().split('\n').filter(Boolean).pop());
     assert(smJson.closure_receipt.remote_issue_closed === 'kept_open',
@@ -11028,7 +10953,7 @@ function testKeepOpenMergeFullChain() {
       '#336: sink-merge receipt roadmap_source_removed must be kept, got: ' + JSON.stringify(smJson.closure_receipt.roadmap_source_removed));
     assert(smJson.closure_invariants.ok === true,
       '#336: sink-merge closure_invariants.ok must be true, got: ' + JSON.stringify(smJson.closure_invariants));
-    const mainStatus = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainStatus = G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim();
     assert(mainStatus === '', '#336: main worktree must be clean after keep-open sink-merge, got: ' + mainStatus);
     console.log('testKeepOpenMergeFullChain: PASSED');
   } finally {
@@ -11113,8 +11038,8 @@ function testKeepOpenFinalizeFlagAlias() {
       '<!-- generated by scripts/kaola-workflow-roadmap.js — do not edit -->\n\n| #861 | keep-open flag fixture | open |\n');
 
     fs.writeFileSync(path.join(wt861, 'feature-861.txt'), 'feature\n');
-    spawnSync('git', ['-C', wt861, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', wt861, 'commit', '-m', 'feat: issue 861 + roadmap source'], {
+    G.git(wt861, ['add', '-A'], { encoding: 'utf8' });
+    G.git(wt861, ['commit', '-m', 'feat: issue 861 + roadmap source'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
     });
@@ -11178,22 +11103,22 @@ function testSinkMergeKeepOpenOnlineMock() {
     // Commit a roadmap source on main so the keep-open receipt has something to preserve.
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.roadmap'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-164.md'), 'issue: #164\nstatus: open\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: roadmap source 164'], {
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'chore: roadmap source 164'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
     });
-    spawnSync('git', ['-C', tmp, 'push', 'origin', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['push', 'origin', 'main'], { encoding: 'utf8' });
 
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-164k'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-164k'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-164k.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmp, 'add', 'feature-164k.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 164k'], {
+    G.git(tmp, ['add', 'feature-164k.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: issue 164k'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
     });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-164k'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-164k'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const mockJs = path.join(binDir, 'gh.js');
     const result = spawnSync(process.execPath, [
@@ -11255,26 +11180,26 @@ function testSinkMergePostPushReopenOnMock() {
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-517.md'), 'issue: #517\nstatus: open\n');
     const gitEnv = { ...process.env, ...GIT_ISOLATION_ENV,
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: roadmap source 517'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'push', 'origin', 'main'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'chore: roadmap source 517'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['push', 'origin', 'main'], { encoding: 'utf8', env: gitEnv });
 
     // Feature branch with deliverable.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
     fs.writeFileSync(path.join(tmp, 'feature-517.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmp, 'add', 'feature-517.txt'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 517'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['add', 'feature-517.txt'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'feat: issue 517'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
 
     // Archive state (finalize ran first on keep-open lane).
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-517');
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
       'status: closed\nstep: complete\nissue_number: 517\n\n## Sink\nbranch: workflow/issue-517\nissue_number: 517\nsink: merge\nissue_action: comment_keep_open\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: finalize keep-open 517'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'chore: finalize keep-open 517'], { encoding: 'utf8', env: gitEnv });
 
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8', env: gitEnv });
 
     const mockJs = path.join(binDir, 'gh.js');
     const result = spawnSync(process.execPath, [
@@ -11408,11 +11333,11 @@ function testSinkMergeKeepOpenArchivedStateGuard() {
   try {
     initGitRepo(tmp);
     // Feature branch with a non-workflow change so the all-workflow refusal does not fire.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-545'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-545'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-545.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmp, 'add', 'feature-545.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 545'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['add', 'feature-545.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: issue 545'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
     // Archived state carrying the keep-open field (the FF merge would put it on HEAD; here we
     // place it directly so postMergeCleanup can read it).
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-545');
@@ -11556,15 +11481,15 @@ function testSinkMergeCloseFailureWarning() {
       "process.stdout.write('{}\\n');"
     ]);
 
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-168f'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-168f'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-168f.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmp, 'add', 'feature-168f.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 168f'], {
+    G.git(tmp, ['add', 'feature-168f.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: issue 168f'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
     });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-168f'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-168f'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const mockJs = path.join(binDir, 'gh.js');
     const result = spawnSync(process.execPath, [
@@ -11633,15 +11558,15 @@ function testSinkMergeCloseExitZeroButStillOpenFailsClosed() {
       "process.stdout.write('{}\\n');"
     ]);
 
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-169f'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-169f'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-169f.txt'), 'feature\n');
-    spawnSync('git', ['-C', tmp, 'add', 'feature-169f.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 169f'], {
+    G.git(tmp, ['add', 'feature-169f.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: issue 169f'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
     });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-169f'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-169f'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const mockJs = path.join(binDir, 'gh.js');
     const result = spawnSync(process.execPath, [
@@ -11705,7 +11630,7 @@ function testSinkMergeSkipsArchivedProjectPhantom() {
 
     // Construct archived state directly on the feature branch — do NOT create a live
     // folder on disk (untracked files survive git reset --hard and would corrupt the test).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-850'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-850'], { encoding: 'utf8' });
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-850');
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), '# archived\n');
@@ -11716,18 +11641,18 @@ function testSinkMergeSkipsArchivedProjectPhantom() {
     // implementation during its original run, so this is the realistic fixture. Root-level so it is
     // outside kaola-workflow/ and does not perturb the wasArchived (liveDir) discriminator below.
     fs.writeFileSync(path.join(tmp, 'impl-850.txt'), 'implementation for issue 850\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A', 'kaola-workflow/', 'impl-850.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: archive issue-850'], {
+    G.git(tmp, ['add', '-A', 'kaola-workflow/', 'impl-850.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'chore: archive issue-850'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
     });
-    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-850'], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-850'], { encoding: 'utf8' });
     // Return to main — origin/main must NOT have the archive (so reset --hard origin/main wipes it)
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     // Hard gate: verify git state is correct before invoking sink-merge
-    const catArchive = spawnSync('git', ['-C', tmp, 'cat-file', '-e', 'workflow/issue-850:kaola-workflow/archive/issue-850/workflow-state.md'], { encoding: 'utf8' });
-    const catLive = spawnSync('git', ['-C', tmp, 'cat-file', '-e', 'workflow/issue-850:kaola-workflow/issue-850/workflow-state.md'], { encoding: 'utf8' });
+    const catArchive = G.git(tmp, ['cat-file', '-e', 'workflow/issue-850:kaola-workflow/archive/issue-850/workflow-state.md'], { encoding: 'utf8' });
+    const catLive = G.git(tmp, ['cat-file', '-e', 'workflow/issue-850:kaola-workflow/issue-850/workflow-state.md'], { encoding: 'utf8' });
     assert(catArchive.status === 0, 'SETUP ERROR: git state not correct for phantom-folder test — archive not committed on feature branch');
     assert(catLive.status !== 0, 'SETUP ERROR: git state not correct for phantom-folder test — live path still on feature branch');
 
@@ -11771,11 +11696,11 @@ function testSinkMergeSkipsArchivedProjectPhantom() {
     );
 
     // main must be clean — reset --hard must have run, not been skipped
-    const aheadCount = spawnSync('git', ['-C', tmp, 'rev-list', '--count', 'origin/main..main'], { encoding: 'utf8' }).stdout.trim();
+    const aheadCount = G.git(tmp, ['rev-list', '--count', 'origin/main..main'], { encoding: 'utf8' }).stdout.trim();
     assert(aheadCount === '0', 'local main must be at origin/main after archived exit-3, got ahead=' + aheadCount);
 
     // Repo must be restored to main branch
-    const headBranch = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headBranch = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(
       headBranch === 'main',
       'repo must be restored to main after merge-impossible, got: ' + headBranch
@@ -14303,8 +14228,8 @@ function testAdaptiveHandoffInGrammarReady() {
     plantHandoffState(projectDir, projectName);
 
     // Git-commit plan + state so the repo HEAD is current (record-base needs a resolvable tree).
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'handoff-ready fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'handoff-ready fixture'], { encoding: 'utf8' });
 
     // Run handoff using --plan (absolute path) — NOT --project (resolves from script's repoRoot).
     const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
@@ -14375,8 +14300,8 @@ function testAdaptiveHandoffAskFreezesNotApproval() {
     fs.writeFileSync(planPath, planText);
     plantHandoffState(projectDir, projectName);
 
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'handoff-ask fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'handoff-ask fixture'], { encoding: 'utf8' });
 
     const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
     assert(r.status === 0, 'ask handoff must exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
@@ -14519,8 +14444,8 @@ function testAdaptiveHandoffLegacyClaimRefusesFreeze() {
     const planBytesBefore = fs.readFileSync(planPath);
     const stateBytesBefore = fs.readFileSync(statePath);
 
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'legacy-claim fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'legacy-claim fixture'], { encoding: 'utf8' });
 
     const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
     assert(r.status !== 0,
@@ -14540,8 +14465,8 @@ function testAdaptiveHandoffLegacyClaimRefusesFreeze() {
 
     // Green control: the SAME plan with a current (envelope-carrying) claim freezes.
     plantHandoffState(projectDir, projectName);
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'current-claim fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'current-claim fixture'], { encoding: 'utf8' });
     const ok = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
     assert(ok.status === 0,
       'current-claim control must exit 0, got ' + ok.status + '\nstderr: ' + ok.stderr + '\nstdout: ' + ok.stdout);
@@ -14582,8 +14507,8 @@ function testAdaptiveHandoffIdempotentReRun() {
     fs.writeFileSync(planPath, planText);
     plantHandoffState(projectDir, projectName);
 
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'handoff-idem fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'handoff-idem fixture'], { encoding: 'utf8' });
 
     // First run.
     const r1 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
@@ -14778,8 +14703,8 @@ function testFreezeCheckedGovernanceAckStale() {
   fs.mkdirSync(proj, { recursive: true });
   const planPath = path.join(proj, 'workflow-plan.md');
   fs.writeFileSync(planPath, PLAN);
-  spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+  G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+  G.git(grepo, ['commit', '-m', 'plan'], { encoding: 'utf8' });
   try {
     // SPAWN 1: --freeze-checked returns the governance payload + planHash, WITHOUT writing.
     const fc = runNode(planValidatorScript, [planPath, '--freeze-checked', '--json'], grepo);
@@ -14846,8 +14771,8 @@ function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
     plantHandoffState(projectDir, projectName);
 
     // Commit so record-base has a tree to hash.
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'proj-root fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'proj-root fixture'], { encoding: 'utf8' });
 
     // Run handoff with --project (NOT --plan) and cwd=tmp.
     // script-dir (__dirname of handoffScript) is the REAL repoRoot/scripts/;
@@ -14910,8 +14835,8 @@ function testAdaptiveHandoffDecisionIdConflict() {
     fs.writeFileSync(planPath, makeHandoffPlan(nodesRows, ledgerRows) + staleNotes);
     plantHandoffState(projectDir, projectName);
 
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'decision-id fixture'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'decision-id fixture'], { encoding: 'utf8' });
 
     const planBytesBefore = fs.readFileSync(planPath);
 
@@ -15130,8 +15055,7 @@ function testLegacyWorktreeCleanupDryRun() {
     assert(computedLegacy === legacyWtPath,
       'legacySiblingWorktreePathFor must return legacy sibling path, got: ' + computedLegacy);
     fs.mkdirSync(legacyWtPath, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-520', '--', legacyWtPath, 'HEAD'],
-      { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-520', '--', legacyWtPath, 'HEAD'], { encoding: 'utf8' });
 
     // Run legacy-worktree-cleanup (dry-run is the default, no --execute)
     const r = runNode(claimScript, ['legacy-worktree-cleanup'], tmp);
@@ -15166,8 +15090,7 @@ function testLegacyWorktreeCleanupDirtySkip() {
   try {
     initGitRepo(tmp);
     fs.mkdirSync(legacyWtPath, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-521', '--', legacyWtPath, 'HEAD'],
-      { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-521', '--', legacyWtPath, 'HEAD'], { encoding: 'utf8' });
     // Plant an uncommitted change so the worktree is dirty
     fs.writeFileSync(path.join(legacyWtPath, 'dirty.txt'), 'dirty\n');
 
@@ -15291,8 +15214,8 @@ function testAdaptiveWorktreeProvisionedE2E() {
     // Step 3: land an impl file in the worktree on the feature branch
     // The worktree is on workflow/issue-530 (created by claim)
     fs.writeFileSync(path.join(wt530, 'impl-test.txt'), 'implementation\n');
-    spawnSync('git', ['add', 'impl-test.txt'], { cwd: wt530, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feat: impl-test for issue 530'], { cwd: wt530, encoding: 'utf8' });
+    G.git(wt530, ['add', 'impl-test.txt'], { encoding: 'utf8' });
+    G.git(wt530, ['commit', '-m', 'feat: impl-test for issue 530'], { encoding: 'utf8' });
 
     // Step 4: worktree-finalize so workflow state is in the worktree branch
     const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-530'], tmp, binDir);
@@ -15313,19 +15236,17 @@ function testAdaptiveWorktreeProvisionedE2E() {
     assert(finResult.status === 0, 'finalize --keep-worktree should exit 0\nstdout: ' + finResult.stdout + '\nstderr: ' + finResult.stderr);
 
     // Step 6: sink-merge (OFFLINE) — assert main now contains impl-test.txt (AC8)
-    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-530'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-530'], { encoding: 'utf8' }).stdout.trim();
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-530', '--branch', 'workflow/issue-530', '--issue', '530'
     ], { cwd: wt530, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
     assert(smResult.status === 0,
       'sink-merge should exit 0 for adaptive e2e\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
 
-    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter === featureHead, 'main must advance to feature HEAD after sink-merge (AC8)');
     // AC8 core: merged main must contain the impl file
-    const implInMain = spawnSync('git', ['cat-file', '-e', 'HEAD:impl-test.txt'],
-      { cwd: tmp, encoding: 'utf8' });
+    const implInMain = G.git(tmp, ['cat-file', '-e', 'HEAD:impl-test.txt'], { encoding: 'utf8' });
     assert(implInMain.status === 0,
       'AC8: merged main must contain impl-test.txt — the implementation that landed in the worktree');
 
@@ -15451,12 +15372,12 @@ function testSinkRefusesWorkflowOnlyBranch() {
     // Need origin/main for the helper's git rev-parse
     initGitRepoWithBareRemote(tmp);
 
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-911'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-911'], { encoding: 'utf8' });
     // Archived folder only — no live folder, no impl file
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-911'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-911', 'workflow-state.md'), 'status: closed\n');
-    spawnSync('git', ['add', 'kaola-workflow/'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'chore: archive issue 911 (workflow-only, no impl)'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', 'kaola-workflow/'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'chore: archive issue 911 (workflow-only, no impl)'], { encoding: 'utf8' });
 
     // Direct call: must throw (branch is workflow-only)
     let threw = false;
@@ -15493,14 +15414,14 @@ function testSinkAllowsMixedBranch() {
   try {
     initGitRepoWithBareRemote(tmp);
 
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-912'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-912'], { encoding: 'utf8' });
     // Real impl file — makes the branch NOT workflow-only
     fs.writeFileSync(path.join(tmp, 'impl-912.txt'), 'implementation\n');
     // Plus archived workflow artifacts
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-912'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-912', 'workflow-state.md'), 'status: closed\n');
-    spawnSync('git', ['add', '.'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feat: impl and archived workflow for 912'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '.'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: impl and archived workflow for 912'], { encoding: 'utf8' });
 
     // Direct call: must NOT throw (impl file is present)
     let threw = false;
@@ -15696,14 +15617,14 @@ function testSinkTransactionBlockedByForeignDirt() {
 
     // Create a feature branch with an impl commit + the project folder already archived
     // (standard lane: finalize runs before --sink so the live folder is gone).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4291'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-4291'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-4291.txt'), 'impl\n');
-    spawnSync('git', ['-C', tmp, 'add', 'impl-4291.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 4291'], {
+    G.git(tmp, ['add', 'impl-4291.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: impl 4291'], {
       encoding: 'utf8',
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     // Plant FOREIGN DIRT: an untracked file in a DIFFERENT project's kaola-workflow folder.
     const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
@@ -15711,7 +15632,7 @@ function testSinkTransactionBlockedByForeignDirt() {
     fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
 
     // Record the git status BEFORE running --sink.
-    const statusBefore = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusBefore = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript,
@@ -15742,7 +15663,7 @@ function testSinkTransactionBlockedByForeignDirt() {
     assert(listed, '#429: foreign_dirt must list the planted file, got: ' + JSON.stringify(out.foreign_dirt));
 
     // ZERO MUTATION: git status must be byte-identical to before
-    const statusAfter = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusAfter = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     assert(statusBefore === statusAfter,
       '#429: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) +
       '\nafter:  ' + JSON.stringify(statusAfter));
@@ -15768,14 +15689,14 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
     initGitRepo(tmp);
 
     // Create a feature branch with an impl commit (same shape as the #429 blocked scenario).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-7152'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-7152'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-7152.txt'), 'impl\n');
-    spawnSync('git', ['-C', tmp, 'add', 'impl-7152.txt'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 7152'], {
+    G.git(tmp, ['add', 'impl-7152.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: impl 7152'], {
       encoding: 'utf8',
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     // Plant the sibling's interrupted-sink receipt (untracked, mid-cycle steps).
     const siblingReceiptRel = 'kaola-workflow/archive/sibling-7159/.cache/sink-receipt.json';
@@ -15799,7 +15720,7 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
     fs.mkdirSync(foreignDir, { recursive: true });
     fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
 
-    const statusBefore = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusBefore = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript,
@@ -15827,7 +15748,7 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
       '#715: the sibling interrupted-sink receipt must NOT appear in foreign_dirt, got: ' + JSON.stringify(out.foreign_dirt));
 
     // ZERO MUTATION: git status byte-identical, and the sibling receipt byte-untouched.
-    const statusAfter = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusAfter = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     assert(statusBefore === statusAfter,
       '#715: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) +
       '\nafter:  ' + JSON.stringify(statusAfter));
@@ -15853,13 +15774,13 @@ function testSinkTransactionCrashResume() {
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
 
     // Feature branch with impl commit.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4292'], { env, encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-4292'], { env, encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-4292.txt'), 'impl\n');
-    spawnSync('git', ['-C', tmp, 'add', 'impl-4292.txt'], { env, encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 4292'], { env, encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { env, encoding: 'utf8' });
+    G.git(tmp, ['add', 'impl-4292.txt'], { env, encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: impl 4292'], { env, encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { env, encoding: 'utf8' });
 
-    const featureHead = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-4292'], { encoding: 'utf8' }).stdout.trim();
+    const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-4292'], { encoding: 'utf8' }).stdout.trim();
 
     // First run: abort after merge step
     const run1 = spawnSync(process.execPath, [
@@ -15892,7 +15813,7 @@ function testSinkTransactionCrashResume() {
       '#429 crash-resume: receipt must show finalize pending (not done) after abort at merge, got: ' + JSON.stringify(receipt1.steps));
 
     // Record main HEAD SHA after first run to detect double-merge (merge is already done).
-    const mainHeadAfterRun1 = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainHeadAfterRun1 = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
 
     // Second run: re-run without the abort flag
     const run2 = spawnSync(process.execPath, [
@@ -15930,7 +15851,7 @@ function testSinkTransactionCrashResume() {
     // still be reachable — and the merge step was NOT re-applied (receipt.steps.merge was done).
     assert(receipt2.steps && receipt2.steps.merge === 'done',
       '#429 crash-resume: receipt must show merge:done after resumed run (not re-applied), got: ' + JSON.stringify(receipt2.steps));
-    const mergeBaseOut = spawnSync('git', ['-C', tmp, 'merge-base', '--is-ancestor', mainHeadAfterRun1, 'main'], { encoding: 'utf8' });
+    const mergeBaseOut = G.git(tmp, ['merge-base', '--is-ancestor', mainHeadAfterRun1, 'main'], { encoding: 'utf8' });
     assert(mergeBaseOut.status === 0,
       '#429 crash-resume: main HEAD from run1 must be an ancestor of main after run2 (no history rewrite), mainHeadAfterRun1=' + mainHeadAfterRun1);
 
@@ -15956,7 +15877,7 @@ function testSinkTransactionCleanEndToEnd() {
     // Feature branch: create linked worktree
     const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-4293');
     fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-    spawnSync('git', ['-C', tmp, 'worktree', 'add', '-b', 'workflow/issue-4293', '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-4293', '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
 
     // Write the project state into the worktree branch
     fs.mkdirSync(path.join(wtPath, 'kaola-workflow', 'issue-4293', '.cache'), { recursive: true });
@@ -15993,14 +15914,14 @@ function testSinkTransactionCleanEndToEnd() {
       'sink: merge',
       ''
     ].join('\n'));
-    spawnSync('git', ['-C', wtPath, 'add', '-A'], { env, encoding: 'utf8' });
-    spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: impl 4293 + archive'], { env, encoding: 'utf8' });
+    G.git(wtPath, ['add', '-A'], { env, encoding: 'utf8' });
+    G.git(wtPath, ['commit', '-m', 'feat: impl 4293 + archive'], { env, encoding: 'utf8' });
 
     // Remove the live folder from main (simulate the standard lane: finalize before sink-merge)
     fs.rmSync(path.join(tmp, 'kaola-workflow', 'issue-4293'), { recursive: true, force: true });
 
-    const featureHead = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-4293'], { encoding: 'utf8' }).stdout.trim();
-    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-4293'], { encoding: 'utf8' }).stdout.trim();
+    const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainBefore !== featureHead, '#429 e2e: precondition: main lags feature branch');
 
     const result = spawnSync(process.execPath, [
@@ -16021,9 +15942,9 @@ function testSinkTransactionCleanEndToEnd() {
     // Main must advance past mainBefore and must contain featureHead (the feature commit is merged).
     // The --sink transaction may create additional commits (archive_commit) after the FF merge,
     // so we check ancestry rather than exact SHA equality.
-    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainAfter !== mainBefore, '#429 e2e: main must advance after --sink\nbefore: ' + mainBefore + '\ngot: ' + mainAfter);
-    const ancestorCheck = spawnSync('git', ['-C', tmp, 'merge-base', '--is-ancestor', featureHead, 'main'], { encoding: 'utf8' });
+    const ancestorCheck = G.git(tmp, ['merge-base', '--is-ancestor', featureHead, 'main'], { encoding: 'utf8' });
     assert(ancestorCheck.status === 0, '#429 e2e: feature HEAD must be an ancestor of main after --sink (feature was merged)\nfeatureHead: ' + featureHead + '\nmainAfter: ' + mainAfter);
 
     // #653: sink-receipt.json must exist with all steps done — read from the STDOUT receipt (the
@@ -16051,14 +15972,11 @@ function testSinkTransactionCleanEndToEnd() {
       '#653: sink-fallback.json must NOT remain on disk after a terminally successful sink');
 
     // #520: journals (sink-receipt.json, sink-fallback.json) must NOT be committed into main.
-    const lsFiles = spawnSync('git', ['-C', tmp, 'ls-files',
-      'kaola-workflow/archive/issue-4293/.cache/sink-receipt.json',
-      'kaola-workflow/archive/issue-4293/.cache/sink-fallback.json'
-    ], { encoding: 'utf8' }).stdout.trim();
+    const lsFiles = G.git(tmp, ['ls-files', 'kaola-workflow/archive/issue-4293/.cache/sink-receipt.json', 'kaola-workflow/archive/issue-4293/.cache/sink-fallback.json'], { encoding: 'utf8' }).stdout.trim();
     assert(lsFiles === '', '#520: sink journals must NOT be tracked in git after --sink; got: ' + lsFiles);
     // #653: a `git status --porcelain` "clean and synced" check must see no journal residue either
     // (the files are gone from disk, not merely untracked).
-    const statusPorcelain = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusPorcelain = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     assert(!/sink-(receipt|fallback)\.json/.test(statusPorcelain),
       '#653: git status --porcelain must show no sink-receipt/sink-fallback residue after --sink; got: ' + statusPorcelain);
 
@@ -16171,8 +16089,8 @@ function testGateEvidenceNonceRotation654() {
     fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
     const freeze = runLegacyFreeze(planValidatorScript, planPath, tmp);
     assert(freeze.status === 0, '#654 walkthrough plan freezes: ' + freeze.stderr + freeze.stdout);
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['commit', '-m', 'freeze repair fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'freeze repair fixture'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
 
     const openWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
@@ -16292,8 +16210,8 @@ function testMixedRepairReplayJournal748() {
     fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
     const freeze = runLegacyFreeze(planValidatorScript, planPath, tmp);
     assert(freeze.status === 0, '#748 walkthrough plan freezes: ' + freeze.stderr + freeze.stdout);
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['commit', '-m', 'freeze mixed replay fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'freeze mixed replay fixture'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
 
     const record = (nodeId, body) => spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', nodeId, '--stdin', '--json'], {
@@ -16658,7 +16576,7 @@ function testOfflineNoHistoryClaimRoot699() {
     try {
       if (row.history) initGitRepo(root);
       else {
-        spawnSync('git', ['init', '-b', 'main'], { cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+        G.git(root, ['init', '-b', 'main'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
         fs.writeFileSync(path.join(root, 'candidate.txt'), 'uncommitted candidate\n');
       }
       for (const issue of row.issues) plantRoadmapIssue(root, issue, '');
@@ -16674,13 +16592,12 @@ function testOfflineNoHistoryClaimRoot699() {
         '#699 offline ' + row.name + ' creates neither worktree nor in-place checkout');
       assert(!fs.existsSync(path.join(root, '.kw', 'worktrees', project)),
         '#699 offline ' + row.name + ' leaves no native worktree');
-      const targetRef = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/' + project], { cwd: root });
+      const targetRef = G.git(root, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/' + project]);
       assert(targetRef.status !== 0, '#699 offline ' + row.name + ' creates no feature branch');
       assert(/^claim_root_base_digest: [0-9a-f]{64}$/m.test(state),
         '#699 offline ' + row.name + ' persists a fail-closed root digest');
       if (!row.history) {
-        const empty = spawnSync('git', ['hash-object', '-t', 'tree', '--stdin'], {
-          cwd: root, input: '', encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout.trim();
+        const empty = G.git(root, ['hash-object', '-t', 'tree', '--stdin'], { input: '', encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout.trim();
         assert(/^claim_root_base_commit: 0{40}$/m.test(state)
           && new RegExp('^claim_root_base_tree: ' + empty + '$', 'm').test(state),
           '#699 no-history ' + row.name + ' persists the exact zero/empty tuple');
@@ -17123,8 +17040,8 @@ function testReviewerContractV2Conformance() {
     const frozenContract = validator.resolvePlanContract(fs.readFileSync(planPath, 'utf8'), { requireFrozen: true });
     assert(freeze.status === 0 && frozenContract.ok === true && frozenContract.contract_version === 2,
       'review-v2 stateful fixture freezes explicitly as contract v2: ' + freeze.stdout + freeze.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['commit', '-m', 'review v2 fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'review v2 fixture'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
 
     const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
@@ -17229,10 +17146,8 @@ function testReviewerContractV2Conformance() {
     // The SAME finding re-anchored on a path-bearing kind is admitted. `candidate_range` binds to the
     // real candidate blob, so the anchor index (which is what makes an anchor trustworthy) validates it.
     const implBytes = fs.readFileSync(path.join(tmp, 'lib', 'impl.js'));
-    const objectFormat805 = String(spawnSync('git', ['-C', tmp, 'rev-parse', '--show-object-format'],
-      { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
-    const implObjectId = String(spawnSync('git', ['-C', tmp, 'hash-object', 'lib/impl.js'],
-      { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
+    const objectFormat805 = String(G.git(tmp, ['rev-parse', '--show-object-format'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
+    const implObjectId = String(G.git(tmp, ['hash-object', 'lib/impl.js'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout).trim();
     assert(/^[0-9a-f]{40,64}$/.test(implObjectId),
       '#805 fixture: the candidate blob id resolves, got ' + JSON.stringify(implObjectId));
     const discoveryFinding = {
@@ -17799,7 +17714,7 @@ function testExpansionTransaction759() {
 
   const grepo = adaptiveTmp('expansion-759');
   initGitRepoWithBareRemote(grepo);
-  spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-759'], { encoding: 'utf8' });
+  G.git(grepo, ['checkout', '-b', 'workflow/issue-759'], { encoding: 'utf8' });
   const proj = path.join(grepo, 'kaola-workflow', 'issue-759');
   fs.mkdirSync(proj, { recursive: true });
   const planPath = path.join(proj, 'workflow-plan.md');
@@ -17846,8 +17761,8 @@ function testExpansionTransaction759() {
     const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], grepo);
     assert(fz.status === 0, '#759 (a): the spine plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
     const spineHash = JSON.parse(fz.stdout).planHash;
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     assertAppendOnly('after freeze');
 
     // Before any expansion the point is ready but is NOT an openable frontier member.
@@ -18109,15 +18024,15 @@ function testExpansionTransaction759() {
   {
     const crepo = adaptiveTmp('expansion-759-crash');
     initGitRepoWithBareRemote(crepo);
-    spawnSync('git', ['-C', crepo, 'checkout', '-b', 'workflow/issue-759c'], { encoding: 'utf8' });
+    G.git(crepo, ['checkout', '-b', 'workflow/issue-759c'], { encoding: 'utf8' });
     const cproj = path.join(crepo, 'kaola-workflow', 'issue-759');
     fs.mkdirSync(cproj, { recursive: true });
     const cplan = path.join(cproj, 'workflow-plan.md');
     fs.writeFileSync(cplan, SPINE_PLAN_759);
     const fz = runNode(planValidatorScript, [cplan, '--freeze', '--json'], crepo);
     assert(fz.status === 0, '#759 (b): freeze should exit 0, got ' + fz.stdout + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: crepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: crepo, encoding: 'utf8' });
+    G.git(crepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(crepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       // Simulate the SIGKILL window: Phase 1 (the record block + the unit ledger rows) landed;
       // Phase 2 (the open) and Phase 3 (the `open()` proof block) never ran. The record deliberately
@@ -18195,7 +18110,7 @@ function testExpansionTransaction759() {
   {
     const drepo = adaptiveTmp('expansion-759-window');
     initGitRepoWithBareRemote(drepo);
-    spawnSync('git', ['-C', drepo, 'checkout', '-b', 'workflow/issue-759d'], { encoding: 'utf8' });
+    G.git(drepo, ['checkout', '-b', 'workflow/issue-759d'], { encoding: 'utf8' });
     const dproj = path.join(drepo, 'kaola-workflow', 'issue-759');
     fs.mkdirSync(dproj, { recursive: true });
     const dplan = path.join(dproj, 'workflow-plan.md');
@@ -18203,8 +18118,8 @@ function testExpansionTransaction759() {
     fs.writeFileSync(dplan, SPINE_PLAN_759);
     const fz = runNode(planValidatorScript, [dplan, '--freeze', '--json'], drepo);
     assert(fz.status === 0, '#759 (b2): freeze should exit 0, got ' + fz.stdout + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: drepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: drepo, encoding: 'utf8' });
+    G.git(drepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(drepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       const composition = {
         derivation: { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none present — co-open' },
@@ -18295,7 +18210,7 @@ function testExpansionTransaction759() {
   {
     const wrepo = adaptiveTmp('expansion-759-write');
     initGitRepoWithBareRemote(wrepo);
-    spawnSync('git', ['-C', wrepo, 'checkout', '-b', 'workflow/issue-759w'], { encoding: 'utf8' });
+    G.git(wrepo, ['checkout', '-b', 'workflow/issue-759w'], { encoding: 'utf8' });
     fs.mkdirSync(path.join(wrepo, 'lib'), { recursive: true });
     fs.writeFileSync(path.join(wrepo, 'lib', 'a.js'), '// a\n');
     fs.writeFileSync(path.join(wrepo, 'lib', 'b.js'), '// b\n');
@@ -18308,8 +18223,8 @@ function testExpansionTransaction759() {
     fs.writeFileSync(wplan, SPINE_PLAN_759.replace('  expected_surfaces: scripts/', '  expected_surfaces: lib/'));
     const fz = runNode(planValidatorScript, [wplan, '--freeze', '--json'], wrepo);
     assert(fz.status === 0, '#759 (e): freeze should exit 0, got ' + fz.stdout + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: wrepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: wrepo, encoding: 'utf8' });
+    G.git(wrepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(wrepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       const composition = {
         derivation: {
@@ -18746,7 +18661,7 @@ function testArchiveRollupPin763() {
       // writes the rollup into.
       const wtPath = path.join(tmp, '.kw', 'worktrees', project);
       fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-      spawnSync('git', ['-C', tmp, 'worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
       fs.writeFileSync(path.join(wtPath, 'impl-76319.txt'), 'impl\n');
       const wtLive = path.join(wtPath, 'kaola-workflow', project);
       fs.mkdirSync(path.join(wtLive, '.cache'), { recursive: true });
@@ -18757,8 +18672,8 @@ function testArchiveRollupPin763() {
       ].join('\n'));
       fs.writeFileSync(path.join(wtLive, 'workflow-plan.md'),
         '# Workflow Plan — sink rollup fixture\n\n## Meta\n\nplan_form: spine\n' + expansionRecords + '\n');
-      spawnSync('git', ['-C', wtPath, 'add', '-A'], { env, encoding: 'utf8' });
-      spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: impl 76319'], { env, encoding: 'utf8' });
+      G.git(wtPath, ['add', '-A'], { env, encoding: 'utf8' });
+      G.git(wtPath, ['commit', '-m', 'feat: impl 76319'], { env, encoding: 'utf8' });
 
       const result = spawnSync(process.execPath, [
         sinkMergeScript, '--sink', '--branch', branch, '--issue', '76319', '--project', project, '--json',
@@ -18810,7 +18725,7 @@ function testReExpandCascade761() {
   const mkRepo = (slug, plan, branch) => {
     const repo = adaptiveTmp(slug);
     initGitRepoWithBareRemote(repo);
-    spawnSync('git', ['-C', repo, 'checkout', '-b', branch], { encoding: 'utf8' });
+    G.git(repo, ['checkout', '-b', branch], { encoding: 'utf8' });
     const proj = path.join(repo, 'kaola-workflow', slug);
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -18819,8 +18734,8 @@ function testReExpandCascade761() {
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: ' + slug + '\nbranch: ' + branch + '\n');
     const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
     assert(fz.status === 0, '#761 ' + slug + ': spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+    G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     return { repo, proj, planPath, project: slug };
   };
   const ledgerOf = (planPath) => {
@@ -18927,7 +18842,7 @@ function testReExpandCascade761() {
     const ctx = mkRepo('issue-761b', PLAN, 'workflow/issue-761b');
     try {
       driveMilestone(ctx, 'm1');
-      const push = spawnSync('git', ['-C', ctx.repo, 'push', '-u', 'origin', 'workflow/issue-761b'], { encoding: 'utf8' });
+      const push = G.git(ctx.repo, ['push', '-u', 'origin', 'workflow/issue-761b'], { encoding: 'utf8' });
       assert(push.status === 0, '#761 (b): push the workflow branch, got ' + push.stderr);
       const reo = expandSub('reexpand-open', ctx, 'm1', fixerComp('scripts/fix.js'));
       const p = JSON.parse(reo.stdout);
@@ -19035,7 +18950,7 @@ const SPINE_PLAN_760 = [
 function testSerializationInversion760() {
   const wrepo = adaptiveTmp('serialization-760');
   initGitRepoWithBareRemote(wrepo);
-  spawnSync('git', ['-C', wrepo, 'checkout', '-b', 'workflow/issue-760'], { encoding: 'utf8' });
+  G.git(wrepo, ['checkout', '-b', 'workflow/issue-760'], { encoding: 'utf8' });
   // `.kw/` is gitignored (leg worktrees live there) mirroring #759 (e)'s fixture.
   fs.mkdirSync(path.join(wrepo, 'lib'), { recursive: true });
   // A pre-existing library file so `lib/` is a real, tracked directory in every provisioned leg —
@@ -19072,8 +18987,8 @@ function testSerializationInversion760() {
     fs.writeFileSync(planPath, SPINE_PLAN_760);
     const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], wrepo);
     assert(fz.status === 0, '#760: the spine plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: wrepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: wrepo, encoding: 'utf8' });
+    G.git(wrepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(wrepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
     // ---- expand-open: two units, UNCERTAIN overlap (one exact file, one directory-shaped entry
     //      that turns out to cover it) — the pre-#760 PREVENT case (kind:'coarse', unresolvable). ----
@@ -19152,13 +19067,13 @@ function testSerializationInversion760() {
     assert(c2.result === 'ok' && c2.barrier === 'group_passed' && c2.synthesized === true && typeof c2.mergeCommit === 'string' && c2.mergeCommit.length >= 7,
       '#760: the last close must run the group barrier and report a synthesizer merge commit — the '
       + 'reconciliation this inversion relies on, got ' + JSON.stringify(c2));
-    const merged = execFileSync('git', ['-C', wrepo, 'show', 'HEAD:kaola-workflow/issue-760/shared-ancestor.md'], { encoding: 'utf8' });
+    const merged = G.exec(wrepo, ['show', 'HEAD:kaola-workflow/issue-760/shared-ancestor.md'], { encoding: 'utf8' });
     assert(merged.includes('line 5 (from w1)') && merged.includes('line 1 (from w2)'),
       '#760: the merged shared ancestor on HEAD must carry BOTH legs\' edits — a REAL 3-way octopus '
       + 'base (a wrong/empty base would drop one side or conflict), not a declared-away overlap, got:\n' + merged);
     // Each leg's own declared production file also lands in the SAME merge commit.
     for (const f of ['lib/w1.js', 'lib/w2.js']) {
-      assert(execFileSync('git', ['-C', wrepo, 'cat-file', '-e', 'HEAD:' + f], { encoding: 'utf8' }) === '',
+      assert(G.exec(wrepo, ['cat-file', '-e', 'HEAD:' + f], { encoding: 'utf8' }) === '',
         '#760: ' + f + ' (the leg\'s own in-lane write) must be present on the synthesized merge commit');
     }
 
@@ -19229,7 +19144,7 @@ function testSerializationInversion760() {
 function testRepairBaseFreshness829() {
   const repo = adaptiveTmp('base-freshness-829');
   initGitRepoWithBareRemote(repo);
-  spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-829'], { encoding: 'utf8' });
+  G.git(repo, ['checkout', '-b', 'workflow/issue-829'], { encoding: 'utf8' });
   const project = 'issue-829';
   const proj = path.join(repo, 'kaola-workflow', project);
   const cacheDir = path.join(proj, '.cache');
@@ -19262,8 +19177,8 @@ function testRepairBaseFreshness829() {
   const fz = runNode(planValidatorScript, [planPath, '--freeze', '--repair', '--json'], repo);
   assert(fz.status === 0, '#829-walk: freeze exits 0: ' + fz.stdout + fz.stderr);
   fs.writeFileSync(path.join(repo, '.gitignore'), '.kw/\n');
-  spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+  G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+  G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
   const R = (args, input) => runNode(adaptiveNodeScript, [...args, '--project', project, '--json'], repo, null,
     input != null ? { input } : undefined);
@@ -19914,8 +19829,8 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     // If worktree not provisioned (NATIVE=1 offline), fall back to in-repo branch.
     const commitRepo = (wtPath && fs.existsSync(wtPath)) ? wtPath : tmp;
     fs.writeFileSync(path.join(commitRepo, 'feature-280001.txt'), 'ac1 test\n');
-    spawnSync('git', ['add', 'feature-280001.txt'], { cwd: commitRepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feat: ac1 test for issue 280001'], { cwd: commitRepo, encoding: 'utf8' });
+    G.git(commitRepo, ['add', 'feature-280001.txt'], { encoding: 'utf8' });
+    G.git(commitRepo, ['commit', '-m', 'feat: ac1 test for issue 280001'], { encoding: 'utf8' });
 
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript,
@@ -19994,8 +19909,8 @@ function testPlannerAttestFlagAbsentStaysMissing() {
     const branchName = sResult.branch || 'workflow/issue-280002';
     const commitRepo = (wtPath && fs.existsSync(wtPath)) ? wtPath : tmp;
     fs.writeFileSync(path.join(commitRepo, 'feature-280002.txt'), 'ac2 test\n');
-    spawnSync('git', ['add', 'feature-280002.txt'], { cwd: commitRepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feat: ac2 test for issue 280002'], { cwd: commitRepo, encoding: 'utf8' });
+    G.git(commitRepo, ['add', 'feature-280002.txt'], { encoding: 'utf8' });
+    G.git(commitRepo, ['commit', '-m', 'feat: ac2 test for issue 280002'], { encoding: 'utf8' });
 
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript,
@@ -20051,7 +19966,7 @@ function testDispatchLogHookWorktreeAware338() {
     initGitRepo(main);
     // git worktree add a linked worktree on a new branch
     const wt = main + '-wt';
-    const wtAdd = spawnSync('git', ['worktree', 'add', '-b', 'wt338', wt], { cwd: main, encoding: 'utf8' });
+    const wtAdd = G.git(main, ['worktree', 'add', '-b', 'wt338', wt], { encoding: 'utf8' });
     assert(wtAdd.status === 0, '#338 T3: git worktree add must succeed: ' + wtAdd.stderr);
     // Active project state file ONLY in the worktree.
     const wtProj = path.join(wt, 'kaola-workflow', 'proj');
@@ -20067,7 +19982,7 @@ function testDispatchLogHookWorktreeAware338() {
     const wtLogContent = fs.readFileSync(wtLog, 'utf8');
     assert(wtLogContent.includes('"agent_type":"tdd-guide"'),
       '#338 T3: worktree dispatch-log must contain the role entry, got: ' + wtLogContent);
-    try { spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: main, encoding: 'utf8' }); } catch (_) {}
+    try { G.git(main, ['worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
     try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
   } finally {
     fs.rmSync(main, { recursive: true, force: true });
@@ -20191,7 +20106,7 @@ function testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568() {
     initGitRepo(main);
     // Linked worktree holds the ACTIVE project; main has NONE.
     const wt = main + '-wt';
-    const wtAdd = spawnSync('git', ['worktree', 'add', '-b', 'wt568', wt], { cwd: main, encoding: 'utf8' });
+    const wtAdd = G.git(main, ['worktree', 'add', '-b', 'wt568', wt], { encoding: 'utf8' });
     assert(wtAdd.status === 0, '#568: git worktree add must succeed: ' + wtAdd.stderr);
     const wtProj = path.join(wt, 'kaola-workflow', 'issue-568');
     fs.mkdirSync(wtProj, { recursive: true });
@@ -20211,7 +20126,7 @@ function testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568() {
     assert(lines.length === 1, '#568: exactly one JSONL line expected (no dup), got ' + lines.length);
     assert(lines[0].includes('"agent_type":"tdd-guide"'),
       '#568: worktree dispatch-log must contain the role-agent entry, got: ' + lines[0]);
-    try { spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: main, encoding: 'utf8' }); } catch (_) {}
+    try { G.git(main, ['worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
     try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
   } finally {
     fs.rmSync(main, { recursive: true, force: true });
@@ -20328,7 +20243,7 @@ function testFinalizeIncompleteResumesCrashState() {
     // Leave working tree dirty: an uncommitted implementation file.
     fs.writeFileSync(path.join(tmp, 'impl-296.js'), '// implementation\n');
     // Confirm tree is dirty before calling resume.
-    const dirtyCheck = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' });
+    const dirtyCheck = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' });
     assert(dirtyCheck.stdout.trim().length > 0, 'fixture: working tree must be dirty for crash test');
     const result = JSON.parse(
       runNode(claimScript, ['resume', '--project', project], tmp).stdout
@@ -20364,10 +20279,10 @@ function testFinalizeIncompleteNegativeControlAlreadyDone() {
       ''
     ].join('\n'));
     // Commit everything so the working tree is clean.
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'impl: issue 296y'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'impl: issue 296y'], { encoding: 'utf8' });
     // Confirm tree is clean.
-    const cleanCheck = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' });
+    const cleanCheck = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' });
     assert(cleanCheck.stdout.trim().length === 0, 'fixture: working tree must be clean for negative control');
     const result = JSON.parse(
       runNode(claimScript, ['resume', '--project', project], tmp).stdout
@@ -20401,12 +20316,12 @@ function testFinalizeIncompleteNegativeControlRepoDirty() {
       ''
     ].join('\n'));
     // Commit the archive dir so it is clean for this project.
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'impl: archive issue-296z'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'impl: archive issue-296z'], { encoding: 'utf8' });
     // Now add an UNRELATED untracked file — simulating another issue in progress.
     fs.writeFileSync(path.join(tmp, 'other-issue-work.js'), '// unrelated\n');
     // Confirm the repo is dirty but only because of the unrelated file.
-    const dirtyCheck = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' });
+    const dirtyCheck = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' });
     assert(dirtyCheck.stdout.trim().length > 0, 'fixture: repo must be dirty (unrelated file)');
     const result = JSON.parse(
       runNode(claimScript, ['resume', '--project', project], tmp).stdout
@@ -20431,12 +20346,10 @@ function testFinalizeIncompleteWorktreeReentryFix() {
     initGitRepo(tmp);
     // Create a feature branch directly in the linked worktree (worktree add -b).
     fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-296b1', '--', wtPath, 'HEAD'],
-      { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-296b1', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
 
     // Confirm the worktree is linked (getCoordRoot from wt points to main .git).
-    const coordFromWt = spawnSync('git', ['rev-parse', '--git-common-dir'],
-      { cwd: wtPath, encoding: 'utf8' }).stdout.trim();
+    const coordFromWt = G.git(wtPath, ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).stdout.trim();
     const coordAbs = path.resolve(wtPath, coordFromWt);
     assert(coordAbs === path.join(tmp, '.git'),
       'fixture: worktree must have a different coord root from wt root; got: ' + coordAbs);
@@ -20477,8 +20390,7 @@ function testFinalizeIncompleteWorktreeReentryFix() {
     fs.writeFileSync(path.join(archiveDir, '.cache', 'final-validation.md'),
       'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand296 + '\n');
     // Verify archive is untracked in the worktree (crash state).
-    const dirtyBefore = spawnSync('git', ['status', '--porcelain'],
-      { cwd: wtPath, encoding: 'utf8' });
+    const dirtyBefore = G.git(wtPath, ['status', '--porcelain'], { encoding: 'utf8' });
     assert(dirtyBefore.stdout.trim().length > 0,
       'fixture: worktree must be dirty (archive uncommitted) before re-entry');
 
@@ -20490,15 +20402,13 @@ function testFinalizeIncompleteWorktreeReentryFix() {
       '#296 B1: finalize re-entry must exit 0\nstdout: ' + finResult.stdout + '\nstderr: ' + finResult.stderr);
 
     // After re-entry with the fix: archive must be committed, tree must be clean.
-    const dirtyAfter = spawnSync('git', ['status', '--porcelain'],
-      { cwd: wtPath, encoding: 'utf8' });
+    const dirtyAfter = G.git(wtPath, ['status', '--porcelain'], { encoding: 'utf8' });
     assert(dirtyAfter.stdout.trim().length === 0,
       '#296 B1: working tree must be clean after finalize re-entry, got: ' + JSON.stringify(dirtyAfter.stdout));
 
     // Confirm the archive was committed (not just staged).
     const archiveRelPath = path.join('kaola-workflow', 'archive', project, 'workflow-state.md');
-    const catFile = spawnSync('git', ['cat-file', '-e', 'HEAD:' + archiveRelPath],
-      { cwd: wtPath, encoding: 'utf8' });
+    const catFile = G.git(wtPath, ['cat-file', '-e', 'HEAD:' + archiveRelPath], { encoding: 'utf8' });
     assert(catFile.status === 0,
       '#296 B1: archive workflow-state.md must be in HEAD commit after re-entry');
 
@@ -20514,7 +20424,7 @@ function testFinalizeIncompleteWorktreeReentryFix() {
     console.log('testFinalizeIncompleteWorktreeReentryFix: PASSED');
   } finally {
     try {
-      spawnSync('git', ['worktree', 'remove', '--force', wtPath], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
     } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -21072,10 +20982,7 @@ function testFinalizeArchiveVerifiesBeforeDelete() {
     // (isLinkedRun is true when mainRoot !== linkedRoot).
     const wtPath = path.join(kwRoot, 'issue-426v');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-426v', '--', wtPath, 'HEAD'], {
-      cwd: tmp,
-      encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-426v', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
 
     // Plant a project dir in the linked worktree that has NO workflow-state.md.
     // The epoch-authority preflight must refuse it before copy/delete.
@@ -21102,7 +21009,7 @@ function testFinalizeArchiveVerifiesBeforeDelete() {
       '#426 verify-before-delete: malformed source must fail the authority preflight, got: ' + JSON.stringify(result)
     );
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -21219,7 +21126,7 @@ function testArchiveCompleteSourceRelative676() {
     initGitRepo(gtmp);
     fs.mkdirSync(gkwRoot, { recursive: true });
     wtPath = path.join(gkwRoot, 'issue-676e');
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-676e', '--', wtPath, 'HEAD'], { cwd: gtmp, encoding: 'utf8' });
+    G.git(gtmp, ['worktree', 'add', '-b', 'workflow/issue-676e', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     const badProj = path.join(wtPath, 'kaola-workflow', 'issue-676bad');
     seedProj676(badProj, { plan: 1 }); // no workflow-state.md → anchor refuses
     const r7 = claim.archiveProjectDir(wtPath, 'issue-676bad', 'closed', undefined, {});
@@ -21228,7 +21135,7 @@ function testArchiveCompleteSourceRelative676() {
     assert(fs.existsSync(badProj),
       '#676 src-rel e2e: the live source folder must SURVIVE an incomplete archive (verify runs before delete)');
   } finally {
-    try { if (wtPath) spawnSync('git', ['-C', gtmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    try { if (wtPath) G.git(gtmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(gtmp, { recursive: true, force: true });
     fs.rmSync(gkwRoot, { recursive: true, force: true });
   }
@@ -21428,19 +21335,19 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
   };
   try {
     initGitRepo(tmp);                                  // main: README.md
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/shared'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['checkout', '-b', 'workflow/shared'], { encoding: 'utf8', env: gitEnv });
     // Issue-1 work (aaa/x.js) committed on the SHARED branch — NOT in issue-2's node set.
     fs.mkdirSync(path.join(tmp, 'aaa'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'aaa', 'x.js'), 'issue-1 work\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'issue-1 work'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'issue-1 work'], { encoding: 'utf8', env: gitEnv });
     // ISSUE2_BASE = the boundary commit where issue-2's own work begins (parent of its first commit).
-    const ISSUE2_BASE = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: gitEnv }).stdout.trim();
+    const ISSUE2_BASE = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: gitEnv }).stdout.trim();
     // Issue-2 work (bbb/y.js) committed — declared by issue-2's complete node.
     fs.mkdirSync(path.join(tmp, 'bbb'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'bbb', 'y.js'), 'issue-2 work\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'issue-2 work'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'issue-2 work'], { encoding: 'utf8', env: gitEnv });
 
     seedProject();
     plantRoadmapIssue(tmp, 539, '');
@@ -21610,8 +21517,8 @@ function testTwoLanesInOneCheckout579() {
     fs.writeFileSync(path.join(tmp, '.gitignore'), '.kw/\n');
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.roadmap'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), '# Roadmap\n');
-    spawnSync('git', ['-C', tmp, 'add', '.gitignore', 'kaola-workflow/ROADMAP.md'], { encoding: 'utf8', env });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: seed shared roadmap + gitignore'], { encoding: 'utf8', env });
+    G.git(tmp, ['add', '.gitignore', 'kaola-workflow/ROADMAP.md'], { encoding: 'utf8', env });
+    G.git(tmp, ['commit', '-m', 'chore: seed shared roadmap + gitignore'], { encoding: 'utf8', env });
 
     // Set up lane A: untracked kaola-workflow files + .kw/worktrees dir (gitignored)
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-A'), { recursive: true });
@@ -21623,7 +21530,7 @@ function testTwoLanesInOneCheckout579() {
     fs.writeFileSync(path.join(tmp, 'src-real.js'), 'real code change\n');
 
     // Get git status --porcelain (with untracked files, as treeDirty uses)
-    const statusRaw = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusRaw = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     assert(statusRaw.length > 0, '#579 two-lanes: git status shows output');
 
     // Import the parked-lane filter from adaptive-schema (the production code path)
@@ -21658,7 +21565,7 @@ function testTwoLanesInOneCheckout579() {
     // .roadmap/ dir is already tracked (from the seed commit above), so a new issue file
     // appears as an individual untracked entry `?? kaola-workflow/.roadmap/issue-99.md`.
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-99.md'), 'test\n');
-    const statusRaw2 = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusRaw2 = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     const allPaths2 = parsePorcelainPaths(statusRaw2);
     const nonIgnored2 = allPaths2.filter(p => !isParkedLanePath(p, ownedProjects));
     assert(nonIgnored2.some(p => p.includes('.roadmap')),
@@ -21667,7 +21574,7 @@ function testTwoLanesInOneCheckout579() {
     // Own project (issue-B) NOT filtered — must show up as dirty
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-B'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-B', 'workflow-state.md'), 'status: active\n');
-    const statusRaw3 = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const statusRaw3 = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     const allPaths3 = parsePorcelainPaths(statusRaw3);
     const nonIgnored3 = allPaths3.filter(p => !isParkedLanePath(p, ['issue-B']));
     assert(nonIgnored3.some(p => p.includes('issue-B')),
@@ -21688,15 +21595,15 @@ function testSummaryDispatchSegments602() {
   const freezeCommit = (grepo, planPath) => {
     const fz = runLegacyFreeze(planValidatorScript, planPath, grepo);
     assert(fz.status === 0, '#602: freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
   };
 
   // (a) open-next --summary — single opened node; model tier remains metadata and effort inherits.
   {
     const grepo = adaptiveTmp('summary-602-open-next');
     initGitRepoWithBareRemote(grepo);
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-602a'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-602a'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-602a');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -21729,7 +21636,7 @@ function testSummaryDispatchSegments602() {
   {
     const grepo = adaptiveTmp('summary-602-open-ready');
     initGitRepoWithBareRemote(grepo);
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-602b'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-602b'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-602b');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -21765,7 +21672,7 @@ function testSummaryDispatchSegments602() {
   {
     const grepo = adaptiveTmp('summary-602-json-bytes');
     initGitRepoWithBareRemote(grepo);
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-602c'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-602c'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-602c');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -21821,8 +21728,8 @@ function testReadOnlyLaneEmptyWriteSet752() {
   const freezeCommit = (grepo, planPath) => {
     const fz = runLegacyFreeze(planValidatorScript, planPath, grepo);
     assert(fz.status === 0, '#752: freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
   };
   // The roles MUST be write-roles: parseWriteSetCell('none').size === 1, so the freeze-time
   // "read-only role declares a write set" check refuses if a/b are authored as read roles.
@@ -21840,7 +21747,7 @@ function testReadOnlyLaneEmptyWriteSet752() {
   {
     const grepo = adaptiveTmp('readonly-752a');
     initGitRepoWithBareRemote(grepo);
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-752a'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-752a'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-752a');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -21893,7 +21800,7 @@ function testReadOnlyLaneEmptyWriteSet752() {
   {
     const grepo = adaptiveTmp('readonly-752b');
     initGitRepoWithBareRemote(grepo);
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-752b'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-752b'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-752b');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -21962,8 +21869,8 @@ function testCodexDispatchModeThreading603() {
     const planPath = path.join(grepo, 'kaola-workflow', 'issue-6031', 'workflow-plan.md');
     fs.writeFileSync(planPath, NODE_PLAN('6031'));
     runLegacyFreeze(planValidatorScript, planPath, grepo);
-    spawnSync('git', ['-C', grepo, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-6031', '--json'], grepo);
       assert(on.status === 0, '#775 (a): open-next should exit 0, got ' + on.status + '\nstderr: ' + on.stderr);
@@ -21989,8 +21896,8 @@ function testCodexDispatchModeThreading603() {
     const planPath = path.join(grepo, 'kaola-workflow', 'issue-6032', 'workflow-plan.md');
     fs.writeFileSync(planPath, NODE_PLAN('6032'));
     runLegacyFreeze(planValidatorScript, planPath, grepo);
-    spawnSync('git', ['-C', grepo, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-6032', '--json'], grepo);
       assert(on.status === 0, '#775 (b): open-next should exit 0, got ' + on.stderr);
@@ -22042,8 +21949,8 @@ function testRunProgressMirror605() {
     fs.mkdirSync(mainProj, { recursive: true });
     fs.writeFileSync(path.join(mainProj, 'workflow-plan.md'), PLAN(proj.replace('issue-', '')));
     runLegacyFreeze(planValidatorScript, path.join(mainProj, 'workflow-plan.md'), tmp);
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmp, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
   };
 
   // (a) after a ledger mutation (open-next) in a LINKED worktree, the mirror exists at the MAIN root
@@ -22056,7 +21963,7 @@ function testRunProgressMirror605() {
       seedFrozenMain(tmp, 'issue-605a');
       const wtPath = path.join(kwRoot, 'issue-605a');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605a', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-605a', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-605a', '--json'], wtPath);
       assert(on.status === 0, '#605 (a): open-next from worktree should exit 0, got ' + on.status + '\nstderr: ' + on.stderr + '\nstdout: ' + on.stdout);
       const mirrorPath = path.join(tmp, 'kaola-workflow', 'issue-605a', '.cache', 'run-progress.json');
@@ -22075,7 +21982,7 @@ function testRunProgressMirror605() {
       const mainPlan = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-605a', 'workflow-plan.md'), 'utf8');
       assert(/\|\s*n1\s*\|\s*pending\s*\|/.test(mainPlan), '#605 (a): root workflow-plan.md ledger must stay frozen (n1 still pending in MAIN)');
     } finally {
-      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(kwRoot, 'issue-605a')], { encoding: 'utf8' }); } catch (_) {}
+      try { G.git(tmp, ['worktree', 'remove', '--force', path.join(kwRoot, 'issue-605a')], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(tmp, { recursive: true, force: true });
       try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
     }
@@ -22091,7 +21998,7 @@ function testRunProgressMirror605() {
       seedFrozenMain(tmp, 'issue-605b');
       const wtPath = path.join(kwRoot, 'issue-605b');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605b', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-605b', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       fs.mkdirSync(mainCache, { recursive: true });
       fs.chmodSync(mainCache, 0o500);
       const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-605b', '--json'], wtPath);
@@ -22102,7 +22009,7 @@ function testRunProgressMirror605() {
         '#605 (b): a failed mirror write must surface run_progress_mirror: "failed", got: ' + JSON.stringify(env.run_progress_mirror));
     } finally {
       try { fs.chmodSync(mainCache, 0o700); } catch (_) {}
-      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(kwRoot, 'issue-605b')], { encoding: 'utf8' }); } catch (_) {}
+      try { G.git(tmp, ['worktree', 'remove', '--force', path.join(kwRoot, 'issue-605b')], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(tmp, { recursive: true, force: true });
       try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
     }
@@ -22123,7 +22030,7 @@ function testRunProgressMirror605() {
       fs.writeFileSync(path.join(mainCache, 'run-progress.json'), JSON.stringify({ plan_hash: 'x', op: 'close-node', node_ledger: [], in_progress: [], all_done: false }) + '\n');
       const wtPath = path.join(kwRoot, 'issue-605c');
       fs.mkdirSync(kwRoot, { recursive: true });
-      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605c', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-605c', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
       plantActiveFolder(wtPath, 'issue-605c', 605, null);
       seedAdaptiveFinalizeFixture(wtPath, 'issue-605c');
       alignFinalizeFixtureAcrossRoots(tmp, wtPath, 'issue-605c');
@@ -22133,7 +22040,7 @@ function testRunProgressMirror605() {
       assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-605c', '.cache', 'run-progress.json')),
         '#605 (c): finalize must remove the main-root run-progress.json with the rest of the project .cache/');
     } finally {
-      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(kwRoot, 'issue-605c')], { encoding: 'utf8' }); } catch (_) {}
+      try { G.git(tmp, ['worktree', 'remove', '--force', path.join(kwRoot, 'issue-605c')], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(tmp, { recursive: true, force: true });
       try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
     }
@@ -22211,7 +22118,7 @@ function testDeclaredNotWalled762() {
   const mkHarness = (name) => {
     const repo = adaptiveTmp(name);
     initGitRepoWithBareRemote(repo);
-    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/' + name], { encoding: 'utf8' });
+    G.git(repo, ['checkout', '-b', 'workflow/' + name], { encoding: 'utf8' });
     const proj = path.join(repo, 'kaola-workflow', name);
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -22302,8 +22209,8 @@ function testDeclaredNotWalled762() {
       fs.writeFileSync(planPath, mkRunPlan());
       const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
       assert(fz.status === 0, '#762 (b): spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+      G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
       driveMilestone('m1');
       driveWall('wall');
@@ -22374,7 +22281,7 @@ function testDeclaredNotWalled762() {
   {
     const repo = adaptiveTmp('issue-762c');
     initGitRepoWithBareRemote(repo);
-    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-762c'], { encoding: 'utf8' });
+    G.git(repo, ['checkout', '-b', 'workflow/issue-762c'], { encoding: 'utf8' });
     const proj = path.join(repo, 'kaola-workflow', 'issue-762c');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -22406,8 +22313,8 @@ function testDeclaredNotWalled762() {
       fs.writeFileSync(planPath, mkRunPlan());
       const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
       assert(fz.status === 0, '#771: spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+      G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
       driveMilestone('m1');
       driveWall('wall');
@@ -22501,8 +22408,8 @@ function testDeclaredNotWalled762() {
       fs.writeFileSync(planPath, mkRunPlan());
       const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
       assert(fz.status === 0, '#792: spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+      G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
       driveMilestone('m1');
       driveWall('wall');
@@ -22669,7 +22576,7 @@ function testReExpansionEpochTransition756() {
   {
     const repo = adaptiveTmp('issue-756a');
     initGitRepoWithBareRemote(repo);
-    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-756a'], { encoding: 'utf8' });
+    G.git(repo, ['checkout', '-b', 'workflow/issue-756a'], { encoding: 'utf8' });
     const proj = path.join(repo, 'kaola-workflow', 'issue-756a');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -22714,8 +22621,8 @@ function testReExpansionEpochTransition756() {
       fs.writeFileSync(planPath, mkRunPlan());
       const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
       assert(fz.status === 0, '#756 (a): spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+      G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
       driveMilestone('m1');
       driveWall('wall');
@@ -22749,8 +22656,8 @@ function testReExpansionEpochTransition756() {
       for (const u of (ap.opened || []).map(n => n.id)) {
         fs.mkdirSync(path.join(repo, 'lib'), { recursive: true });
         fs.writeFileSync(path.join(repo, 'lib', 'companion.js'), '// recovered companion\n');
-        spawnSync('git', ['-C', repo, 'add', '-A'], { encoding: 'utf8' });
-        spawnSync('git', ['-C', repo, 'commit', '-m', 'fx'], { encoding: 'utf8' });
+        G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+        G.git(repo, ['commit', '-m', 'fx'], { encoding: 'utf8' });
         fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
         const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-756a', '--node-id', u, '--json'], repo);
         assert(c.status === 0, '#756 (a): close re-opened unit ' + u + ': ' + c.stderr);
@@ -22790,7 +22697,7 @@ function testReExpansionEpochTransition756() {
   {
     const repo = adaptiveTmp('issue-756c');
     initGitRepoWithBareRemote(repo);
-    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-756c'], { encoding: 'utf8' });
+    G.git(repo, ['checkout', '-b', 'workflow/issue-756c'], { encoding: 'utf8' });
     const proj = path.join(repo, 'kaola-workflow', 'issue-756c');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -22811,8 +22718,8 @@ function testReExpansionEpochTransition756() {
       fs.writeFileSync(planPath, childPlan);
       const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
       assert(fz.status === 0, '#756 (c): the epoch child must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-      spawnSync('git', ['commit', '-m', 'frozen child'], { cwd: repo, encoding: 'utf8' });
+      G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(repo, ['commit', '-m', 'frozen child'], { encoding: 'utf8' });
       // The MPfused rider: seed the shared context packet orient writes, so the fused-advance dispatch
       // card carries it verbatim (the #763 conditional-attach discipline).
       fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
@@ -22823,8 +22730,8 @@ function testReExpansionEpochTransition756() {
       assert(o.status === 0 && JSON.parse(o.stdout).opened.id === 'impl', '#756 (c): open impl: ' + o.stdout + o.stderr);
       fs.mkdirSync(path.join(repo, 'lib'), { recursive: true });
       fs.writeFileSync(path.join(repo, 'lib', 'companion.js'), '// recovered companion, now reviewed\n');
-      spawnSync('git', ['-C', repo, 'add', '-A'], { encoding: 'utf8' });
-      spawnSync('git', ['-C', repo, 'commit', '-m', 'impl'], { encoding: 'utf8' });
+      G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+      G.git(repo, ['commit', '-m', 'impl'], { encoding: 'utf8' });
       fs.appendFileSync(path.join(proj, '.cache', 'impl.md'), '\nregression-green: ok\n');
       const ci = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-756c', '--node-id', 'impl', '--json'], repo);
       assert(ci.status === 0, '#756 (c): close impl + fused-advance to wall: ' + ci.stdout + ci.stderr);
@@ -22925,7 +22832,7 @@ function testSpineAuthoringOrchestrationKeystone767() {
 
   const repo = adaptiveTmp('spine-767');
   initGitRepoWithBareRemote(repo);
-  spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-767'], { encoding: 'utf8' });
+  G.git(repo, ['checkout', '-b', 'workflow/issue-767'], { encoding: 'utf8' });
   const proj = path.join(repo, 'kaola-workflow', 'issue-767');
   fs.mkdirSync(proj, { recursive: true });
   const planPath = path.join(proj, 'workflow-plan.md');
@@ -22952,8 +22859,8 @@ function testSpineAuthoringOrchestrationKeystone767() {
     assert(frozen.frozen === true && frozen.result === 'in-grammar',
       '#767 (1): the freeze payload must report frozen in-grammar, got ' + fz.stdout);
     const spineHash = frozen.planHash;
-    spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+    G.git(repo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(repo, ['commit', '-m', 'frozen'], { encoding: 'utf8' });
 
     // (2a) ORIENT surfaces the ready expansion point on expansionPending — the exact signal the PART
     // B routing prose keys on — and the point is NOT a dispatchable readyPending member.
@@ -23128,8 +23035,8 @@ function testAcceptanceSurfaceEndToEnd() {
     const frozenAcceptance = validator.acceptanceDigest(fs.readFileSync(planPath, 'utf8'));
     assert(/^[0-9a-f]{64}$/.test(String(frozenAcceptance || '')),
       'acceptance-e2e: the frozen plan carries a transcribed acceptance surface');
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
-    spawnSync('git', ['commit', '-m', 'acceptance e2e fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    G.git(tmp, ['commit', '-m', 'acceptance e2e fixture'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
 
     // Drive the run: writer produces the change, reviewer clears it, the sink opens.
     const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));

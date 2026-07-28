@@ -34,6 +34,9 @@ process.env.USERPROFILE = kwSandboxHome;
 
 const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag, buildClaimAnchors } = require('./kaola-workflow-claim.js');
 const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 
 let passed = 0, failed = 0;
 function assert(c, m) { if (c) passed++; else { failed++; console.error('FAIL: ' + m); } }
@@ -386,11 +389,11 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   g(['checkout', '-b', 'workflow/issue-476t']);
   fs.writeFileSync(path.join(repo, 'x.txt'), 'x'); g(['add', '-A']); g(['commit', '-m', 'feat']);
   g(['checkout', 'main']);
-  const headBefore = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const headBefore = G.exec(repo, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const d = run(SINK, ['--branch', 'workflow/issue-476t', '--project', 'issue-476t', '--help'], repo);
   assert(d.code === 0 && /^usage:/m.test(d.out), '#476: sink-merge --help prints usage + exit 0 (got ' + d.out.trim() + ')');
-  const branchStill = execFileSync('git', ['-C', repo, 'branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
-  const headAfter = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const branchStill = G.exec(repo, ['branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
+  const headAfter = G.exec(repo, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   assert(branchStill !== '' && headAfter === headBefore, '#476: sink-merge --help did NOT merge or delete the branch (zero side effects)');
 
   // (e) sink-merge --bogus → unknown_flag refuse + exit 1.
@@ -403,7 +406,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   // the path the end-of-argv tests (a)/(d) do NOT exercise.
   const f1 = run(SINK, ['--branch', 'workflow/issue-476t', '--project', '--help'], repo); // --help in --project's value slot
   assert(f1.code === 0 && /^usage:/m.test(f1.out), '#476: sink-merge --project --help must STILL be caught as help (no swallow), got code ' + f1.code + ' ' + f1.out.trim());
-  const branchAfterSwallow = execFileSync('git', ['-C', repo, 'branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
+  const branchAfterSwallow = G.exec(repo, ['branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
   assert(branchAfterSwallow !== '', '#476: the swallowed --help did NOT merge/delete the branch (zero side effects)');
   const f2 = run(SINK, ['--branch', '--bogus', '--project', 'issue-476t'], repo); // --bogus in --branch's value slot
   let f2j = {}; try { f2j = JSON.parse(f2.out.trim().split('\n').pop()); } catch (_) {}
@@ -416,7 +419,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   // sink help gate scans the RAW argv before parseArgs, so `--issue-numbers -h` is still caught as help.
   const g1 = run(SINK, ['--branch', 'workflow/issue-476t', '--project', 'issue-476t', '--issue-numbers', '-h'], repo);
   assert(g1.code === 0 && /^usage:/m.test(g1.out), '#476: sink-merge --issue-numbers -h must STILL be caught as help (raw-argv scan, no -h swallow), got code ' + g1.code + ' ' + g1.out.trim());
-  const branchAfterG = execFileSync('git', ['-C', repo, 'branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
+  const branchAfterG = G.exec(repo, ['branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
   assert(branchAfterG !== '', '#476: the swallowed -h did NOT merge/delete the branch (zero side effects)');
 
   fs.rmSync(repo, { recursive: true, force: true });
@@ -1137,7 +1140,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     fs.mkdirSync(wtGitLinkDir, { recursive: true });
     fs.writeFileSync(path.join(wtGitLinkDir, 'commondir'), '../..\n');
     fs.writeFileSync(path.join(wtGitLinkDir, 'gitdir'), path.join(wtRoot, '.git') + '\n');
-    const claimHead522 = spawnS522('git', ['-C', mainRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const claimHead522 = G.git(mainRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), claimHead522 + '\n');
     fs.writeFileSync(path.join(wtRoot, '.git'), 'gitdir: ' + wtGitLinkDir + '\n');
     // Write project folder in the worktree (simulating worktree-finalize having already run).
@@ -1296,7 +1299,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     //     We use --git-dir pointing to main's .git to simulate a linked worktree.
     // Advance only the synthetic worktree HEAD to the feature commit. Its
     // persisted claim-root tuple remains the real claim-time commit/tree.
-    const headSha = spawnS522('git', ['-C', mainRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headSha = G.git(mainRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), headSha + '\n');
 
     // In a real git linked worktree the working tree is a full checkout of the branch, so
@@ -1344,8 +1347,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         '#522(A): finalize_gate_unverified reason required (got ' + JSON.stringify(r.json) + ')');
 
       // No `chore: archive` commit must land (HEAD must still be the impl commit).
-      const headAfter = spawnS522('git', ['-C', fx.wtRoot, 'rev-parse', 'HEAD'],
-        { encoding: 'utf8' }).stdout.trim();
+      const headAfter = G.git(fx.wtRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
       assert(headAfter === headSha,
         '#522(A): NO archive commit must land when gate refuses (HEAD changed: ' + headSha + ' → ' + headAfter + ')');
 
@@ -1398,19 +1400,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
     };
     try {
-      execFS522('git', ['-C', tmpC, 'init', '-b', 'main'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      execFS522('git', ['-C', tmpC, 'config', 'user.email', 't@t.com'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      execFS522('git', ['-C', tmpC, 'config', 'user.name', 'Test'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      execFS522('git', ['-C', tmpC, 'config', 'commit.gpgsign', 'false'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      G.exec(tmpC, ['init', '-b', 'main'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      G.exec(tmpC, ['config', 'user.email', 't@t.com'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      G.exec(tmpC, ['config', 'user.name', 'Test'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      G.exec(tmpC, ['config', 'commit.gpgsign', 'false'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
       fs.writeFileSync(path.join(tmpC, 'README.md'), 'x\n');
-      execFS522('git', ['-C', tmpC, 'add', '-A'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      execFS522('git', ['-C', tmpC, 'commit', '-m', 'init'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      G.exec(tmpC, ['add', '-A'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      G.exec(tmpC, ['commit', '-m', 'init'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
 
       // Project folder with NO workflow-plan.md and a stale legacy `workflow_path: fast` field.
       // Under retirement a plan-absent finalize collapses to a typed adaptive_plan_missing refusal
@@ -2606,7 +2602,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(wtPath, 'unmerged-feature.txt'), 'the only copy of this work\n');
     g620(wtPath, ['add', 'unmerged-feature.txt']);
     g620(wtPath, ['commit', '-m', 'feat: unmerged work']);
-    const unmergedTip = execFS620('git', ['-C', wtPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_620 }).trim();
+    const unmergedTip = G.exec(wtPath, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_620 }).trim();
 
     // gh mock: issue 96201 reports CLOSED (the collectStale trigger).
     fs.mkdirSync(binDir620, { recursive: true });
@@ -2634,11 +2630,11 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     // AND its tip commit is still reachable (not merely a dangling ref about to be gc'd).
     let branchSurvived = false, tipReachable = false;
     try {
-      execFS620('git', ['-C', tmp620, 'rev-parse', '--verify', '--quiet', 'refs/heads/workflow/issue-96201'], { stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV_620 });
+      G.exec(tmp620, ['rev-parse', '--verify', '--quiet', 'refs/heads/workflow/issue-96201'], { stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV_620 });
       branchSurvived = true;
     } catch (_) {}
     try {
-      execFS620('git', ['-C', tmp620, 'cat-file', '-e', unmergedTip], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_620 });
+      G.exec(tmp620, ['cat-file', '-e', unmergedTip], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_620 });
       tipReachable = true;
     } catch (_) {}
     assert(branchSurvived,
@@ -2789,7 +2785,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#677a: deleted_branch must NOT include the branch of an unprobeable worktree, got ' + JSON.stringify(out677a.deleted_branch));
     let branchSurvived677a = false;
     try {
-      execFS677a('git', ['-C', tmp677a, 'rev-parse', '--verify', '--quiet', 'refs/heads/workflow/issue-' + issueNum677a], { stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV_677a });
+      G.exec(tmp677a, ['rev-parse', '--verify', '--quiet', 'refs/heads/workflow/issue-' + issueNum677a], { stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV_677a });
       branchSurvived677a = true;
     } catch (_) {}
     assert(branchSurvived677a,
@@ -2868,7 +2864,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       chmodApplied677b = false;
       let stillRegistered677b = false;
       try {
-        const list = execFS677b('git', ['worktree', 'list', '--porcelain'], { cwd: tmp677b, encoding: 'utf8' });
+        const list = G.exec(tmp677b, ['worktree', 'list', '--porcelain'], { encoding: 'utf8' });
         stillRegistered677b = list.includes(wtPath677b);
       } catch (_) {}
       assert(stillRegistered677b,
@@ -2915,14 +2911,14 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(tmp631, 'feat.txt'), 'impl\n');
     g631(tmp631, ['add', 'feat.txt']);
     g631(tmp631, ['commit', '-m', 'feat: impl']);
-    const staleBranchHead = execFS631('git', ['-C', tmp631, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_631 }).trim();
+    const staleBranchHead = G.exec(tmp631, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_631 }).trim();
     g631(tmp631, ['checkout', 'main']);
 
     // Advance main with the content that ACTUALLY landed (simulating the rebased/published tip).
     fs.writeFileSync(path.join(tmp631, 'published.txt'), 'landed\n');
     g631(tmp631, ['add', 'published.txt']);
     g631(tmp631, ['commit', '-m', 'feat: published']);
-    const publishedHead = execFS631('git', ['-C', tmp631, 'rev-parse', 'main'], { encoding: 'utf8', env: GIT_ENV_631 }).trim();
+    const publishedHead = G.exec(tmp631, ['rev-parse', 'main'], { encoding: 'utf8', env: GIT_ENV_631 }).trim();
     assert(staleBranchHead !== publishedHead, '#631 fixture: branch_head and published_head must differ, got equal ' + staleBranchHead);
 
     const archiveCacheDir = path.join(tmp631, 'kaola-workflow', 'archive', project631, '.cache');
@@ -2981,7 +2977,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
       g686(tmp, ['add', 'README.md']);
       g686(tmp, ['commit', '-m', 'init']);
-      const headSha = execFS686('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
+      const headSha = G.exec(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
 
       const projDir = path.join(tmp, 'kaola-workflow', project);
       fs.mkdirSync(projDir, { recursive: true });
@@ -2989,13 +2985,13 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 
       const refName = 'refs/kaola-workflow/barrier/' + project + '/n1-test';
       g686(tmp, ['update-ref', refName, headSha]);
-      const beforeReap = execFS686('git', ['-C', tmp, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
+      const beforeReap = G.exec(tmp, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
       assert(beforeReap === refName, '#686 fixture: the barrier ref exists before archiving, got ' + JSON.stringify(beforeReap));
 
       const result = claim686.archiveProjectDir(tmp, project, 'closed', undefined, {});
       assert(result && result.archived === true, '#686: archiveProjectDir must still succeed with a barrier ref present, got ' + JSON.stringify(result));
 
-      const afterReap = execFS686('git', ['-C', tmp, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
+      const afterReap = G.exec(tmp, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
       assert(afterReap === '', '#686: archive-time reap must delete every refs/kaola-workflow/barrier/<project>/* ref, got ' + JSON.stringify(afterReap));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -3055,7 +3051,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
     g686b(tmp, ['add', 'README.md']);
     g686b(tmp, ['commit', '-m', 'init']);
-    const headSha = execFS686b('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
+    const headSha = G.exec(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
 
     // ACTIVE project — folder present, non-terminal status → KEEP.
     const activeProj = 'issue-686active';
@@ -3092,7 +3088,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     let out = {};
     try { out = JSON.parse(String(run.stdout || '').trim().split('\n').pop()); } catch (_) {}
 
-    const listRefs = (prefix) => execFS686b('git', ['-C', tmp, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
+    const listRefs = (prefix) => G.exec(tmp, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
 
     assert(run.status === 0, '#686 sweep: barrier-ref-sweep must exit 0, got status=' + run.status + ' stdout=' + run.stdout + ' stderr=' + run.stderr);
     assert(out && Array.isArray(out.refsDeleted) && Array.isArray(out.tagsKept), '#686 sweep: --json summary must carry refsDeleted[]/tagsKept[], got ' + JSON.stringify(out));
@@ -3145,7 +3141,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(mainRoot686c, 'README.md'), 'fixture\n');
     g686c(mainRoot686c, ['add', 'README.md']);
     g686c(mainRoot686c, ['commit', '-m', 'init']);
-    const headSha686c = execFS686c('git', ['-C', mainRoot686c, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
+    const headSha686c = G.exec(mainRoot686c, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
 
     // Linked worktree — the invoking cwd for the sweep. Its OWN kaola-workflow/ dir never exists.
     const wtPath686c = path.join(kwRoot686c, 'issue-686wtcwd');
@@ -3160,7 +3156,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
     g686c(mainRoot686c, ['update-ref', 'refs/kaola-workflow/barrier/' + siblingProj + '/n1', headSha686c]);
 
-    const listRefs686c = (prefix) => execFS686c('git', ['-C', mainRoot686c, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
+    const listRefs686c = (prefix) => G.exec(mainRoot686c, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
     const beforeSweep686c = listRefs686c('refs/kaola-workflow/barrier/' + siblingProj + '/');
     assert(beforeSweep686c === 'refs/kaola-workflow/barrier/' + siblingProj + '/n1',
       '#686 R1 fixture: the live sibling barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686c));
@@ -3215,7 +3211,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(mainRoot686d, 'README.md'), 'fixture\n');
     g686d(mainRoot686d, ['add', 'README.md']);
     g686d(mainRoot686d, ['commit', '-m', 'init']);
-    const headSha686d = execFS686d('git', ['-C', mainRoot686d, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
+    const headSha686d = G.exec(mainRoot686d, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
 
     fs.mkdirSync(kwRoot686d, { recursive: true });
     // w1 — the invoking cwd for the sweep. Its own kaola-workflow/ never exists.
@@ -3235,7 +3231,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     const deadProj686d = 'issue-686w2dead';
     g686d(mainRoot686d, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686d + '/n1', headSha686d]);
 
-    const listRefs686d = (prefix) => execFS686d('git', ['-C', mainRoot686d, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
+    const listRefs686d = (prefix) => G.exec(mainRoot686d, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
     const beforeSweep686d = listRefs686d('refs/kaola-workflow/barrier/' + w2LiveProj + '/');
     assert(beforeSweep686d === 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1',
       '#686 R4 fixture: the w2-only live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686d));
@@ -3289,7 +3285,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(tmp686f, 'README.md'), 'fixture\n');
     g686f(tmp686f, ['add', 'README.md']);
     g686f(tmp686f, ['commit', '-m', 'init']);
-    const headSha686f = execFS686f('git', ['-C', tmp686f, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
+    const headSha686f = G.exec(tmp686f, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
 
     // A genuinely dead (no-folder-anywhere) tag — deleted in normal operation, but must SURVIVE
     // when the worktree-list enumeration itself is forced to fail.
@@ -3308,7 +3304,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     assert(Array.isArray(out686f.refsDeleted) && out686f.refsDeleted.length === 0,
       '#686 R4 fail-closed: an enumeration failure must delete NOTHING, got refsDeleted=' + JSON.stringify(out686f.refsDeleted));
 
-    const afterSweep686f = execFS686f('git', ['-C', tmp686f, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + deadProj686f + '/'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
+    const afterSweep686f = G.exec(tmp686f, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + deadProj686f + '/'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
     assert(afterSweep686f === 'refs/kaola-workflow/barrier/' + deadProj686f + '/n1',
       '#686 R4 fail-closed: even a genuinely dead tag must SURVIVE an enumeration-failure abort (delete nothing beats delete-the-wrong-thing), got ' + JSON.stringify(afterSweep686f));
   } finally {
@@ -3345,7 +3341,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(tmp686e, 'README.md'), 'fixture\n');
     g686e(tmp686e, ['add', 'README.md']);
     g686e(tmp686e, ['commit', '-m', 'init']);
-    const headSha686e = execFS686e('git', ['-C', tmp686e, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
+    const headSha686e = G.exec(tmp686e, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
 
     // Live folder dirent: lowercase `issue-9`.
     const liveProj686e = 'issue-9';
@@ -3362,7 +3358,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     try { out686e = JSON.parse(String(run686e.stdout || '').trim().split('\n').pop()); } catch (_) {}
     assert(run686e.status === 0, '#686 R5: barrier-ref-sweep must exit 0, got status=' + run686e.status + ' stdout=' + run686e.stdout + ' stderr=' + run686e.stderr);
 
-    const afterSweep686e = execFS686e('git', ['-C', tmp686e, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
+    const afterSweep686e = G.exec(tmp686e, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
     assert(afterSweep686e === 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/n1',
       '#686 R5: a wrong-case ref tag (`Issue-9`) whose live folder dirent differs only in case (`issue-9`) must be KEPT under case-folded comparison, got ' + JSON.stringify(afterSweep686e) +
       ' tagsKept=' + JSON.stringify(out686e.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686e.tagsDeleted));
@@ -3406,7 +3402,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(mainRoot686g, 'README.md'), 'fixture\n');
     g686g(mainRoot686g, ['add', 'README.md']);
     g686g(mainRoot686g, ['commit', '-m', 'init']);
-    const headSha686g = execFS686g('git', ['-C', mainRoot686g, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
+    const headSha686g = G.exec(mainRoot686g, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
 
     // A worktree path whose final path SEGMENT contains a literal embedded newline.
     nlPath686g = mainRoot686g + '-wt-a' + '\n' + 'wt-b';
@@ -3420,7 +3416,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
     g686g(mainRoot686g, ['update-ref', 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1', headSha686g]);
 
-    const listRefs686g = (prefix) => execFS686g('git', ['-C', mainRoot686g, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
+    const listRefs686g = (prefix) => G.exec(mainRoot686g, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
     const beforeSweep686g = listRefs686g('refs/kaola-workflow/barrier/' + nlLiveProj + '/');
     assert(beforeSweep686g === 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1',
       '#686 R6 fixture: the embedded-newline-worktree live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686g));
@@ -3473,7 +3469,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(mainRoot686h, 'README.md'), 'fixture\n');
     g686h(mainRoot686h, ['add', 'README.md']);
     g686h(mainRoot686h, ['commit', '-m', 'init']);
-    const headSha686h = execFS686h('git', ['-C', mainRoot686h, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
+    const headSha686h = G.exec(mainRoot686h, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
 
     // A worktree path with a meaningful trailing space.
     const trailPath686h = path.join(mainRoot686h + '.kw', 'issue-686trail ');
@@ -3488,7 +3484,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
     g686h(mainRoot686h, ['update-ref', 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1', headSha686h]);
 
-    const listRefs686h = (prefix) => execFS686h('git', ['-C', mainRoot686h, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
+    const listRefs686h = (prefix) => G.exec(mainRoot686h, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
     const beforeSweep686h = listRefs686h('refs/kaola-workflow/barrier/' + trailLiveProj + '/');
     assert(beforeSweep686h === 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1',
       '#686 R7 fixture: the trailing-space-worktree live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686h));
@@ -3548,7 +3544,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       fs.writeFileSync(path.join(mainRoot686i, 'README.md'), 'fixture\n');
       g686i(mainRoot686i, ['add', 'README.md']);
       g686i(mainRoot686i, ['commit', '-m', 'init']);
-      const headSha686i = execFS686i('git', ['-C', mainRoot686i, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
+      const headSha686i = G.exec(mainRoot686i, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
 
       // A LIVE SEQUENCE-run project: workflow-state.md present but UNREADABLE (chmod 000), and
       // deliberately NO .cache/running-set.json — the state file is its SOLE keep signal.
@@ -3564,7 +3560,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       const deadProj686i = 'issue-686chmoddead';
       g686i(mainRoot686i, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686i + '/n1', headSha686i]);
 
-      const listRefs686i = (prefix) => execFS686i('git', ['-C', mainRoot686i, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
+      const listRefs686i = (prefix) => G.exec(mainRoot686i, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
       const beforeSweep686i = listRefs686i('refs/kaola-workflow/barrier/' + liveProj686i + '/');
       assert(beforeSweep686i === 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1',
         '#686 R8a fixture: the chmod-000-state-file live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686i));
@@ -3615,7 +3611,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(mainRoot686j, 'README.md'), 'fixture\n');
     g686j(mainRoot686j, ['add', 'README.md']);
     g686j(mainRoot686j, ['commit', '-m', 'init']);
-    const headSha686j = execFS686j('git', ['-C', mainRoot686j, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
+    const headSha686j = G.exec(mainRoot686j, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
 
     // A LIVE SEQUENCE-run project: workflow-state.md is a DIRECTORY (EISDIR), and deliberately no
     // .cache/running-set.json — the state file is its SOLE keep signal.
@@ -3627,7 +3623,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     const deadProj686j = 'issue-686eisdirdead';
     g686j(mainRoot686j, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686j + '/n1', headSha686j]);
 
-    const listRefs686j = (prefix) => execFS686j('git', ['-C', mainRoot686j, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
+    const listRefs686j = (prefix) => G.exec(mainRoot686j, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
     const beforeSweep686j = listRefs686j('refs/kaola-workflow/barrier/' + liveProj686j + '/');
     assert(beforeSweep686j === 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1',
       '#686 R8b fixture: the EISDIR-state-file live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686j));
@@ -3689,7 +3685,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       fs.writeFileSync(path.join(mainRoot691, 'README.md'), 'fixture\n');
       g691(mainRoot691, ['add', 'README.md']);
       g691(mainRoot691, ['commit', '-m', 'init']);
-      const headSha691 = execFS691('git', ['-C', mainRoot691, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
+      const headSha691 = G.exec(mainRoot691, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
 
       // A LIVE SEQUENCE-run project whose PROJECT DIRECTORY (not just the state file) is chmod 000:
       // workflow-state.md is live INSIDE it, but traversing into the directory itself is denied
@@ -3715,7 +3711,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       fs.mkdirSync(path.join(mainRoot691, 'kaola-workflow', enoentProj691), { recursive: true });
       g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + enoentProj691 + '/n1', headSha691]);
 
-      const listRefs691 = (prefix) => execFS691('git', ['-C', mainRoot691, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
+      const listRefs691 = (prefix) => G.exec(mainRoot691, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
       const beforeSweep691 = listRefs691('refs/kaola-workflow/barrier/' + liveProj691 + '/');
       assert(beforeSweep691 === 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1',
         '#691 fixture: the chmod-000-project-directory live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep691));
@@ -3820,14 +3816,14 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       && /^first_node_role: none$/m.test(persisted),
     '#699: a fresh epoch-1 claim persists the complete legal planless authority tuple');
 
-    execFileSync('git', ['-C', noHistoryRoot699, 'init', '-b', 'main'], { env: env699, stdio: ['ignore', 'ignore', 'pipe'] });
+    G.exec(noHistoryRoot699, ['init', '-b', 'main'], { env: env699, stdio: ['ignore', 'ignore', 'pipe'] });
     fs.writeFileSync(path.join(noHistoryRoot699, 'untracked.txt'), 'candidate\n');
     const noHistory = buildClaimAnchors(noHistoryRoot699, {
       project: 'issue-700', issue_number: 700, issue_numbers: [700], branch: 'workflow/issue-700',
       worktree_path: noHistoryRoot699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
       session_marker: 'claim-test-no-history'
     });
-    const emptyTree = execFileSync('git', ['-C', noHistoryRoot699, 'hash-object', '-t', 'tree', '--stdin'], {
+    const emptyTree = G.exec(noHistoryRoot699, ['hash-object', '-t', 'tree', '--stdin'], {
       input: '', encoding: 'utf8', env: env699, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
     assert(/^0{40}$/.test(noHistory.claim_root_base_commit)
       && noHistory.claim_root_base_tree === emptyTree
@@ -4233,12 +4229,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
       GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
     });
-    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    G.exec(tmpDir, ['init', '-b', 'main'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.email', 't@t'], { stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.name', 'T'], { stdio: 'ignore' });
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
-    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['add', 'README.md'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['commit', '-m', 'init'], { env: gitEnv, stdio: 'ignore' });
 
     const destRel = 'kaola-workflow/archive/issue-801.discarded-2026-01-01';
     fs.mkdirSync(path.join(tmpDir, destRel), { recursive: true });
@@ -4285,20 +4281,20 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
       GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
     });
-    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    G.exec(tmpDir, ['init', '-b', 'main'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.email', 't@t'], { stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.name', 'T'], { stdio: 'ignore' });
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
-    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['add', 'README.md'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['commit', '-m', 'init'], { env: gitEnv, stdio: 'ignore' });
 
     const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-909.discarded-x');
     fs.mkdirSync(dest, { recursive: true });
     fs.writeFileSync(path.join(dest, 'workflow-state.md'), 'state\n');
 
     // Off-base checkout → the helper refuses BEFORE staging: tip unchanged, residue on disk.
-    execFileSync('git', ['checkout', '-b', 'workflow/other-lane'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    const tipBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    G.exec(tmpDir, ['checkout', '-b', 'workflow/other-lane'], { env: gitEnv, stdio: 'ignore' });
+    const tipBefore = G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const off = commitDiscardArchive({ archived: true, dest: dest }, 'issue-909', 'main');
     assert(off && off.committed === false,
       '#715 F1: the helper refuses to commit the discard archive on a non-base branch, got ' + JSON.stringify(off));
@@ -4306,20 +4302,19 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#715 F1: the refusal discloses the current (non-receiving) branch, got ' + JSON.stringify(off));
     assert(off && typeof off.detail === 'string' && off.detail.includes('main') && off.detail.includes('workflow/other-lane'),
       '#715 F1: the refusal detail names both the current and the surviving base branch, got ' + JSON.stringify(off));
-    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === tipBefore,
+    assert(G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === tipBefore,
       '#715 F1: a refused commit leaves the non-base branch tip unchanged');
     assert(fs.existsSync(dest),
       '#715 F1: a refused commit leaves the archive on disk as recoverable residue');
 
     // On-base checkout → the helper commits and discloses the receiving branch.
-    execFileSync('git', ['checkout', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['checkout', 'main'], { env: gitEnv, stdio: 'ignore' });
     const on = commitDiscardArchive({ archived: true, dest: dest }, 'issue-909', 'main');
     assert(on && on.committed === true,
       '#715 F1: the helper commits the discard archive on the base branch, got ' + JSON.stringify(on));
     assert(on && on.branch === 'main',
       '#715 F1: the success path discloses the receiving branch, got ' + JSON.stringify(on));
-    const atHead = execFileSync('git', ['cat-file', '-t', 'HEAD:kaola-workflow/archive/issue-909.discarded-x'],
-      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const atHead = G.exec(tmpDir, ['cat-file', '-t', 'HEAD:kaola-workflow/archive/issue-909.discarded-x'], { encoding: 'utf8' }).trim();
     assert(atHead === 'tree',
       '#715 F1: the committed archive is a tree at the base HEAD, got ' + JSON.stringify(atHead));
   } finally {
@@ -4349,12 +4344,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
       GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
     });
-    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    G.exec(tmpDir, ['init', '-b', 'main'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.email', 't@t'], { stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.name', 'T'], { stdio: 'ignore' });
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
-    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['add', 'README.md'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['commit', '-m', 'init'], { env: gitEnv, stdio: 'ignore' });
 
     const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-910.discarded-x');
     fs.mkdirSync(dest, { recursive: true });
@@ -4366,29 +4361,28 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       { discardedBranch: 'workflow/issue-910', defaultBase: 'main' });
     assert(on && on.committed === true && on.branch === 'main',
       '#715 N5-A/N5-B: the honest on-base path still commits and discloses the receiving branch, got ' + JSON.stringify(on));
-    assert(execFileSync('git', ['cat-file', '-t', 'main:kaola-workflow/archive/issue-910.discarded-x'],
-      { cwd: tmpDir, encoding: 'utf8' }).trim() === 'tree',
+    assert(G.exec(tmpDir, ['cat-file', '-t', 'main:kaola-workflow/archive/issue-910.discarded-x'], { encoding: 'utf8' }).trim() === 'tree',
       '#715 N5-B: the honest commit is a tree at the base ref');
-    const anc = require('child_process').spawnSync('git', ['-C', tmpDir, 'merge-base', '--is-ancestor', 'HEAD', 'main']);
+    const anc = G.git(tmpDir, ['merge-base', '--is-ancestor', 'HEAD', 'main']);
     assert(anc.status === 0,
       '#715 N5-B: the honest archive commit is reachable from the base ref (merge-base --is-ancestor HEAD main)');
 
     // (a) Detached checkout + base='HEAD' (the sentinel): refused outright, nothing committed.
-    execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    const detachedTip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    G.exec(tmpDir, ['checkout', '--detach', 'HEAD'], { env: gitEnv, stdio: 'ignore' });
+    const detachedTip = G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const sentinel = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'HEAD');
     assert(sentinel && sentinel.committed === false,
       '#715 N5-A: the guard must reject the detached-HEAD sentinel as a base outright, got ' + JSON.stringify(sentinel));
     assert(sentinel && sentinel.branch === 'HEAD',
       '#715 N5-A: the sentinel refusal discloses the (non-receiving) detached HEAD, got ' + JSON.stringify(sentinel));
-    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === detachedTip,
+    assert(G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === detachedTip,
       '#715 N5-A: a sentinel-refused commit leaves the detached HEAD tip unchanged');
     assert(fs.existsSync(dest),
       '#715 N5-A: a sentinel-refused commit leaves the archive on disk as recoverable residue');
 
     // (c-release) Base naming the branch the release discards (call-site-supplied discardedBranch).
-    execFileSync('git', ['checkout', '-b', 'workflow/issue-910'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    const featTip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    G.exec(tmpDir, ['checkout', '-b', 'workflow/issue-910'], { env: gitEnv, stdio: 'ignore' });
+    const featTip = G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const discarded = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'workflow/issue-910',
       { discardedBranch: 'workflow/issue-910' });
     assert(discarded && discarded.committed === false,
@@ -4396,7 +4390,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     assert(discarded && discarded.branch === 'workflow/issue-910' &&
       typeof discarded.detail === 'string' && discarded.detail.includes('workflow/issue-910'),
       '#715 N5-A: the discarded-branch refusal discloses the current branch and names the base, got ' + JSON.stringify(discarded));
-    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === featTip,
+    assert(G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === featTip,
       '#715 N5-A: a discarded-branch refusal happens BEFORE staging (tip unchanged)');
 
     // (b) Base naming no real local branch (falsified durable state): refused via rev-parse --verify.
@@ -4414,7 +4408,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#715 N5-A: the guard must refuse a base naming the current non-default lane at the sweep posture, got ' + JSON.stringify(lane));
     assert(lane && lane.branch === 'workflow/issue-910',
       '#715 N5-A: the arbitrary-lane refusal discloses the current (non-receiving) lane, got ' + JSON.stringify(lane));
-    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === featTip,
+    assert(G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === featTip,
       '#715 N5-A: an arbitrary-lane refusal happens BEFORE staging (tip unchanged)');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -4440,15 +4434,15 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
       GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
     });
-    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    G.exec(tmpDir, ['init', '-b', 'main'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.email', 't@t'], { stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.name', 'T'], { stdio: 'ignore' });
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
-    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['add', 'README.md'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['commit', '-m', 'init'], { env: gitEnv, stdio: 'ignore' });
     // Pre-create the race branch at main's tip so the interleave has somewhere to land.
-    execFileSync('git', ['branch', 'race', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    const mainTip = execFileSync('git', ['rev-parse', 'main'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    G.exec(tmpDir, ['branch', 'race', 'main'], { env: gitEnv, stdio: 'ignore' });
+    const mainTip = G.exec(tmpDir, ['rev-parse', 'main'], { encoding: 'utf8' }).trim();
 
     const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-910.discarded-x');
     fs.mkdirSync(dest, { recursive: true });
@@ -4482,10 +4476,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#715 N5-B: a HEAD re-point during the commit must downgrade to committed:false, got ' + JSON.stringify(raced));
     assert(raced && raced.branch === 'race',
       '#715 N5-B: the downgrade discloses the ACTUAL receiving branch (race), never the stale pre-race base, got ' + JSON.stringify(raced));
-    assert(execFileSync('git', ['rev-parse', 'main'], { cwd: tmpDir, encoding: 'utf8' }).trim() === mainTip,
+    assert(G.exec(tmpDir, ['rev-parse', 'main'], { encoding: 'utf8' }).trim() === mainTip,
       '#715 N5-B: the base ref tip is unchanged by the raced commit');
-    const onRace = execFileSync('git', ['cat-file', '-t', 'race:kaola-workflow/archive/issue-910.discarded-x'],
-      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const onRace = G.exec(tmpDir, ['cat-file', '-t', 'race:kaola-workflow/archive/issue-910.discarded-x'], { encoding: 'utf8' }).trim();
     assert(onRace === 'tree',
       '#715 N5-B: the off-base commit stays recoverable on the actual receiving branch, got ' + JSON.stringify(onRace));
   } finally {
@@ -4516,9 +4509,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
       GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
     });
-    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    G.exec(tmpDir, ['init', '-b', 'main'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.email', 't@t'], { stdio: 'ignore' });
+    G.exec(tmpDir, ['config', 'user.name', 'T'], { stdio: 'ignore' });
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
 
     // The consumer repo TRACKS the active folder (the live-run precondition).
@@ -4527,12 +4520,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(src, 'workflow-state.md'), 'state\n');
     fs.writeFileSync(path.join(src, 'workflow-plan.md'), 'plan\n');
     fs.writeFileSync(path.join(src, '.cache', 'n1.md'), 'evidence\n');
-    execFileSync('git', ['add', '-A'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
-    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['add', '-A'], { env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['commit', '-m', 'init'], { env: gitEnv, stdio: 'ignore' });
 
     // Unrelated dirt that must survive the pathspec-scoped commit byte-untouched.
     fs.writeFileSync(path.join(tmpDir, 'staged-dirt.txt'), 'staged\n');
-    execFileSync('git', ['add', 'staged-dirt.txt'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['add', 'staged-dirt.txt'], { env: gitEnv, stdio: 'ignore' });
     fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture modified\n');
 
     // The archive move itself (archiveProjectDir's in-place branch): pure filesystem rename.
@@ -4543,23 +4536,20 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     const moved = commitDiscardArchive({ archived: true, dest: dest }, 'proj-x', 'main');
     assert(moved && moved.committed === true,
       '#749 R2: the helper commits the complete archive move when the source folder is tracked, got ' + JSON.stringify(moved));
-    assert(execFileSync('git', ['cat-file', '-t', 'HEAD:kaola-workflow/archive/proj-x.discarded-x'],
-      { cwd: tmpDir, encoding: 'utf8' }).trim() === 'tree',
+    assert(G.exec(tmpDir, ['cat-file', '-t', 'HEAD:kaola-workflow/archive/proj-x.discarded-x'], { encoding: 'utf8' }).trim() === 'tree',
       '#749 R2: the archive destination is a tree at HEAD after the commit');
-    const srcAtHead = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'kaola-workflow/proj-x'],
-      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const srcAtHead = G.exec(tmpDir, ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'kaola-workflow/proj-x'], { encoding: 'utf8' }).trim();
     assert(srcAtHead === '',
       '#749 R2: committed:true must imply the tracked SOURCE folder is gone at HEAD, still present: ' + JSON.stringify(srcAtHead));
-    const scoped = execFileSync('git', ['status', '--porcelain', '--', 'kaola-workflow'],
-      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const scoped = G.exec(tmpDir, ['status', '--porcelain', '--', 'kaola-workflow'], { encoding: 'utf8' }).trim();
     assert(scoped === '',
       '#749 R2: no kaola-workflow-scoped residue survives the discard-archive commit, got ' + JSON.stringify(scoped));
     // Unrelated dirt untouched: staged-dirt.txt still STAGED (never committed), README still unstaged.
-    assert(execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: tmpDir, encoding: 'utf8' }).trim() === 'staged-dirt.txt',
+    assert(G.exec(tmpDir, ['diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim() === 'staged-dirt.txt',
       '#749 R2: the pathspec-scoped commit leaves unrelated STAGED dirt staged and uncommitted');
-    assert(execFileSync('git', ['diff', '--name-only'], { cwd: tmpDir, encoding: 'utf8' }).trim() === 'README.md',
+    assert(G.exec(tmpDir, ['diff', '--name-only'], { encoding: 'utf8' }).trim() === 'README.md',
       '#749 R2: the pathspec-scoped commit leaves unrelated UNSTAGED dirt unstaged');
-    const headFiles = execFileSync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' });
+    const headFiles = G.exec(tmpDir, ['show', '--name-only', '--format=', 'HEAD'], { encoding: 'utf8' });
     assert(!headFiles.includes('staged-dirt.txt'),
       '#749 R2: unrelated staged dirt is NOT swept into the discard-archive commit, got ' + JSON.stringify(headFiles));
 
@@ -5741,20 +5731,20 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     return path.join(projDir825(issueN), '.cache', 'origin', 'selection-record.json');
   }
   function branchesFor825(issueN) {
-    const r = spawnS825('git', ['-C', repo825, 'branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' });
+    const r = G.git(repo825, ['branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' });
     return String(r.stdout || '').trim();
   }
   function cleanup825(issueN) {
     try { fs.rmSync(projDir825(issueN), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(repo825, 'kaola-workflow', '.origin'), { recursive: true, force: true }); } catch (_) {}
-    try { spawnS825('git', ['-C', repo825, 'checkout', '-f', 'master'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
-    try { spawnS825('git', ['-C', repo825, 'checkout', '-f', 'main'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
-    for (const b of String(spawnS825('git', ['-C', repo825, 'branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' }).stdout || '')
+    try { G.git(repo825, ['checkout', '-f', 'master'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    try { G.git(repo825, ['checkout', '-f', 'main'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    for (const b of String(G.git(repo825, ['branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' }).stdout || '')
       .split('\n').map(s => s.replace(/^[*+ ]+/, '').trim()).filter(Boolean)) {
-      try { spawnS825('git', ['-C', repo825, 'worktree', 'remove', '--force', path.join(repo825, '..', b)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
-      try { spawnS825('git', ['-C', repo825, 'branch', '-D', b], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+      try { G.git(repo825, ['worktree', 'remove', '--force', path.join(repo825, '..', b)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+      try { G.git(repo825, ['branch', '-D', b], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
     }
-    try { spawnS825('git', ['-C', repo825, 'worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    try { G.git(repo825, ['worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
   }
   // A refusal must leave NOTHING behind: no project folder, no branch, no record, no .origin fold.
   function assertZeroWrite825(issueN, label, r) {
@@ -5962,9 +5952,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     }
   } finally {
     try {
-      for (const b of String(spawnS825('git', ['-C', repo825, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout || '')
+      for (const b of String(G.git(repo825, ['worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout || '')
         .split('\n').filter(l => l.startsWith('worktree ')).map(l => l.slice(9).trim())) {
-        if (b !== repo825) { try { spawnS825('git', ['-C', repo825, 'worktree', 'remove', '--force', b], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} }
+        if (b !== repo825) { try { G.git(repo825, ['worktree', 'remove', '--force', b], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} }
       }
     } catch (_) {}
     fs.rmSync(repo825, { recursive: true, force: true });

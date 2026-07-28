@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 // Contract test for install-all.sh — the one entrypoint that reinstalls all four
 // runtime editions. Two jobs:
 //   1. GUARD: assert install-all.sh references every runtime installer, checked in
@@ -285,6 +293,7 @@ function runWrapper(rootOrStub, args, extraEnv) {
   const root = isStub ? rootOrStub.root : rootOrStub;
   const codexBin = isStub ? rootOrStub.codexBin : path.join(root, 'no-such-codex-cli');
   const started = Date.now();
+  // spawn-class: environment
   const r = spawnSync('bash', [INSTALL_ALL].concat(args), {
     cwd: REPO, encoding: 'utf8',
     env: Object.assign({}, process.env, {

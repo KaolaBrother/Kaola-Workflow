@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 
 // Regression for #154: re-running install.sh over a pre-#153 install (concrete
 // agent frontmatter + manifest recording the concrete hash) must rewrite each
@@ -36,6 +44,7 @@ function sha256(buf) {
 // Returns stdout+stderr COMBINED: the traversal guard reports rejected manifest
 // entries on stderr, and a test that only read stdout could not see them.
 function runInstall(home) {
+  // spawn-class: environment
   const r = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'], {
     cwd: root,
     env: { ...process.env, HOME: home },

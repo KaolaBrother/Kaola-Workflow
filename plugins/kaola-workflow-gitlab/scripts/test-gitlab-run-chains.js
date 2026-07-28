@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 'use strict';
+// Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
+// file destructures child_process so the counted wrappers are what it binds. Advisory,
+// pass-through and fail-open: the require itself is guarded, so a census that is absent
+// or faulty can change no assertion and fail no run.
+try { require('./test-spawn-census').install('test-gitlab-run-chains'); } catch (_) { /* advisory only */ }
 
 // Standalone failing-path tests for kaola-gitlab-workflow-run-chains.js (#550).
 //

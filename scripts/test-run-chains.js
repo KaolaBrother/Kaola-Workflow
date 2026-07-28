@@ -116,6 +116,9 @@ function makeSelfKillScript(dir, name, signal) {
 // line ~13, before this patch runs) — a fresh Node process has its own, unpatched `child_process`
 // module, entirely unaffected by anything mutated in THIS process's module cache.
 const childProcessModule = require('child_process');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const realSpawnSync = childProcessModule.spawnSync;
 const realSpawn = childProcessModule.spawn;
 const SIGNAL_DEATH_MARKER = '__kaola_test_signal_death__';
@@ -287,7 +290,7 @@ try {
   const rc5 = r5.receipt;
   assert(rc5 !== null, 'T5: receipt written');
   if (rc5 !== null) {
-    const realHead = execFileSync('git', ['-C', repo5, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const realHead = G.exec(repo5, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     assert(rc5.headSha === realHead, 'T5: headSha in receipt matches git rev-parse HEAD');
   }
 } finally {
@@ -975,15 +978,15 @@ try {
     // classifies this repo as chain-receipt (self-host), not the consumer final-validation.md path.
     fs.writeFileSync(path.join(repo29, 'package.json'), JSON.stringify({ scripts: {
       'test:kaola-workflow:claude': 'true' } }) + '\n');
-    execFileSync('git', ['-C', repo29, 'add', 'package.json'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', repo29, 'commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
+    G.exec(repo29, ['add', 'package.json'], { encoding: 'utf8' });
+    G.exec(repo29, ['commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
     const proj = path.join(repo29, 'kaola-workflow', 'issue-618');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, '# plan\n');
-    execFileSync('git', ['-C', repo29, 'add', '-A'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', repo29, 'commit', '-m', 'plan'], { encoding: 'utf8' });
-    const headSha = execFileSync('git', ['-C', repo29, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    G.exec(repo29, ['add', '-A'], { encoding: 'utf8' });
+    G.exec(repo29, ['commit', '-m', 'plan'], { encoding: 'utf8' });
+    const headSha = G.exec(repo29, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
     fs.writeFileSync(path.join(proj, '.cache', 'chain-receipt.json'), JSON.stringify({ headSha, chains: [] }));
     const r = spawnSync(process.execPath, [PLAN_VALIDATOR, planPath, '--finalize-check', '--json'],

@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 'use strict';
+// Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
+// file destructures child_process so the counted wrappers are what it binds. Advisory,
+// pass-through and fail-open: the require itself is guarded, so a census that is absent
+// or faulty can change no assertion and fail no run.
+try { require('./test-spawn-census').install('simulate-gitlab-workflow-walkthrough'); } catch (_) { /* advisory only */ }
 
 const { execFileSync } = require('child_process');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -205,21 +213,21 @@ function testGitlabSinkRefusesLingeringLaneGroup() {
   const lingering = JSON.stringify({ state: 'open', nodes: [{ id: 'B', role: 'tdd-guide' }], lane_group: { group_id: 'lane-9552', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9552/A' }, B: { legPath: '.kw/legs/issue-9552/B' } } } }, null, 2);
   try {
     glInitGitRepo(tmp);
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-9552'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9552'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    spawnSync('git', ['add', 'feature.txt'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'feat: issue 9552'], { cwd: tmp, encoding: 'utf8' });
-    spawnSync('git', ['checkout', 'main'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', 'feature.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: issue 9552'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
     // RED (live location): a lingering lane_group blocks the sink, main unchanged.
     const liveCache = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
     fs.mkdirSync(liveCache, { recursive: true });
     fs.writeFileSync(path.join(liveCache, 'running-set.json'), lingering);
-    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     const r1 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
     assert.notStrictEqual(r1.status, 0, 'gitlab #552: sink must refuse (exit non-zero) on a lingering lane_group, got status ' + r1.status);
     const p1 = JSON.parse(String(r1.stdout || '').trim().split('\n').pop());
     assert.strictEqual(p1.reason, 'lingering_lane_group', 'gitlab #552: typed refusal lingering_lane_group, got ' + JSON.stringify(p1));
-    assert.strictEqual(spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim(), mainBefore, 'gitlab #552: main must NOT advance');
+    assert.strictEqual(G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim(), mainBefore, 'gitlab #552: main must NOT advance');
     // RED (archive location): dual-location read also fires.
     fs.rmSync(liveCache, { recursive: true, force: true });
     const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9552', '.cache');
@@ -984,12 +992,12 @@ function testGitlabAdaptiveFreezeChecked() {
 // ===========================================================================
 
 function glInitGitRepo(tmp) {
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+  G.git(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+  G.git(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+  G.git(tmp, ['add', 'README.md'], { encoding: 'utf8' });
+  G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
 }
 
 function glPlantRoadmapIssue(tmp, n) {
@@ -1600,9 +1608,9 @@ function testSinkMrUsesFinalizationSummary() {
   const sinkMrScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sink-mr-fin-'));
   try {
-    execFileSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-    execFileSync('git', ['-C', tmp, 'config', 'user.email', 'test@example.com'], { encoding: 'utf8', stdio: 'pipe' });
-    execFileSync('git', ['-C', tmp, 'config', 'user.name', 'Test User'], { encoding: 'utf8', stdio: 'pipe' });
+    G.exec(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.exec(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8', stdio: 'pipe' });
+    G.exec(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8', stdio: 'pipe' });
     const kwDir = path.join(tmp, 'kaola-workflow', 'issue-2830');
     fs.mkdirSync(kwDir, { recursive: true });
     fs.writeFileSync(path.join(kwDir, 'workflow-state.md'), [
@@ -1618,8 +1626,8 @@ function testSinkMrUsesFinalizationSummary() {
     ].join('\n'));
     // Plant finalization-summary.md (the new canonical file)
     fs.writeFileSync(path.join(kwDir, 'finalization-summary.md'), '# Finalization Summary\n');
-    execFileSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', stdio: 'pipe' });
-    execFileSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { encoding: 'utf8', stdio: 'pipe' });
+    G.exec(tmp, ['add', '-A'], { encoding: 'utf8', stdio: 'pipe' });
+    G.exec(tmp, ['commit', '-m', 'initial'], { encoding: 'utf8', stdio: 'pipe' });
 
     const result = spawnSync(process.execPath, [
       sinkMrScript,
@@ -1764,9 +1772,9 @@ function testGitlabAcceptanceSurface() {
   // (c) the bounded-repair fence, over the real gitlab handoff CLI in a real repo.
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-acceptfence-')));
   try {
-    spawnSync('git', ['init', '-b', 'main'], { cwd: repo, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.email', 't@example.com'], { cwd: repo, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.name', 'T'], { cwd: repo, encoding: 'utf8' });
+    G.git(repo, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.git(repo, ['config', 'user.email', 't@example.com'], { encoding: 'utf8' });
+    G.git(repo, ['config', 'user.name', 'T'], { encoding: 'utf8' });
     const project = 'issue-acceptance-gl';
     const dir = path.join(repo, 'kaola-workflow', project);
     fs.mkdirSync(dir, { recursive: true });
@@ -1834,9 +1842,7 @@ function testGitlabFinalizeArchiveVerifiesBeforeDelete() {
     glInitGitRepo(tmp);
     const wtPath = path.join(kwRoot, 'issue-426gl');
     fs.mkdirSync(kwRoot, { recursive: true });
-    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-426gl', '--', wtPath, 'HEAD'], {
-      cwd: tmp, encoding: 'utf8'
-    });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-426gl', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     // Project dir with NO workflow-state.md.
     const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426gl');
     fs.mkdirSync(projDir, { recursive: true });
@@ -1855,7 +1861,7 @@ function testGitlabFinalizeArchiveVerifiesBeforeDelete() {
       'gitlab #426: malformed source (no workflow-state.md) must fail the epoch-authority preflight before copy/delete, got: ' + JSON.stringify(result));
     console.log('testGitlabFinalizeArchiveVerifiesBeforeDelete: PASSED');
   } finally {
-    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -2168,7 +2174,7 @@ function testGitlabBundle424432433NodeSeeding() {
 
     const grepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-433seed-'));
     glInitGitRepo(grepo);
-    spawnSync('git', ['checkout', '-b', 'workflow/issue-433-seed-gl'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-433-seed-gl'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-433-seed-gl');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -2177,8 +2183,8 @@ function testGitlabBundle424432433NodeSeeding() {
     const fz = spawnSync(process.execPath, [pvScript, planPath, '--freeze'],
       { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     assert.strictEqual(fz.status, 0, 'gitlab #433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
-    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'frozen plan'], { cwd: grepo, encoding: 'utf8' });
+    G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'frozen plan'], { encoding: 'utf8' });
     const cacheDir = path.join(proj, '.cache');
 
     try {

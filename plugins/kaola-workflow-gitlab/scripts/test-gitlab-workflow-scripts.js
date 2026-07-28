@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 'use strict';
+// Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
+// file destructures child_process so the counted wrappers are what it binds. Advisory,
+// pass-through and fail-open: the require itself is guarded, so a census that is absent
+// or faulty can change no assertion and fail no run.
+try { require('./test-spawn-census').install('test-gitlab-workflow-scripts'); } catch (_) { /* advisory only */ }
 
 const assert = require('assert');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -382,14 +390,14 @@ function writeGlabShimForStale(binDir) {
 }
 
 function initGitRepo(root) {
-  let result = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' });
+  let result = G.git(root, ['init'], { encoding: 'utf8' });
   assert.strictEqual(result.status, 0, result.stderr);
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: root, encoding: 'utf8' });
+  G.git(root, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+  G.git(root, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
   fs.writeFileSync(path.join(root, 'README.md'), '# fixture\n');
-  result = spawnSync('git', ['add', 'README.md'], { cwd: root, encoding: 'utf8' });
+  result = G.git(root, ['add', 'README.md'], { encoding: 'utf8' });
   assert.strictEqual(result.status, 0, result.stderr);
-  result = spawnSync('git', ['commit', '-m', 'init'], { cwd: root, encoding: 'utf8' });
+  result = G.git(root, ['commit', '-m', 'init'], { encoding: 'utf8' });
   assert.strictEqual(result.status, 0, result.stderr);
 }
 
@@ -1215,17 +1223,17 @@ withForge({
     initGitRepo(root);
     // #725: the adaptive finalize gate diffs against the default base branch (`main` when offline),
     // so name the fixture's default branch `main` before adding the worktrees.
-    spawnSync('git', ['branch', '-M', 'main'], { cwd: root, encoding: 'utf8' });
+    G.git(root, ['branch', '-M', 'main'], { encoding: 'utf8' });
     const wtRelease = path.join(kwRoot, 'release-project');
     fs.mkdirSync(path.dirname(wtRelease), { recursive: true });
-    let result = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-70', '--', wtRelease, 'HEAD'], { cwd: root, encoding: 'utf8' });
+    let result = G.git(root, ['worktree', 'add', '-b', 'workflow/gitlab-issue-70', '--', wtRelease, 'HEAD'], { encoding: 'utf8' });
     assert.strictEqual(result.status, 0, result.stderr);
     writeState(root, 'release-project', 70, 'worktree_path: ' + wtRelease);
     runNode([claimScript, 'release', '--project', 'release-project', '--reason', 'test'], root);
     assert(!fs.existsSync(wtRelease), 'GitLab release should remove linked worktree');
 
     const wtFinalize = path.join(kwRoot, 'finalize-project');
-    result = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-71', '--', wtFinalize, 'HEAD'], { cwd: root, encoding: 'utf8' });
+    result = G.git(root, ['worktree', 'add', '-b', 'workflow/gitlab-issue-71', '--', wtFinalize, 'HEAD'], { encoding: 'utf8' });
     assert.strictEqual(result.status, 0, result.stderr);
     writeState(root, 'finalize-project', 71, 'worktree_path: ' + wtFinalize);
     // This fixture validates worktree retention and archive movement, not the
@@ -1725,7 +1733,7 @@ withForge({
     const linkedWt = path.join(fs.realpathSync(tmp), '.kw', 'worktrees', 'issue-5');
     fs.mkdirSync(linkedWt, { recursive: true });
     // Create a worktree so git knows about it
-    spawnSync('git', ['worktree', 'add', '--detach', linkedWt], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', '--detach', linkedWt], { encoding: 'utf8' });
 
     // Provide a glab shim so the classifier doesn't fail-close on forge error
     const binDir100 = path.join(tmp, 'bin100');
@@ -1770,7 +1778,7 @@ function testStaleWorktreeCheck() {
   }
 
   function addWorktree(repoRoot, branch, wtPath) {
-    const r = spawnSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+    const r = G.git(repoRoot, ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     assert.strictEqual(r.status, 0, 'git worktree add failed: ' + r.stderr);
   }
 
@@ -1790,7 +1798,7 @@ function testStaleWorktreeCheck() {
         'issue 200 should not be in stale_branches');
       assert(result.count >= 1, 'count should be >= 1');
     } finally {
-      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(kwRoot, { recursive: true, force: true });
     }
@@ -1810,7 +1818,7 @@ function testStaleWorktreeCheck() {
       assert(result.stale_worktrees.some(x => x.issue_number === 300),
         'expected issue 300 in stale_worktrees (archived), got: ' + JSON.stringify(result));
     } finally {
-      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(kwRoot, { recursive: true, force: true });
     }
@@ -1832,7 +1840,7 @@ function testStaleWorktreeCheck() {
       assert(!result.stale_worktrees.some(x => x.issue_number === 100),
         'issue 100 should not be in stale_worktrees');
     } finally {
-      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(kwRoot, { recursive: true, force: true });
     }
@@ -1866,7 +1874,7 @@ function testStaleWorktreeCheck() {
     const kwRoot = tmp + '.kw';
     const binDir = path.join(tmp, 'bin');
     writeGlabShimForStale(binDir);
-    spawnSync('git', ['branch', 'workflow/gitlab-issue-400'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['branch', 'workflow/gitlab-issue-400'], { encoding: 'utf8' });
     try {
       const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
       assert(result.stale_branches.some(x => x.issue_number === 400),
@@ -1897,7 +1905,7 @@ function testStaleWorktreeCheck() {
       assert(out.stale_worktrees.some(x => x.issue_number === 300),
         'expected issue 300 stale in OFFLINE+archive mode, got: ' + JSON.stringify(out));
     } finally {
-      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(kwRoot, { recursive: true, force: true });
     }
@@ -2169,8 +2177,8 @@ function testInstallProfilesFeaturesTableHandling() {
     initGitRepo(root);
     // Commit a .gitignore so the bin/ shim + kaola-workflow/ folder don't dirty the tree
     fs.writeFileSync(path.join(root, '.gitignore'), 'bin149/\nkaola-workflow/\n.kw/\n');
-    spawnSync('git', ['add', '.gitignore'], { cwd: root, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: root, encoding: 'utf8' });
+    G.git(root, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(root, ['commit', '-m', 'add gitignore'], { encoding: 'utf8' });
     const binDir149 = path.join(root, 'bin149');
     fs.mkdirSync(binDir149, { recursive: true });
     writeShimFiles(path.join(binDir149, 'glab'), [
@@ -2189,9 +2197,9 @@ function testInstallProfilesFeaturesTableHandling() {
     const out = JSON.parse(r.stdout.trim().split('\n').pop());
     assert.strictEqual(out.worktree_path, '', 'worktree_path empty when KAOLA_WORKTREE_NATIVE=0');
     // #260: in-place branch must be created and checked out
-    const headBranch = spawnSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const headBranch = G.git(root, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert.strictEqual(headBranch, 'workflow/gitlab-issue-601', 'NATIVE=0 must checkout in-place branch workflow/gitlab-issue-601, got: ' + headBranch);
-    const treeStatus = spawnSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    const treeStatus = G.git(root, ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
     assert.strictEqual(treeStatus, '', 'tree must be clean after in-place claim (all untracked entries gitignored), got: ' + JSON.stringify(treeStatus));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -2299,7 +2307,7 @@ withForge({
 
 function testStaleWorktreeCleanup() {
   function addWorktree(repoRoot, branch, wtPath) {
-    const r = spawnSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+    const r = G.git(repoRoot, ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     assert.strictEqual(r.status, 0, 'git worktree add failed: ' + r.stderr);
   }
 
@@ -2389,7 +2397,7 @@ function testStaleWorktreeCleanup() {
       assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
         'sc4: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
       assert(!fs.existsSync(wtPath), 'sc4: worktree dir must be removed after archive+execute');
-      const stashResult = spawnSync('git', ['-C', tmp, 'stash', 'list'], { encoding: 'utf8' });
+      const stashResult = G.git(tmp, ['stash', 'list'], { encoding: 'utf8' });
       assert(stashResult.stdout.includes('kaola-cleanup-issue-200'),
         'sc4: stash list must contain kaola-cleanup-issue-200, got: ' + stashResult.stdout);
     } finally {
@@ -2467,7 +2475,7 @@ function testStaleWorktreeCleanup() {
         'sc7: deleted_branch must be empty with --keep-branch, got: ' + JSON.stringify(out.deleted_branch));
       assert(!fs.existsSync(wtPath), 'sc7: worktree dir must be removed');
       // Branch must still exist
-      const branchCheck = spawnSync('git', ['-C', tmp, 'rev-parse', '--verify', 'refs/heads/workflow/gitlab-issue-200'], { encoding: 'utf8' });
+      const branchCheck = G.git(tmp, ['rev-parse', '--verify', 'refs/heads/workflow/gitlab-issue-200'], { encoding: 'utf8' });
       assert.strictEqual(branchCheck.status, 0, 'sc7: branch workflow/gitlab-issue-200 must still exist, got: ' + branchCheck.stderr);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -3415,9 +3423,7 @@ function testGitlabLegacyWorktreeCleanupDryRun() {
     const legacyContainer = path.dirname(mainRoot) + path.sep + path.basename(mainRoot) + '.kw';
     const legacyWt = path.join(legacyContainer, 'issue-264-legacy');
     fs.mkdirSync(legacyWt, { recursive: true });
-    const addResult = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-264-legacy', '--', legacyWt, 'HEAD'], {
-      cwd: root, encoding: 'utf8'
-    });
+    const addResult = G.git(root, ['worktree', 'add', '-b', 'workflow/gitlab-issue-264-legacy', '--', legacyWt, 'HEAD'], { encoding: 'utf8' });
     assert.strictEqual(addResult.status, 0, 'git worktree add failed: ' + addResult.stderr);
     try {
       const dryRun = spawnSync(process.execPath, [claimScript, 'legacy-worktree-cleanup'], {
@@ -3435,7 +3441,7 @@ function testGitlabLegacyWorktreeCleanupDryRun() {
         'Option B: legacy-worktree-cleanup dry-run must NOT emit would_delete_branch, got: ' + JSON.stringify(out));
       console.log('testGitlabLegacyWorktreeCleanupDryRun: PASSED');
     } finally {
-      spawnSync('git', ['worktree', 'remove', '--force', legacyWt], { cwd: root, encoding: 'utf8' });
+      G.git(root, ['worktree', 'remove', '--force', legacyWt], { encoding: 'utf8' });
       try { fs.rmSync(legacyContainer, { recursive: true, force: true }); } catch (_) {}
     }
   } finally {
@@ -4912,7 +4918,7 @@ function testGitlabReplanEditionContract699() {
 
   const fenceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-gitlab-fence-')));
   try {
-    spawnSync('git', ['init', '-q'], { cwd: fenceRoot, encoding: 'utf8' });
+    G.git(fenceRoot, ['init', '-q'], { encoding: 'utf8' });
     const project = 'issue-n5-gitlab-fence';
     const projectDir = path.join(fenceRoot, 'kaola-workflow', project);
     const cacheDir = path.join(projectDir, '.cache');

@@ -32,6 +32,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 
 // #531/#770: hermetic HOME. The classifier reads parallel_mode from
 // ~/.config/kaola-workflow/config.json (os.homedir()). Pin a sandbox HOME seeded with the
@@ -73,12 +76,12 @@ function makeTmpRoot() {
 }
 
 function initGitRepo(tmp) {
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+  G.git(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+  G.git(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+  G.git(tmp, ['add', 'README.md'], { encoding: 'utf8' });
+  G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
 }
 
 // Write a roadmap file for an issue so OFFLINE classify returns green (not target_unverified).
@@ -778,8 +781,8 @@ function readState(tmpRoot, project) {
     writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 47] });
     // treeDirty includes untracked files (same gate as claimProject) — commit the fixture so the
     // in-place dirty-gate sees a clean tree.
-    spawnSync('git', ['-C', tmpRoot, 'add', '-A'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'fixture'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['commit', '-m', 'fixture'], { encoding: 'utf8' });
     const result = runClaim(
       ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive'],
       tmpRoot, binDir, { KAOLA_WORKTREE_NATIVE: '0' }
@@ -789,7 +792,7 @@ function readState(tmpRoot, project) {
     const state = readState(tmpRoot, 'bundle-42-47');
     assert(/^run_posture:\s*in-place\s*$/m.test(state || ''), '#370 in-place: state records run_posture: in-place');
     assert(/^base_branch:\s*main\s*$/m.test(state || ''), '#370 in-place: state records base_branch: main');
-    const cur = spawnSync('git', ['-C', tmpRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const cur = G.git(tmpRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     assert(cur === out.branch, '#370 in-place: HEAD is on the created bundle branch ' + out.branch + ', got ' + cur);
   } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
 })();

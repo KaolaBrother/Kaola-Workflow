@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 'use strict';
+// Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
+// file destructures child_process so the counted wrappers are what it binds. Advisory,
+// pass-through and fail-open: the require itself is guarded, so a census that is absent
+// or faulty can change no assertion and fail no run.
+try { require('./test-spawn-census').install('test-gitea-sinks'); } catch (_) { /* advisory only */ }
 
 const assert = require('assert');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -135,11 +143,11 @@ function setupRealRepo(name, project) {
 function setupRealRepoWithBareRemote(name, project) {
   const { root, branch } = setupRealRepo(name, project);
   const remotePath = root + '-remote';
-  execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
-  execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: root, encoding: 'utf8' });
-  execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
-  execFileSync('git', ['push', '-u', 'origin', branch], { cwd: root, encoding: 'utf8' });
-  execFileSync('git', ['branch', '--set-upstream-to=origin/' + branch, branch], { cwd: root, encoding: 'utf8' });
+  G.execRaw(['init', '--bare', remotePath], { encoding: 'utf8' });
+  G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
+  G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+  G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
+  G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
   return { root, branch, remotePath };
 }
 
@@ -542,7 +550,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
     encoding: 'utf8'
   });
   assert(result.status === 0, `success-path test: expected exit code 0, got ${result.status}. stderr: ${result.stderr}`);
-  const branchList = execFileSync('git', ['branch', '--list', branch], { cwd: root, encoding: 'utf8' });
+  const branchList = G.exec(root, ['branch', '--list', branch], { encoding: 'utf8' });
   assert(branchList.trim() === '', `success-path test: expected feature branch '${branch}' to be deleted`);
   assert(fs.existsSync(cwdFile), 'success-path test: KAOLA_WORKFLOW_DEBUG_CWD file not written');
   const cwdContents = fs.readFileSync(cwdFile, 'utf8').trim();
@@ -674,7 +682,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   const sinkPrScript = path.join(__dirname, 'kaola-gitea-workflow-sink-pr.js');
   const { root, branch } = setupRealRepo('offline-gt-pr-test', 'test-gt-offline-pr');
 
-  const branchBefore = execFileSync('git', ['branch', '--list', branch], { cwd: root, encoding: 'utf8' });
+  const branchBefore = G.exec(root, ['branch', '--list', branch], { encoding: 'utf8' });
   assert(branchBefore.trim() !== '', `offline-pr test: branch '${branch}' must exist before test`);
 
   const result = spawnSync(process.execPath, [
@@ -707,7 +715,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   assert(summary.includes('PR URL: OFFLINE_PLACEHOLDER'), `offline-pr test: summary must include 'PR URL: OFFLINE_PLACEHOLDER'`);
   assert(summary.includes('PR Number: 0'), `offline-pr test: summary must include 'PR Number: 0'`);
 
-  const log = execFileSync('git', ['log', '--oneline', '-1'], { cwd: root, encoding: 'utf8' }).trim();
+  const log = G.exec(root, ['log', '--oneline', '-1'], { encoding: 'utf8' }).trim();
   assert(log.includes('chore: record PR metadata for test-gt-offline-pr'),
     `offline-pr test: expected metadata commit in git log, got: ${log}`);
 
@@ -754,7 +762,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   const project = 'test-gt-wt-dirty';
   const { root, branch } = setupRealRepo('wt-dirty-gt-test', project);
   const wtPath = path.join(path.dirname(root), path.basename(root) + '-linked-wt');
-  execFileSync('git', ['-C', root, 'worktree', 'add', wtPath, branch], { encoding: 'utf8' });
+  G.exec(root, ['worktree', 'add', wtPath, branch], { encoding: 'utf8' });
   fs.writeFileSync(path.join(wtPath, 'feature.md'), 'precious uncommitted edit');
   const result = spawnSync(process.execPath, [sinkScript, '--project', project, '--branch', branch], {
     cwd: root,
@@ -766,7 +774,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
     `#346 wt-dirty: expected the linked-worktree-dirty refusal, got: ${result.stderr}`);
   assert(fs.existsSync(wtPath) && fs.readFileSync(path.join(wtPath, 'feature.md'), 'utf8') === 'precious uncommitted edit',
     '#346 wt-dirty: a refused sink MUST leave the worktree + its uncommitted change intact (zero destruction)');
-  execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+  G.exec(root, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
   console.log('#346 worktree-dirty preserves-worktree subprocess test passed');
 }
 
@@ -832,7 +840,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
     git('commit', '-m', 'init');
     // Create linked worktree with new branch directly (branch must not be checked out in mainRoot first)
     fs.mkdirSync(kwRoot, { recursive: true });
-    execFileSync('git', ['worktree', 'add', '-b', 'workflow/test-kw-proj', wtPath, 'main'], { cwd: mainRoot, encoding: 'utf8' });
+    G.exec(mainRoot, ['worktree', 'add', '-b', 'workflow/test-kw-proj', wtPath, 'main'], { encoding: 'utf8' });
     // Commit workflow state in linked worktree (simulates worktree-finalize)
     const projDir = path.join(wtPath, 'kaola-workflow', 'test-kw-proj');
     fs.mkdirSync(projDir, { recursive: true });
@@ -844,8 +852,8 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
       'worktree_path: ' + wtPath, ''
     ].join('\n'));
     seedAdaptiveFinalizeFixture(wtPath, 'test-kw-proj');
-    execFileSync('git', ['add', 'kaola-workflow/'], { cwd: wtPath, encoding: 'utf8' });
-    execFileSync('git', ['commit', '-m', 'chore: finalize test-kw-proj'], { cwd: wtPath, encoding: 'utf8' });
+    G.exec(wtPath, ['add', 'kaola-workflow/'], { encoding: 'utf8' });
+    G.exec(wtPath, ['commit', '-m', 'chore: finalize test-kw-proj'], { encoding: 'utf8' });
     // Also set up main worktree with the live folder
     const mainProjDir = path.join(mainRoot, 'kaola-workflow', 'test-kw-proj');
     fs.mkdirSync(mainProjDir, { recursive: true });
@@ -862,7 +870,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
     assert(finResult.status === 0,
       'finalize --keep-worktree should exit 0\nstdout: ' + finResult.stdout + '\nstderr: ' + finResult.stderr);
     // Feature branch HEAD must have archive path, not live path
-    const lsTree = execFileSync('git', ['ls-tree', '--name-only', '-r', 'workflow/test-kw-proj'], { cwd: mainRoot, encoding: 'utf8' });
+    const lsTree = G.exec(mainRoot, ['ls-tree', '--name-only', '-r', 'workflow/test-kw-proj'], { encoding: 'utf8' });
     assert(!lsTree.includes('kaola-workflow/test-kw-proj/'),
       'feature branch HEAD must not have live folder after finalize --keep-worktree, got:\n' + lsTree);
     // #832: the archive resolves against MAIN's project root regardless of invocation cwd, so it
@@ -874,7 +882,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
       '#832: main must hold the archive after finalize --keep-worktree');
     console.log('finalize --keep-worktree commits archive rename (Gitea): PASSED');
   } finally {
-    try { execFileSync('git', ['worktree', 'remove', '--force', wtPath], { cwd: mainRoot, encoding: 'utf8' }); } catch (_) {}
+    try { G.exec(mainRoot, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(mainRoot, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -1076,7 +1084,7 @@ console.log('Gitea keep-open (#336) tests passed');
       git('branch', branch); git('checkout', branch);
       fs.writeFileSync(path.join(root, 'DELIVERABLE3.txt'), 'deliverable3'); git('add', '-A'); git('commit', '-m', 'feat: deliverable3');
       git('checkout', 'main');
-      const branchHead = execFileSync('git', ['rev-parse', branch], { cwd: root, encoding: 'utf8' }).trim();
+      const branchHead = G.exec(root, ['rev-parse', branch], { encoding: 'utf8' }).trim();
       // Mid-cycle receipt: preflight+push_upstream done, merge pending, branch_head = actual tip
       const midCycleReceipt = JSON.stringify({
         project, branch, issue_number: 9484, issue_numbers: [9484], resolved_default_branch: 'main',
@@ -1128,11 +1136,11 @@ process.exit(0);
     git('commit', '-m', 'feat: fix\n\nCloses #9517');
     git('checkout', 'main');
     const remotePath = root + '-remote';
-    execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
-    execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: root, encoding: 'utf8' });
-    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
-    execFileSync('git', ['push', '-u', 'origin', branch], { cwd: root, encoding: 'utf8' });
-    execFileSync('git', ['branch', '--set-upstream-to=origin/' + branch, branch], { cwd: root, encoding: 'utf8' });
+    G.execRaw(['init', '--bare', remotePath], { encoding: 'utf8' });
+    G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
+    G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+    G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
+    G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
     const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--issue', '9517', '--project', project, '--keep-issue-open', '--sink'], {
       cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_TEA_MOCK_SCRIPT: mockTeaPath }
     });
@@ -1166,15 +1174,15 @@ console.log('Gitea #517 reopen-after-autoclose tests passed');
     const wt = path.join(path.dirname(root), path.basename(root) + '-linked-wt');
     try {
       seedArchiveFinalization(root, project);
-      execFileSync('git', ['-C', root, 'worktree', 'add', wt, branch], { encoding: 'utf8' });
-      const before = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      G.exec(root, ['worktree', 'add', wt, branch], { encoding: 'utf8' });
+      const before = G.exec(root, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
       const r = spawnSync(process.execPath, [sinkScript, '--project', project, '--branch', branch, '--root', root], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL: '1' }, encoding: 'utf8' });
       assert.notStrictEqual(r.status, 0, '#496-gitea: an unprovable worktree-clean probe must refuse (fail closed), got status ' + r.status + '\nstderr: ' + r.stderr);
       assert.ok(/(could not|cannot) (be )?verif|unprovable/i.test(r.stderr || ''), '#496-gitea: refusal must name the unverifiable-clean cause, got: ' + r.stderr);
       assert.ok(fs.existsSync(wt), '#496-gitea: a probe-fault refusal must NOT remove the worktree');
-      assert.strictEqual(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), before, '#496-gitea: main must NOT advance on a probe-fault refusal');
+      assert.strictEqual(G.exec(root, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), before, '#496-gitea: main must NOT advance on a probe-fault refusal');
     } finally {
-      try { execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
+      try { G.exec(root, ['worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
@@ -1187,15 +1195,15 @@ console.log('Gitea #517 reopen-after-autoclose tests passed');
     const wt = path.join(path.dirname(root), path.basename(root) + '-list-wt');
     try {
       seedArchiveFinalization(root, project);
-      execFileSync('git', ['-C', root, 'worktree', 'add', wt, branch], { encoding: 'utf8' });
-      const before = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      G.exec(root, ['worktree', 'add', wt, branch], { encoding: 'utf8' });
+      const before = G.exec(root, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
       const r = spawnSync(process.execPath, [sinkScript, '--project', project, '--branch', branch, '--root', root], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' }, encoding: 'utf8' });
       assert.notStrictEqual(r.status, 0, '#506-gitea: an unprovable worktree-list probe must refuse (fail closed), got status ' + r.status + '\nstderr: ' + r.stderr);
       assert.ok(/worktree list|enumerate worktree/i.test(r.stderr || ''), '#506-gitea: refusal must name the worktree-list cause, got: ' + r.stderr);
       assert.ok(fs.existsSync(wt), '#506-gitea: a list-probe-fault refusal must NOT remove the worktree');
-      assert.strictEqual(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), before, '#506-gitea: main must NOT advance on a list-probe-fault refusal');
+      assert.strictEqual(G.exec(root, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), before, '#506-gitea: main must NOT advance on a list-probe-fault refusal');
     } finally {
-      try { execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
+      try { G.exec(root, ['worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
@@ -1213,7 +1221,7 @@ console.log('Gitea #517 reopen-after-autoclose tests passed');
       const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
       git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
       fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-      execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+      G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
       git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
       git('branch', branch); git('checkout', branch);
       fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
@@ -1254,7 +1262,7 @@ console.log('Gitea #517 reopen-after-autoclose tests passed');
       const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
       git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
       fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-      execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+      G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
       git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
       git('branch', branch); git('checkout', branch);
       fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
@@ -1312,10 +1320,7 @@ console.log('Gitea #496/#497/#506 fail-closed sink guard tests passed');
     const p520 = JSON.parse(String(r.stdout || '').trim().split('\n').pop());
     assert.strictEqual(p520.journal_disposed, true, '#653-gitea: a terminally successful sink must report journal_disposed:true, got ' + JSON.stringify(p520));
     // Journals must NOT be tracked in git after --sink
-    const lsFiles = spawnSync('git', ['-C', root, 'ls-files',
-      'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json',
-      'kaola-workflow/archive/' + project + '/.cache/sink-fallback.json'
-    ], { encoding: 'utf8' }).stdout.trim();
+    const lsFiles = G.git(root, ['ls-files', 'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json', 'kaola-workflow/archive/' + project + '/.cache/sink-fallback.json'], { encoding: 'utf8' }).stdout.trim();
     assert.strictEqual(lsFiles, '', '#520-gitea: sink journals must NOT be tracked in git after --sink; got: ' + lsFiles);
     // #653: the receipt must be GONE from disk after terminal success (it exists on disk only for
     // crash-resume; a completed sink disposes of it itself).
@@ -1352,7 +1357,7 @@ console.log('Gitea #520 journal-exclusion from archive_commit: PASSED');
     fs.writeFileSync(path.join(root, 'package.json'),
       JSON.stringify({ name: 'consumer-product', version: '1.0.0', scripts: { test: 'echo unrelated-consumer-suite' } }, null, 2) + '\n');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base + consumer package.json');
-    execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', remotePath], { encoding: 'utf8' });
     git('remote', 'add', 'origin', remotePath); git('push', '-u', 'origin', 'main');
     git('checkout', '-b', branch);
     fs.writeFileSync(path.join(root, 'feat.md'), 'feat'); git('add', '-A'); git('commit', '-m', 'feat: impl 9548');
@@ -1360,16 +1365,16 @@ console.log('Gitea #520 journal-exclusion from archive_commit: PASSED');
     git('checkout', 'main');
     // Advance origin/main via a clone, then fetch so the local origin/main tracking ref moves ahead
     // → alreadyUpToDate is false in the --sink transaction (no Step-1 fetch on that path).
-    execFileSync('git', ['clone', remotePath, clone], { encoding: 'utf8' });
+    G.execRaw(['clone', remotePath, clone], { encoding: 'utf8' });
     // The clone is a separate repo and inherits no identity under the hermetic HOME — give it one
     // (mirrors the `root` config above) so the concurrent-advance commit doesn't fail status 128.
-    execFileSync('git', ['-C', clone, 'config', 'user.email', 't@t'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', clone, 'config', 'user.name', 't'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { encoding: 'utf8' });
+    G.exec(clone, ['config', 'user.email', 't@t'], { encoding: 'utf8' });
+    G.exec(clone, ['config', 'user.name', 't'], { encoding: 'utf8' });
+    G.exec(clone, ['checkout', '-B', 'main', 'origin/main'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
-    execFileSync('git', ['-C', clone, 'add', '-A'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', clone, 'push', 'origin', 'main'], { encoding: 'utf8' });
+    G.exec(clone, ['add', '-A'], { encoding: 'utf8' });
+    G.exec(clone, ['commit', '-m', 'concurrent main advance'], { encoding: 'utf8' });
+    G.exec(clone, ['push', 'origin', 'main'], { encoding: 'utf8' });
     git('fetch', 'origin');
     const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', project, '--sink', '--json'], {
       cwd: root, encoding: 'utf8',
@@ -1429,7 +1434,7 @@ console.log('Gitea #548 consumer-aware test-gate: PASSED');
     const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
     git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-    execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
     git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
     git('branch', branch); git('checkout', branch);
     fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
@@ -1529,12 +1534,12 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
 
     const wtPath620 = path.join(kwRoot620, 'issue-96205');
     fs.mkdirSync(kwRoot620, { recursive: true });
-    execFileSync('git', ['-C', root620, 'worktree', 'add', '-b', branch620, '--', wtPath620, 'HEAD'], { encoding: 'utf8' });
+    G.exec(root620, ['worktree', 'add', '-b', branch620, '--', wtPath620, 'HEAD'], { encoding: 'utf8' });
     // Commit new work INSIDE the worktree — never merged into main.
     fs.writeFileSync(path.join(wtPath620, 'unmerged-feature.txt'), 'the only copy of this work\n');
-    execFileSync('git', ['-C', wtPath620, 'add', '-A'], { encoding: 'utf8' });
-    execFileSync('git', ['-C', wtPath620, 'commit', '-m', 'feat: unmerged work'], { encoding: 'utf8' });
-    const unmergedTip620 = execFileSync('git', ['-C', wtPath620, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    G.exec(wtPath620, ['add', '-A'], { encoding: 'utf8' });
+    G.exec(wtPath620, ['commit', '-m', 'feat: unmerged work'], { encoding: 'utf8' });
+    const unmergedTip620 = G.exec(wtPath620, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 
     fs.writeFileSync(mockScript620, [
       "const a = process.argv.slice(2).join(' ');",
@@ -1553,11 +1558,11 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
 
     let branchSurvived620 = false, tipReachable620 = false;
     try {
-      execFileSync('git', ['-C', root620, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branch620], { stdio: ['ignore', 'pipe', 'ignore'] });
+      G.exec(root620, ['rev-parse', '--verify', '--quiet', 'refs/heads/' + branch620], { stdio: ['ignore', 'pipe', 'ignore'] });
       branchSurvived620 = true;
     } catch (_) {}
     try {
-      execFileSync('git', ['-C', root620, 'cat-file', '-e', unmergedTip620], { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(root620, ['cat-file', '-e', unmergedTip620], { stdio: ['ignore', 'ignore', 'ignore'] });
       tipReachable620 = true;
     } catch (_) {}
     assert.ok(branchSurvived620,
@@ -1594,13 +1599,13 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
     fs.writeFileSync(path.join(root631, 'feat.txt'), 'impl');
     git631('add', '-A');
     git631('commit', '-m', 'feat: impl');
-    const staleBranchHead631 = execFileSync('git', ['-C', root631, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const staleBranchHead631 = G.exec(root631, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     git631('checkout', 'main');
 
     fs.writeFileSync(path.join(root631, 'published.txt'), 'landed');
     git631('add', '-A');
     git631('commit', '-m', 'feat: published');
-    const publishedHead631 = execFileSync('git', ['-C', root631, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+    const publishedHead631 = G.exec(root631, ['rev-parse', 'main'], { encoding: 'utf8' }).trim();
     assert.notStrictEqual(staleBranchHead631, publishedHead631, '#631 (Gitea) fixture: branch_head and published_head must differ');
 
     const archiveCacheDir631 = path.join(root631, 'kaola-workflow', 'archive', project631, '.cache');
@@ -1668,7 +1673,7 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
     git('checkout', 'main');
     if (withWorktreeEvidence) {
       const wtPath = path.join(root, '.kw', 'worktrees', project);
-      execFileSync('git', ['-C', root, 'worktree', 'add', wtPath, branch], { encoding: 'utf8' });
+      G.exec(root, ['worktree', 'add', wtPath, branch], { encoding: 'utf8' });
       const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
       fs.mkdirSync(wtCache, { recursive: true });
       fs.writeFileSync(path.join(wtCache, 'n1-impl.md'), 'worktree evidence n1\n');
@@ -1694,7 +1699,7 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
         '#707-gitea-a: the worktree .cache evidence must be archived, archive .cache holds: '
         + JSON.stringify((() => { try { return fs.readdirSync(path.join(root, archRel, '.cache')); } catch (_) { return '<none>'; } })()));
       let committed = false;
-      try { committed = execFileSync('git', ['-C', root, 'cat-file', '-t', 'HEAD:' + archRel + '/.cache/n1-impl.md'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'blob'; } catch (_) {}
+      try { committed = G.exec(root, ['cat-file', '-t', 'HEAD:' + archRel + '/.cache/n1-impl.md'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'blob'; } catch (_) {}
       assert.ok(committed, '#707-gitea-a: the archived evidence must be committed at HEAD');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }

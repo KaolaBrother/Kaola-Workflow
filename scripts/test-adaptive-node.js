@@ -170,6 +170,9 @@ function assert(condition, message) {
 // `--shard i/N` runs a disjoint stride of it in a worker process. WITHOUT --shard every
 // scenario runs, in file order — a bare `node scripts/test-adaptive-node.js` is unchanged.
 const shardLib = require('./test-shard-lib');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const SHARD = shardLib.selector(process.argv);
 let scenarioCount = 0;
 let scenariosRun = 0;
@@ -1819,11 +1822,11 @@ scenario(() => {
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-682', 'workflow-state.md'), 'active-one\n');
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'other-project', 'state.md'), 'other-one\n');
     fs.writeFileSync(path.join(tmp, '.gitignore'), '.kw/\n');
-    execFixtureFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore' });
-    execFixtureFileSync('git', ['config', 'user.email', 'kw@test'], { cwd: tmp });
-    execFixtureFileSync('git', ['config', 'user.name', 'kw'], { cwd: tmp });
-    execFixtureFileSync('git', ['add', '-A'], { cwd: tmp });
-    execFixtureFileSync('git', ['commit', '-m', 'base'], { cwd: tmp, stdio: 'ignore' });
+    G.exec(tmp, ['init'], { stdio: 'ignore' });
+    G.exec(tmp, ['config', 'user.email', 'kw@test']);
+    G.exec(tmp, ['config', 'user.name', 'kw']);
+    G.exec(tmp, ['add', '-A']);
+    G.exec(tmp, ['commit', '-m', 'base'], { stdio: 'ignore' });
     // #683: the candidate is now a TRIPLE (whole-tree digest + declared blob map + residue digest). The
     // whole-tree `digest` field keeps its exact pre-#683 meaning and is what these assertions pin.
     const declaredUnion683 = new Set(['code.js']);
@@ -5185,7 +5188,7 @@ function writeLegAwareEvidence(cacheDir, id, role, extraLines) {
     ? running.lane_group.legs[id]
     : null;
   if (leg && leg.legPath) {
-    const root = execFixtureFileSync('git', ['-C', cacheDir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+    const root = G.exec(cacheDir, ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
     evidencePath = path.join(leg.legPath,
       path.relative(fs.realpathSync(root), fs.realpathSync(cacheDir)), id + '.md');
   }
@@ -11856,11 +11859,11 @@ scenario(() => {
     const planPath = path.join(projectDir, 'workflow-plan.md');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(tmp, 'product.js'), 'module.exports = 1;\n');
-    execFixtureFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore' });
-    execFixtureFileSync('git', ['config', 'user.email', 'kw@test'], { cwd: tmp });
-    execFixtureFileSync('git', ['config', 'user.name', 'kw'], { cwd: tmp });
-    execFixtureFileSync('git', ['add', '-A'], { cwd: tmp });
-    execFixtureFileSync('git', ['commit', '-m', 'base'], { cwd: tmp, stdio: 'ignore' });
+    G.exec(tmp, ['init'], { stdio: 'ignore' });
+    G.exec(tmp, ['config', 'user.email', 'kw@test']);
+    G.exec(tmp, ['config', 'user.name', 'kw']);
+    G.exec(tmp, ['add', '-A']);
+    G.exec(tmp, ['commit', '-m', 'base'], { stdio: 'ignore' });
     const lineage = 'a'.repeat(64);
     const frontier = 'b'.repeat(64);
     fs.writeFileSync(planPath, [
@@ -12323,9 +12326,9 @@ scenario(() => {
       '| r2 | in_progress |', '| r3 | in_progress |', '| finalize | pending |', '',
     ].join('\n'));
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
-    execFileSync('git', ['-C', repoRoot, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
-    execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'kw@test']);
-    execFileSync('git', ['-C', repoRoot, 'config', 'user.name', 'kw']);
+    G.exec(repoRoot, ['init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['config', 'user.email', 'kw@test']);
+    G.exec(repoRoot, ['config', 'user.name', 'kw']);
     freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, stdio: ['ignore', 'ignore', 'ignore'] });
     fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({
       state: 'opening', max_concurrent: 2,
@@ -12334,8 +12337,8 @@ scenario(() => {
         { id: 'r3', role: 'code-explorer', kind: 'read', model: 'standard', wait_budget_minutes: 300, wait_budget_source: 'planner_override', baseline: 'recorded', opening: true },
       ],
     }, null, 2));
-    execFileSync('git', ['-C', repoRoot, 'add', '-A']);
-    execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['add', '-A']);
+    G.exec(repoRoot, ['commit', '-m', 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
     const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], ON);
     const rs = readRS(cacheDir);
     assert(rec.result === 'ok' && rs.nodes.map(n => n.id).join(',') === 'r2,r3', '#655-MIXED-READ: exact stable r2 + opening r3 retained');
@@ -12598,9 +12601,7 @@ scenario(() => {
   }
   function groupBaselineRefExists678(repoRoot, project, groupId) {
     try {
-      execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet',
-        'refs/kaola-workflow/barrier/' + project + '/' + groupId.replace(/[^A-Za-z0-9_-]/g, '_') + '^{commit}'],
-        { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(repoRoot, ['rev-parse', '--verify', '--quiet', 'refs/kaola-workflow/barrier/' + project + '/' + groupId.replace(/[^A-Za-z0-9_-]/g, '_') + '^{commit}'], { stdio: ['ignore', 'ignore', 'ignore'] });
       return true;
     } catch (_) { return false; }
   }
@@ -12850,10 +12851,10 @@ scenario(() => {
   // -------------------------------------------------------------------------
   scenario(() => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-666-enobufs-'));
-    execFileSync('git', ['-C', repoRoot, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
-    execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'kw@test']);
-    execFileSync('git', ['-C', repoRoot, 'config', 'user.name', 'kw']);
-    execFileSync('git', ['-C', repoRoot, 'config', 'commit.gpgsign', 'false']);
+    G.exec(repoRoot, ['init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['config', 'user.email', 'kw@test']);
+    G.exec(repoRoot, ['config', 'user.name', 'kw']);
+    G.exec(repoRoot, ['config', 'commit.gpgsign', 'false']);
     // 4200 empty files with a 196-char name each puts the `ls-tree -r` listing at ~1.05 MB — just
     // past Node's 1 MB default maxBuffer, not far past (fast to build: well under a second).
     const bigDir = path.join(repoRoot, 'bigdir');
@@ -12884,11 +12885,11 @@ scenario(() => {
   // Read `git worktree list --porcelain` at a repo and return the set of worktree paths.
   function worktreePaths(repoRoot) {
     let out = '';
-    try { out = execFileSync('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch (_) { return []; }
+    try { out = G.exec(repoRoot, ['worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch (_) { return []; }
     return String(out).split('\n').filter(l => l.indexOf('worktree ') === 0).map(l => l.slice('worktree '.length).trim());
   }
   function branchExists(repoRoot, branch) {
-    try { execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branch], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    try { G.exec(repoRoot, ['rev-parse', '--verify', '--quiet', 'refs/heads/' + branch], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
     catch (_) { return false; }
   }
   function timingsHas(cacheDir, id, event) {
@@ -13188,7 +13189,7 @@ scenario(() => {
     assert(r.result === 'ok' && r.laneGroup, 'LEG-ORPHAN-SWEEP: setup co-open ok');
     // Manually provision an orphan leg under the same band with no running-set member.
     const orphanPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'orphan');
-    execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/orphan', '--', orphanPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['worktree', 'add', '-b', 'kw/legs/test-project/orphan', '--', orphanPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
     assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'orphan'))), 'LEG-ORPHAN-SWEEP: orphan provisioned for the test');
     const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
     assert(rec.result === 'ok', 'LEG-ORPHAN-SWEEP: reconcile ok, got ' + JSON.stringify(rec));
@@ -13211,11 +13212,11 @@ scenario(() => {
     const node = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
     const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
     const legBranch = 'kw/legs/test-project/A';
-    const base = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const base = G.exec(repoRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const first = node.provisionLeg(repoRoot, legPath, legBranch, base);
     assert(first.ok, 'LEG-DANGLING-BRANCH-REUSE: first provision ok');
     // Remove the worktree but leave the branch dangling (the swallowed `branch -D` scenario).
-    execFileSync('git', ['-C', repoRoot, 'worktree', 'remove', '--force', legPath], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['worktree', 'remove', '--force', legPath], { stdio: ['ignore', 'ignore', 'ignore'] });
     assert(branchExists(repoRoot, legBranch), 'LEG-DANGLING-BRANCH-REUSE: branch dangles after worktree-only removal');
     const second = node.provisionLeg(repoRoot, legPath, legBranch, base);
     assert(second.ok && second.reusedBranch, 'LEG-DANGLING-BRANCH-REUSE: re-provision REUSES the dangling branch (no wedge), got ' + JSON.stringify(second));
@@ -13289,7 +13290,7 @@ scenario(() => {
     const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], DEFAULT);
     assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
       '#593-AC1: B closes via the group (octopus-merge) union barrier ⇒ group_passed + synthesized, got ' + JSON.stringify(rB));
-    const head = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    const head = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
     assert(head.includes(COARSE_A) && head.includes(COARSE_B),
       '#593-AC1: BOTH legs\' files reach HEAD after the union barrier merge, got ' + JSON.stringify(head.split('\n').filter(Boolean)));
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', '#593-AC1: both members complete');
@@ -13370,7 +13371,7 @@ scenario(() => {
       '#552-CRASH-WINDOW-LEDGER-ISLAST: B synthesizes + merges (no silent loss), got ' + JSON.stringify(rB));
     // The commit-union group barrier (group_passed) already enforces per-leg-head ancestor inclusion for
     // BOTH legs; cross-check concretely that A's committed leg file reached HEAD (the no-loss invariant).
-    const head1 = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    const head1 = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
     assert(head1.includes('ax.js') && head1.includes('by.js'),
       '#552-CRASH-WINDOW-LEDGER-ISLAST: BOTH legs\' files on HEAD after synthesis (ax.js from the crash-window member), got ' + JSON.stringify(head1.split('\n').filter(Boolean)));
     cleanup(repoRoot);
@@ -13417,7 +13418,7 @@ scenario(() => {
     const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
     assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
       '#552-CRASH-WINDOW-RECONCILE-HEAL: B group_passed + synthesized after the healed reconcile, got ' + JSON.stringify(rB));
-    const head2 = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    const head2 = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
     assert(head2.includes('ax.js') && head2.includes('by.js'),
       '#552-CRASH-WINDOW-RECONCILE-HEAL: BOTH legs\' files on HEAD (A leg retained through reconcile), got ' + JSON.stringify(head2.split('\n').filter(Boolean)));
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', '#552-CRASH-WINDOW-RECONCILE-HEAL: both complete');
@@ -13458,7 +13459,7 @@ scenario(() => {
     const { repoRoot, cacheDir } = makeLaneRepo();
     // Plant a leg directly (simulating a leftover) without any running set.
     const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
-    execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
     try { fs.unlinkSync(path.join(cacheDir, 'running-set.json')); } catch (_) {}
     const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], SERIAL); // kill-switch suppresses the sweep
     assert(rec.result === 'ok', 'LEG-CRASH-LOST-MANIFEST-SERIAL: reconcile ok, got ' + JSON.stringify(rec));
@@ -13572,13 +13573,13 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, legA, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// committed in leg\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
-    execFileSync('git', ['-C', legA, 'commit', '-m', 'leg work'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q);
+    G.exec(legA, ['commit', '-m', 'leg work'], STDIO_Q);
     const rOk = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(rOk.result === 'pass', 'LEG-BARRIER-COMMITTED: committed in-lane leg write passes (read-tree HEAD path), got ' + JSON.stringify(rOk));
     fs.writeFileSync(path.join(legA, 'zz.js'), '// committed overflow\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
-    execFileSync('git', ['-C', legA, 'commit', '-m', 'leg overflow'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q);
+    G.exec(legA, ['commit', '-m', 'leg overflow'], STDIO_Q);
     const rBad = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(rBad.result === 'refuse' && rBad.reason === 'write_set_overflow', 'LEG-BARRIER-COMMITTED: committed overflow still refuses, got ' + JSON.stringify(rBad));
     cleanup(repoRoot);
@@ -13653,8 +13654,8 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, legA, rs } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'zz.js'), '// overflow a free base would launder\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
-    execFileSync('git', ['-C', legA, 'commit', '-m', 'overflow committed'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q);
+    G.exec(legA, ['commit', '-m', 'overflow committed'], STDIO_Q);
     const postWrite = gitOut(legA, ['rev-parse', 'HEAD']);
     assert(postWrite && postWrite !== rs.lane_group.legs.A.baseline, 'LEG-BARRIER-VACUOUS-BASE: post-write HEAD differs from the anchored base');
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', postWrite, '--json']);
@@ -13666,7 +13667,7 @@ scenario(() => {
   scenario(() => {
     const { repoRoot } = makeLaneRepo();
     const legX = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
-    execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legX, 'HEAD'], STDIO_Q);
+    G.exec(repoRoot, ['worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legX, 'HEAD'], STDIO_Q);
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legX, '--json']);
     assert(r.result === 'refuse' && r.reason === 'no_leg_base', 'LEG-BARRIER-NO-REF: missing anchored ref refuses no_leg_base (no vacuous pass), got ' + JSON.stringify(r));
     cleanup(repoRoot);
@@ -13677,10 +13678,10 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, legA } = provisionedRepo();
     fs.writeFileSync(path.join(repoRoot, 'forward.txt'), 'f\n');
-    execFileSync('git', ['-C', repoRoot, 'add', '-A'], STDIO_Q);
-    execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'forward'], STDIO_Q);
+    G.exec(repoRoot, ['add', '-A'], STDIO_Q);
+    G.exec(repoRoot, ['commit', '-m', 'forward'], STDIO_Q);
     const forward = gitOut(repoRoot, ['rev-parse', 'HEAD']); // descendant of baseRev ⇒ NOT an ancestor of legHEAD(=baseRev)
-    execFileSync('git', ['-C', repoRoot, 'update-ref', legRefName('A'), forward], STDIO_Q);
+    G.exec(repoRoot, ['update-ref', legRefName('A'), forward], STDIO_Q);
     const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', forward, '--json']);
     assert(r.result === 'refuse' && r.reason === 'leg_base_unreachable', 'LEG-BARRIER-ANCESTOR-BACKSTOP: a forward (non-ancestor) base refuses leg_base_unreachable, got ' + JSON.stringify(r));
     cleanup(repoRoot);
@@ -13950,10 +13951,10 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q); G.exec(legA, ['commit', '-m', 'la'], STDIO_Q);
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
-    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
-    execFileSync('git', ['-C', repoRoot, 'merge', '--no-ff', '-m', 'partial: only legA', 'kw/legs/test-project/A'], STDIO_Q);
+    G.exec(legB, ['add', '-A'], STDIO_Q); G.exec(legB, ['commit', '-m', 'lb'], STDIO_Q);
+    G.exec(repoRoot, ['merge', '--no-ff', '-m', 'partial: only legA', 'kw/legs/test-project/A'], STDIO_Q);
     const M = gitOut(repoRoot, ['rev-parse', 'HEAD']);
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'leg_omitted_from_merge', 'SYNTH-OMISSION: a dropped leg (legB not in M) is caught leg_omitted_from_merge, got ' + JSON.stringify(r));
@@ -13966,10 +13967,10 @@ scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
     fs.writeFileSync(path.join(legA, 'zz.js'), '// OUT OF UNION committed\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la+escape'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q); G.exec(legA, ['commit', '-m', 'la+escape'], STDIO_Q);
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
-    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
-    execFileSync('git', ['-C', repoRoot, 'merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q);
+    G.exec(legB, ['add', '-A'], STDIO_Q); G.exec(legB, ['commit', '-m', 'lb'], STDIO_Q);
+    G.exec(repoRoot, ['merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q);
     const M = gitOut(repoRoot, ['rev-parse', 'HEAD']);
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'SYNTH-UNION-ESCAPE: an out-of-union committed path in M refuses write_set_overflow, got ' + JSON.stringify(r));
@@ -13981,9 +13982,9 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q); G.exec(legA, ['commit', '-m', 'la'], STDIO_Q);
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
-    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    G.exec(legB, ['add', '-A'], STDIO_Q); G.exec(legB, ['commit', '-m', 'lb'], STDIO_Q);
     const bad = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', '--project', 'test-project', '--json']);
     assert(bad.result === 'refuse' && bad.reason === 'merge_commit_invalid', 'SYNTH-ARG: a non-resolving --merge-commit refuses merge_commit_invalid, got ' + JSON.stringify(bad));
     // an UNRELATED commit (legA head — not a descendant merging BOTH; base is its ancestor but legB isn't)
@@ -14003,12 +14004,12 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q); G.exec(legA, ['commit', '-m', 'la'], STDIO_Q);
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
-    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    G.exec(legB, ['add', '-A'], STDIO_Q); G.exec(legB, ['commit', '-m', 'lb'], STDIO_Q);
     // an ORPHAN commit (commit-tree with NO parent) — base is not an ancestor of it.
     const tree = gitOut(repoRoot, ['write-tree']);
-    const orphan = execFileSync('git', ['-C', repoRoot, 'commit-tree', tree, '-m', 'orphan'], { encoding: 'utf8' }).trim();
+    const orphan = G.exec(repoRoot, ['commit-tree', tree, '-m', 'orphan'], { encoding: 'utf8' }).trim();
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', orphan, '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'merge_base_unreachable', 'SYNTH-MERGE-BASE-UNREACHABLE: an M not descending from base refuses merge_base_unreachable, got ' + JSON.stringify(r));
     cleanup(repoRoot);
@@ -14020,15 +14021,15 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q); G.exec(legA, ['commit', '-m', 'la'], STDIO_Q);
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
-    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
-    const M = (() => { execFileSync('git', ['-C', repoRoot, 'merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q); return gitOut(repoRoot, ['rev-parse', 'HEAD']); })();
+    G.exec(legB, ['add', '-A'], STDIO_Q); G.exec(legB, ['commit', '-m', 'lb'], STDIO_Q);
+    const M = (() => { G.exec(repoRoot, ['merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q); return gitOut(repoRoot, ['rev-parse', 'HEAD']); })();
     // make a DIVERGENT branch-point commit, re-anchor leg B's ref to it AND match its manifest baseline (so
     // B's #368 cross-check passes) — now A's base (baseRev) != B's base → split. Leg A's head is a real
     // commit != baseRev, so it serves as the divergent baseline for B.
     const divergent = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']);
-    execFileSync('git', ['-C', repoRoot, 'update-ref', legRefName('B'), divergent], STDIO_Q);
+    G.exec(repoRoot, ['update-ref', legRefName('B'), divergent], STDIO_Q);
     const rs = readRS(cacheDir);
     rs.lane_group.legs.B.baseline = divergent;
     fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs, null, 2));
@@ -14199,9 +14200,9 @@ scenario(() => {
     const { repoRoot, legA, legB, rs } = provisionedRepo();
     const telRel = 'kaola-workflow/test-project/.cache/node-timings.jsonl';
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
-    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    G.exec(legA, ['add', '-A'], STDIO_Q); G.exec(legA, ['commit', '-m', 'la'], STDIO_Q);
     fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
-    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    G.exec(legB, ['add', '-A'], STDIO_Q); G.exec(legB, ['commit', '-m', 'lb'], STDIO_Q);
     const headA = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']);
     const headB = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/B']);
     // ONLY the excluded telemetry residue remains uncommitted in each leg.
@@ -14347,8 +14348,8 @@ scenario(() => {
     // leg's recorded baseline — legs still branch off the prior level's commit chain, just past the
     // stub-seed commit the fix inserts.
     let m1AncestorOfC = false, m1AncestorOfD = false;
-    try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, rs2.lane_group.legs.C.baseline], STDIO_Q); m1AncestorOfC = true; } catch (_) { m1AncestorOfC = false; }
-    try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, rs2.lane_group.legs.D.baseline], STDIO_Q); m1AncestorOfD = true; } catch (_) { m1AncestorOfD = false; }
+    try { G.exec(repoRoot, ['merge-base', '--is-ancestor', M1, rs2.lane_group.legs.C.baseline], STDIO_Q); m1AncestorOfC = true; } catch (_) { m1AncestorOfC = false; }
+    try { G.exec(repoRoot, ['merge-base', '--is-ancestor', M1, rs2.lane_group.legs.D.baseline], STDIO_Q); m1AncestorOfD = true; } catch (_) { m1AncestorOfD = false; }
     assert(m1AncestorOfC && m1AncestorOfD, 'S5-MULTI-LEVEL: level-2 leg baselines descend from M1 (legs branch off the prior level\'s commit chain, past the #633 stub-seed commit), got ' + JSON.stringify({ C: rs2.lane_group.legs.C.baseline, D: rs2.lane_group.legs.D.baseline, M1 }));
     const leg2C = path.join(repoRoot, '.kw', 'legs', 'test-project', 'C');
     const leg2D = path.join(repoRoot, '.kw', 'legs', 'test-project', 'D');
@@ -14363,7 +14364,7 @@ scenario(() => {
     // either direction — so a `gitOut(...) === ''` (stdout) check would be a tautology (both directions →
     // '' → always passes). Key on the exit code, exactly as the production validator does (plan-validator.js).
     let m2DescendsM1 = false;
-    try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, M2], STDIO_Q); m2DescendsM1 = true; } catch (_) { m2DescendsM1 = false; }
+    try { G.exec(repoRoot, ['merge-base', '--is-ancestor', M1, M2], STDIO_Q); m2DescendsM1 = true; } catch (_) { m2DescendsM1 = false; }
     assert(m2DescendsM1, 'S5-MULTI-LEVEL: M2 descends from M1 (the dependency-level commit chain), got is-ancestor=false for M1=' + M1 + ' M2=' + M2);
     cleanup(repoRoot);
   });
@@ -14984,12 +14985,12 @@ scenario(() => {
       return { repoRoot, project, planPath, projDir, cacheDir, g };
   }
   function headSha(repoRoot) {
-    return execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    return G.exec(repoRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   }
   // Commit subjects on HEAD's first-parent history, newest first.
   function gitSubjects(repoRoot) {
     try {
-      return execFileSync('git', ['-C', repoRoot, 'log', '--format=%s'], { encoding: 'utf8' })
+      return G.exec(repoRoot, ['log', '--format=%s'], { encoding: 'utf8' })
         .split('\n').map(s => s.trim()).filter(Boolean);
     } catch (_) { return []; }
   }
@@ -15022,9 +15023,9 @@ scenario(() => {
       '#802-SEAM-COOPEN: EXACTLY one kaola-checkpoint commit, got ' + JSON.stringify(gitSubjects(repoRoot)));
     // The checkpoint commit's content is exactly the dirty paths — nothing else rode along. (Resolve it
     // by SUBJECT: leg provisioning commits the tracked evidence stubs afterwards, so HEAD has moved on.)
-    const seamSha = execFileSync('git', ['-C', repoRoot, 'log', '--format=%H %s'], { encoding: 'utf8' })
+    const seamSha = G.exec(repoRoot, ['log', '--format=%H %s'], { encoding: 'utf8' })
       .split('\n').map(s => s.trim()).filter(s => s.indexOf(' kaola-checkpoint(') > 0)[0].split(' ')[0];
-    const touched = execFileSync('git', ['-C', repoRoot, 'show', '--name-only', '--format=', seamSha], { encoding: 'utf8' })
+    const touched = G.exec(repoRoot, ['show', '--name-only', '--format=', seamSha], { encoding: 'utf8' })
       .split('\n').map(s => s.trim()).filter(Boolean).sort();
     assert(JSON.stringify(touched) === JSON.stringify(['src/serial_a.js']),
       '#802-SEAM-COOPEN: the checkpoint commit touches ONLY the attributed dirty paths, got ' + JSON.stringify(touched));
@@ -15098,7 +15099,7 @@ scenario(() => {
     assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
       '#802-UNATTRIBUTABLE: NO serial open either — both frontier members stay pending');
     // The index must be left clean (a partially-staged index is reset before halting).
-    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    const staged = G.exec(repoRoot, ['diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
     assert(staged === '', '#802-UNATTRIBUTABLE: the index is left unstaged, got ' + JSON.stringify(staged));
     cleanup(repoRoot);
   });
@@ -15152,7 +15153,7 @@ scenario(() => {
     // legs' declared files landed in the merge.
     for (const p of ['src/serial_a.js', 'par_a.js', 'par_b.js']) {
       let ok = true;
-      try { execFileSync('git', ['-C', repoRoot, 'cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); }
+      try { G.exec(repoRoot, ['cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); }
       catch (_) { ok = false; }
       assert(ok, '#802-E2E: ' + p + ' is reachable from HEAD after the merge');
     }
@@ -15172,20 +15173,20 @@ scenario(() => {
   // Put the mixed fixture on a FEATURE branch so `git diff <base>...HEAD` is a real, non-empty
   // branch diff (the sweep is vacuous when base === HEAD). Returns the surviving base branch name.
   function branchOffBase(repoRoot, feature) {
-    const base = execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim();
-    execFileSync('git', ['-C', repoRoot, 'checkout', '-q', '-b', feature], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    const base = G.exec(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim();
+    G.exec(repoRoot, ['checkout', '-q', '-b', feature], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     return base;
   }
   function headBranch(repoRoot) {
-    try { return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return null; }
+    try { return G.exec(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return null; }
   }
   function reachableFromHead(repoRoot, p) {
-    try { execFileSync('git', ['-C', repoRoot, 'cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    try { G.exec(repoRoot, ['cat-file', '-e', 'HEAD:' + p], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
     catch (_) { return false; }
   }
   function branchNames(repoRoot) {
     try {
-      return execFileSync('git', ['-C', repoRoot, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8' })
+      return G.exec(repoRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8' })
         .split('\n').map(s => s.trim()).filter(Boolean);
     } catch (_) { return []; }
   }
@@ -15260,7 +15261,7 @@ scenario(() => {
       '#802-AC6-FINALIZE precondition: the branch carries exactly one mid-run checkpoint commit');
     // The sweep's own input: the checkpointed path IS in the branch diff (pre-#802 it was uncommitted
     // and absent from it). Without this the pass below would prove nothing.
-    const branchDiff = execFileSync('git', ['-C', repoRoot, 'diff', base + '...HEAD', '--name-only'], { encoding: 'utf8' })
+    const branchDiff = G.exec(repoRoot, ['diff', base + '...HEAD', '--name-only'], { encoding: 'utf8' })
       .split('\n').map(s => s.trim()).filter(Boolean);
     assert(branchDiff.includes('src/serial_a.js'),
       '#802-AC6-FINALIZE: the checkpointed serial path is IN the finalize sweep\'s branch diff, got ' + JSON.stringify(branchDiff));
@@ -15394,7 +15395,7 @@ scenario(() => {
     assert(!readRS(cacheDir), '#802-AC6-EPOCH-FAILCLOSED: no running set was written (zero mutation)');
     assert(ledgerStatus(planPath, 'pA') === 'pending' && ledgerStatus(planPath, 'pB') === 'pending',
       '#802-AC6-EPOCH-FAILCLOSED: NO serial open either — the frontier stays pending');
-    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    const staged = G.exec(repoRoot, ['diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
     assert(staged === '', '#802-AC6-EPOCH-FAILCLOSED: the index is left unstaged, got ' + JSON.stringify(staged));
     cleanup(repoRoot);
   });
@@ -15508,7 +15509,7 @@ scenario(() => {
     // 1. NO PARTIAL CHECKPOINT: the attributable sibling was NOT committed on its own.
     assert(seamCommitCount(repoRoot) === 0 && gitSubjects(repoRoot).length === before,
       '#802-QUOTED-PATH: NOTHING was committed — no partial checkpoint of the attributable half, got ' + JSON.stringify(gitSubjects(repoRoot)));
-    const staged = execFileSync('git', ['-C', repoRoot, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
+    const staged = G.exec(repoRoot, ['diff', '--cached', '--name-only'], { encoding: 'utf8' }).trim();
     assert(staged === '', '#802-QUOTED-PATH: the index is left unstaged, got ' + JSON.stringify(staged));
     assert(!reachableFromHead(repoRoot, 'src/serial_a.js'),
       '#802-QUOTED-PATH: the attributable serial path is still UNCOMMITTED (it was not half-landed)');
@@ -15595,8 +15596,7 @@ scenario(() => {
   // leaves nothing behind whichever guard trips.
   function ordinaryCommitRefused(repoRoot, extraEnv) {
     try {
-      execFileSync('git', ['-C', repoRoot, 'commit', '--allow-empty', '-m', 'hostility probe'],
-        { stdio: ['ignore', 'ignore', 'ignore'], env: Object.assign({}, process.env, extraEnv || {}) });
+      G.exec(repoRoot, ['commit', '--allow-empty', '-m', 'hostility probe'], { stdio: ['ignore', 'ignore', 'ignore'], env: Object.assign({}, process.env, extraEnv || {}) });
       return false;
     } catch (_) { return true; }
   }
@@ -15669,8 +15669,7 @@ scenario(() => {
       '#802-D7-NO-IDENTITY: a repo with no configured identity does NOT halt at the seam, got ' + JSON.stringify({ result: r.result, reason: r.reason, detail: r.detail }));
     assert(r.seamCheckpoint && JSON.stringify(r.seamCheckpoint.committed) === JSON.stringify(['src/serial_a.js']),
       '#802-D7-NO-IDENTITY: the checkpoint committed the attributed serial path, got ' + JSON.stringify(r.seamCheckpoint));
-    const who = execFileSync('git', ['-C', repoRoot, 'log', '-1', '--format=%an <%ae>|%cn <%ce>', r.seamCheckpoint.commit],
-      { encoding: 'utf8' }).trim();
+    const who = G.exec(repoRoot, ['log', '-1', '--format=%an <%ae>|%cn <%ce>', r.seamCheckpoint.commit], { encoding: 'utf8' }).trim();
     assert(who === 'kaola-workflow <kaola-workflow@local>|kaola-workflow <kaola-workflow@local>',
       '#802-D7-NO-IDENTITY: the checkpoint is attributed to the INJECTED scheduler identity, got ' + JSON.stringify(who));
     assert(r.laneGroup && r.laneGroup.members.length === 2 && !r.serialDegradeReason,
@@ -15711,14 +15710,13 @@ scenario(() => {
     const witnessPath = path.join(repoRoot, '.git', 'scanner-witness');
     // PROVE hostility on the EXACT bytes under audit: stage the attributed serial path and try to commit.
     let scannerBlockedOrdinaryCommit = false;
-    execFileSync('git', ['-C', repoRoot, 'add', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['add', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
     try {
-      execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'ordinary commit of the same bytes', '--', 'src/serial_a.js'],
-        { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(repoRoot, ['commit', '-m', 'ordinary commit of the same bytes', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) { scannerBlockedOrdinaryCommit = true; }
     // Restore the untracked/uncommitted state the seam is supposed to meet, and clear the witness so
     // whatever it records next is unambiguously the SCHEDULER's commit.
-    execFileSync('git', ['-C', repoRoot, 'reset', '-q', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['reset', '-q', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
     assert(scannerBlockedOrdinaryCommit,
       '#802-D7-SECRET-SCANNER precondition: the scanner really does block an ordinary commit of these bytes');
     assert(seamCommitCount(repoRoot) === 0,
@@ -15737,7 +15735,7 @@ scenario(() => {
     // branch — no commit, no branch tip, no leg branch.
     assert(fs.readFileSync(path.join(repoRoot, 'src', 'serial_a.js'), 'utf8').indexOf(SECRET) !== -1,
       '#802-D7-SECRET-SCANNER: the payload really is in the working tree');
-    const branchHistory = execFileSync('git', ['-C', repoRoot, 'log', '-p', '--branches'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    const branchHistory = G.exec(repoRoot, ['log', '-p', '--branches'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert(branchHistory.indexOf(SECRET) === -1,
       '#802-D7-SECRET-SCANNER: the scanner was NOT defeated — the key never reached the branch');
     assert(!readRS(cacheDir) || !readRS(cacheDir).lane_group,
@@ -15763,8 +15761,7 @@ scenario(() => {
     // And it is genuinely the class `--no-verify` does not cover — prove it against git itself.
     let survivesNoVerify = false;
     try {
-      execFileSync('git', ['-C', repoRoot, 'commit', '--no-verify', '--allow-empty', '-m', 'bypass probe'],
-        { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(repoRoot, ['commit', '--no-verify', '--allow-empty', '-m', 'bypass probe'], { stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) { survivesNoVerify = true; }
     assert(survivesNoVerify,
       '#802-D7-PREPARE-MSG precondition: `--no-verify` does NOT disable prepare-commit-msg (the N4 overclaim)');
@@ -15858,7 +15855,7 @@ scenario(() => {
       '#802-POST-FENCE: the ledger is untouched');
     assert(fs.existsSync(path.join(repoRoot, 'concurrent.js')),
       '#802-POST-FENCE: the concurrent writer\'s bytes were NOT auto-reset away — disclosure, not silent data loss');
-    assert(execFileSync('git', ['-C', repoRoot, 'cat-file', '-p', after + ':src/serial_a.js'], { encoding: 'utf8' }).length > 0,
+    assert(G.exec(repoRoot, ['cat-file', '-p', after + ':src/serial_a.js'], { encoding: 'utf8' }).length > 0,
       '#802-POST-FENCE: the attributed serial path really is inside the disclosed commit');
     cleanup(repoRoot);
   });
@@ -16117,7 +16114,7 @@ scenario(() => {
     const rB2 = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
     assert(rB2.result === 'ok' && rB2.barrier === 'group_passed' && rB2.synthesized === true,
       '#622-MIXED: once probe drains, B\'s retried close-node merges cleanly (group_passed), got ' + JSON.stringify(rB2));
-    const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    const headTree = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
     assert(headTree.includes('ax622.js') && headTree.includes('by622.js'), '#622-MIXED: both in-lane files reach HEAD after the drained merge, got ' + JSON.stringify(headTree.split('\n').filter(Boolean)));
     cleanup(repoRoot);
   });
@@ -16191,7 +16188,7 @@ scenario(() => {
       '#633: last-member close reaches group_passed with NO manual intervention (the untracked-vs-tracked evidence-file merge collision does not resurface), got ' + JSON.stringify(rB));
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete',
       '#633: both A and B ledger complete');
-    const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    const headTree = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
     assert(headTree.includes('ax.js') && headTree.includes('by.js'), '#633: both in-lane files reach HEAD after the merge, got ' + JSON.stringify(headTree));
     const wts = worktreePaths(repoRoot);
     assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), '#633: leg worktrees torn down on clean completion, got ' + JSON.stringify(wts));
@@ -16327,7 +16324,7 @@ scenario(() => {
     const rB2 = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
     assert(rB2.result === 'ok' && rB2.barrier === 'group_passed' && rB2.synthesized === true,
       'R4-REGRESSION: once gateR drains, B\'s retried close-node merges cleanly (group_passed), got ' + JSON.stringify(rB2));
-    const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    const headTree = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
     assert(headTree.includes('ar4.js') && headTree.includes('br4.js'),
       'R4-REGRESSION: both A and B in-lane files reach HEAD after the drained merge, got ' + JSON.stringify(headTree));
     const wts = worktreePaths(repoRoot);
@@ -18285,15 +18282,15 @@ scenario(() => {
   }
   function worktreePaths596(repoRoot) {
     let out = '';
-    try { out = execFileSync('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch (_) { return []; }
+    try { out = G.exec(repoRoot, ['worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch (_) { return []; }
     return String(out).split('\n').filter(l => l.indexOf('worktree ') === 0).map(l => l.slice('worktree '.length).trim());
   }
   function branchExists596(repoRoot, branch) {
-    try { execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branch], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    try { G.exec(repoRoot, ['rev-parse', '--verify', '--quiet', 'refs/heads/' + branch], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
     catch (_) { return false; }
   }
   function legBaseRefExists596(repoRoot, project, id) {
-    try { execFileSync('git', ['-C', repoRoot, 'show-ref', '--verify', '--quiet', 'refs/kaola-workflow/leg-base/' + project + '/' + id], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    try { G.exec(repoRoot, ['show-ref', '--verify', '--quiet', 'refs/kaola-workflow/leg-base/' + project + '/' + id], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
     catch (_) { return false; }
   }
   // Open gate1 via the REAL scheduler (a normal read-only ready node) and return its nonce.
@@ -18365,7 +18362,7 @@ scenario(() => {
     const rW = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'writerW', '--json']);
     assert(rW.result === 'ok' && rW.barrier === 'group_passed' && rW.synthesized === true && typeof rW.mergeCommit === 'string' && rW.mergeCommit.length >= 7,
       'T596-3: writerW closes via the group (octopus-merge) union barrier ⇒ group_passed + synthesized, got ' + JSON.stringify(rW));
-    const head = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    const head = G.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
     assert(head.includes('w.js'), 'T596-3: w.js reaches HEAD after the union barrier merge, got ' + JSON.stringify(head.split('\n').filter(Boolean)));
     assert(ledgerStatus596(planPath, 'writerW') === 'complete', 'T596-3: writerW ledger complete');
     const wts = worktreePaths596(repoRoot);
@@ -18401,7 +18398,7 @@ scenario(() => {
     assert(!(rs && (rs.nodes || []).some(n => n.id === 'writerW')), 'T596-4: writerW removed from the running set');
     assert(!(rs && rs.lane_group), 'T596-4: lane_group entirely cleared (sole member discarded)');
     assert(!fs.existsSync(path.join(repoRoot, 'w.js')), 'T596-4: parent worktree byte-identical to pre-speculation — w.js never existed at the parent root');
-    const porcelainW = execFileSync('git', ['-C', repoRoot, 'status', '--porcelain', '--', 'w.js'], { encoding: 'utf8' });
+    const porcelainW = G.exec(repoRoot, ['status', '--porcelain', '--', 'w.js'], { encoding: 'utf8' });
     assert(porcelainW.trim() === '', 'T596-4: git sees no trace of w.js at the parent');
     rm596(repoRoot);
   }
@@ -20309,11 +20306,11 @@ scenario(() => {
   let worktreeOK = true;
   { const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'kw641-probe-'));
     try {
-      execFileSync('git', ['-C', probe, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
-      execFileSync('git', ['-C', probe, 'config', 'user.email', 'k@t'], { stdio: ['ignore', 'ignore', 'ignore'] });
-      execFileSync('git', ['-C', probe, 'config', 'user.name', 'k'], { stdio: ['ignore', 'ignore', 'ignore'] });
-      fs.writeFileSync(path.join(probe, 'f'), 'x'); execFileSync('git', ['-C', probe, 'add', '-A'], { stdio: ['ignore', 'ignore', 'ignore'] });
-      execFileSync('git', ['-C', probe, 'commit', '-m', 'i'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(probe, ['init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(probe, ['config', 'user.email', 'k@t'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(probe, ['config', 'user.name', 'k'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      fs.writeFileSync(path.join(probe, 'f'), 'x'); G.exec(probe, ['add', '-A'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.exec(probe, ['commit', '-m', 'i'], { stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) { worktreeOK = false; }
     cleanup(probe);
   }
@@ -21325,8 +21322,7 @@ scenario(() => {
     const attempt683 = id => journal683().attempts.find(a => a.attempt_id === id);
     const refSha683 = id => {
       try {
-        return String(execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet',
-          'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
+        return String(G.exec(repoRoot, ['rev-parse', '--verify', '--quiet', 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
       } catch (_) { return ''; }
     };
 
@@ -21687,8 +21683,7 @@ scenario(() => {
       readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
       // The fault: return a tree that did NOT restore ax.js to its old baseline content — i.e. exactly
       // the "re-anchor to the current tree" attack that would zero the writer's own diff.
-      rebindTreeFault: (tree, root, env) => String(realExec('git',
-        ['-C', root, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })).trim(),
+      rebindTreeFault: (tree, root, env) => String(G.exec(root, ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })).trim(),
     };
     const r = node683.runRepairNode(opts);
     assert(r.result === 'repair_requires_replan' && r.reason === 'rebind_base_rewrite_unsafe'
@@ -21791,11 +21786,11 @@ scenario(() => {
     try { node683.runRepairNode({ ...opts2, reviewFailpoint: 'repair_settled_written' }); } catch (_) {}
     const savedBase = fs.readFileSync(path.join(w2.cacheDir, 'barrier-base-wa'), 'utf8').trim();
     const ref2 = 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/wa';
-    realExec('git', ['-C', w2.repoRoot, 'update-ref', '-d', ref2], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(w2.repoRoot, ['update-ref', '-d', ref2], { stdio: ['ignore', 'ignore', 'ignore'] });
     const clobbered = node683.runRepairNode(opts2);
     assert(clobbered.result === 'repair_requires_replan' && clobbered.reason === 'writer_identity_changed',
       '#683 N8-variant: a lost/replaced anchored ref refuses writer_identity_changed (a dirty tree cannot be made to look clean)');
-    realExec('git', ['-C', w2.repoRoot, 'update-ref', ref2, savedBase], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(w2.repoRoot, ['update-ref', ref2, savedBase], { stdio: ['ignore', 'ignore', 'ignore'] });
     const recovered = node683.runRepairNode(opts2);
     assert(recovered.result === 'ok' && recovered.resumed === true && recovered.consumed_by === 'wa',
       '#683 N8-variant: the ref-restore recovery completes the consume with NO discard and NO re-freeze');
@@ -21856,9 +21851,8 @@ scenario(() => {
       readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
     };
     try { node683.runRepairNode({ ...opts, reviewFailpoint: 'rebind_recorded' }); } catch (_) {}
-    const strayRef = String(realExec('git', ['-C', w.repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
-    realExec('git', ['-C', w.repoRoot, 'update-ref', 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/wa', strayRef],
-      { stdio: ['ignore', 'ignore', 'ignore'] });
+    const strayRef = String(G.exec(w.repoRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
+    G.exec(w.repoRoot, ['update-ref', 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/wa', strayRef], { stdio: ['ignore', 'ignore', 'ignore'] });
     const out = node683.runRepairNode(opts);
     assert(out.result === 'repair_requires_replan' && out.reason === 'rebind_replay_diverged',
       '#683 N9-diverged: an anchored ref matching NEITHER recorded base fails closed with rebind_replay_diverged');
@@ -21914,7 +21908,7 @@ scenario(() => {
       legEdits: { wb: leg => fs.chmodSync(path.join(leg, 'bx.js'), 0o755) },   // ...only the mode moves
     });
     const modeOf = p => {
-      const line = String(execFileSync('git', ['-C', w.repoRoot, 'ls-files', '-s', '--', p], { encoding: 'utf8' })).trim();
+      const line = String(G.exec(w.repoRoot, ['ls-files', '-s', '--', p], { encoding: 'utf8' })).trim();
       return line ? line.split(/\s+/)[0] : null;
     };
     assert(w.closeWb.result === 'ok' && w.cgb.result === 'ok' && w.ledger683('gb') === 'complete'
@@ -21943,7 +21937,7 @@ scenario(() => {
       wbFiles: {},
       legEdits: { wb: leg => { fs.unlinkSync(path.join(leg, 'bx.js')); fs.symlinkSync('bx-target.js', path.join(leg, 'bx.js')); } },
     });
-    const entry = p => String(execFileSync('git', ['-C', w.repoRoot, 'ls-files', '-s', '--', p], { encoding: 'utf8' }))
+    const entry = p => String(G.exec(w.repoRoot, ['ls-files', '-s', '--', p], { encoding: 'utf8' }))
       .trim().split(/\s+/);
     const approved = entry('bx.js');
     assert(w.cgb.result === 'ok' && w.ledger683('gb') === 'complete' && approved[0] === '120000',
@@ -21952,7 +21946,7 @@ scenario(() => {
     fs.unlinkSync(path.join(w.repoRoot, 'bx.js'));                                  // out-of-band revert
     fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), 'bx-target.js');               // back to a plain file
     // Read the WORKING TREE (what the candidate snapshot's `add -A` actually hashes), not the index.
-    const revertedSha = String(execFileSync('git', ['-C', w.repoRoot, 'hash-object', '--', 'bx.js'], { encoding: 'utf8' })).trim();
+    const revertedSha = String(G.exec(w.repoRoot, ['hash-object', '--', 'bx.js'], { encoding: 'utf8' })).trim();
     assert(fs.lstatSync(path.join(w.repoRoot, 'bx.js')).isSymbolicLink() === false
       && revertedSha === approved[1],
       '#683 N13: the revert is INVISIBLE to any sha-only stick — the plain file carries the symlink\'s EXACT '
@@ -22065,8 +22059,7 @@ scenario(() => {
     const attempt829 = id => journal829().attempts.find(a => a.attempt_id === id);
     const refSha829 = id => {
       try {
-        return String(execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet',
-          'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
+        return String(G.exec(repoRoot, ['rev-parse', '--verify', '--quiet', 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
       } catch (_) { return ''; }
     };
     const probe829 = id => JSON.parse(String(execFileSync('node',
@@ -22463,10 +22456,9 @@ scenario(() => {
   // -------------------------------------------------------------------------
   scenario(() => {
     const w = drive683({ gbPass: true });
-    const mergeSha = String(execFileSync('git', ['-C', w.repoRoot, 'log', '--merges', '-F',
-      '--grep=kw-synth: ', '-1', '--format=%H'], { encoding: 'utf8' })).trim();
+    const mergeSha = String(G.exec(w.repoRoot, ['log', '--merges', '-F', '--grep=kw-synth: ', '-1', '--format=%H'], { encoding: 'utf8' })).trim();
     if (typeof candidateTripleForCommit === 'function') {
-      const headSha = String(execFileSync('git', ['-C', w.repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
+      const headSha = String(G.exec(w.repoRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
       const union = new Set(['ax.js', 'bx.js']);
       const tripleMerge = candidateTripleForCommit(w.repoRoot, mergeSha, PROJECT_683, union);
       const tripleHead = candidateTripleForCommit(w.repoRoot, headSha, PROJECT_683, union);
@@ -24192,9 +24184,9 @@ scenario(() => {
 
   const tmp713 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-713-fold-pass-')));
   try {
-    spawn713('git', ['init', '-b', 'main'], { cwd: tmp713, encoding: 'utf8', env: env713 });
-    spawn713('git', ['config', 'user.email', 'kw@test'], { cwd: tmp713, encoding: 'utf8', env: env713 });
-    spawn713('git', ['config', 'user.name', 'kw'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+    G.git(tmp713, ['init', '-b', 'main'], { encoding: 'utf8', env: env713 });
+    G.git(tmp713, ['config', 'user.email', 'kw@test'], { encoding: 'utf8', env: env713 });
+    G.git(tmp713, ['config', 'user.name', 'kw'], { encoding: 'utf8', env: env713 });
     const project713 = 'issue-713-fold';
     const projectDir713 = path.join(tmp713, 'kaola-workflow', project713);
     const cacheDir713 = path.join(projectDir713, '.cache');
@@ -24239,8 +24231,8 @@ scenario(() => {
     assert(freeze713.status === 0 && lastJson713(freeze713) && lastJson713(freeze713).planHash,
       '#713: the schema-2 serial two-gate plan freezes: ' + freeze713.stdout + freeze713.stderr);
     const planHash713 = lastJson713(freeze713).planHash;
-    spawn713('git', ['add', '-A'], { cwd: tmp713, encoding: 'utf8', env: env713 });
-    spawn713('git', ['commit', '-m', 'fixture'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+    G.git(tmp713, ['add', '-A'], { encoding: 'utf8', env: env713 });
+    G.git(tmp713, ['commit', '-m', 'fixture'], { encoding: 'utf8', env: env713 });
 
     // Step 1-2: writer ships v1; gateA PASSES (its pass attempt seals).
     const openWriter713 = run713(NODE_CLI_713, ['open-next', '--project', project713, '--json'], tmp713);
@@ -24276,10 +24268,8 @@ scenario(() => {
     // route can act on. `candidate_range` over the writer's own declared file is the faithful shape here
     // (the defect IS in that file), and it is what makes the repair below reach `writer` by ownership
     // rather than by the ownership-absent inert fallback.
-    const objectFormat713 = String(spawn713('git', ['-C', tmp713, 'rev-parse', '--show-object-format'],
-      { encoding: 'utf8', env: env713 }).stdout).trim();
-    const implObjectId713 = String(spawn713('git', ['-C', tmp713, 'hash-object', 'lib/impl.js'],
-      { encoding: 'utf8', env: env713 }).stdout).trim();
+    const objectFormat713 = String(G.git(tmp713, ['rev-parse', '--show-object-format'], { encoding: 'utf8', env: env713 }).stdout).trim();
+    const implObjectId713 = String(G.git(tmp713, ['hash-object', 'lib/impl.js'], { encoding: 'utf8', env: env713 }).stdout).trim();
     const implLength713 = fs.readFileSync(path.join(tmp713, 'lib', 'impl.js')).length;
     assert(/^[0-9a-f]{40,64}$/.test(implObjectId713),
       '#713 fixture: the candidate blob id for lib/impl.js resolves, got ' + JSON.stringify(implObjectId713));
@@ -24505,9 +24495,9 @@ scenario(() => {
   const run728 = (script, args, input) => spawn728(process.execPath, [script, ...args],
     { cwd: tmp728, encoding: 'utf8', env: env728, input, timeout: 120000 });
   try {
-    spawn728('git', ['init', '-b', 'main'], { cwd: tmp728, encoding: 'utf8', env: env728 });
-    spawn728('git', ['config', 'user.email', 'kw@test'], { cwd: tmp728, encoding: 'utf8', env: env728 });
-    spawn728('git', ['config', 'user.name', 'kw'], { cwd: tmp728, encoding: 'utf8', env: env728 });
+    G.git(tmp728, ['init', '-b', 'main'], { encoding: 'utf8', env: env728 });
+    G.git(tmp728, ['config', 'user.email', 'kw@test'], { encoding: 'utf8', env: env728 });
+    G.git(tmp728, ['config', 'user.name', 'kw'], { encoding: 'utf8', env: env728 });
 
     // One frozen schema-2 project per scenario, all inside the same repo: a serial writer
     // certified by an adversarial-verifier gate (sequence or replicated_majority fan-out),
@@ -24561,8 +24551,8 @@ scenario(() => {
       const freeze = run728(VALIDATOR_CLI_728, [planPath, '--freeze', '--json']);
       assert(freeze.status === 0 && lastJson728(freeze) && lastJson728(freeze).frozen === true,
         '#728: the schema-2 AV-gate plan (' + aggregation + ') freezes: ' + freeze.stdout + freeze.stderr);
-      spawn728('git', ['add', '-A'], { cwd: tmp728, encoding: 'utf8', env: env728 });
-      spawn728('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp728, encoding: 'utf8', env: env728 });
+      G.git(tmp728, ['add', '-A'], { encoding: 'utf8', env: env728 });
+      G.git(tmp728, ['commit', '-m', 'fixture ' + project], { encoding: 'utf8', env: env728 });
       return { project, projectDir, cacheDir, planPath, implPath, avIds };
     };
 
@@ -24708,10 +24698,8 @@ scenario(() => {
       // (review_finding_anchor_unroutable) — a path-less blocking finding could commit an attempt no
       // repair route can place. That gate is orthogonal to what these blocks pin (the frontier must
       // be non-empty behind a failing aggregate), so the fixture uses an anchor that satisfies both.
-      const objectFormat728 = String(spawn728('git', ['-C', tmp728, 'rev-parse', '--show-object-format'],
-        { encoding: 'utf8', env: env728 }).stdout).trim();
-      const objectId728 = String(spawn728('git', ['-C', tmp728, 'hash-object', fx.implPath],
-        { encoding: 'utf8', env: env728 }).stdout).trim();
+      const objectFormat728 = String(G.git(tmp728, ['rev-parse', '--show-object-format'], { encoding: 'utf8', env: env728 }).stdout).trim();
+      const objectId728 = String(G.git(tmp728, ['hash-object', fx.implPath], { encoding: 'utf8', env: env728 }).stdout).trim();
       const finding728 = {
         failure_class: 'correctness',
         trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
@@ -24819,9 +24807,9 @@ scenario(() => {
   const run733 = (args, input) => spawn733(process.execPath, [NODE_CLI_733, ...args],
     { cwd: tmp733, encoding: 'utf8', env: env733, input, timeout: 120000 });
   try {
-    spawn733('git', ['init', '-b', 'main'], { cwd: tmp733, encoding: 'utf8', env: env733 });
-    spawn733('git', ['config', 'user.email', 'kw@test'], { cwd: tmp733, encoding: 'utf8', env: env733 });
-    spawn733('git', ['config', 'user.name', 'kw'], { cwd: tmp733, encoding: 'utf8', env: env733 });
+    G.git(tmp733, ['init', '-b', 'main'], { encoding: 'utf8', env: env733 });
+    G.git(tmp733, ['config', 'user.email', 'kw@test'], { encoding: 'utf8', env: env733 });
+    G.git(tmp733, ['config', 'user.name', 'kw'], { encoding: 'utf8', env: env733 });
 
     // One frozen schema-2 project per scenario: a serial writer certified by a
     // code-reviewer sequence gate, then the sink.
@@ -24861,8 +24849,8 @@ scenario(() => {
         { cwd: tmp733, encoding: 'utf8', env: env733 });
       assert(freeze.status === 0 && lastJson733(freeze) && lastJson733(freeze).frozen === true,
         '#733: the schema-2 gate plan freezes: ' + freeze.stdout + freeze.stderr);
-      spawn733('git', ['add', '-A'], { cwd: tmp733, encoding: 'utf8', env: env733 });
-      spawn733('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp733, encoding: 'utf8', env: env733 });
+      G.git(tmp733, ['add', '-A'], { encoding: 'utf8', env: env733 });
+      G.git(tmp733, ['commit', '-m', 'fixture ' + project], { encoding: 'utf8', env: env733 });
       return { project, projectDir, cacheDir, planPath, implRel };
     };
 
@@ -24885,10 +24873,8 @@ scenario(() => {
       // with no path routes to no writer, so the attempt would commit with no reachable repair.
       // `candidate_range` over the writer's own declared file is the faithful shape (the defect IS
       // there) and binds to the real candidate blob the anchor index checks.
-      const objectFormat733 = String(spawn733('git', ['-C', tmp733, 'rev-parse', '--show-object-format'],
-        { encoding: 'utf8', env: env733 }).stdout).trim();
-      const implObjectId733 = String(spawn733('git', ['-C', tmp733, 'hash-object', fx.implRel],
-        { encoding: 'utf8', env: env733 }).stdout).trim();
+      const objectFormat733 = String(G.git(tmp733, ['rev-parse', '--show-object-format'], { encoding: 'utf8', env: env733 }).stdout).trim();
+      const implObjectId733 = String(G.git(tmp733, ['hash-object', fx.implRel], { encoding: 'utf8', env: env733 }).stdout).trim();
       assert(/^[0-9a-f]{40,64}$/.test(implObjectId733),
         '#733 fixture: the candidate blob id for ' + fx.implRel + ' resolves, got ' + JSON.stringify(implObjectId733));
       const finding = {
@@ -27055,9 +27041,9 @@ scenario(() => {
   const run805 = (args, input) => spawn805(process.execPath, [NODE_CLI, ...args],
     { cwd: tmp805, encoding: 'utf8', env: env805, input, timeout: 120000 });
   try {
-    spawn805('git', ['init', '-b', 'main'], { cwd: tmp805, encoding: 'utf8', env: env805 });
-    spawn805('git', ['config', 'user.email', 'kw@test'], { cwd: tmp805, encoding: 'utf8', env: env805 });
-    spawn805('git', ['config', 'user.name', 'kw'], { cwd: tmp805, encoding: 'utf8', env: env805 });
+    G.git(tmp805, ['init', '-b', 'main'], { encoding: 'utf8', env: env805 });
+    G.git(tmp805, ['config', 'user.email', 'kw@test'], { encoding: 'utf8', env: env805 });
+    G.git(tmp805, ['config', 'user.name', 'kw'], { encoding: 'utf8', env: env805 });
 
     // One frozen schema-2 project per scenario, all in one repo: a serial writer certified by a
     // SEQUENCE adversarial-verifier CHANGE gate (it `certifies` the writer, which is what makes
@@ -27100,8 +27086,8 @@ scenario(() => {
         { cwd: tmp805, encoding: 'utf8', env: env805 });
       assert(freeze.status === 0 && lastJson(freeze) && lastJson(freeze).frozen === true,
         '#805-R1 fixture: the AV change-gate plan freezes: ' + freeze.stdout + freeze.stderr);
-      spawn805('git', ['add', '-A'], { cwd: tmp805, encoding: 'utf8', env: env805 });
-      spawn805('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp805, encoding: 'utf8', env: env805 });
+      G.git(tmp805, ['add', '-A'], { encoding: 'utf8', env: env805 });
+      G.git(tmp805, ['commit', '-m', 'fixture ' + project], { encoding: 'utf8', env: env805 });
       return { project, projectDir, cacheDir, planPath, implRel };
     };
 
@@ -27191,10 +27177,8 @@ scenario(() => {
     {
       const fx = setup('issue-805r1-admitted');
       const opened = openGate(fx);
-      const objectFormat = String(spawn805('git', ['-C', tmp805, 'rev-parse', '--show-object-format'],
-        { encoding: 'utf8', env: env805 }).stdout).trim();
-      const objectId = String(spawn805('git', ['-C', tmp805, 'hash-object', fx.implRel],
-        { encoding: 'utf8', env: env805 }).stdout).trim();
+      const objectFormat = String(G.git(tmp805, ['rev-parse', '--show-object-format'], { encoding: 'utf8', env: env805 }).stdout).trim();
+      const objectId = String(G.git(tmp805, ['hash-object', fx.implRel], { encoding: 'utf8', env: env805 }).stdout).trim();
       const implBytes = fs.readFileSync(path.join(tmp805, fx.implRel));
       const routable = { ...anchorlessFinding(fx.cacheDir, 'writer:805r1-unused'),
         primary_anchor: { kind: 'candidate_range', path: fx.implRel, object_format: objectFormat,

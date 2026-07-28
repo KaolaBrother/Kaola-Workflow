@@ -4,6 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const SCRIPT = path.join(__dirname, 'kaola-workflow-release.js');
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 let passed = 0, failed = 0;
@@ -59,7 +62,7 @@ function verifyChangelog(changelog, closed) {
   const t = run(d, ['--tag', '--version', '5.1.0', '--json']);
   assert(t.status === 0 && t.json.tag_tree_verified === true && t.json.candidate_sha === candidate, 'tag succeeds only for committed authorized candidate');
   assert(git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}') === candidate, 'tag resolves exactly to HEAD');
-  for (const rel of surface) assert(execFileSync('git', ['-C', d, 'show', 'kaola-workflow--v5.1.0:' + rel], { env: ENV }).equals(fs.readFileSync(path.join(d, rel))), 'tag tree equals prepared ' + rel);
+  for (const rel of surface) assert(G.exec(d, ['show', 'kaola-workflow--v5.1.0:' + rel], { env: ENV }).equals(fs.readFileSync(path.join(d, rel))), 'tag tree equals prepared ' + rel);
   const rows = fs.readFileSync(path.join(d, '.cache/release-receipt.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert(rows.some(x => x.step === 'tag_authorized' && x.candidateSha === candidate) && rows.some(x => x.step === 'tag_complete' && x.candidateSha === candidate), 'authorization and completion bind candidate SHA');
   const idem = run(d, ['--tag', '--version', '5.1.0', '--json']); assert(idem.status === 0 && idem.json.idempotent === true, 'fully agreeing tag rerun is idempotent');
@@ -73,7 +76,7 @@ function verifyChangelog(changelog, closed) {
   const rp = path.join(d, '.cache/release-receipt.jsonl');
   const rows = fs.readFileSync(rp, 'utf8').trim().split('\n').map(JSON.parse).filter(x => ['prepare_binding', 'prepare_changelog', 'prepare_package'].includes(x.step));
   fs.writeFileSync(rp, rows.map(JSON.stringify).join('\n') + '\n');
-  for (const rel of [...codex, ...claude, 'README.md']) fs.writeFileSync(path.join(d, rel), execFileSync('git', ['-C', d, 'show', 'HEAD:' + rel], { env: ENV }));
+  for (const rel of [...codex, ...claude, 'README.md']) fs.writeFileSync(path.join(d, rel), G.exec(d, ['show', 'HEAD:' + rel], { env: ENV }));
   const resumed = prepare(d);
   assert(resumed.status === 0 && resumed.json.codex_version === '3.1.0', 'partial prepare resumes with persisted Codex resolution; got ' + JSON.stringify(resumed.json));
   assert(codex.every(rel => JSON.parse(fs.readFileSync(path.join(d, rel))).version === '3.1.0'), 'partial prepare completes every missing manifest step');

@@ -392,6 +392,18 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
 }
 
 // ---------------------------------------------------------------------------
+// The four child processes below are boundary class `cli-contract` and stay processes. Every
+// assertion above this line already calls validatePlan() in-process; what is left is the part
+// that has no in-process form — argv in, ENVELOPE and EXIT CODE out. An exit code is a
+// property of a process, so converting these would not preserve the assertion, it would
+// delete it.
+//
+// Four sites, three argv shapes. `--freeze-checked` appears twice on purpose: those are its
+// two RESULT branches (the refuse envelope carrying `errors`, and the in-grammar envelope
+// carrying `warnings`), which are different envelope shapes, not two scenarios of one shape.
+// The ADR's "once per subcommand, not per scenario" is about scenarios; a subcommand whose
+// envelope changes shape by result has one contract per shape.
+// ---------------------------------------------------------------------------
 // T830-CLI-1: the typed reason + operator_hint survive verbatim on the plain --json envelope
 //             (validatePlan emitted as-is); the refusal exits nonzero.
 // ---------------------------------------------------------------------------
@@ -404,6 +416,7 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
     fs.writeFileSync(planPath, childPlan({ classes: 'code', digest: '4'.repeat(64),
       code_certifier: 'child-review', nodes: CERT_NODES }));
     let out = null, code = 0;
+    // spawn-class: cli-contract
     try { out = execFileSync('node', [VALIDATOR, planPath, '--json'], { encoding: 'utf8' }); }
     catch (e) { code = e.status; out = e.stdout || ''; }
     const v = JSON.parse(out);
@@ -428,6 +441,7 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
     fs.writeFileSync(planPath, childPlan({ classes: 'code', digest: '4'.repeat(64),
       code_certifier: 'child-review', nodes: CERT_NODES }));
     let out = null, code = 0;
+    // spawn-class: cli-contract
     try { out = execFileSync('node', [VALIDATOR, planPath, '--freeze-checked', '--json'], { encoding: 'utf8' }); }
     catch (e) { code = e.status; out = e.stdout || ''; }
     const v = JSON.parse(out);
@@ -452,12 +466,14 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
     fs.writeFileSync(planPath, childPlan({ classes: 'code', digest: '4'.repeat(64),
       code_certifier: 'child-review', nodes: CERT_NODES, extraMeta: POLICY }));
 
+    // spawn-class: cli-contract
     const checked = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--freeze-checked', '--json'], { encoding: 'utf8' }));
     assert(checked.result === 'in-grammar' && Array.isArray(checked.warnings)
       && checked.warnings.length === 1 && checked.warnings[0].warning === 'frontier_without_writer',
       'T830-CLI-3: --freeze-checked carries the frontier_without_writer advisory on an in-grammar verdict, got '
       + JSON.stringify({ result: checked.result, warnings: checked.warnings }));
 
+    // spawn-class: cli-contract
     const frozen = JSON.parse(execFileSync('node',
       [VALIDATOR, planPath, '--freeze', '--governance-ack', checked.planHash, '--json'], { encoding: 'utf8' }));
     assert(frozen.result === 'in-grammar' && frozen.frozen === true
