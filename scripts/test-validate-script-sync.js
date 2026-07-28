@@ -15,6 +15,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const sync = require('./validate-script-sync.js');
+// The suites' single process-boundary decision point for git. Fixture arrangement and git
+// interrogation both route through it, so this file adds no independent decision to spawn git.
+const G = require('./test-git-fixture.js');
 
 const repoRoot = path.resolve(__dirname, '..');
 let failed = 0, passed = 0;
@@ -49,8 +52,7 @@ assert(kernelGroup && kernelGroup.files === sync.KERNEL_COPIES,
 // re-gitignores them, THIS fails and forces the policing question to be re-answered deliberately.
 {
   const tracked = new Set(
-    require('child_process')
-      .execFileSync('git', ['-C', repoRoot, 'ls-files', '--', ...sync.KERNEL_COPIES], { encoding: 'utf8' })
+    G.out(repoRoot, ['ls-files', '--'].concat(sync.KERNEL_COPIES))
       .split('\n').map(s => s.trim()).filter(Boolean));
   for (const rel of sync.KERNEL_COPIES) {
     assert(tracked.has(rel),
@@ -69,18 +71,14 @@ assert(typeof sync.checkCommittedKernelParity === 'function',
 // throwaway git repo so the assertion is proven armed rather than merely green (a check that only ever
 // sees a healthy tree is indistinguishable from a check that always passes).
 {
-  const git = (cwd, args) => require('child_process').execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-parity-'));
   try {
-    git(tmp, ['init', '-q']);
-    git(tmp, ['config', 'user.email', 't@t']);
-    git(tmp, ['config', 'user.name', 't']);
+    G.init(tmp);
     for (const rel of sync.KERNEL_COPIES) {
       fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
       fs.writeFileSync(path.join(tmp, rel), 'module.exports = {};\n');
     }
-    git(tmp, ['add', '-A']);
-    git(tmp, ['commit', '-qm', 'clean']);
+    G.commitAll(tmp, 'clean');
     let res = sync.checkCommittedKernelParity(tmp);
     assert(res.drift.length === 0 && res.skipped === null,
       'XED-1 MUTATION: a correctly-synced committed tree must PASS, got ' + JSON.stringify(res));
@@ -88,8 +86,7 @@ assert(typeof sync.checkCommittedKernelParity === 'function',
     // (a) one forge copy drifts in the COMMIT — the exact XED-1 mutation.
     const gitea = sync.KERNEL_COPIES[3];
     fs.appendFileSync(path.join(tmp, gitea), '// drift\n');
-    git(tmp, ['add', '-A']);
-    git(tmp, ['commit', '-qm', 'drift']);
+    G.commitAll(tmp, 'drift');
     res = sync.checkCommittedKernelParity(tmp);
     assert(res.drift.length === 1 && res.drift[0].includes(gitea),
       'XED-1 MUTATION: a drifted COMMITTED forge kernel copy must be REJECTED and NAMED, got ' + JSON.stringify(res.drift));
@@ -102,8 +99,8 @@ assert(typeof sync.checkCommittedKernelParity === 'function',
       'XED-1 MUTATION: repairing the WORKING COPY must not clear a drifted COMMIT (the materialize-preamble laundering path), got ' + JSON.stringify(res.drift));
 
     // (c) a forge copy that is not committed at all is the fresh-clone module-resolution failure.
-    git(tmp, ['rm', '-q', '--cached', gitea]);
-    git(tmp, ['commit', '-qm', 'untrack']);
+    G.git(tmp, ['rm', '-q', '--cached', gitea]);
+    G.commit(tmp, 'untrack');
     res = sync.checkCommittedKernelParity(tmp);
     assert(res.drift.length === 1 && /NOT COMMITTED/.test(res.drift[0]),
       'XED-1 MUTATION: an uncommitted forge kernel copy must be REJECTED, got ' + JSON.stringify(res.drift));
