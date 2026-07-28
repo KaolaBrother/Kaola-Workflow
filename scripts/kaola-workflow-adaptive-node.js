@@ -286,6 +286,8 @@ const OPERATOR_HINT_REGISTRY = {
     'Node ' + (ctx.nodeId || '<id>') + ' is not in the current ready set (its dependencies are not all complete). Open the ready frontier next-action reports instead.',
   no_ready_node: () =>
     'No ready node to open (all are blocked or done). Run orient to confirm whether the plan is complete or wedged.',
+  expansion_point_not_openable: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is an expansion point: it holds no work of its own and is never opened through the normal node lifecycle. Compose and open its frontier instead: ' + ADAPTIVE_NODE_SCRIPT + ' expand-open --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json (orient reports it on expansionPending).',
   node_not_in_ledger: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' is not present in the ## Node Ledger. Check the node id, or re-freeze the plan so the ledger carries every node.',
   baseline_failed: (ctx) =>
@@ -7005,6 +7007,18 @@ function runOpenNext(opts) {
     }
   }
 
+  // An expansion point is NEVER opened through the normal node lifecycle: it holds no work of its
+  // own, and `expand-open` — which composes AND opens its whole frontier in one transaction — is its
+  // single entry. next-action withholds the role from `nextNode`, so neither implicit door (the
+  // fallthrough above, the fused advance in close-and-open-next) can reach one. This is the EXPLICIT
+  // door: `--node-id <point>` resolves against `readySet`, which still carries the point because the
+  // stall refusal and the terminal derivation depend on it. Refuse by construction — before the
+  // review-open probe, the baseline and the ledger flip — so "a point is not serially openable" is a
+  // property of the command rather than an ordering accident of the ready-set projection.
+  if (targetNode && targetNode.role === require('./kaola-workflow-plan-validator').SPINE_EXPANSION_ROLE) {
+    return { result: 'refuse', reason: 'expansion_point_not_openable', nodeId: targetNode.id };
+  }
+
   // Reviewer-v2 identity must be proven and its canonical context persisted
   // before the first baseline/ledger mutation. Non-review and verified legacy
   // nodes return an inert descriptor.
@@ -11604,25 +11618,10 @@ function runOpenReady(opts) {
   // tamper + cycle + unique-sink + role-library + depends_on resolvability. Any non-ok refuses with
   // zero mutation. (Without this, an emptied write node's declared_write_set is reclassified read-only
   // by isReadOnlyNode and fans out concurrently — the #387 repro.)
-  // serialExclude: honored when a caller (runExpandOpen) names ids whose in_progress state is the
-  // transaction's own container, never a peer serial node — any OTHER live serial node still refuses.
-  // #759-gap (2/2): an expansion point whose frontier is ALREADY composed+opened is the container of
-  // THIS running set, not a peer — its in_progress row must not fence the frontier's own
-  // open/top-up lifecycle (close-node carries no coordination refusal, so only this site needs it).
-  let openReadySerialExclude = opts._serialExclude;
-  try {
-    const v = require('./kaola-workflow-plan-validator');
-    const c = readFile(planPath);
-    if (v.parsePlanForm(c).form === 'spine') {
-      const ledger = readLedgerStatuses(c);
-      const recs = v.parseExpansionRecords(c);
-      const points = new Set(parseNodesFromContent(c).filter(n => n.role === v.SPINE_EXPANSION_ROLE).map(n => n.id));
-      const containers = Object.keys(ledger).filter(id => ledger[id] === 'in_progress' && points.has(id)
-        && recs.records.some(r => r.point === id && v.expansionRecordOpened(recs, r.id)));
-      if (containers.length) openReadySerialExclude = (openReadySerialExclude || []).concat(containers);
-    }
-  } catch (_) { /* fail-closed: no exclusion */ }
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: openReadySerialExclude });
+  // serialExclude: honored when a CALLER names ids whose in_progress state the transaction itself is
+  // invalidating (the re-expansion path names the sink), never a peer serial node — any OTHER live
+  // serial node still refuses.
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
   const reviewOpen = reviewFanoutTopUpAllowance(opts, readFile(planPath));
@@ -13943,14 +13942,8 @@ function runExpandOpen(opts) {
   // excl-serial). Expansion is a MUTATING subcommand and is not exempt from any layer. No
   // excl-scheduler: like open-ready, this command OWNS the running-set open. ==
   // #761: the RE-OPEN path forwards `_serialExclude` (only ever the sink id) so the guard does not
-  // refuse over the live sink the re-open is invalidating. Absent for every expand-open caller.
-  // #759-gap: the serial open path (runOpenNext / the fused advance) leaves the expansion POINT
-  // itself in_progress when the orchestrator is about to compose its frontier (readySet keeps
-  // SPINE_EXPANSION_ROLE for stall/terminal derivation). The point is the container being expanded,
-  // never a peer serial node its own expansion would race — exclude exactly that one id from the
-  // serial surface (any OTHER live serial node still refuses), and carry it on opts so the Phase-2
-  // open-ready inside this same transaction honors it too.
-  opts._serialExclude = (opts._serialExclude || []).concat(nodeId ? [nodeId] : []);
+  // refuse over the live sink the re-open is invalidating. Absent for every other expand-open caller —
+  // the point itself is never serially opened, so it can never be its own live serial row.
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
@@ -14207,10 +14200,6 @@ function rollForwardExpansions(opts) {
 function runExpandClose(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, now } = opts;
 
-  // #759-gap: the serial open path leaves the expansion POINT itself in_progress while its frontier
-  // settles (see runExpandOpen). The point is the container being discharged, never a peer serial
-  // node — exclude exactly that one id (any OTHER live serial node still refuses).
-  opts._serialExclude = (opts._serialExclude || []).concat(nodeId ? [nodeId] : []);
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
