@@ -30,7 +30,7 @@
     "plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js": 74,
     "plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js": 29,
     "plugins/kaola-workflow/scripts/test-git-fixture.js": 2,
-    "scripts/simulate-workflow-walkthrough.js": 782,
+    "scripts/simulate-workflow-walkthrough.js": 167,
     "scripts/test-adaptive-handoff.js": 2,
     "scripts/test-adaptive-node.js": 88,
     "scripts/test-barrier-base-integrity.js": 3,
