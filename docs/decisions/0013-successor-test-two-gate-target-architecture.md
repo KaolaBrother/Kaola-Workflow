@@ -875,6 +875,35 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
     deviation, which reads as investigation/discard, but that set is a fail-closed anchor
     and widening it is an owner call, not an implementer's.
 
+15. **P6 reverts from *checked* to *claimed*, deliberately — and the razor that did it is the
+    decision's own.** `test-kernel-state-machine.js` (1,607 lines) proved the drawn machine in
+    THIS DOCUMENT matches the code's splice sites, and it is deleted. The reasoning is T4's:
+    the drawn machine is not one of the three oracles, not a Layer-0 record, and not one of the
+    two gates — no successor reads a decision record to resume a run, so its accuracy is
+    documentation hygiene, not runtime correctness. The price it charged was disproportionate
+    and partly self-inflicted: a hand-rolled JavaScript tokenizer, a call-graph builder whose own
+    saturation failure needed its own guard, a 270-line mutation battery, and an on-disk half that
+    **mutated this shipped ADR on every invocation** behind a backup sidecar — a test that had
+    already corrupted a durable record once when a SIGTERM left a row deleted. A check that damages
+    a durable document in order to verify a drawing inverts the priority the ADR exists to set.
+    The one runtime property underneath it — every live ledger status has an outgoing splice — is a
+    four-element check and is retained. **The drawing in this document is now unverified prose and
+    should be read as such.**
+
+16. **The refusal ratchet was not armed against this campaign's own additions, and the census went
+    the wrong way.** Layer 2 states that specificity is carried "in the payload, never by minting a
+    new code", and that adding a code "means amending the ADR — deliberately heavy, the anti-growth
+    ratchet." Measured over the campaign that authored this decision: production refusal tokens went
+    **741 → 772**, 35 added and 4 removed, and **not one of the 35 was added to the enumerated
+    vocabulary** — they were minted in the legacy shape, which the ratchet does not police. The
+    ratchet guards the fenced block; it does not guard the corpus the fenced block is supposed to
+    replace, so it was inert exactly where it was needed. M3 has since brought the count to 768.
+    Two consequences worth stating rather than discovering again: an anti-growth mechanism that only
+    covers the target vocabulary and not the source corpus cannot prevent growth; and **R2 makes
+    subtraction cost test code** — every retired refusal requires a pinned green traversal, so a
+    wave whose entire purpose was removal still grew the suites. That tension is real, unpriced by
+    this decision, and belongs in whatever governs the next batch.
+
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after
 whose "before" is captured after the deletions it measures is not a measurement.
