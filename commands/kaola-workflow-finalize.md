@@ -333,9 +333,25 @@ from the linked worktree and reason over the typed emit:
   --project {project} --keep-worktree $SINK_KEEP_OPEN_FLAG)
 ```
 
+Preconditions are a CHECKLIST, not a ladder. `finalize --check` evaluates EVERY precondition in one
+read-only pass and reports all of them together, so N unmet preconditions come back from ONE
+invocation instead of one refusal per re-run:
+
+```bash
+(cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
+  --project {project} --keep-worktree --check --json)
+```
+
+It emits `{ project, ok, checks, reasons }` (exit 0 when `ok`), where `checks` always carries
+`mirror`, `workflow_state`, `implementation_commit`, `staging_guard`, `validation`, and
+`dirty_paths`, and `reasons` names the most specific token per UNMET precondition. It makes zero
+side effect — clear every reason it lists, then run the transaction once.
+
 Judgment stays with you; the transaction owns atomicity. Typed refusals it can return, each with no
-further side effect: `finalize_mirror_refused`/`ledger_regression` (the main copy carries a staler
-ledger than the worktree — sync worktree→main FIRST, never bypass), `implementation_commit_missing`
+further side effect: `finalize_mirror_refused` with `inner_reason: mirror_sync_failed` (the
+transaction OWNS the worktree→main project-folder sync and could not perform it — make the main
+checkout writable and re-run; never hand-copy a staler main ledger over the worktree),
+`implementation_commit_missing`
 (implementation-shaped changes are uncommitted and the branch carries no implementation commit —
 author it yourself and re-run; the machinery authors only the finalize bookkeeping commit),
 `staging_guard_foreign_archive` / `staging_guard_multi_project` (split the commit),

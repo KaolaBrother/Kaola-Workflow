@@ -1700,7 +1700,14 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fx); }
   }
 
-  // --- T2: the ledger-regression guard refuses INSIDE the transaction --------------------------
+  // --- T2: the ledger-regression guard is REPAIRED INSIDE the transaction -----------------------
+  // SUPERSEDED BY #837. T2 used to pin `finalize_mirror_refused`/`ledger_regression` as an OPERATOR
+  // obligation ("sync worktree→main FIRST, then re-run"). #837 subtracts that obligation: the
+  // staler main copy is a blocker the workflow manufactured out of its own commit policy, so the
+  // transaction now performs the worktree→main sync itself and proceeds. The INVARIANT T2 actually
+  // guards is unchanged and re-asserted below — a staler main copy must NEVER be allowed to regress
+  // the complete worktree ledger. The refusal branch itself survives, re-typed as
+  // `inner_reason: mirror_sync_failed`, and is covered by #837(P5).
   {
     const fx = mk816('issue-816b');
     try {
@@ -1708,16 +1715,18 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       const mainPlan = path.join(fx.mainProjDir, 'workflow-plan.md');
       fs.writeFileSync(mainPlan, fs.readFileSync(mainPlan, 'utf8').replace(/\| complete \|/g, '| pending |'));
       const r = runFinalize816(fx);
-      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused'
-        && r.json.inner_reason === 'ledger_regression',
-        '#816(T2): a staler MAIN ledger must refuse finalize_mirror_refused/ledger_regression, got status='
+      assert(r.status === 0 && r.json && r.json.reason !== 'finalize_mirror_refused',
+        '#816(T2): a staler MAIN ledger is repaired by the transaction, not refused, got status='
         + r.status + ' json=' + JSON.stringify(r.json));
-      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
-        '#816(T2): the refused mirror must leave the live project folder in place (no archive side effect)');
+      assert(r.json && r.json.finalize_transaction
+        && r.json.finalize_transaction.ledger_compare === 'synced_from_worktree',
+        '#816(T2): the transaction ledger must record the script-performed worktree→main sync, got '
+        + JSON.stringify(r.json && r.json.finalize_transaction));
       let wtPlan = '';
-      try { wtPlan = fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8'); } catch (_) {}
+      const archivedPlan = path.join(fx.wtRoot, 'kaola-workflow', 'archive', 'issue-816b', 'workflow-plan.md');
+      try { wtPlan = fs.readFileSync(archivedPlan, 'utf8'); } catch (_) {}
       assert(!!wtPlan && !/\| pending \|/.test(wtPlan),
-        '#816(T2): the refusal must happen BEFORE the copy — the worktree ledger stays complete');
+        '#816(T2): the staler main copy must NEVER regress the complete worktree ledger');
     } finally { cleanup816(fx); }
   }
 
@@ -5464,7 +5473,8 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       const archivedText = fs.existsSync(archivedPlan) ? fs.readFileSync(archivedPlan, 'utf8') : '';
       assert(archivedText && !/\| pending \|/.test(archivedText),
         '#837(P3): the sync must never regress the worktree ledger with the staler main copy');
-      const mainText = fs.readFileSync(path.join(fx.mainProjDir, 'workflow-plan.md'), 'utf8');
+      const mainPlanPath837 = path.join(fx.mainProjDir, 'workflow-plan.md');
+      const mainText = fs.existsSync(mainPlanPath837) ? fs.readFileSync(mainPlanPath837, 'utf8') : '';
       assert(!/\| pending \|/.test(mainText),
         '#837(P3): the MAIN project folder must be synced UP from the worktree by the script — '
         + 'that sync is the operator rsync this issue subtracts');
