@@ -32,8 +32,10 @@
 // is a second copy of the drawing, and two copies of a drawing agree with each other
 // while both disagree with the system):
 //   * unit states           `LEDGER_STATUSES` in kaola-workflow-adaptive-schema.js
-//   * unit transitions      every `spliceLedgerNode(…, '<to>', { allowFrom: [<from>…] })`
-//                           call site in kaola-workflow-adaptive-node.js
+//   * unit transitions      every `spliceLedgerNode(…, <to>, { allowFrom: [<from>…] })` call
+//                           site in kaola-workflow-adaptive-node.js. EVERY one: a site whose
+//                           to-status the scanner cannot read is an ERROR naming its line, not
+//                           a silent skip — see 1d
 //   * mid-run row creation  `appendLedgerRows`, which seeds new rows `pending`
 //   * the verb on a row     the CLI subcommand that reaches that call site, resolved by
 //                           walking the static call graph UPWARD from the splice site to
@@ -376,15 +378,127 @@ const READ_ONLY_SUBCOMMANDS = Object.freeze(['orient', 'mirror-project']);
 // `spliceLedgerNode(content, id, '<to>', { allowFrom: ['<from>', …] })` is the ONE seam
 // through which a `## Node Ledger` row status changes; every mutating subcommand routes
 // through it. Each call site is therefore a drawn-machine transition, stated in code.
+//
+// THE SCANNER MAY NOT SILENTLY SKIP A CALL SITE. Its first draft matched only a QUOTED
+// to-status in the third argument position, so a call passing a variable simply did not match
+// and was dropped without a word — measured: `spliceLedgerNode(currentPlan, nodeId, newStatus,
+// { allowFrom: ['in_progress'] })` in the close path was invisible to this entire suite, and
+// the banner reported one site fewer than the tree holds. That particular site is benign
+// (`newStatus` is a `const` set to 'complete' a few lines above, and in_progress->complete is
+// drawn), which is exactly why it survived: nothing went red, so nothing was noticed. The
+// defect is not the one site. It is that P6's "exhaustiveness is CHECKED, not claimed" was
+// false by construction — the NEXT splice written with a variable carrying an UNDRAWN status
+// would stay green forever. Same class as the swallowing catch that once hid a dead layer here.
+//
+// So the scanner now finds every call site, RESOLVES a simple local constant when the argument
+// is an identifier, and returns everything it still cannot read in `unresolved` — which the
+// non-vacuity block below turns RED, naming file and line. Unreadable is an error, not a skip.
+
+/**
+ * Split a call's argument list. `text` starts immediately after the opening paren.
+ * Returns { args, closed } — `closed` false means the call does not finish in `text`.
+ */
+function splitCallArgs(text) {
+  const args = [];
+  let cur = '';
+  let depth = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      cur += ch;
+      if (ch === '\\') { cur += text[i + 1] || ''; i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; cur += ch; continue; }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; cur += ch; continue; }
+    if (ch === ')' && depth === 0) { args.push(cur); return { args, closed: true }; }
+    if (ch === ')' || ch === ']' || ch === '}') { depth--; cur += ch; continue; }
+    if (ch === ',' && depth === 0) { args.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  args.push(cur);
+  return { args, closed: false };
+}
+
+/**
+ * Resolve `ident` to a string literal when the enclosing function assigns it EXACTLY ONCE,
+ * from a plain literal. Anything else (no declaration, two declarations, a reassignment, a
+ * computed initializer) returns null and the call site is reported unresolved — a value this
+ * scanner has to guess at is a value it is not checking.
+ *
+ * The declaration is LOCATED in the code-only view (so a worked example inside a comment
+ * cannot supply a value) and READ from the raw view at the same index (so the literal, which
+ * the code-only view blanks, is still there). `bodyOf` and `rawBodyOf` slice the same line
+ * range, so the two views stay aligned.
+ */
+function resolveLocalConst(idx, fnName, ident) {
+  if (!fnName) return null;
+  const rawBody = idx.rawBodyOf(fnName).split('\n');
+  const codeBody = idx.bodyOf(fnName).split('\n');
+  const esc = ident.replace(/\$/g, '\\$');
+  const assignRe = new RegExp('\\b' + esc + '\\s*=(?!=)');
+  const litRe = new RegExp('\\b(?:const|let|var)\\s+' + esc + "\\s*=\\s*'([a-z/_.]+)'\\s*;");
+  let assignments = 0;
+  const values = new Set();
+  for (let i = 0; i < codeBody.length; i++) {
+    if (!assignRe.test(codeBody[i] || '')) continue;
+    assignments++;
+    const m = litRe.exec(rawBody[i] || '');
+    if (m) values.add(m[1]);
+  }
+  return (assignments === 1 && values.size === 1) ? Array.from(values)[0] : null;
+}
+
+/**
+ * @returns {{sites: Array, unresolved: Array<{line:number, fn:string, reason:string, text:string}>}}
+ */
 function spliceSites(src, idx) {
-  const out = [];
-  src.split('\n').forEach((l, i) => {
-    const m = /spliceLedgerNode\([^,]+,\s*[^,]+,\s*'([a-z/_.]+)'\s*,\s*\{\s*allowFrom:\s*\[([^\]]*)\]/.exec(l);
-    if (!m) return;
-    const from = m[2].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
-    out.push({ line: i + 1, to: m[1], from, fn: idx.enclosing(i) });
-  });
-  return out;
+  const sites = [];
+  const unresolved = [];
+  const rawLines = String(src || '').split('\n');
+  // The code-only view decides WHERE a call is (a call written inside a comment or a template
+  // string is not a call); the raw view supplies the literals it is written with.
+  const codeLines = stripNonCode(String(src || '')).split('\n');
+  const callRe = /\bspliceLedgerNode\s*\(/g;
+  for (let i = 0; i < codeLines.length; i++) {
+    const code = codeLines[i] || '';
+    if (/\bfunction\s+spliceLedgerNode\s*\(/.test(code)) continue;   // the declaration
+    callRe.lastIndex = 0;
+    const hit = callRe.exec(code);
+    if (!hit) continue;
+    const fn = idx.enclosing(i);
+    if (fn === 'spliceLedgerNode') continue;                          // its own internals
+    const raw = rawLines[i] || '';
+    const at = raw.indexOf('spliceLedgerNode');
+    const open = at < 0 ? -1 : raw.indexOf('(', at);
+    const bad = (reason) => unresolved.push({ line: i + 1, fn, reason, text: raw.trim() });
+    if (open < 0) { bad('the call could not be located in the raw source line'); continue; }
+
+    const { args, closed } = splitCallArgs(raw.slice(open + 1));
+    if (!closed) { bad('the call does not close on its own line — this scanner reads one line per site'); continue; }
+    if (args.length < 4) { bad('only ' + args.length + ' argument(s) parsed; a splice takes (content, id, to, opts)'); continue; }
+
+    const toArg = args[2].trim();
+    let to = null;
+    const lit = /^'([a-z/_.]+)'$/.exec(toArg);
+    if (lit) to = lit[1];
+    else if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(toArg)) to = resolveLocalConst(idx, fn, toArg);
+    if (!to) {
+      bad('the to-status argument `' + toArg + '` is not a status literal and does not resolve to a '
+        + 'single local string constant in ' + (fn || '(top level)'));
+      continue;
+    }
+
+    const fm = /allowFrom:\s*\[([^\]]*)\]/.exec(args.slice(3).join(','));
+    if (!fm) { bad('no literal `allowFrom: [...]` array in the options argument'); continue; }
+    const from = fm[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
+    if (!from.length) { bad('the `allowFrom` array is empty or non-literal'); continue; }
+
+    sites.push({ line: i + 1, to, from, fn });
+  }
+  return { sites, unresolved };
 }
 
 // --- 1e. verb existence, per script, from that script's OWN dispatch.
@@ -474,7 +588,8 @@ function declaredSetLiteral(src, name) {
 const NODE_SRC = read(NODE_REL);
 const NODE_IDX = functionIndex(NODE_SRC);
 const NODE_DISPATCH = dispatchMap(NODE_SRC, NODE_IDX.byName);
-const SPLICES = spliceSites(NODE_SRC, NODE_IDX).filter(s => s.fn !== 'spliceLedgerNode');
+const SPLICE_SCAN = spliceSites(NODE_SRC, NODE_IDX);
+const SPLICES = SPLICE_SCAN.sites;
 for (const s of SPLICES) {
   s.verbs = Array.from(attributeVerbs(s.fn, NODE_DISPATCH.fnToVerbs, NODE_IDX.callers)).sort();
 }
@@ -509,7 +624,17 @@ assert(LEDGER_STATUSES.length >= 4,
   'DERIVE: LEDGER_STATUSES must be readable from the schema — got ' + JSON.stringify(LEDGER_STATUSES));
 assert(SPLICES.length >= 20,
   'DERIVE: the spliceLedgerNode scanner found ' + SPLICES.length + ' call sites; the shipped tree has '
-    + '25. Below 20 the scanner has gone blind on a shape change and every comparison under it is vacuous');
+    + '26. Below 20 the scanner has gone blind on a shape change and every comparison under it is vacuous');
+// FAIL CLOSED on anything the scanner could not read. A skipped site is not a smaller
+// measurement — it is a transition checked against nothing, and it is silent by definition.
+assert(SPLICE_SCAN.unresolved.length === 0,
+  'DERIVE: ' + SPLICE_SCAN.unresolved.length + ' spliceLedgerNode call site(s) in ' + NODE_REL
+    + ' have a to-status this scanner cannot read, so the transition each performs is compared '
+    + 'against NOTHING and P6 exhaustiveness is unfalsifiable for them:\n'
+    + SPLICE_SCAN.unresolved.map(u => '    ' + NODE_REL + ':' + u.line + ' in ' + (u.fn || '(top level)')
+      + ' — ' + u.reason + '\n      ' + u.text).join('\n')
+    + '\n  State the status literally at the call site, or assign it once in the enclosing function '
+    + 'as `const x = \'<status>\';` (that shape IS resolved). Do not widen the scanner to guess.');
 assert(CODE_PAIRS.size >= 5,
   'DERIVE: only ' + CODE_PAIRS.size + ' distinct (from -> to) ledger pairs were derived — the allowFrom '
     + 'parse has stopped working');
@@ -939,17 +1064,81 @@ function mutationBattery() {
     'MUTATION: checkExhaustive must ACCEPT a coherent two-state machine');
 
   // --- the derivation functions ---
-  assert(spliceSites('function f(){ }\n', functionIndex('function f(){ }\n')).length === 0,
-    'MUTATION: spliceSites must find nothing in a source with no ledger writes');
+  {
+    const empty = spliceSites('function f(){ }\n', functionIndex('function f(){ }\n'));
+    assert(empty.sites.length === 0 && empty.unresolved.length === 0,
+      'MUTATION: spliceSites must find nothing in a source with no ledger writes');
+  }
   {
     const src = 'function runFoo(o) {\n'
       + "  const r = spliceLedgerNode(c, id, 'complete', { allowFrom: ['in_progress'] });\n"
       + '}\n';
     const idx = functionIndex(src);
-    const sites = spliceSites(src, idx);
+    const { sites, unresolved } = spliceSites(src, idx);
     assert(sites.length === 1 && sites[0].to === 'complete' && sites[0].from.join(',') === 'in_progress'
-      && sites[0].fn === 'runFoo',
+      && sites[0].fn === 'runFoo' && unresolved.length === 0,
       'MUTATION: spliceSites must read to-status, allowFrom and the enclosing function from a real call shape');
+  }
+  {
+    // THE DOC-3 SHAPE. A to-status held in a local constant must RESOLVE, not vanish. Before
+    // this, the call did not match the scanner's regex at all and was dropped in silence.
+    const src = 'function runBar(o) {\n'
+      + "  const newStatus = 'complete';\n"
+      + '  const r = spliceLedgerNode(plan, id, newStatus, { allowFrom: [\'in_progress\'] });\n'
+      + '}\n';
+    const { sites, unresolved } = spliceSites(src, functionIndex(src));
+    assert(sites.length === 1 && sites[0].to === 'complete' && unresolved.length === 0,
+      'MUTATION: spliceSites must RESOLVE a to-status held in a single local string constant — got '
+        + JSON.stringify({ sites, unresolved }));
+  }
+  {
+    // ...and a to-status it CANNOT read must be an error naming the line, never a skip. This is
+    // the property the whole fix exists for: silence here makes exhaustiveness unfalsifiable.
+    const cases = [
+      ['a value computed at the call site',
+        'function runBaz(o) {\n'
+        + "  const r = spliceLedgerNode(plan, id, o.status || 'complete', { allowFrom: ['in_progress'] });\n"
+        + '}\n'],
+      ['an identifier with no local declaration',
+        'function runQux(o) {\n'
+        + "  const r = spliceLedgerNode(plan, id, someStatus, { allowFrom: ['in_progress'] });\n"
+        + '}\n'],
+      ['an identifier reassigned after its declaration',
+        'function runQuux(o) {\n'
+        + "  let s = 'complete';\n"
+        + "  if (o.skip) s = 'n/a';\n"
+        + "  const r = spliceLedgerNode(plan, id, s, { allowFrom: ['in_progress'] });\n"
+        + '}\n'],
+      ['a missing allowFrom array',
+        'function runCorge(o) {\n'
+        + "  const r = spliceLedgerNode(plan, id, 'complete', opts);\n"
+        + '}\n'],
+    ];
+    for (const [label, src] of cases) {
+      const { sites, unresolved } = spliceSites(src, functionIndex(src));
+      assert(sites.length === 0 && unresolved.length === 1 && unresolved[0].line >= 1,
+        'MUTATION: spliceSites must report ' + label + ' as UNRESOLVED with a line number rather than '
+          + 'skipping the call site — got ' + JSON.stringify({ sites, unresolved }));
+    }
+  }
+  {
+    // A call written inside a comment or a string is not a call, and must not be reported as an
+    // unreadable one — a fail-closed scanner that cries wolf gets disarmed.
+    const src = 'function runGrault(o) {\n'
+      + '  // e.g. spliceLedgerNode(plan, id, whatever, { allowFrom: [] })\n'
+      + '  const msg = "spliceLedgerNode(plan, id, nope, { allowFrom: [] })";\n'
+      + '}\n';
+    const { sites, unresolved } = spliceSites(src, functionIndex(src));
+    assert(sites.length === 0 && unresolved.length === 0,
+      'MUTATION: a spliceLedgerNode mention inside a comment or a string literal is not a call site — got '
+        + JSON.stringify({ sites, unresolved }));
+  }
+  {
+    // The declaration itself is not one of its own call sites.
+    const src = 'function spliceLedgerNode(content, nodeId, newStatus, opts) {\n  return null;\n}\n';
+    const { sites, unresolved } = spliceSites(src, functionIndex(src));
+    assert(sites.length === 0 && unresolved.length === 0,
+      'MUTATION: the spliceLedgerNode declaration must not be scanned as a call to itself');
   }
   assert(scanVerbs("const x = ['--porcelain', '--name-only'];", 'flag').size === 0,
     'MUTATION: the flag scan must NOT admit flags that merely appear as literals in a forwarded array — '
@@ -1165,6 +1354,6 @@ if (require.main === module) main();
 
 module.exports = {
   parseStateMachine, checkStateRows, checkEdgeRows, checkExhaustive,
-  functionIndex, dispatchMap, attributeVerbs, spliceSites, scanVerbs,
-  runStatusLiterals, declaredSetLiteral,
+  functionIndex, dispatchMap, attributeVerbs, spliceSites, splitCallArgs, resolveLocalConst,
+  scanVerbs, runStatusLiterals, declaredSetLiteral,
 };

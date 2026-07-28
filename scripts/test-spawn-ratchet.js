@@ -40,12 +40,27 @@
 //      else on the comment. Put any rationale on a separate comment line.
 //   3. Unclassified sites are counted per file and compared against the committed baseline
 //      `scripts/spawn-ratchet-baseline.json`.
-//   4. It FAILS only when a file's unclassified count EXCEEDS its baseline. Equal or lower
-//      passes; lowering a baseline number and committing it is always allowed and is the
-//      only maintenance path. A file with no baseline entry has an implicit baseline of 0 —
-//      enforcement is default-on and exempt-BY-BASELINE, never an opt-in allowlist.
+//   4. Enforcement is BIDIRECTIONAL, and only EQUAL passes. A count that EXCEEDS its row is a
+//      new unclassified site. A count BELOW its row is a STALE row: the ratchet already moved
+//      down and the row is carrying slack nobody granted. A row naming a file the ratchet no
+//      longer covers is stale too. All three are RED, and none can be satisfied by raising a
+//      number — the only maintenance path is LOWERING a row or DELETING it. A file with no
+//      baseline entry has an implicit baseline of 0 — enforcement is default-on and
+//      exempt-BY-BASELINE, never an opt-in allowlist, so a file legitimately at 0 needs no row
+//      and produces no noise.
+//
+//      One direction is not a ratchet. A guard that only fires when a number goes UP is
+//      silently disarmed by anything that moves a number down in the tree but not in the
+//      baseline — most cheaply by a 3-way merge that keeps the side with the older, higher
+//      numbers and reports no conflict. The slack it leaves behind is an exemption budget the
+//      next N sites spend without ever turning anything red. This mirrors the K->0 condition
+//      ratchet in scripts/test-route-reachability.js, whose stale-baseline direction enforces
+//      the identical discipline for the identical reason.
 //   5. An unrecognised class token is RED. The vocabulary is closed: widening it means
 //      amending the architecture decision that named the classes, deliberately.
+//   6. A baseline row that is not a non-negative integer is RED. `Number('lots')` is NaN and
+//      every comparison against NaN is false, so an unvalidated row is a silent exemption in
+//      BOTH directions — the exact shape this guard exists to refuse.
 //
 // A new spawn site therefore ships either classified as one of the five, or not at all.
 //
@@ -271,8 +286,23 @@ function main() {
         + ' — the vocabulary is closed to: ' + VALID_CLASSES.join(', '));
     }
 
-    const allowed = Object.prototype.hasOwnProperty.call(baseline.files, file)
-      ? Number(baseline.files[file]) : 0;
+    const hasRow = Object.prototype.hasOwnProperty.call(baseline.files, file);
+    const rawRow = hasRow ? baseline.files[file] : 0;
+    const allowed = Number(rawRow);
+
+    // An uncomparable row fails BEFORE either direction is evaluated. NaN loses every
+    // comparison silently, so a row that is not a plain non-negative integer would exempt its
+    // file from the ratchet entirely while still looking like enforcement.
+    if (!Number.isInteger(allowed) || allowed < 0) {
+      failures.push(file + ': baseline row is ' + JSON.stringify(rawRow)
+        + ', which is not a non-negative integer'
+        + '\n    every comparison against a non-number is false, so this row exempts the file in BOTH'
+        + '\n    directions. Fix it in scripts/spawn-ratchet-baseline.json (measured: '
+        + m.unclassified + ').');
+      rows.push({ file, sites: m.sites, classified: m.classified, unclassified: m.unclassified, allowed: NaN });
+      continue;
+    }
+
     if (m.unclassified > allowed) {
       failures.push(file + ': ' + m.unclassified
         + ' unclassified spawn sites exceeds the baseline of ' + allowed
@@ -281,18 +311,39 @@ function main() {
         + ',\n    or convert them in-process. Raising the baseline is not a fix.'
         + '\n    unclassified lines in this file (last 12): '
         + m.unclassifiedLines.slice(-12).join(', '));
+    } else if (hasRow && m.unclassified < allowed) {
+      // The other direction. Slack a row carries but the file does not need is an exemption
+      // budget nobody granted — and the cheapest way to acquire one is a 3-way merge that
+      // keeps the side with the older, higher number and reports no conflict.
+      failures.push('stale-baseline: ' + file + ' measures ' + m.unclassified
+        + ' unclassified spawn site(s) but its baseline row allows ' + allowed
+        + '\n    the ratchet already moved DOWN and the row did not follow it. LOWER the row to '
+        + m.unclassified
+        + (m.unclassified === 0
+          ? ' — or DELETE it, since a\n    row of 0 is the implicit default for every covered file'
+          : '')
+        + ' in scripts/spawn-ratchet-baseline.json.'
+        + '\n    Enforcement is bidirectional and only EQUAL passes: ' + (allowed - m.unclassified)
+        + ' slot(s) of slack is ' + (allowed - m.unclassified)
+        + ' unclassified\n    site(s) that could be added back with the gate still green.');
     }
-    if (m.sites > 0 || allowed > 0) {
+    if (m.sites > 0 || allowed > 0 || hasRow) {
       rows.push({ file, sites: m.sites, classified: m.classified, unclassified: m.unclassified, allowed });
     }
   }
 
-  // A baseline entry naming a file that no longer exists is stale, not a failure —
-  // deletion is the strongest possible tightening.
+  // A baseline entry naming a file the ratchet no longer covers is the same defect in its
+  // strongest form: an exemption with nothing to exempt, which silently re-attaches itself to
+  // any future file that lands on that path. Deletion is the only fix, so this is RED rather
+  // than a console note nobody reads.
   for (const file of Object.keys(baseline.files)) {
     if (!Object.prototype.hasOwnProperty.call(measured, file)) {
-      console.log('spawn-ratchet: baseline entry for ' + file
-        + ' is stale (file gone, or a pre-migration bare basename) — drop the row when convenient');
+      failures.push('stale-baseline: ' + file + ' carries a baseline row of '
+        + JSON.stringify(baseline.files[file])
+        + ' but the ratchet no longer covers that file'
+        + '\n    (deleted, renamed, or a pre-migration bare basename). DELETE the row from'
+        + '\n    scripts/spawn-ratchet-baseline.json — the baseline may only shrink, and a row that'
+        + '\n    outlives its file pre-grants an exemption to whatever lands on that path next.');
     }
   }
 
@@ -306,7 +357,8 @@ function main() {
         + '  classified=' + String(r.classified).padStart(4)
         + '  unclassified=' + String(r.unclassified).padStart(4)
         + '  baseline=' + String(r.allowed).padStart(4)
-        + (slack > 0 ? '  (-' + slack + ')' : ''));
+        + (slack > 0 ? '  (STALE: row carries ' + slack + ' slot(s) of unused slack)' : '')
+        + (slack < 0 ? '  (EXCEEDS by ' + (-slack) + ')' : ''));
     }
   }
 
@@ -322,7 +374,7 @@ function main() {
     .map(r => r.file + ' ' + r.unclassified);
   console.log('spawn-ratchet passed (' + totalSites + ' spawn sites across ' + rows.length
     + ' files; ' + totalClassified + ' classified, ' + totalUnclassified
-    + ' unclassified at or under baseline'
+    + ' unclassified, every baseline row exact in both directions'
     + (heaviest.length ? '; heaviest: ' + heaviest.join(', ') : '') + ')');
 }
 
