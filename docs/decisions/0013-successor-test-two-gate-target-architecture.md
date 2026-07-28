@@ -182,10 +182,29 @@ it, so the vocabulary is carried here as a parseable block rather than as Englis
 fenced list is the single left-hand side of the three-way equality invariant: the
 registry's key set, the vocabulary constant, and this block must be equal, and a code
 present in any two but not the third fails the build. The sweep's **cell** set is a
-different set and is deliberately NOT part of this equality — cells are derived, one per
-(code x declared discriminator value), so a family that gains a discriminator value gains
-its cells automatically. Deriving them is what makes the sweep meaningful: walking seven
-codes would prove almost nothing.
+different set and is deliberately NOT part of this equality — cells are derived off the
+payload schema, so a family that gains a discriminator value gains its cells automatically.
+Deriving them is what makes the sweep meaningful: walking seven codes would prove almost
+nothing.
+
+**The derivation has two halves, and quoting only the first understates it** (see
+`deriveCells()` in `scripts/test-refusal-route-sweep.js`). The base is one cell per
+(code x declared discriminator value) — **49 on HEAD**, the sum of the seven families'
+`REFUSAL_PAYLOAD_SCHEMAS[...].values` enums (4 + 11 + 10 + 3 + 3 + 12 + 6). On top of that,
+a family that declares a **second payload field selecting a different route or hint ARM under
+the same primary value** splits its cells again — three do, and each declares it differently,
+which is exactly why the short formula misses them: `kernel_write_failed` record x {retry,
+environment}, where the arm is selected by the presence of an `errno` from the schema's own
+`enums.errno` (+4, one environment arm per record value, probed with `ENOSPC`);
+`kernel_lock_held` kind x {live, stale}, the one family carrying an explicit
+`secondary_discriminator: 'stale'` (+3); and `sink_verdict`'s `unattributed_paths` kind x the
+8 values of its nested `enums.subtype` (+8). That is **15 secondary-arm cells, for 64 in
+total** — the number the sweep reports and walks. The WHY slot
+is keyed on the primary pair alone, which is why it reports 49 live cells against 64 walked;
+the secondary split belongs to the FACT, not the WHY. A re-derivation from the base half
+alone would build 49 cells and silently drop the environment, stale-lock and subtype arms —
+the arms whose whole point is that the same code exits differently — while the "7 codes"
+check still agreed.
 
 Three columns: the code, its locus, and whether it is auto-remediable. A row's
 `auto_remediable` is `no` exactly when repairing the deviation would launder the evidence
@@ -205,8 +224,22 @@ This block is **normative and closed**: adding a row is an amendment to this ADR
 the anti-growth ratchet in its literal form. `scripts/test-refusal-route-sweep.js` parses
 it and asserts it equals `Object.keys(KERNEL_REFUSAL_REGISTRY)` and
 `KERNEL_REFUSAL_VOCABULARY` exactly, in both directions — so the registry has no
-independent content to drift with, and a code minted in a script (including one built by
-string concatenation at runtime) fails the build.
+independent content to drift with.
+
+**Exactly what that buys, stated narrowly, because the guarantee is easy to overclaim.**
+Three minting paths and only three fail the build: (a) a code added to any ONE or TWO of the
+fence / `KERNEL_REFUSAL_REGISTRY` / `KERNEL_REFUSAL_VOCABULARY` — the three-way equality; (b)
+a discriminator value declared without a route, or a route keyed on an undeclared value —
+the bidirectional key parity below; (c) re-using one of the seven FAMILY names as a legacy
+`condition` literal anywhere in `scripts/kaola-workflow-*.js`, which the census forbids so
+the two namespaces cannot collide. A payload passed to the kernel emitters carrying an
+unenumerated code is rejected by `validateRefusalPayload` at **RUNTIME**, not at build time.
+And a **brand-new reason string emitted directly in a script's own refusal envelope fails
+nothing at all** — that is how every legacy condition is emitted today (the sweep's census
+measures 734 distinct condition values on HEAD), and the census neither ratchets nor caps
+them: `unclassified` is a PRINTED METRIC (374 of those 734), with no assertion behind it. So the ratchet binds the *enumerated
+vocabulary*, not the codebase's ability to mint a string; closing that second gap is what
+demoting the legacy census to zero is for, and until then it is a review obligation.
 
 Specificity is carried in the payload. Each family declares its discriminator enum in
 `REFUSAL_PAYLOAD_SCHEMAS`, and its route table is keyed by that same enum — the sweep
@@ -444,7 +477,10 @@ hold ~1,100 static spawn sites (785 / 197 / 126) — exactly the suites behind t
 gate's rotating slice, each spawn paying node startup plus a 7–17k-line parse for no
 added evidence. **Two claims in the preceding sentences were refuted by measurement and
 are retracted by amendment 8: the per-spawn startup cost, and the parallelization
-premise below.** The necessary set is larger than the ~10% first estimated here, because
+premise below.** **The four spawn-site counts in the preceding sentence are stale and are
+retracted by amendment 11, which carries the re-measured values; `scripts/test-spawn-ratchet.js`
+is the instrument of record and no number here is authoritative against it.** The
+necessary set is larger than the ~10% first estimated here, because
 the fifth class is populous. Production composition is already in-process (aggregators `require` their
 siblings' pure functions); the residual production subprocess cost — 56 `git` execs in
 the node lifecycle plus the validator shell in barrier choreography — is a bounded,
@@ -731,6 +767,68 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
     L2 or A3") is only checkable if the loci are the whole space. An incomplete drawing
     does not merely under-describe — it makes the decision's own guarantees unfalsifiable,
     which is precisely the charge this ADR levels at the 474 refusals it replaces.
+
+11. **The § process-boundary spawn measurements are stale, and are retracted rather than
+    quietly rewritten.** They were present-tense claims about a tree the campaign then
+    changed under them, and no amendment had said so — the exact failure mode amendment 6
+    named (an imported claim carries no evidence with it). Re-measured on HEAD with the
+    instrument of record, `node scripts/test-spawn-ratchet.js` (banner) and its
+    `measure()` export (per file):
+
+    - **`test-adaptive-handoff`: "0 spawn sites" is FALSE — it holds 2** (both unclassified,
+      baseline row 2). `test-oracle-kernel`'s 0 still holds.
+    - **`test-replan`: "11" is still the total, but the number no longer means what the
+      sentence uses it for** — 11 sites, of which 5 are now CLASSIFIED (2 `cli-contract`,
+      3 `durable-handoff`) and 6 unclassified. Quoted as "sites the pattern left behind" it
+      now overstates by ~2x.
+    - **"the three pre-pattern heavyweights hold ~1,100 static spawn sites (785 / 197 / 126)"
+      is stale on both halves.** The sentence also conflates two different triples: the
+      suites behind the fast gate's rotating `--shard auto/12` slice are
+      `simulate-workflow-walkthrough` / `test-adaptive-node` / `test-replan` (**140 / 87 /
+      11 = 238 sites today**), while the 785 / 197 / 126 parenthetical tracks
+      `simulate-workflow-walkthrough` / `test-adaptive-node` / `test-claim-hardening`
+      (**140 / 87 / 83 = 310 today**), and `test-claim-hardening` is not in the fast chain
+      at all. Neither triple is anywhere near ~1,100.
+    - **Amendment 8's own "already-landed call-site reduction (2,056 → 872 sites)" must not
+      be re-quoted as a live number.** It was a correct point-in-time total; the same
+      instrument reported 880 at `6548f76c` and 883 at `efdab963`, and reports **885 total
+      sites across 55 files — 265 classified, 620 unclassified** today. The reduction it
+      records happened; the residue is what moved.
+
+    The durable rule this leaves behind: **this document does not carry live spawn counts.**
+    `scripts/test-spawn-ratchet.js` plus `scripts/spawn-ratchet-baseline.json` are the
+    measurement of record, they are tighten-only and default-on, and any figure quoted here
+    is a dated observation — cite the command, not the number.
+
+12. **Amendment 6's own measured formula was half-wrong, and the missing half is the
+    load-bearing one.** It corrected the false three-way equality (§ Layer 2, cells are NOT
+    part of it — that part stands) but then stated the derivation as "(code x declared
+    discriminator value). Measured: 7 codes, 64 cells". Those two halves disagree against
+    the shipped `deriveCells()`: (code x declared discriminator value) is **49** on HEAD, and
+    the sweep's **64** adds **15 SECONDARY-ARM cells** — `kernel_write_failed` record x
+    {retry, environment} (+4), `kernel_lock_held` kind x {live, stale} (+3), and
+    `sink_verdict`'s `unattributed_paths` x its 8 declared subtypes (+8). The full derivation
+    is now written out in § Layer 2. This matters in exactly one direction and it is the
+    dangerous one: an implementer re-deriving the cell set from the stated formula would
+    build 49 cells, silently drop every secondary arm — the arms that exist *because* the
+    same code exits differently on the same primary discriminator — and still pass the "7
+    codes" check, so the sweep would weaken with nothing turning red. The sweep's own
+    `live_cells=49 / 64 walked` banner is the reconciliation: the WHY slot keys on the
+    primary pair, the FACT keys on the arm.
+
+13. **§ Layer 2's minting claim was overbroad; the true guarantee is narrower and is now
+    stated as such.** The text read "a code minted in a script (including one built by string
+    concatenation at runtime) fails the build". Verified against the sweep: what fails the
+    build is a code out of sync across the fence / registry / vocabulary, a discriminator
+    value without a route (or a route for an undeclared value), and re-use of one of the
+    seven family names as a legacy `condition` literal. An unenumerated code handed to the
+    kernel emitters is rejected by `validateRefusalPayload` at **runtime**. A brand-new
+    reason string emitted directly in a script's own envelope — the way every legacy
+    condition is emitted today — fails **nothing**: the census counts 734 distinct condition
+    values and prints `unclassified=374` as a METRIC with no assertion behind it. The
+    overclaim is not cosmetic; read literally it says the anti-growth ratchet already binds
+    the whole codebase, which would retire the demotion batches that are the only thing that
+    can actually make it true.
 
 Also sharpened, not amended: **P4 now states that M2's ordering is load-bearing.** The
 recorder must land with the registry batch; only the reporter may follow M3. A before/after
