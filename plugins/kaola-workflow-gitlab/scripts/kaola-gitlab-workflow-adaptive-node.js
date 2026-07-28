@@ -5511,6 +5511,57 @@ function reExpansionWindowUnits(parsed, covered) {
   return byUnit;
 }
 
+// healUnprojectedInteriors — THE REMEDY THAT RETIRED `owner_projection_write_failed` (ADR 0013 R3).
+//
+// The condition it repairs: a re-expansion record is COMMITTED on a projection-COVERED point and no
+// projection entry carries its leaves, because the append that should have landed in the same
+// transaction did not take (a full disk, an unwritable .cache/epoch-projections/). The old answer was
+// a hard mid-run refusal that rolled the whole transaction back and told an operator to re-run the
+// verb by hand. The agent's next step after that refusal was a deterministic transformation — append
+// the entry the previous call computed — which is R3's definition of a missing tool wearing a
+// uniform. So the script performs it.
+//
+// THE PREDICATE IS `reExpansionWindowUnits`' OWN, deliberately, and that is what bounds this under
+// R4. Only a record whose point a PREVIOUS DISCHARGE already projected qualifies: the run has already
+// proven, durably, that it owns that interior, so re-stating the ownership adds no claim the plan
+// does not already make. A never-discharged point is a FIRST expansion and is skipped — nothing to
+// re-state. Nothing here reads, repairs or rewrites a hash, a chain or a diff, so no evidence can be
+// laundered: the only thing appended is an entry derived, byte for byte, from the committed record.
+//
+// TOTAL AND FAIL-OPEN. It never throws and never refuses; `ensureOwnerProjection` is idempotent per
+// (point, records, leaves), so a healthy plan is a no-op and a still-faulting substrate leaves the run
+// exactly where it was — in the typed `reexpansion_in_flight` class, which is the run's own in-flight
+// append and already carries its route. Returns the record ids it appended, for the caller's emit.
+function healUnprojectedInteriors(opts) {
+  const healed = [];
+  try {
+    if (!opts || typeof opts.readFile !== 'function' || !opts.planPath) return healed;
+    const content = opts.readFile(opts.planPath);
+    const validator = require('./kaola-gitlab-workflow-plan-validator');
+    if (validator.parsePlanForm(content).form !== 'spine') return healed;
+    const planHash = planHashFromContent(content);
+    if (!planHash) return healed;
+    const projection = loadOwnerProjection(opts, planHash);
+    if (!projection.present) return healed;
+    const parsed = validator.parseExpansionRecords(content);
+    const window = reExpansionWindowUnits(parsed, projection.points);
+    if (!window.size) return healed;
+    // Group the window's units back into their records, so each append reproduces exactly the entry
+    // the failed transaction would have written (one entry per record, leaves sorted by the writer).
+    const byRecord = new Map();
+    for (const [unitId, owner] of window) {
+      if (!byRecord.has(owner.record)) byRecord.set(owner.record, { point: owner.point, units: [] });
+      byRecord.get(owner.record).units.push({ id: unitId });
+    }
+    const stamp = (typeof opts.now === 'function') ? opts.now() : new Date().toISOString();
+    for (const [recordId, rec] of byRecord) {
+      const out = ensureOwnerProjection(opts, planHash, rec.point, [{ id: recordId, units: rec.units }], stamp);
+      if (out === 'appended') healed.push(recordId);
+    }
+  } catch (_) { /* fail-open: a remedy that refuses is the thing this function replaced */ }
+  return healed;
+}
+
 // routeMismatchDetail — the TYPED detail on the surviving `review_journal_route_mismatch`. Three
 // classes, all fail-closed, in precedence order:
 //   projection_missing — the rows reference a REAL unit of a DISCHARGED expansion point that no
@@ -14867,47 +14918,53 @@ function runExpandOpen(opts) {
   // entry for units that never landed is INERT (canonicalization only ever sees ids the route rows
   // actually carry), whereas the reverse order re-opens the exact window on any crash in between.
   //
-  // AND IT IS A PRECONDITION, NOT A COURTESY — this write FAILING CLOSED is what makes "the window
-  // never exists" unconditionally true. Ordering alone only defeats a CRASH between the two writes;
-  // it does nothing about the write simply not taking (ENOSPC, EACCES on .cache/epoch-projections/),
-  // and carrying on past that lands the record with no projection to cover it — the window, re-opened
-  // by the one branch that was supposed to close it. The fail-open posture the rest of this path uses
-  // is not available here: the discharge may carry on over a failed projection write because its
-  // already-discharged re-ensure re-attempts it idempotently, and the re-open has no such repair —
-  // the re-activation cascade rides in the very write below, so the instant it lands the point reads
-  // `pending` and the re-open verb refuses `reexpansion_point_not_discharged` on every retry.
+  // AND WHEN THAT WRITE DOES NOT TAKE, THE ANSWER IS A TOOL, NOT A REFUSAL (ADR 0013 R3).
   //
-  // So: no plan write, no cascade, no residue — the milestone is byte-identical to before the call,
-  // and the refusal names the substrate fault at the moment and place it happened rather than
-  // surfacing three layers downstream as a review-journal route mismatch. A second failure is a
-  // second identical no-op refusal; retrying after the substrate recovers is a fresh transaction.
+  // Ordering alone only defeats a CRASH between the two writes; it does nothing about the write
+  // simply not taking (ENOSPC, EACCES on .cache/epoch-projections/). This branch used to fail CLOSED
+  // on that — a hard MID-RUN refusal (`owner_projection_write_failed`), which R1 forbids outright:
+  // the only legitimate mid-run interrupt is the A3 consent valve, and a refusal that stalls a live
+  // frontier is itself a workflow-created serializer. R4 admits the remedy: a failed write is not a
+  // deviation that is ITSELF EVIDENCE (no hash disagrees, no chain is broken, no diff is
+  // unattributed) — it is an ABSENT write, and re-performing an absent write launders nothing.
+  //
+  // So the script performs the remedy instead of demanding it. `healUnprojectedInteriors` re-attempts
+  // exactly this append, deterministically, from durable state alone: it re-reads the committed
+  // records, keeps the ones on a projection-COVERED point that no discharge covers, and appends their
+  // leaves. It runs at the top of `openExpansionFrontier`, which is Phase 2 of THIS call and also the
+  // body of `reconcile-running-set`'s roll-forward — so the missing entry is re-written by the very
+  // next in-grammar verb, with no operator triage and no re-dispatch.
+  //
+  // What the residue looks like in between is the reason this is safe rather than merely cheaper: a
+  // committed-but-unprojected record on a covered point is precisely the `reexpansion_in_flight`
+  // class, the run's OWN append, already typed and already routed. The window is no longer "closed
+  // by construction"; it is closed by a tool that runs unprompted, and while it is open the run reads
+  // as in-flight rather than as forgery. `owner_projection` rides out on the ok envelope so the
+  // measurement is never silent.
   const reopenFault = {};
   const reopenProjection = opts._allowDischarged
     ? ensureOwnerProjection(opts, planHash, nodeId, [{ id: recordId, units: unitIds.map(id => ({ id })) }],
       (typeof now === 'function') ? now() : new Date().toISOString(), reopenFault)
     : null;
-  if (reopenProjection === 'write_failed') {
-    // The verb to name is the one the OPERATOR ran: an amend-surface re-open carries its amendment in
-    // `_amendBlockText`, and pointing that operator at bare reexpand-open would silently drop it.
-    const retryVerb = opts._amendBlockText ? 'amend-surface' : 'reexpand-open';
-    return refuse('owner_projection_write_failed', {
+  const reopenProjectionAdvisory = reopenProjection === 'write_failed'
+    ? {
       node_id: nodeId,
       path: reopenFault.path || null,
-      // The FIELD is enum-bound to the errnos that mean "blocker outside the runtime" (that is what
-      // selects the environment route); any other errno is still reported, in the detail.
+      // The FIELD is enum-bound to the errnos that mean "blocker outside the runtime"; any other
+      // errno is still reported, in the detail.
       ...(WRITE_FAILED_ENVIRONMENT_ERRNOS.indexOf(reopenFault.errno) >= 0 ? { errno: reopenFault.errno } : {}),
-      retry_script: 'adaptive-node',
-      retry_verb: retryVerb,
-      retry_args: '--project <P> --node-id ' + nodeId
-        + (retryVerb === 'amend-surface' ? ' --files "<paths>"' : '') + ' --json',
+      remedy_script: 'adaptive-node',
+      remedy_verb: 'reconcile-running-set',
+      remedy_args: '--project <P> --json',
       detail: 'the re-open could not write the owner projection'
         + (reopenFault.errno ? ' (' + reopenFault.errno + ')' : '')
         + (reopenFault.path ? ' at ' + reopenFault.path : '')
-        + '. That write is a PRECONDITION of the record append, so NOTHING was committed: the plan, '
-        + 'the ledger and the milestone are exactly as they were before this call. Clear the substrate '
-        + 'fault, then re-run ' + retryVerb + ' — a fresh transaction, not a resume.',
-    });
-  }
+        + '. The record was committed anyway and the projection append is RE-ATTEMPTED automatically '
+        + 'by the next expansion-frontier open (this call\'s Phase 2, and reconcile-running-set\'s '
+        + 'roll-forward). Until it lands the run reads as reexpansion_in_flight — its own in-flight '
+        + 'append, never tamper — and the re-discharge appends the superseding entry regardless.',
+    }
+    : null;
   writeFile(planPath, seeded);
 
   // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
@@ -14946,6 +15003,10 @@ function runExpandOpen(opts) {
     expansion_point: nodeId,
     ordinal,
     ...(reopenProjection ? { owner_projection: reopenProjection } : {}),
+    // ADVISORY, not a refusal (R1/R3): the fault is REPORTED on a successful envelope and the remedy
+    // runs itself. Present only on the failed-write arm, so a consumer testing for it is testing for
+    // a real substrate fault and never for the healthy path.
+    ...(reopenProjectionAdvisory ? { owner_projection_advisory: reopenProjectionAdvisory } : {}),
     ...(reactivation ? { reactivation } : {}),
     units: composed.units.map((u, i) => ({ ...u, id: unitIds[i] })),
     derivation: composed.derivation,
@@ -14962,6 +15023,13 @@ function runExpandOpen(opts) {
 // and the `open()` proof block is appended only when it is absent.
 function openExpansionFrontier(opts, recordId) {
   const { planPath, readFile, writeFile, now } = opts;
+  // R3, THE MISSING TOOL: re-attempt any owner-projection append a previous transaction could not
+  // land. This is the remedy that retired `owner_projection_write_failed` — it runs BEFORE
+  // runOpenReady because the mismatched journal is exactly what runOpenReady would otherwise refuse
+  // on, and it runs here because this function is the ONE body shared by expand-open Phase 2,
+  // reexpand-open Phase 2 and reconcile-running-set's roll-forward. Total and fail-open: a substrate
+  // still faulting leaves the run exactly where it was, in the typed reexpansion_in_flight class.
+  healUnprojectedInteriors(opts);
   const opened = runOpenReady(opts);
   if (opened && opened.result === 'refuse') {
     return { ...opened, expansion_phase: 'open', expansion_id: recordId };
@@ -15688,70 +15756,108 @@ function finalFixEntryShapeFault(entry) {
   return null;
 }
 
-// runFinalFixCommit — the ONE commitment point. The ladder is PRECEDENCE-ORDERED so an operator is
-// told the OUTERMOST fault first: a receipt complaint about a lane that is not open at all would send
-// them to fix the wrong thing. EVERY refusal is ZERO-WRITE — no register created or modified, the
-// frozen plan byte-identical, git untouched — so a refused call is a pure no-op.
-function runFinalFixCommit(opts) {
-  const { planPath, project, entry, readFile, writeFile } = opts;
-  let content;
-  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+// evaluateFinalFixPreconditions — ONE PASS over EVERY precondition of the final-fix lane (ADR 0013,
+// the #837 report-all shape applied to the second ladder in the codebase).
+//
+// WHAT THIS SUBTRACTS. The lane used to be a five-rung SERIAL ladder: each rung was observable only
+// once every rung above it had been cleared, so an operator learned exactly ONE new fact per
+// finalize round-trip and a submission with three faults cost three refusals. Nothing is learned
+// one-refusal-at-a-time that cannot be learned in one pass, and refusal interruption cost is
+// superlinear in a ladder — which is why the finalize ladder in `kaola-gitlab-workflow-claim.js` was
+// collapsed the same way and why this pass deliberately reuses its emitted shape (`checks` +
+// `reasons`) rather than authoring a second vocabulary for the same idea.
+//
+// WHAT THIS DOES NOT SUBTRACT — the WALLS. Every rung still fails closed, still zero-write, and the
+// two R4/A3-grade ones are untouched in strength: the PRODUCTION-SURFACE wall (a behavior change
+// arriving after every reviewer is discharged is a deviation that is ITSELF EVIDENCE, so it is
+// reported and never repaired) and the PRISTINE pre-push boundary (past the sink's first
+// irreversible step the record is immutable history). Collapsing a ladder means reporting its rungs
+// together, not lowering any of them.
+//
+// PRECEDENCE IS PRESERVED, and it is still the OUTERMOST-first order — a receipt complaint about a
+// lane that is not open at all would send an operator to fix the wrong thing. It now decides which
+// token leads the report, not which facts the operator is allowed to see.
+//
+// EVALUATION ORDER IS NOT PRECEDENCE. A rung whose input the pass cannot trust reports
+// `not_checked` rather than inventing a second verdict for the same missing artifact: the entry's
+// STRUCTURAL shape is still proven before anything git-shelling recomputes a candidate from it, and
+// the surface classifier is skipped when `files` is not a usable list. STRICTLY READ-ONLY: no
+// register created or modified, the frozen plan byte-identical, git only ever read.
+function evaluateFinalFixPreconditions(opts, content) {
+  const { planPath, project, entry, readFile } = opts;
+  const checks = {
+    sink: 'live',
+    sink_progress: 'pristine',
+    receipt: 'ok',
+    surface: 'not_checked',
+    register: 'ok',
+  };
+  const reasons = [];
+  const payload = {};
+  const details = [];
+  const fail = (reason, fields, detail) => {
+    reasons.push(reason);
+    Object.assign(payload, fields || {});
+    details.push(detail);
+  };
 
   // ---- RUNG 1: the lane is SINK-OWNED. No live sink ⇒ this run is not in finalization at all. ----
   const statuses = readLedgerStatuses(content);
   const sink = reviewSchema.finalizeSinkStatus(parseNodesFromContent(content), id => statuses[id]);
   if (!sink.live) {
-    return refuse('final_fix_sink_not_live', {
-      sink_node: sink.id, sink_status: sink.status || 'none',
-      detail: sink.id
+    checks.sink = sink.status || 'none';
+    fail('final_fix_sink_not_live', { sink_node: sink.id, sink_status: sink.status || 'none' },
+      sink.id
         ? 'the terminal sink "' + sink.id + '" is "' + (sink.status || 'unknown') + '", not in_progress'
-        : 'the plan has no unique terminal finalize node',
-    });
+        : 'the plan has no unique terminal finalize node');
   }
 
   // ---- RUNG 2: the PRISTINE boundary — the lane's HARD CLOSE. Three-valued, fail-closed: only ----
   // ---- 'pristine' admits, because a false 'pristine' after a push would rewrite a shipped run. ----
   const progress = deriveSinkProgress(opts, content);
+  checks.sink_progress = progress.state;
   if (progress.state !== 'pristine') {
-    return refuse('final_fix_after_sink_started', {
-      sink_node: sink.id, sink_progress: progress.state,
-      detail: 'the sink has taken (or may have taken) its first irreversible step — ' + progress.evidence
-        + '; after that the record is immutable history and recovery is a follow-up issue, never a rewrite',
-    });
+    fail('final_fix_after_sink_started', { sink_node: sink.id, sink_progress: progress.state },
+      'the sink has taken (or may have taken) its first irreversible step — ' + progress.evidence
+      + '; after that the record is immutable history and recovery is a follow-up issue, never a rewrite');
   }
 
   // ---- RUNG 3: the receipt must bind THE EXACT FAILED COMMAND to the POST-FIX candidate. ----
-  const shapeFault = finalFixEntryShapeFault(entry);
-  if (shapeFault) return refuse('final_fix_unverified', { detail: shapeFault });
   const validator = require('./kaola-gitlab-workflow-plan-validator');
   let hashRoot;
   try { hashRoot = opts.repoRoot || getRoot(); } catch (_) { hashRoot = process.cwd(); }
-  let candidate = null;
-  try {
-    candidate = validator.computeCodeTreeHash(hashRoot, project, validator.parseValidationTestConsumes(content));
-  } catch (_) { candidate = null; }
-  if (!candidate) {
-    return refuse('final_fix_unverified', {
-      detail: 'the current candidate code-tree hash could not be computed (git failure) — the receipt cannot be bound',
-    });
-  }
-  if (entry.rerun.candidate_hash !== candidate) {
-    return refuse('final_fix_unverified', {
-      recorded_candidate_hash: entry.rerun.candidate_hash, current_candidate_hash: candidate,
-      detail: 'the rerun receipt is bound to candidate ' + entry.rerun.candidate_hash
-        + ' but the current candidate is ' + candidate + ' — the tree moved after the green run, so the '
-        + 'receipt no longer describes what is about to ship',
-    });
-  }
+  const shapeFault = finalFixEntryShapeFault(entry);
   let fixCommit = null;
-  try {
-    fixCommit = execFileSync('git', ['-C', hashRoot, 'rev-parse', '--verify', '--quiet', entry.fix_commit + '^{commit}'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch (_) { fixCommit = null; }
-  if (!fixCommit) {
-    return refuse('final_fix_unverified', {
-      detail: 'fix_commit "' + entry.fix_commit + '" does not resolve to a commit in this repo',
-    });
+  if (shapeFault) {
+    checks.receipt = 'malformed';
+    fail('final_fix_unverified', {}, shapeFault);
+  } else {
+    let candidate = null;
+    try {
+      candidate = validator.computeCodeTreeHash(hashRoot, project, validator.parseValidationTestConsumes(content));
+    } catch (_) { candidate = null; }
+    if (!candidate) {
+      checks.receipt = 'candidate_uncomputable';
+      fail('final_fix_unverified', {},
+        'the current candidate code-tree hash could not be computed (git failure) — the receipt cannot be bound');
+    } else if (entry.rerun.candidate_hash !== candidate) {
+      checks.receipt = 'candidate_drift';
+      fail('final_fix_unverified',
+        { recorded_candidate_hash: entry.rerun.candidate_hash, current_candidate_hash: candidate },
+        'the rerun receipt is bound to candidate ' + entry.rerun.candidate_hash
+        + ' but the current candidate is ' + candidate + ' — the tree moved after the green run, so the '
+        + 'receipt no longer describes what is about to ship');
+    } else {
+      try {
+        fixCommit = execFileSync('git', ['-C', hashRoot, 'rev-parse', '--verify', '--quiet', entry.fix_commit + '^{commit}'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      } catch (_) { fixCommit = null; }
+      if (!fixCommit) {
+        checks.receipt = 'fix_commit_unresolved';
+        fail('final_fix_unverified', {},
+          'fix_commit "' + entry.fix_commit + '" does not resolve to a commit in this repo');
+      }
+    }
   }
 
   // ---- RUNG 4: the SCOPE class, and this wall is HARD (D-826-01 + its DIR-2 reversal). Apparatus ----
@@ -15759,37 +15865,80 @@ function runFinalFixCommit(opts) {
   // ---- entry is not consulted for a receipt at all: a verdict that varied with one would be a ----
   // ---- verdict that CONSULTS it, and that is the first half of laundering a deviation into an ----
   // ---- admission. The refusal is zero-write and carries the typed exit, so it is a fork, not a wall. ----
-  const surface = classifyFinalFixSurface(entry.files, project);
-  if (surface.surface_class === 'production') {
-    return refuse('final_fix_production_surface', {
-      production_paths: surface.production,
-      detail: 'a finalize-time fix that touches production behavior is a deviation that is ITSELF EVIDENCE — '
+  let surface = null;
+  if (entry && Array.isArray(entry.files) && entry.files.length
+    && entry.files.every(p => typeof p === 'string' && p.trim())) {
+    surface = classifyFinalFixSurface(entry.files, project);
+    checks.surface = surface.surface_class;
+    if (surface.surface_class === 'production') {
+      fail('final_fix_production_surface', { production_paths: surface.production },
+        'a finalize-time fix that touches production behavior is a deviation that is ITSELF EVIDENCE — '
         + 'evidence that the certification standing over this candidate no longer describes it — so it is '
-        + 'reported, never recorded into this register; the exit is the refuted shape, not a wider lane',
+        + 'reported, never recorded into this register; the exit is the refuted shape, not a wider lane');
+    }
+  }
+
+  // ---- RUNG 5: the EXISTING register must verify before anything is appended to it. ----
+  const registerPath = path.join(path.dirname(planPath), '.cache', reviewSchema.FINAL_FIX_REGISTER_NAME);
+  const planHash = planHashFromContent(content);
+  let register = null;
+  if (!planHash) {
+    checks.receipt = checks.receipt === 'ok' ? 'plan_hash_missing' : checks.receipt;
+    fail('final_fix_unverified', {}, 'the plan carries no plan_hash — the register cannot be bound to it');
+  } else {
+    let existingRaw = null;
+    try { existingRaw = readFile(registerPath); } catch (_) { existingRaw = null; }
+    if (existingRaw == null) {
+      checks.register = 'absent';
+    } else {
+      try { register = JSON.parse(existingRaw); } catch (_) { register = null; }
+      const proof = register === null
+        ? { ok: false, reason: 'register_malformed', detail: 'unparseable JSON' }
+        : reviewSchema.verifyFinalFixRegister(register, planHash, files => classifyFinalFixSurface(files, project));
+      if (!proof.ok) {
+        register = null;
+        checks.register = String(proof.reason || 'unknown');
+        fail('final_fix_register_unverified', { register_reason: String(proof.reason || 'unknown') },
+          'the existing register at ' + registerPath + ' did not verify (' + proof.reason
+          + (proof.detail ? ': ' + proof.detail : '') + ') — it is written only by this verb, so a mismatch '
+          + 'means it was edited out of band; appending to it would launder the edit');
+      }
+    }
+  }
+
+  // The LEAD token stays the outermost unmet rung, so `reason` is byte-identical to what the serial
+  // ladder emitted for the same submission; the rest ride in `reasons` instead of in a future
+  // round-trip. `detail` concatenates in the same precedence order — an operator reading only the
+  // prose still reads the outermost fault first.
+  return {
+    checks, reasons, payload, register, planHash, sink, fixCommit, registerPath,
+    surface,
+    detail: details.join('; '),
+  };
+}
+
+// runFinalFixCommit — the ONE commitment point. It reads the ONE-PASS report above and, when
+// anything is unmet, emits ONE refusal carrying EVERY unmet precondition. EVERY refusal is
+// ZERO-WRITE — no register created or modified, the frozen plan byte-identical, git untouched — so a
+// refused call is a pure no-op.
+function runFinalFixCommit(opts) {
+  const { planPath, project, entry, readFile, writeFile } = opts;
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+
+  const report = evaluateFinalFixPreconditions(opts, content);
+  if (report.reasons.length) {
+    return refuse(report.reasons[0], {
+      ...report.payload,
+      checks: report.checks,
+      reasons: report.reasons,
+      detail: report.detail,
     });
   }
 
   // ---- ADMIT. Append one entry. NO per-run cap: each entry's own receipt is the natural bound. ----
-  const registerPath = path.join(path.dirname(planPath), '.cache', reviewSchema.FINAL_FIX_REGISTER_NAME);
-  const planHash = planHashFromContent(content);
-  if (!planHash) return refuse('final_fix_unverified', { detail: 'the plan carries no plan_hash — the register cannot be bound to it' });
-  let register = null;
-  let existingRaw = null;
-  try { existingRaw = readFile(registerPath); } catch (_) { existingRaw = null; }
-  if (existingRaw != null) {
-    try { register = JSON.parse(existingRaw); } catch (_) { register = null; }
-    const proof = register === null
-      ? { ok: false, reason: 'register_malformed', detail: 'unparseable JSON' }
-      : reviewSchema.verifyFinalFixRegister(register, planHash, files => classifyFinalFixSurface(files, project));
-    if (!proof.ok) {
-      return refuse('final_fix_register_unverified', {
-        register_reason: String(proof.reason || 'unknown'),
-        detail: 'the existing register at ' + registerPath + ' did not verify (' + proof.reason
-          + (proof.detail ? ': ' + proof.detail : '') + ') — it is written only by this verb, so a mismatch '
-          + 'means it was edited out of band; appending to it would launder the edit',
-      });
-    }
-  }
+  const { planHash, sink, fixCommit, registerPath, surface } = report;
+  let register = report.register;
   if (!register) register = { schema_version: reviewSchema.FINAL_FIX_REGISTER_SCHEMA_VERSION, plan_hash: planHash, entries: [] };
   const recorded = {
     ordinal: register.entries.length + 1,
@@ -17692,6 +17841,7 @@ module.exports = {
   // routing case beside the tamper RED.
   loadOwnerProjection,
   ensureOwnerProjection,
+  healUnprojectedInteriors,
   routeMismatchDetail,
   // #701 (D-701-01): schema-2 anchor-path ownership routing + the repair admissibility helpers.
   schema2RouteCandidates,
