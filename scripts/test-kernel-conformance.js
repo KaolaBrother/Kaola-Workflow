@@ -107,6 +107,7 @@ function partA() {
 const PATTERN_WITNESSES = {
   '/^\\.cache\\/epochs\\/[^/]+\\/manifest\\.json$/': '.cache/epochs/1/manifest.json',
   '/^\\.cache\\/committed-transactions\\/[^/]+\\.json$/': '.cache/committed-transactions/tx-1.json',
+  '/^\\.cache\\/aborted-transactions\\/[^/]+\\.json$/': '.cache/aborted-transactions/tx-1.json',
   '/^\\.cache\\/barrier-base-[^/]+$/': '.cache/barrier-base-n1',
   '/^\\.cache\\/barrier-open-[^/]+$/': '.cache/barrier-open-n1',
   '/^\\.cache\\/replan-sources\\/[^/]+\\.json$/': '.cache/replan-sources/a1.json',
@@ -226,18 +227,58 @@ function collectArchiveCorpus() {
 // collectDeclaredArtifactNames — every artifact path the production scripts name as a literal.
 // The archive corpus is historical; this is the FORWARD half, so an artifact introduced by a new
 // feature and not yet present in any archived run still has to be ruled.
+//
+// The character class MUST admit `/`. A nested artifact is declared one of two ways — as a whole
+// nested literal (`.cache/origin/selection-record.json`) or as the band prefix its concrete path is
+// concatenated from (`'.cache/aborted-transactions/' + id + '.json'`) — and a scanner whose class
+// cannot match a slash sees NEITHER. Measured on the draft that excluded it: the journal-ahead
+// durable record `replan abort` writes classified `unclassified`, in a suite that passed 654
+// assertions, because the totality half could not see the band at all.
 function collectDeclaredArtifactNames() {
   const names = new Set();
   const files = fs.readdirSync(path.join(ROOT, 'scripts'))
     .filter(name => /^kaola-workflow-[a-z0-9-]+\.js$/.test(name));
   for (const file of files) {
     const text = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
-    for (const m of text.matchAll(/['"]\.cache\/([A-Za-z0-9_.-]+)['"]/g)) names.add('.cache/' + m[1]);
+    for (const m of text.matchAll(/['"]\.cache\/([A-Za-z0-9_./-]+)['"]/g)) names.add('.cache/' + m[1]);
     for (const m of text.matchAll(/^const [A-Z0-9_]*(?:NAME|MIRROR_NAME) = '([A-Za-z0-9_.-]+\.(?:json|jsonl|md|lock))';$/gm)) {
       names.add('.cache/' + m[1]);
     }
   }
   return names;
+}
+
+// literalHead — the fixed text every path a start-anchored pattern matches must begin with.
+// `/^\.cache\/epochs\/[^/]+\/manifest\.json$/` -> `.cache/epochs/`. Reading stops at the first
+// metacharacter, so the result is a sound prefix (it may be shorter than the true one, never longer)
+// and an unanchored pattern yields '' — both directions fail CLOSED, into the audit rather than out.
+function literalHead(matcher) {
+  const src = matcher.source;
+  if (!src.startsWith('^')) return '';
+  let head = '';
+  for (let i = 1; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '\\') {
+      const next = src[i + 1];
+      // Only a punctuation escape is a literal character; `\d`, `\w`, `\s` are classes.
+      if (next === undefined || !/[.\/+*?^$(){}|[\]\\-]/.test(next)) break;
+      head += next; i += 1; continue;
+    }
+    if ('[](){}.*+?|^$'.includes(ch)) break;
+    head += ch;
+  }
+  return head;
+}
+
+// bandRowUnder — a registry row whose every match lies INSIDE `prefix`, or null. This is what
+// discharges a declared band prefix: not "it is a directory, so it is not an artifact" (which
+// excuses precisely the nested families the ruling has to cover), but a ruling anchored under it.
+function bandRowUnder(prefix) {
+  for (const [matcher] of REGISTRY) {
+    const head = (typeof matcher === 'string') ? matcher : literalHead(matcher);
+    if (head.startsWith(prefix)) return String(matcher);
+  }
+  return null;
 }
 
 // Literal `.cache/...` strings that are NOT durable project artifacts: usage/help text, fixture
@@ -258,6 +299,16 @@ function partC() {
   ok(archive.size >= 200, 'the archived-run corpus is real (' + archive.size + ' distinct artifact paths)');
   ok(declared.size >= 20, 'the declared-name corpus is real (' + declared.size + ' names)');
 
+  // Non-vacuity, NESTED half. The scan must actually reach below `.cache/`, or the totality claim
+  // is total only over the flat band and every subdirectory family is silently exempt. Re-narrowing
+  // the scanner's character class reddens HERE, at the cause, instead of at the next unruled band.
+  const nestedNames = [...declared].filter(rel => rel.slice('.cache/'.length).includes('/'));
+  ok(nestedNames.length >= 4,
+    'the declared-name scan SEES nested artifact paths (' + nestedNames.length + ') — a scanner that cannot match a "/" is blind to every artifact under a subdirectory');
+  const declaredBands = nestedNames.filter(rel => rel.endsWith('/'));
+  ok(declaredBands.length >= 3,
+    'the scan sees declared BAND prefixes too (' + declaredBands.length + ') — the form a concatenated nested path is declared in');
+
   const unclassified = [];
   for (const rel of archive) {
     if (CORPUS_EXCLUDED.includes(rel)) continue;
@@ -265,6 +316,16 @@ function partC() {
   }
   for (const rel of declared) {
     if (DECLARED_NOT_ARTIFACT.has(rel)) continue;
+    // A declared BAND prefix names a family whose concrete paths are built by concatenation, so
+    // there is no literal file name to classify. It is discharged by a registry row anchored inside
+    // the band — and by nothing else. `.cache/aborted-transactions/` is why: every sibling band
+    // (`committed-transactions/`, `epochs/`, `replan-sources/`) carries such a row and it did not.
+    if (rel.endsWith('/')) {
+      if (!bandRowUnder(rel)) {
+        unclassified.push('declared band: ' + rel + ' (no registry row is anchored under it)');
+      }
+      continue;
+    }
     if (schema.classifyDurableArtifact(rel).ruling === 'unclassified') unclassified.push('declared: ' + rel);
   }
   deepEqual(unclassified, [],
