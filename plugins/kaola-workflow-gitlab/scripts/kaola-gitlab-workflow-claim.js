@@ -1447,15 +1447,18 @@ function selectionRecordRefusal(status, reasoning) {
 // Resolve Gate 1 with ZERO side effects. Returns { refusal } or { bytes, digest }.
 // `label` names the resolved target(s) for the degenerate record.
 function resolveSelectionGate(args, label) {
+  // Fail CLOSED on an unrecognized value: ONLY an absent flag or the exact literal 'user_directed'
+  // skips the gate. A typo ('orchestrator-selected') must not silently claim past the commitment
+  // point — the whole purpose of Gate 1 is that a no-target-originated claim cannot slip through.
   const targetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim();
-  const orchestratorSelected = targetSource === 'orchestrator_selected';
+  const orchestratorSelected = targetSource !== 'user_directed';
   const recordPath = args.selectionRecord == null ? '' : String(args.selectionRecord).trim();
 
   if (!recordPath) {
     if (orchestratorSelected) {
       return {
         refusal: selectionRecordRefusal('selection_record_missing',
-          '--target-source orchestrator_selected declares a no-target-originated claim, which must carry '
+          '--target-source ' + targetSource + ' declares a no-target-originated claim, which must carry '
           + '--selection-record <path>: the orchestrator owns selection now, so the typed record IS the '
           + 'commitment-point evidence. Refusing with zero side effects.'),
       };
@@ -1638,8 +1641,10 @@ function cmdStartup() {
   args.selectionRecordDigest = selectionGate.digest;
   // The emitted `target_source` is a RECORD of how this claim originated, so it echoes the
   // discriminator the gate just resolved rather than the historical constant.
+  // Mirrors the gate's own fail-closed reading: anything that is not the exact 'user_directed'
+  // literal was gated as orchestrator-originated, so it is recorded as such.
   const resolvedTargetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim()
-    === 'orchestrator_selected' ? 'orchestrator_selected' : 'user_directed';
+    === 'user_directed' ? 'user_directed' : 'orchestrator_selected';
 
   // #328: bundle path
   if (bundleTargets) {
