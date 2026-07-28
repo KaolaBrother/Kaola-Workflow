@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
+// Advisory spawn census. Installed BEFORE the child_process destructure below so the
+// counted wrappers are what this file (and anything it requires) binds. Pass-through and
+// fail-open: it can change no assertion and fail no run.
+const spawnCensus = require('./test-spawn-census');
+spawnCensus.install('simulate-workflow-walkthrough');
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -23236,4 +23242,4 @@ main().catch(err => {
     console.error(lines.slice(-30).join('\n'));
   }
   process.exitCode = 1;
-});
+}).finally(() => { spawnCensus.report(); });
