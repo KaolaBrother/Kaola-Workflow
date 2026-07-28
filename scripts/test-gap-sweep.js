@@ -850,6 +850,260 @@ try {
   try { fs.rmSync(fix20.root, { recursive: true, force: true }); } catch (_) {}
 }
 
+// ===========================================================================
+// #836 — match a summary sample to its seeded gap by MEANING, not by bytes.
+//
+// The `## Run gaps` sample used to be compared with strict `===` against the seeded
+// run-gaps-manual.md text in BOTH directions (reverse containment → observed_gap_unseeded,
+// forward match → gaps_unswept). A finalization summary that ABBREVIATED or PARAPHRASED the
+// seeded prose — the normal thing to write in a summary — refused twice in a row even though the
+// gap was correctly seeded, correctly observed, and correctly mapped.
+//
+// The rule these scenarios pin: within a reasonClass that still matches EXACTLY, a summary sample
+// matches a seeded sample when either is a prefix/substring of the other (after trimming).
+// Nothing else loosens: a different reasonClass never matches, a sample with no containment
+// relation still refuses observed_gap_unseeded, and a seeded gap with no mapping row at all still
+// refuses gaps_unswept.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// T21 (#836): THE REPRODUCTION — the summary sample is a PREFIX of the seeded gap text, and the
+// seeded text carries nested parentheses. Pre-#836 this refused observed_gap_unseeded (the reverse
+// containment check runs first), and after seeding it would have refused gaps_unswept as well.
+// ---------------------------------------------------------------------------
+const fix21 = makeFixture('proj-t21');
+try {
+  writeProvenance(fix21.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix21.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix21.cacheDir, 'run-gaps-manual.md'),
+    'gap: consent receipt ordering — the consent receipt is written before the halt row clears '
+      + '(replan.js:1474), so a resume re-reads a stale halt\n',
+    'utf8'
+  );
+  run(fix21.root, ['--project', 'proj-t21', '--json']);
+  const projDir21 = path.join(fix21.root, 'kaola-workflow', 'proj-t21');
+  // Abbreviated in the summary — the same gap, fewer words, no "(replan.js:1474)" tail.
+  writeSummary(fix21.cacheDir, projDir21, [
+    '- manual:consent-receipt-ordering (the consent receipt is written before the halt row clears): filed: #826',
+  ]);
+
+  const r21 = run(fix21.root, [
+    '--project', 'proj-t21',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir21, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r21.exitCode === 0,
+    'T21 (#836): an ABBREVIATED summary sample of a correctly seeded gap must pass — the information '
+    + 'is present and correct, only the serialization differed, got exit ' + r21.exitCode + ' / ' + r21.stdout.trim());
+  if (r21.jsonOut) {
+    assert(r21.jsonOut.result === 'pass', 'T21: result = pass, got ' + r21.jsonOut.result);
+    assert(r21.jsonOut.mapped === 1, 'T21: mapped = 1, got ' + r21.jsonOut.mapped);
+    assert(r21.jsonOut.filed === 1, 'T21: filed = 1, got ' + r21.jsonOut.filed);
+  }
+} finally {
+  try { fs.rmSync(fix21.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T22 (#836): containment in the OTHER direction — the summary sample ELABORATES on a shorter
+// seeded text. Matching is symmetric: whichever side is the substring, the pair matches.
+// A parenthesised API symbol in the sample (the shape the lazy row regex exists to carve out)
+// still resolves.
+// ---------------------------------------------------------------------------
+const fix22 = makeFixture('proj-t22');
+try {
+  writeProvenance(fix22.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix22.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix22.cacheDir, 'run-gaps-manual.md'),
+    'gap: flaky load — the load test flaked\n'
+      + 'gap: retry backoff — retryAfter(from:) ignores the (nested) Retry-After header\n',
+    'utf8'
+  );
+  run(fix22.root, ['--project', 'proj-t22', '--json']);
+  const projDir22 = path.join(fix22.root, 'kaola-workflow', 'proj-t22');
+  writeSummary(fix22.cacheDir, projDir22, [
+    // Superset of the seeded text.
+    '- manual:flaky-load (the load test flaked once under concurrency): noise: environment',
+    // Prefix of the seeded text, and the prefix itself carries nested parentheses.
+    '- manual:retry-backoff (retryAfter(from:)): filed: #900',
+  ]);
+
+  const r22 = run(fix22.root, [
+    '--project', 'proj-t22',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir22, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r22.exitCode === 0,
+    'T22 (#836): containment is symmetric — an elaborated sample and a paren-bearing prefix both '
+    + 'match their seeded gaps, got exit ' + r22.exitCode + ' / ' + r22.stdout.trim() + ' / ' + r22.stderr.trim());
+  if (r22.jsonOut) {
+    assert(r22.jsonOut.result === 'pass', 'T22: result = pass, got ' + r22.jsonOut.result);
+    assert(r22.jsonOut.mapped === 2, 'T22: mapped = 2, got ' + r22.jsonOut.mapped);
+    assert(r22.jsonOut.filed === 1, 'T22: filed = 1, got ' + r22.jsonOut.filed);
+    assert(r22.jsonOut.noise === 1, 'T22: noise = 1, got ' + r22.jsonOut.noise);
+  }
+} finally {
+  try { fs.rmSync(fix22.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T23 (#836): FAIL-CLOSED. Containment loosens the SAMPLE comparison and nothing else:
+//   (a) a summary sample with no containment relation to any seeded sample of the same class still
+//       refuses observed_gap_unseeded;
+//   (b) the reasonClass comparison stays EXACT — a sample that would match by containment under a
+//       DIFFERENT class does not rescue the row.
+// ---------------------------------------------------------------------------
+const fix23 = makeFixture('proj-t23');
+try {
+  writeProvenance(fix23.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix23.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix23.cacheDir, 'run-gaps-manual.md'),
+    'gap: coresim-busy — one transient Busy event during the third chain\n',
+    'utf8'
+  );
+  run(fix23.root, ['--project', 'proj-t23', '--json']);
+  const projDir23 = path.join(fix23.root, 'kaola-workflow', 'proj-t23');
+  writeSummary(fix23.cacheDir, projDir23, [
+    // Right class, sample shares no containment relation with the seeded text.
+    '- manual:coresim-busy (the sink refused twice on a stale receipt): filed: #999',
+  ]);
+
+  const r23 = run(fix23.root, [
+    '--project', 'proj-t23',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir23, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r23.exitCode !== 0,
+    'T23a (#836): an unrelated sample under a seeded class must still refuse — containment is a '
+    + 'match rule, not a waiver, got exit ' + r23.exitCode + ' / ' + r23.stdout.trim());
+  if (r23.jsonOut) {
+    assert(r23.jsonOut.result === 'refuse', 'T23a: result = refuse, got ' + r23.jsonOut.result);
+    assert(r23.jsonOut.reason === 'observed_gap_unseeded',
+      'T23a: reason = observed_gap_unseeded, got ' + r23.jsonOut.reason);
+  }
+} finally {
+  try { fs.rmSync(fix23.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+const fix23b = makeFixture('proj-t23b');
+try {
+  writeProvenance(fix23b.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix23b.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix23b.cacheDir, 'run-gaps-manual.md'),
+    'gap: coresim-busy — one transient Busy event during the third chain\n',
+    'utf8'
+  );
+  run(fix23b.root, ['--project', 'proj-t23b', '--json']);
+  const projDir23b = path.join(fix23b.root, 'kaola-workflow', 'proj-t23b');
+  writeSummary(fix23b.cacheDir, projDir23b, [
+    // Sample WOULD match by containment, but the class is wrong.
+    '- manual:some-other-class (one transient Busy event): noise: environment',
+  ]);
+
+  const r23b = run(fix23b.root, [
+    '--project', 'proj-t23b',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir23b, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r23b.exitCode !== 0,
+    'T23b (#836): the reasonClass comparison stays EXACT — a containing sample under a different '
+    + 'class does not seed it, got exit ' + r23b.exitCode + ' / ' + r23b.stdout.trim());
+  if (r23b.jsonOut) {
+    assert(r23b.jsonOut.result === 'refuse', 'T23b: result = refuse, got ' + r23b.jsonOut.result);
+    assert(r23b.jsonOut.reason === 'observed_gap_unseeded',
+      'T23b: reason = observed_gap_unseeded, got ' + r23b.jsonOut.reason);
+  }
+} finally {
+  try { fs.rmSync(fix23b.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T24 (#836): FAIL-CLOSED, forward direction. A swept gap that is not mapped AT ALL still refuses
+// gaps_unswept — containment must not let an unrelated mapping row cover a second, unmentioned gap.
+// ---------------------------------------------------------------------------
+const fix24 = makeFixture('proj-t24');
+try {
+  writeProvenance(fix24.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix24.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix24.cacheDir, 'run-gaps-manual.md'),
+    'gap: coresim-busy — one transient Busy event during the third chain\n'
+      + 'gap: sink retry — the sink retried after a stale receipt\n',
+    'utf8'
+  );
+  run(fix24.root, ['--project', 'proj-t24', '--json']);
+  const projDir24 = path.join(fix24.root, 'kaola-workflow', 'proj-t24');
+  writeSummary(fix24.cacheDir, projDir24, [
+    // Only the first gap is mapped; manual:sink-retry is never mentioned.
+    '- manual:coresim-busy (one transient Busy event): noise: environment',
+  ]);
+
+  const r24 = run(fix24.root, [
+    '--project', 'proj-t24',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir24, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r24.exitCode !== 0,
+    'T24 (#836): an entirely unmapped swept gap must still refuse gaps_unswept, got exit '
+    + r24.exitCode + ' / ' + r24.stdout.trim());
+  if (r24.jsonOut) {
+    assert(r24.jsonOut.result === 'refuse', 'T24: result = refuse, got ' + r24.jsonOut.result);
+    assert(r24.jsonOut.reason === 'gaps_unswept', 'T24: reason = gaps_unswept, got ' + r24.jsonOut.reason);
+    assert(Array.isArray(r24.jsonOut.unmapped) && r24.jsonOut.unmapped.length === 1,
+      'T24: exactly one unmapped gap, got ' + JSON.stringify(r24.jsonOut.unmapped));
+    if (r24.jsonOut.unmapped && r24.jsonOut.unmapped[0]) {
+      assert(r24.jsonOut.unmapped[0].reasonClass === 'manual:sink-retry',
+        'T24: the unmapped gap is manual:sink-retry, got ' + r24.jsonOut.unmapped[0].reasonClass);
+    }
+  }
+} finally {
+  try { fs.rmSync(fix24.root, { recursive: true, force: true }); } catch (_) {}
+}
+
 // ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------

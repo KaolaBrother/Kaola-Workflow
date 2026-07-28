@@ -1782,12 +1782,97 @@ function readCanonicalReviewContext(opts, contextHash) {
   return { ok: true, context, contextPath };
 }
 
+// ---------------------------------------------------------------------------
+// EVIDENCE TOKEN RESOLUTION — refuse on missing MEANING, never on serialization.
+//
+// A token's value used to be readable only in ONE byte-exact shape: the key at column 0, the value
+// non-whitespace and on the SAME line. A value that wrapped onto the next line, a key indented by a
+// space, or the documented presence-only `findings_none` written without a colon were all refused
+// even though the information was present and correct — a refusal that costs a triage plus a
+// re-dispatch and changes zero product state.
+//
+// The resolution rule, used by EVERY content-token reader (checkEvidenceShape's role branches and
+// the schema-2 review required-token loop):
+//   1. RECOGNITION — the key may carry leading whitespace. Any OTHER prefix character (notably the
+//      seed's `<!--`) still fails to match, so a `<!-- token: paste … -->` seed comment can never
+//      satisfy a check.
+//   2. SAME-LINE VALUE — `token:` followed by a non-whitespace tail resolves to that tail (trimmed).
+//   3. WRAPPED VALUE — when the same-line tail is empty, the value is the IMMEDIATELY following
+//      line, and only when that line is a genuine continuation: it exists, is non-blank, does not
+//      open an `<!-- … -->` comment, and is not itself a `<name>:` key line. No skipping — a blank
+//      line, a comment, a sibling key, or EOF leaves the token EMPTY and the refusal fires unchanged.
+//   4. BARE PRESENT-ONLY TOKEN — a line that is EXACTLY the token name resolves to a canonical value
+//      ONLY for the documented presence-only token (`findings_none`), whose meaning IS its presence.
+//      Every other token written bare still resolves to nothing and still refuses.
+//   5. LAST-MATCH-WINS across all forms, in line order (a corrected re-statement still wins).
+//
+// Deliberately OUT of scope: the `evidence-binding: <node-id> <nonce>` anti-replay header, the
+// `red_baseline` receipt, `upstream_read`'s consumed-proof echo, and the main-session-gate
+// `verdict:` / `instrumentation:` tokens. Those are two-field MACHINE identities whose exact shape
+// is the contract (verdict/instrumentation keep parity with adaptive-schema's parseNodeVerdict), not
+// prose an agent composes — they stay byte-exact.
+// ---------------------------------------------------------------------------
+
+// A line is somebody's `<name>:` KEY line when, after optional leading whitespace, it opens with an
+// identifier immediately followed by ':'. Used only to prove a line is NOT the previous token's
+// wrapped value.
+const EVIDENCE_KEY_LINE_RE = /^[ \t]*[A-Za-z_][A-Za-z0-9_.-]*:/;
+
+// The documented PRESENCE-ONLY token(s). Written bare, the token name alone carries the whole
+// meaning, so it normalizes to a canonical value instead of refusing. Scoped deliberately: a bare
+// `RED` / `build-green` / `finding_json` carries no value and must still refuse.
+const EVIDENCE_PRESENCE_ONLY_TOKENS = Object.freeze({ findings_none: 'true' });
+
+function escapeEvidenceToken(token) {
+  return String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Rule 3. Returns the trimmed continuation value, or null when the next physical line is not one.
+function evidenceContinuationValue(lines, index) {
+  if (index + 1 >= lines.length) return null;
+  const next = String(lines[index + 1]);
+  const trimmed = next.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('<!--')) return null;
+  if (EVIDENCE_KEY_LINE_RE.test(next)) return null;
+  return trimmed;
+}
+
+// (content, token) -> string | null. `null` = the token is absent entirely; `''` = the key is
+// present but carries no resolvable value (both are refused by the non-empty predicate below; the
+// distinction is what the DD-5 absent-key exemption keys off).
 function evidenceTokenValue(content, token) {
-  const escaped = String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp('^' + escaped + ':[ \\t]*(.*?)\\s*$', 'gm');
-  let match, last = null;
-  while ((match = re.exec(String(content || ''))) !== null) last = match[1];
+  const name = String(token);
+  const escaped = escapeEvidenceToken(name);
+  const keyRe = new RegExp('^[ \\t]*' + escaped + ':[ \\t]*(.*?)[ \\t\\r]*$');
+  const bareCanonical = Object.prototype.hasOwnProperty.call(EVIDENCE_PRESENCE_ONLY_TOKENS, name)
+    ? EVIDENCE_PRESENCE_ONLY_TOKENS[name] : null;
+  const bareRe = bareCanonical === null ? null : new RegExp('^[ \\t]*' + escaped + '[ \\t\\r]*$');
+  const lines = String(content || '').split('\n');
+  let last = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(keyRe);
+    if (m) {
+      if (m[1] !== '') { last = m[1]; continue; }
+      const continuation = evidenceContinuationValue(lines, i);
+      last = continuation === null ? '' : continuation;
+      continue;
+    }
+    if (bareRe && bareRe.test(line)) last = bareCanonical;
+  }
   return last;
+}
+
+// The gate predicate: the token resolves to a non-empty value.
+function evidenceTokenSatisfied(content, token) {
+  const value = evidenceTokenValue(content, token);
+  return value !== null && String(value).trim() !== '';
+}
+
+// The DD-5 absent-key probe: the token appears at all (value may be empty).
+function evidenceTokenKeyPresent(content, token) {
+  return evidenceTokenValue(content, token) !== null;
 }
 
 function buildReviewAnchorIndex(opts, context, candidateDigest, rawFindings, nodes, reviewerId) {
@@ -2884,8 +2969,10 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: expectedTokens };
     }
     // The open-time seed contains empty RED:/red_baseline: keys and comments naming both tokens.
-    // Require a non-empty column-0 value so a seed-only file can never satisfy --verify or close.
-    const hasRed = /^RED:[ \t]*(\S.*)$/m.test(content);
+    // Require a non-empty RESOLVED value (same line, or wrapped onto the immediately following
+    // continuation line) so a seed-only file can never satisfy --verify or close: the seed's empty
+    // key is followed by an `<!-- … -->` comment or by EOF, neither of which is a continuation.
+    const hasRed = evidenceTokenSatisfied(content, 'RED');
     if (!hasRed) {
       return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: expectedTokens };
     }
@@ -2917,8 +3004,10 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: expectedTokens };
     }
     // The open-time seed contains an empty key and a comment listing the alternation. Require an
-    // actual non-empty column-0 value so encrypted-return recovery cannot accept untouched scaffolding.
-    const hasChangeType = /^(?:tests-green|regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
+    // actual non-empty RESOLVED value (same line or wrapped) so encrypted-return recovery cannot
+    // accept untouched scaffolding — the seed's empty key is followed by EOF, not a continuation.
+    const hasChangeType = ['tests-green', 'regression-green', 'build-green', 'smoke-integration']
+      .some(tier => evidenceTokenSatisfied(content, tier));
     if (!hasChangeType) {
       return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing verification-tier token', expected: expectedTokens };
     }
@@ -2930,16 +3019,17 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
   // would close a node COMPLETE on a hollow stub with zero ratchet log. Enforce that each of the
   // four non-binding D6 tokens is present AND carries a non-empty value (evidence-binding is
   // checked at the top of this function). Presence-only, per the function's documented contract:
-  // a non-whitespace value after the column-0 `<token>:` is required; the value itself is not
-  // validated. The stub's `<!-- <token>: paste ... -->` comment line is NOT column-0 anchored on
-  // the token key, so it never satisfies the check.
+  // a non-empty RESOLVED value after `<token>:` is required (same line, or wrapped onto the
+  // immediately following continuation line); the value itself is not validated. The stub's
+  // `<!-- <token>: paste ... -->` comment line neither matches the token key (its `<!--` prefix is
+  // not whitespace) nor counts as a continuation, so it never satisfies the check.
   if (role === 'metric-optimizer') {
     if (!content) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for metric-optimizer node ' + nodeId, expected: ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green'] };
     }
     const D6_TOKENS = ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green'];
     for (const token of D6_TOKENS) {
-      const hasValue = new RegExp('^' + token + ':[ \\t]*(\\S.*)$', 'm').test(content);
+      const hasValue = evidenceTokenSatisfied(content, token);
       if (!hasValue) {
         return { ok: false, kind: 'shape', missingTokenClass: token, reason: 'metric-optimizer ' + nodeId + ' evidence missing non-empty ' + token + ' token', expected: D6_TOKENS };
       }
@@ -2962,9 +3052,8 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator')); } catch (_) { ROLE_TOKEN_REGISTRY = {}; }
     const row = (ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || null;
     if (row) {
-      const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const keyPresent = (tok) => new RegExp('^' + esc(tok) + ':', 'm').test(content);
-      const valuePresent = (tok) => new RegExp('^' + esc(tok) + ':[ \\t]*(\\S.*)$', 'm').test(content);
+      const keyPresent = (tok) => evidenceTokenKeyPresent(content, tok);
+      const valuePresent = (tok) => evidenceTokenSatisfied(content, tok);
       for (const tokenClass of row) {
         if (tokenClass === 'evidence-binding') continue;
         const alts = tokenClass.split('|');
@@ -7279,6 +7368,75 @@ function runOpenNext(opts) {
   };
 }
 
+// The schema-2 review evidence token names. They live on the reviewer contract rather than in the
+// role registry, so the writer-side canonicalizer names them explicitly.
+const REVIEW_EVIDENCE_TOKEN_NAMES = [
+  'contract_version', 'review_context_hash', 'behavior_contract_hash', 'resolved_profile_hash',
+  'candidate_digest', 'domain_outcome', 'claim_outcome', 'gate_mode', 'gate_claim', 'gate_surface',
+  'gate_aggregation', 'execution_status', 'gate_effect', 'finding_json', 'resolution_json',
+];
+
+// Every token name a reader may look for, ROLE-INDEPENDENT (the canonicalizer must work even when
+// the plan cannot be read). `evidence-binding` is deliberately EXCLUDED: it is the byte-exact
+// anti-replay identity header, not agent-composed prose, and the close gate must stay able to refuse
+// a malformed one.
+function knownEvidenceTokenNames() {
+  const names = new Set(REVIEW_EVIDENCE_TOKEN_NAMES);
+  names.add('findings_none');
+  names.add('upstream_read');
+  try {
+    const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
+    for (const row of Object.values(ROLE_TOKEN_REGISTRY || {})) {
+      for (const tokenClass of row) {
+        for (const alt of String(tokenClass).split('|')) names.add(alt);
+      }
+    }
+  } catch (_) { /* fail-soft: the review names alone still canonicalize a review body */ }
+  names.delete('evidence-binding');
+  return names;
+}
+
+// Where a canonical serialization genuinely matters (machine-read receipts), the WRITER normalizes
+// on record instead of a later READER refusing after the fact. Two rewrites, both TOKEN-SCOPED:
+//   * a KNOWN token whose value wrapped onto a valid continuation line collapses to `token: <value>`
+//     (the dangling empty `token:` line does not survive);
+//   * a bare presence-only token line becomes its canonical `token: <value>` form.
+// Everything else — a non-token `Summary:` key and its prose, an already-canonical body — is
+// returned BYTE-IDENTICAL. Fail-soft by construction: an unrecognised line is copied through.
+function canonicalizeEvidenceTokens(content) {
+  const raw = String(content || '');
+  if (!raw) return raw;
+  const names = knownEvidenceTokenNames();
+  const lines = raw.split('\n');
+  const out = [];
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const keyMatch = line.match(/^[ \t]*([A-Za-z_][A-Za-z0-9_.-]*):[ \t]*(.*?)[ \t\r]*$/);
+    if (keyMatch && names.has(keyMatch[1])) {
+      if (keyMatch[2] === '') {
+        const continuation = evidenceContinuationValue(lines, i);
+        if (continuation !== null) {
+          out.push(keyMatch[1] + ': ' + continuation);
+          i++;                       // the continuation line is folded in, not duplicated
+          changed = true;
+          continue;
+        }
+      }
+      out.push(line);
+      continue;
+    }
+    const bareMatch = line.match(/^[ \t]*([A-Za-z_][A-Za-z0-9_.-]*)[ \t\r]*$/);
+    if (bareMatch && Object.prototype.hasOwnProperty.call(EVIDENCE_PRESENCE_ONLY_TOKENS, bareMatch[1])) {
+      out.push(bareMatch[1] + ': ' + EVIDENCE_PRESENCE_ONLY_TOKENS[bareMatch[1]]);
+      changed = true;
+      continue;
+    }
+    out.push(line);
+  }
+  return changed ? out.join('\n') : raw;
+}
+
 // The verdict/word-boundary-presence branches of checkEvidenceShape whose bare-name presence regex would
 // be FALSE-SATISFIED by an empty re-injected key — never re-inject content tokens for these roles.
 const REINJECT_EXCLUDED_ROLES = new Set([
@@ -7419,6 +7577,14 @@ function runRecordEvidence(opts) {
   // consumed check requires a non-empty value), never a pass. Old in-flight nodes (whose record-evidence
   // already ran under old code) never re-enter here ⇒ exempt.
   contentToWrite = reinjectMissingRequiredKeys(contentToWrite, planPath, nodeId, recordReadFile);
+
+  // Canonicalize the token serialization ON RECORD. The reader already accepts a wrapped value and
+  // the documented bare presence-only token, so nothing downstream depends on this — it exists so a
+  // machine-read receipt is stored in ONE shape rather than each later reader re-deriving it. A body
+  // already in canonical form is written byte-identical, and a re-injected EMPTY key stays empty
+  // (the line after it is a sibling key or EOF, never a continuation), so the non-droppability
+  // guarantee above is unchanged.
+  contentToWrite = canonicalizeEvidenceTokens(contentToWrite);
 
   // #699: read-only certifier bodies arrive through stdin and replace the seeded file. Preserve the
   // authoritative OPEN-TIME G4 tuple rather than trusting/recomputing agent-supplied bindings at
@@ -15825,10 +15991,13 @@ function classifyEvidenceBody(content, role) {
   const row = ((ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || [])
     .filter(tokenClass => tokenClass !== 'evidence-binding');
   if (!row.length) return 'deliverable'; // vacuous anti-forgery contract — fail closed (see header)
-  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The SAME value-presence resolution checkEvidenceShape uses (evidenceTokenSatisfied), so the two
+  // gates can never disagree about what "a token carries a value" means. A body whose token value
+  // wrapped onto the next line is a real deliverable to the close gate, so it must be a real
+  // deliverable here too — stamping a capability_gap marker over it must not launder it.
   for (const tokenClass of row) {
     for (const alt of tokenClass.split('|')) {
-      if (new RegExp('^' + esc(alt) + ':[ \\t]*(\\S.*)$', 'm').test(content)) return 'deliverable';
+      if (evidenceTokenSatisfied(content, alt)) return 'deliverable';
     }
   }
   return 'capability_gap';
@@ -16586,6 +16755,11 @@ module.exports = {
   complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
+  // The single evidence-token reader behind both the shape gate's content-token branches and the
+  // schema-2 review required-token loop. Exported so the "refuse on missing MEANING, not on
+  // serialization" contract is pinnable directly — the review loop is otherwise reachable only
+  // through a complete schema-2 review-context + profile + candidate-digest fixture.
+  evidenceTokenValue,
   checkVerdictParse,
   readCoordinationState,
   probeCoordination,

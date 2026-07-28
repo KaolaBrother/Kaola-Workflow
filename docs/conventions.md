@@ -659,6 +659,15 @@ The orchestrator MUST:
    paren-bearing sample now parses (issue #726), a hand-typed row whose sample contains `)` is
    subject to reverse containment like any other — previously such a row never parsed, so it fell
    through to the both-sides-empty vacuous pass and escaped the check entirely.
+
+   In BOTH directions, a summary sample is matched to a seeded sample by CONTAINMENT, not byte
+   equality (issue #836): after trimming, either side being a prefix/substring of the other
+   identifies the same gap, symmetrically — so a summary may abbreviate the seeded prose (drop a
+   `(replan.js:1474)` tail) or elaborate on it without refusing. The information is what is
+   checked, not its serialization. Nothing else loosens: the `reasonClass` comparison stays EXACT,
+   an empty sample on either side never matches, a sample with no containment relation still
+   refuses `observed_gap_unseeded`, and a seeded gap with no mapping row at all still refuses
+   `gaps_unswept`.
 4. Cite the gate exit code as evidence in the finalization summary. Never record a
    `gaps_addressed: true` prose attestation without a passing `--check` invocation.
 

@@ -13,6 +13,11 @@ const {
   complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
+  // #836: the single evidence-token reader behind the schema-2 review required-token loop.
+  // Exported for direct coverage of the "refuse on missing MEANING, not serialization" contract
+  // (wrapped value, indented token, documented bare presence-only token) and of the absences that
+  // must stay fail-closed.
+  evidenceTokenValue,
   checkVerdictParse,
   readCoordinationState,
   probeCoordination,
@@ -27942,6 +27947,455 @@ scenario(() => {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// ===========================================================================
+// #836 — refuse on missing MEANING, not on serialization.
+//
+// The evidence checker used to demand a byte-exact serialization the producing agent could not
+// see at write time: a column-0 token key with a NON-WHITESPACE value ON THE SAME LINE. A value
+// that wrapped onto the next line, a token indented by a leading space, or the documented
+// presence-only `findings_none` written without a colon were all refused even though the
+// information was present and correct. Each refusal cost a triage + a re-dispatch that changed
+// zero product state.
+//
+// The contract these scenarios pin:
+//   (1) A token key whose value is EMPTY on its own line is satisfied by the IMMEDIATELY FOLLOWING
+//       line when that line is a genuine continuation — non-blank, not an `<!-- ... -->` comment,
+//       and not itself a `<name>:` key line. Only the immediately following line: no skipping
+//       forward past blanks, comments, or empty sibling keys.
+//   (2) A token is recognised anywhere in the body, including with leading whitespace — the
+//       column-0 anchor is dropped for the CONTENT tokens.
+//   (3) The documented bare-token form `findings_none` (the token alone on a line, no colon) is
+//       normalised to its canonical value, not refused.
+//   (4) Absence stays FAIL-CLOSED. An untouched open-time seed, an empty value with no
+//       continuation, a bare token that is NOT the documented presence-only one, and a body with
+//       no token at all all still refuse exactly as before.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// #836-T1: checkEvidenceShape accepts a WRAPPED value for every content-token branch
+// (tdd-guide / implementer / metric-optimizer / generic registry), and an INDENTED token line.
+// This is refusal reproduction (A): `tests-green:` with the value on the next line.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const NONCE = 'abc123def456';
+  const bindTo = (id) => 'evidence-binding: ' + id + ' ' + NONCE + '\n';
+  const optsFor = (id) => ({ expectedNonce: NONCE, expectedNodeId: id });
+
+  // (A) THE REPRODUCTION. The implementer verification tier wrapped onto the next line.
+  const wrappedTier = bindTo('impl-x')
+    + 'tests-green:\n'
+    + 'node scripts/test-adaptive-node.js — 4118 assertions green\n';
+  const rWrapped = checkEvidenceShape('implementer', 'impl-x', wrappedTier, optsFor('impl-x'));
+  assert(rWrapped.ok === true,
+    '#836-T1a: implementer `tests-green:` with the value WRAPPED onto the next line must close — '
+    + 'the meaning is present, only the serialization differed, got ' + JSON.stringify(rWrapped));
+
+  // The same wrap with trailing whitespace after the colon (what an editor actually leaves behind).
+  const wrappedTierWs = bindTo('impl-x')
+    + 'tests-green:   \n'
+    + 'node scripts/test-adaptive-node.js — 4118 assertions green\n';
+  assert(checkEvidenceShape('implementer', 'impl-x', wrappedTierWs, optsFor('impl-x')).ok === true,
+    '#836-T1b: trailing whitespace after the colon must not defeat the wrapped value');
+
+  // (B) An INDENTED token line (the column-0 anchor is dropped for content tokens).
+  const indentedTier = bindTo('impl-x') + '  tests-green: 4118 assertions green\n';
+  assert(checkEvidenceShape('implementer', 'impl-x', indentedTier, optsFor('impl-x')).ok === true,
+    '#836-T1c: an indented `tests-green:` token must be recognised — the token is accepted anywhere '
+    + 'in the evidence body, got ' + JSON.stringify(checkEvidenceShape('implementer', 'impl-x', indentedTier, optsFor('impl-x'))));
+
+  // (C) tdd-guide RED — the same prose-valued token, same wrap.
+  const wrappedRed = bindTo('tdd-x')
+    + 'RED:\n'
+    + 'the new assertion fails on the recorded baseline\n'
+    + 'red_baseline: ' + NONCE + '\n';
+  assert(checkEvidenceShape('tdd-guide', 'tdd-x', wrappedRed, optsFor('tdd-x')).ok === true,
+    '#836-T1d: tdd-guide RED wrapped onto the next line must close, got '
+    + JSON.stringify(checkEvidenceShape('tdd-guide', 'tdd-x', wrappedRed, optsFor('tdd-x'))));
+
+  // (D) metric-optimizer — every D6 token wrapped.
+  const wrappedD6 = bindTo('opt-x')
+    + 'metric_baseline:\n412ms\n'
+    + 'metric_final:\n118ms\n'
+    + 'iterations_used:\n3\n'
+    + 'regression-green:\nnpm test green\n';
+  assert(checkEvidenceShape('metric-optimizer', 'opt-x', wrappedD6, optsFor('opt-x')).ok === true,
+    '#836-T1e: metric-optimizer D6 tokens wrapped onto the next line must close, got '
+    + JSON.stringify(checkEvidenceShape('metric-optimizer', 'opt-x', wrappedD6, optsFor('opt-x'))));
+
+  // (E) generic registry branch — the nonce-bound full-row enforcement.
+  const wrappedGeneric = bindTo('explore-x') + 'findings:\nmapped the affected files\n';
+  assert(checkEvidenceShape('code-explorer', 'explore-x', wrappedGeneric, optsFor('explore-x')).ok === true,
+    '#836-T1f: a generic registry token wrapped onto the next line must close, got '
+    + JSON.stringify(checkEvidenceShape('code-explorer', 'explore-x', wrappedGeneric, optsFor('explore-x'))));
+});
+
+// ---------------------------------------------------------------------------
+// #836-T2: ABSENCE STAYS FAIL-CLOSED. The wrap tolerance is a continuation rule, not a licence to
+// treat any nearby text as a value. The untouched OPEN-TIME SEED — the exact bytes seedEvidenceFile
+// writes — must still refuse for every branch, and so must an empty value at end-of-file, an empty
+// value followed by a blank line, and a body carrying no token at all.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const NONCE = 'abc123def456';
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-836-seed-'));
+  try {
+    const planPath = path.join(tmp, 'workflow-plan.md');
+    const rows = [
+      ['s-tdd', 'tdd-guide', 'RED'],
+      ['s-impl', 'implementer', 'change-type'],
+      ['s-opt', 'metric-optimizer', 'metric_baseline'],
+      ['s-explore', 'code-explorer', 'findings'],
+      ['s-lookup', 'knowledge-lookup', 'findings'],
+      ['s-arch', 'code-architect', 'files_to_create|files_to_modify'],
+    ];
+    fs.writeFileSync(planPath, [
+      '## Nodes',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      ...rows.map(([id, role]) => '| ' + id + ' | ' + role + ' | — | — | 1 | sequence |'),
+      '## Node Ledger',
+      '| id | status |', '| --- | --- |',
+      ...rows.map(([id]) => '| ' + id + ' | in_progress |'),
+    ].join('\n'));
+
+    for (const [id, role, expectedClass] of rows) {
+      seedEvidenceFile(planPath, id, NONCE, role, false);
+      const seeded = fs.readFileSync(path.join(tmp, '.cache', id + '.md'), 'utf8');
+      const verdict = checkEvidenceShape(role, id, seeded,
+        { expectedNonce: NONCE, expectedNodeId: id });
+      assert(verdict.ok === false && verdict.kind === 'shape' && verdict.missingTokenClass === expectedClass,
+        '#836-T2-seed: the untouched open-time seed for ' + role + ' must STILL refuse '
+        + expectedClass + ' — an empty key followed by an `<!-- ... -->` comment or by EOF is not a '
+        + 'wrapped value, got ' + JSON.stringify(verdict));
+    }
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  const bind = 'evidence-binding: impl-x ' + NONCE + '\n';
+  const opts = { expectedNonce: NONCE, expectedNodeId: 'impl-x' };
+
+  // Empty value at END OF FILE — there is no following line to continue onto.
+  const eof = checkEvidenceShape('implementer', 'impl-x', bind + 'tests-green: ', opts);
+  assert(eof.ok === false && eof.missingTokenClass === 'change-type',
+    '#836-T2a: an empty tier value at end-of-file still refuses, got ' + JSON.stringify(eof));
+
+  // Empty value followed by a BLANK line — a blank line is not a continuation.
+  const blank = checkEvidenceShape('implementer', 'impl-x', bind + 'tests-green:\n\n4118 green\n', opts);
+  assert(blank.ok === false && blank.missingTokenClass === 'change-type',
+    '#836-T2b: an empty tier value followed by a blank line still refuses — the continuation is the '
+    + 'IMMEDIATELY following line only, got ' + JSON.stringify(blank));
+
+  // Empty value followed by ANOTHER key line — a sibling key is not this token's value.
+  const sibling = checkEvidenceShape('code-explorer', 'explore-x',
+    'evidence-binding: explore-x ' + NONCE + '\nfindings:\nsources: docs/api.md\n',
+    { expectedNonce: NONCE, expectedNodeId: 'explore-x' });
+  assert(sibling.ok === false && sibling.missingTokenClass === 'findings',
+    '#836-T2c: an empty token followed by a sibling `key:` line still refuses — a key line is never '
+    + 'consumed as the previous token\'s wrapped value, got ' + JSON.stringify(sibling));
+
+  // No token at all — the original genuine absence.
+  const none = checkEvidenceShape('implementer', 'impl-x', bind + 'I changed some files.\n', opts);
+  assert(none.ok === false && none.kind === 'shape' && none.missingTokenClass === 'change-type',
+    '#836-T2d: a body with no verification tier at all still refuses change-type, got ' + JSON.stringify(none));
+
+  // A BARE colon-less content token is NOT the documented presence-only form and must still refuse.
+  // (T6b-bare / T7e-bare pin the same thing; restated here so the #836 loosening cannot be read as
+  // a licence to canonicalise every bare token — only `findings_none` carries that documented form.)
+  const bareTier = checkEvidenceShape('implementer', 'impl-x', bind + 'build-green\n', opts);
+  assert(bareTier.ok === false && bareTier.missingTokenClass === 'change-type',
+    '#836-T2e: a bare colon-less `build-green` is still refused — the bare-token normalisation is '
+    + 'scoped to the documented presence-only token, got ' + JSON.stringify(bareTier));
+  const bareRed = checkEvidenceShape('tdd-guide', 'tdd-x', 'RED\nred_baseline: ' + NONCE + '\n');
+  assert(bareRed.ok === false && bareRed.missingTokenClass === 'RED',
+    '#836-T2f: a bare colon-less `RED` is still refused, got ' + JSON.stringify(bareRed));
+
+  // The anti-replay binding header is NOT a content token and keeps its exact two-field shape.
+  const wrappedBinding = checkEvidenceShape('implementer', 'impl-x',
+    'evidence-binding:\nimpl-x ' + NONCE + '\ntests-green: 4118 green\n', opts);
+  assert(wrappedBinding.ok === false && wrappedBinding.missingTokenClass === 'evidence-binding',
+    '#836-T2g: the evidence-binding anti-replay header stays byte-exact — the wrap tolerance covers '
+    + 'CONTENT tokens, never the identity header, got ' + JSON.stringify(wrappedBinding));
+});
+
+// ---------------------------------------------------------------------------
+// #836-T3: the END-TO-END reproduction. runVerifyEvidence (the same checkEvidenceShape call the
+// close paths make, reason `evidence_shape_failed`) accepts the wrapped tier off disk, and still
+// refuses a body that genuinely carries no tier.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const NONCE = 'abcdef123456';
+  const mkFixture = (body) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-836-verify-'));
+    const cacheDir = path.join(tmp, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-n1-impl'), NONCE + 'extra');
+    fs.writeFileSync(path.join(cacheDir, 'n1-impl.md'), body);
+    const planPath = path.join(tmp, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '## Nodes',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| n1-impl | implementer | — | scripts/foo.js | 1 | sequence |',
+      '## Node Ledger',
+      '| id | status |', '| --- | --- |', '| n1-impl | in_progress |',
+    ].join('\n'));
+    return { tmp, planPath };
+  };
+  const verify = (planPath) => runVerifyEvidence({
+    planPath, project: 'issue-836', nodeId: 'n1-impl',
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+
+  const good = mkFixture('evidence-binding: n1-impl ' + NONCE + '\ntests-green:\n'
+    + 'node scripts/test-adaptive-node.js — 4118 assertions green\n');
+  try {
+    const r = verify(good.planPath);
+    assert(r.result === 'ok',
+      '#836-T3a: END-TO-END — a wrapped `tests-green` value must no longer raise '
+      + 'evidence_shape_failed; the round-trip that cost a 5.9m re-dispatch is gone, got ' + JSON.stringify(r));
+  } finally { try { fs.rmSync(good.tmp, { recursive: true, force: true }); } catch (_) {} }
+
+  const bad = mkFixture('evidence-binding: n1-impl ' + NONCE + '\nI changed some files.\n');
+  try {
+    const r = verify(bad.planPath);
+    assert(r.result === 'refuse' && r.reason === 'evidence_shape_failed' && r.missingTokenClass === 'change-type',
+      '#836-T3b: END-TO-END control — a body with no tier at all still refuses '
+      + 'evidence_shape_failed/change-type (absence stays fail-closed), got ' + JSON.stringify(r));
+  } finally { try { fs.rmSync(bad.tmp, { recursive: true, force: true }); } catch (_) {} }
+});
+
+// ---------------------------------------------------------------------------
+// #836-T4: evidenceTokenValue — the reader behind the schema-2 review required-token loop
+// (`review_evidence_token_missing`). This is refusal reproduction (B): a reviewer wrote the bare
+// documented `findings_none` with no colon and the gate refused a correct, complete review.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  assert(typeof evidenceTokenValue === 'function',
+    '#836-T4-export: evidenceTokenValue must be exported so the review token contract is pinnable '
+    + 'directly (the required-token loop is otherwise reachable only through a full schema-2 '
+    + 'review-context fixture), got ' + typeof evidenceTokenValue);
+  if (typeof evidenceTokenValue !== 'function') return;
+
+  const nonEmpty = (v) => v !== null && v !== undefined && String(v).trim() !== '';
+
+  // (B) THE REPRODUCTION — the bare documented presence-only token, alone on its line.
+  assert(nonEmpty(evidenceTokenValue('domain_outcome: approved\nfindings_none\n', 'findings_none')),
+    '#836-T4a: a BARE `findings_none` (no colon) must resolve to its canonical value — the '
+    + 'documented presence-only form carries its meaning in its presence, got '
+    + JSON.stringify(evidenceTokenValue('domain_outcome: approved\nfindings_none\n', 'findings_none')));
+
+  // Indented and trailing-whitespace variants of the same bare form.
+  assert(nonEmpty(evidenceTokenValue('  findings_none  \n', 'findings_none')),
+    '#836-T4b: an indented / whitespace-padded bare `findings_none` resolves too, got '
+    + JSON.stringify(evidenceTokenValue('  findings_none  \n', 'findings_none')));
+
+  // The colon form is unchanged (back-compat with every shipped fixture).
+  assert(evidenceTokenValue('findings_none: true\n', 'findings_none') === 'true',
+    '#836-T4c: the canonical `findings_none: true` form is unchanged, got '
+    + JSON.stringify(evidenceTokenValue('findings_none: true\n', 'findings_none')));
+
+  // WRAPPED value — the same continuation rule the shape checker uses.
+  assert(evidenceTokenValue('gate_claim:\nthe code candidate is approved\n', 'gate_claim')
+    === 'the code candidate is approved',
+  '#836-T4d: a review token value wrapped onto the next line resolves to that value, got '
+    + JSON.stringify(evidenceTokenValue('gate_claim:\nthe code candidate is approved\n', 'gate_claim')));
+
+  // INDENTED token line.
+  assert(evidenceTokenValue('    domain_outcome: approved\n', 'domain_outcome') === 'approved',
+    '#836-T4e: an indented review token resolves — the token is read anywhere in the body, got '
+    + JSON.stringify(evidenceTokenValue('    domain_outcome: approved\n', 'domain_outcome')));
+
+  // last-match-wins is preserved (a corrected re-statement still wins).
+  assert(evidenceTokenValue('domain_outcome: rejected\ndomain_outcome: approved\n', 'domain_outcome')
+    === 'approved',
+  '#836-T4f: last-match-wins is preserved, got '
+    + JSON.stringify(evidenceTokenValue('domain_outcome: rejected\ndomain_outcome: approved\n', 'domain_outcome')));
+
+  // ---- FAIL-CLOSED ----
+  // Genuine absence.
+  assert(!nonEmpty(evidenceTokenValue('domain_outcome: approved\n', 'findings_none')),
+    '#836-T4g: a body that never mentions the token still yields no value (absence stays '
+    + 'fail-closed), got ' + JSON.stringify(evidenceTokenValue('domain_outcome: approved\n', 'findings_none')));
+
+  // A bare token that is NOT the documented presence-only form carries no value.
+  assert(!nonEmpty(evidenceTokenValue('finding_json\n', 'finding_json')),
+    '#836-T4h: a bare `finding_json` is NOT canonicalisable — its meaning IS its JSON payload, got '
+    + JSON.stringify(evidenceTokenValue('finding_json\n', 'finding_json')));
+  assert(!nonEmpty(evidenceTokenValue('gate_claim\n', 'gate_claim')),
+    '#836-T4i: a bare `gate_claim` carries no value, got '
+    + JSON.stringify(evidenceTokenValue('gate_claim\n', 'gate_claim')));
+
+  // The bare form must be the WHOLE line — a mention inside prose is not a token.
+  assert(!nonEmpty(evidenceTokenValue('we recorded findings_none for this gate\n', 'findings_none')),
+    '#836-T4j: a prose mention of the token is not the bare token form, got '
+    + JSON.stringify(evidenceTokenValue('we recorded findings_none for this gate\n', 'findings_none')));
+  assert(!nonEmpty(evidenceTokenValue('no_findings_none_here\n', 'findings_none')),
+    '#836-T4k: the bare-token match is word-exact, not a substring, got '
+    + JSON.stringify(evidenceTokenValue('no_findings_none_here\n', 'findings_none')));
+
+  // An empty token whose next line is a sibling KEY must stay empty, and the sibling must be read
+  // as its own token — the continuation must never swallow the next key.
+  const twoKeys = 'gate_claim:\ngate_surface: full code candidate\n';
+  assert(!nonEmpty(evidenceTokenValue(twoKeys, 'gate_claim')),
+    '#836-T4l: an empty token followed by a sibling key stays EMPTY, got '
+    + JSON.stringify(evidenceTokenValue(twoKeys, 'gate_claim')));
+  assert(evidenceTokenValue(twoKeys, 'gate_surface') === 'full code candidate',
+    '#836-T4m: and the sibling key still reads as its own token, got '
+    + JSON.stringify(evidenceTokenValue(twoKeys, 'gate_surface')));
+
+  // An empty token at end-of-file, and one followed by a comment, stay empty.
+  assert(!nonEmpty(evidenceTokenValue('gate_claim:\n', 'gate_claim')),
+    '#836-T4n: an empty token at end-of-file stays empty');
+  assert(!nonEmpty(evidenceTokenValue('gate_claim:\n<!-- gate_claim: paste here -->\n', 'gate_claim')),
+    '#836-T4o: an empty token followed by an `<!-- ... -->` seed comment stays empty, got '
+    + JSON.stringify(evidenceTokenValue('gate_claim:\n<!-- gate_claim: paste here -->\n', 'gate_claim')));
+});
+
+// ---------------------------------------------------------------------------
+// #836-T5: the WRITER normalises on record. Where a canonical serialization genuinely matters
+// (machine-read receipts), record-evidence rewrites the token into canonical form instead of a
+// later reader refusing after the fact. An already-canonical body is written BYTE-IDENTICAL, and a
+// key that is not an evidence token is never touched.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const record = (nodeId, stdinContent) => {
+    const written = {};
+    const result = runRecordEvidence({
+      planPath: '/fake/kaola-workflow/issue-836/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/issue-836/workflow-state.md',
+      project: 'issue-836', nodeId, stdinContent,
+      writeFile: (p, c) => { written[p] = c; },
+      mkdirp: () => {},
+    });
+    const key = Object.keys(written).find(k => k.includes('.cache/' + nodeId + '.md'));
+    return { result, body: key === undefined ? null : written[key] };
+  };
+
+  // A wrapped tier is persisted CANONICAL — one line, `token: value`.
+  const wrapped = record('impl-core', 'tests-green:\n4118 assertions green\n');
+  assert(wrapped.result.result === 'ok', '#836-T5a: record-evidence accepts the wrapped body');
+  assert(wrapped.body !== null && /^tests-green: 4118 assertions green$/m.test(wrapped.body),
+    '#836-T5a: record-evidence must persist the wrapped token in canonical one-line form, got '
+    + JSON.stringify(wrapped.body));
+  assert(wrapped.body !== null && !/^tests-green:[ \t]*$/m.test(wrapped.body),
+    '#836-T5b: the dangling empty `tests-green:` line must not survive the normalisation, got '
+    + JSON.stringify(wrapped.body));
+
+  // The bare documented presence-only token is persisted with its canonical value.
+  const bare = record('review-gate', 'domain_outcome: approved\nfindings_none\n');
+  assert(bare.result.result === 'ok', '#836-T5c: record-evidence accepts the bare-token body');
+  assert(bare.body !== null && /^findings_none: true$/m.test(bare.body),
+    '#836-T5c: a bare `findings_none` must be persisted as the canonical `findings_none: true`, got '
+    + JSON.stringify(bare.body));
+
+  // An already-canonical body is written byte-identical — normalisation is a no-op, never a rewrite.
+  const canonical = 'evidence-binding: impl-core deadbeef1234\ntests-green: 4118 assertions green\n';
+  const untouched = record('impl-core', canonical);
+  assert(untouched.body === canonical,
+    '#836-T5d: an already-canonical body is written byte-identical, got ' + JSON.stringify(untouched.body));
+
+  // A key that is not an evidence token is never rewritten — the normaliser is token-scoped, not a
+  // blanket line-joiner over the agent's prose.
+  const prose = 'evidence-binding: impl-core deadbeef1234\ntests-green: 4118 green\nSummary:\nrewrote the matcher\n';
+  const proseOut = record('impl-core', prose);
+  assert(proseOut.body === prose,
+    '#836-T5e: a non-token `key:` line and its following prose line are left exactly as written, got '
+    + JSON.stringify(proseOut.body));
+});
+
+// ---------------------------------------------------------------------------
+// #836-T6: ARCHIVED-CORPUS NON-REGRESSION — no existing green evidence file becomes refused.
+//
+// The guard is structural rather than a frozen list: `baselineShapeGreen` is a verbatim copy of the
+// pre-#836 matchers (the 3-arg / no-nonce call shape, which is what an archived artifact is read
+// under). For EVERY archived evidence file that the OLD checker accepted, the shipped checker must
+// still accept it. The loosening may only ever ADD acceptances, never remove one.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const { DELEGATION_OUTCOME_VOCABULARY } = require('./kaola-workflow-adaptive-schema');
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Verbatim pre-#836 semantics: column-0 token key, non-whitespace value on the SAME line.
+  function baselineShapeGreen(role, content) {
+    const c = content || '';
+    const dm = c.match(/^delegation_outcome:[ \t]*(\S+)[ \t]*$/m);
+    if (dm && !DELEGATION_OUTCOME_VOCABULARY.includes(dm[1].toLowerCase())) return false;
+    if (role === 'main-session-gate') {
+      if (!c.trim()) return false;
+      const vm = c.match(/^verdict:[ \t]*([A-Za-z-]+)[ \t]*$/gm);
+      const last = vm ? vm[vm.length - 1].replace(/^verdict:[ \t]*/, '').trim().toLowerCase() : null;
+      if (last !== 'pass' && last !== 'fail') return false;
+      return /^instrumentation:[ \t]*(\S+)[ \t]*$/m.test(c);
+    }
+    if (c.trim().startsWith('n/a')) return true;
+    if (role === 'tdd-guide') return !!c && /^RED:[ \t]*(\S.*)$/m.test(c);
+    if (role === 'implementer') {
+      return !!c && /^(?:tests-green|regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(c);
+    }
+    if (role === 'metric-optimizer') {
+      return !!c && ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green']
+        .every(t => new RegExp('^' + t + ':[ \\t]*(\\S.*)$', 'm').test(c));
+    }
+    if (!c.trim()) return false;
+    const row = (ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || null;
+    if (row) {
+      for (const tokenClass of row) {
+        if (tokenClass === 'evidence-binding') continue;
+        const alts = tokenClass.split('|');
+        if (!alts.some(a => new RegExp('^' + esc(a) + ':', 'm').test(c))) continue;
+        if (!alts.some(a => new RegExp('^' + esc(a) + ':[ \\t]*(\\S.*)$', 'm').test(c))) return false;
+      }
+    }
+    return true;
+  }
+
+  const archiveDir = path.join(__dirname, '..', 'kaola-workflow', 'archive');
+  if (!fs.existsSync(archiveDir)) {
+    assert(false, '#836-T6: the archived-run corpus is missing at ' + archiveDir
+      + ' — the "no green file becomes refused" proof cannot go vacuous');
+    return;
+  }
+
+  let scanned = 0;
+  let baselineGreen = 0;
+  const regressions = [];
+  for (const project of fs.readdirSync(archiveDir).sort()) {
+    const planPath = path.join(archiveDir, project, 'workflow-plan.md');
+    if (!fs.existsSync(planPath)) continue;
+    let nodes;
+    try { nodes = planValidator.parseNodes(fs.readFileSync(planPath, 'utf8')); } catch (_) { continue; }
+    if (!Array.isArray(nodes)) continue;
+    for (const node of nodes) {
+      const cachePath = path.join(archiveDir, project, '.cache', node.id + '.md');
+      if (!fs.existsSync(cachePath)) continue;
+      const content = fs.readFileSync(cachePath, 'utf8');
+      scanned++;
+      if (!baselineShapeGreen(node.role, content)) continue;
+      baselineGreen++;
+      let verdict;
+      try { verdict = checkEvidenceShape(node.role, node.id, content); }
+      catch (error) { verdict = { ok: false, missingTokenClass: 'threw:' + error.message }; }
+      if (verdict.ok !== true && regressions.length < 12) {
+        regressions.push(project + '/' + node.id + ' (' + node.role + ') → ' + verdict.missingTokenClass);
+      } else if (verdict.ok !== true) {
+        regressions.push('…');
+      }
+    }
+  }
+
+  assert(scanned >= 900,
+    '#836-T6a: the archived corpus must be non-trivially populated so this proof cannot pass '
+    + 'vacuously — scanned ' + scanned + ' evidence files');
+  assert(baselineGreen >= 900,
+    '#836-T6b: the archived corpus must contain a large green population — ' + baselineGreen
+    + ' of ' + scanned + ' were accepted by the pre-#836 matchers');
+  assert(regressions.length === 0,
+    '#836-T6c: NO existing green archived evidence file may become refused — ' + regressions.length
+    + ' regressed: ' + regressions.slice(0, 12).join('; '));
 });
 
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
