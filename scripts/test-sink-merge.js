@@ -501,7 +501,7 @@ function suffixedArchiveRel(tmpRoot, project) {
   const tmpRoot = fs.realpathSync(makeTmpRoot());
   try {
     // Minimal in-place repo: .roadmap sources for both members + a mirror + a live bundle project.
-    spawnSync('git', ['init', '-b', 'main'], { cwd: tmpRoot, encoding: 'utf8' });
+    G.git(tmpRoot, ['init', '-b', 'main'], { encoding: 'utf8' });
     G.git(tmpRoot, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
     G.git(tmpRoot, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
     const roadmapDir = path.join(tmpRoot, 'kaola-workflow', '.roadmap');

@@ -2,6 +2,9 @@
 'use strict';
 
 const assert = require('assert');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -1275,15 +1278,14 @@ scenario(() => {
       deepEqual(attempt.rebind, [], 'copied live attempt preserves empty rebind');
 
       const scratchRepo = path.join(scratch, 'repo');
-      execFileSync('git', ['clone', '--quiet', '--no-hardlinks', '--branch', liveFixture.legacy_root_proof.branch,
-        '--', externalRoot, scratchRepo], { env: gitEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+      G.execRaw(['clone', '--quiet', '--no-hardlinks', '--branch', liveFixture.legacy_root_proof.branch, '--', externalRoot, scratchRepo], { env: gitEnv, stdio: ['ignore', 'ignore', 'pipe'] });
       // candidate_declared is the journal's exact path -> Git blob projection
       // at review time. Rehydrate those historical blobs from the source object
       // store instead of trusting the source worktree's later mutable bytes.
       for (const [rel, entry] of Object.entries(attempt.candidate_declared)) {
         const match = /^(100644|100755) ([0-9a-f]{40})$/.exec(entry);
         ok(match, 'copied live declared candidate entry has a regular-file Git identity: ' + rel);
-        const sourceBytes = execFileSync('git', ['-C', externalRoot, 'cat-file', 'blob', match[2]], {
+        const sourceBytes = G.exec(externalRoot, ['cat-file', 'blob', match[2]], {
           env: gitEnv, encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024,
         });
         const destination = path.join(scratchRepo, rel);

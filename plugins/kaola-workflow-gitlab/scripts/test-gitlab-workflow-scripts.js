@@ -1223,7 +1223,7 @@ withForge({
     initGitRepo(root);
     // #725: the adaptive finalize gate diffs against the default base branch (`main` when offline),
     // so name the fixture's default branch `main` before adding the worktrees.
-    spawnSync('git', ['branch', '-M', 'main'], { cwd: root, encoding: 'utf8' });
+    G.git(root, ['branch', '-M', 'main'], { encoding: 'utf8' });
     const wtRelease = path.join(kwRoot, 'release-project');
     fs.mkdirSync(path.dirname(wtRelease), { recursive: true });
     let result = G.git(root, ['worktree', 'add', '-b', 'workflow/gitlab-issue-70', '--', wtRelease, 'HEAD'], { encoding: 'utf8' });

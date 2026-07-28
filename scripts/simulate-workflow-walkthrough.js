@@ -2368,7 +2368,7 @@ function testMetricOptimizerContract() {
         G.git(grepo, ['add', 'src/hot.js'], { encoding: 'utf8' });
         G.git(grepo, ['commit', '-m', 'kw-opt(opt) iter ' + k], { encoding: 'utf8' });
         // reject-and-revert this iteration (scoped restore, never reset --hard), then commit the revert.
-        spawnSync('git', ['restore', '--source=HEAD~1', '--', 'src/hot.js'], { cwd: grepo, encoding: 'utf8' });
+        G.git(grepo, ['restore', '--source=HEAD~1', '--', 'src/hot.js'], { encoding: 'utf8' });
         G.git(grepo, ['commit', '-am', 'kw-opt(opt) revert iter ' + k], { encoding: 'utf8' });
       }
       // final accepted iteration: a net change confined to src/hot.js.
@@ -2887,7 +2887,7 @@ function testAdaptiveGateBarrierEnforcement() {
       assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
         '--barrier-check must refuse (exit 1) a surprise sensitive write, got status ' + r.status + ' ' + r.stdout);
       // Clean control: revert the surprise file; only the declared write remains.
-      spawnSync('git', ['rm', '-q', 'src/auth/session.js'], { cwd: grepo, encoding: 'utf8' });
+      G.git(grepo, ['rm', '-q', 'src/auth/session.js'], { encoding: 'utf8' });
       G.git(grepo, ['commit', '-m', 'drop surprise'], { encoding: 'utf8' });
       r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
@@ -3453,7 +3453,7 @@ function testBundle424432433ValidatorGates() {
     }
     // Branch off main BEFORE the plan commit so the finalize sweep's `git diff main...HEAD` reflects
     // the real diverged-feature-branch topology (the plan + every node/orphan commit is on the branch).
-    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-424'], { encoding: 'utf8' });
+    G.git(grepo, ['checkout', '-b', 'workflow/issue-424'], { encoding: 'utf8' });
     const proj = path.join(grepo, 'kaola-workflow', 'issue-424');
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
@@ -6424,7 +6424,7 @@ function testArchiveDestinationResolvesAgainstMain832() {
     );
 
     // (3) THE INCIDENT: the sink removes the linked worktree at cleanup. The run record survives.
-    spawnSync('git', ['worktree', 'remove', '--force', '--', wtPath], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'remove', '--force', '--', wtPath], { encoding: 'utf8' });
     assert(
       !fs.existsSync(wtPath),
       '#832: precondition — the worktree teardown the sink performs actually removed the tree'
@@ -6739,7 +6739,7 @@ function testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase() {
   try {
     initGitRepo(tmp);
     // In-place posture: the run lives on the feature branch in the MAIN checkout.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-801'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     plantActiveFolder(tmp, 'issue-801', 801, null);
@@ -6821,7 +6821,7 @@ function testWatchPrClosedSweepSkipsCommitOffBaseBranch() {
       "else { process.stdout.write('[\\n'); }"
     ]);
     // An unrelated non-base branch carrying its own commit, checked out.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/other-lane'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/other-lane'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     fs.writeFileSync(path.join(tmp, 'other.txt'), 'other\n');
@@ -7152,7 +7152,7 @@ function testWatchPrClosedSweepArbitraryLaneLyingBaseSkips() {
       "else { process.stdout.write('[\\n'); }"
     ]);
     // An unrelated non-base branch carrying its own commit, checked out.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/other-lane'], {
+    G.git(tmp, ['checkout', '-b', 'workflow/other-lane'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     fs.writeFileSync(path.join(tmp, 'other.txt'), 'other\n');
@@ -7230,7 +7230,7 @@ function testReleaseHeadRepointRaceDowngradesArchiveCommit() {
     });
     plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'main');
     // Pre-create the race branch at main's tip so the interleave has somewhere to land.
-    spawnSync('git', ['-C', tmp, 'branch', 'race', 'main'], {
+    G.git(tmp, ['branch', 'race', 'main'], {
       encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
     });
     const mainTipBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
@@ -7447,14 +7447,14 @@ function testSinkRefusesStaleReceipt() {
     try {
       initGitRepo(tmp);
       // Create feature branch and capture its tip BEFORE writing the receipt.
-      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['branch', branch], { encoding: 'utf8' });
       G.git(tmp, ['switch', branch], { encoding: 'utf8' });
       fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
       G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
       G.git(tmp, ['commit', '-m', 'feat: slice deliverable'], { encoding: 'utf8' });
       const featureTip = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
       // Switch back to main WITHOUT merging (branch is NOT an ancestor of main).
-      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
+      G.git(tmp, ['switch', 'main'], { encoding: 'utf8' });
 
       // Write receipt with branch_head matching the CURRENT feature tip → cycle-identity passes.
       const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
@@ -7516,7 +7516,7 @@ function testAssertWorktreeCleanFailsClosedOnProbeFault() {
   try {
     initGitRepo(tmp);
     // Provision a CLEAN linked worktree on a feature branch (no uncommitted changes).
-    spawnSync('git', ['branch', 'workflow/issue-9496'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['branch', 'workflow/issue-9496'], { encoding: 'utf8' });
     const wt = path.join(tmp, '.kw', 'wt-9496');
     G.git(tmp, ['worktree', 'add', wt, 'workflow/issue-9496'], { encoding: 'utf8' });
     const mainBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
@@ -7566,7 +7566,7 @@ function testAssertWorktreeCleanFailsClosedOnListProbeFault() {
   try {
     initGitRepo(tmp);
     // Provision a CLEAN linked worktree on a feature branch (no uncommitted changes).
-    spawnSync('git', ['branch', 'workflow/issue-9506'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['branch', 'workflow/issue-9506'], { encoding: 'utf8' });
     const wt = path.join(tmp, '.kw', 'wt-9506');
     G.git(tmp, ['worktree', 'add', wt, 'workflow/issue-9506'], { encoding: 'utf8' });
     const mainBefore = G.git(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
@@ -7668,7 +7668,7 @@ function testSinkRefusesOnPushUpstreamFailure() {
     // A feature branch with a real (unpushed) commit and NO upstream configured — the forced push
     // failure below means `git push -u` never actually runs, so branch@{u} never resolves and the
     // parity check genuinely fails (this is not a fabricated assertion — it is the real git state).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9499'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-9499'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
     G.git(tmp, ['add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
@@ -7803,7 +7803,7 @@ function testSinkTransactionStampsPublishedHeadAfterRebase() {
 
     // Advance origin/main concurrently (via a fresh clone) so the feature branch is NOT
     // fast-forwardable and doRebase genuinely rewrites its commits (a new SHA post-rebase).
-    spawnSync('git', ['clone', remotePath, clone], { env });
+    G.raw(['clone', remotePath, clone], { env });
     G.git(clone, ['checkout', '-B', 'main', 'origin/main'], { env });
     fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
     G.git(clone, ['add', '-A'], { env });
@@ -9512,7 +9512,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
     // MAIN's status (D entries) in the clean assertion added below.
     plantRoadmapIssue(tmp, 911, '');
     // Commit so .roadmap/ is on HEAD (the gate check used by the regression fix).
-    spawnSync('git', ['-C', tmp, 'add', path.join('kaola-workflow', '.roadmap', 'issue-911.md')], { encoding: 'utf8' });
+    G.git(tmp, ['add', path.join('kaola-workflow', '.roadmap', 'issue-911.md')], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'plant'], { encoding: 'utf8' });
     // Create linked worktree on a feature branch
     const wtPath = path.join(kwRoot, 'issue-911');
@@ -10750,7 +10750,7 @@ function testSinkMergeMockabilityAndReceipt() {
     ]);
 
     // Create a feature branch, push it upstream.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-164m'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-164m'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-164m.txt'), 'feature\n');
     G.git(tmp, ['add', 'feature-164m.txt'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'feat: issue 164m'], {
@@ -10759,7 +10759,7 @@ function testSinkMergeMockabilityAndReceipt() {
     });
     G.git(tmp, ['push', '-u', 'origin', 'workflow/issue-164m'], { encoding: 'utf8' });
     // Return to main so checkout in sink-merge works.
-    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
     const mockJs = path.join(binDir, 'gh.js');
     const result = spawnSync(process.execPath, [
@@ -11185,7 +11185,7 @@ function testSinkMergePostPushReopenOnMock() {
     G.git(tmp, ['push', 'origin', 'main'], { encoding: 'utf8', env: gitEnv });
 
     // Feature branch with deliverable.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
     fs.writeFileSync(path.join(tmp, 'feature-517.txt'), 'feature\n');
     G.git(tmp, ['add', 'feature-517.txt'], { encoding: 'utf8', env: gitEnv });
     G.git(tmp, ['commit', '-m', 'feat: issue 517'], { encoding: 'utf8', env: gitEnv });
@@ -11333,7 +11333,7 @@ function testSinkMergeKeepOpenArchivedStateGuard() {
   try {
     initGitRepo(tmp);
     // Feature branch with a non-workflow change so the all-workflow refusal does not fire.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-545'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-545'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'feature-545.txt'), 'feature\n');
     G.git(tmp, ['add', 'feature-545.txt'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'feat: issue 545'], { encoding: 'utf8' });
@@ -11630,7 +11630,7 @@ function testSinkMergeSkipsArchivedProjectPhantom() {
 
     // Construct archived state directly on the feature branch — do NOT create a live
     // folder on disk (untracked files survive git reset --hard and would corrupt the test).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-850'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-850'], { encoding: 'utf8' });
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-850');
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), '# archived\n');
@@ -14228,7 +14228,7 @@ function testAdaptiveHandoffInGrammarReady() {
     plantHandoffState(projectDir, projectName);
 
     // Git-commit plan + state so the repo HEAD is current (record-base needs a resolvable tree).
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'handoff-ready fixture'], { encoding: 'utf8' });
 
     // Run handoff using --plan (absolute path) — NOT --project (resolves from script's repoRoot).
@@ -14771,7 +14771,7 @@ function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
     plantHandoffState(projectDir, projectName);
 
     // Commit so record-base has a tree to hash.
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'proj-root fixture'], { encoding: 'utf8' });
 
     // Run handoff with --project (NOT --plan) and cwd=tmp.
@@ -15617,7 +15617,7 @@ function testSinkTransactionBlockedByForeignDirt() {
 
     // Create a feature branch with an impl commit + the project folder already archived
     // (standard lane: finalize runs before --sink so the live folder is gone).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4291'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-4291'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-4291.txt'), 'impl\n');
     G.git(tmp, ['add', 'impl-4291.txt'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'feat: impl 4291'], {
@@ -15689,7 +15689,7 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
     initGitRepo(tmp);
 
     // Create a feature branch with an impl commit (same shape as the #429 blocked scenario).
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-7152'], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-7152'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-7152.txt'), 'impl\n');
     G.git(tmp, ['add', 'impl-7152.txt'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'feat: impl 7152'], {
@@ -15774,7 +15774,7 @@ function testSinkTransactionCrashResume() {
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
 
     // Feature branch with impl commit.
-    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4292'], { env, encoding: 'utf8' });
+    G.git(tmp, ['checkout', '-b', 'workflow/issue-4292'], { env, encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-4292.txt'), 'impl\n');
     G.git(tmp, ['add', 'impl-4292.txt'], { env, encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'feat: impl 4292'], { env, encoding: 'utf8' });
@@ -20279,7 +20279,7 @@ function testFinalizeIncompleteNegativeControlAlreadyDone() {
       ''
     ].join('\n'));
     // Commit everything so the working tree is clean.
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'impl: issue 296y'], { encoding: 'utf8' });
     // Confirm tree is clean.
     const cleanCheck = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' });
@@ -20316,7 +20316,7 @@ function testFinalizeIncompleteNegativeControlRepoDirty() {
       ''
     ].join('\n'));
     // Commit the archive dir so it is clean for this project.
-    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'impl: archive issue-296z'], { encoding: 'utf8' });
     // Now add an UNRELATED untracked file — simulating another issue in progress.
     fs.writeFileSync(path.join(tmp, 'other-issue-work.js'), '// unrelated\n');

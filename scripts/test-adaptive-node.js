@@ -13216,7 +13216,7 @@ scenario(() => {
     const first = node.provisionLeg(repoRoot, legPath, legBranch, base);
     assert(first.ok, 'LEG-DANGLING-BRANCH-REUSE: first provision ok');
     // Remove the worktree but leave the branch dangling (the swallowed `branch -D` scenario).
-    execFileSync('git', ['-C', repoRoot, 'worktree', 'remove', '--force', legPath], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['worktree', 'remove', '--force', legPath], { stdio: ['ignore', 'ignore', 'ignore'] });
     assert(branchExists(repoRoot, legBranch), 'LEG-DANGLING-BRANCH-REUSE: branch dangles after worktree-only removal');
     const second = node.provisionLeg(repoRoot, legPath, legBranch, base);
     assert(second.ok && second.reusedBranch, 'LEG-DANGLING-BRANCH-REUSE: re-provision REUSES the dangling branch (no wedge), got ' + JSON.stringify(second));
@@ -15716,7 +15716,7 @@ scenario(() => {
     } catch (_) { scannerBlockedOrdinaryCommit = true; }
     // Restore the untracked/uncommitted state the seam is supposed to meet, and clear the witness so
     // whatever it records next is unambiguously the SCHEDULER's commit.
-    execFileSync('git', ['-C', repoRoot, 'reset', '-q', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    G.exec(repoRoot, ['reset', '-q', '--', 'src/serial_a.js'], { stdio: ['ignore', 'ignore', 'ignore'] });
     assert(scannerBlockedOrdinaryCommit,
       '#802-D7-SECRET-SCANNER precondition: the scanner really does block an ordinary commit of these bytes');
     assert(seamCommitCount(repoRoot) === 0,

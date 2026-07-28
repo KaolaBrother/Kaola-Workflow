@@ -4293,7 +4293,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(dest, 'workflow-state.md'), 'state\n');
 
     // Off-base checkout → the helper refuses BEFORE staging: tip unchanged, residue on disk.
-    execFileSync('git', ['checkout', '-b', 'workflow/other-lane'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['checkout', '-b', 'workflow/other-lane'], { env: gitEnv, stdio: 'ignore' });
     const tipBefore = G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const off = commitDiscardArchive({ archived: true, dest: dest }, 'issue-909', 'main');
     assert(off && off.committed === false,
@@ -4308,7 +4308,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#715 F1: a refused commit leaves the archive on disk as recoverable residue');
 
     // On-base checkout → the helper commits and discloses the receiving branch.
-    execFileSync('git', ['checkout', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['checkout', 'main'], { env: gitEnv, stdio: 'ignore' });
     const on = commitDiscardArchive({ archived: true, dest: dest }, 'issue-909', 'main');
     assert(on && on.committed === true,
       '#715 F1: the helper commits the discard archive on the base branch, got ' + JSON.stringify(on));
@@ -4368,7 +4368,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#715 N5-B: the honest archive commit is reachable from the base ref (merge-base --is-ancestor HEAD main)');
 
     // (a) Detached checkout + base='HEAD' (the sentinel): refused outright, nothing committed.
-    execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['checkout', '--detach', 'HEAD'], { env: gitEnv, stdio: 'ignore' });
     const detachedTip = G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const sentinel = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'HEAD');
     assert(sentinel && sentinel.committed === false,
@@ -4381,7 +4381,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#715 N5-A: a sentinel-refused commit leaves the archive on disk as recoverable residue');
 
     // (c-release) Base naming the branch the release discards (call-site-supplied discardedBranch).
-    execFileSync('git', ['checkout', '-b', 'workflow/issue-910'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['checkout', '-b', 'workflow/issue-910'], { env: gitEnv, stdio: 'ignore' });
     const featTip = G.exec(tmpDir, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const discarded = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'workflow/issue-910',
       { discardedBranch: 'workflow/issue-910' });
@@ -4441,7 +4441,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     G.exec(tmpDir, ['add', 'README.md'], { env: gitEnv, stdio: 'ignore' });
     G.exec(tmpDir, ['commit', '-m', 'init'], { env: gitEnv, stdio: 'ignore' });
     // Pre-create the race branch at main's tip so the interleave has somewhere to land.
-    execFileSync('git', ['branch', 'race', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    G.exec(tmpDir, ['branch', 'race', 'main'], { env: gitEnv, stdio: 'ignore' });
     const mainTip = G.exec(tmpDir, ['rev-parse', 'main'], { encoding: 'utf8' }).trim();
 
     const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-910.discarded-x');

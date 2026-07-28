@@ -1413,10 +1413,10 @@ console.log('GitLab #520 journal-exclusion from archive_commit: PASSED');
     git('checkout', 'main');
     // Advance origin/main via a clone, then fetch so the local origin/main tracking ref moves ahead
     // → alreadyUpToDate is false in the --sink transaction (no Step-1 fetch on that path).
-    execFileSync('git', ['clone', remotePath, clone], { encoding: 'utf8' });
+    G.execRaw(['clone', remotePath, clone], { encoding: 'utf8' });
     // The clone is a separate repo and inherits no identity under the hermetic HOME — give it one
     // (mirrors the `root` config above) so the concurrent-advance commit doesn't fail status 128.
-    execFileSync('git', ['-C', clone, 'config', 'user.email', 't@t'], { encoding: 'utf8' });
+    G.exec(clone, ['config', 'user.email', 't@t'], { encoding: 'utf8' });
     G.exec(clone, ['config', 'user.name', 't'], { encoding: 'utf8' });
     G.exec(clone, ['checkout', '-B', 'main', 'origin/main'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');

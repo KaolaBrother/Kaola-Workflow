@@ -781,7 +781,7 @@ function readState(tmpRoot, project) {
     writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 47] });
     // treeDirty includes untracked files (same gate as claimProject) — commit the fixture so the
     // in-place dirty-gate sees a clean tree.
-    spawnSync('git', ['-C', tmpRoot, 'add', '-A'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmpRoot, ['commit', '-m', 'fixture'], { encoding: 'utf8' });
     const result = runClaim(
       ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive'],
