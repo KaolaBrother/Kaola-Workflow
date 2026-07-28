@@ -285,10 +285,20 @@ choices, or ambiguity that blocks correctness.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
 - Commit And Push happens after docs, issues, roadmap, archive, and metadata are complete.
-- Route a validation failure by kind: build/type/lint/tooling → `build-error-resolver`;
-  behavior/regression/coverage/test-defect → `tdd-guide`, the role that owns the test artifact;
-  review/security → the review/security gate. Write fix output to
-  `.cache/final-validation-fix-{n}.md` and rerun the failed command.
+- Repair a failed final validation **however you judge best** — inline for a trivial correction, or
+  dispatched to whichever role fits (`tdd-guide` for a test defect, the role that owns the test
+  artifact; `build-error-resolver` for build/type/lint/tooling; the review/security gate for a review
+  finding). No mandated mode, no justifier, no approval attaches to that choice. Write fix output to
+  `.cache/final-validation-fix-{n}.md` and rerun the exact command that failed.
+- Then RECORD the fix — the one regulated step: `node scripts/kaola-gitea-workflow-adaptive-node.js
+  final-fix-commit --project {project} --json --stdin`, one entry per fix (exact failed command, fix
+  commit, touched paths, green rerun receipt bound to the post-fix candidate). The finalize
+  attribution sweep credits that register as a third source; an unrecorded finalize-time fix refuses
+  `unattributed_change`. A fix touching production behavior additionally needs a bound
+  re-certification receipt (a settled PASS review attempt over the post-fix candidate) or the verb
+  refuses `final_fix_production_surface`. The lane closes at the sink's first irreversible step: once
+  the branch is pushed the verb refuses `final_fix_after_sink_started` and recovery is a follow-up
+  issue, never a history rewrite.
 - A one-line, mechanically obvious inline edit (no behavior/API/security/design judgment) that fixes
   finalization friction, formatting, a typo, or an import stays legal — recorded in
   `finalization-summary.md`, with affected validation rerun. It is **never** an edit to a test file:

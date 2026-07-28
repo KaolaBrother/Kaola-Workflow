@@ -4197,6 +4197,175 @@ function canonicalizeRouteOwners(row, leafToMilestone) {
     owning_node: mapped.length === 1 ? mapped[0] : null });
 }
 
+// ---------------------------------------------------------------------------
+// THE SINK-OWNED FINAL-FIX REGISTER — the ONE commitment point at which a fix produced DURING
+// finalization enters the candidate. Zero regulation on HOW the fix is produced (inline, or
+// dispatched to whichever role fits: no mandated mode, no justifier, no approval); full regulation
+// HERE, where the fix is recorded and the finalize attribution sweep starts crediting it.
+//
+// The register is a per-run `.cache` artifact owned by the LIVE sink: it may only be written while
+// the terminal finalize row is `in_progress` AND the sink is still PRISTINE (nothing pushed). After
+// the sink's first irreversible step the record is immutable history and recovery is a follow-up
+// issue, never a rewrite.
+//
+// DIGEST-BOUND, because the sweep reads it as an ATTRIBUTION source: an unverified register is a
+// laundering primitive (append a path, and an unreviewed file ships attributed). The digest covers
+// { schema_version, plan_hash, entries } and every entry re-states its own gates, so the sweep can
+// re-prove the whole file rather than trust it. A register that does not verify refuses its OWN
+// typed reason — never `unattributed_change`, whose documented cure (delete the file) would be a lie
+// about the real fault.
+//
+// The two helpers below are the SINGLE source both the writer (adaptive-node's final-fix-commit) and
+// the reader (the plan validator's finalize attribution sweep) use, so the two can never disagree
+// about what "verified" means. `classify` is injected — the surface classifier lives with the
+// allowband predicates in the plan validator, and this module stays dependency-free.
+// ---------------------------------------------------------------------------
+const FINAL_FIX_REGISTER_NAME = 'final-fixes.json';
+const FINAL_FIX_SUBCOMMAND = 'final-fix-commit';
+const FINAL_FIX_REGISTER_SCHEMA_VERSION = 1;
+const FINAL_FIX_SURFACE_CLASSES = ['validation-apparatus', 'production'];
+
+// The digest binds the register's whole meaning-carrying core. Recomputable by anyone holding the
+// file: the point is DETECTION of an out-of-band edit, not secrecy.
+function computeFinalFixRegisterDigest(register) {
+  const core = {
+    schema_version: (register && register.schema_version) != null
+      ? register.schema_version : FINAL_FIX_REGISTER_SCHEMA_VERSION,
+    plan_hash: String((register && register.plan_hash) || ''),
+    entries: Array.isArray(register && register.entries) ? register.entries : [],
+  };
+  return sha256Hex(Buffer.from(canonicalJson(core), 'utf8'));
+}
+
+// verifyFinalFixRegister — total, never throws. Re-proves the file AND every entry's own gates.
+// Returns { ok: true, files: [...] } (the union of attributed paths, sorted) or { ok: false, reason,
+// detail }. FAIL-CLOSED in every direction: an unknown schema, a foreign plan_hash, a broken digest,
+// a red rerun, a receipt bound to another command, or a production entry with no re-certification
+// receipt all refuse rather than attribute.
+function verifyFinalFixRegister(parsed, planHash, classify) {
+  if (!isPlainObject(parsed)) return { ok: false, reason: 'register_malformed', detail: 'not a JSON object' };
+  if (parsed.schema_version !== FINAL_FIX_REGISTER_SCHEMA_VERSION) {
+    return { ok: false, reason: 'register_schema_unknown',
+      detail: 'schema_version ' + JSON.stringify(parsed.schema_version) + ' (expected ' + FINAL_FIX_REGISTER_SCHEMA_VERSION + ')' };
+  }
+  if (typeof parsed.plan_hash !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.plan_hash)) {
+    return { ok: false, reason: 'register_plan_hash_malformed', detail: String(parsed.plan_hash) };
+  }
+  if (planHash && parsed.plan_hash !== planHash) {
+    return { ok: false, reason: 'register_plan_hash_mismatch',
+      detail: 'register is bound to plan ' + parsed.plan_hash + ', not ' + planHash };
+  }
+  if (!Array.isArray(parsed.entries)) return { ok: false, reason: 'register_malformed', detail: 'entries is not an array' };
+  if (typeof parsed.digest !== 'string' || computeFinalFixRegisterDigest(parsed) !== parsed.digest) {
+    return { ok: false, reason: 'register_digest_mismatch',
+      detail: 'the recorded digest does not bind the recorded entries — the register was edited out of band' };
+  }
+  const files = new Set();
+  for (const entry of parsed.entries) {
+    const gate = verifyFinalFixEntry(entry, classify);
+    if (!gate.ok) return { ok: false, reason: gate.reason, detail: 'entry ' + JSON.stringify(entry && entry.ordinal) + ': ' + gate.detail };
+    for (const p of entry.files) files.add(p);
+  }
+  return { ok: true, files: Array.from(files).sort(), entries: parsed.entries.length };
+}
+
+// verifyFinalFixEntry — ONE recorded entry's own gates, re-proved from the bytes. Total; never
+// throws. Deliberately does NOT re-run anything: it re-checks that the receipt the writer accepted
+// is still internally coherent, which is exactly what an out-of-band editor has to break.
+function verifyFinalFixEntry(entry, classify) {
+  if (!isPlainObject(entry)) return { ok: false, reason: 'register_entry_malformed', detail: 'not an object' };
+  if (typeof entry.failed_command !== 'string' || !entry.failed_command.trim()) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'failed_command is missing' };
+  }
+  if (typeof entry.fix_commit !== 'string' || !/^[0-9a-f]{7,40}$/.test(entry.fix_commit)) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'fix_commit is not a resolved rev' };
+  }
+  if (!Array.isArray(entry.files) || !entry.files.length
+    || entry.files.some(p => typeof p !== 'string' || !p.trim() || /[*?]|\/$/.test(p))) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'files must be a non-empty list of exact repo-relative paths' };
+  }
+  const rerun = entry.rerun;
+  if (!isPlainObject(rerun) || rerun.command !== entry.failed_command) {
+    return { ok: false, reason: 'register_entry_receipt_unbound',
+      detail: 'the rerun receipt does not name the exact failed command' };
+  }
+  if (rerun.exit_code !== 0) {
+    return { ok: false, reason: 'register_entry_rerun_red', detail: 'rerun exit_code ' + JSON.stringify(rerun.exit_code) };
+  }
+  if (typeof rerun.candidate_hash !== 'string' || !/^[0-9a-f]{64}$/.test(rerun.candidate_hash)) {
+    return { ok: false, reason: 'register_entry_receipt_unbound', detail: 'rerun.candidate_hash is not a candidate binding' };
+  }
+  if (FINAL_FIX_SURFACE_CLASSES.indexOf(entry.surface_class) === -1) {
+    return { ok: false, reason: 'register_entry_malformed', detail: 'unknown surface_class ' + JSON.stringify(entry.surface_class) };
+  }
+  if (typeof classify === 'function') {
+    let recomputed = null;
+    try { recomputed = classify(entry.files); } catch (_) { recomputed = null; }
+    if (!recomputed || recomputed.surface_class !== entry.surface_class) {
+      return { ok: false, reason: 'register_entry_surface_mismatch',
+        detail: 'recorded surface_class "' + entry.surface_class + '" does not match the paths it names' };
+    }
+  }
+  if (entry.surface_class === 'production') {
+    const rc = entry.recertification;
+    if (!isPlainObject(rc) || typeof rc.attempt_id !== 'string' || !rc.attempt_id
+      || typeof rc.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/.test(rc.candidate_digest)) {
+      return { ok: false, reason: 'register_entry_recertification_missing',
+        detail: 'a production-surface entry carries no bound re-certification receipt' };
+    }
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// deriveSinkProgressFromState — the ONE derivation of "has the sink taken its first irreversible
+// step?", shared by the adaptive node's sink-progress probe and the plan validator's finalize
+// deviation route so the two can never disagree about whether the lane is open. Resolves the run's
+// branch from `workflow-state.md` (NEVER `git rev-parse HEAD`: the sink runs main-session-direct
+// from the MAIN root, so HEAD would make the predicate inert), then treats a PUSHED branch —
+// `origin/<branch>` exists — as the first irreversible step.
+//
+// THREE-VALUED and FAIL-CLOSED: only 'pristine' admits. A missing origin ref is the pristine
+// not-yet-pushed signal; ANY other failure (no branch pointer, git error, non-repo) collapses to
+// 'unknown', because the dangerous direction is a false 'pristine' after a push.
+// ---------------------------------------------------------------------------
+function deriveSinkProgressFromState(io) {
+  const readFile = io && io.readFile;
+  if (typeof readFile !== 'function') return { state: 'unknown', evidence: 'no readFile seam' };
+  let branch = null;
+  try {
+    const st = readFile(io.statePath);
+    const m = /^branch:\s*(\S+)\s*$/m.exec(String(st || ''));
+    if (m) branch = m[1];
+  } catch (_) { branch = null; }
+  if (!branch) return { state: 'unknown', evidence: 'no branch: pointer in workflow-state.md (cannot derive sink progress)' };
+  const root = (io && io.repoRoot) || process.cwd();
+  const { execFileSync } = require('child_process');
+  try {
+    const out = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/' + branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (String(out).trim()) return { state: 'started', evidence: 'origin/' + branch + ' exists — the sink has pushed (irreversible)' };
+    return { state: 'pristine', evidence: 'origin/' + branch + ' unresolved — the sink has not pushed' };
+  } catch (e) {
+    if (e && e.status === 1) return { state: 'pristine', evidence: 'no origin/' + branch + ' — the sink has not pushed' };
+    return { state: 'unknown', evidence: 'git rev-parse for origin/' + branch + ' failed (status ' + (e && e.status) + ') — cannot derive sink progress' };
+  }
+}
+
+// finalizeSinkStatus — the plan's UNIQUE terminal sink row, read through whatever ledger accessor
+// the caller already holds. `live` is the finalize-context predicate every deviation route keys on:
+// exactly one `finalize` node, and its ledger row is `in_progress`. A plan with zero or several
+// finalize rows is NOT finalize context (fail-closed: no route, no lane).
+function finalizeSinkStatus(nodes, statusOf) {
+  const list = (Array.isArray(nodes) ? nodes : []).filter(n => n && n.role === 'finalize');
+  if (list.length !== 1) return { id: null, status: null, live: false };
+  const id = list[0].id;
+  let status = null;
+  try { status = statusOf(id); } catch (_) { status = null; }
+  status = (status == null || status === '') ? null : String(status).toLowerCase();
+  return { id, status, live: status === 'in_progress' };
+}
+
 module.exports = {
   LANE_STALENESS_MS,
   SHARED_STATE_FIELDS,
@@ -4411,4 +4580,18 @@ module.exports = {
   verifyOwnerProjectionEntry,
   foldOwnerProjection,
   canonicalizeRouteOwners,
+  // The sink-owned final-fix register (the finalize deviation route's ONE commitment point): the
+  // filename + verb constants, the digest binding, and the fail-closed verifier BOTH the writer
+  // (adaptive-node) and the finalize attribution sweep (plan-validator) prove the file through.
+  FINAL_FIX_REGISTER_NAME,
+  FINAL_FIX_SUBCOMMAND,
+  FINAL_FIX_REGISTER_SCHEMA_VERSION,
+  FINAL_FIX_SURFACE_CLASSES,
+  computeFinalFixRegisterDigest,
+  verifyFinalFixRegister,
+  verifyFinalFixEntry,
+  // The finalize-context predicates the deviation routes key on: one derivation of "has the sink
+  // pushed?" and one reading of the unique terminal sink row.
+  deriveSinkProgressFromState,
+  finalizeSinkStatus,
 };

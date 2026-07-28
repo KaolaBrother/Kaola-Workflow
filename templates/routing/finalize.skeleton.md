@@ -335,7 +335,9 @@ Advisory: export `KAOLA_GOAL` (or set a `goal:` line in `## Meta`) so `goal_chec
 
 ## Resume Detection
 
-final validation not run → `final-validation`; failed w/ no ledger row → `route-final-fix`; fixed but
+final validation not run → `final-validation`; failed w/ no ledger row → `route-final-fix` (its
+durable counterpart is `.cache/final-fixes.json`: an entry there means the fix was already recorded,
+so resume at the rerun rather than re-fixing); fixed but
 not re-run → `final-validation`; acceptance incomplete → `acceptance-check`; doc gate → `doc-update`;
 docking → `doc-docking`; summary missing → `write-summary`; closure gate → `closure-decision`; issue
 not updated → `issue-update`; roadmap/archive → `roadmap-archive`; metadata pending →
@@ -350,9 +352,11 @@ and ask.
 <!-- SPLICE:fz-cmd-005 -->
 - **Delegation:** the main session may run one small focused command (classify a failure, a quick
   post-trivial-edit check, a short smoke). Delegate expensive/noisy validation (full suites, broad
-  lint, long logs, repeated repro) to a fresh validation subagent or the fix agent — `tdd-guide` for
+  lint, long logs, repeated repro) to a fresh validation subagent or a fix agent — `tdd-guide` for
   behavior/regression/coverage/test-defect (it holds custody of the test artifact; no other role may
-  write a test path), `build-error-resolver` for build/type/lint/tooling. Raw output →
+  write a test path), `build-error-resolver` for build/type/lint/tooling. Which of those you pick, or
+  whether you fix it inline instead, is your call: the regulation is at the recording step
+  (`final-fix-commit`), never on the mode. Raw output →
   `kaola-workflow/{project}/.cache/final-validation.md`; record only command, result, summary,
   classification, evidence path, route, and citation boundary.
 - **De-duplication:** run each full relevant command once against the final candidate; cite a prior
@@ -390,12 +394,40 @@ Agent(
 ## Steps
 
 **Step 1 — Final Validation.** Update `workflow-state.md` (`stage: finalization`,
-`step: final-validation`, `main_session_role: orchestrator`, `fix_owner: tdd-guide or
-build-error-resolver`), then run the repo-kind validation from the Validation Gate above, saving raw
-output to `kaola-workflow/{project}/.cache/final-validation.md`. On failure route
-(build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage/test-defect →
-`tdd-guide`, the role that owns the test artifact; review/security → the review/security gate), write
-fix output to `.cache/final-validation-fix-{n}.md`, and rerun the failed command.
+`step: final-validation`), then run the repo-kind validation from the Validation Gate above, saving
+raw output to `kaola-workflow/{project}/.cache/final-validation.md`.
+
+On failure, **repair it however you judge best.** Fix it inline for a trivial correction, or dispatch
+it to whichever role fits — `tdd-guide` for a test defect (it holds custody of the test artifact),
+`build-error-resolver` for build/type/lint/tooling, the review/security gate for a review finding.
+There is no mandated mode, no justifier to write, and no approval attached to that choice. Write fix
+output to `.cache/final-validation-fix-{n}.md` and rerun the exact command that failed.
+
+**Step 1b — Record the fix (the ONE commitment point).** A finalize-time fix lands outside every
+`complete` node's declared write set, so the attribution sweep in Step 8a will refuse it
+`unattributed_change` unless it is recorded. Record each fix into the sink-owned register — one entry
+per fix, naming the exact failed command, the fix commit, the touched paths, and the green rerun
+receipt bound to the post-fix candidate:
+
+```bash
+node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --candidate-hash --json
+node scripts/kaola-workflow-adaptive-node.js final-fix-commit --project {project} --json --stdin <<'JSON'
+{"failed_command":"<the exact command that failed>","fix_commit":"<sha>",
+ "files":["<exact repo-relative path>"],
+ "rerun":{"command":"<the same exact command>","exit_code":0,"candidate_hash":"<the hash above>"},
+ "role":"<who produced the fix, audit-only>"}
+JSON
+```
+
+Validation apparatus (tests, fixtures, build/tooling glue, allowband docs) needs nothing more. A fix
+touching **production behavior** is admissible too, but only behind a bound re-certification receipt:
+run the review gate again over the post-fix candidate and cite its settled PASS as
+`"recertification":{"attempt_id":"<id>","candidate_digest":"<post-fix candidate digest>"}`. Without
+it the verb refuses `final_fix_production_surface`, zero-write.
+
+This lane closes at the sink's first irreversible step: once the branch is pushed the record is
+immutable history and the verb refuses `final_fix_after_sink_started`. Recovery after that point is a
+follow-up issue, never a history rewrite.
 
 **Step 2 — Acceptance Check.** Walk the frozen plan's `## Acceptance` items (`A1:`, `A2:`, …) one at a
 time and name what satisfies each one — a covering test, a gate receipt, or prose evidence, judged in
@@ -690,10 +722,20 @@ choices, or ambiguity that blocks correctness.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
 - Commit And Push happens after docs, issues, roadmap, archive, and metadata are complete.
-- Route a validation failure by kind: build/type/lint/tooling → `build-error-resolver`;
-  behavior/regression/coverage/test-defect → `tdd-guide`, the role that owns the test artifact;
-  review/security → the review/security gate. Write fix output to
-  `.cache/final-validation-fix-{n}.md` and rerun the failed command.
+- Repair a failed final validation **however you judge best** — inline for a trivial correction, or
+  dispatched to whichever role fits (`tdd-guide` for a test defect, the role that owns the test
+  artifact; `build-error-resolver` for build/type/lint/tooling; the review/security gate for a review
+  finding). No mandated mode, no justifier, no approval attaches to that choice. Write fix output to
+  `.cache/final-validation-fix-{n}.md` and rerun the exact command that failed.
+- Then RECORD the fix — the one regulated step: `node scripts/kaola-workflow-adaptive-node.js
+  final-fix-commit --project {project} --json --stdin`, one entry per fix (exact failed command, fix
+  commit, touched paths, green rerun receipt bound to the post-fix candidate). The finalize
+  attribution sweep credits that register as a third source; an unrecorded finalize-time fix refuses
+  `unattributed_change`. A fix touching production behavior additionally needs a bound
+  re-certification receipt (a settled PASS review attempt over the post-fix candidate) or the verb
+  refuses `final_fix_production_surface`. The lane closes at the sink's first irreversible step: once
+  the branch is pushed the verb refuses `final_fix_after_sink_started` and recovery is a follow-up
+  issue, never a history rewrite.
 - A one-line, mechanically obvious inline edit (no behavior/API/security/design judgment) that fixes
   finalization friction, formatting, a typo, or an import stays legal — recorded in
   `finalization-summary.md`, with affected validation rerun. It is **never** an edit to a test file:

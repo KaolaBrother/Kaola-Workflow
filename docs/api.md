@@ -1155,6 +1155,62 @@ Field contract:
 
 ---
 
+### `final-fix-commit` subcommand — the finalize deviation route (issue #826 / D-826-01)
+
+The ONE commitment point for a fix produced **during finalization**. HOW the fix is produced is unregulated (inline, or dispatched to whichever role fits — no mandated mode, no justifier, no approval); recording it is the only gate. Without the record, a finalize-time fix lands outside every `complete` node's declared write set and the attribution sweep refuses it `unattributed_change`.
+
+**CLI:** `node scripts/kaola-workflow-adaptive-node.js final-fix-commit --project P --json --stdin`
+
+**stdin** is ONE JSON entry:
+
+| field | type | meaning |
+| --- | --- | --- |
+| `failed_command` | string | the exact validation command that failed, verbatim |
+| `fix_commit` | string | a rev that resolves to a commit in the run's repo |
+| `files` | string[] | exact repo-relative paths (no directory or glob tokens) |
+| `rerun` | object | `{ command, exit_code, candidate_hash }` — `command` MUST equal `failed_command`, `exit_code` MUST be `0`, `candidate_hash` MUST equal the recomputed current candidate (`--candidate-hash --json`) |
+| `role` | string? | the producing role. **Audit-only**: recorded, never adjudicated — test custody stays prose |
+| `recertification` | object? | `{ attempt_id, candidate_digest }` — required only for a PRODUCTION surface |
+
+**Register:** `kaola-workflow/{project}/.cache/final-fixes.json`, digest-bound and plan-bound.
+
+```json
+{
+  "schema_version": 1,
+  "plan_hash": "<64hex — the frozen plan's hash>",
+  "entries": [
+    { "ordinal": 1, "failed_command": "…", "fix_commit": "<sha>", "files": ["…"],
+      "surface_class": "validation-apparatus", "rerun": { "command": "…", "exit_code": 0, "candidate_hash": "<64hex>" },
+      "recertification": null, "role": "tdd-guide", "recorded_at": "<iso8601>" }
+  ],
+  "digest": "<64hex over { schema_version, plan_hash, entries }>"
+}
+```
+
+**Surface classes.** `classifyFinalFixSurface` splits the touched paths. VALIDATION APPARATUS — the machinery that judges the product: the `#424` allowband (`docs/**`, root `README.md`/`CHANGELOG.md`, the active project tree), conventional test layouts (`tests?/`, `__tests__/`, `spec/`, `*.test.*`, `*.spec.*`), this repo's own `test-*.js` / `simulate-*.js` naming, fixture/mock/snapshot directories, and build-tooling basenames (`package.json`, lockfiles, `tsconfig.json`, `jest.config.*`, `Makefile`, …). PRODUCTION — everything else. **An unrecognized path is PRODUCTION** and a mixed entry is PRODUCTION as a whole; the conservative default is the safety argument, so an unanticipated surface fails toward the re-certification wall rather than through the cheap path.
+
+**Refusal ladder** — precedence-ordered, top to bottom, EVERY refusal **zero-write** (no register created or modified, the frozen plan byte-identical, git HEAD unmoved, `git status --porcelain` unchanged). Exit code 1.
+
+| reason | fires when | extra envelope fields |
+| --- | --- | --- |
+| `final_fix_sink_not_live` | the plan's unique terminal `finalize` row is not `in_progress` — this run is not in finalization | `sink_node`, `sink_status` |
+| `final_fix_after_sink_started` | the derived sink progress is not `pristine`. **The lane's hard close.** Three-valued and fail-closed: `started` AND `unknown` both refuse, because a false `pristine` after a push would rewrite a shipped run. After the push, recovery is a follow-up issue, never a history rewrite | `sink_progress: "started" \| "unknown"` |
+| `final_fix_unverified` | `rerun` absent/malformed; `rerun.command !== failed_command` (a receipt for another command is a rubber stamp); `rerun.exit_code !== 0`; `rerun.candidate_hash` ≠ the recomputed current candidate; `fix_commit` unresolvable | `recorded_candidate_hash`, `current_candidate_hash` |
+| `final_fix_production_surface` | the entry touches production behavior AND its re-certification receipt does not verify | `recertification: "missing" \| "unresolved" \| "unsettled" \| "stale"`, `production_paths[]`, `route: "shape_refutation"` |
+| `final_fix_register_unverified` | an EXISTING register does not verify — appending to it would launder the out-of-band edit | `register_reason` |
+
+**Re-certification (D-826-01 — the scope wall was widened, not deleted).** The filed issue rejected production-behavior paths outright; the owner overrode that and admits them behind a **bound re-certification receipt**, which is now the load-bearing safeguard that replaces the wall. `verifyFinalFixRecertification(entry, journal, expectedCandidateDigest)` reads the run's own review journal through the existing `readReviewJournal` (inside the ledger-chain tamper boundary — never a parallel settlement store) and discriminates four failure states: `missing` (no receipt on the entry), `unresolved` (the `attempt_id` names an attempt the journal does not carry, or there is no journal), `unsettled` (the attempt exists but did not settle `pass`), `stale` (a settled PASS over a DIFFERENT candidate — the receipt-replay — or an entry whose recorded digest disagrees with the attempt it cites). Only a settled PASS bound to the post-fix candidate, agreed by entry AND journal, admits.
+
+**No per-run cap.** Each entry carries its own green rerun receipt, and that receipt is the natural bound.
+
+**Attribution: the THIRD source.** `--finalize-check`'s sweep attributes a changed path iff it is in the narrow allowband OR under `^kaola-workflow/` OR in a `complete` node's declared write set (child + sealed parent epochs) OR **in a verified final-fix register entry**. The sweep RECOMPUTES the register digest and re-proves each entry's own gates; a register that does not verify refuses `final_fix_register_unverified` (zero-write, with `register_reason`) and deliberately does **not** report the smuggled path under `unattributed_change`, whose documented cure is to delete the file — that would be a lie about the real fault. Same argument as `epoch_lineage_unverified`.
+
+**Deviation routes.** `unattributed_change` gains `route: "final-fix-commit"` when — and only when — the sink is live AND pristine. `would_orphan_in_progress` / `would_strand_completed_dependent`, fired from `reopen-node` or the repair family in that same finalize context, carry the identical field. The route is decided AT THE EMIT SITE, not from the static `DEVIATION_ROUTES` table, because it is context-bound: over a PUSHED sink the identical refusal must advertise nothing, since the lane could only refuse `final_fix_after_sink_started`.
+
+**Install surface:** unchanged — `final-fix-commit` is a subcommand of `adaptive-node.js`. It participates in `SPLIT_GUARDED_SUBCOMMANDS` (project-scoped `.cache` write ⇒ worktree authority + scheduler lock) and `REPLAN_GUARDED_SUBCOMMANDS`, and is deliberately NOT in `LEDGER_MUTATING_SUBCOMMANDS` (it flips no ledger row).
+
+---
+
 ### `record-evidence --verify` (issue #444 / D-444-01 §4)
 
 New READ-ONLY mode of the `record-evidence` subcommand. Verifies on-disk `.cache/<node-id>.md` without stdin transit — enables proactive pre-close evidence validation with no side effects.
