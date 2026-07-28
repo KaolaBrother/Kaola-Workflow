@@ -4303,10 +4303,14 @@ function testGiteaFinalizeRowMainDirect338() {
   assert.strictEqual(result.result, 'ok', '#338 gt: finalize-sink close result===ok');
   assert.strictEqual(result.allDone, true, '#338 gt: allDone===true after the sink closes');
   const writtenPlan = written['/fake/kaola-workflow/gt-338/workflow-plan.md'];
-  assert.ok(writtenPlan && writtenPlan.includes('| finalize (done) | main-session-direct |'),
-    '#338 gt: finalize sink row must be main-session-direct');
-  assert.ok(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
-    '#338 gt: finalize sink row must NOT be falsely certified subagent-invoked');
+  assert.ok(writtenPlan !== undefined, '#338 gt: plan written');
+  assert.ok(!writtenPlan.includes('## Required Agent Compliance'),
+    '#338 gt: close writes NO ## Required Agent Compliance section (#833)');
+  const rendered338 = planValidator.renderAgentComplianceSection(writtenPlan);
+  assert.ok(rendered338.includes('| finalize (done) | main-session-direct |'),
+    '#338 gt: the finalize sink derives main-session-direct (role rule survives the subtraction)');
+  assert.ok(!rendered338.includes('| finalize (done) | subagent-invoked'),
+    '#338 gt: the finalize sink is NOT falsely certified subagent-invoked');
   console.log('testGiteaFinalizeRowMainDirect338 (#338): PASSED');
 }
 
