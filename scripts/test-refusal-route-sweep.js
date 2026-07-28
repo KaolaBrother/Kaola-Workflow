@@ -1360,6 +1360,94 @@ for (const cond of emitted) {
 }
 
 // ===========================================================================
+// (8b) THE REPLAN BAND — an exit must be REACHABLE FROM THE STATE IT IS OFFERED IN.
+//
+// Every `replan_*` / `snapshot_*` / `cleanup_*` condition fires while the project is
+// REPLAN-FENCED. `projectMutationGuard` refuses every action except the literal `'replan resume'`
+// with `replan_in_progress` while that fence stands, so a route naming any member of
+// `REPLAN_GUARDED_SUBCOMMANDS` is dead ON ARRIVAL — the operator is refused a second time, by a
+// different code, with no exit named. That is the #840 class one level deeper than "the verb does
+// not exist": the verb exists, dispatches, and cannot run HERE.
+//
+// The guarded set is SCANNED from adaptive-node's own source, never restated, so a subcommand added
+// to the fence tomorrow is checked against these routes without anyone remembering to come back.
+// ===========================================================================
+{
+  const nodeSrc = read('scripts/kaola-workflow-adaptive-node.js');
+  const guardBlock = /const REPLAN_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\)/.exec(nodeSrc);
+  assert(!!guardBlock, 'REPLAN-BAND: REPLAN_GUARDED_SUBCOMMANDS must be scannable from adaptive-node');
+  const guarded = new Set(guardBlock ? (guardBlock[1].match(/'([a-z-]+)'/g) || []).map(s => s.slice(1, -1)) : []);
+  assert(guarded.size > 10 && guarded.has('reconcile-running-set'),
+    'REPLAN-BAND: the scanned fence set must be non-vacuous and contain the record-class default verb — '
+    + 'got ' + guarded.size);
+
+  // A route is admissible for a fenced condition iff it is NOT a fenced adaptive-node verb.
+  const reachableUnderFence = (route) => !(route && route.script === 'adaptive-node' && guarded.has(route.verb));
+
+  // (a) The band's own exit. Sampled across all three prefixes and across both the seam families
+  //     (source / child / CAS) and the archive families, so the rule is checked as a BAND rather
+  //     than as a handful of named tokens.
+  const bandConditions = [
+    'replan_snapshot_incomplete', 'replan_child_finding_uncovered', 'replan_child_invalid',
+    'replan_activation_integrity_failure', 'replan_source_evidence_missing', 'replan_task_mirror_failed',
+    'snapshot_copy_verify_failed', 'snapshot_source_changed', 'snapshot_manifest_conflict',
+    'cleanup_receipt_missing', 'cleanup_receipt_incomplete', 'cleanup_removed_path_reappeared',
+  ];
+  for (const cond of bandConditions) {
+    const env = schema.refuse(cond, {});
+    assert(env.refusal_family === 'kernel_write_failed',
+      'REPLAN-BAND: `' + cond + '` is a write-path fault and stays at kernel_write_failed: ' + env.refusal_family);
+    assert(reachableUnderFence(env.refusal_route),
+      'REPLAN-BAND: `' + cond + '` must NOT route to a replan-fenced verb — following it would refuse '
+      + '`replan_in_progress` and dead-end: ' + JSON.stringify(env.refusal_route));
+    assert(env.refusal_route && env.refusal_route.script === 'replan' && env.refusal_route.verb === 'resume',
+      'REPLAN-BAND: ...and the one exit the fence itself declares legal is `replan resume`: '
+      + JSON.stringify(env.refusal_route));
+  }
+
+  // (b) THE SEALED-ARCHIVE VERIFIER IS R4, NOT A RETRYABLE WRITE.
+  //     verifySnapshotManifest / verifyAllEpochSnapshots / verifySchema2SnapshotBinding /
+  //     verifyLegacyExternalBinding are READ-ONLY over an already-sealed parent epoch. A seal that
+  //     does not verify IS the evidence: reported, investigated, never repaired. Classifying these
+  //     as `kernel_write_failed` said the opposite twice over — `auto_remediable: true` plus a RETRY
+  //     verb on a broken seal is precisely the laundering R4 exists to forbid.
+  const sealVerifierConditions = [
+    'snapshot_manifest_missing', 'snapshot_authority_unreadable', 'snapshot_epochs_unreadable',
+    'snapshot_state_binding_unreadable', 'snapshot_staging_incomplete', 'snapshot_stage_files_missing',
+    'snapshot_manifest_type_invalid', 'snapshot_epochs_type_invalid', 'snapshot_epoch_entry_invalid',
+    'snapshot_epoch_sequence_invalid', 'snapshot_directory_invalid', 'snapshot_path_invalid',
+    'snapshot_case_collision', 'snapshot_symlink_refused', 'snapshot_hardlink_refused',
+    'snapshot_special_file_refused', 'snapshot_child_binding_invalid', 'snapshot_lineage_binding_invalid',
+    'legacy_snapshot_binding_unsealed', 'legacy_external_seal_mismatch', 'legacy_child_not_pending',
+    'replan_abort_undecidable',
+  ];
+  for (const cond of sealVerifierConditions) {
+    const env = schema.refuse(cond, {});
+    assert(env.refusal_family === 'kernel_integrity_broken',
+      'R4-SEAL: `' + cond + '` is a verifier verdict over sealed bytes and belongs at '
+      + 'kernel_integrity_broken, not at a retryable kernel write: ' + env.refusal_family);
+    assert(env.auto_remediable === false,
+      'R4-SEAL: `' + cond + '` must be stamped NON-remediable — auto-repairing a seal that does not '
+      + 'verify launders the evidence: ' + JSON.stringify(env.auto_remediable));
+    assert(checkR4({ auto_remediable: false }, env.refusal_route).length === 0,
+      'R4-SEAL: `' + cond + '` must route to investigation or discard, never to a repair verb: '
+      + JSON.stringify(env.refusal_route));
+    assert(reachableUnderFence(env.refusal_route),
+      'R4-SEAL: ...and that investigation verb must be reachable while the replan fence stands: '
+      + JSON.stringify(env.refusal_route));
+  }
+
+  // The guard must be armed in both directions, or it proves nothing: a route naming a fenced verb
+  // has to be rejected, and a route naming an unfenced one has to be accepted.
+  assert(!reachableUnderFence({ verb: 'reconcile-running-set', script: 'adaptive-node', args: '' }),
+    'MUTATION: the fence check must REJECT a route naming a replan-guarded verb');
+  assert(reachableUnderFence({ verb: 'orient', script: 'adaptive-node', args: '' }),
+    'MUTATION: the fence check must ACCEPT a read-only verb the fence does not guard');
+  assert(reachableUnderFence({ verb: 'resume', script: 'replan', args: '' }),
+    'MUTATION: the fence check must ACCEPT the fence\'s own declared legal mutation');
+}
+
+// ===========================================================================
 // (9) THE MUTATION BATTERY — a green suite is not evidence a guard is armed. Each checker
 //     is fed a deliberately broken input and must REJECT it.
 // ===========================================================================

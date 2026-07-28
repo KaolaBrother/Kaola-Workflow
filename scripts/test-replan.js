@@ -7195,5 +7195,92 @@ scenario(() => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// M3 / R2 — THE PLANNER HANDOFF IS AN ANSWER, AND THE LEGAL PATH THROUGH IT IS PINNED GREEN.
+//
+// `replan_planner_dispatch_required` states that the planner has not been dispatched YET. Nothing
+// was attempted, nothing half-landed, the transaction is exactly where the previous verb parked it,
+// and the one legal next step is a dispatch. R1 admits a refusal only where proceeding would
+// irreversibly corrupt a kernel record, publish unverified content, or override a human call —
+// none of which describes "the next actor has not acted yet" — so this is a tool ANSWER.
+//
+// R2 is bidirectional: REMOVING a refusal requires the legal path pinned, not merely the absence of
+// the refusal. Both halves are below — the answer's shape, and the arc that follows it to a
+// committed epoch.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const common = { repoRoot: fx.root, project: fx.project, now: () => '2026-07-16T03:00:00.000Z' };
+    equal(replan.prepareReplan({ ...common, sourceAttemptId: fx.sourceAttemptId,
+      transitionReason: 'review_repair_requires_replan' }).result, 'prepared',
+      'M3-DISPATCH: the fixture prepares a transaction');
+
+    const answer = replan.resumeReplan(common);
+    equal(answer.result, 'planner_dispatch_required',
+      'M3-DISPATCH: resume ANSWERS the planner handoff instead of refusing it: ' + JSON.stringify(answer));
+    equal(answer.reason, 'replan_planner_dispatch_required',
+      'M3-DISPATCH: ...and RETAINS the token the six routing surfaces and the planner profiles name');
+    equal(answer.phase, 'planner_pending', 'M3-DISPATCH: ...and names the phase it parked in');
+
+    // An answer carries no refusal stamp. The stamp is what assigns a locus, a family and a route,
+    // so its ABSENCE is the mechanical statement that this condition sits at no refusing locus.
+    for (const field of ['refusal_family', 'refusal_locus', 'refusal_route', 'condition']) {
+      equal(answer[field], undefined,
+        'M3-DISPATCH: an answer carries no refusal stamp (`' + field + '`): ' + JSON.stringify(answer));
+    }
+    // The classifier agrees, deliberately rather than by omission: the token is on the
+    // explicitly-out list, so no suffix rule can re-claim it into a kernel-write cell.
+    const classified = schema.classifyRefusalCondition('replan_planner_dispatch_required');
+    ok(classified && classified.explicit === true && classified.family === null,
+      'M3-DISPATCH: the classifier rules the token OUT of the vocabulary deliberately: ' + JSON.stringify(classified));
+
+    // The answer is SUFFICIENT — every field the dispatch brief binds rides on it, so the caller
+    // never has to re-open the transaction to build one.
+    for (const field of ['transaction_id', 'packet_path', 'child_path', 'dispatch_nonce',
+      'planner_profile_identity']) {
+      ok(typeof answer[field] === 'string' && answer[field].length > 0,
+        'M3-DISPATCH: the answer carries `' + field + '`: ' + JSON.stringify(answer));
+    }
+
+    // THE GREEN ARC — dispatch against the answer's own transaction and the epoch commits.
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(tx.transaction_id, answer.transaction_id,
+      'M3-DISPATCH: the answer names the live transaction, so the brief it seeds is the right one');
+    writePlannerResult(fx, tx);
+    let result = answer;
+    for (let turn = 0; turn < 10 && !['committed', 'already_committed'].includes(result && result.result); turn++) {
+      result = replan.resumeReplan(common);
+    }
+    equal(result.result, 'committed',
+      'M3-DISPATCH: GREEN ARC — following the answer drives the epoch to committed: ' + JSON.stringify(result));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// The same property at the PROCESS boundary, which is where the cost actually landed. main() keys
+// its exit code on `result === 'refuse'` alone, so while the handoff was typed as a refusal the
+// single most-travelled step of every re-plan exited NON-ZERO — a shell caller reading only the
+// status saw a fault at the exact point where the run was healthy and waiting for its next actor.
+// The exit code lives at the process boundary and nowhere else, so it is checked there.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
+      'prepared', 'M3-DISPATCH-CLI: the fixture prepares a transaction');
+    // spawn-class: cli-contract
+    const child = spawnSync(process.execPath,
+      [path.join(__dirname, 'kaola-workflow-replan.js'), 'resume', '--project', fx.project, '--json'],
+      { cwd: fx.root, encoding: 'utf8', env: gitEnv });
+    const out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop());
+    equal(out.result, 'planner_dispatch_required',
+      'M3-DISPATCH-CLI: the CLI answers the handoff: ' + child.stdout + child.stderr);
+    equal(out.reason, 'replan_planner_dispatch_required',
+      'M3-DISPATCH-CLI: ...carrying the token through the process boundary unchanged');
+    equal(child.status, 0,
+      'M3-DISPATCH-CLI: ...and exits ZERO — nothing failed, so nothing may read as a fault: ' + child.status);
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
 console.log(`test-replan: PASSED (${passed} assertions)`);

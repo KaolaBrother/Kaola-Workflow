@@ -5140,6 +5140,12 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     'invalid_args', 'invalid_project', 'invalid_reason', 'unknown_flag',
     'finding_json_unreadable', 'expansion_composition_malformed',
     'replan_consent_reference_required',
+    // `replan_planner_dispatch_required` states that the planner has not been dispatched YET.
+    // Nothing was attempted and nothing failed, so it is a tool ANSWER (`replan resume` returns
+    // `result: 'planner_dispatch_required'` and exits 0) and not a refusal at any locus. Listed
+    // here so the `/^replan_/` suffix rule below cannot re-claim it into a kernel-write cell whose
+    // rendered sentence is false in every clause.
+    'replan_planner_dispatch_required',
   ] },
 
   // --- A3: the consent valve ----------------------------------------------
@@ -5242,6 +5248,41 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
       /^replan_pre_freeze_cas_/, 'writer_identity_changed', 'review_profile_hash_mismatch',
       /^review_context_(mismatch|plan_mismatch)$/, 'review_receipt_identity_invalid'] },
 
+  // --- L1: integrity broken — THE SEALED-ARCHIVE VERIFIER (R4) -------------
+  //
+  // `verifySnapshotManifest` / `verifyAllEpochSnapshots` / `verifySchema2SnapshotBinding` /
+  // `verifyLegacyExternalBinding` are READ-ONLY verifiers over an already-sealed parent epoch.
+  // Nothing is being written when they answer, so the write-failed suffix rule below was wrong on
+  // both halves at once: it rendered "the position record write did not take" about a verifier that
+  // writes nothing, and it stamped `auto_remediable: true` plus a RETRY verb on a seal that does not
+  // verify — which is exactly the laundering R4 forbids. A snapshot whose manifest, file index,
+  // binding or lineage does not check out IS the evidence; it is reported and investigated, never
+  // repaired. The BUILD-path snapshot faults (`buildSnapshot` could not stage or rename) are a
+  // different thing and deliberately stay under `kernel_write_failed` below, where an idempotent
+  // retry is the correct exit.
+  //
+  // Every kind chosen here routes to `adaptive-node orient`, which is read-only and NOT in
+  // `REPLAN_GUARDED_SUBCOMMANDS`. `chain_break` / `last_copy_in_target` are deliberately NOT used:
+  // their route is `adaptive-node write-halt`, which IS replan-guarded, so during the very fence
+  // these conditions fire under it would refuse `replan_in_progress` — a route that dead-ends is
+  // the defect this contract exists to prevent.
+  { family: 'kernel_integrity_broken', patch: { kind: 'absent_anchor' },
+    match: ['snapshot_manifest_missing', 'snapshot_authority_unreadable', 'snapshot_epochs_unreadable',
+      'snapshot_state_binding_unreadable', 'snapshot_staging_incomplete', 'snapshot_stage_files_missing'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'schema_mismatch' },
+    match: ['snapshot_manifest_type_invalid', 'snapshot_epochs_type_invalid', 'snapshot_epoch_entry_invalid',
+      'snapshot_epoch_sequence_invalid', 'snapshot_directory_invalid', 'snapshot_path_invalid',
+      'snapshot_case_collision', 'snapshot_symlink_refused', 'snapshot_hardlink_refused',
+      'snapshot_special_file_refused',
+      // The transaction bytes will not parse, so `abort` cannot PROVE the epoch is still
+      // pre-activation. Its own payload already says "this is a broken kernel record, not a routine
+      // discard" and routes to the consent valve; classifying it as a retryable position write said
+      // the opposite to every consumer reading the envelope structurally.
+      'replan_abort_undecidable'] },
+  { family: 'kernel_integrity_broken', patch: { kind: 'identity_mismatch' },
+    match: ['snapshot_child_binding_invalid', 'snapshot_lineage_binding_invalid',
+      'legacy_snapshot_binding_unsealed', 'legacy_external_seal_mismatch', 'legacy_child_not_pending'] },
+
   // --- L1: CAS lost -------------------------------------------------------
   { family: 'kernel_cas_lost', patch: { record: 'ledger_row' },
     match: ['close_transition_disallowed', 'node_not_complete', 'ledger_row_missing',
@@ -5270,7 +5311,20 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     match: [/^plan_invalid:/, /^freeze_failed/, 'cannot_reread_plan_after_freeze'] },
   { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', blocked_on: c.replace(/_unavailable$/, '') }),
     match: [/_unavailable$/] },
-  { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', step: c }),
+  // THE REPLAN BAND'S EXIT IS `replan resume`, AND ONLY `replan resume`.
+  //
+  // The record-class default for `position` is `adaptive-node reconcile-running-set`, and every
+  // condition matched here fires while the project is REPLAN-FENCED. `reconcile-running-set` is in
+  // `REPLAN_GUARDED_SUBCOMMANDS`, so `projectMutationGuard` refuses it `replan_in_progress` for any
+  // action except the literal `'replan resume'` — an operator who followed the recorded route was
+  // refused a second time, by a different code, with no exit named. That is the exact dead-end the
+  // route contract exists to make impossible, and it is fixed here rather than by minting finer
+  // codes: ONE payload-carried retry route, correct for the whole band. `replan resume` is
+  // idempotent by construction — it re-reads the transaction, re-verifies its seams and rolls the
+  // same phase forward or reports the same reason again — which is precisely what the retry arm of
+  // this family promises.
+  { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', step: c,
+    retry_verb: 'resume', retry_script: 'replan', retry_args: '--project <P> --json' }),
     match: [/^replan_/, /^snapshot_/, /^cleanup_/] },
   { family: 'kernel_write_failed', patch: (c) => ({ record: 'evidence', target: c }),
     match: [/^evidence_/, /^review_(context|receipt)_persist_failed$/, 'review_evidence_validation_failed',

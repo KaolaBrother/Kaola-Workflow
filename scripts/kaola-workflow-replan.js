@@ -1885,6 +1885,33 @@ function transactionActivationJournal() {
   return out;
 }
 
+// plannerDispatchAnswer — the planner handoff is an ANSWER, not a refusal.
+//
+// `replan_planner_dispatch_required` states that the planner has not been dispatched yet. Nothing
+// failed, nothing was half-written, and the transaction is exactly where the previous verb left it:
+// the packet is on disk, the child path is seeded, and the one legal next step is to hand the packet
+// to a Re-plan dispatch-mode planner. Emitting that as `result: 'refuse'` (exit 1) made the single
+// most-travelled step of every re-plan look like a fault, and classified it into a cell whose
+// rendered explanation — "the position record write did not take … a half-applied position leaves
+// the ledger and the running set disagreeing" — is false in every clause.
+//
+// It is therefore a tool answer with its own result token, and `reason` is RETAINED so every
+// consumer that matches the token today (the six routing surfaces, the planner profiles, the
+// suites' drive loops) keeps working unchanged. The fast path already answered in this shape; the
+// resume path now agrees with it instead of contradicting it.
+function plannerDispatchAnswer(transaction) {
+  return {
+    result: 'planner_dispatch_required',
+    reason: 'replan_planner_dispatch_required',
+    transaction_id: transaction.transaction_id,
+    phase: transaction.phase,
+    packet_path: transaction.planner.packet_path,
+    child_path: transaction.planner.child_path,
+    dispatch_nonce: transaction.planner.dispatch_nonce,
+    planner_profile_identity: transaction.planner.profile_identity,
+  };
+}
+
 function plannerDispatchNonce(transactionId, plannerAttempt) {
   return schema.sha256Canonical({
     transaction_id: transactionId,
@@ -2421,8 +2448,8 @@ function prepareReplanUnlocked(paths, opts) {
 // #824 — the one-command fast path: `shape-refutation --project X --premise "..." --evidence
 // <paths>` fuses packet seal + prepare + fence + planner packet into a single locked
 // transaction when the run is quiescent. Target cost: one planner dispatch — on success the
-// result IS the dispatch request (`planner_dispatch_required` with the same fields the resume
-// path's `replan_planner_dispatch_required` carries), ready to hand to a Re-plan dispatch-mode
+// result IS the dispatch request (`planner_dispatch_required`, the same envelope the resume path
+// answers with, carrying `replan_planner_dispatch_required` in `reason`), ready to hand to a Re-plan dispatch-mode
 // workflow-planner. Every entry-predicate refusal (not quiescent / review authority present or
 // pending / evidence missing / consent required) propagates unchanged with zero side effects
 // beyond the idempotent packet seal.
@@ -2438,13 +2465,10 @@ function prepareShapeRefutation(opts) {
       transitionReason: SHAPE_REFUTATION_KIND,
     }));
     if (prepared.result !== 'prepared') return prepared;
-    const advanced = resumeReplanUnlocked(paths, opts);
-    if (advanced && advanced.result === 'refuse' && advanced.reason === 'replan_planner_dispatch_required') {
-      const dispatch = Object.assign({}, advanced, { result: 'planner_dispatch_required' });
-      delete dispatch.reason;
-      return dispatch;
-    }
-    return advanced;
+    // The resume path now ANSWERS the planner handoff in this exact shape, so the fast path has
+    // nothing left to convert: both entries emit one `planner_dispatch_required` envelope carrying
+    // the same fields, and neither exits non-zero for a step where nothing failed.
+    return resumeReplanUnlocked(paths, opts);
   });
 }
 
@@ -4395,14 +4419,7 @@ function resumeReplanUnlocked(paths, opts) {
     transaction.phase = 'planner_pending';
     updateTransaction(paths, transaction, opts, 'after_tx_planner_pending');
     updateFenceState(paths, transaction, opts, null, 'after_state_planner_pending_fence');
-    return schema.refuse('replan_planner_dispatch_required', {
-      transaction_id: transaction.transaction_id,
-      phase: transaction.phase,
-      packet_path: transaction.planner.packet_path,
-      child_path: transaction.planner.child_path,
-      dispatch_nonce: transaction.planner.dispatch_nonce,
-      planner_profile_identity: transaction.planner.profile_identity,
-    });
+    return plannerDispatchAnswer(transaction);
   }
 
   if (transaction.phase === 'planner_pending') {
@@ -4412,9 +4429,9 @@ function resumeReplanUnlocked(paths, opts) {
     if (!sourceAuthority.ok) return schema.refuse(sourceAuthority.reason);
     let childStat;
     try { childStat = fs.lstatSync(paths.childPath); }
-    catch (_) { return schema.refuse('replan_planner_dispatch_required', { transaction_id: transaction.transaction_id }); }
+    catch (_) { return plannerDispatchAnswer(transaction); }
     if (!childStat.isFile() || childStat.isSymbolicLink() || childStat.size === 0) {
-      return schema.refuse('replan_planner_dispatch_required', { transaction_id: transaction.transaction_id });
+      return plannerDispatchAnswer(transaction);
     }
     const attested = verifyPlannerAttestation(paths, transaction);
     if (!attested.ok) return schema.refuse(attested.reason, { detail: attested.detail || null });
