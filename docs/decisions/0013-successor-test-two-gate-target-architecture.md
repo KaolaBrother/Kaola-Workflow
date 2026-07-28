@@ -291,6 +291,27 @@ proportion to the refusal census, because a deleted rule needs no pin. The
 route-reachability contract stays, machine-enforcing that what *does* remain reaches all
 six surfaces.
 
+### The process boundary obeys the same razor
+
+Test-time process spawns are priced like refusals: a real child process adds evidence
+only where the property under test lives **at the process boundary**. Four classes
+qualify: the **CLI shell contract** (argv → handler → envelope → exit code — proven
+once per subcommand, not once per scenario); **U-ground concurrency** observables
+(multi-process lock and atomic-write contention); **I-ground crash** semantics (kill
+mid-write, restart, recover — the P1 kill test); and **environment/install** probes.
+Every other assertion is function behavior plus file state, reachable in-process
+through the `module.exports` APIs all eight CLIs already publish — the pattern the
+three newest suites prove (`test-adaptive-handoff`: 0 spawn sites;
+`test-oracle-kernel`: 0; `test-replan`: 11), while the three pre-pattern heavyweights
+hold ~1,100 static spawn sites (785 / 197 / 126) — exactly the suites behind the fast
+gate's rotating slice, each spawn paying node startup plus a 7–17k-line parse for no
+added evidence. The necessary set is ~10% of the current census; conversion also
+removes the material basis of the "suite cannot be parallelized" constraint (spawn
+contention). Production composition is already in-process (aggregators `require` their
+siblings' pure functions); the residual production subprocess cost — 56 `git` execs in
+the node lifecycle plus the validator shell in barrier choreography — is a bounded,
+separate lever, not part of this claim.
+
 ## Standing admission rules (in force from acceptance, before any migration)
 
 - **R1 — Locus and severity.** A new refusal must sit at L1 or L2, **and** be crucial
@@ -354,7 +375,10 @@ one-rule-one-wording; the single adaptive path.
 - **P3 — Wedge extinction.** Permanent mid-run stuck states (the #839 class) are
   impossible by construction: nothing mid-run refuses hard.
 - **P4 — Economics.** Tokens and wall-clock per equivalent issue drop, measured by M2
-  telemetry before/after.
+  telemetry before/after. The test-side companion is the **spawn census**: per-suite
+  real process counts are reported, the necessary set is ~10% of today's, and a
+  tighten-only ratchet (no growth in unclassified spawn sites) holds the line while
+  conversion proceeds.
 - **P5 — Prose census.** The six routing surfaces' line count and the contract
   validators' needle-pin count drop in proportion to the refusal census (T11). If the
   prompts do **not** shrink as refusals demote, choreography is surviving its refusal —
