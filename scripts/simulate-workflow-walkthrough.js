@@ -69,6 +69,11 @@ function runNode(script, args, cwd, extraEnv, opts) {
   // running under. A standalone run (no scale set) keeps the original bound exactly.
   const timeoutScale = Math.max(1, Number(process.env.KAOLA_TEST_TIMEOUT_SCALE) || 1);
   const timeout = ((opts && opts.timeout != null) ? opts.timeout : 120000) * timeoutScale;
+  // Every adaptive-lifecycle scenario drives this helper as a CHAIN of separate CLI
+  // processes: one writes the ledger row, the barrier baseline and the .cache evidence
+  // and EXITS; the next re-derives the entire run from those bytes with no shared heap.
+  // That re-derivation is the assertion, so collapsing it in-process deletes it.
+  // spawn-class: durable-handoff
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
@@ -4812,6 +4817,9 @@ function testAdaptiveAuditCoverage() {
 }
 
 function runClassifierOffline(tmp, issueNumber) {
+  // The shared envelope vehicle for the classifier CLI: what THIS site asserts is exit 0
+  // plus exactly one parseable JSON object on stdout. The verdict checks live in callers.
+  // spawn-class: cli-contract
   const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', String(issueNumber)], {
     cwd: tmp, encoding: 'utf8',
     env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
@@ -4867,6 +4875,10 @@ function testClassifierParallelModeBypass() {
         JSON.stringify({ parallel_mode: mode, installed_paths: [] }, null, 2) + '\n'
       );
       try {
+        // HOME and USERPROFILE are repointed at a hermetic home so the parallel-mode config the
+        // classifier resolves is the fixture's, not the developer's. The parent's HOME is already
+        // resolved; only a child process can be given a different one honestly.
+        // spawn-class: environment
         const r = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '75'], {
           cwd: tmp, encoding: 'utf8',
           env: Object.assign({}, process.env, { HOME: home, USERPROFILE: home, KAOLA_WORKFLOW_OFFLINE: '1' })
@@ -5543,6 +5555,10 @@ function callProbeIssueState(argExpr, env, binDir) {
     "process.stdout.write(JSON.stringify(m.probeIssueState(" + argExpr + ")));"
   ].join('\n');
   const mockEnv = binDir ? ghMockEnv(binDir) : {};
+  // A fresh-environment driver: the module runs under an OFFLINE flag and a gh shim first
+  // on PATH that the parent process cannot hold, because its own env and require cache are
+  // already resolved.
+  // spawn-class: environment
   const r = spawnSync(process.execPath, ['-e', driver], {
     encoding: 'utf8',
     env: Object.assign({}, process.env, env || {}, mockEnv, {
@@ -5694,6 +5710,9 @@ function ghMockEnv(binDir) {
 }
 
 function runClaimOnline(args, cwd, binDir, extraEnv) {
+  // The shared envelope vehicle for the claim CLI's success path — no signal, an exit code,
+  // and a parseable stdout envelope are the whole of what this site asserts.
+  // spawn-class: cli-contract
   const result = spawnSync(process.execPath, [claimScript, ...args], {
     cwd,
     encoding: 'utf8',
@@ -5716,6 +5735,10 @@ function runClaimOnline(args, cwd, binDir, extraEnv) {
 // Needed for commands (e.g. worktree-finalize) that emit git progress text
 // before the final JSON object on the last line.
 function runClaimOnlineLastJson(args, cwd, binDir, extraEnv) {
+  // A distinct stdout-envelope contract: this CLI emits git progress text BEFORE its JSON,
+  // so what is proven here is 'the last non-empty stdout line is the envelope'. That shape
+  // exists only at the process boundary — in-process there is no stdout to interleave.
+  // spawn-class: cli-contract
   const result = spawnSync(process.execPath, [claimScript, ...args], {
     cwd,
     encoding: 'utf8',
@@ -5772,6 +5795,9 @@ function testProbeTimeoutEnv() {
 
 // Run closure-audit online (mock gh via KAOLA_GH_MOCK_SCRIPT). Mirrors runClaimOnline.
 function runClosureAudit(args, cwd, binDir, extraEnv) {
+  // The envelope vehicle for the closure-audit CLI's online path: no signal, exit 0, and a
+  // parseable stdout object.
+  // spawn-class: cli-contract
   const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
     cwd,
     encoding: 'utf8',
@@ -5791,6 +5817,9 @@ function runClosureAudit(args, cwd, binDir, extraEnv) {
 
 // Run closure-audit offline (no gh shim; remote classes must report skipped_offline).
 function runClosureAuditOffline(args, cwd) {
+  // The envelope vehicle for the closure-audit CLI's offline path: exit 0 plus a parseable
+  // stdout object.
+  // spawn-class: cli-contract
   const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
     cwd,
     encoding: 'utf8',
@@ -6642,6 +6671,10 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
     // Note: release always calls removeWorktree, which removes the linked worktree directory
     // after archiving. We therefore verify archive creation via the JSON result rather than
     // post-call filesystem inspection of the now-removed wtPath.
+    // The release process COMMITS its discard archive and exits; the sink process below re-reads
+    // that committed tree from disk and must not classify it as foreign dirt. This site is the
+    // writer half of that handoff.
+    // spawn-class: durable-handoff
     const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-703', '--reason', 'test'], {
       cwd: wtPath,
       env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' },
@@ -6699,6 +6732,10 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
       env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
     });
     G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
+    // A fresh sink process, sharing no heap with the release above, re-reads only what that
+    // exited process committed. The #715 property IS what this second process concludes from
+    // the first one's durable bytes.
+    // spawn-class: durable-handoff
     const sinkAfterRelease = spawnSync(process.execPath, [
       sinkMergeScript,
       '--sink',
@@ -8577,6 +8614,9 @@ function testE2EGitHubMergeFullChain() {
     // gate, so the adaptive --finalize-check proceeds.
     seedAdaptiveFinalizeFixture(wt850, 'issue-850', ['feature-850.txt']);
     // Step 4: finalize --keep-worktree (cwd=wt850, cleans main worktree copy, preserves linked worktree)
+    // finalize writes the archive and the closure state and EXITS; the second finalize and the
+    // sink-merge below both re-derive their whole verdict from those bytes.
+    // spawn-class: durable-handoff
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
     ], { cwd: wt850, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -8619,6 +8659,10 @@ function testE2EGitHubMergeFullChain() {
 
     // issue #217: a second finalize --keep-worktree on a clean index must be a no-op (not crash)
     const headBefore2nd = G.git(wt850, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    // A SECOND finalize process re-reads its predecessor's on-disk archive and must conclude
+    // 'already done'. Idempotence across a process boundary cannot be observed inside one heap,
+    // where the first call's in-memory state would answer instead of the disk.
+    // spawn-class: durable-handoff
     const finResult2 = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
     ], { cwd: wt850, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -8630,6 +8674,9 @@ function testE2EGitHubMergeFullChain() {
     const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-850'], { encoding: 'utf8' }).stdout.trim();
 
     // Step 5: sink-merge (cwd=wt850, OFFLINE)
+    // sink-merge re-derives the entire merge from the archive and workflow-state the exited
+    // finalize process left on disk.
+    // spawn-class: durable-handoff
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-850', '--branch', 'workflow/issue-850', '--issue', '850'
     ], { cwd: wt850, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -9191,6 +9238,9 @@ function testSinkMergeConsumerRepoSkipsNpmTestGate() {
     G.git(clone, ['commit', '-m', 'concurrent main advance'], { env });
     G.git(clone, ['push', 'origin', 'main'], { env });
 
+    // The assertion is an environment fact, not a behavior: an `npm` shim leads PATH and the
+    // absent sentinel proves the process never RESOLVED or exec'd npm through it.
+    // spawn-class: environment
     const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-5480', '--branch', 'workflow/issue-5480'], {
       cwd: tmp, encoding: 'utf8',
       // OFFLINE=0 + NO SKIP_TESTGATE: the gate runs, and the consumer discriminator (not the hook)
@@ -9226,6 +9276,8 @@ function testSinkMergeBareRemoteDeleteOrder() {
   const binDir = path.join(tmp + '-bin');
   fs.mkdirSync(binDir, { recursive: true });
   // A `git` wrapper that appends its argv to traceLog then execs the real git. Placed first on PATH.
+  // A literal PATH lookup for the real git binary, so the tracing shim can exec it.
+  // spawn-class: environment
   const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/git';
   const shim = path.join(binDir, 'git');
   fs.writeFileSync(shim,
@@ -9309,6 +9361,9 @@ function testE2EGitHubPrFullChain() {
     }
 
     // Step 4: sink-pr (cwd=wt860, OFFLINE) — production ordering: sink-pr runs before finalize/archive
+    // sink-pr writes pr_url into workflow-state.md and exits; the watch-pr process later in this
+    // scenario re-reads that record from disk with no shared heap.
+    // spawn-class: durable-handoff
     const spResult = spawnSync(process.execPath, [
       sinkPrScript, '--branch', 'workflow/issue-860', '--project', 'issue-860', '--issue', '860'
     ], { cwd: wt860, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -9398,6 +9453,8 @@ function testParallelIssueIndependence() {
     // tdd-guide node attributes the committed feature file, plus a passing gate.
     seedAdaptiveFinalizeFixture(wt870, 'issue-870', ['feature-870.txt']);
     // Step 4: finalize --keep-worktree 870 (cwd=wt870)
+    // finalize writes the archive and exits; the sink-merge process below re-reads it from disk.
+    // spawn-class: durable-handoff
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-870', '--keep-worktree'
     ], { cwd: wt870, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -9408,6 +9465,8 @@ function testParallelIssueIndependence() {
     const feature870Head = G.git(tmp, ['rev-parse', 'workflow/issue-870'], { encoding: 'utf8' }).stdout.trim();
 
     // Step 5: sink-merge 870 (cwd=wt870, OFFLINE)
+    // sink-merge re-derives the merge from what the exited finalize process wrote to disk.
+    // spawn-class: durable-handoff
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-870', '--branch', 'workflow/issue-870', '--issue', '870'
     ], { cwd: wt870, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -9735,6 +9794,9 @@ function writeGhShimFailingIssueView(binDir) {
 }
 
 function runClaimOnlineExpectFail(args, cwd, binDir, extraEnv) {
+  // The REFUSAL-envelope vehicle for the claim CLI: callers assert on the non-zero exit code
+  // and the stderr text, which is the argv-to-envelope mapping itself.
+  // spawn-class: cli-contract
   return spawnSync(process.execPath, [claimScript, ...args], {
     cwd,
     encoding: 'utf8',
@@ -9928,6 +9990,8 @@ function testClassifierTopLevelIssueFlag() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cli-toplevel-'));
   try {
     // Top-level --issue (no 'classify' subcommand) + OFFLINE + no roadmap → target_unverified
+    // An argv-shape contract: a top-level --issue with no subcommand must parse and exit 0.
+    // spawn-class: cli-contract
     const topLevel = spawnSync(process.execPath, [classifierScript, '--issue', '999'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -9941,6 +10005,8 @@ function testClassifierTopLevelIssueFlag() {
       'top-level --issue must return target_unverified for no-evidence offline, got: ' + topParsed.verdict);
 
     // --help
+    // --help must print usage on stdout and exit 0. argv in, envelope out — nothing else.
+    // spawn-class: cli-contract
     const help = spawnSync(process.execPath, [classifierScript, '--help'], {
       cwd: tmp,
       encoding: 'utf8'
@@ -9976,6 +10042,9 @@ function testClaimProjectOwnedFolderFailingRemote() {
       'const result = m.claimProject(' + JSON.stringify(tmp) + ', { issue: 157, project: "issue-157" });',
       'process.stdout.write(JSON.stringify(result));'
     ].join('\n');
+    // A fresh-environment driver: OFFLINE=0 plus a gh shim first on PATH, resolved by a process
+    // whose environment was never the parent's.
+    // spawn-class: environment
     const r = spawnSync(process.execPath, ['-e', driver], {
       encoding: 'utf8',
       timeout: 30000,
@@ -10910,6 +10979,8 @@ function testKeepOpenMergeFullChain() {
       path.join(cache860, 'final-validation.md'));
 
     // finalize --keep-worktree WITHOUT --keep-open: exercises state-field derivation (OFFLINE).
+    // finalize writes the keep-open closure state and exits; the sink-merge below re-reads it.
+    // spawn-class: durable-handoff
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-860', '--keep-worktree'
     ], { cwd: wt860, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -10934,6 +11005,8 @@ function testKeepOpenMergeFullChain() {
     const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-860'], { encoding: 'utf8' }).stdout.trim();
 
     // sink-merge --keep-issue-open (OFFLINE).
+    // sink-merge re-derives the kept-open receipt from the state the exited finalize wrote.
+    // spawn-class: durable-handoff
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-860', '--branch', 'workflow/issue-860', '--issue', '860', '--keep-issue-open'
     ], { cwd: wt860, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -11314,6 +11387,9 @@ function testSinkMergeKeepOpenRequiresIssue() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-keepopen-noissue-')));
   try {
     initGitRepo(tmp);
+    // A flag-dependency refusal: --keep-issue-open without --issue must map to a non-zero exit
+    // and a stderr line naming the missing flag. That mapping is the assertion.
+    // spawn-class: cli-contract
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-700', '--branch', 'workflow/issue-700', '--keep-issue-open'
     ], { cwd: tmp, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -12428,6 +12504,8 @@ function testClosureAuditPrFolderTimeout() {
 
 function testContractValidatorOfflineSkip() {
   const contractsScript = path.join(__dirname, 'validate-workflow-contracts.js');
+  // The one envelope proof for this CLI: invoked with no argv under OFFLINE it must exit 0.
+  // spawn-class: cli-contract
   const result = spawnSync(process.execPath, [contractsScript], {
     encoding: 'utf8',
     env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
@@ -12493,6 +12571,9 @@ function testContractValidatorMissingTag() {
     fs.writeFileSync(gitMock, '#!/bin/sh\nexit 1\n');
     fs.chmodSync(gitMock, 0o755);
     const contractsScript = path.join(__dirname, 'validate-workflow-contracts.js');
+    // An environment-fault probe: `git` is replaced on PATH by a binary that always fails, so
+    // what is asserted is what the CLI does when its environment cannot answer at all.
+    // spawn-class: environment
     const result = spawnSync(process.execPath, [contractsScript], {
       encoding: 'utf8',
       env: {
@@ -12679,6 +12760,9 @@ function testPatchBranchGuards() {
   {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-patchbranch-escape-'));
     try {
+      // argv sanitization at the shell boundary: a path-traversal --project value must map to exit
+      // 1 and a stderr line naming the cause.
+      // spawn-class: cli-contract
       const raw = spawnSync(process.execPath, [claimScript, 'patch-branch', '--project', '../escape-poc', '--branch', 'workflow/escape'], {
         cwd: tmp, encoding: 'utf8',
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
@@ -15230,6 +15314,8 @@ function testAdaptiveWorktreeProvisionedE2E() {
     fs.copyFileSync(path.join(cacheDir, 'final-validation.md'), path.join(mainCache530, 'final-validation.md'));
 
     // Step 5: finalize --keep-worktree
+    // finalize writes the archive and exits; the sink-merge below re-reads it from disk.
+    // spawn-class: durable-handoff
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-530', '--keep-worktree'
     ], { cwd: wt530, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -15237,6 +15323,8 @@ function testAdaptiveWorktreeProvisionedE2E() {
 
     // Step 6: sink-merge (OFFLINE) — assert main now contains impl-test.txt (AC8)
     const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-530'], { encoding: 'utf8' }).stdout.trim();
+    // sink-merge re-derives the merge from what the exited finalize process left on disk.
+    // spawn-class: durable-handoff
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-530', '--branch', 'workflow/issue-530', '--issue', '530'
     ], { cwd: wt530, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
@@ -15516,6 +15604,8 @@ function testHarnessSelfCheck() {
 
   // (1) --list exits 0 and prints a known scenario name without running anything.
   {
+    // The harness's own argv contract: --list must exit 0, print scenario names, and run nothing.
+    // spawn-class: cli-contract
     const r = spawnSync(nodeExec, [thisScript, '--list'], { encoding: 'utf8', timeout: 30000 });
     assert(r.status === 0, 'self-check: --list must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
     assert(r.stdout.includes('testProbeTimeoutEnv'),
@@ -15527,6 +15617,8 @@ function testHarnessSelfCheck() {
 
   // (2) --only with a bogus token exits 1 with a clear message naming the token.
   {
+    // The harness's own argv contract: an unknown --only token must exit 1 and name the token.
+    // spawn-class: cli-contract
     const r = spawnSync(nodeExec, [thisScript, '--only', 'noSuchScenarioXYZ'], {
       encoding: 'utf8', timeout: 30000
     });
@@ -15537,6 +15629,8 @@ function testHarnessSelfCheck() {
 
   // (3) --only a known fast self-contained scenario runs green.
   {
+    // The harness's own argv contract: a known --only token must exit 0 and report the subset.
+    // spawn-class: cli-contract
     const r = spawnSync(nodeExec, [thisScript, '--only', 'testProbeTimeoutEnv'], {
       encoding: 'utf8', timeout: 30000
     });
@@ -15783,6 +15877,9 @@ function testSinkTransactionCrashResume() {
     const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-4292'], { encoding: 'utf8' }).stdout.trim();
 
     // First run: abort after merge step
+    // The sink transaction is aborted mid-flight (SINK_ABORT_AFTER=merge), leaving a
+    // half-written journal on disk. This is the kill half of kill/restart/recover.
+    // spawn-class: crash
     const run1 = spawnSync(process.execPath, [
       sinkMergeScript,
       '--sink',
@@ -15816,6 +15913,10 @@ function testSinkTransactionCrashResume() {
     const mainHeadAfterRun1 = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
 
     // Second run: re-run without the abort flag
+    // A fresh process restarts from that half-written journal and must RESUME the remaining
+    // steps rather than redo the completed ones — the recover half. Only a real second process
+    // can prove the recovery reads disk instead of surviving memory.
+    // spawn-class: crash
     const run2 = spawnSync(process.execPath, [
       sinkMergeScript,
       '--sink',
@@ -16104,6 +16205,9 @@ function testGateEvidenceNonceRotation654() {
     //      reopen-node + re-run, and the operator hint must SAY so — an operator who is refused
     //      without being told the recovery will paste a baseline in by hand, which launders the
     //      receipt back into the self-description it replaced.
+    // record-evidence writes .cache/writer.md and EXITS; the close-and-open-next process below
+    // re-reads those exact bytes, and its refusal is the assertion.
+    // spawn-class: durable-handoff
     const legacyRec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
         + '\nRED: writer failed before implementation\nGREEN: writer passes after implementation\n',
@@ -16126,6 +16230,8 @@ function testGateEvidenceNonceRotation654() {
       'custody: the refusal precedes any ledger advance — writer must still be in_progress');
 
     // ---- the CUSTODY-shaped artifact closes: RED bound to this open's recorded baseline, no GREEN. ----
+    // The custody-shaped artifact is written by one process and judged by the next, from disk.
+    // spawn-class: durable-handoff
     const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
         + '\nRED: writer failed before implementation\nred_baseline: ' + openWriter.nonce + '\n',
@@ -16135,6 +16241,9 @@ function testGateEvidenceNonceRotation654() {
     const closeWriter = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
     assert(closeWriter.opened && closeWriter.opened.id === 'reviewer', '#654 reviewer opens after writer close');
     const firstReviewerNonce = closeWriter.opened.nonce;
+    // The blocking reviewer verdict is written by this process and re-read by the close-node
+    // process below with no shared heap.
+    // spawn-class: durable-handoff
     const blocking = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: reviewer ' + firstReviewerNonce
         + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=repair\n',
@@ -16155,6 +16264,8 @@ function testGateEvidenceNonceRotation654() {
     assert(writerBrief.includes('failed_review_attempt: reviewer:1'), '#654 reopened writer is seeded with exact failed-attempt brief');
 
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
+    // Repaired writer evidence is written and exits; the reopen verdict below re-reads it.
+    // spawn-class: durable-handoff
     const repairedEvidence = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
         + '\nRED: repair regression reproduced\nred_baseline: ' + openWriter.nonce + '\n',
@@ -16167,6 +16278,8 @@ function testGateEvidenceNonceRotation654() {
     const reseeded = fs.readFileSync(path.join(projectDir, '.cache', 'reviewer.md'), 'utf8');
     assert(reseeded.startsWith('evidence-binding: reviewer ' + repairedClose.opened.nonce + '\n'), '#654 reopened dispatch nonce equals written binding');
     assert(!reseeded.includes('verdict: fail') && !reseeded.includes('findings_blocking: 1'), '#654 reopened reviewer has no stale blocking verdict');
+    // The passing reviewer verdict is written by this process and consumed by the close below.
+    // spawn-class: durable-handoff
     const passing = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: reviewer ' + repairedClose.opened.nonce
         + '\nverdict: pass\nfindings_blocking: 0\n',
@@ -16213,6 +16326,9 @@ function testMixedRepairReplayJournal748() {
     G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
     G.git(tmp, ['commit', '-m', 'freeze mixed replay fixture'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
 
+    // The evidence-recording vehicle for this scenario: each call writes one .cache record and
+    // exits, and every later close-and-open-next process re-derives the journal from those bytes.
+    // spawn-class: durable-handoff
     const record = (nodeId, body) => spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', nodeId, '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8', input: body,
@@ -16348,6 +16464,9 @@ function testPlanlessAndPlannedInitialAuthority699() {
   try {
     initGitRepo(tmp);
     plantRoadmapIssue(tmp, 6992, '');
+    // startup writes the epoch-1 claim authority tuple into workflow-state.md and EXITS; later
+    // CLI processes in this scenario re-read that record from disk and their verdict is asserted.
+    // spawn-class: durable-handoff
     const claimed = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '6992'], {
       cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
         KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -16384,6 +16503,9 @@ function testPlanlessAndPlannedInitialAuthority699() {
       try {
         initGitRepo(root);
         plantRoadmapIssue(root, issue, '');
+        // The shared planless fixture: this process writes the canonical epoch-1 authority record and
+        // exits, and the caller process below reconstructs the claim from that record alone.
+        // spawn-class: durable-handoff
         const startup = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', String(issue)], {
           cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
             KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -16407,6 +16529,9 @@ function testPlanlessAndPlannedInitialAuthority699() {
     };
 
     exercisePlanlessCaller('release', 69921, (root, callerProject) => {
+      // A fresh release process reconstructs the claim authority from the record the exited startup
+      // wrote — the successor axiom under measurement, not asserted.
+      // spawn-class: durable-handoff
       const result = spawnSync(process.execPath, [claimScript, 'release', '--project', callerProject], {
         cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
           KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -16419,6 +16544,8 @@ function testPlanlessAndPlannedInitialAuthority699() {
       // A finalize requires an authored adaptive plan (plan-absent finalize refuses),
       // so bind a minimal frozen plan + passing gate onto the canonical epoch-1 authority.
       seedAdaptiveFinalizeFixture(root, callerProject);
+      // A fresh finalize process reconstructs the claim authority and the frozen plan from disk.
+      // spawn-class: durable-handoff
       const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', callerProject], {
         cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
           KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -16442,6 +16569,8 @@ function testPlanlessAndPlannedInitialAuthority699() {
         "else if(a.includes('issue view')) process.stdout.write('{\"state\":\"closed\"}\\n');",
         "else if(a.includes('api')) process.stdout.write('[]\\n');",
       ].join('\n'));
+      // A fresh watch-pr process reconstructs the claim authority from the durable record alone.
+      // spawn-class: durable-handoff
       const result = spawnSync(process.execPath, [claimScript, 'watch-pr', '--issue', '69923'], {
         cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
           KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0', KAOLA_GH_MOCK_SCRIPT: mock }
@@ -16454,6 +16583,9 @@ function testPlanlessAndPlannedInitialAuthority699() {
 
     fs.writeFileSync(statePath(tmp, project), state.replace(/^first_node_id: explore$/m,
       'first_node_id: stale-parent'));
+    // The on-disk authority record was TAMPERED between the two processes, so the refusal can
+    // only come from re-reading disk. In one heap the mutation would be invisible.
+    // spawn-class: durable-handoff
     const hybrid = spawnSync(process.execPath, [claimScript, 'release', '--project', project], {
       cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
         KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -16480,6 +16612,8 @@ function testPlanlessAndPlannedInitialAuthority699() {
       try {
         initGitRepo(root);
         plantRoadmapIssue(root, tamperIssue, '');
+        // Writes a fresh planless authority record for the tamper below to mutate on disk.
+        // spawn-class: durable-handoff
         const startup = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', String(tamperIssue)], {
           cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
             KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' } });
@@ -16488,6 +16622,8 @@ function testPlanlessAndPlannedInitialAuthority699() {
         const tamperProject = 'issue-' + tamperIssue;
         const sf = statePath(root, tamperProject);
         fs.writeFileSync(sf, mutate(fs.readFileSync(sf, 'utf8')));
+        // A fresh process re-reads the mutated authority record and must stop before archive cleanup.
+        // spawn-class: durable-handoff
         const refused = spawnSync(process.execPath, [claimScript, 'release', '--project', tamperProject], {
           cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
             KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' } });
@@ -16897,6 +17033,10 @@ function testReviewerContractV2Conformance() {
       delete env.KAOLA_AGENT_DIR;
       env.HOME = path.join(layoutTmp, 'hermetic-home');
       Object.assign(env, extraEnv || {});
+      // A HERMETIC probe: the KAOLA_* runtime vars are deleted and HOME is repointed, so what is
+      // under test is profile resolution against a freshly materialized install layout. In-process
+      // the parent's own HOME and require cache are already resolved.
+      // spawn-class: environment
       const r = spawnSync(process.execPath, ['-e', script], { cwd: layoutTmp, env, encoding: 'utf8' });
       try { return JSON.parse(String(r.stdout).trim()); }
       catch (_) { return { ok: false, reason: 'probe_crash: ' + String(r.stderr || r.stdout).split('\n')[0] }; }
@@ -17045,6 +17185,8 @@ function testReviewerContractV2Conformance() {
 
     const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    // record-evidence writes the writer artifact and EXITS; the close process below re-reads it.
+    // spawn-class: durable-handoff
     const writerRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
@@ -17082,6 +17224,8 @@ function testReviewerContractV2Conformance() {
       'gate_aggregation: ' + boundDispatch.gate_aggregation,
       ...(extraRows || []), '',
     ].join('\n');
+    // Stale review bytes land on disk here; the close process below must refuse from those bytes.
+    // spawn-class: durable-handoff
     const staleRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, 'f'.repeat(64), 'approved', ['findings_none: true']),
@@ -17115,6 +17259,8 @@ function testReviewerContractV2Conformance() {
       secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
       status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
     };
+    // The unroutable-anchor finding is written and exits; the close below refuses from disk.
+    // spawn-class: durable-handoff
     const unroutableRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, dispatch.candidate_digest,
@@ -17156,6 +17302,8 @@ function testReviewerContractV2Conformance() {
         object_format: objectFormat805, tree_mode: '100644', object_id: implObjectId,
         start: 0, end: 1, blob_length: implBytes.length },
     };
+    // The bound reviewer verdict is written here and re-read by the close process below.
+    // spawn-class: durable-handoff
     const reviewRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, dispatch.candidate_digest,
@@ -17198,6 +17346,8 @@ function testReviewerContractV2Conformance() {
     '#805: the reopened writer receives a brief that NAMES the anchored file, got '
       + JSON.stringify(repair.repair_brief && { s: repair.repair_brief.scope, u: repair.repair_brief.assigned_uids }));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
+    // Repaired writer evidence lands on disk; the close below reopens the gate from those bytes.
+    // spawn-class: durable-handoff
     const repairedWriterRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
@@ -17260,6 +17410,8 @@ function testReviewerContractV2Conformance() {
       'finding_json: ' + JSON.stringify(resolvedFinding),
       'resolution_json: ' + JSON.stringify(resolution), '',
     ].join('\n');
+    // The closure evidence is written and exits; the close transaction below settles from disk.
+    // spawn-class: durable-handoff
     const closureRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8', input: closureEvidence,
@@ -19974,6 +20126,10 @@ function testDispatchLogHookWorktreeAware338() {
     fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
     // No active project in main → the old hook (hook-cwd only) would log nothing.
     const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: wt });
+    // The dispatch-log hook is a bash script — it has NO in-process form. What is asserted is its
+    // shell contract: a JSON payload on stdin plus a cwd must yield exit 0 (fail-open) and exactly
+    // one appended record.
+    // spawn-class: cli-contract
     const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#338 T3: hook must exit 0 (fail-open), got ' + hr.status);
     const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
@@ -19996,6 +20152,9 @@ function testDispatchLogHookWorktreeAware338() {
     fs.mkdirSync(proj, { recursive: true });
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
     const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: inplace });
+    // Same shell contract, in-place posture: stdin payload plus cwd must yield exit 0 and exactly
+    // one appended record (no duplicate).
+    // spawn-class: cli-contract
     const hr = spawnSync('bash', [hookPath], { cwd: inplace, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#338 T3: in-place hook must exit 0, got ' + hr.status);
     const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
@@ -20026,6 +20185,9 @@ function testDispatchLogEmitsModelFields566() {
     // Payload INCLUDES a `model` field (simulating the codex runtime supply); n1 finding: only the
     // codex CLI runtime exposes model, so the test injects it directly.
     const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: tmp, model: 'gpt-5.2' });
+    // Same shell contract with a model field on stdin: exit 0 fail-open plus one well-formed
+    // JSONL record is the envelope this bash entry point owes its caller.
+    // spawn-class: cli-contract
     const hr = spawnSync('bash', [hookPath], { cwd: tmp, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#566: hook must exit 0 (fail-open), got ' + hr.status);
     const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
@@ -20075,6 +20237,9 @@ function testDispatchLogResolverResolvesUnderOpencodeLayout567() {
     // from the opencode-native (<cfg>/kaola-workflow/scripts) candidate.
     assert(!fs.existsSync(path.join(cfg, 'scripts')), '#567: control — sibling scripts/ must be absent');
     const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: repo });
+    // The hook is DEPLOYED into a foreign install layout (the sibling scripts/ dir is asserted
+    // ABSENT) and probed there. What is under test is resolution against that materialization.
+    // spawn-class: environment
     const hr = spawnSync('bash', [hookDst], { cwd: repo, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#567: hook must exit 0 (fail-open), got ' + hr.status);
     const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
@@ -20117,6 +20282,8 @@ function testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568() {
     // The KEY difference from #338: agent cwd == MAIN repo (NOT the worktree). Under opencode
     // worktree posture the role agent runs in the main repo while the active state is worktree-resident.
     const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 'n2', cwd: main });
+    // Same shell contract from the main-repo cwd: exit 0 fail-open plus exactly one record.
+    // spawn-class: cli-contract
     const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
     assert(hr.status === 0, '#568: hook must exit 0 (fail-open), got ' + hr.status);
     const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
@@ -23041,6 +23208,9 @@ function testAcceptanceSurfaceEndToEnd() {
     // Drive the run: writer produces the change, reviewer clears it, the sink opens.
     const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = { record: true };\n');
+    // record-evidence writes the writer artifact and EXITS; the close process below re-reads it
+    // from disk and opens the reviewer on the strength of those bytes alone.
+    // spawn-class: durable-handoff
     const writerRecord = spawnSync(process.execPath,
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',

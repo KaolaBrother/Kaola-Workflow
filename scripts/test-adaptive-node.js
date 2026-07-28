@@ -575,11 +575,19 @@ scenario(() => {
       { cwd: simultaneousTmp, stdio: 'pipe' });
     git(['add', '-A']); git(['commit', '-m', 'seed']);
     for (const writer of ['writer-a', 'writer-b']) {
+      // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+      // process and exits; the adaptive-node process that follows re-reads both from disk. A
+      // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+      // spawn-class: durable-handoff
       execFixtureFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
         planPath, '--record-base', '--node-id', writer, '--json'], { cwd: simultaneousTmp, stdio: 'pipe' });
     }
     const cli = args => {
       try {
+        // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+        // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+        // and the next re-derives the whole run state from those bytes with no shared heap.
+        // spawn-class: durable-handoff
         const stdout = execFixtureFileSync(process.execPath,
           [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), ...args],
           { cwd: simultaneousTmp, encoding: 'utf8' });
@@ -595,6 +603,9 @@ scenario(() => {
       'R7-SIMULTANEOUS-RED: real scheduler opens both independent review gates');
     for (const review of ['review-a', 'review-b']) {
       const nonce = byId.get(review).nonce;
+      // record-evidence writes each gate's receipt in its own process and EXITS; the close-node
+      // processes below re-read those receipts from disk, and their verdict is the assertion.
+      // spawn-class: durable-handoff
       const recorded = require('child_process').spawnSync(process.execPath,
         [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'record-evidence', '--project', project,
           '--node-id', review, '--stdin', '--json'],
@@ -5535,6 +5546,10 @@ scenario(() => {
 
   const run665 = (args) => {
     let out = {}; let exit = 0;
+    // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+    // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+    // and the next re-derives the whole run state from those bytes with no shared heap.
+    // spawn-class: durable-handoff
     try { out = JSON.parse(exec665('node', args, { cwd: repoRoot665, encoding: 'utf8' }).trim().split('\n').pop()); }
     catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
     return { out, exit };
@@ -5558,6 +5573,9 @@ scenario(() => {
 
   // close: record the test author's baseline-bound RED evidence for impl-core, then
   // close-and-open-next opens review.
+  // record-evidence writes .cache/impl-core.md and EXITS; the close-and-open-next process
+  // below re-reads those exact bytes with no shared heap.
+  // spawn-class: durable-handoff
   const rec665 = spawn665(process.execPath, [NODE_CLI_665, 'record-evidence', '--project', project665, '--node-id', 'impl-core', '--stdin', '--json'], {
     cwd: repoRoot665, encoding: 'utf8', input: 'evidence-binding: impl-core ' + implCoreNonce665
       + '\nRED: impl-core failed before implementation\nred_baseline: ' + implCoreNonce665 + '\n',
@@ -5663,6 +5681,10 @@ scenario(() => {
 
   const run670 = (args) => {
     let out = {}; let exit = 0;
+    // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+    // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+    // and the next re-derives the whole run state from those bytes with no shared heap.
+    // spawn-class: durable-handoff
     try { out = JSON.parse(exec670('node', args, { cwd: repoRoot670, encoding: 'utf8' }).trim().split('\n').pop()); }
     catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
     return { out, exit };
@@ -5866,6 +5888,10 @@ scenario(() => {
 
   const run673 = (args) => {
     let out = {}; let exit = 0;
+    // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+    // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+    // and the next re-derives the whole run state from those bytes with no shared heap.
+    // spawn-class: durable-handoff
     try { out = JSON.parse(exec673('node', args, { cwd: repoRoot673, encoding: 'utf8' }).trim().split('\n').pop()); }
     catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
     return { out, exit };
@@ -6997,6 +7023,10 @@ scenario(() => {
 
       const run = (args) => {
         let out = {}; let exit = 0;
+        // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+        // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+        // and the next re-derives the whole run state from those bytes with no shared heap.
+        // spawn-class: durable-handoff
         try { out = JSON.parse(exec817('node', [NODE_CLI_817, ...args], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); }
         catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
         return { out, exit };
@@ -10651,6 +10681,9 @@ scenario(() => {
   g(['add', '-A']); g(['commit', '-m', 'init']);
   // Sanity: the FROZEN plan passes --resume-check (control — proves the tamper, not a freeze bug, fails it).
   let preCheck = {};
+  // Control: a fresh validator process re-reads the frozen plan from disk and confirms the
+  // hash. This is the 'before' half of a tamper that happens BETWEEN processes.
+  // spawn-class: durable-handoff
   try { preCheck = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--resume-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); } catch (_) {}
   assert(preCheck.ok === true, '#499b: control — the frozen plan passes --resume-check, got ' + JSON.stringify(preCheck));
   // TAMPER: widen a's declared_write_set (a hash-defeating content edit that keeps the DAG valid).
@@ -10658,11 +10691,17 @@ scenario(() => {
   fs.writeFileSync(planPath, tampered);
   // The REAL validator now detects the mismatch.
   let postCheck = {};
+  // The plan was tampered ON DISK between the two processes, so only a fresh process that
+  // re-reads the file can detect the mismatch. In one heap the parsed plan would answer.
+  // spawn-class: durable-handoff
   try { postCheck = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--resume-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); } catch (err) { try { postCheck = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
   assert(postCheck.ok !== true, '#499b: the tampered plan FAILS --resume-check (real validator detects the hash mismatch), got ' + JSON.stringify(postCheck));
   // open-next on the tampered plan MUST refuse plan_integrity_failed (post-fix) with zero mutation.
   let openOut = {};
   let openExit = 0;
+  // open-next re-reads the tampered plan from disk and must refuse with zero mutation — the
+  // successor test executed, not asserted.
+  // spawn-class: durable-handoff
   try { openOut = JSON.parse(execFileSync('node', [NODE_CLI, 'open-next', '--project', project, '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); }
   catch (err) { openExit = (err.status == null) ? 1 : err.status; try { openOut = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
   assert(openOut.result === 'refuse' && openOut.reason === 'plan_integrity_failed', '#499b: open-next REFUSES plan_integrity_failed on the tampered plan (the serial-resume integrity gate), got exit=' + openExit + ' ' + JSON.stringify(openOut));
@@ -12247,6 +12286,10 @@ scenario(() => {
   function runNode(repoRoot, subArgs, extraEnv) {
     const env = Object.assign({}, process.env, extraEnv || {});
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
       let parsed = {};
       try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
@@ -12318,6 +12361,10 @@ scenario(() => {
       g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
       freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, stdio: 'pipe' });
       g(['add', '-A']); g(['commit', '-m', 'seed']);
+      // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+      // process and exits; the adaptive-node process that follows re-reads both from disk. A
+      // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+      // spawn-class: durable-handoff
       execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'impl', '--json'], { cwd: repoRoot, stdio: 'pipe' });
       const opened = runNode(repoRoot, ['open-ready', '--project', project, '--json'], DEFAULT);
       assert(opened.result === 'ok' && opened.opened.length === 2, 'R4 real open-ready opens both explicit skeptics, got ' + JSON.stringify(opened));
@@ -12331,6 +12378,9 @@ scenario(() => {
       }
       assert(!fs.readdirSync(cacheDir).some(f => /^adversarial-verifier-/.test(f)), 'R4 integration authors no role-prefix bridge');
       fs.writeFileSync(path.join(cacheDir, 'review.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      // --verdict-check re-reads, in a fresh process, the receipts that the earlier close-node
+      // processes wrote to .cache and exited.
+      // spawn-class: durable-handoff
       const verdict = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--verdict-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim());
       assert(verdict.ok === true || verdict.result === 'pass', 'R4 real whole-plan verdict-check passes canonical receipts, got ' + JSON.stringify(verdict));
     } finally { cleanup(repoRoot); }
@@ -12769,6 +12819,10 @@ scenario(() => {
   scenario(() => {
     const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
     // Record a REAL orphan baseline (file + ref) for an id in NO ledger row and NO running set.
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'orphan', '--json'], { cwd: repoRoot, encoding: 'utf8' });
     assert(fs.existsSync(path.join(cacheDir, 'barrier-base-orphan')) && groupBaselineRefExists678(repoRoot, project, 'orphan'),
       '#680-B: the orphan baseline (file + ref) is seeded before reconcile');
@@ -12797,8 +12851,20 @@ scenario(() => {
     const groupId = 'lg-A-B';
     // A is a genuinely-live in_progress member; stand up a live 'open' lane_group with A as a live node.
     fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('| A | pending |', '| A | in_progress |'));
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'A', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', groupId, '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'orphan', '--json'], { cwd: repoRoot, encoding: 'utf8' });
     fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({
       state: 'open', max_concurrent: 2,
@@ -12847,8 +12913,20 @@ scenario(() => {
     plan = plan.replace('| A | pending |', '| A | in_progress |').replace('| B | pending |', '| B | in_progress |');
     fs.writeFileSync(planPath, plan);
     // Phase-1 recorded the LIVE group baseline (file + ref) + both member baselines — all on disk.
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', groupId, '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'A', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'B', '--json'], { cwd: repoRoot, encoding: 'utf8' });
     // Torn Phase-3: running-set.json is ABSENT (the O_TRUNC write left no readable manifest).
     assert(!readRS(cacheDir), '#680-B-repair: precondition — running-set.json is absent (torn Phase-3 write)');
@@ -13538,6 +13616,9 @@ scenario(() => {
   function runVal(repoRoot, subArgs) {
     const VAL_MAX_BUFFER = 64 * 1024 * 1024;
     try {
+      // The validator vehicle for this harness: it re-derives leg baselines and plan state from the
+      // refs and files the adaptive-node processes wrote and exited.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [VALIDATOR, ...subArgs], { cwd: repoRoot, encoding: 'utf8', maxBuffer: VAL_MAX_BUFFER });
       let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...parsed };
@@ -14856,6 +14937,10 @@ scenario(() => {
     const taskMirrorPath = path.join(__dirname, 'kaola-workflow-task-mirror.js');
     const { repoRoot, projDir } = makeLaneRepo();
     fs.mkdirSync(path.join(projDir, 'workflow-tasks.json'), { recursive: true });
+    // The whole assertion is the envelope: a non-zero exit, stdout carrying EXACTLY one line, that
+    // line being a {result:refuse, reason:mirror_write_failed} object, and stderr carrying no raw
+    // stack frames. Streams and exit codes exist only at the process boundary.
+    // spawn-class: cli-contract
     const res = spawnSync(process.execPath, [taskMirrorPath, '--project', 'test-project', '--json'], { cwd: repoRoot, encoding: 'utf8' });
     const combined = (res.stdout || '') + (res.stderr || '');
     assert(res.status !== 0, '#671-MIRROR-CRASH-OBSERVABILITY: EISDIR collision still exits non-zero, got ' + JSON.stringify(res.status));
@@ -15256,6 +15341,9 @@ scenario(() => {
   function seedFinalValidation(repoRoot, projDir, planPath) {
     let cand = '';
     try {
+      // The candidate hash is computed by one process over the on-disk tree and written into
+      // final-validation.md, which the finalize-check process below re-reads from disk.
+      // spawn-class: durable-handoff
       cand = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--candidate-hash', '--json'],
         { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()).validated_candidate_hash || '';
     } catch (_) { cand = ''; }
@@ -15266,6 +15354,9 @@ scenario(() => {
   // `[validatorScript, authorityPlanPath, '--finalize-check', '--json']`, plus the forwarded --base).
   function finalizeCheck(repoRoot, planPath, base) {
     try {
+      // The EXACT subprocess cmdFinalize shells before any irreversible side effect: a fresh
+      // process re-derives the finalize verdict from the plan, the receipts and the tree alone.
+      // spawn-class: durable-handoff
       const out = execFileSync('node', [VALIDATOR, planPath, '--finalize-check', '--json', '--base', base],
         { cwd: repoRoot, encoding: 'utf8' });
       return JSON.parse(out.trim().split('\n').pop());
@@ -16947,6 +17038,9 @@ scenario(() => {
 
   let out665r1 = {};
   try {
+    // A missing required flag must map to a refusal envelope naming it — argv validation, proven
+    // at the CLI because that is where argv exists.
+    // spawn-class: cli-contract
     out665r1 = JSON.parse(exec665r1('node', [NODE_CLI_665R1, 'repair-node', '--project', project665r1, '--node-id', 'impl', '--json'],
       { cwd: repoRoot665r1, encoding: 'utf8' }).trim());
   } catch (err) {
@@ -17631,6 +17725,9 @@ scenario(() => {
 
     let stdout446e = '';
     try {
+      // --summary is a stdout-shape contract: exactly ONE line, starting with 'summary: '. Line
+      // counting on a real stream is the assertion.
+      // spawn-class: cli-contract
       stdout446e = execFileSync(process.execPath, [
         ADAPTIVE_NODE, 'orient', '--project', 'nonexistent-zyx', '--json', '--summary',
       ], { cwd: tmpRoot446e, encoding: 'utf8' });
@@ -17704,6 +17801,9 @@ scenario(() => {
 
     let out446f = '';
     try {
+      // Subcommand recognition: the argv token must reach a handler rather than fall through to
+      // 'unknown subcommand'. That dispatch is the CLI's own argv table.
+      // spawn-class: cli-contract
       out446f = execFileSync(process.execPath, [
         ADAPTIVE_NODE, 'route-findings', '--project', 'test-project-446f', '--node-id', 'review', '--json',
       ], { cwd: tmpRoot446f, encoding: 'utf8' });
@@ -17972,6 +18072,10 @@ scenario(() => {
   }
   function run466(cwd, subArgs) {
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI_466, ...subArgs], { cwd, encoding: 'utf8' });
       let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...parsed };
@@ -18020,6 +18124,9 @@ scenario(() => {
     const { repoRoot } = make466Repo('worktree_path: ' + wt + '\n');
     let r;
     try {
+      // record-evidence --stdin re-reads the recorded worktree authority from disk in a fresh
+      // process; the refusal can only be derived from what a previous process durably wrote.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI_466, 'record-evidence', '--node-id', 'A', '--stdin', '--project', 'issue-466', '--json'],
         { cwd: repoRoot, encoding: 'utf8', input: 'evidence-binding: A 000000000000\n' });
       r = JSON.parse(stdout.trim().split('\n').pop());
@@ -18146,12 +18253,20 @@ scenario(() => {
     try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_439, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR_439, planPath, '--record-base', '--node-id', 'impl', '--json'],
       { cwd: repoRoot, encoding: 'utf8' });
     return { repoRoot, project, projDir, cacheDir, planPath, g };
   }
   function run439(repoRoot, subArgs) {
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI_439, ...subArgs], { cwd: repoRoot, encoding: 'utf8' });
       let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...p };
@@ -18466,6 +18581,10 @@ scenario(() => {
     try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_596, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR_596, planPath, '--record-base', '--node-id', 'writerA', '--json'],
       { cwd: repoRoot, encoding: 'utf8' });
     return { repoRoot, project: PROJECT_596, projDir, cacheDir, planPath, g };
@@ -18503,6 +18622,10 @@ scenario(() => {
     try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_596, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
+    // --record-base writes a kernel record (the barrier baseline file AND its git ref) in its own
+    // process and exits; the adaptive-node process that follows re-reads both from disk. A
+    // hand-written baseline could not carry a real ref, so the handoff is the fixture.
+    // spawn-class: durable-handoff
     execFileSync('node', [VALIDATOR_596, planPath, '--record-base', '--node-id', 'writerA', '--json'],
       { cwd: repoRoot, encoding: 'utf8' });
     return { repoRoot, project: PROJECT_596, projDir, cacheDir, planPath, g };
@@ -18510,6 +18633,10 @@ scenario(() => {
 
   function run596(repoRoot, subArgs, extraEnv) {
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI_596, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, ...(extraEnv || {}) } });
       let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...p };
@@ -19578,6 +19705,10 @@ scenario(() => {
   function runNode(repoRoot, subArgs, extraEnv) {
     const env = Object.assign({}, process.env, extraEnv || {});
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
       let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...parsed };
@@ -19622,6 +19753,10 @@ scenario(() => {
       'const { spawn } = require("child_process");' +
       'function run(a){return new Promise(function(res){var p=spawn(process.execPath,[' + JSON.stringify(NODE_CLI) + '].concat(a),{cwd:' + JSON.stringify(repoRoot) + ',env:process.env});var o="";var e="";p.stdout.on("data",function(d){o+=d});p.stderr.on("data",function(d){e+=d});p.on("close",function(c){res({code:c,out:o})});});}' +
       'Promise.all(' + JSON.stringify(argvs) + '.map(run)).then(function(rs){process.stdout.write("RACE:"+JSON.stringify(rs)+"\\n");});';
+    // A GENUINE N-process interleave: the orchestrator spawns N real adaptive-node CLIs
+    // concurrently and joins them, so what is measured is scheduler-lock contention between
+    // separate OS processes. There is no in-process form of a race between processes.
+    // spawn-class: concurrency
     const res = spawnSync(process.execPath, ['-e', orch], { cwd: repoRoot, encoding: 'utf8', env: process.env });
     const line = String(res.stdout || '').split('\n').filter((l) => l.indexOf('RACE:') === 0).pop() || 'RACE:[]';
     let arr = []; try { arr = JSON.parse(line.slice('RACE:'.length)); } catch (_) { arr = []; }
@@ -20343,6 +20478,10 @@ scenario(() => {
   const rm612 = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} };
   const runNode612 = (cwd, subArgs) => {
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI_612, ...subArgs], { cwd, encoding: 'utf8' });
       let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...p };
@@ -20605,6 +20744,10 @@ scenario(() => {
   function runNode(repoRoot, subArgs, extraEnv) {
     const env = Object.assign({}, process.env, extraEnv || {});
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
       let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...parsed };
@@ -21612,6 +21755,10 @@ scenario(() => {
 
   function run683(repoRoot, subArgs, stdin) {
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const stdout = execFileSync('node', [NODE_CLI_683, ...subArgs], { cwd: repoRoot, encoding: 'utf8', input: stdin });
       let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...p };
@@ -22002,6 +22149,10 @@ scenario(() => {
     const before = w.refSha683('wa');
     const opts = {
       planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      // The REAL shell seam, not a double: the repair transaction genuinely spawns the validator so
+      // the barrier baseline and its ref are re-read from disk by a fresh process. Substituting an
+      // in-process double is exactly how an earlier draft passed the mutation it exists to catch.
+      // spawn-class: durable-handoff
       shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } },
       readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
       cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
@@ -22081,6 +22232,10 @@ scenario(() => {
     const realExec = require('child_process').execFileSync;
     const baseOpts = {
       planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      // The REAL shell seam, not a double: the repair transaction genuinely spawns the validator so
+      // the barrier baseline and its ref are re-read from disk by a fresh process. Substituting an
+      // in-process double is exactly how an earlier draft passed the mutation it exists to catch.
+      // spawn-class: durable-handoff
       shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } },
       readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
       cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
@@ -22107,6 +22262,10 @@ scenario(() => {
     // .cache/barrier-base-<writer>) completes the consume.
     const w2 = drive683();
     const opts2 = { ...baseOpts, planPath: w2.planPath, repoRoot: w2.repoRoot,
+      // The REAL shell seam, not a double: the repair transaction genuinely spawns the validator so
+      // the barrier baseline and its ref are re-read from disk by a fresh process. Substituting an
+      // in-process double is exactly how an earlier draft passed the mutation it exists to catch.
+      // spawn-class: durable-handoff
       shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w2.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } } };
     try { node683.runRepairNode({ ...opts2, reviewFailpoint: 'repair_settled_written' }); } catch (_) {}
     const savedBase = fs.readFileSync(path.join(w2.cacheDir, 'barrier-base-wa'), 'utf8').trim();
@@ -22133,6 +22292,10 @@ scenario(() => {
     const realExec = require('child_process').execFileSync;
     const opts = {
       planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      // The REAL shell seam, not a double: the repair transaction genuinely spawns the validator so
+      // the barrier baseline and its ref are re-read from disk by a fresh process. Substituting an
+      // in-process double is exactly how an earlier draft passed the mutation it exists to catch.
+      // spawn-class: durable-handoff
       shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } },
       readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
       cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
@@ -22387,6 +22550,9 @@ scenario(() => {
         return String(G.exec(repoRoot, ['rev-parse', '--verify', '--quiet', 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
       } catch (_) { return ''; }
     };
+    // --base-freshness re-reads, in a fresh process, the anchored barrier refs the adaptive-node
+    // processes moved — a ref is durable state, and this probe exists to read it back.
+    // spawn-class: durable-handoff
     const probe829 = id => JSON.parse(String(execFileSync('node',
       [VALIDATOR_683, planPath, '--base-freshness', '--node-id', id, '--json'],
       { cwd: repoRoot, encoding: 'utf8' })).trim().split('\n').pop());
@@ -24491,6 +24657,10 @@ scenario(() => {
   const baseEnv713 = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_')));
   const env713 = { ...baseEnv713, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
     KAOLA_WORKFLOW_OFFLINE: '1' };
+  // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+  // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+  // and the next re-derives the whole run state from those bytes with no shared heap.
+  // spawn-class: durable-handoff
   const run713 = (script, args, cwd, input) => spawn713(process.execPath, [script, ...args],
     { cwd, encoding: 'utf8', env: env713, input, timeout: 120000 });
   const lastJson713 = result => {
@@ -24821,6 +24991,10 @@ scenario(() => {
   };
 
   const tmp728 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-728-empty-frontier-')));
+  // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+  // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+  // and the next re-derives the whole run state from those bytes with no shared heap.
+  // spawn-class: durable-handoff
   const run728 = (script, args, input) => spawn728(process.execPath, [script, ...args],
     { cwd: tmp728, encoding: 'utf8', env: env728, input, timeout: 120000 });
   try {
@@ -25133,6 +25307,10 @@ scenario(() => {
     return line ? JSON.parse(line) : null;
   };
   const tmp733 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-733-mirror-')));
+  // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+  // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+  // and the next re-derives the whole run state from those bytes with no shared heap.
+  // spawn-class: durable-handoff
   const run733 = (args, input) => spawn733(process.execPath, [NODE_CLI_733, ...args],
     { cwd: tmp733, encoding: 'utf8', env: env733, input, timeout: 120000 });
   try {
@@ -25174,6 +25352,9 @@ scenario(() => {
         '| finalize (finalize) | pending | | |', '',
       ].join('\n'));
       fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+      // --freeze stamps plan_hash into workflow-plan.md and EXITS; every adaptive-node process in
+      // this scenario then re-reads and re-verifies that stamp from disk.
+      // spawn-class: durable-handoff
       const freeze = spawn733(process.execPath, [VALIDATOR_CLI_733, planPath, '--freeze', '--json'],
         { cwd: tmp733, encoding: 'utf8', env: env733 });
       assert(freeze.status === 0 && lastJson733(freeze) && lastJson733(freeze).frozen === true,
@@ -27367,6 +27548,10 @@ scenario(() => {
     return line ? JSON.parse(line) : null;
   };
   const tmp805 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-805r1-')));
+  // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+  // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+  // and the next re-derives the whole run state from those bytes with no shared heap.
+  // spawn-class: durable-handoff
   const run805 = (args, input) => spawn805(process.execPath, [NODE_CLI, ...args],
     { cwd: tmp805, encoding: 'utf8', env: env805, input, timeout: 120000 });
   try {
@@ -27411,6 +27596,9 @@ scenario(() => {
         '| code-reviewer (codegate) | pending | | |', '| finalize (finalize) | pending | | |', '',
       ].join('\n'));
       fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+      // --freeze stamps plan_hash into workflow-plan.md and EXITS; every adaptive-node process in
+      // this scenario then re-reads and re-verifies that stamp from disk.
+      // spawn-class: durable-handoff
       const freeze = spawn805(process.execPath, [VALIDATOR_CLI, planPath, '--freeze', '--json'],
         { cwd: tmp805, encoding: 'utf8', env: env805 });
       assert(freeze.status === 0 && lastJson(freeze) && lastJson(freeze).frozen === true,
@@ -29624,6 +29812,10 @@ scenario(() => {
   function cleanup826(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
   function runNode826(repoRoot, subArgs, stdin) {
     try {
+      // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
+      // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
+      // and the next re-derives the whole run state from those bytes with no shared heap.
+      // spawn-class: durable-handoff
       const out = exec826('node', [NODE_CLI_826, ...subArgs],
         { cwd: repoRoot, encoding: 'utf8', input: stdin == null ? '' : stdin });
       return { exitCode: 0, ...JSON.parse(out.trim().split('\n').pop()) };
@@ -29634,6 +29826,9 @@ scenario(() => {
     }
   }
   function candidateHash826(repoRoot, planPath) {
+    // A fresh process recomputes the candidate hash over the on-disk tree; the value is written
+    // into final-validation.md for the finalize-check process below to re-read.
+    // spawn-class: durable-handoff
     const out = exec826('node', [VALIDATOR_826, planPath, '--candidate-hash', '--json'],
       { cwd: repoRoot, encoding: 'utf8' });
     return JSON.parse(out.trim().split('\n').pop()).validated_candidate_hash;
@@ -29648,6 +29843,9 @@ scenario(() => {
   // The EXACT subprocess cmdFinalize shells before any irreversible finalize side effect.
   function finalizeCheck826(repoRoot, planPath, base) {
     try {
+      // The EXACT subprocess cmdFinalize shells before any irreversible finalize side effect: a
+      // fresh process re-derives the verdict from durable state alone.
+      // spawn-class: durable-handoff
       const out = exec826('node', [VALIDATOR_826, planPath, '--finalize-check', '--json', '--base', base],
         { cwd: repoRoot, encoding: 'utf8' });
       return { exitCode: 0, ...JSON.parse(out.trim().split('\n').pop()) };
