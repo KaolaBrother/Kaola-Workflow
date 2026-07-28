@@ -11752,8 +11752,10 @@ function synthesizeLevel(root, legs, groupId, planPath) {
   // parent-owned `leg_committed` append below writes a file the merge is about to carry (git refuses
   // an untracked-over-tracked overwrite). The legs are checkouts of the same tree, so the repo-relative
   // path resolves identically inside each leg; exclude it from the sweep and neither failure mode can
-  // arise. Derivation is fail-open (a planPath outside root yields no exclusion) because the merge-side
-  // guards below stay the enforcement of last resort.
+  // arise. Derivation is fail-open (a planPath outside root yields no exclusion). There is NO
+  // merge-side telemetry guard: when the derivation yields nothing, the failure it prevents simply
+  // re-appears as the generic `merge_conflict` refusal at the octopus merge below — loud, but the
+  // original failure rather than a backstop.
   let telemetryRel = null;
   if (planPath) {
     const rel = path.relative(root, path.join(path.dirname(planPath), '.cache', 'node-timings.jsonl'));

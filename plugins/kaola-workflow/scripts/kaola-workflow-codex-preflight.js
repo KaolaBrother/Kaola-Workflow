@@ -863,7 +863,7 @@ function detectCodexDispatchMode(configContent) {
 const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.';
 
 // #775: the legacy `[features] multi_agent` (v1) flag and the V1/V2 dual-feature OR-join are
-// retired — multi_agent_v2 (now the [agents] table) is the ONLY dispatch contract, so
+// retired — multi_agent_v2 (`features.multi_agent_v2`) is the ONLY dispatch contract, so
 // deriveDispatchPosture below gates on detectCodexDispatchMode's `multi_agent_v2_enabled` alone.
 
 // Root-level `model_reasoning_effort` (NOT the per-profile agents/*.toml field of the
@@ -916,7 +916,7 @@ function dispatchPostureRemediation(posture) {
     + 'for proactive delegation.';
 }
 
-// #775: gates ONLY on multi_agent_v2_enabled (the [agents] table) — v1 is retired, so there is no
+// #775: gates ONLY on multi_agent_v2_enabled (`features.multi_agent_v2`) — v1 is retired, so there is no
 // more OR-join with a legacy feature flag. `multi_agent_enabled` mirrors multi_agent_v2_enabled
 // (kept as a distinct output field for back-compat shape; there is only one feature now).
 function deriveDispatchPosture(configContent) {
@@ -974,10 +974,10 @@ const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'default_wait_timeout_ms',
 ];
 
-// #775: parses the four MultiAgentV2ConfigToml numeric fields from the unified top-level
-// [agents] table (moved from [features.multi_agent_v2] pre-0.145). [agents] is a genuine TOML
-// table — no more inline-object/scalar dual-shape grammar. `max_threads` is a back-compat alias
-// for `max_concurrent_threads_per_session` (same field); first occurrence of either name wins.
+// #775: parses the four MultiAgentV2ConfigToml numeric fields from `features.multi_agent_v2`, in
+// the same three shapes the enable flag is read in: the [features.multi_agent_v2] sub-table, the
+// inline `multi_agent_v2 = { ... }` under [features], and the dotted root form. There is NO
+// `max_threads` alias — MULTI_AGENT_V2_NUMERIC_FIELDS above is the closed field list.
 // Same first-match/fail-to-absent discipline as the rest of this file: a non-integer or repeated
 // value is treated as not-configured rather than guessed at.
 function parseMultiAgentV2NumericFields(configContent) {
@@ -2027,8 +2027,8 @@ function containsExternalFeaturesTable(content) {
 // "Kaola never writes or overrides agents.default_subagent_model / ...reasoning_effort" non-goal).
 // None of these collide with a Kaola role name, so a bare [agents] table carrying ONLY these keys
 // is not a wildcard override — only a MANAGED ROLE NAME (or an inline-table-valued key under one)
-// still counts as a conflict, exactly as before #775. Without this allowlist the remediation this
-// gate itself prints ([agents]\nenabled = true) would immediately trip its OWN conflict check.
+// still counts as a conflict, exactly as before #775. Without this allowlist a user-owned bare
+// [agents] settings table would immediately trip the managed-role conflict check.
 const AGENTS_TABLE_SCALAR_SETTING_KEYS = new Set([
   'enabled', 'max_concurrent_threads_per_session', 'max_threads',
   'min_wait_timeout_ms', 'max_wait_timeout_ms', 'default_wait_timeout_ms',
@@ -2438,7 +2438,7 @@ function resolveCodexVersion({ override, env } = {}) {
 function codexVersionUnsupportedRemediation(detected) {
   return `Codex ${detected || '(version undetermined — no --codex-version/KAOLA_CODEX_VERSION override and no codex binary on PATH)'} `
     + `is below the supported floor ${CODEX_MIN_VERSION}. Upgrade the Codex CLI to >=${CODEX_MIN_VERSION} `
-    + '(ships multi_agent_v2 as the stable, only dispatch path under the unified [agents] config table), '
+    + '(ships multi_agent_v2 as the stable, only dispatch path; the switch lives at features.multi_agent_v2.enabled), '
     + 'then re-run this preflight. On a sandbox/CI host with no codex binary on PATH, pass '
     + '--codex-version <installed-version> or set KAOLA_CODEX_VERSION=<installed-version> to attest the '
     + 'version explicitly.';
@@ -2753,7 +2753,7 @@ function runPreflight(opts) {
   };
   const globalScope = { ...rawGlobalScope, ...effectiveRuntime };
 
-  // #775: multi_agent_v2 is a required engine feature (the [agents] table) — NO V1 fallback.
+  // #775: multi_agent_v2 is a required engine feature (`features.multi_agent_v2`) — NO V1 fallback.
   // Retired transport-mode gate previously sat here; freed exit code 7 is reused below.
   if (!effectiveRuntime.multi_agent_v2_enabled) {
     return codexMultiAgentV2RequiredResult(scope, 'effective', codexDir, null);
@@ -3943,7 +3943,7 @@ function runDoctor(opts) {
   const pluginCacheStale = scopes.some(scope => scope.scope === 'plugin_cache'
     && (scope.malformed.length > 0 || scope.stale_profiles.length > 0
       || scope.missing_roles.length > 0 || scope.stale_files.length > 0));
-  // #775: multi_agent_v2 (the [agents] table) is a required engine feature; an installed-but-
+  // #775: multi_agent_v2 (`features.multi_agent_v2`) is a required engine feature; an installed-but-
   // not-enabled scope is exactly what scopeIsStale's `multi_agent_v2_enabled === false` branch
   // already reports (kaola_footprint-gated), same as effectiveTransportUnsafe did pre-#775.
   const effectiveV2Unavailable = userReport.kaola_footprint && !effectiveRuntime.multi_agent_v2_enabled;

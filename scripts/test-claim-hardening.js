@@ -1724,7 +1724,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         '#816(T2): the transaction ledger must record the script-performed worktree→main sync, got '
         + JSON.stringify(r.json && r.json.finalize_transaction));
       let wtPlan = '';
-      const archivedPlan = path.join(fx.wtRoot, 'kaola-workflow', 'archive', 'issue-816b', 'workflow-plan.md');
+      const archivedPlan = path.join(fx.mainRoot, 'kaola-workflow', 'archive', 'issue-816b', 'workflow-plan.md');
       try { wtPlan = fs.readFileSync(archivedPlan, 'utf8'); } catch (_) {}
       assert(!!wtPlan && !/\| pending \|/.test(wtPlan),
         '#816(T2): the staler main copy must NEVER regress the complete worktree ledger');
@@ -5475,7 +5475,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       assert(tx && tx.ledger_compare === 'synced_from_worktree',
         '#837(P3): the transaction ledger must record that the script performed the worktree→main sync, got '
         + JSON.stringify(tx));
-      const archivedPlan = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, 'workflow-plan.md');
+      const archivedPlan = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, 'workflow-plan.md');
       const archivedText = fs.existsSync(archivedPlan) ? fs.readFileSync(archivedPlan, 'utf8') : '';
       assert(archivedText && !/\| pending \|/.test(archivedText),
         '#837(P3): the sync must never regress the worktree ledger with the staler main copy');
@@ -5484,8 +5484,14 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       assert(!/\| pending \|/.test(mainText),
         '#837(P3): the MAIN project folder must be synced UP from the worktree by the script — '
         + 'that sync is the operator rsync this issue subtracts');
-      assert(mainText === archivedText,
-        '#837(P3): after the script-owned sync the two copies of the ledger authority are identical');
+      // The two copies are NOT compared for equality here: on a successful linked finalize
+      // `archiveProjectDir` deliberately deletes main's live project folder after copy+verify, so
+      // that a surviving main copy cannot keep `readActiveFolders` claiming an archived project.
+      // The true post-condition is therefore that main's live folder is GONE and the archive under
+      // main's root is the single surviving ledger authority.
+      assert(!fs.existsSync(mainPlanPath837),
+        '#837(P3): after the script-owned sync + archive, main\'s LIVE project folder must be gone — '
+        + 'the archive is the sole surviving ledger authority');
     } finally { cleanup837(fx); }
   }
 
