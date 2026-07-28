@@ -1079,6 +1079,94 @@ const specPlanAuto = (nodes, ledger) => '## Meta\nspeculative_open_policy: auto\
       '#759 (8): no legacy descriptor may gain an expansion_* provenance key');
   }
 
+  // (10) THE SERIAL-OPEN SURFACE. `nextNode` is what the two SERIAL open doors consume (open-next's
+  //      fallthrough and close-and-open-next's fused advance), and both of them OPEN whatever it
+  //      names. An expansion point holds no work of its own and is opened only by the expand-open
+  //      transaction, so it must never be offered there — otherwise the serial path opens the point,
+  //      and expand-open / open-ready / expand-close then each refuse `serial_node_live` over the
+  //      point's OWN in_progress row.
+  //
+  //      The subtraction is scoped precisely: `readySet` still carries the point (it is what keeps
+  //      allDone and the stall refusal honest), and only the SERIAL-OPENABLE projection drops it.
+  {
+    const r = computeNextAction(SPINE(BASE_LEDGER), { resolveModel: stub });
+    assert(r.result === 'ok',
+      '#835 (10): a spine plan whose only ready node is the expansion point must NOT refuse, got '
+      + JSON.stringify(r));
+    assert(r.readySet.some(n => n.id === 'm1'),
+      '#835 (10): readySet is UNCHANGED — the point stays on it (stall/terminal derivation is not '
+      + 'the surface being subtracted), got ' + JSON.stringify(r.readySet.map(n => n.id)));
+    assert(r.allDone === false,
+      '#835 (10): the point still counts toward "work remains" — allDone must stay false');
+    assert(r.nextNode === null || r.nextNode.role !== 'expansion-point',
+      '#835 (10): nextNode must NEVER name an expansion point — it is the id the SERIAL open doors '
+      + 'open by construction, got ' + JSON.stringify(r.nextNode));
+    assert(r.nextNode === null,
+      '#835 (10): with the point the only ready node there is nothing serial-openable at all, so '
+      + 'nextNode is null (the caller routes to expand-open via expansionPending), got '
+      + JSON.stringify(r.nextNode));
+    assert((r.expansionPending || []).length === 1 && r.expansionPending[0].id === 'm1',
+      '#835 (10): ...and the point is still reported on its DEDICATED field, so the executor can '
+      + 'route it to expand-open, got ' + JSON.stringify(r.expansionPending));
+  }
+
+  // (11) DOC-ORDER PRECEDENCE. The point sits BEFORE a concrete ready node in the ## Nodes table, so
+  //      `readySet[0]` is the point. nextNode must skip it and name the concrete node — proving the
+  //      exclusion is a filter on the serial-openable projection, not an accident of ordering.
+  {
+    const twoReady = [
+      '## Meta', '', 'plan_form: spine', '',
+      'expansion(m1):',
+      '  milestone_goal: land it',
+      '  expected_surfaces: scripts/',
+      '  join_constraints: none',
+      '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| probe | code-explorer | — | — | 1 | sequence |',
+      '| m1 | expansion-point | probe | — | 1 | sequence |',
+      '| side | code-explorer | probe | — | 1 | sequence |',
+      '| done | finalize | m1, side | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| probe | complete |', '| m1 | pending |', '| side | pending |', '| done | pending |', '',
+    ].join('\n');
+    const r = computeNextAction(twoReady, { resolveModel: stub });
+    assert(r.result === 'ok', '#835 (11): expected ok, got ' + JSON.stringify(r));
+    assert(r.readySet[0] && r.readySet[0].id === 'm1',
+      '#835 (11) FIXTURE: the point IS readySet[0] — the pin below is non-vacuous, got '
+      + JSON.stringify(r.readySet.map(n => n.id)));
+    assert(r.nextNode && r.nextNode.id === 'side',
+      '#835 (11): nextNode must skip the point and name the first serial-openable ready node, got '
+      + JSON.stringify(r.nextNode && r.nextNode.id));
+  }
+
+  // (12) CONTROL — a plan with NO expansion point is byte-unchanged: nextNode is still readySet[0].
+  {
+    const legacy = makePlan(
+      ['| a | code-explorer | — | — | 1 | sequence |', '| b | finalize | a | — | 1 | sequence |'],
+      ['| a | pending |', '| b | pending |']);
+    const r = computeNextAction(legacy, { resolveModel: stub });
+    assert(r.nextNode && r.nextNode.id === 'a' && deepEqual(r.nextNode, r.readySet[0]),
+      '#835 (12) CONTROL: with no expansion point nextNode is byte-identically readySet[0], got '
+      + JSON.stringify(r.nextNode));
+  }
+
+  // (13) An expansion point that is ALREADY in_progress (a legacy plan frozen and part-run by the
+  //      pre-subtraction serial path) must ALSO stay off nextNode. The filter keys on the ROLE, not
+  //      on the ledger status — a status-only filter would keep re-offering the very row that made
+  //      the serial-open wedge, and the fused advance's own in_progress guard is a different check.
+  {
+    const content = SPINE(['| probe | complete |', '| m1 | in_progress |', '| wall | pending |', '| done | pending |']);
+    const r = computeNextAction(content, { resolveModel: stub });
+    assert(r.result === 'ok', '#835 (13): expected ok, got ' + JSON.stringify(r));
+    assert(r.readySet.some(n => n.id === 'm1'),
+      '#835 (13) FIXTURE: readySet still carries the live point (only TERMINAL rows are dropped)');
+    assert(r.nextNode === null || r.nextNode.role !== 'expansion-point',
+      '#835 (13): an in_progress point must not be offered on nextNode either, got '
+      + JSON.stringify(r.nextNode));
+  }
+
   // (9) A record keying an UNKNOWN node id contributes no units (it is refused at expand-open, and
   //     must not silently inject orphan rows into the ready-set graph here).
   {

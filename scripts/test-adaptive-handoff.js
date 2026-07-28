@@ -3150,6 +3150,117 @@ const FWW_WARNING = {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T-DECOY-HALT — a FRESH freeze may never hand off a plan that already carries
+// `consent_halt: pending` in its `## Node Ledger`.
+//
+// The marker is the durable consent valve: `open-next` (and every other mutating subcommand) refuses
+// `halt_pending` while it is set. That is correct for a run that actually halted — and catastrophic
+// for a run that has not started, because there is nothing to consent TO and the very first open
+// wedges on a halt no human ever raised.
+//
+// It is a real, observed shape: a planner that copies its plan skeleton from an ARCHIVED plan (where
+// the marker legitimately survives) carries the line into a brand-new ledger. `plan_hash` covers only
+// `## Meta` + `## Nodes`, so the marker rides through the freeze completely unremarked.
+//
+// The freeze path owns this because it is the ONLY point that can tell "fresh" from "resumed": it is
+// where a plan first becomes a run. Resolve it EITHER way — refuse with a typed reason that names the
+// marker, or strip the marker before freezing — but never hand back `ready_to_run` with it still set.
+// ---------------------------------------------------------------------------
+{
+  const adaptiveSchemaDecoy = require('./kaola-workflow-adaptive-schema');
+  const PLAN_PATH_DECOY = '/fake/kaola-workflow/test-project/workflow-plan.md';
+
+  const runDecoyHandoff = (planContent) => {
+    const writtenFiles = {};
+    let planNow = planContent;
+    let readCallCount = 0;
+    const frozen = stampFrozen(h => planContent.replace('# Workflow Plan',
+      '<!-- plan_hash: ' + h + ' -->\n\n# Workflow Plan'));
+    const shellStub = makeShellStub({
+      'kaola-workflow-plan-validator.js:--freeze-checked': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run',
+        planHash: PLAN_HASH_64, frozen: false,
+        governance: { decision: 'auto-run', risk: {} },
+        risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+      },
+      'kaola-workflow-plan-validator.js:--freeze': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run',
+        planHash: PLAN_HASH_64, frozen: true, resumeOk: true,
+        risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+      },
+      'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+      'git:add': { exitCode: 0 },
+      'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64,
+        dest: '/wt/kaola-workflow/test-project' },
+    });
+    const result = runHandoff({
+      planPath: PLAN_PATH_DECOY,
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      json: true,
+      shell: shellStub,
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) {
+          readCallCount++;
+          // Whatever the handoff has written most recently wins, so a STRIP is observable; absent a
+          // write, the first read is the unfrozen draft and later reads are the frozen bytes.
+          if (writtenFiles[PLAN_PATH_DECOY] !== undefined) return writtenFiles[PLAN_PATH_DECOY];
+          return readCallCount <= 1 ? planNow : frozen;
+        }
+        if (fpath.endsWith('workflow-state.md')) return makeStateContent({ issueNumber: 42 });
+        return '';
+      },
+      writeFile: (fpath, content) => { writtenFiles[fpath] = content; },
+      stateMtime: undefined,
+    });
+    const finalPlan = writtenFiles[PLAN_PATH_DECOY] !== undefined
+      ? writtenFiles[PLAN_PATH_DECOY]
+      : frozen;
+    return { result, writtenFiles, finalPlan };
+  };
+
+  // The decoy: the marker sits INSIDE `## Node Ledger` (the only place it fences) on a fresh,
+  // never-run plan whose every row is still `pending`.
+  const decoyPlan = makeUnfrozenPlan('auto-run').replace(
+    '| finalize | pending | |',
+    '| finalize | pending | |\nconsent_halt: pending');
+  assert(adaptiveSchemaDecoy.readDurableConsentHalt(decoyPlan) === true,
+    'T-DECOY-HALT FIXTURE: the decoy marker is genuinely ledger-scoped (the same read every mutating '
+    + 'subcommand fences on)');
+  assert(!/in_progress/.test(decoyPlan),
+    'T-DECOY-HALT FIXTURE: nothing in this plan has ever run — there is no halt to consent to');
+
+  const decoy = runDecoyHandoff(decoyPlan);
+  const stillHalted = adaptiveSchemaDecoy.readDurableConsentHalt(decoy.finalPlan);
+  assert(!(decoy.result.handoff_status === 'ready_to_run' && stillHalted),
+    'T-DECOY-HALT: a fresh freeze must NEVER return ready_to_run with a decoy `consent_halt: pending` '
+    + 'still set — the first open-next would refuse halt_pending on a run that never halted. got '
+    + JSON.stringify({ handoff_status: decoy.result.handoff_status, stillHalted }));
+
+  if (decoy.result.handoff_status === 'ready_to_run') {
+    assert(!stillHalted,
+      'T-DECOY-HALT (strip arm): if the freeze STRIPS the decoy it must write the stripped plan back');
+  } else {
+    const blob = JSON.stringify({ reason: decoy.result.reason, errors: decoy.result.errors });
+    assert(decoy.result.result === 'refuse' && /consent_halt|halt/i.test(blob),
+      'T-DECOY-HALT (refuse arm): the refusal must be TYPED and NAME the marker so the planner can '
+      + 'fix its own draft, got ' + blob);
+  }
+
+  // CONTROL — the identical fixture WITHOUT the decoy reaches ready_to_run, so the pin above
+  // discriminates the marker rather than some unrelated property of this harness.
+  const clean = runDecoyHandoff(makeUnfrozenPlan('auto-run'));
+  assert(clean.result.handoff_status === 'ready_to_run',
+    'T-DECOY-HALT CONTROL: the same plan WITHOUT the marker still freezes to ready_to_run, got '
+    + JSON.stringify({ handoff_status: clean.result.handoff_status, reason: clean.result.reason,
+      errors: clean.result.errors }));
+  assert(adaptiveSchemaDecoy.readDurableConsentHalt(clean.finalPlan) === false,
+    'T-DECOY-HALT CONTROL: ...and no marker is invented on the clean path');
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

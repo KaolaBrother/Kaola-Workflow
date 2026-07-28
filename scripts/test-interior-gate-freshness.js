@@ -1047,6 +1047,120 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
   } finally { fs.rmSync(tmp7, { recursive: true, force: true }); }
 }
 
+// ---- 8. INVESTIGATION-mode gates are exempt from whole-candidate staleness (#831 site 5) ----
+//
+// An investigation adversarial-verifier certifies NOTHING: `certified_producers` is empty by
+// construction, `deriveGateEffect` maps every outcome to `none`, and it post-dominates no producer.
+// A PRE-WRITE skeptic wall is the canonical shape — it seals against the tree as it stood BEFORE any
+// writer ran, so its receipt is stale against the post-write candidate BY DESIGN.
+//
+// Applying whole-candidate freshness to it wedges finalization outright: `interiorSurfaceFresh` needs
+// a reviewed-producer slice to scope against, and an investigation gate has none (`certifies` is
+// empty), so the scoped arm can never rescue it either. Every run whose writers legitimately moved
+// the tree the skeptic read would refuse `schema-2 certifier receipt is stale for the current
+// candidate` forever, with no reopen that could ever clear it.
+//
+// The exemption keys on gate MODE alone, so a change-gate verifier is untouched — block 2's P3 pins
+// that direction on the real runtime.
+{
+  const tag = '831-site5';
+  const tmp8 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-investigation-stale-')));
+  try {
+    initGitRepo(tmp8);
+    const project = 'issue-831';
+    const projectDir = path.join(tmp8, 'kaola-workflow', project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp8, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp8, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    // skeptic (PRE-WRITE investigation adversarial-verifier: nothing upstream produces a change, so
+    // deriveGateMode answers `investigation`) -> writer -> cert (the code_certifier) -> finalize.
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — investigation-mode staleness exemption', '',
+      '## Meta',
+      'plan_form: spine',
+      'plan_schema_version: 2',
+      'labels: enhancement',
+      'code_certifier: cert',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'validation_command: node --check lib/impl.js',
+      'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| skeptic | adversarial-verifier | — | — | 1 | sequence | premise-holds | pre-write-tree | sequence | — |',
+      '| writer | tdd-guide | skeptic | lib/impl.js | 1 | sequence | — | — | — | — |',
+      '| cert | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.', '',
+      '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '',
+      '## Node Ledger', '',
+      '| id | status |', '|---|---|',
+      '| skeptic | pending |', '| writer | pending |', '| cert | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+      '| adversarial-verifier (skeptic) | pending | | |', '| tdd-guide (writer) | pending | | |',
+      '| code-reviewer (cert) | pending | | |', '| finalize (finalize) | pending | | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+
+    const freeze = node(planValidatorScript, [planPath, '--freeze', '--json'], tmp8);
+    assert(freeze.status === 0, tag + ' setup: the pre-write-skeptic plan freezes: ' + freeze.stdout + freeze.stderr);
+    if (freeze.status !== 0) { throw new Error('freeze failed — cannot proceed'); }
+    git(tmp8, ['add', '-A']);
+    git(tmp8, ['commit', '-m', 'freeze']);
+
+    // skeptic seals against candidate C0 — the tree BEFORE any writer has run.
+    const openSkeptic = lastJson(node(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp8));
+    assert(openSkeptic && openSkeptic.opened && openSkeptic.opened.id === 'skeptic',
+      tag + ': the pre-write skeptic opens first: ' + JSON.stringify(openSkeptic));
+    const skepticDispatch = openSkeptic.opened.dispatch;
+    assert(skepticDispatch && skepticDispatch.gate_mode === 'investigation',
+      tag + ' NON-VACUITY: the skeptic is dispatched in INVESTIGATION mode (nothing upstream produces '
+      + 'a change), got ' + JSON.stringify(skepticDispatch && skepticDispatch.gate_mode));
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'skeptic', '--stdin', '--json'], tmp8,
+      gateEvidence('skeptic', openSkeptic.nonce, skepticDispatch, 'not_refuted',
+        ['claim_outcome: not_refuted', 'gate_mode: investigation', 'findings_none: true'])).status === 0,
+      tag + ': skeptic evidence records');
+    const closeSkeptic = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'skeptic', '--json'], tmp8));
+    assert(closeSkeptic && closeSkeptic.opened && closeSkeptic.opened.id === 'writer',
+      tag + ': skeptic settles and the writer opens: ' + JSON.stringify(closeSkeptic));
+
+    // writer moves the tree — the whole candidate leaves C0, exactly as the plan intends.
+    const openWriter = closeSkeptic.opened;
+    fs.writeFileSync(path.join(tmp8, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], tmp8,
+      writerEvidence('writer', openWriter.nonce, 'base')).status === 0, tag + ': writer evidence records');
+    const closeWriter = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp8));
+    assert(closeWriter && closeWriter.opened && closeWriter.opened.id === 'cert',
+      tag + ': cert opens after the writer: ' + JSON.stringify(closeWriter));
+
+    const certDispatch = closeWriter.opened.dispatch;
+    assert(skepticDispatch.candidate_digest !== certDispatch.candidate_digest,
+      tag + ' NON-VACUITY: the skeptic sealed against a DIFFERENT whole candidate than the certifier — '
+      + 'this is the staleness the exemption has to survive');
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'cert', '--stdin', '--json'], tmp8,
+      gateEvidence('cert', closeWriter.opened.nonce, certDispatch, 'approved', ['findings_none: true'])).status === 0,
+      tag + ': cert evidence records');
+    const closeCert = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'cert', '--json'], tmp8));
+    assert(closeCert && closeCert.closed === 'cert', tag + ': cert seals PASS: ' + JSON.stringify(closeCert));
+
+    // THE PIN: --verdict-check must PASS. The skeptic is whole-candidate-stale and has no certified
+    // producer slice to scope against, so ONLY the investigation exemption can carry it.
+    const verdict = node(planValidatorScript, [planPath, '--verdict-check', '--json'], tmp8);
+    const out = lastJson(verdict);
+    const skepticStale = out && Array.isArray(out.failures)
+      && out.failures.some(f => f && f.nodeId === 'skeptic' && /stale/.test(String(f.reason || '')));
+    assert(!skepticStale,
+      tag + ': an INVESTIGATION gate must never be refused for whole-candidate staleness — its receipt '
+      + 'binds the pre-write tree by design and no scoped arm can rescue it: ' + verdict.stdout + verdict.stderr);
+    assert(verdict.status === 0 && out && out.ok === true,
+      tag + ': ...so the run finalizes instead of wedging: ' + verdict.stdout + verdict.stderr);
+  } finally { fs.rmSync(tmp8, { recursive: true, force: true }); }
+}
+
 if (failed) {
   console.error(`\ninterior-gate freshness test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
