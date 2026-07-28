@@ -25,7 +25,7 @@ const roadmapModule = require('./kaola-gitlab-workflow-roadmap');
 const closureContract = require('./kaola-workflow-closure-contract');
 // #441: parseGoal — reads the `goal:` line from ## Meta in workflow-plan.md.
 // #763: the shared expansion-efficiency derivation (the archive rollup line below).
-const { parseGoal, parseLedger, parseExpansionRecords, expansionRecordEfficiency } = require('./kaola-gitlab-workflow-plan-validator');
+const { parseGoal, parseLedger, parseExpansionRecords, expansionRecordEfficiency, renderAgentComplianceSection } = require('./kaola-gitlab-workflow-plan-validator');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -2162,12 +2162,11 @@ function verifyArchiveEpochAuthority(projectPath, opts) {
   return { ok: true, current, snapshots };
 }
 
-// #735: the RUN-STATE PROGRESS half of the archive authority. These five reasons are the
-// only ones the composed check emits about artifacts a run PRODUCES as it executes — the
-// `## Required Agent Compliance` receipt table, the mutable `## Node Ledger` progress
-// table, and the derived `workflow-tasks.json` mirror. Every OTHER reason it can emit is
-// about the epoch envelope, the immutable frozen plan, the replan transaction, or the
-// snapshot tree, and stays fail-closed for every archive.
+// #735: the RUN-STATE PROGRESS half of the archive authority. These reasons are the only
+// ones the composed check emits about artifacts a run PRODUCES as it executes — the mutable
+// `## Node Ledger` progress table and the derived `workflow-tasks.json` mirror. Every OTHER
+// reason it can emit is about the epoch envelope, the immutable frozen plan, the replan
+// transaction, or the snapshot tree, and stays fail-closed for every archive.
 //
 // A `closed` archive is the input to archiveEpochLineagePreserved, whose `preserved`
 // token asserts on the closure receipt that the lineage really was intact — so for a
@@ -2176,17 +2175,18 @@ function verifyArchiveEpochAuthority(projectPath, opts) {
 // An `abandoned` archive asserts nothing of the sort: it is stamped `abandoned`, lands at
 // `archive/<project>.discarded-<ts>`, and produces no closure receipt and no lineage
 // token. Demanding progress artifacts there made discard structurally unavailable to
-// exactly the projects most in need of it — one frozen by a runtime that did not pre-seed
-// the compliance section, one mid-run whose section still carried the legacy
-// row-per-closed-node partial set, and one whose best-effort freeze-time task-mirror
-// generation never landed. All three are ABSENT or INCOMPLETE run product on a project the
-// user has explicitly asked to abandon, not evidence of tampering, and the refusal was
-// total: no worktree, branch, or claim-label cleanup was attempted either. The reason is
-// recorded on the result as `authority_downgraded` and surfaced by the caller rather than
-// silently dropped.
+// exactly the projects most in need of it. That is ABSENT or INCOMPLETE run product on a
+// project the user has explicitly asked to abandon, not evidence of tampering, and the
+// refusal was total: no worktree, branch, or claim-label cleanup was attempted either. The
+// reason is recorded on the result as `authority_downgraded` and surfaced by the caller
+// rather than silently dropped.
+//
+// #833: the two `state_compliance_*` entries are gone with the codes themselves. Two of the
+// three shapes that motivated this downgrade were compliance-table shapes (a runtime that did
+// not pre-seed the section; a mid-run section carrying the legacy row-per-closed-node partial
+// set) — neither can occur now that the table is derived rather than stored, so those discards
+// simply succeed instead of succeeding-with-a-downgrade-note.
 const ABANDON_DOWNGRADABLE_AUTHORITY_REASONS = new Set([
-  'state_compliance_authority_invalid',
-  'state_compliance_progress_invalid',
   'state_ledger_authority_invalid',
   'state_ledger_progress_invalid',
   'state_task_mirror_mismatch',
@@ -2258,6 +2258,26 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // before the folder is renamed into archive/, so a torn write here is unrecoverable — a torn
     // workflow-state.md is silently skipped by readActiveFolders and the project goes invisible.
     writeFile(state, content);
+  } catch (_) {}
+  // #833: RENDER the `## Required Agent Compliance` receipt table into the plan being archived.
+  // The table is no longer maintained during a run (nothing mirrors the ledger any more), so this
+  // is where the human-readable receipt is materialized — ONCE, at the boundary, from the same
+  // derivation every reader uses. Hash-NEUTRAL by construction: the section lives outside
+  // computePlanHash, so the archived plan still verifies against its frozen plan_hash. BEFORE the
+  // rename/copy so the rendered copy is what lands in archive/. Best-effort: a render failure must
+  // never turn a legitimate archive into a refusal — the ledger and .cache evidence it derives
+  // from are archived either way.
+  try {
+    const archivePlanPath = path.join(src, 'workflow-plan.md');
+    if (fs.existsSync(archivePlanPath)) {
+      const planText = fs.readFileSync(archivePlanPath, 'utf8');
+      const cacheDir = path.join(src, '.cache');
+      const rendered = renderAgentComplianceSection(planText, {
+        readEvidence: nodeId => fs.readFileSync(path.join(cacheDir, nodeId + '.md'), 'utf8'),
+        readProvenance: () => fs.readFileSync(path.join(cacheDir, 'provenance-log.jsonl'), 'utf8'),
+      });
+      if (rendered !== planText) writeFile(archivePlanPath, rendered);
+    }
   } catch (_) {}
   // #324: sanitize the archived finalization-summary's PRE-SINK sentinels so a later audit reading
   // only the archive cannot mistake a merged/closed run for one still "READY FOR FINAL GIT GATE".

@@ -15,8 +15,6 @@ spawnCensus.install('test-adaptive-node');
 const {
   spliceLedgerNode,
   readLedgerStatuses,
-  spliceComplianceRow,
-  complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
   // #836: the single evidence-token reader behind the schema-2 review required-token loop.
@@ -132,7 +130,7 @@ const {
   foldOwnerProjection,
   canonicalizeRouteOwners,
 } = require('./kaola-workflow-adaptive-schema');
-const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, locateSection, spliceComplianceSection } = require('./kaola-workflow-adaptive-schema');
 // #585: scheduler mutual-exclusion lock helpers (byte-identical ×4 in adaptive-schema).
 const { acquireProjectLock, isStaleLock, SCHEDULER_LOCK_NAME, LANE_STALENESS_MS } = require('./kaola-workflow-adaptive-schema');
 
@@ -2038,8 +2036,14 @@ for (const crashAfterPlanWrite of [false, true]) {
     const retry = closeFn(common);
     const retryAgain = closeFn(common);
     const finalPlan = fs.readFileSync(planPath, 'utf8');
+    // #833: the retried close must write NO compliance row at all — the anti-duplicate guard this
+    // pin was built around (`complianceRowExists`) is gone because the row is gone. What replaces
+    // it is stronger: the DERIVED table has exactly one row for the node no matter how many times
+    // the close is replayed, because the row set IS the node set.
     const complianceRows = finalPlan.split('\n')
       .filter(line => line.includes('| adversarial-verifier (skeptic-a) |'));
+    const derivedRows = planValidator.deriveAgentCompliance(finalPlan).rows
+      .filter(row => row.node_id === 'skeptic-a');
     const timings = fs.readFileSync(timingPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     const provenance = fs.existsSync(provenancePath)
       ? fs.readFileSync(provenancePath, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
@@ -2047,12 +2051,13 @@ for (const crashAfterPlanWrite of [false, true]) {
       && retry.provisional === true && retryAgain.provisional === true,
     'R25-PROVISIONAL-BOOKKEEPING-RED: ' + closeKind + ' ' + (crashAfterPlanWrite ? 'crash retry' : 'ordinary retry')
       + ' preserves the provisional close result');
-    assert(complianceRows.length === 1
+    assert(complianceRows.length === 0 && derivedRows.length === 1
       && timings.filter(e => e.node === 'skeptic-a' && e.event === 'closed').length === 1
       && provenance.filter(e => e.nodeId === 'skeptic-a' && e.event === 'close'
         && e.nonce === 'aaaaaaaaaaaa').length === 1,
     'R25-PROVISIONAL-BOOKKEEPING-RED: ' + closeKind + ' ' + (crashAfterPlanWrite ? 'crash retry' : 'ordinary retry')
-      + ' records exactly one compliance row, close timing, and generation-bound provenance entry');
+      + ' writes NO compliance row (derives exactly one) and records exactly one close timing and '
+      + 'generation-bound provenance entry');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 }
@@ -5463,10 +5468,12 @@ scenario(() => {
   assert(readDurableConsentHalt(decoyPlan) === false,
     'T6: readDurableConsentHalt ignores the fenced-decoy consent_halt (real ledger has none)');
 
-  // spliceComplianceRow appends to the REAL compliance section (after the real ledger).
-  const withRow = spliceComplianceRow(decoyPlan, '| code-reviewer | subagent-invoked | ok | |');
+  // #833: adaptive-node's spliceComplianceRow wrapper is gone with the rest of the compliance
+  // writers; the fence-awareness property it proved belongs to the KERNEL helper it delegated to,
+  // which is retained as the archive-time renderer's row producer. Pin it there.
+  const withRow = spliceComplianceSection(decoyPlan, '| code-reviewer | subagent-invoked | ok | |');
   assert(withRow.includes('| code-reviewer | subagent-invoked | ok | |'),
-    'T6: spliceComplianceRow appended the row');
+    'T6: spliceComplianceSection appended the row');
   // exactly one real compliance heading (the fenced decoy has none here); row lands after the real ledger.
   assert(withRow.indexOf('| code-reviewer | subagent-invoked | ok | |') > withRow.lastIndexOf('```'),
     'T6: the compliance row lands in the REAL section (after the fenced decoy)');
@@ -6647,10 +6654,15 @@ scenario(() => {
   assert(writtenPlan.includes('| impl-core | complete | |'), 'T14: impl-core marked complete');
   assert(writtenPlan.includes('| impl-other | in_progress | |'), 'T14: impl-other opened in_progress by fused advance');
 
-  // Compliance row written — tdd-guide role, keyed by role+id format
-  const hasComplianceSection = writtenPlan.includes('## Required Agent Compliance');
-  assert(hasComplianceSection, 'T14: ## Required Agent Compliance section written');
-  assert(writtenPlan.includes('tdd-guide'), 'T14: compliance row contains tdd-guide role');
+  // #833: the close writes NO compliance section — and the DERIVED table still reports the
+  // closed node as invoked, keyed by the canonical `role (node-id)` cell.
+  assert(!writtenPlan.includes('## Required Agent Compliance'),
+    'T14: close writes NO ## Required Agent Compliance section');
+  const t14derived = planValidator.deriveAgentCompliance(writtenPlan).rows
+    .find(row => row.node_id === 'impl-core');
+  assert(t14derived && t14derived.requirement === 'tdd-guide (impl-core)'
+    && t14derived.status === 'subagent-invoked',
+  'T14: the closed node derives `tdd-guide (impl-core)` = subagent-invoked, got ' + JSON.stringify(t14derived));
 
   // commit-node barrier was called (without --start)
   const barrierCall = shellCalls.find(c => c.base === 'kaola-workflow-commit-node.js' && !c.args.includes('--start') && !c.args.includes('--json') === false);
@@ -6729,18 +6741,18 @@ scenario(() => {
 
   const writtenPlan = writtenFiles['/fake/kaola-workflow/test-project/workflow-plan.md'];
   assert(writtenPlan !== undefined, 'T14b: plan written');
-  assert(writtenPlan.includes('## Required Agent Compliance'), 'T14b: compliance section written');
+  assert(!writtenPlan.includes('## Required Agent Compliance'),
+    'T14b: close writes NO ## Required Agent Compliance section (#833)');
 
-  // Bare role string check: compliance row should have 'code-reviewer' in Requirement cell,
-  // NOT 'code-reviewer (review)'
-  const complianceSection = writtenPlan.slice(writtenPlan.indexOf('## Required Agent Compliance'));
-  // #714: the append path must EMIT the canonical `role (node-id)` cell — the node id is known
-  // at close time and validateRequiredAgentCompliance requires exactly one `role (node-id)` row
-  // per node. A bare `code-reviewer` cell is the drift the issue pins (never emitted anymore).
+  // #714 was "the appended row must use the canonical `role (node-id)` cell, never a bare role".
+  // #833 subtracts the append entirely, so the property moves to the RENDERER: the cell is built
+  // from the node, so a bare-role cell is now unrepresentable rather than merely forbidden.
+  const rendered14b = planValidator.renderAgentComplianceSection(writtenPlan);
+  const complianceSection = rendered14b.slice(rendered14b.indexOf('## Required Agent Compliance'));
   assert(complianceSection.includes('| code-reviewer (review) |'),
-    'T14b (#714): appended compliance row uses the canonical role (node-id) cell');
-  const legacyBareFormat = complianceSection.includes('| code-reviewer |');
-  assert(legacyBareFormat === false, 'T14b (#714): appended compliance row is NEVER a bare role cell');
+    'T14b (#714/#833): the rendered row uses the canonical role (node-id) cell');
+  assert(complianceSection.includes('| code-reviewer |') === false,
+    'T14b (#714/#833): a bare role cell is never rendered');
 });
 
 // ---------------------------------------------------------------------------
@@ -6812,21 +6824,27 @@ scenario(() => {
 
   const writtenPlan = writtenFiles['/fake/kaola-workflow/test-project/workflow-plan.md'];
   assert(writtenPlan !== undefined, 'T14c: plan written');
-  assert(writtenPlan.includes('## Required Agent Compliance'), 'T14c: compliance section written');
-  assert(writtenPlan.includes('| finalize (done) | main-session-direct |'),
-    'T14c: finalize sink row is main-session-direct');
-  assert(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
-    'T14c: finalize sink row is NOT falsely certified subagent-invoked');
+  assert(!writtenPlan.includes('## Required Agent Compliance'),
+    'T14c: close writes NO ## Required Agent Compliance section (#833)');
+  const rendered14c = planValidator.renderAgentComplianceSection(writtenPlan);
+  assert(rendered14c.includes('| finalize (done) | main-session-direct |'),
+    'T14c: the finalize sink derives main-session-direct (role rule survives the subtraction)');
+  assert(!rendered14c.includes('| finalize (done) | subagent-invoked'),
+    'T14c: the finalize sink is NOT falsely certified subagent-invoked');
 });
 
 // ---------------------------------------------------------------------------
-// T14d (#817): execution mode is the orchestrator's per-unit judgment, so the
-// compliance row must be able to record `main-session-direct` for ANY node the
-// orchestrator ran inline — not only the finalize sink. Bidirectional by
-// construction: the SAME close runs twice, once with the flag and once without,
-// and the two runs must disagree. Without the second half the assertion would
-// still pass if the producer hardcoded main-session-direct for every node.
+// T14d (#817, re-homed by #833): execution mode is the orchestrator's per-unit
+// judgment, so it must be recordable for ANY node the orchestrator ran inline — not
+// only the finalize sink. It used to live in the Status cell of a compliance ROW; with
+// that mirror subtracted it rides the per-node CLOSE entry of `.cache/provenance-log.jsonl`
+// (the dispatch record), and the derivation reads it back through the `readProvenance`
+// seam. Bidirectional by construction: the SAME close runs twice, once with the flag and
+// once without, and the two runs must disagree — without the second half the assertion
+// would still pass if the producer hardcoded main-session-direct for every node.
 // The flag is a RECORD, never a gate: both runs close ok, and neither refuses.
+// A REAL temp project dir is used because the provenance journal is a real filesystem
+// append (the durable record is the property under test, not the in-memory plan bytes).
 // ---------------------------------------------------------------------------
 scenario(() => {
   const nodes = [
@@ -6839,10 +6857,6 @@ scenario(() => {
     '| review | pending | |',
     '| done | pending | |',
   ], nodes);
-
-  const cacheFiles = {
-    '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing test\nGREEN: test passes\n',
-  };
 
   const shellStub = function(scriptPath, args) {
     const base = path.basename(scriptPath);
@@ -6858,41 +6872,52 @@ scenario(() => {
   };
 
   const closeOnce = (mainSessionDirect) => {
-    let planContent = basePlan;
-    const written = {};
-    const result = runCloseAndOpenNext({
-      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
-      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
-      project: 'test-project',
-      nodeId: 'impl-core',
-      mainSessionDirect,
-      shell: shellStub,
-      readFile: (fpath) => {
-        if (fpath.endsWith('workflow-plan.md')) return planContent;
-        if (fpath.endsWith('workflow-state.md')) return makeState();
-        if (cacheFiles[fpath]) return cacheFiles[fpath];
-        throw new Error('ENOENT: ' + fpath);
-      },
-      writeFile: (fpath, content) => {
-        written[fpath] = content;
-        if (fpath.endsWith('workflow-plan.md')) planContent = content;
-      },
-      cacheExists: (fpath) => !!cacheFiles[fpath],
-    });
-    return { result, plan: written['/fake/kaola-workflow/test-project/workflow-plan.md'] };
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-t14d-'));
+    try {
+      const projectDir = path.join(tmp, 'kaola-workflow', 'test-project');
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      const statePath = path.join(projectDir, 'workflow-state.md');
+      fs.writeFileSync(planPath, basePlan);
+      fs.writeFileSync(statePath, makeState());
+      fs.writeFileSync(path.join(cacheDir, 'impl-core.md'), 'RED: failing test\nGREEN: test passes\n');
+      const result = runCloseAndOpenNext({
+        planPath, statePath, project: 'test-project', nodeId: 'impl-core',
+        mainSessionDirect,
+        shell: shellStub,
+        readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+        writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+        cacheExists: fpath => fs.existsSync(fpath),
+      });
+      const plan = fs.readFileSync(planPath, 'utf8');
+      const provenancePath = path.join(cacheDir, 'provenance-log.jsonl');
+      const provenance = fs.existsSync(provenancePath) ? fs.readFileSync(provenancePath, 'utf8') : '';
+      const derived = planValidator.deriveAgentCompliance(plan, {
+        readProvenance: () => provenance,
+      }).rows.find(row => row.node_id === 'impl-core');
+      return { result, plan, provenance, derived };
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   };
 
   const inline = closeOnce(true);
   assert(inline.result.result === 'ok', 'T14d: an inline-run node closes ok (a record, not a gate)');
-  assert(inline.plan.includes('| tdd-guide (impl-core) | main-session-direct |'),
-    'T14d: a non-finalize node the orchestrator ran inline records main-session-direct');
-  assert(!inline.plan.includes('| tdd-guide (impl-core) | subagent-invoked'),
-    'T14d: the inline close does NOT falsely certify a delegation that never happened');
+  assert(!inline.plan.includes('## Required Agent Compliance'),
+    'T14d (#833): the close writes NO compliance section — the record is the provenance entry');
+  assert(/"main_session_direct":true/.test(inline.provenance),
+    'T14d: --main-session-direct is recorded durably on the close provenance entry, got ' + inline.provenance);
+  assert(inline.derived && inline.derived.status === 'main-session-direct',
+    'T14d: a non-finalize node the orchestrator ran inline DERIVES main-session-direct, got '
+      + JSON.stringify(inline.derived));
 
   const dispatched = closeOnce(false);
   assert(dispatched.result.result === 'ok', 'T14d: the dispatched close still closes ok');
-  assert(dispatched.plan.includes('| tdd-guide (impl-core) | subagent-invoked |'),
-    'T14d (mutation proof): without the flag the SAME node still records subagent-invoked');
+  assert(!/main_session_direct/.test(dispatched.provenance),
+    'T14d (mutation proof): without the flag the provenance entry carries no override, got '
+      + dispatched.provenance);
+  assert(dispatched.derived && dispatched.derived.status === 'subagent-invoked',
+    'T14d (mutation proof): without the flag the SAME node derives subagent-invoked, got '
+      + JSON.stringify(dispatched.derived));
 });
 
 // ---------------------------------------------------------------------------
@@ -6968,21 +6993,27 @@ scenario(() => {
       'T14e: the non-delegable ' + c.role + ' node closes ok, got ' + JSON.stringify(result));
     const plan = written['/fake/kaola-workflow/test-project/workflow-plan.md'];
     assert(plan !== undefined, 'T14e: ' + c.role + ' close writes the plan');
-    assert(plan.includes('| ' + c.role + ' (' + c.id + ') | main-session-direct |'),
-      'T14e: ' + c.role + ' is non-delegable — it records main-session-direct with NO flag passed');
-    assert(!plan.includes('| ' + c.role + ' (' + c.id + ') | subagent-invoked'),
-      'T14e: ' + c.role + ' never falsely certifies a delegation that cannot happen');
+    // #833: the role rule is now the DERIVATION's, not the writer's — same verdict, no stored row.
+    const derived14e = planValidator.deriveAgentCompliance(plan).rows.find(row => row.node_id === c.id);
+    assert(derived14e && derived14e.status === 'main-session-direct',
+      'T14e: ' + c.role + ' is non-delegable — it DERIVES main-session-direct with NO flag passed, got '
+        + JSON.stringify(derived14e));
+    assert(!plan.includes('## Required Agent Compliance'),
+      'T14e: ' + c.role + ' close writes no compliance section');
   }
 });
 
 // ---------------------------------------------------------------------------
-// T14f (#817 repair): pin the `--main-session-direct` ARGV SURFACE. T14d drives the
-// close functions in-process, so the literal flag string never crossed the CLI parse
-// — replacing `args.includes('--main-session-direct')` with `false` in either
+// T14f (#817 repair, re-homed by #833): pin the `--main-session-direct` ARGV SURFACE.
+// T14d drives the close functions in-process, so the literal flag string never crossed the
+// CLI parse — replacing `args.includes('--main-session-direct')` with `false` in either
 // subcommand branch broke the flag with the whole suite still green. This drives the
 // REAL subprocess for BOTH close subcommands, twice each on fresh fixtures (with and
-// without the flag), and asserts the RECORDED compliance differs. Bidirectional: a
+// without the flag), and asserts the DERIVED execution mode differs. Bidirectional: a
 // parse forced to false reds the with-flag half; one forced to true reds the other.
+// #833: the observable moved from a compliance ROW in the plan to the `main_session_direct`
+// field on the close entry of `.cache/provenance-log.jsonl` — read back through the same
+// derivation seam every consumer uses, so this still crosses the real process boundary.
 // ---------------------------------------------------------------------------
 scenario(() => {
   const { execFileSync: exec817 } = require('child_process');
@@ -6991,7 +7022,7 @@ scenario(() => {
 
   // Build a fresh frozen fixture, open `impl` through the real CLI, record its bound
   // evidence, then close it through the real CLI with `extraCloseArgs`. Returns the
-  // compliance status the close actually WROTE to the plan.
+  // execution mode the close's DURABLE records derive to.
   const closeViaCli = (closeSub, openSub, extraCloseArgs) => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-817-argv-'));
     try {
@@ -7044,8 +7075,14 @@ scenario(() => {
 
       const closed = run([closeSub, '--project', project, '--node-id', 'impl', '--json', ...extraCloseArgs]);
       const finalPlan = fs.readFileSync(planPath, 'utf8');
-      const row = finalPlan.match(/^\|\s*tdd-guide \(impl\)\s*\|\s*([a-z-]+)\s*\|/m);
-      return { closed, status: row ? row[1] : null };
+      assert(!finalPlan.includes('## Required Agent Compliance'),
+        'T14f (#833): the real `' + closeSub + '` CLI writes NO compliance section');
+      const provenancePath = path.join(projDir, '.cache', 'provenance-log.jsonl');
+      const provenance = fs.existsSync(provenancePath) ? fs.readFileSync(provenancePath, 'utf8') : '';
+      const derived = require('./kaola-workflow-plan-validator')
+        .deriveAgentCompliance(finalPlan, { readProvenance: () => provenance })
+        .rows.find(r => r.node_id === 'impl');
+      return { closed, status: derived ? derived.status : null, provenance };
     } finally { try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch (_) {} }
   };
 
@@ -7058,11 +7095,12 @@ scenario(() => {
     assert(without.closed.out.result === 'ok',
       'T14f: real `' + closeSub + '` closes ok, got ' + JSON.stringify(without.closed.out));
     assert(withFlag.status === 'main-session-direct',
-      'T14f: `' + closeSub + '` ARGV parse honours --main-session-direct, recorded ' + withFlag.status);
+      'T14f: `' + closeSub + '` ARGV parse honours --main-session-direct, derived ' + withFlag.status
+        + ' from provenance ' + withFlag.provenance);
     assert(without.status === 'subagent-invoked',
-      'T14f: `' + closeSub + '` without the flag still records subagent-invoked, recorded ' + without.status);
+      'T14f: `' + closeSub + '` without the flag still derives subagent-invoked, derived ' + without.status);
     assert(withFlag.status !== without.status,
-      'T14f (mutation proof): the flag CHANGES the recorded compliance across the `' + closeSub + '` CLI boundary');
+      'T14f (mutation proof): the flag CHANGES the recorded execution mode across the `' + closeSub + '` CLI boundary');
   }
 });
 
@@ -9877,7 +9915,11 @@ scenario(() => {
   const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev-a', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(r.result === 'ok' && r.closed === 'rev-a', 'R5: closed rev-a');
   assert(h.files[RS_PLAN_PATH].includes('| rev-a | complete | |'), 'R5: ledger row complete');
-  assert(/code-reviewer \(rev-a\) \| subagent-invoked/.test(h.files[RS_PLAN_PATH]), 'R5 (#714): compliance row appended with the canonical role (node-id) cell');
+  assert(!h.files[RS_PLAN_PATH].includes('## Required Agent Compliance'),
+    'R5 (#714/#833): the close appends NO compliance row');
+  assert(planValidator.deriveAgentCompliance(h.files[RS_PLAN_PATH]).rows
+    .some(row => row.requirement === 'code-reviewer (rev-a)' && row.status === 'subagent-invoked'),
+  'R5 (#714/#833): the closed node derives the canonical role (node-id) cell as subagent-invoked');
   const set = JSON.parse(h.files[RS_SET_PATH]);
   assert(set.nodes.length === 1 && set.nodes[0].id === 'rev-b', 'R5: rev-a removed from running set, rev-b remains');
   assert(Array.isArray(r.newlyReady) && r.newlyReady.some(n => n.id === 'rev-b'), 'R5: newlyReady surfaced');
@@ -10496,16 +10538,27 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
-// S-CR (#384/#391c): complianceRowExists — true only when the section already has a row for the cell.
+// S-CR (#833, was #384/#391c `complianceRowExists`): the duplicate-row guard is SUBTRACTED, not
+// replaced. `complianceRowExists` existed because `spliceComplianceSection` appends
+// unconditionally, so every idempotent re-close path had to ask "did I already write this row?"
+// first — and the answer had to cope with the legacy bare-role cell. Derivation removes the
+// question: the row set IS the node set, so duplication is unrepresentable no matter how many
+// times a close replays, and a stored row (bare-role or otherwise) contributes nothing.
 // ---------------------------------------------------------------------------
 scenario(() => {
   const base = makePlan(['| a | complete | |']);
-  assert(complianceRowExists(base, 'code-reviewer', 'a') === false, 'S-CR: absent compliance row → false');
-  const withRow = spliceComplianceRow(base, '| code-reviewer | subagent-invoked | ok | |');
-  assert(complianceRowExists(withRow, 'code-reviewer', 'a') === true, 'S-CR: present row (bare role) → true');
-  assert(complianceRowExists(withRow, 'implementer (a)', 'a') === false, 'S-CR: different cell → false');
-  const withNode = spliceComplianceRow(base, '| implementer (impl-x) | subagent-invoked | ok | |');
-  assert(complianceRowExists(withNode, 'implementer (impl-x)', 'impl-x') === true, 'S-CR: present row (role (id)) → true');
+  const derived = planValidator.deriveAgentCompliance(base);
+  assert(derived.rows.length === planValidator.parseNodes(base).length,
+    'S-CR: derived rows are exactly one per node, got ' + JSON.stringify(derived.rows.map(r => r.requirement)));
+  // Plant BOTH historical duplicate shapes the retired guard defended against (a bare `code-reviewer`
+  // cell and a second canonical cell for the same node) and prove the derivation is unmoved.
+  let polluted = spliceComplianceSection(base, '| code-reviewer | subagent-invoked | ok | |');
+  polluted = spliceComplianceSection(polluted, '| code-reviewer (a) | subagent-invoked | dup | |');
+  polluted = spliceComplianceSection(polluted, '| code-reviewer (a) | subagent-invoked | dup again | |');
+  const afterPollution = planValidator.deriveAgentCompliance(polluted);
+  assert(JSON.stringify(afterPollution.rows) === JSON.stringify(derived.rows),
+    'S-CR: duplicate/bare stored rows cannot perturb the derivation, got '
+      + JSON.stringify(afterPollution.rows.map(r => r.requirement + '=' + r.status)));
 });
 
 // ---------------------------------------------------------------------------
@@ -11023,8 +11076,10 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
-// S391c (#391c/#384): idempotent compliance append — re-closing the SAME node (alreadyAtTarget
-// path) does NOT append a DUPLICATE Required Agent Compliance row.
+// S391c (#391c/#384, subtracted by #833): the idempotent-append property. Re-closing the SAME
+// node (alreadyAtTarget path) used to risk a DUPLICATE compliance row; there is no append left
+// to be idempotent about, and the derived table still reports exactly one row per node however
+// many times the close replays.
 // ---------------------------------------------------------------------------
 scenario(() => {
   function closeOnce(planContent, files) {
@@ -11048,21 +11103,28 @@ scenario(() => {
   const r1 = closeOnce(plan, files);
   assert(r1.result === 'ok' && r1.closed === 'rev', 'S391c: first close ok');
   const after1 = files[RS_PLAN_PATH];
-  const count1 = (after1.match(/\|\s*code-reviewer \(rev\)\s*\|\s*subagent-invoked\s*\|/g) || []).length;
-  assert(count1 === 1, 'S391c: exactly ONE code-reviewer compliance row after first close, got ' + count1);
-  // Re-close (alreadyAtTarget: row already complete) → no second row.
+  const derivedCount = plan => planValidator.deriveAgentCompliance(plan).rows
+    .filter(row => row.requirement === 'code-reviewer (rev)' && row.status === 'subagent-invoked').length;
+  assert(!after1.includes('## Required Agent Compliance'),
+    'S391c (#833): the first close writes NO compliance row');
+  assert(derivedCount(after1) === 1,
+    'S391c: exactly ONE derived code-reviewer row after first close, got ' + derivedCount(after1));
+  // Re-close (alreadyAtTarget: row already complete) → still exactly one derived row.
   const r2 = closeOnce(after1, files);
   assert(r2.result === 'ok', 'S391c: re-close still ok (idempotent)');
-  const count2 = (files[RS_PLAN_PATH].match(/\|\s*code-reviewer \(rev\)\s*\|\s*subagent-invoked\s*\|/g) || []).length;
-  assert(count2 === 1, 'S391c: STILL exactly ONE compliance row after re-close (idempotent append), got ' + count2);
+  assert(!files[RS_PLAN_PATH].includes('## Required Agent Compliance'),
+    'S391c (#833): the re-close writes NO compliance row either');
+  assert(derivedCount(files[RS_PLAN_PATH]) === 1,
+    'S391c: STILL exactly ONE derived row after re-close, got ' + derivedCount(files[RS_PLAN_PATH]));
 });
 
 // ---------------------------------------------------------------------------
-// E3-699: schema-2 plans freeze the exact one-row-per-node compliance set up
-// front. Closing (and re-closing after a crash) must ADVANCE the existing
-// pending row to its verified evidence binding, never treat mere row presence
-// as completion and never append a duplicate. The finalize sink remains the
-// non-delegated main-session-direct row required by finalize compatibility.
+// E3-699 (inverted by #833): a LEGACY plan that still carries the schema-2 pre-seeded
+// compliance table must be TOLERATED BYTE-FOR-BYTE across a close, a crash re-close, and
+// the sink close — no verb advances a row, no verb appends one, and the stored `pending`
+// cells survive verbatim — while the DERIVED table reports the true state the run reached
+// (review + finalize invoked, the sink main-session-direct). This is the whole subtraction
+// in one scenario: the artifact that seven fixes fought to keep in step is now inert.
 // ---------------------------------------------------------------------------
 scenario(() => {
   const nodes = [
@@ -11116,41 +11178,60 @@ scenario(() => {
     });
   }
 
+  const storedBlock = content => {
+    const i = content.indexOf('## Required Agent Compliance');
+    return i < 0 ? null : content.slice(i);
+  };
+  const storedBefore = storedBlock(plan);
+
   const first = closePreseeded('review', true);
   assert(first.result === 'ok' && first.closed === 'review' && first.opened && first.opened.id === 'done',
     'E3-699 compliance: closing review advances the serial chain to finalize, got ' + JSON.stringify(first));
-  assert(files[planPath].includes('| code-reviewer (review) | subagent-invoked | evidence-binding: review reviewnonce123 | |'),
-    'E3-699 compliance: the pre-seeded review row advances to verified invoked/evidence binding');
-  assert(!files[planPath].includes('| code-reviewer (review) | pending | | |'),
-    'E3-699 compliance: the completed review row is no longer pending');
+  assert(storedBlock(files[planPath]) === storedBefore,
+    'E3-699/#833: the legacy stored table is BYTE-IDENTICAL after the close (no row advanced, none appended)');
+  assert(planValidator.deriveAgentCompliance(files[planPath], {
+    readEvidence: id => files['/p/.cache/' + id + '.md'],
+  }).rows.find(row => row.node_id === 'review').status === 'subagent-invoked',
+  'E3-699/#833: the DERIVED review row reports subagent-invoked while the stored cell still reads pending');
 
   const reclose = closePreseeded('review', false);
   assert(reclose.result === 'ok', 'E3-699 compliance: re-close is replay-safe, got ' + JSON.stringify(reclose));
-  assert((files[planPath].match(/\| code-reviewer \(review\) \|/g) || []).length === 1,
-    'E3-699 compliance: re-close retains exactly one review requirement row');
+  assert(storedBlock(files[planPath]) === storedBefore,
+    'E3-699/#833: the stored table is STILL byte-identical after a replayed close');
 
   const finalized = closePreseeded('done', false);
   assert(finalized.result === 'ok' && finalized.allDone === true,
     'E3-699 compliance: finalize closes after the pre-seeded row advances, got ' + JSON.stringify(finalized));
   const finalPlan = files[planPath];
-  const compliance = planValidator.validateRequiredAgentCompliance(finalPlan, planValidator.parseNodes(finalPlan));
-  assert(compliance.ok === true, 'E3-699 compliance: final exact row set is validator-compatible, got ' + JSON.stringify(compliance));
-  assert(compliance.ok && compliance.rows.length === 3
-    && JSON.stringify(compliance.rows.map(row => row.requirement))
+  assert(storedBlock(finalPlan) === storedBefore,
+    'E3-699/#833: the stored table survives the SINK close byte-identically too');
+  const derived = planValidator.deriveAgentCompliance(finalPlan, {
+    readEvidence: id => files['/p/.cache/' + id + '.md'],
+  });
+  assert(derived.rows.length === 3
+    && JSON.stringify(derived.rows.map(row => row.requirement))
       === JSON.stringify(['tdd-guide (impl)', 'code-reviewer (review)', 'finalize (done)']),
-  'E3-699 compliance: final table contains the exact complete node requirement set');
-  assert(finalPlan.includes('| finalize (done) | main-session-direct | evidence-binding: done finalnonce123 | |'),
-    'E3-699 compliance: finalize pending row advances to main-session-direct with its evidence binding');
-  assert(!/\| (?:code-reviewer \(review\)|finalize \(done\)) \| pending \|/.test(finalPlan),
-    'E3-699 compliance: no closed node retains a pending compliance row');
+  'E3-699/#833: the derived table is the exact node requirement set, got '
+    + JSON.stringify(derived.rows.map(row => row.requirement)));
+  assert(derived.rows.find(row => row.node_id === 'done').status === 'main-session-direct'
+    && derived.rows.find(row => row.node_id === 'done').evidence
+      === 'evidence-binding: done finalnonce123',
+  'E3-699/#833: the sink derives main-session-direct with its evidence binding, got '
+    + JSON.stringify(derived.rows.find(row => row.node_id === 'done')));
+  assert(!derived.rows.some(row => row.status === 'pending'),
+    'E3-699/#833: no closed node derives a pending row, got ' + JSON.stringify(derived.rows));
+  // The stored table STILL says pending for two of them — proof the derivation ignores it.
+  assert(/\| (?:code-reviewer \(review\)|finalize \(done\)) \| pending \|/.test(finalPlan),
+    'E3-699/#833 (non-vacuity): the stored table still reads `pending` for the closed nodes, so the '
+      + 'assertions above are about the DERIVATION and not about a table someone quietly updated');
 });
 
 // ---------------------------------------------------------------------------
-// E3-SINK-COMPLIANCE: the pre-seeded finalize/sink row auto-advances at its own
-// close-node. Freeze now seeds one PENDING row per node INCLUDING the sink, so a
-// run that closes the sink through the running-set scheduler must leave ZERO
-// pending rows — otherwise the follow-on epoch-authority check would see a
-// `complete` finalize ledger status against a `pending` compliance row and trip.
+// E3-SINK-COMPLIANCE (#833): the sink's own close through the running-set scheduler.
+// The `complete` ledger status vs `pending` compliance row divergence this scenario was
+// written to catch is unrepresentable now — the row IS the ledger status — so what is
+// pinned is that closing the sink writes no compliance bytes and derives
+// main-session-direct with its evidence binding.
 // ---------------------------------------------------------------------------
 scenario(() => {
   const plan = makePlan(['| seed | complete | |', '| rev | complete | |', '| finalize | in_progress | |'], [
@@ -11182,16 +11263,20 @@ scenario(() => {
   assert(r.result === 'ok' && r.closed === 'finalize',
     'E3-SINK-COMPLIANCE: close-node closes the sink, got ' + JSON.stringify(r));
   const closedPlan = h.files[RS_PLAN_PATH];
-  assert(/\| finalize \(finalize\) \| main-session-direct \| evidence-binding: finalize finalnonce12/.test(closedPlan),
-    'E3-SINK-COMPLIANCE: the pre-seeded finalize row auto-advances to main-session-direct at its close');
-  assert(!/\| pending \|/.test(closedPlan.slice(closedPlan.indexOf('## Required Agent Compliance'))),
-    'E3-SINK-COMPLIANCE: no compliance row is left pending once the sink closes');
-  const sinkCompliance = planValidator.validateRequiredAgentCompliance(closedPlan, planValidator.parseNodes(closedPlan));
-  assert(sinkCompliance.ok === true,
-    'E3-SINK-COMPLIANCE: the closed plan still satisfies the epoch-authority compliance check, got '
-      + JSON.stringify(sinkCompliance));
-  assert((closedPlan.match(/\| finalize \(finalize\) \|/g) || []).length === 1,
-    'E3-SINK-COMPLIANCE: the sink advance is in-place — never a duplicate appended row');
+  const sliceStored = c => c.slice(c.indexOf('## Required Agent Compliance'));
+  assert(sliceStored(closedPlan) === sliceStored(plan),
+    'E3-SINK-COMPLIANCE (#833): the legacy stored section is byte-identical after the sink close — '
+      + 'its `finalize (finalize) | pending` cell is never flipped');
+  const sinkRows = planValidator.deriveAgentCompliance(closedPlan, {
+    readEvidence: id => h.files['/p/.cache/' + id + '.md'],
+  }).rows;
+  const sinkRow = sinkRows.find(row => row.node_id === 'finalize');
+  assert(sinkRow && sinkRow.status === 'main-session-direct'
+    && sinkRow.evidence === 'evidence-binding: finalize finalnonce12',
+  'E3-SINK-COMPLIANCE: the sink derives main-session-direct with its evidence binding, got '
+    + JSON.stringify(sinkRow));
+  assert(sinkRows.filter(row => row.node_id === 'finalize').length === 1,
+    'E3-SINK-COMPLIANCE: exactly one derived row for the sink — duplication is unrepresentable');
 });
 
 // ---------------------------------------------------------------------------
@@ -23174,7 +23259,7 @@ scenario(() => {
       '| writer | tdd-guide | — | scripts/w684d.js | 1 | sequence |',
       '| done | finalize | writer | CHANGELOG.md | 1 | sequence |',
     ]);
-    body = spliceComplianceRow(body, '| code-reviewer | complete | historical | |');
+    body = spliceComplianceSection(body, '| code-reviewer | complete | historical | |');
     const hash = planValidator.computePlanHash(body);
     const planPath = path.join(projectDir, 'workflow-plan.md');
     const statePath = path.join(projectDir, 'workflow-state.md');
@@ -24501,12 +24586,12 @@ scenario(() => {
 });
 
 // ===========================================================================
-// #714 — the issue's round-trip over the LEGACY append path: run close-node
-// over a 3-node plan (writer, code-reviewer, finalize) through a full
-// open/close cycle, then feed the UNTOUCHED plan file straight into
-// validateRequiredAgentCompliance. Pin the issue's three defects explicitly:
-// (1) no blank line inside the table, (2) every row is `role (node-id)`,
-// (3) exactly one blank line before the following heading.
+// #714 (re-homed by #833) — the issue's round-trip. #714's three defects were all
+// PRODUCER defects of the incremental append path (a blank line migrating into the
+// table, a bare `code-reviewer` cell, a lost blank before the next heading), and that
+// path is deleted. The round-trip therefore pins two things instead: the close cycle
+// writes NO compliance bytes at all, and the ARCHIVE-TIME renderer — the only producer
+// left — emits all three properties by construction over the same finished plan.
 // ===========================================================================
 scenario(() => {
   const planPath714 = '/fake/kaola-workflow/p714/workflow-plan.md';
@@ -24557,44 +24642,48 @@ scenario(() => {
   assert(f714.result === 'ok', '#714: finalize closes on the legacy append path, got ' + JSON.stringify(f714));
   const final714 = files714[planPath714];
 
-  // Acceptance: the untouched close-node output passes validateRequiredAgentCompliance.
-  const validation714 = planValidator.validateRequiredAgentCompliance(final714, planValidator.parseNodes(final714));
-  assert(validation714.ok === true,
-    '#714: the untouched close-node output passes validateRequiredAgentCompliance byte-untouched '
-    + '(pre-fix: the bare code-reviewer row refuses), got ' + JSON.stringify(validation714));
+  // #833 acceptance: the whole open/close cycle wrote NO compliance bytes.
+  assert(!final714.includes('## Required Agent Compliance'),
+    '#714/#833: a full 3-node open/close cycle leaves NO ## Required Agent Compliance section, got:\n'
+    + final714.slice(final714.indexOf('## Node Ledger')));
 
-  // Defect 2: every appended row carries the canonical `role (node-id)` cell — never bare.
-  assert(final714.includes('| code-reviewer (rev) | subagent-invoked |'),
-    '#714: the appended review row is `code-reviewer (rev)`, never a bare `code-reviewer` cell');
-  assert(!/^\| code-reviewer \|/m.test(final714) && !/^\| security-reviewer \|/m.test(final714),
-    '#714: no bare review-role cell is emitted anywhere in the table');
+  // The renderer is the only producer left; hold it to #714's three properties.
+  const rendered714 = planValidator.renderAgentComplianceSection(final714, {
+    readEvidence: id => files714['/fake/kaola-workflow/p714/.cache/' + id + '.md'],
+  });
+  assert(planValidator.computePlanHash(rendered714) === planValidator.computePlanHash(final714),
+    '#714/#833: rendering the table is plan_hash-NEUTRAL');
+
+  // Defect 2: every rendered row carries the canonical `role (node-id)` cell — never bare.
+  assert(rendered714.includes('| code-reviewer (rev) | subagent-invoked |'),
+    '#714: the rendered review row is `code-reviewer (rev)`, never a bare `code-reviewer` cell');
+  assert(!/^\| code-reviewer \|/m.test(rendered714) && !/^\| security-reviewer \|/m.test(rendered714),
+    '#714: no bare review-role cell is rendered anywhere in the table');
 
   // Defect 1: table rows stay contiguous — no blank line inside the table.
-  const sec714 = locateSection(final714, 'Required Agent Compliance');
-  assert(sec714.start >= 0, '#714: the compliance section exists after the cycle');
-  const end714 = sec714.next >= 0 ? sec714.next : final714.length;
-  const bodyLines714 = final714.slice(sec714.start, end714).split('\n');
+  const sec714 = locateSection(rendered714, 'Required Agent Compliance');
+  assert(sec714.start >= 0, '#714: the rendered compliance section exists');
+  const end714 = sec714.next >= 0 ? sec714.next : rendered714.length;
+  const bodyLines714 = rendered714.slice(sec714.start, end714).split('\n');
   const firstRow714 = bodyLines714.findIndex(line => line.trim().startsWith('|'));
   const rowCount714 = bodyLines714.filter(line => line.trim().startsWith('|')).length;
   const tableSpan714 = bodyLines714.slice(firstRow714, firstRow714 + rowCount714);
   assert(rowCount714 === 5 && tableSpan714.every(line => line.trim() !== ''),
-    '#714: header + separator + 3 node rows are contiguous — no blank line inside the table '
-    + '(pre-fix: the section-trailing blank migrates between rows), got:\n' + tableSpan714.join('\n'));
+    '#714: header + separator + 3 node rows are contiguous — no blank line inside the table, got:\n'
+    + tableSpan714.join('\n'));
 
   // Defect 3: exactly one blank line separates the table from the following heading.
-  assert(/\| \|\n\n## Plan Notes/.test(final714) && !/\| \|\n## Plan Notes/.test(final714)
-    && !/\| \|\n\n\n## Plan Notes/.test(final714),
+  assert(/\| \|\n\n## Plan Notes/.test(rendered714) && !/\| \|\n## Plan Notes/.test(rendered714)
+    && !/\| \|\n\n\n## Plan Notes/.test(rendered714),
     '#714: exactly one blank line separates the table from the following heading, got:\n'
-    + final714.slice(final714.indexOf('## Required Agent Compliance')));
-
-  // #713's regression check folded in: resume-check purity is unaffected by compliance bytes
-  // (the section is outside plan_hash) — the round-trip pins only the table shape above.
+    + rendered714.slice(rendered714.indexOf('## Required Agent Compliance')));
 });
 
 // ===========================================================================
-// #714 — legacy bare-cell READ compatibility (regression control, must stay
-// green): an ALREADY-EMITTED bare `code-reviewer` pending row still advances
-// in place (never duplicated, never rewritten) on its close.
+// #714 (inverted by #833) — legacy bare-cell TOLERANCE. The bare `code-reviewer`
+// pending row used to be MATCHED and advanced in place; nothing advances it now. The
+// contract is stricter and simpler: it is left byte-identical, and the derivation —
+// which keys on the node, not the cell — reports the truth regardless.
 // ===========================================================================
 scenario(() => {
   const planPath714b = '/fake/kaola-workflow/p714b/workflow-plan.md';
@@ -24627,13 +24716,20 @@ scenario(() => {
   });
   assert(close714b.result === 'ok', '#714: legacy bare-row close stays ok, got ' + JSON.stringify(close714b));
   const complianceBlock714b = files714b[planPath714b].slice(files714b[planPath714b].indexOf('## Required Agent Compliance'));
-  const bareMatches = complianceBlock714b.match(/^\| code-reviewer \|/gm) || [];
-  assert(bareMatches.length === 1
-    && complianceBlock714b.includes('| code-reviewer | subagent-invoked |'),
-    '#714: an already-emitted legacy bare row still advances IN PLACE (read compatibility), '
-    + 'got:\n' + files714b[planPath714b].slice(files714b[planPath714b].indexOf('## Required Agent Compliance')));
-  assert(!files714b[planPath714b].includes('| code-reviewer (rev) |'),
-    '#714: the legacy bare row is matched, not duplicated under the canonical cell');
+  assert(complianceBlock714b.includes('| code-reviewer | pending | | |'),
+    '#714/#833: the legacy bare row is left BYTE-IDENTICAL (never advanced, never rewritten), got:\n'
+    + complianceBlock714b);
+  assert((complianceBlock714b.match(/^\| code-reviewer \|/gm) || []).length === 1
+    && !complianceBlock714b.includes('| code-reviewer (rev) |'),
+  '#714/#833: no row is appended alongside it either');
+  const derived714b = planValidator.deriveAgentCompliance(files714b[planPath714b], {
+    readEvidence: id => files714b['/fake/kaola-workflow/p714b/.cache/' + id + '.md'],
+  }).rows;
+  assert(derived714b.length === 1 && derived714b[0].requirement === 'code-reviewer (rev)'
+    && derived714b[0].status === 'subagent-invoked'
+    && derived714b[0].evidence === 'evidence-binding: rev revnonce714b',
+  '#714/#833: the derivation reports the closed node correctly while the stored bare row still '
+    + 'reads `pending`, got ' + JSON.stringify(derived714b));
 });
 
 // ===========================================================================
@@ -24644,9 +24740,9 @@ scenario(() => {
 // sealed-pass receipt), the writer repairs, and the folded-pass gateA must
 // REOPEN (no review_repair_delta_unavailable), re-certify the repaired tree,
 // and the sequence must drive to finalize with the claim intact (no release,
-// no replan). This block doubles as #714's schema-2 pre-seeded-cycle pin:
-// the cycle includes a gate re-close after repair, and the untouched plan
-// must pass validateRequiredAgentCompliance at the end.
+// no replan). This block doubles as #714/#833's schema-2 cycle pin: the cycle
+// includes a gate re-close after repair, and the plan must come out of it with
+// NO compliance bytes and a clean derived table.
 // ===========================================================================
 scenario(() => {
   const { spawnSync: spawn713 } = require('child_process');
@@ -24941,20 +25037,28 @@ scenario(() => {
       assert(!fs.existsSync(path.join(cacheDir713, 'replan-source.json')),
         '#713: no replan escape hatch was needed to unwedge the claim');
 
-      // #714's schema-2 pin on the same cycle (pre-seeded rows + a gate re-close after repair):
-      // the untouched plan validates; re-closes advanced rows in place — never duplicated.
-      const compliance713 = planValidator.validateRequiredAgentCompliance(finalPlan713,
-        planValidator.parseNodes(finalPlan713));
-      assert(compliance713.ok === true && compliance713.rows.length === 4,
-        '#713/#714: the untouched schema-2 plan passes validateRequiredAgentCompliance after the '
-        + 'full repair cycle, got ' + JSON.stringify(compliance713));
-      assert((finalPlan713.match(/\| tdd-guide \(writer\) \|/g) || []).length === 1
-        && (finalPlan713.match(/\| security-reviewer \(gateA\) \|/g) || []).length === 1
-        && (finalPlan713.match(/\| code-reviewer \(gateB\) \|/g) || []).length === 1
-        && (finalPlan713.match(/\| finalize \(finalize\) \|/g) || []).length === 1,
-        '#713/#714: every re-close advanced the pre-seeded row — no duplicate, no drift');
-      assert(!/\| (?:tdd-guide \(writer\)|security-reviewer \(gateA\)|code-reviewer \(gateB\)|finalize \(finalize\)) \| pending \|/.test(finalPlan713),
-        '#713/#714: no pending compliance row survives the completed cycle');
+      // #714/#833's schema-2 pin on the same cycle (an open/close/repair/re-close sequence over
+      // the REAL CLI): the plan carries no compliance bytes, and the derivation reports every
+      // node exactly once with nothing left pending.
+      // The fixture hand-authors a pre-seeded section (a legacy schema-2 plan shape). Nothing in
+      // the repair cycle may touch it: every row must still read `pending` byte-for-byte.
+      assert(/\| tdd-guide \(writer\) \| pending \| \| \|/.test(finalPlan713)
+        && /\| security-reviewer \(gateA\) \| pending \| \| \|/.test(finalPlan713)
+        && /\| code-reviewer \(gateB\) \| pending \| \| \|/.test(finalPlan713)
+        && /\| finalize \(finalize\) \| pending \| \| \|/.test(finalPlan713),
+      '#713/#714/#833: a full repair cycle over the real CLI leaves the legacy stored section '
+        + 'byte-identical, got:\n' + finalPlan713.slice(finalPlan713.indexOf('## Required Agent Compliance')));
+      const derived713 = planValidator.deriveAgentCompliance(finalPlan713, {
+        readEvidence: id => fs.readFileSync(path.join(cacheDir713, id + '.md'), 'utf8'),
+      }).rows;
+      assert(derived713.length === 4
+        && JSON.stringify(derived713.map(r => r.requirement)) === JSON.stringify(
+          ['tdd-guide (writer)', 'security-reviewer (gateA)', 'code-reviewer (gateB)', 'finalize (finalize)']),
+      '#713/#714/#833: the derived table is exactly one row per node, no duplicate, no drift, got '
+        + JSON.stringify(derived713.map(r => r.requirement)));
+      assert(!derived713.some(r => r.status === 'pending'),
+        '#713/#714/#833: no node derives pending after the completed cycle, got '
+        + JSON.stringify(derived713.map(r => r.requirement + '=' + r.status)));
     }
   } finally { fs.rmSync(tmp713, { recursive: true, force: true }); }
 });
@@ -26741,10 +26845,13 @@ scenario(() => {
     } finally { f.cleanup(); }
   }
 
-  // --- D2c (#759-gap): a pre-fix discharge left the milestone's pre-seeded compliance row pending —
-  //     the alreadyDischarged re-entry flips EXACTLY that row (no transition, no mirror: no ledger
-  //     row moved), and a second re-entry is byte-zero. A non-pending row stays untouched (D2b keeps
-  //     the no-table case byte-zero). ---
+  // --- D2c (#759-gap, SUBTRACTED by #833): a pre-fix discharge left the milestone's pre-seeded
+  //     compliance row `pending` forever, and the archive authority refused
+  //     `state_compliance_progress_invalid` over it — so expand-close carried a REPAIR VERB whose
+  //     only job was to flip that one cell. Both the refusal and the repair are gone: the derived
+  //     table reads the milestone's LEDGER row, which already says `complete`. The pin inverts to
+  //     the stronger property — the alreadyDischarged re-entry is byte-zero-mutation even with a
+  //     stale stored row present, and the derivation reports the milestone discharged anyway. ---
   {
     const DISCHARGED = ['| probe | complete |', '| m1 | complete |', '| wall | pending |', '| done | pending |'];
     const COMPLIANCE = ['## Required Agent Compliance', '',
@@ -26753,22 +26860,30 @@ scenario(() => {
       '| expansion-point (m1) | pending | | |', ''];
     const f = mk807(PLAN807(DISCHARGED, COMPLIANCE), []);
     try {
+      const before = fs.readFileSync(f.planPath, 'utf8');
       const r = runExpandClose({ ...f.opts, nodeId: 'm1' });
       assert(r.result === 'ok' && r.alreadyDischarged === true,
         '#759-gap-D2c: the re-entry still short-circuits ok, got ' + JSON.stringify(r));
       assert(JSON.stringify(r.taskTransitions) === '[]'
         && !Object.prototype.hasOwnProperty.call(r, 'taskMirror') && f.mirrorCalls.length === 0,
-      '#759-gap-D2c: the compliance repair moves no ledger row — no transition, no mirror refresh, got '
+      '#759-gap-D2c: no ledger row moved — no transition, no mirror refresh, got '
         + JSON.stringify({ transitions: r.taskTransitions, mirror: r.taskMirror, calls: f.mirrorCalls.length }));
-      const repaired = fs.readFileSync(f.planPath, 'utf8');
-      assert(!/\| expansion-point \(m1\) \| pending \|/.test(repaired)
-        && /\| expansion-point \(m1\) \| main-session-direct \|/.test(repaired),
-      '#759-gap-D2c: the pending row flipped to main-session-direct in place, got:\n'
-        + (repaired.split('\n').filter(l => l.includes('expansion-point (m1)')).join('\n') || '<row missing>'));
+      const after = fs.readFileSync(f.planPath, 'utf8');
+      assert(after === before,
+        '#759-gap-D2c/#833: the re-entry is byte-zero-mutation even with a STALE pending compliance '
+        + 'row present — the repair verb is gone, got:\n'
+        + (after.split('\n').filter(l => l.includes('expansion-point (m1)')).join('\n') || '<row missing>'));
+      assert(/\| expansion-point \(m1\) \| pending \|/.test(after),
+        '#759-gap-D2c/#833 (non-vacuity): the stale stored row is still `pending`, so the assertion '
+        + 'above is about tolerance and not about a row someone flipped');
+      const derivedM1 = planValidator.deriveAgentCompliance(after).rows.find(row => row.node_id === 'm1');
+      assert(derivedM1 && derivedM1.status === 'main-session-direct',
+        '#759-gap-D2c/#833: the discharged milestone DERIVES main-session-direct from its complete '
+        + 'ledger row regardless of the stale stored cell, got ' + JSON.stringify(derivedM1));
       const r2 = runExpandClose({ ...f.opts, nodeId: 'm1' });
       assert(r2.result === 'ok' && r2.alreadyDischarged === true
-        && fs.readFileSync(f.planPath, 'utf8') === repaired,
-      '#759-gap-D2c: the repair is idempotent — the second re-entry is byte-zero-mutation');
+        && fs.readFileSync(f.planPath, 'utf8') === before,
+      '#759-gap-D2c: a second re-entry is byte-zero-mutation too');
     } finally { f.cleanup(); }
   }
 });
@@ -28568,11 +28683,17 @@ scenario(() => {
       + 'if the run can finish, got ' + JSON.stringify(closed));
 
     const after = fs.readFileSync(planPath, 'utf8');
-    const complianceRow = after.split('\n').find(l => /\| code-explorer \(n1\) \|/.test(l)) || '';
-    assert(/role_substituted: code-explorer→investigator/.test(complianceRow),
-      '#819-T13: the compliance row must record WHAT ACTUALLY RAN, got ' + JSON.stringify(complianceRow));
-    assert(/manifest superset/.test(complianceRow),
-      '#819-T13: and the basis that made it legal, got ' + JSON.stringify(complianceRow));
+    // #833: the substitution used to be COPIED into the close-time compliance row. The row is gone;
+    // the record it copied FROM — `.cache/role-substitutions.json` — was always the durable one, so
+    // assert against that. Copying it into the plan was the duplication this issue subtracts.
+    const substitutions = JSON.parse(fs.readFileSync(path.join(cacheDir, 'role-substitutions.json'), 'utf8'));
+    const record = (substitutions.substitutions || []).find(row => row.node_id === 'n1');
+    assert(record && record.from_role === 'code-explorer' && record.to_role === 'investigator',
+      '#819-T13: the durable record must say WHAT ACTUALLY RAN, got ' + JSON.stringify(record));
+    assert(record && /manifest superset/.test(String(record.basis)),
+      '#819-T13: and the basis that made it legal, got ' + JSON.stringify(record && record.basis));
+    assert(!after.includes('## Required Agent Compliance'),
+      '#819-T13/#833: the close copies none of it into the plan');
     assert(/^\| n1 \| complete \|/m.test(after),
       '#819-T13: the ledger row must be complete');
   } finally {
@@ -28854,8 +28975,13 @@ scenario(() => {
       '#841-D: the node must close after the CARD-DISPATCHED substitute delivers — the recovery is '
       + 'only real if the run reaches the end of it, got ' + JSON.stringify(closed));
     const after = fs.readFileSync(planPath, 'utf8');
-    assert(/role_substituted: code-explorer→investigator/.test(after),
-      '#841-D: and the compliance row still records what actually ran');
+    const subs841 = JSON.parse(fs.readFileSync(path.join(cacheDir, 'role-substitutions.json'), 'utf8'));
+    const rec841 = (subs841.substitutions || []).find(row => row.node_id === 'n1');
+    assert(rec841 && rec841.from_role === 'code-explorer' && rec841.to_role === 'investigator',
+      '#841-D/#833: and the durable substitution record still says what actually ran, got '
+      + JSON.stringify(rec841));
+    assert(!after.includes('## Required Agent Compliance'),
+      '#841-D/#833: with nothing copied into the plan');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

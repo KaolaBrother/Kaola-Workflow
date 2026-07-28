@@ -1337,9 +1337,9 @@ Every one of them is produced by `spawnParameterFields()` — the derivation fac
 **CLI:** `node kaola-workflow-adaptive-node.js close-node|close-and-open-next --project P --node-id N --main-session-direct --json`
 
 Execution mode — dispatch a role agent versus run the unit inline — is the orchestrator's per-unit
-judgment, not a contract. The optional boolean `--main-session-direct` records that judgment: the
-node's `## Required Agent Compliance` row is written `main-session-direct` instead of the default
-`subagent-invoked`. The two **non-delegable** roles — the `finalize` sink and a `main-session-gate`
+judgment, not a contract. The optional boolean `--main-session-direct` records that judgment on the
+node's close entry in `.cache/provenance-log.jsonl` (`main_session_direct: true`), from which the
+derived compliance table reads `main-session-direct` instead of the default `subagent-invoked`. The two **non-delegable** roles — the `finalize` sink and a `main-session-gate`
 — are `main-session-direct` unconditionally, with or without the flag: the plan-validator refuses to
 let either carry a model precisely because neither is ever dispatched as a subagent, so recording
 `subagent-invoked` for them would be a false delegation claim.
@@ -1954,11 +1954,11 @@ where legal execution progress was mistaken for authoring tamper:
 - **Immutable authored surface** — the plan's `## Meta`/`## Nodes`/`## Node Briefs` bytes. Verified
   by exact hash equality (`readStoredHash` = `computePlanHash` = the state's `active_plan_hash`);
   divergence refuses `state_active_plan_invalid` or `state_active_plan_hash_mismatch`.
-- **Legal runtime surfaces** — `## Node Ledger` (exactly one row per authored node, legal status
+- **Legal runtime surfaces** — `## Node Ledger` (exactly one row per execution node, legal status
   vocabulary, dependency-consistent progress; refuses `state_ledger_authority_invalid` /
-  `state_ledger_progress_invalid`) and `## Required Agent Compliance` (exact authored requirement
-  rows with closed-node evidence binding; refuses `state_compliance_authority_invalid` /
-  `state_compliance_progress_invalid`). These surfaces legally progress after commitment and are
+  `state_ledger_progress_invalid`). `## Required Agent Compliance` is **not** among them: it is
+  derived from this same ledger at read time, so it cannot disagree with it, and its two authority
+  tiers are deleted rather than merely unreachable. This surface legally progresses after commitment and is
   validated by parse/consistency rules, never by raw-byte comparison against a staged copy. The
   `workflow-tasks.json` mirror is **not** among them: it is a pure projection of the same plan bytes
   this check already parses, with one writer and no consumer that reads its content for a decision,
@@ -4063,8 +4063,8 @@ left NOT done so a re-run retries it after the operator restores the run's `.cac
 every epoch-authority refusal into one shape whose signal is a reason string, not a file list:
 `{archive_incomplete: true, missing: [], snapshot_error: "<reason>"}`. Keying the loud-fail on
 `missing.length > 0` alone therefore swallowed real post-run incompleteness — e.g.
-`state_compliance_progress_invalid` (a `## Required Agent Compliance` row still `pending` while its
-ledger row is `complete`) — and reported `status:"sinked"` with the project never archived and the
+`state_ledger_progress_invalid` (a node reported `complete` above a dependency that is still
+`pending`) — and reported `status:"sinked"` with the project never archived and the
 roadmap never reconciled. The discriminator is now allowlist-narrowed: the sink refuses on ANY
 `archive_incomplete` that either loses evidence (`missing.length > 0`) OR carries a `snapshot_error`
 outside the benign allowlist. That allowlist holds exactly one reason — `state_missing`, the

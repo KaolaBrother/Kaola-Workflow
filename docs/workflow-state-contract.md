@@ -877,17 +877,28 @@ genuinely unavailable. The Finalization-phase mechanical bookkeeping is likewise
 main-session-direct: one `cmdFinalize` transaction the orchestrator runs, with no dispatched
 role and no separate attestation.
 
-**Freeze pre-seeds the compliance set (schema 2).** The producer completes this artifact at its
-authoring boundary: freezing a `plan_schema_version: 2` plan that carries no
-`## Required Agent Compliance` section appends it with exactly one `pending` row per node, in
-`## Nodes` order, including the `finalize` sink node. The lifecycle then advances each pre-seeded
-row in place at its node's close — presence of a row is never proof of completion. The pre-seed is
-inject-if-absent (a plan already carrying the section, such as a re-plan child or a mid-run
-re-freeze with advanced rows, is left byte-identical) and never applies to a legacy v1 plan. It is
-`plan_hash`-neutral: the compliance table sits outside the hashed `Meta`/`Nodes`/`Node Briefs`/`Design`/`Acceptance`
-surface, so governance-ack and resume-check are unaffected. This is what lets the shared
-epoch-authority check stay strict — it validates the section unconditionally for an epoch-planned
-claim, so any absence it sees is genuine corruption rather than a normal fresh-plan state.
+**Agent compliance is DERIVED, never stored.** `## Required Agent Compliance` used to be a
+hand-maintained mirror of the `## Node Ledger`: freeze pre-seeded one `pending` row per node, every
+lifecycle verb had to remember to flip its row, and three authorities refused whenever the mirror
+and the ledger disagreed. Nothing writes it during a run any more. The table is a pure function of
+(the frozen `## Nodes` plus recorded expansion units) x (the `## Node Ledger` status) x
+(`.cache/{node-id}.md` evidence and `.cache/provenance-log.jsonl`):
+
+| Cell | Derived from |
+|---|---|
+| Requirement (`role (node-id)`) | the frozen `## Nodes` table plus `## Expansion Records` units |
+| pending / invoked / `n/a` | the node's `## Node Ledger` status |
+| `subagent-invoked` vs `main-session-direct` | the role (`finalize`, `main-session-gate` and `expansion-point` are never dispatched) and the `main_session_direct` field on the node's close entry in `.cache/provenance-log.jsonl` |
+| Evidence | the first line of `.cache/{node-id}.md` (its `evidence-binding:` line) |
+
+Consequences: exactly one row per execution node is true by construction, so nothing can drift and
+there is nothing to police; the `state_compliance_authority_invalid` /
+`state_compliance_progress_invalid` / `required_agent_compliance_invalid` refusals are **deleted**;
+freeze emits the bytes it validated and nothing more. A legacy plan that still carries a stored
+section is **tolerated byte-for-byte** — no reader consults it for a verdict and no writer rewrites
+it. The archive step re-materializes the table from the derivation so an archived plan still reads
+as a human receipt; that render is `plan_hash`-neutral (the section sits outside the hashed
+`Meta`/`Nodes`/`Node Briefs`/`Design`/`Acceptance` surface) and idempotent.
 
 ## Epoch Lineage and Re-plan State (schema 2; #699 / D-699-01)
 
@@ -930,7 +941,7 @@ progress is never mistaken for authoring tamper:
 |---|---|---|---|
 | Epoch envelope | `epoch_schema_version`, `epoch_lineage_id`, and their identity/root-digest basis | Recomputed and compared; a fully absent envelope reads as pre-epoch legacy state | `state_epoch_schema_missing`, `state_epoch_schema_unsupported`, `state_epoch_lineage_missing`, `state_epoch_lineage_invalid`, `state_epoch_lineage_basis_invalid`, `state_epoch_lineage_mismatch` |
 | Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs`, `## Design` / `## Acceptance` (when present) | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
-| Legal runtime progress | `## Node Ledger`, `## Required Agent Compliance` | Parsed and consistency-checked, not byte-compared; closed-node evidence and dependency-consistent status required | `state_ledger_authority_invalid`, `state_ledger_progress_invalid`, `state_compliance_authority_invalid`, `state_compliance_progress_invalid` |
+| Legal runtime progress | `## Node Ledger` | Parsed and consistency-checked, not byte-compared; one row per execution node, legal status vocabulary, dependency-consistent progress | `state_ledger_authority_invalid`, `state_ledger_progress_invalid` |
 
 `workflow-tasks.json` is deliberately **not** an authority tier. It is a pure projection of the same
 plan bytes this check already parses, with one writer and no consumer that reads its content for a

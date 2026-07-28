@@ -1749,12 +1749,11 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
   // pins and which no execution-time growth may ever redefine. `planNodesWithExpansions` is the
   // EXECUTION view (the spine plus every recorded expansion unit) and is what the RUN-STATE tiers
   // must range over: `appendLedgerRows` gives every expansion unit a `## Node Ledger` row and never
-  // a `## Nodes` row, and `addCloseCompliance` appends its `## Required Agent Compliance` row at
-  // close, so on any plan that actually expanded, both tables are written against the execution
-  // view. Judging them by the freeze view made a row-count equality mismatch unconditionally and
-  // refused every expanded run — including the `closed` archive of a successful one. A plan with no
-  // expansion records returns the identical `parseNodes` array by reference, so nothing about a
-  // non-expanded plan changes.
+  // a `## Nodes` row, so on any plan that actually expanded the ledger is written against the
+  // execution view. Judging it by the freeze view made a row-count equality mismatch
+  // unconditionally and refused every expanded run — including the `closed` archive of a successful
+  // one. A plan with no expansion records returns the identical `parseNodes` array by reference, so
+  // nothing about a non-expanded plan changes.
   const nodes = validator.parseNodes(plan);
   if (!nodes.length) return schema.refuse('state_active_plan_invalid');
   if (state.first_node_id !== nodes[0].id || state.first_node_role !== nodes[0].role) {
@@ -1784,28 +1783,15 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
       }
     }
   }
-  const complianceAuthority = validator.validateRequiredAgentCompliance(plan, execNodes);
-  let complianceRows = null;
-  if (!complianceAuthority.ok) {
-    const complianceDetail = { detail: complianceAuthority.detail || complianceAuthority.reason };
-    if (!deferFailure('state_compliance_authority_invalid', complianceDetail)) {
-      return schema.refuse('state_compliance_authority_invalid', complianceDetail);
-    }
-  } else {
-    complianceRows = complianceAuthority.rows;
-  }
-  if (complianceRows && ledger) {
-    const expectedRequirements = new Map(execNodes.map(node => [node.role + ' (' + node.id + ')', node.id]));
-    for (const row of complianceRows) {
-      const id = expectedRequirements.get(row.requirement);
-      const status = String(row.status || '').toLowerCase();
-      if (ledger.get(id) === 'complete' && (status === 'pending'
-          || (!row.evidence && !row.skip_reason))) {
-        if (!deferFailure('state_compliance_progress_invalid')) return schema.refuse('state_compliance_progress_invalid');
-        break;
-      }
-    }
-  }
+  // #833: the two `state_compliance_*` authority tiers used to sit here. They compared a STORED
+  // `## Required Agent Compliance` table against the very ledger it mirrored — one tier for its
+  // shape (`state_compliance_authority_invalid`), one for the mirror lagging the ledger
+  // (`state_compliance_progress_invalid`) — and they are the reason archive, discard, release and
+  // replan-prepare all refused whenever some verb forgot to flip a row. Measured on this repo's
+  // own archive: 167 of 186 archived runs carrying a stored table FAIL the shape tier. Compliance
+  // is derived from this same ledger now (`validator.deriveAgentCompliance`), so the mirror cannot
+  // lag it and there is no second copy to police. Both codes are DELETED, not merely unreachable.
+  // The `state_ledger_*` tiers above remain: the ledger is the real authority they always were.
   // `workflow-tasks.json` is NOT an authority tier and is deliberately not compared here.
   // It is a pure projection of this very plan — `generateMirror` derives its source hash,
   // its row set, and every row's status from the same `readStoredHash`/`parseNodes`/
@@ -1856,11 +1842,12 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
       schema.refuse(deferred[0].reason, deferred[0].detail ? { detail: deferred[0].detail } : undefined),
       { deferrable_only: true, deferred_failures: deferred });
   }
+  // #833: the digest covered `{ ledger, compliance }`. Compliance is a pure projection of the
+  // ledger now, so hashing both would hash the same facts twice; the ledger alone carries every
+  // bit the compliance half ever contributed.
   return { ok: true, authority_kind: 'planned', plan_hash: activeHash,
     first_node_id: nodes[0].id, first_node_role: nodes[0].role,
-    mutable_progress_digest: schema.sha256Canonical({
-      ledger: ledgerRows, compliance: complianceRows,
-    }) };
+    mutable_progress_digest: schema.sha256Canonical({ ledger: ledgerRows }) };
 }
 
 function verifyActivePlanningEvidence(projectDir) {

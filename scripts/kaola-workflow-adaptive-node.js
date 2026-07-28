@@ -45,7 +45,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -2698,119 +2698,18 @@ function readLedgerStatuses(content) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// spliceComplianceRow — append a row to ## Required Agent Compliance section.
-// #354: delegates to the shared fence-aware spliceComplianceSection in adaptive-schema (the single
-// home for the section shape + find/append), collapsing the duplicate that lived here and in
-// parallel-batch.appendComplianceRow. Creates the section below ## Node Ledger if absent.
-// ---------------------------------------------------------------------------
-function spliceComplianceRow(content, row) {
-  return spliceComplianceSection(content, row);
-}
-
-// ---------------------------------------------------------------------------
-// complianceRowExists (#384/#391c) — true when the ## Required Agent Compliance section already
-// carries a row for this node's Requirement cell. spliceComplianceSection appends UNCONDITIONALLY,
-// so the idempotent re-close paths (close-and-open-next / close-node `alreadyAtTarget`, and the
-// reconcile close-direction re-run) would otherwise append a DUPLICATE row on every re-close.
-// Guard the append at the caller with this check. The Requirement cell uniquely identifies the row:
-// it is always `role (id)` on emission; a BARE role cell (code-reviewer / security-reviewer) only
-// exists in legacy rows emitted before the canonical-cell producer fix, which must still MATCH
-// here so they advance in place instead of duplicating.
-// Match the Requirement cell as the first table column (`| <cell> |`) within the compliance section
-// only — a same-text string elsewhere in the plan must not suppress the append.
-// ---------------------------------------------------------------------------
-function complianceRowExists(content, requirementCell, nodeId) {
-  const sec = locateSection(content, 'Required Agent Compliance');
-  if (sec.start < 0) return false;
-  const block = sec.next >= 0 ? content.slice(sec.start, sec.next) : content.slice(sec.start);
-  // Each compliance row is `| <requirementCell> | <status> | <evidence> | |`. Compare the trimmed
-  // first column against requirementCell exactly (cell text is plain, no regex metacharacters of
-  // concern here, but match column-structurally to avoid substring false-positives).
-  const rows = block.split('\n').filter(l => l.trim().startsWith('|'));
-  for (const row of rows) {
-    const cells = row.split('|').slice(1, -1).map(c => c.trim());
-    if (!cells.length || cells[0] !== requirementCell) continue;
-    // code-reviewer/security-reviewer deliberately use a bare Requirement cell. Their evidence
-    // binding identifies the concrete node, so two same-role fan-out members each retain one row
-    // while a retry of either member remains idempotent. A legacy row with no binding remains the
-    // sole role-level witness for backward compatibility.
-    if ((requirementCell === 'code-reviewer' || requirementCell === 'security-reviewer') && nodeId) {
-      if (cells.some(cell => cell.includes('evidence-binding: ' + nodeId + ' '))) return true;
-      if (!cells.some(cell => cell.includes('evidence-binding: '))) return true;
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker, mainSessionDirect, roleSubstitution) {
-  const canonicalRequirement = role + ' (' + nodeId + ')';
-  // Legacy bare cells (code-reviewer / security-reviewer, emitted before the canonical-cell
-  // producer fix) remain READ/match-compatible so an already-emitted row still advances in
-  // place — but the append path below NEVER emits a bare cell: the node id is known at close
-  // time, and validateRequiredAgentCompliance requires exactly `role (node-id)` per node.
-  const legacyRequirement = (role === 'code-reviewer' || role === 'security-reviewer') ? role : null;
-  let evidenceSummary = evidenceContent
-    ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
-  if (barrierMarker) evidenceSummary += '; barrier: ' + barrierMarker;
-  // A substituted node records WHAT ACTUALLY RAN and the basis that made it legal, so the divergence
-  // between the frozen `role` cell and the dispatched role is on the record by construction rather
-  // than by the orchestrator remembering to write a note.
-  if (roleSubstitution && roleSubstitution.to_role) {
-    evidenceSummary += '; role_substituted: ' + roleSubstitution.from_role + '→' +
-      roleSubstitution.to_role + ' (' + roleSubstitution.basis + ')';
-  }
-  // Execution mode is the orchestrator's per-unit judgment, so the row records what actually ran
-  // it: `main-session-direct` for the two NON-DELEGABLE roles — the `finalize` sink and a
-  // `main-session-gate` (the validator refuses a model on either; neither is ever dispatched as a
-  // subagent, so `subagent-invoked` would be a false delegation claim on a GATE) — and for ANY node
-  // the caller says it ran inline (`--main-session-direct`). A record, never a gate — the status is
-  // already in the validator's accepted vocabulary, nothing refuses on it, and the fail-closed
-  // anchors (the seeded evidence-binding nonce, `record-evidence --verify`, the exact-path write-set
-  // barrier) are author-agnostic and bind identically either way. Absent flag ⇒ `subagent-invoked`.
-  const complianceStatus =
-    (role === 'finalize' || role === 'main-session-gate' || mainSessionDirect === true)
-      ? 'main-session-direct' : 'subagent-invoked';
-
-  // Schema-2 plans pre-seed the exact one-row-per-node compliance set at
-  // freeze time.  Presence is therefore not proof of completion: advance the
-  // canonical pending row in place, preserve a resolved row byte-for-byte on
-  // replay, and append only for a legacy plan that has no row yet.
-  const sec = locateSection(planContent, 'Required Agent Compliance');
-  if (sec.start >= 0) {
-    const end = sec.next >= 0 ? sec.next : planContent.length;
-    const block = planContent.slice(sec.start, end);
-    const lines = block.split('\n');
-    const parsed = lines.map((line, index) => ({
-      index,
-      line,
-      cells: line.trim().startsWith('|')
-        ? line.split('|').slice(1, -1).map(cell => cell.trim()) : [],
-    }));
-    let matched = parsed.find(row => row.cells[0] === canonicalRequirement);
-    if (!matched && legacyRequirement) {
-      matched = parsed.find(row => {
-        if (row.cells[0] !== legacyRequirement) return false;
-        const binding = row.cells.find(cell => cell.includes('evidence-binding:')) || '';
-        return !binding || binding.includes('evidence-binding: ' + nodeId + ' ');
-      });
-    }
-    if (matched) {
-      if (String(matched.cells[1] || '').toLowerCase() !== 'pending') return planContent;
-      const requirementCell = matched.cells[0];
-      lines[matched.index] = '| ' + requirementCell + ' | ' + complianceStatus
-        + ' | ' + evidenceSummary + ' | |';
-      return planContent.slice(0, sec.start) + lines.join('\n') + planContent.slice(end);
-    }
-  }
-
-  // Append is ALWAYS the canonical `role (node-id)` cell — never the legacy bare role.
-  const requirementCell = canonicalRequirement;
-  return spliceComplianceRow(planContent,
-    '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
-}
+// #833 — the compliance WRITERS are gone.
+//
+// `spliceComplianceRow`, `complianceRowExists` and `addCloseCompliance` existed only to keep a
+// STORED `## Required Agent Compliance` table in step with the `## Node Ledger`: seed a pending
+// row, find it again by its canonical `role (node-id)` cell (or a legacy bare role cell), flip it
+// exactly once, never double-append on a replay. Every lifecycle verb that closed, expanded,
+// discharged or replayed a node carried that obligation, and seven separate fixes chased verbs
+// that forgot it. The table is DERIVED at read time now
+// (plan-validator `deriveAgentCompliance` over nodes x ledger x .cache), so the obligation, the
+// idempotence guard and the legacy-cell matcher have nothing left to protect.
+//
+// A legacy plan's stored section is left byte-for-byte untouched by every verb below.
 
 function appendCloseSidecarsOnce(opts, nodeId) {
   const planPath = opts.planPath;
@@ -2843,7 +2742,14 @@ function appendCloseSidecarsOnce(opts, nodeId) {
         && (event.nonce || null) === (nonce || null);
     });
   } catch (_) { /* absent log is repaired by the append below */ }
-  if (!provenancePresent) appendProvenanceLog(planPath, 'close', nodeId, nonce);
+  // #833: the DISPATCH RECORD for execution mode. `--main-session-direct` used to survive only as
+  // the Status cell of a `## Required Agent Compliance` row; with that mirror subtracted, the flag
+  // rides the per-node close entry this journal already writes. Emitted ONLY when the flag is set,
+  // so every un-flagged close stays byte-identical and the derivation falls back to the role rule.
+  if (!provenancePresent) {
+    appendProvenanceLog(planPath, 'close', nodeId, nonce,
+      opts.mainSessionDirect === true ? { main_session_direct: true } : undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -5719,6 +5625,15 @@ function readReviewJournal(opts, planContent) {
       const evidencePath = path.join(path.dirname(opts.planPath), '.cache', node.id + '.md');
       try { evidenceByNode.set(node.id, opts.readFile(evidencePath)); } catch (_) { evidenceByNode.set(node.id, ''); }
     }
+    // #833: this reads a LEGACY plan's stored `## Required Agent Compliance` table as a coarse
+    // "a review already closed here" witness. It is a READ of a tolerated artifact, not a write
+    // or a validation, so it survives the subtraction untouched — and it is only consulted on a
+    // contract_version-1 plan, i.e. one frozen before schema-2, whose rows were all written by
+    // the retired writer. It is NOT re-derived from the ledger: a ledger-only witness
+    // ("some verdict-role node is complete") is strictly BROADER than the row it replaced and
+    // false-refuses a legal close (a settled read-only verifier with no recorded verdict). The
+    // precise derived form of this guard already exists — the per-node evidence loop directly
+    // below, which requires a RECORDED VERDICT on the node, not merely a terminal ledger row.
     const complianceSection = locateSection(planContent, 'Required Agent Compliance');
     const complianceBlock = complianceSection.start < 0 ? ''
       : planContent.slice(complianceSection.start, complianceSection.next >= 0 ? complianceSection.next : undefined);
@@ -6477,8 +6392,6 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
       return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
     }
     if (closed.changed) plan = closed.content;
-    plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect,
-      activeRoleSubstitution(path.join(path.dirname(opts.planPath), '.cache'), opts.readFile, ctx.nodeInfo.id));
     opts.writeFile(opts.planPath, plan);
     appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
     removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
@@ -6568,9 +6481,7 @@ function prepareReviewClose(opts, ctx) {
         const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
         if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
         if (closed.changed) plan = closed.content;
-        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent, null, opts.mainSessionDirect,
-      activeRoleSubstitution(path.join(path.dirname(opts.planPath), '.cache'), opts.readFile, ctx.nodeInfo.id));
-        // Plan/compliance first, then replay-safe sidecars, then running-set removal. A crash after
+        // Plan first, then replay-safe sidecars, then running-set removal. A crash after
         // any prefix is completed by the unchanged retry without duplicating durable evidence.
         opts.writeFile(opts.planPath, plan);
         appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
@@ -7957,18 +7868,18 @@ function runCloseAndOpenNext(opts) {
   if (reviewPrepared && reviewPrepared.handled) return reviewPrepared.result;
   if (reviewPrepared) reviewBegun = reviewPrepared.begun;
 
-  // -- (c) Close: spliceLedgerNode + compliance row ----------------------
+  // -- (c) Close: spliceLedgerNode -----------------------------------------
   // Re-read plan (baseline call in open-next may have written it).
   let currentPlan = readFile(planPath);
 
   const newStatus = 'complete';
   // #348: close ONLY an in_progress node. Dropping 'n/a' from allowFrom means a skipped
   // (n/a) node is never silently flipped to complete. The splice can be a NO-OP in two ways
-  // and BOTH must refuse with zero mutation — no compliance row, no plan write — so we never
-  // append a `Required Agent Compliance` row (or run the fused advance) over a node that was
-  // not actually closed. The reachable trigger is a #305-class crash interleaving: open-batch
-  // records a baseline BEFORE the ledger flip, so the barrier can pass while the row is still
-  // pending. alreadyAtTarget (row already 'complete') still proceeds — idempotent resume.
+  // and BOTH must refuse with zero mutation — no plan write — so the fused advance never runs
+  // over a node that was not actually closed. The reachable trigger is a #305-class crash
+  // interleaving: open-batch records a baseline BEFORE the ledger flip, so the barrier can pass
+  // while the row is still pending. alreadyAtTarget (row already 'complete') still proceeds —
+  // idempotent resume.
   const closeResult = spliceLedgerNode(currentPlan, nodeId, newStatus, { allowFrom: ['in_progress'] });
 
   if (!closeResult.found) {
@@ -7981,13 +7892,10 @@ function runCloseAndOpenNext(opts) {
     currentPlan = closeResult.content;
   }
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect,
-    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
-
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
 
-  // Write the complete passing transition (gate + compliance + selector arms) before removing the
+  // Write the complete passing transition (gate + selector arms) before removing the
   // running member or settling the journal. A crash here remains fenced by the unsettled attempt.
   writeFile(planPath, currentPlan);
   if (selectorCheck.isSelector === true) reviewFailpoint(opts, 'selector_folded');
@@ -13559,8 +13467,6 @@ function runCloseNode(opts) {
   }
   if (closeResult.changed) currentPlan = closeResult.content;
 
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, null, opts.mainSessionDirect,
-    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
   writeFile(planPath, currentPlan);
@@ -13620,13 +13526,12 @@ function runCloseNode(opts) {
 // shape PRESENCE check already passed in runCloseNode (step a); this performs:
 //   1. PER-MEMBER in-lane vacuity guard (member's declared set must have changes OR evidence declares
 //      a no_op:) — restores the #283 anti-vacuity check in lane form.
-//   2a. NON-LAST member: DEFER the diff barrier (record `barrier: deferred_to_group`), close the
-//       ledger row, append a compliance row carrying the `deferred_to_group` marker, mark the member
+//   2a. NON-LAST member: DEFER the diff barrier, close the ledger row, mark the member
 //       closed:true in lane_group.members, return barrier:'deferred_to_group'.
 //   2b. LAST member: run the GROUP BARRIER ONCE over the union of all members (shell the validator's
 //       --group-barrier while lane_group.members STILL holds the full set, per the design ordering).
-//       Pass ⇒ close the row, compliance `barrier: group_passed`, CLEAR lane_group, drop the group
-//       baseline. Refuse ⇒ typed refusal, NO ledger advance, lane_group untouched.
+//       Pass ⇒ close the row, CLEAR lane_group, drop the group baseline. Refuse ⇒ typed refusal,
+//       NO ledger advance, lane_group untouched.
 // "Last member" = every OTHER member already carries closed:true in lane_group.members.
 // ---------------------------------------------------------------------------
 function closeGroupMember(ctx) {
@@ -13711,12 +13616,13 @@ function closeGroupMember(ctx) {
       return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
     }
     if (closeResult.changed) currentPlan = closeResult.content;
-    // Compliance row carrying the literal `deferred_to_group` marker in the Evidence cell (grep/audit).
-    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group', opts.mainSessionDirect,
-    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
+    // #833: the deferral used to be re-recorded as a `barrier: deferred_to_group` marker in a
+    // compliance row. The durable record is `running-set.json`'s lane_group (closed_members) plus
+    // the returned `barrier` field — the row was a second copy, not a second witness.
     writeFile(planPath, currentPlan);
     appendNodeTiming(planPath, nodeId, 'closed');
-    appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+    appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile),
+      opts.mainSessionDirect === true ? { main_session_direct: true } : undefined);
     transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
 
     // Record this member in lane_group.closed_members (KEEP lane_group + members string[]; ≥1 member
@@ -13818,8 +13724,7 @@ function closeGroupMember(ctx) {
     };
   }
 
-  // Group barrier passed: close this member, append compliance `group_passed`, clear lane_group,
-  // drop the group baseline.
+  // Group barrier passed: close this member, clear lane_group, drop the group baseline.
   let currentPlan = readFile(planPath);
   const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
   if (!closeResult.found) return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
@@ -13827,11 +13732,10 @@ function closeGroupMember(ctx) {
     return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
   }
   if (closeResult.changed) currentPlan = closeResult.content;
-  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed', opts.mainSessionDirect,
-    activeRoleSubstitution(path.join(path.dirname(planPath), '.cache'), readFile, nodeId));
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
-  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile),
+    opts.mainSessionDirect === true ? { main_session_direct: true } : undefined);
   transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
 
   // Clear lane_group entirely + remove the member from running_set.nodes.
@@ -14797,25 +14701,13 @@ function runExpandOpen(opts) {
   const withRecord = appendExpansionBlock(baseForRecord, block);
   const led = appendLedgerRows(withRecord, unitIds);
   if (!led.ok) return refuse(led.reason, { node_id: nodeId, detail: 'cannot append unit rows to ## Node Ledger' });
-  // #780: pre-seed a `pending` ## Required Agent Compliance row for every unit in the SAME atomic
-  // Phase-1 write as its ledger row, so the compliance table tracks the EXECUTION node view
-  // (planNodesWithExpansions — spine + units) from the moment a unit EXISTS, not only from its close.
-  // Without this, a live expansion frontier has one compliance row per SPINE node while the execution
-  // view has spine + units, so validateRequiredAgentCompliance's exact-one-row-per-node rule refuses
-  // `state_compliance_authority_invalid` for the whole live window. addCloseCompliance then FLIPS the
-  // pending row in place (its canonical `role (id)` match) instead of inserting a second one.
-  // Guarded by section presence (a plan under no compliance authority stays byte-identical) and
-  // complianceRowExists (idempotent — a roll-forward re-entry never doubles a row). This rides the ONE
-  // existing crash-atomic writeFile below; it introduces no second window.
+  // #833: #780 used to pre-seed a `pending` compliance row per unit here, in this same atomic
+  // Phase-1 write, purely so the stored table would keep matching the EXECUTION node view
+  // (spine + units) for the whole live expansion window — otherwise the one-row-per-node
+  // authority refused the entire window. Compliance is derived from (nodes x ledger x .cache)
+  // now, and `appendLedgerRows` above already gives every unit its ledger row, so the derived
+  // table tracks the execution view with no second write and no window to keep closed.
   let seeded = led.content;
-  if (locateSection(seeded, 'Required Agent Compliance').start >= 0) {
-    composed.units.forEach((u, i) => {
-      const requirementCell = u.role + ' (' + unitIds[i] + ')';
-      if (!complianceRowExists(seeded, requirementCell, unitIds[i])) {
-        seeded = spliceComplianceRow(seeded, '| ' + requirementCell + ' | pending | | |');
-      }
-    });
-  }
   // THE RE-EXPANSION WINDOW IS CLOSED BY THE WRITE THAT OPENS IT.
   //
   // A RE-open (`_allowDischarged` — only runReExpandOpen sets it) appends a SECOND record to a point
@@ -14989,30 +14881,14 @@ function runExpandClose(opts) {
   const parsed = validator.parseExpansionRecords(content);
   const recs = parsed.records.filter(r => r.point === nodeId);
   if (String(ledger[nodeId] || '').toLowerCase() === 'complete') {
-    // #759-gap: a discharge that landed before the discharge-time compliance flip existed leaves the
-    // milestone's row pending forever (the archive authority refuses state_compliance_progress_invalid).
-    // Repair EXACTLY that shape here, idempotently: flip only an EXISTING pending row — the branch
-    // otherwise stays byte-zero-mutation on the plan side, and the flip moves no ledger row, so it
-    // still reports no transition and refreshes no mirror. The projection below binds to the plan
-    // hash AFTER this repair, so a repaired plan and its projection stay hash-consistent.
-    const canonicalRow = validator.SPINE_EXPANSION_ROLE + ' (' + nodeId + ')';
-    const sec = locateSection(content, 'Required Agent Compliance');
-    const hasPendingRow = sec.start >= 0 && content
-      .slice(sec.start, sec.next >= 0 ? sec.next : content.length).split('\n').some(line => {
-        const cells = line.trim().startsWith('|') ? line.split('|').slice(1, -1).map(c => c.trim()) : [];
-        return cells[0] === canonicalRow && cells[1] === 'pending';
-      });
-    if (hasPendingRow) {
-      let repaired;
-      try {
-        const pointEvidence = readFile(path.join(path.dirname(planPath), '.cache', nodeId + '.md'));
-        repaired = addCloseCompliance(content, nodeId, validator.SPINE_EXPANSION_ROLE, pointEvidence, null, true);
-      } catch (_) {
-        repaired = addCloseCompliance(content, nodeId, validator.SPINE_EXPANSION_ROLE, null, null, true);
-      }
-      if (repaired !== content) { writeFile(planPath, repaired); content = repaired; }
-    }
-    // Apart from the #759-gap repair above, the plan side is a byte-zero no-op on this branch — but
+    // #833: the #759-gap compliance repair lived here — a discharge that landed before the
+    // discharge-time flip existed left the milestone's stored row `pending` forever and the archive
+    // authority refused `state_compliance_progress_invalid`. That is the seventh instance of the
+    // family this issue subtracts: the repair patch existed only because the mirror could disagree
+    // with the ledger. The derived table reads the milestone's ledger row directly, so a legacy
+    // pending row is simply ignored (and re-rendered at archive time) with no repair verb at all.
+    //
+    // The plan side is a byte-zero no-op on this branch now — but
     // the discharge PROJECTION is a second artifact, and this is the only discharge entry point, so
     // it owns the heal: a crash between the
     // committed discharge and the projection write (or a discharge that predates the projection) is
@@ -15049,20 +14925,10 @@ function runExpandClose(opts) {
   const stamp = (typeof now === 'function') ? now() : new Date().toISOString();
   const withDischarge = appendExpansionBlock(spliced.content,
     'discharge(' + nodeId + '):\n  at: ' + stamp + '\n  records: ' + recs.map(r => r.id).join(', ') + '\n');
-  // #759-gap: the milestone's `## Required Agent Compliance` row must flip at discharge exactly like
-  // a normal close flips its node's row — otherwise the archive authority reads a `complete` ledger
-  // row against a `pending` compliance row and refuses state_compliance_progress_invalid. The point
-  // is composed + discharged by the executor, so main-session-direct is the honest status (matches
-  // the archived shape of a serially-opened point closing through the normal path).
-  let dischargedContent = withDischarge;
-  try {
-    const pointEvidence = readFile(path.join(path.dirname(planPath), '.cache', nodeId + '.md'));
-    dischargedContent = addCloseCompliance(withDischarge, nodeId, validator.SPINE_EXPANSION_ROLE, pointEvidence, null, true);
-  } catch (_) { /* evidence file absent — addCloseCompliance still flips with a generic summary */ }
-  if (dischargedContent === withDischarge) {
-    dischargedContent = addCloseCompliance(withDischarge, nodeId, validator.SPINE_EXPANSION_ROLE, null, null, true);
-  }
-  writeFile(planPath, dischargedContent);
+  // #833: discharge used to carry a compliance-flip obligation here (#759-gap) so the stored mirror
+  // would not read `complete` in the ledger against `pending` in the table. The ledger flip above IS
+  // the record now; nothing mirrors it, so nothing can forget to.
+  writeFile(planPath, withDischarge);
 
   // Discharge is the commitment point that changes the node view, so discharge OWNS the translation:
   // the durable, digest-bound leaf -> owning-milestone owner projection for the discharged interior,
@@ -17467,8 +17333,6 @@ module.exports = {
   hasEvidenceBodyBelowHeader,
   readRoleSubstitutions,
   activeRoleSubstitution,
-  spliceComplianceRow,
-  complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
   // The single evidence-token reader behind both the shape gate's content-token branches and the

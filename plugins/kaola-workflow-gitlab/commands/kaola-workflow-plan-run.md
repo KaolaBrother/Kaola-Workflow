@@ -311,8 +311,8 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" substitute-role \
 
 Same-kind and manifest-superset are checkable facts, so this decides mechanically — no consent stop.
 The frozen plan, its `## Node Ledger`, and `plan_hash` stay BYTE-IDENTICAL: substitution is dispatch
-metadata, recorded durably in `.cache/role-substitutions.json` and folded into the close-time
-compliance row. The re-issued card carries `agent_type` (dispatch this), `agent_type_frozen` (what
+metadata, recorded durably in `.cache/role-substitutions.json` — that record IS the receipt; nothing
+copies it into the plan. The re-issued card carries `agent_type` (dispatch this), `agent_type_frozen` (what
 the plan says), `role_substituted: true`, and a task identity derived from the DISPATCH TARGET — so a
 substituted node presents a FRESH identity, not the one already consumed. Spawn it anew from the
 re-issued card; never resume the consumed identity with a follow-up, and never reuse the
@@ -628,7 +628,7 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" close-and-open-next
 
 Enforces (in order): evidence-shape check → barrier (`plan_hash` re-verified, diff against
 baseline, `post-dominate` gate check, `escalated_to_full: consent` / `typed refusal` on lane
-overflow) → close + compliance row → selector routing → fused advance. Returns
+overflow) → close (ledger) → selector routing → fused advance. Returns
 `{closed:{...}, opened:{...}|null, allDone}` or `result: refuse`.
 
 After every close, print the required progress line:

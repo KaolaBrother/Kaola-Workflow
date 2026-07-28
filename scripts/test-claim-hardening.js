@@ -4766,12 +4766,19 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 
   const abandonWindows = [
+    // #833 retired the compliance-table tiers entirely (the table is derived from the ledger, so
+    // it cannot lag it). These two windows are the ORIGINAL motivating shapes for the #735
+    // downgrade — a runtime that never pre-seeded the section, and a mid-run legacy
+    // row-per-closed-node partial set — and they now abandon cleanly with NO downgrade at all,
+    // which is strictly better than downgrading them. Kept rather than deleted because they still
+    // pin the user-facing property: these projects discard and fully clean up. `null` means
+    // "no downgrade expected".
     ['frozen-never-run, plan frozen with NO ## Required Agent Compliance section',
       { impl: 'pending', review: 'pending', finalize: 'pending' }, { complianceFor: null },
-      'state_compliance_authority_invalid'],
+      null],
     ['mid-run, compliance rows only for the CLOSED node (legacy row-by-row append)',
       { impl: 'complete', review: 'pending', finalize: 'pending' }, { complianceFor: ['impl'] },
-      'state_compliance_authority_invalid'],
+      null],
     // #733 retired the task-mirror comparison from the authority ladder entirely (the mirror
     // is a pure projection of the ledger, so comparing it could only ever report staleness).
     // A missing mirror therefore no longer refuses AT ALL, and this window needs NO downgrade
@@ -4809,22 +4816,32 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 
-  // CONTROL 1 — the relaxation is ABANDON-only. The same never-produced compliance
-  // artifact must still fail the `closed` archive closed: a closed archive is the
-  // input to archiveEpochLineagePreserved, whose `preserved` token asserts the
-  // lineage really was intact. Nothing about a user-consented abandon claims that.
+  // CONTROL 1 (#833) — the CLOSED archive path over the same never-produced compliance artifact.
+  // It used to fail closed on `state_compliance_authority_invalid`; with that tier retired the
+  // absent section is simply not an authority signal, so the closed archive SUCCEEDS — and it
+  // RENDERS the derived receipt table into the archived plan, hash-neutrally. The fail-closed
+  // posture that matters is unchanged and is proven by CONTROL 2 below (a post-freeze tamper).
   {
-    const fx = fixture735({ impl: 'pending', review: 'pending', finalize: 'pending' },
+    const fx = fixture735({ impl: 'complete', review: 'pending', finalize: 'pending' },
       { complianceFor: null });
     try {
       const claim735 = require('./kaola-workflow-claim.js');
+      const beforePlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+      assert(!beforePlan.includes('## Required Agent Compliance'),
+        '#735/#833 control: the fixture really has NO stored compliance section');
       const closed = claim735.archiveProjectDir(fx.root, fx.project, 'closed', undefined, {});
-      assert(closed && closed.archived === false
-        && closed.snapshot_error === 'state_compliance_authority_invalid',
-        '#735 control: a CLOSED archive still fails closed on the same missing compliance section, got '
+      assert(closed && closed.archived === true && !closed.snapshot_error,
+        '#735/#833 control: a CLOSED archive no longer refuses over an absent compliance section, got '
           + JSON.stringify(closed));
-      assert(fs.existsSync(fx.projectDir),
-        '#735 control: the refused CLOSED archive left the live folder untouched');
+      const archivedPlan = fs.readFileSync(path.join(closed.dest, 'workflow-plan.md'), 'utf8');
+      assert(archivedPlan.includes('## Required Agent Compliance')
+        && /\| tdd-guide \(impl\) \| subagent-invoked \| evidence-binding: impl abc \|/.test(archivedPlan),
+      '#833: the archive RENDERS the derived receipt table from (nodes x ledger x .cache), got:\n'
+        + archivedPlan.slice(archivedPlan.indexOf('## Required Agent Compliance')));
+      assert(/\| finalize \(finalize\) \| pending \|/.test(archivedPlan),
+        '#833: an unreached node renders `pending` in the archived receipt');
+      assert(validator735.computePlanHash(archivedPlan) === validator735.readStoredHash(archivedPlan),
+        '#833: the archive-time render is plan_hash-NEUTRAL — the archived plan still verifies');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 
@@ -5044,17 +5061,22 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   // failure in front of them, and must refuse identically.
   const maskingProbes = [
     ['S1 snapshot staging residue, alone', {}, stagingResidue755, 'snapshot_staging_incomplete'],
-    ['S2 snapshot staging residue MASKED by a missing compliance section',
-      { complianceFor: null }, stagingResidue755, 'snapshot_staging_incomplete'],
-    ['S3 corrupt replan transaction, alone', {}, corruptTransaction755, 'replan_transaction_invalid'],
-    ['S4 corrupt replan transaction MASKED by a missing compliance section',
-      { complianceFor: null }, corruptTransaction755, 'replan_transaction_invalid'],
-    ['S5 .cache/epochs symlinked out of the project MASKED by a missing compliance section',
-      { complianceFor: null }, symlinkEpochs755, 'snapshot_epochs_unreadable'],
-    // The compliance tier is not the only deferrable one: an unreadable ## Node Ledger is
-    // downgradable too, and it is checked EARLIER still, so it masks even more of the ladder.
-    ['S6 snapshot staging residue MASKED by an unreadable ## Node Ledger',
+    // #833: the masking probes used a MISSING COMPLIANCE SECTION as the downgradable mask. That
+    // tier is retired — an absent section is no longer a fault of any kind — so the mask moves to
+    // the unreadable `## Node Ledger`, which is still downgradable and is checked EARLIER still,
+    // masking even more of the ladder. The property under test is unchanged: a NON-downgradable
+    // fault behind a downgradable one must refuse identically.
+    ['S2 snapshot staging residue MASKED by an unreadable ## Node Ledger',
       { ledger: BOGUS_LEDGER755 }, stagingResidue755, 'snapshot_staging_incomplete'],
+    ['S3 corrupt replan transaction, alone', {}, corruptTransaction755, 'replan_transaction_invalid'],
+    ['S4 corrupt replan transaction MASKED by an unreadable ## Node Ledger',
+      { ledger: BOGUS_LEDGER755 }, corruptTransaction755, 'replan_transaction_invalid'],
+    ['S5 .cache/epochs symlinked out of the project MASKED by an unreadable ## Node Ledger',
+      { ledger: BOGUS_LEDGER755 }, symlinkEpochs755, 'snapshot_epochs_unreadable'],
+    // And a missing compliance section, which used to be the mask, must now mask NOTHING: the
+    // same non-downgradable fault surfaces with no downgradable tier in front of it at all.
+    ['S6 snapshot staging residue with a missing compliance section (no longer a fault)',
+      { complianceFor: null }, stagingResidue755, 'snapshot_staging_incomplete'],
   ];
   for (const [label, opts, mutate, expected] of maskingProbes) {
     const fx = fixture755('issue-755', opts.ledger || PENDING755, opts);
@@ -5077,22 +5099,20 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   // not re-break this. The emitted `warnings[]` entry is asserted directly: reading
   // `authority_downgraded` off the result spread alone left the non-silence property
   // unpinned (the warning push could be deleted with every assertion still green).
+  // #833: the ONLY-downgradable window this control was written around (a missing compliance
+  // section) is no longer downgradable because it is no longer a FAULT — so the abandon succeeds
+  // with no downgrade recorded and no warning emitted at all. Strictly better than downgrading.
   {
     const fx = fixture755('issue-755', PENDING755, { complianceFor: null });
     try {
       const r = runRelease755(fx);
-      assert(r.status === 0 && r.json && r.json.released === true
-        && r.json.authority_downgraded === 'state_compliance_authority_invalid',
-        '#755 control: an ONLY-downgradable abandon must still succeed with the reason recorded, got '
+      assert(r.status === 0 && r.json && r.json.released === true && !r.json.authority_downgraded,
+        '#755/#833 control: a missing compliance section abandons with NO downgrade at all, got '
           + r.raw.trim());
-      assert(Array.isArray(r.json.warnings) && r.json.warnings.some(w =>
-        String(w).startsWith('run-state authority downgraded: state_compliance_authority_invalid')),
-        '#755 control: the downgrade must be surfaced in the EMITTED warnings[], got '
-          + JSON.stringify(r.json.warnings));
       assert(!fs.existsSync(fx.projectDir) && r.json.dest && fs.existsSync(r.json.dest),
-        '#755 control: the only-downgradable abandon archives the live folder');
+        '#755 control: the abandon archives the live folder');
       assert(!fs.existsSync(fx.worktreePath) && git755(fx.root, ['branch', '--list', fx.branch]) === '',
-        '#755 control: the only-downgradable abandon still removes the worktree and branch');
+        '#755 control: the abandon still removes the worktree and branch');
       assert(r.json.claim_label_removed === 'skipped_offline',
         '#755 control: claim-label cleanup was attempted, got ' + JSON.stringify(r.json.claim_label_removed));
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
@@ -5109,6 +5129,13 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         && r.json.authority_downgraded === 'state_ledger_authority_invalid',
         '#755 control: an ONLY-downgradable LEDGER fault must still abandon with the reason recorded, got '
           + r.raw.trim());
+      // The non-silence property (#833 re-homed it here, from the retired compliance tier): the
+      // downgrade must reach the EMITTED warnings[], not only the result spread — otherwise the
+      // warning push could be deleted with every assertion still green.
+      assert(Array.isArray(r.json.warnings) && r.json.warnings.some(w =>
+        String(w).startsWith('run-state authority downgraded: state_ledger_authority_invalid')),
+      '#755 control: the downgrade must be surfaced in the EMITTED warnings[], got '
+        + JSON.stringify(r.json.warnings));
       assert(!fs.existsSync(fx.projectDir) && !fs.existsSync(fx.worktreePath)
         && git755(fx.root, ['branch', '--list', fx.branch]) === '',
         '#755 control: the ledger-tier abandon archives the folder and cleans up worktree + branch');
@@ -5131,16 +5158,30 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         '#755 sweep: the refused sweep must leave the live folder in place');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
+  // #833: the sweep's downgradable window moves from the retired compliance tier to the ledger
+  // tier — the property (an AUTOMATIC cleanup must not be silent about a downgrade) is unchanged.
   {
-    const fx = fixture755('issue-755', PENDING755, { complianceFor: null, sinkPr: true });
+    const fx = fixture755('issue-755', BOGUS_LEDGER755, { sinkPr: true });
     try {
       const r = runWatchPrClosed755(fx);
       const entry = ((r.json && r.json.cleanups) || [])[0] || {};
       assert(!fs.existsSync(fx.projectDir) && entry.folder === fx.project,
         '#755 sweep control: an ONLY-downgradable sweep still archives the folder, got ' + r.raw.trim());
-      assert(entry.authority_downgraded === 'state_compliance_authority_invalid',
+      assert(entry.authority_downgraded === 'state_ledger_authority_invalid',
         '#755 sweep: the automatic cleanup must not be silent about the downgrade, got '
           + JSON.stringify(entry));
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+  // …and a missing compliance section sweeps clean with NO downgrade recorded at all (#833).
+  {
+    const fx = fixture755('issue-755', PENDING755, { complianceFor: null, sinkPr: true });
+    try {
+      const r = runWatchPrClosed755(fx);
+      const entry = ((r.json && r.json.cleanups) || [])[0] || {};
+      assert(!fs.existsSync(fx.projectDir) && entry.folder === fx.project
+        && !entry.authority_downgraded,
+      '#755/#833 sweep: a missing compliance section is not a fault, so the sweep archives with no '
+        + 'downgrade note, got ' + JSON.stringify(entry));
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 }

@@ -958,19 +958,21 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
-// A schema-2 plan freezes and resumes only when Required Agent Compliance is
-// the exact one-row-per-node requirement set, including the finalize sink.
-// Runtime status/evidence advancement remains mutable and is intentionally not
-// rewritten by this validation wall.
+// #833 (was: the schema-2 compliance wall). A schema-2 plan used to freeze and resume only when a
+// STORED `## Required Agent Compliance` table was the exact one-row-per-node requirement set. That
+// wall is gone with the stored table: freeze and resume are INDIFFERENT to the section's contents,
+// and the same three malformations that used to refuse `required_agent_compliance_invalid` are now
+// tolerated byte-for-byte while the derivation reports the truth from the ledger.
 scenario(() => {
   const livePlanPath = path.resolve(__dirname, '..', 'kaola-workflow', 'issue-699', 'workflow-plan.md');
   if (fs.existsSync(livePlanPath)) {
     const exact = fs.readFileSync(livePlanPath, 'utf8');
-    ok(exact.includes('| finalize (e11-finalize) | pending | | |')
-      && validator.validatePlan(exact, { root: path.resolve(__dirname, '..') }).result === 'in-grammar',
-    'schema-2 freeze accepts the exact complete compliance requirement set including finalize');
+    ok(exact.includes('| finalize (e11-finalize) | pending | | |'),
+      'fixture: the legacy live plan really does carry a stored compliance table');
+    ok(validator.validatePlan(exact, { root: path.resolve(__dirname, '..') }).result === 'in-grammar',
+      'schema-2 freeze accepts the legacy plan');
     ok(validator.revalidateForResume(exact, { root: path.resolve(__dirname, '..') }).ok,
-      'schema-2 resume accepts the exact complete compliance requirement set');
+      'schema-2 resume accepts the legacy plan');
     const variants = [
       ['missing finalize requirement', exact.replace(/^\| finalize \(e11-finalize\).*\n/m, '')],
       ['duplicate requirement', exact.replace(
@@ -980,10 +982,15 @@ scenario(() => {
         '| Agent | Status | Evidence | Skip Reason |')],
     ];
     for (const [name, malformed] of variants) {
-      equal(validator.validatePlan(malformed, { root: path.resolve(__dirname, '..') }).reason,
-        'required_agent_compliance_invalid', 'schema-2 freeze refuses ' + name);
-      equal(validator.revalidateForResume(malformed, { root: path.resolve(__dirname, '..') }).reasonCode,
-        'required_agent_compliance_invalid', 'schema-2 resume refuses ' + name);
+      ok(malformed !== exact, '#833 non-vacuity: the "' + name + '" mutation really changes the plan');
+      equal(validator.validatePlan(malformed, { root: path.resolve(__dirname, '..') }).result, 'in-grammar',
+        '#833: schema-2 freeze TOLERATES ' + name + ' (required_agent_compliance_invalid retired)');
+      ok(validator.revalidateForResume(malformed, { root: path.resolve(__dirname, '..') }).ok,
+        '#833: schema-2 resume TOLERATES ' + name);
+      // And the derived table is unmoved by any of them.
+      deepEqual(validator.deriveAgentCompliance(malformed).rows.map(r => r.requirement),
+        validator.deriveAgentCompliance(exact).rows.map(r => r.requirement),
+        '#833: the derivation is unaffected by ' + name);
     }
   }
 });
@@ -5751,13 +5758,30 @@ scenario(() => {
       ['a ledger status outside the closed vocabulary',
         text => text.replace('| ' + fx.unitIds[1] + ' | complete |', '| ' + fx.unitIds[1] + ' | done |'),
         'state_ledger_authority_invalid'],
-      ['a missing compliance row for a closed expansion unit',
-        text => text.replace(new RegExp('^\\| code-explorer \\(' + fx.unitIds[0] + '\\) \\|.*\\n', 'm'), ''),
-        'state_compliance_authority_invalid'],
-      ['a compliance row still pending under a complete unit ledger row',
-        text => text.replace(new RegExp('^\\| code-explorer \\(' + fx.unitIds[0] + '\\) \\|.*$', 'm'),
-          '| code-explorer (' + fx.unitIds[0] + ') | pending | | |'),
-        'state_compliance_progress_invalid'],
+    ];
+    // #833: the two `state_compliance_*` mutations that used to live in this list are RETIRED with
+    // their codes. Re-assert them as TOLERANCE — the bidirectional (green-arc) half R2 asks for
+    // when a refusal is removed. The run itself writes no compliance table any more, so a LEGACY
+    // stored table is planted first (exactly the shape the retired writer produced) and then broken
+    // in the two ways that used to refuse.
+    // The fixture hand-authors a SPINE-only stored table (the legacy shape), and the settled run
+    // above expanded and closed two units without touching it — so it is already the "stale mirror"
+    // every one of these mutations builds on.
+    const complianceMutations = [
+      ['a stale SPINE-only stored table over an EXPANDED execution view (the #780 shape)',
+        text => text],
+      ['a missing compliance row for a real spine node',
+        text => text.replace(/^\| code-reviewer \(wall\) \|.*\n/m, '')],
+      ['a compliance row still pending under a complete ledger row',
+        text => text.replace('| code-explorer (probe) | invoked | .cache/probe.md | |',
+          '| code-explorer (probe) | pending | | |')],
+      ['a malformed compliance header',
+        text => text.replace('| Requirement | Status | Evidence | Skip Reason |', '| Agent | Status |')],
+      ['a compliance status outside the retired vocabulary',
+        text => text.replace('| code-explorer (probe) | invoked', '| code-explorer (probe) | banana')],
+      ['a compliance row for a node in neither view',
+        text => text.replace('| finalize (done) | pending | | |',
+          '| ghost-role (ghost-unit) | pending | | |\n| finalize (done) | pending | | |')],
     ];
     for (const [name, mutate, reason] of mutations) {
       const mutated = mutate(settledPlan);
@@ -5766,6 +5790,24 @@ scenario(() => {
       equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, reason,
         '#779 non-vacuity: ' + name + ' must STILL refuse ' + reason
         + ' on the execution view — the fix re-aims the tier, it does not gut it');
+      restore();
+    }
+    // No verb appended a unit row, and no verb flipped a spine row: the stored table is exactly
+    // what the fixture authored, four SPINE rows, over an execution view that now has six nodes.
+    // That is precisely the divergence the retired `state_compliance_authority_invalid` refused on.
+    ok(!new RegExp('\\| code-explorer \\(' + fx.unitIds[0] + '\\) \\|').test(settledPlan),
+      '#833: expand-open + close appended NO compliance row for the expansion unit');
+    ok(settledPlan.includes('| expansion-point (m1) | pending | | |'),
+      '#833: the discharged milestone\'s stored row was never flipped either');
+    for (const [name, mutate] of complianceMutations) {
+      const mutated = mutate(settledPlan);
+      ok(mutated.includes('## Required Agent Compliance'),
+        '#833 fixture "' + name + '" keeps a stored table to be tolerated');
+      fs.writeFileSync(fx.planPath, mutated);
+      ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok === true,
+        '#833: ' + name + ' is TOLERATED — the archive/discard/replan authority reads the ledger, '
+        + 'never the stored mirror, got '
+        + JSON.stringify(replan.verifyCurrentEpochAuthority(fx.projectDir)));
       restore();
     }
     // A unit-progress violation the FREEZE view structurally could not see: a unit reported
@@ -5929,7 +5971,14 @@ function initExpandedFamilyFixture(opts) {
   return fx;
 }
 
-// --- #780 (write side) + :4564 (read side) — the interlocked compliance pair. ---------------------
+// --- #780 + :4564 (SUBTRACTED by #833) — the interlocked compliance pair, dissolved. -------------
+//
+// #780 taught expand-open to PRE-SEED a pending compliance row per unit, and :4564 re-aimed the
+// resume wall at the execution view, purely so a live expansion frontier would not trip the
+// one-row-per-node rule for its whole window. Both halves existed only because a STORED table had
+// to be kept in step with a growing node set. The table is derived from (nodes x ledger x .cache)
+// now, and `appendLedgerRows` already gives every unit its ledger row, so the execution view is
+// tracked with NO second write, NO window, and NO wall.
 scenario(() => {
   const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: '' });
   try {
@@ -5943,58 +5992,80 @@ scenario(() => {
       ['probe', 'm1', 'wall', 'done', 'm1-r1-u1'],
       '#783 fixture: the EXECUTION view derives the unit from the records section');
 
-    // #780 write side: expand-open pre-seeds a PENDING compliance row for the unit in the SAME atomic
-    // Phase-1 write as its ledger row, so the compliance table already tracks the execution view.
-    ok(/^\| code-explorer \(m1-r1-u1\) \| pending \| \| \|$/m.test(expandedPlan),
-      '#780: expand-open pre-seeds a pending compliance row for the live unit (RED: no such row — '
-      + 'addCloseCompliance appended it only at close)');
+    // #833 write side: expand-open writes the unit's LEDGER row and nothing else.
+    ok(/^\| m1-r1-u1 \| in_progress \|/m.test(expandedPlan),
+      '#833: expand-open gives the unit its ledger row (the ONE durable record)');
+    ok(!/^\| code-explorer \(m1-r1-u1\) \|/m.test(expandedPlan),
+      '#833: and pre-seeds NO compliance row for it — the #780 second write is gone');
 
-    // #780 GREEN: with the unit in_progress and its pending compliance row present, the epoch authority
-    // HOLDS mid-frontier (RED against the pre-#780 tree: state_compliance_authority_invalid — one
-    // compliance row per SPINE node while the execution view has spine + units).
+    // #833 read side: the derivation covers the EXECUTION view with no wall and no pre-seed. This
+    // is what #780 was buying, obtained structurally instead of by remembering to write.
+    const liveRows = validator.deriveAgentCompliance(expandedPlan).rows;
+    deepEqual(liveRows.map(r => r.requirement),
+      ['code-explorer (probe)', 'expansion-point (m1)', 'code-reviewer (wall)', 'finalize (done)',
+        'code-explorer (m1-r1-u1)'],
+      '#833: the derived table already covers the live expansion unit, got '
+        + JSON.stringify(liveRows.map(r => r.requirement)));
+    equal(liveRows.find(r => r.node_id === 'm1-r1-u1').status, 'pending',
+      '#833: the live (in_progress) unit derives `pending`');
+
+    // The whole live-frontier window that #780 existed to keep out of refusal territory.
     const midFrontier = replan.verifyCurrentEpochAuthority(fx.projectDir);
     ok(midFrontier.ok === true && midFrontier.authority_kind === 'planned',
-      '#780: a LIVE expansion frontier (unit in_progress) holds current-epoch authority: '
+      '#833: a LIVE expansion frontier holds current-epoch authority with NO pre-seeded rows: '
       + JSON.stringify(midFrontier));
-
-    // :4564 GREEN: the resume compliance wall reads the EXECUTION view, so the pre-seeded unit row is
-    // exactly one-per-execution-node (RED against pre-:4564 tree: required_agent_compliance_invalid —
-    // freeze-view node count vs the execution-view compliance table).
     const resume = validator.revalidateForResume(fx.planText(), { installedRoles: fx.installedRoles });
     ok(resume.ok === true && resume.result === 'pass',
-      '#783 :4564: a resumed expanded spine passes the compliance wall on the execution view: '
+      '#833: a resumed expanded spine passes resume with no compliance wall to satisfy: '
       + JSON.stringify({ ok: resume.ok, reasonCode: resume.reasonCode }));
 
-    // #780: addCloseCompliance FLIPS the pre-seeded row in place — never inserts a second one.
+    // Close the unit: still no compliance bytes, and the derived row advances on the LEDGER alone.
     fx.closeUnit(fx.unitId);
     const closedPlan = fx.planText();
-    const unitRows = closedPlan.match(/^\| code-explorer \(m1-r1-u1\) \|/gm) || [];
-    equal(unitRows.length, 1, '#780: exactly ONE compliance row for the unit after close (flip, not insert)');
-    ok(/^\| code-explorer \(m1-r1-u1\) \| subagent-invoked \| .+ \| \|$/m.test(closedPlan),
-      '#780: the pre-seeded pending row is flipped to subagent-invoked at close');
+    ok(!/^\| code-explorer \(m1-r1-u1\) \|/m.test(closedPlan),
+      '#833: closing the unit appends no compliance row either');
+    const closedRows = validator.deriveAgentCompliance(closedPlan, {
+      readEvidence: id => fs.readFileSync(path.join(fx.cacheDir, id + '.md'), 'utf8'),
+    }).rows;
+    equal(closedRows.filter(r => r.node_id === 'm1-r1-u1').length, 1,
+      '#833: exactly ONE derived row for the unit — duplication is unrepresentable');
+    equal(closedRows.find(r => r.node_id === 'm1-r1-u1').status, 'subagent-invoked',
+      '#833: the closed unit derives subagent-invoked from its complete ledger row');
     ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok,
-      '#780: the settled unit holds authority (the #779 closed/archive path stays intact)');
+      '#833: the settled unit holds authority (the #779 closed/archive path stays intact)');
 
-    // :4564 NON-VACUITY — the wall is re-aimed, not gutted. A genuinely missing unit compliance row,
-    // and an EXTRA compliance row for a node in neither view, both still refuse on the execution view.
+    // TOLERANCE (the green arc R2 asks for when a refusal is removed): the two mutations that used
+    // to refuse `required_agent_compliance_invalid` at resume are now inert. A stored table is
+    // planted first, because nothing in the run writes one.
+    const legacy = closedPlan.replace(/\s*$/, '\n\n') + ['## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |',
+      '| code-explorer (probe) | subagent-invoked | e | |',
+      '| expansion-point (m1) | subagent-invoked | e | |',
+      '| code-reviewer (wall) | pending | | |',
+      '| finalize (done) | pending | | |',
+      '| code-explorer (m1-r1-u1) | subagent-invoked | e | |', ''].join('\n');
+    ok(validator.revalidateForResume(legacy, { installedRoles: fx.installedRoles }).ok === true,
+      '#833: a legacy stored table resumes untouched');
     const missing = validator.revalidateForResume(
-      closedPlan.replace(/^\| code-explorer \(m1-r1-u1\) \|.*$\n/m, ''), { installedRoles: fx.installedRoles });
-    equal(missing.reasonCode, 'required_agent_compliance_invalid',
-      '#783 :4564 non-vacuity: a missing unit compliance row still refuses required_agent_compliance_invalid');
+      legacy.replace(/^\| code-explorer \(m1-r1-u1\) \|.*$\n/m, ''), { installedRoles: fx.installedRoles });
+    ok(missing.ok === true,
+      '#833: a MISSING unit compliance row is tolerated at resume (required_agent_compliance_invalid '
+      + 'retired), got ' + JSON.stringify({ ok: missing.ok, reasonCode: missing.reasonCode }));
     const extra = validator.revalidateForResume(
-      closedPlan.replace(/^(\| finalize \(done\) \|.*)$/m, '| code-explorer (ghost-unit) | pending | | |\n$1'),
+      legacy.replace(/^(\| finalize \(done\) \|.*)$/m, '| code-explorer (ghost-unit) | pending | | |\n$1'),
       { installedRoles: fx.installedRoles });
-    equal(extra.reasonCode, 'required_agent_compliance_invalid',
-      '#783 :4564 non-vacuity: a compliance row for a node in neither view still refuses');
-
-    // #780 NON-VACUITY — a genuinely unresolved unit still refuses the compliance authority tier.
-    const stillPending = replan.verifyCurrentEpochAuthority; // sanity: fn present
-    ok(typeof stillPending === 'function', '#780: verifyCurrentEpochAuthority present');
-    fs.writeFileSync(fx.planPath, closedPlan.replace(
-      /^\| code-explorer \(m1-r1-u1\) \| subagent-invoked \| .+ \| \|$/m,
+    ok(extra.ok === true,
+      '#833: a compliance row for a node in NEITHER view is tolerated too, got '
+      + JSON.stringify({ ok: extra.ok, reasonCode: extra.reasonCode }));
+    // And a `pending` stored row under a `complete` unit ledger row — the retired
+    // `state_compliance_progress_invalid` shape — no longer refuses the runtime authority.
+    fs.writeFileSync(fx.planPath, legacy.replace(
+      '| code-explorer (m1-r1-u1) | subagent-invoked | e | |',
       '| code-explorer (m1-r1-u1) | pending | | |'));
-    equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, 'state_compliance_progress_invalid',
-      '#780 non-vacuity: a pending compliance row under a complete unit ledger row still refuses');
+    ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok === true,
+      '#833: a pending stored row under a complete unit ledger row is tolerated — '
+      + 'state_compliance_progress_invalid is retired, got '
+      + JSON.stringify(replan.verifyCurrentEpochAuthority(fx.projectDir)));
     fs.writeFileSync(fx.planPath, closedPlan);
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
