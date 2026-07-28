@@ -166,7 +166,11 @@ const OPERATOR_HINT_REGISTRY = {
   acceptance_missing: () => 'A code-producing plan requires a non-empty ## Acceptance section — the human-values artifact of the run: what "done" means, transcribed at freeze from the issue body plus explicit user statements, one item per line (A1:, A2:, …) as prose. It is a SIBLING of ## Design, not part of it, and carries no sub-grammar (no types, no priorities, no verification bindings) — how an item is satisfied is judged, never matched. Author ## Acceptance and re-freeze. FREEZE-ONLY: a plan frozen before this section existed resumes unchanged.',
   acceptance_section_ambiguous: () => '## Acceptance identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
   acceptance_anchor_unreadable: () => 'The acceptance anchor under .cache/ EXISTS but cannot be read back as a well-formed record, so the acceptance surface recorded at first submission is unavailable. A present-but-unreadable anchor refuses instead of degrading to "no anchor yet" — that branch re-anchors on whatever surface the current submission carries, which would disarm the fence exactly when its record is damaged. The ordinary cause is an interrupted write (crash, full disk), not tampering. Restore the anchor byte-for-byte from a copy, an epoch snapshot, or version control; if it cannot be recovered, discard and restart the run or carry the work into a re-plan child epoch under a surface-bound consent entry. Deleting the anchor is not a repair — it is the disarm this refusal prevents.',
-  acceptance_repair_fenced: () => 'The bounded plan_invalid repair loop may fix ## Meta / ## Nodes / ## Node Briefs / ledger scaffolding, but it MUST NOT alter ## Acceptance — the acceptance surface is a human-values artifact, and changing it is a values decision that routes through the consent valve, never through repair. Restore the acceptance surface recorded at first submission and re-run the repair, or stop and escalate the acceptance change.',
+  // DELETED (rung-1 subtraction): acceptance_repair_fenced. It classifies to
+  // consent_required/acceptance_change, whose derived hint states the same rule ("changing it
+  // mid-run redefines success after the fact, so it is a standing call for whoever set it, never a
+  // repair the plan may make on its own behalf") and ends on the consent valve — the exit the
+  // template described in prose.
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -196,6 +200,39 @@ const OPERATOR_HINT_REGISTRY = {
   leg_baseline_split: (ctx) => `Lane-group legs disagree on their branch-point baseline (${ctx.file || 'see legs'}) — all legs of one fan-out level must branch from the SAME pre-fan-out HEAD for the union barrier to measure base→M coherently. Re-provision the level.`,
   internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
 };
+
+// ---------------------------------------------------------------------------
+// THE RUNG-1 CENSUS — a tighten-only ratchet on the legacy hint table.
+//
+// This table is the hand-kept condition-specific mirror the kernel refusal registry exists to
+// replace, so its size is a DEBT figure and may only ever go DOWN. Without a trigger the debt
+// silently re-grows: adding a template is a one-line diff nobody reads as a policy change.
+//
+// The check is EQUALITY, not a ceiling, and it runs at MODULE LOAD — which makes every suite that
+// requires this file an enforcement point, and makes both directions loud:
+//   * ADDING a template fails until someone raises this number, which is the visible admission that
+//     rung 1 grew. Do not raise it: register the condition's cure as a cell-keyed WHY clause in the
+//     kernel registry instead.
+//   * DELETING one fails until someone lowers it, so the census can never drift below the table and
+//     quietly re-open room.
+// Equality is also what catches the clean-merge hazard: two branches that each delete a different
+// template merge without conflict into a table whose size matches neither side's census, and a
+// ceiling would pass that silently.
+//
+// This is a STATIC property of committed source checked dynamically — it cannot fire in the field
+// unless the committed table itself disagrees with the committed number.
+// ---------------------------------------------------------------------------
+const OPERATOR_HINT_RUNG_CENSUS = 77;
+{
+  const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
+  if (live !== OPERATOR_HINT_RUNG_CENSUS) {
+    throw new Error('operator_hint_rung_census_mismatch: OPERATOR_HINT_REGISTRY holds ' + live
+      + ' templates, the recorded census says ' + OPERATOR_HINT_RUNG_CENSUS
+      + '. Rung 1 is TIGHTEN-ONLY: delete a template and lower the census. If you are adding one,'
+      + ' add a cell-keyed WHY clause to the kernel refusal registry instead — a new template here'
+      + ' re-grows the mirror this table is being deleted to remove.');
+  }
+}
 
 // ADR 0013 / M3: one accessor, one fallback chain, shared with every other aggregator that
 // owns a legacy hint table — this table first (today's text verbatim, forge paths intact),
