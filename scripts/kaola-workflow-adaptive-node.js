@@ -331,7 +331,7 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- the bounded re-anchor verb (route: rebind-base) ---
   reanchor_provenance_unprovable: (ctx) =>
-    'The barrier base of ' + (ctx.node_id || ctx.nodeId || '<id>') + ' cannot be PROVEN to predate a lane-group merge (' + (ctx.detail || 'no leg-base lineage') + '). rebind-base refuses zero-write; hand update-ref stays forbidden. If the base is genuinely stale through a lane-group merge, re-run repair-node and let its rebind refuse with route: rebind-base; otherwise a re-plan is the exit.',
+    'The barrier base of ' + (ctx.node_id || ctx.nodeId || '<id>') + ' cannot be PROVEN to predate a lane-group merge (' + (ctx.detail || 'no leg lineage') + '). The precondition is BOTH halves of that proof: ' + (ctx.node_id || ctx.nodeId || '<id>') + ' ran as a lane-group leg (its leg branch-point is journaled at the group merge and outlives the torn-down leg-base ref) AND its recorded base is STILL that leg-era base — a base already re-anchored, hand-moved, or never leg-era fails it, and one re-anchor per leg era is the bound. rebind-base refuses zero-write here and hand update-ref stays forbidden; with no matching lineage a re-plan is the exit.',
   rebind_base_not_reviewed: (ctx) =>
     'The reviewed merged parent is no longer the current tree for ' + (ctx.node_id || ctx.nodeId || '<id>') + ' — the re-anchor would bind the repair to an unreviewed tree. A re-plan (or a fresh repair-node run whose own rebind proof passes) is the exit; never hand-edit the barrier ref.',
   reanchor_not_attempt_producer: (ctx) =>
@@ -8883,14 +8883,56 @@ function reconcilePendingRebind(opts, attempt, state, nodeId, writerPaths, now) 
       + ') nor base_after (' + record.base_after + ') of the unsettled rebind — restore it from the recorded pair' };
 }
 
+// LEG_LINEAGE_KEY — the review journal's journal-level record of every lane-group leg's branch-point.
+// The leg-base REF the R1 proof used to read is deleted by teardownLeg at group completion, and a
+// post-dominating gate can only settle AFTER that completion — so the ref is always gone by repair
+// time and the lineage it anchored has to outlive it. It lives in the review journal (the run's
+// digest-bound integrity anchor, snapshotted per epoch and never hand-edited), NOT in a best-effort
+// sidecar: a fail-closed provenance proof may not be backed by a record anything can rewrite.
+// Shape: { <node-id>: { leg_base, branch_point, merge, group_id } }, all 40-hex.
+//   leg_base     — the member's RECORDED barrier base as of the merge (the parentless synthetic
+//                  snapshot commit `--record-base` anchors). R1 requires the on-disk base to still
+//                  equal it, which is what bounds the verb to ONE re-anchor per leg era (after a
+//                  successful rebind the base IS the merge, so the next call mismatches) and what
+//                  refuses a hand-moved base.
+//   branch_point — the real commit the legs branched from (the leg manifest's `baseline`). This is
+//                  the ancestor R1 proves against and the diff anchor `legBase` the caller consumes.
+//   merge        — the lane-group synthesis commit the record was written at.
+const LEG_LINEAGE_KEY = 'leg_lineage';
+
+function readLegLineageRecord(opts, nodeId) {
+  let content;
+  try { content = opts.readFile(opts.planPath); }
+  catch (_) { return { ok: false, detail: 'the frozen plan is unreadable' }; }
+  const state = readReviewJournal(opts, content);
+  if (!state.ok) {
+    return { ok: false, detail: 'the review journal (the leg lineage anchor) is unreadable: ' + state.reason };
+  }
+  if (!state.journal) return { ok: false, detail: 'no review journal — no lane-group leg lineage' };
+  const lineage = state.journal[LEG_LINEAGE_KEY];
+  const record = (lineage && typeof lineage === 'object' && !Array.isArray(lineage)) ? lineage[nodeId] : null;
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { ok: false, detail: 'no journaled leg lineage — ' + nodeId + ' never ran as a lane-group leg' };
+  }
+  const hex40 = v => /^[0-9a-f]{40}$/i.test(String(v || ''));
+  if (!hex40(record.leg_base) || !hex40(record.branch_point) || !hex40(record.merge)) {
+    return { ok: false, detail: 'the journaled leg lineage for ' + nodeId + ' is malformed' };
+  }
+  return { ok: true, leg_base: String(record.leg_base).toLowerCase(),
+    branch_point: String(record.branch_point).toLowerCase(), merge: String(record.merge).toLowerCase() };
+}
+
 // proveReanchorProvenance — R1 of the re-anchor proof: "this node's recorded base PROVABLY predates
 // a lane-group merge". Fully git-checkable, read-only, never throws:
-//   (1) the recorded barrier base IS the node's leg-base ref — the node ran as a lane-group leg and
-//       its base was never re-anchored (a prior re-anchor fails this, which is also what BOUNDS the
-//       verb to one re-anchor per leg-era base);
+//   (1) the node has a journaled leg lineage AND the recorded barrier base is still the leg-era base
+//       that lineage records — the node ran as a lane-group leg and its base was never re-anchored
+//       (a prior re-anchor fails this, which is also what BOUNDS the verb to one re-anchor per
+//       leg-era base; so does a hand-moved base, including one hand-moved to the real branch-point);
 //   (2) the leg branch-point is a strict ancestor of HEAD;
 //   (3) a lane-group synthesis merge (`kw-synth: ` commit, the level_merged telemetry's git anchor)
-//       sits in base..HEAD.
+//       sits in branch-point..HEAD.
+// The claim is per-NODE: "a lane-group merge happened somewhere in this run" is not lineage, and a
+// foreign node cannot borrow a leg member's lineage by copying its recorded base.
 // Returns { ok:true, legBase, merges } (merges newest-first) or { ok:false, detail }.
 function proveReanchorProvenance(opts, nodeId) {
   try {
@@ -8901,15 +8943,14 @@ function proveReanchorProvenance(opts, nodeId) {
     if (!/^[0-9a-f]{40}$/i.test(base)) {
       return { ok: false, detail: 'no recorded barrier base for ' + nodeId };
     }
-    const legSha = resolveRefSha(root, legBaseRef(opts.project, nodeId));
-    if (!legSha) {
-      return { ok: false, detail: 'no leg-base ref — ' + nodeId + ' never ran as a lane-group leg' };
+    const lineage = readLegLineageRecord(opts, nodeId);
+    if (!lineage.ok) return { ok: false, detail: lineage.detail };
+    if (lineage.leg_base !== base.toLowerCase()) {
+      return { ok: false, detail: 'the recorded base is not the leg-era base ' + nodeId + '\'s lineage records (already re-anchored, or hand-moved)' };
     }
-    if (legSha.toLowerCase() !== base.toLowerCase()) {
-      return { ok: false, detail: 'the recorded base is not the leg branch-point (already re-anchored, or never leg-era)' };
-    }
+    const branchPoint = lineage.branch_point;
     try {
-      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', base, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', branchPoint, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) {
       return { ok: false, detail: 'the leg branch-point is not an ancestor of HEAD' };
     }
@@ -8918,22 +8959,59 @@ function proveReanchorProvenance(opts, nodeId) {
       head = String(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
     } catch (_) { head = ''; }
-    if (head && head.toLowerCase() === base.toLowerCase()) {
+    if (head && head.toLowerCase() === branchPoint) {
       return { ok: false, detail: 'the leg branch-point IS the current head — no merge above it' };
     }
     let merges = [];
     try {
-      const out = execFileSync('git', ['-C', root, 'log', '--format=%H', '--merges', '-F', '--grep=kw-synth: ', base + '..HEAD'],
+      const out = execFileSync('git', ['-C', root, 'log', '--format=%H', '--merges', '-F', '--grep=kw-synth: ', branchPoint + '..HEAD'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
       merges = String(out).split('\n').map(s => s.trim()).filter(s => /^[0-9a-f]{40}$/i.test(s));
     } catch (_) { merges = []; }
     if (!merges.length) {
       return { ok: false, detail: 'no lane-group synthesis merge above the leg branch-point' };
     }
-    return { ok: true, legBase: base, merges };
+    return { ok: true, legBase: branchPoint, merges };
   } catch (err) {
     return { ok: false, detail: String((err && err.message) || err) };
   }
+}
+
+// recordLegLineage — journal the lane-group leg lineage at the LAST-MEMBER MERGE, the one moment both
+// halves are still in hand: the live legs manifest (each member's branch-point) and the synthesis
+// merge commit. Runs BEFORE the teardown loop that deletes the leg-base refs, so a crash in between
+// leaves the record already durable. Last-write-wins per member (an idempotent synthesizer re-run
+// re-journals the same pair). FAIL-SOFT by design: the CONSUMER is fail-closed — an absent or
+// mismatched record refuses zero-write — so a journal that cannot be written costs the re-anchor
+// route, never correctness, and must not brick a close that has already merged.
+function recordLegLineage(opts, planContent, legsManifest, mergedCommit, groupId) {
+  try {
+    const hex40 = v => /^[0-9a-f]{40}$/i.test(String(v || ''));
+    if (!hex40(mergedCommit) || !legsManifest) return;
+    const state = readReviewJournal(opts, planContent);
+    if (!state.ok || !state.journal || !state.journalPath) return;
+    const existing = state.journal[LEG_LINEAGE_KEY];
+    const lineage = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
+    let changed = false;
+    for (const id of Object.keys(legsManifest).sort()) {
+      const leg = legsManifest[id] || {};
+      if (!hex40(leg.baseline)) continue;
+      let legBase = '';
+      try { legBase = String(opts.readFile(writerBarrierAnchors(opts, id).baseFile) || '').trim(); }
+      catch (_) { legBase = ''; }
+      if (!hex40(legBase)) continue;
+      lineage[id] = {
+        leg_base: legBase.toLowerCase(),
+        branch_point: String(leg.baseline).toLowerCase(),
+        merge: String(mergedCommit).toLowerCase(),
+        group_id: groupId || null,
+      };
+      changed = true;
+    }
+    if (!changed) return;
+    state.journal[LEG_LINEAGE_KEY] = lineage;
+    writeReviewJournal(opts, state);
+  } catch (_) { /* fail-soft: the consumer refuses zero-write without a record */ }
 }
 
 // runRebindBase — the bounded RE-ANCHOR verb (route: rebind-base). The machine-owned form of the one
@@ -13105,6 +13183,12 @@ function closeGroupMember(ctx) {
     // identical). Read the legs from the live running-set's lane_group (authoritative on disk), not lg.
     const legsManifest = running.lane_group && running.lane_group.legs;
     if (legsManifest && Object.keys(legsManifest).length) {
+      // #840: journal each member's leg lineage FIRST. teardownLeg below deletes the leg-base ref the
+      // re-anchor proof used to read, and a post-dominating gate can only settle after this close — so
+      // without a record that outlives the ref, rebind-base is unreachable and the only exit from a
+      // stale-through-the-merge base is a re-plan. Written before the teardown, into the digest-bound
+      // review journal, and fail-soft (the proof stays fail-closed without it).
+      recordLegLineage(opts, currentPlan, legsManifest, mergedCommit, lg.group_id);
       let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
       for (const id of Object.keys(legsManifest)) {
         const leg = legsManifest[id];
