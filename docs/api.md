@@ -1768,16 +1768,36 @@ node scripts/kaola-workflow-replan.js prepare \
   --project <project> --source-attempt <attempt-id> \
   --reason review_repair_requires_replan --json
 
+# Begin from a sealed shape-refutation packet (no failed gate; the run must be quiescent).
+# The non-fused entry: it expects `.cache/shape-refutation.md` to already exist.
+node scripts/kaola-workflow-replan.js prepare \
+  --project <project> --reason shape_refutation --json
+
+# The one-command fast path: seal the packet, prepare, fence, and build the planner packet in
+# ONE locked transaction. On success the result IS the dispatch request
+# (`planner_dispatch_required`). `--premise` states the shape assumption the run has outgrown;
+# `--mismatch` states what the evidence shows instead (defaults to `--premise`). `--evidence` is
+# both repeatable AND comma-splittable, and every path is PROJECT-RELATIVE ONLY — resolved under
+# `kaola-workflow/{project}/` (a leading `kaola-workflow/{project}/` prefix is accepted and
+# stripped); an absolute path or one escaping the project directory refuses
+# `shape_refutation_evidence_path_invalid`.
+node scripts/kaola-workflow-replan.js shape-refutation \
+  --project <project> --premise "<the frozen assumption>" \
+  --mismatch "<what the evidence shows>" \
+  --evidence .cache/recon.md,.cache/impl.md --evidence .cache/probe.md --json
+
 # The only legal mutation while a transition is fenced.
 node scripts/kaola-workflow-replan.js resume --project <project> --json
 
 # Read the fence/transaction state without mutation.
 node scripts/kaola-workflow-replan.js status --project <project> --json
 
-# One user-authorized, one-slot ceiling extension after consent_halt.
+# One user-authorized, one-slot ceiling extension after consent_halt. `--authority-scope`
+# (`review` | `shape_refutation`, optional) additionally credits the extension to that authority's
+# per-authority allowance; omitting it keeps the original behaviour (shared ceiling only).
 node scripts/kaola-workflow-replan.js extend-consent \
   --project <project> --user-turn-reference <ref> \
-  --consent-reason <reason> --json
+  --consent-reason <reason> [--authority-scope shape_refutation] --json
 
 # Recursively verify every retained epoch snapshot and active-state binding.
 node scripts/kaola-workflow-replan.js verify-snapshots --project <project> --json
@@ -1971,6 +1991,57 @@ regular, contained artifacts—`diagnosis_root_cause`, `falsified_alternatives`,
 touch only those artifact paths, and the child must cite the exact proof and recommendation digests.
 Untyped, repeated, writer-bearing, review-driven, or citation-missing variants count or refuse.
 
+**The third authority: `shape_refutation`.** Mid-run, with no failed gate, the orchestrator may
+re-plan when accumulated evidence refutes the frozen spine's shape — but only against a sealed,
+digest-bound refutation packet at `kaola-workflow/{project}/.cache/shape-refutation.md`, and only
+while the run is quiescent. The packet's schema is
+`{schema_version: 1, kind: "shape_refutation", premise, mismatch, evidence: [{path, digest}]}`;
+`sealShapeRefutationPacket` writes it atomically and crash-idempotently from the `--premise` /
+`--mismatch` / `--evidence` inputs (same inputs → same canonical bytes), and
+`verifyShapeRefutationPacket` re-derives its proof over the packet digest, the parent plan hash and
+exact digest, the completed Ledger projection, every evidence row's exact digest, and the claim
+lineage triple. The transaction rides `authority_kind: 'diagnosis_to_build'` with
+`source_reason: 'shape_refutation'`, carrying
+`source.shape_refutation {packet_path, packet_digest, premise, mismatch, evidence}`.
+
+Entry is gated in this order: **quiescence** — no `in_progress` Ledger row, no open speculative
+leg, no live halt (a `consent_halt: pending` Ledger row or an `escalated_to_full:` state line),
+refusing `shape_refutation_not_quiescent` with `detail.{open_nodes, speculative_legs,
+running_set_state, live_halt}`; then **review-authority precedence** — an UNSETTLED review attempt
+refuses `shape_refutation_review_pending` (this authority must never be usable to dodge a gate
+about to record findings), and a still-CONSUMABLE settled review authority refuses
+`shape_refutation_review_authority_present`. Consumability is the exact conjunction the review
+lane's own `readSource` enforces: `lifecycle_settled === true && outcome === 'fail' &&
+consumed_by == null` and the attempt's `plan_hash` equal to the CURRENT parent plan hash. It is
+**never** the mere existence of `.cache/review-attempts.json` or `.cache/replan-source.json`: every
+gate settlement appends the journal (pass and fail alike), nothing ever deletes it, and epoch
+activation deliberately preserves both files — so a journal carrying only settled PASSES, an
+already-consumed repair attempt, or residue bound to an earlier epoch's plan hash all leave the
+shape entry open. An unreadable journal still fails closed to
+`shape_refutation_review_authority_present`. Finally the **evidence fence** —
+`shape_refutation_evidence_missing` (no packet, no premise, no evidence rows, or an evidence file
+that has vanished), `shape_refutation_evidence_path_invalid` (a non-`project-relative` path, or one
+escaping the project directory), `shape_refutation_evidence_mismatch` (an evidence file whose
+current digest differs from the sealed row), and `shape_refutation_lineage_invalid` (the state's
+`epoch_lineage_id` / `claim_identity_digest` / `claim_root_base_digest` triple is not intact).
+
+The allowance is per-authority: `shapeRefutationAllowance` reports `{count, ceiling}`, where the
+ceiling is `REVIEW_REPLAN_LIMIT` (2) plus one per consent entry scoped `shape_refutation`, and
+`countShapeRefutationTransitions` derives `count` from durable committed
+receipts alone (the live committed transaction plus `.cache/committed-transactions/`, de-duplicated
+by `transaction_id`) rather than from a new state field. The prepared transaction and the emitted
+envelope publish it as `budget.shape_refutation_allowance {count_before, ceiling}`; exhaustion
+refuses `replan_consent_required` with `shape_refutation_replans` / `shape_refutation_ceiling`.
+This allowance governs ADMISSION only — the transition still costs one shared automatic slot
+(`transition_cost: 1`, `automatic_review_replans` advances), so two autonomous reshapes exhaust the
+shared autonomous budget and every other authority then needs a recorded consent turn. That
+direction is deliberate: it fails toward more consent, never less.
+
+A `shape_refutation` request's transaction identity is the SEALED PACKET and nothing else. It never
+inherits an attempt id from a `.cache/replan-source.json` handoff that survived an earlier epoch —
+re-sealing the SAME packet after commit replays `already_committed`, while a NEW packet (or a first
+packet after a non-shape epoch) opens a new `transaction_id`.
+
 Every parent epoch is copied to `.cache/epochs/<parent-plan-epoch>/files/**` before active-cache
 cleanup. The schema-2 full manifest stores and re-derives the earlier projection, but separately
 seals the exact child path/hash/digest, planner attestation, sorted path/mode/size/digest file index,
@@ -2006,7 +2077,15 @@ Common typed refusals include `replan_in_progress`, `replan_integrity_mismatch`,
 `replan_candidate_changed`, `replan_snapshot_incomplete`, `replan_task_mirror_failed`,
 `replan_cache_cleanup_failed`, `replan_consent_required`, `replan_consent_ledger_invalid`,
 `legacy_claim_root_unprovable`, `legacy_snapshot_binding_unsealed`, and the active-state consistency
-reasons above. While fenced, `orient` is read-only and reports the phase/hashes;
+reasons above. The `shape_refutation` entry adds seven of its own — `shape_refutation_not_quiescent`,
+`shape_refutation_review_pending`, `shape_refutation_review_authority_present`,
+`shape_refutation_evidence_missing`, `shape_refutation_evidence_path_invalid`,
+`shape_refutation_evidence_mismatch`, and `shape_refutation_lineage_invalid` — all zero-write beyond
+the idempotent packet seal. A refusal that fires because the intended action falls outside the frozen
+shape additionally carries a typed `route` field naming the one legal recorded verb:
+`replan_source_journal_missing` (a re-plan asked for with no review history at all) routes to
+`shape_refutation`, and `replan_superseded_by_local_reexpansion` routes to `reexpand-open`. While
+fenced, `orient` is read-only and reports the phase/hashes;
 ordinary node mutation, normal handoff, task-mirror refresh, archive, and Finalization refuse. The
 only mutation route is `kaola-workflow-replan.js resume --project <project>`.
 
@@ -3054,7 +3133,11 @@ The following functions are exported from sink, claim, re-plan, and forge module
 **`scripts/kaola-workflow-replan.js`:**
 - `prepareReplan(opts)` — Validates and durably prepares one claim-scoped epoch transition from a settled typed source attempt.
 - `resumeReplan(opts)` — Idempotently advances the transaction through planner request, child freeze, parent snapshot, and journaled activation.
-- `appendConsentExtension(opts)` / `verifyConsentLedger(ledger, epochLineageId)` — Append and verify exactly-one-slot, hash-chained consent extensions.
+- `appendConsentExtension(opts)` / `verifyConsentLedger(ledger, epochLineageId)` — Append and verify exactly-one-slot, hash-chained consent extensions. An optional `authorityScope` (`review` | `shape_refutation`) records which authority the human turn extended; the chain arithmetic is unchanged (every entry still raises the shared ceiling by one).
+- `prepareShapeRefutation(opts)` — The one-command `shape-refutation` fast path: seal the packet, prepare, fence, and build the planner packet inside ONE project lock. On success returns the dispatch request itself (`planner_dispatch_required`); every entry-predicate refusal propagates unchanged with no side effect beyond the idempotent packet seal.
+- `sealShapeRefutationPacket(paths, opts)` — Atomically write `.cache/shape-refutation.md` from `{premise, mismatch, evidence}`. Evidence inputs are repeatable and comma-splittable, resolved **project-relative only**; identical inputs write byte-identical canonical bytes, so a crash-prefix retry is a no-op.
+- `verifyShapeRefutationPacket(paths, parentPlan, lineage?)` — Re-derive the refutation proof over the packet digest, the parent plan hash + exact digest, the completed Ledger projection, every evidence row's current digest, and the claim lineage triple. Returns `{ ok: true, payload, proof_digest }` or the typed `shape_refutation_evidence_*` / `shape_refutation_lineage_invalid` refusal.
+- `countShapeRefutationTransitions(paths, lineageId)` / `shapeRefutationAllowance(paths, lineageId, entries)` — The per-authority allowance, derived from durable committed receipts (the live committed transaction plus `.cache/committed-transactions/`, de-duplicated by `transaction_id`) rather than a new state field. The ceiling is `REVIEW_REPLAN_LIMIT` plus one per `shape_refutation`-scoped consent entry, published on the transaction as `budget.shape_refutation_allowance`.
 - `verifySnapshotManifest(epochDir)` / `verifyAllEpochSnapshots(projectDir, expected?)` — Recursively verify immutable epoch files, manifest self-digests, sequence, lineage, active-state binding, and consent ceiling. Snapshot integrity is **content-addressed**: each file is verified by size + SHA-256 digest against the manifest row, and the manifest itself by its self-digest and recomputed authority projection. The manifest still records each file's creation `mode` as forensic metadata, but verification never compares permission bits — snapshot files are read-only evidence copies that are never executed and never restored, and mode is not preserved by the transports these snapshots travel through (git stores only `100644`/`100755`). A sealed epoch therefore keeps verifying across an archive commit, clone, or fresh worktree checkout.
 - `readStatus(opts)` — Read the current re-plan fence and transaction status without mutation.
 - `validateChildPlan(childBytes, transaction)` / `validateChildHandoffAuthority(paths, transaction)` — Enforce schema-2 child bindings, all-pending Ledger, exact child path, and durable pre-freeze CAS authority.

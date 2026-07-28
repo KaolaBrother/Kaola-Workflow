@@ -595,6 +595,35 @@ const OPERATOR_HINT_REGISTRY = {
 };
 
 // ---------------------------------------------------------------------------
+// DEVIATION_ROUTES — the typed `route:` verb for a refusal that fires because the intended action
+// falls OUTSIDE the frozen shape. A prose hint tells the operator what went wrong; the route names
+// the ONE legal recorded verb that resolves it, so an out-of-shape refusal is a fork in the road
+// rather than a dead end.
+//
+// The mapping is DERIVED from the barrier reason precedence the plan validator already owns, so
+// the two cannot drift. Keyed by reason and stamped at the single emit-time decorator below —
+// never scattered across the many close_transition_disallowed / node_not_in_ledger emit sites, so
+// a new emit site inherits its route for free.
+//
+// `foreign_archive` is deliberately ABSENT: writing another run's archive is not curable by
+// reverting the overflow, by amending the surface, or by reshaping the spine, so naming any verb
+// would misdirect. A reason with no entry gains no route — that silence is information.
+// ---------------------------------------------------------------------------
+const DEVIATION_ROUTES = {
+  // Out-of-set writes: discard them and re-land inside the declared set.
+  write_set_overflow: 'revert-overflow',
+  write_set_granularity: 'revert-overflow',
+  lockfile_write: 'revert-overflow',
+  mirror_write: 'revert-overflow',
+  count_bump: 'revert-overflow',
+  // Writes nobody declared: attribute them onto a surface and re-review, rather than discard.
+  unattributed_write: 'amend-surface',
+  // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which is a
+  // spine change — a node-level fix cannot conjure a reviewer the frozen plan never contained.
+  sensitive_write_unreviewed: 'shape_refutation',
+};
+
+// ---------------------------------------------------------------------------
 // getOperatorHint(reason, ctx) (#445 / D-445-01 §1-2) — the single emit-time
 // accessor. Looks up `reason` in OPERATOR_HINT_REGISTRY, calls the template with
 // the emit context, and returns the one-sentence string. A reason with no
@@ -627,6 +656,12 @@ function getOperatorHint(reason, ctx) {
 // operator_hint is itself the "there is a next step" signal. Existing consumers
 // reading result/reason are unaffected (purely additive). Idempotent: never
 // overwrites an operator_hint a callee already set.
+//
+// #838 — the same seam also stamps the typed deviation `route` from
+// DEVIATION_ROUTES, under identical rules: actionable envelopes only, reason
+// required, idempotent (a route a callee already decided always wins — it knows
+// the concrete situation, the table is only the default), and a reason outside
+// the table gains nothing.
 // ---------------------------------------------------------------------------
 function decorateOperatorHint(envelope) {
   if (!envelope || typeof envelope !== 'object') return envelope;
@@ -635,6 +670,8 @@ function decorateOperatorHint(envelope) {
     || envelope.result === 'warn';
   if (!actionable) return envelope;
   if (!envelope.reason) return envelope;
+  const route = DEVIATION_ROUTES[envelope.reason];
+  if (route && !envelope.route) envelope.route = route;
   if (typeof envelope.operator_hint === 'string' && envelope.operator_hint) return envelope;
   envelope.operator_hint = getOperatorHint(envelope.reason, envelope);
   return envelope;

@@ -5898,8 +5898,10 @@ function driveShapeRefutationToCommit(fx, request) {
   throw new Error('shape_refutation_driver_did_not_converge:' + JSON.stringify(result));
 }
 
-// #824 entry precedence: a review authority — settled, merely PRESENT, or in flight — always
-// wins over the shape_refutation entry. The authority must never be usable to dodge a gate.
+// #824 entry precedence: a CONSUMABLE review authority — settled-failed and unspent, or in
+// flight — always wins over the shape_refutation entry. The authority must never be usable to
+// dodge a gate. (#838 narrowed the predicate from "the file exists" to "the authority can
+// actually be consumed"; the two live arms below are unchanged, the dead-handoff arm moved.)
 scenario(() => {
   const fx = initFixture(); // settled FAILED attempt + replan-source.json, the review authority present
   try {
@@ -5919,12 +5921,16 @@ scenario(() => {
       '#824: an UNSETTLED review attempt refuses shape_refutation_review_pending (no gate-dodging): '
         + JSON.stringify(pending));
 
-    // The handoff alone (journal rotated away) is still a present review authority.
+    // #838: the handoff ALONE is a dead letter, not an authority. readSource refuses it
+    // (`replan_source_journal_missing` — there is no journal to prove the attempt settled failed
+    // and unspent), so nothing can consume it and it must not block the shape entry. Deferring to
+    // it is what re-created the permanent wedge one epoch later, because `replan-source.json` is
+    // never cleaned either: the committed rotation COPIES it into history, leaving the live file.
     fs.unlinkSync(journalPath);
     const sourceOnly = prepare();
-    equal(sourceOnly.reason, 'shape_refutation_review_authority_present',
-      '#824: a replan-source.json handoff alone is still a present review authority: '
-        + JSON.stringify(sourceOnly));
+    equal(sourceOnly.reason, 'shape_refutation_evidence_missing',
+      '#838: a replan-source.json handoff with no journal is unconsumable — the entry proceeds to '
+        + 'its own evidence fence instead of deferring to a dead authority: ' + JSON.stringify(sourceOnly));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
@@ -6347,6 +6353,354 @@ scenario(() => {
     ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
       '#824: the routed refusal writes no transaction');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #838 — the shape_refutation entry keys on a CONSUMABLE review authority, never on the
+// EXISTENCE of `.cache/review-attempts.json` / `.cache/replan-source.json`.
+//
+// Why this matters: every change-gate settlement — pass OR fail — appends the review journal,
+// no code path ever deletes it, and epoch activation deliberately preserves it. Keying the
+// precedence on file existence therefore made the third authority unreachable from the first
+// green gate onward: the exact wedge it was filed to remove. The three journal states the entry
+// must distinguish, and the ONLY discriminator that is honest across an epoch boundary:
+//
+//   UNSETTLED attempt (lifecycle_settled !== true)          -> shape_refutation_review_pending
+//   settled FAILED + consumed_by == null + plan_hash ==
+//     the CURRENT parent plan hash (i.e. still consumable)  -> shape_refutation_review_authority_present
+//   anything else (only settled PASSES, an already-consumed
+//     repair, or a journal bound to another epoch's plan)   -> the entry PROCEEDS
+//
+// The schema itself supplies the invariant the pass arm leans on: a `pass` attempt must carry
+// `repair.selected_writer === null`, `consumed_by === null` and an empty `rebind`, so a passed
+// attempt is structurally NOT a repair authority and can never be "consumed through the review
+// re-plan" the old refusal hinted at.
+// ---------------------------------------------------------------------------
+
+// The PRODUCTION state after a change gate settles GREEN: `review-attempts.json` is on disk (the
+// gate wrote it and nothing removes it) carrying a settled PASSED attempt, and no
+// `replan-source.json` was ever written (that handoff exists only on the repair->replan path).
+// Rewrites the fixture's seeded FAILED attempt into the passing shape the schema pins, so the
+// journal on disk is a REAL journal the validator accepts — not a stub.
+function sealPassedGateJournal(fx) {
+  const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  const attempt = journal.attempts[0];
+  const generation = attempt.generations[0].nonce;
+  const body = [`evidence-binding: ${attempt.generations[0].member} ${generation}`,
+    'verdict: pass', 'findings_blocking: 0', ''].join('\n');
+  attempt.outcome = 'pass';
+  attempt.reason = null;
+  attempt.lifecycle_settled = true;
+  attempt.repair = { selected_writer: null, settled: null };
+  attempt.rebind = [];
+  attempt.consumed_by = null;
+  attempt.findings = [];
+  attempt.route_candidates = [];
+  attempt.receipts = [{ node_id: attempt.generations[0].member, generation, body,
+    receipt_sha256: sha256(Buffer.from(body)), effective_pass: true, verdict: 'pass',
+    findings_blocking: 0 }];
+  attempt.transaction_key = sha256(Buffer.from(JSON.stringify({ plan_hash: journal.plan_hash,
+    logical_gate_key: attempt.logical_gate.key, candidate_digest: attempt.candidate_digest,
+    generations: attempt.generations })));
+  fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
+  fs.writeFileSync(path.join(fx.cacheDir, attempt.generations[0].member + '.md'), body);
+  return journal;
+}
+
+// #838 GREEN ARC — a multi-gate spine whose change gate settled PASSED, quiescent, with the
+// review journal STILL ON DISK. This fixture deliberately does NOT call initShapeFixture: the
+// hand-delete of `review-attempts.json` inside that helper was the defect's own fingerprint, so
+// a green arc that needs it proves nothing.
+scenario(() => {
+  const fx = initFixture({ seedSource: false });
+  try {
+    const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+    const journal = sealPassedGateJournal(fx);
+    ok(schema.validateReviewJournal(journal, fx.parent.hash, { schema2_review_gates: [] }).ok,
+      '#838: the passed-gate journal is a REAL schema-valid journal, not a stub: '
+        + JSON.stringify(schema.validateReviewJournal(journal, fx.parent.hash, { schema2_review_gates: [] })));
+    ok(fs.existsSync(journalPath),
+      '#838: the settled PASSED gate leaves review-attempts.json on disk (nothing ever deletes it)');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-source.json')),
+      '#838: a gate that settles GREEN writes no repair handoff');
+
+    const premise = 'the frozen spine assumed one writer owns product.js; the completed nodes prove two';
+    const dispatch = replan.prepareShapeRefutation({ repoRoot: fx.root, project: fx.project,
+      premise, evidence: ['.cache/impl.md'], now: () => '2026-07-16T03:00:00.000Z' });
+    equal(dispatch.result, 'planner_dispatch_required',
+      '#838: a quiescent run whose only review history is a settled PASS may still re-plan on a '
+        + 'sealed refutation packet: ' + JSON.stringify(dispatch));
+    equal(dispatch.phase, 'planner_pending', '...at the planner seam: ' + JSON.stringify(dispatch));
+    ok(fs.existsSync(journalPath),
+      '#838: ...and the journal is still on disk when the entry is admitted (presence is NOT the predicate)');
+
+    // The whole arc, not just the entry: the child epoch activates on the unchanged downstream
+    // machinery, and the journal survives it — so a presence-keyed predicate would wedge FOREVER.
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    writePlannerResult(fx, tx);
+    let result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project, now: () => '2026-07-16T03:00:00.000Z' });
+    for (let turn = 0; turn < 20 && result && !['committed', 'already_committed'].includes(result.result); turn++) {
+      result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project, now: () => '2026-07-16T03:00:00.000Z' });
+    }
+    equal(result.result, 'committed',
+      '#838: the shape_refutation child commits over a live passed-gate journal: ' + JSON.stringify(result));
+    ok(fs.existsSync(journalPath),
+      '#838: epoch activation preserves the journal — which is exactly why presence can never be the predicate');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #838 predicate table — the ONE fixture family, five journal states, one classification each.
+// The two REGRESSION arms (unsettled / consumable settled-failed) keep their existing typed
+// reasons verbatim; the three ADMITTED arms reach the next fence (`shape_refutation_evidence_missing`
+// — this fixture seals no packet), which is the precise signal that precedence let them through.
+scenario(() => {
+  const shapePrepare = fx => replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+    transitionReason: 'shape_refutation' });
+  const journalOf = fx => JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+  const writeJournal = (fx, journal) => fs.writeFileSync(path.join(fx.cacheDir, 'review-attempts.json'),
+    JSON.stringify(journal, null, 2) + '\n');
+
+  // REGRESSION 1 — a settled FAILED attempt that is still consumable wins, as before.
+  const fxLive = initFixture();
+  try {
+    equal(shapePrepare(fxLive).reason, 'shape_refutation_review_authority_present',
+      '#838 regression: a CONSUMABLE settled review authority still wins over the shape entry');
+  } finally { fs.rmSync(fxLive.root, { recursive: true, force: true }); }
+
+  // REGRESSION 2 — an UNSETTLED attempt (a gate in flight, yet to record findings) still refuses
+  // with its own reason. This authority must never be usable to dodge a gate about to settle.
+  const fxPending = initFixture();
+  try {
+    const journal = journalOf(fxPending);
+    journal.attempts[0].lifecycle_settled = false;
+    writeJournal(fxPending, journal);
+    equal(shapePrepare(fxPending).reason, 'shape_refutation_review_pending',
+      '#838 regression: an UNSETTLED attempt still refuses shape_refutation_review_pending');
+  } finally { fs.rmSync(fxPending.root, { recursive: true, force: true }); }
+
+  // ADMITTED 1 — the journal carries only settled PASSES. The schema pins a pass to a null
+  // selected writer / null consumer / empty rebind, so there is nothing a review re-plan could
+  // consume: the old refusal hinted at a route that structurally does not exist.
+  const fxPassed = initFixture({ seedSource: false });
+  try {
+    sealPassedGateJournal(fxPassed);
+    const admitted = shapePrepare(fxPassed);
+    equal(admitted.reason, 'shape_refutation_evidence_missing',
+      '#838: an all-PASSED journal is not a review authority — the entry proceeds to its own '
+        + 'evidence fence: ' + JSON.stringify(admitted));
+  } finally { fs.rmSync(fxPassed.root, { recursive: true, force: true }); }
+
+  // ADMITTED 2 — the settled FAILED attempt was ALREADY consumed by its repair writer. readSource
+  // refuses a consumed attempt (`consumed_by != null`), so it is no longer an authority either.
+  const fxConsumed = initFixture();
+  try {
+    const journal = journalOf(fxConsumed);
+    journal.attempts[0].repair = { selected_writer: 'impl', settled: true };
+    journal.attempts[0].consumed_by = 'impl';
+    writeJournal(fxConsumed, journal);
+    const admitted = shapePrepare(fxConsumed);
+    equal(admitted.reason, 'shape_refutation_evidence_missing',
+      '#838: an already-CONSUMED repair authority no longer blocks the shape entry: '
+        + JSON.stringify(admitted));
+  } finally { fs.rmSync(fxConsumed.root, { recursive: true, force: true }); }
+
+  // ADMITTED 3 — the journal (and the orphaned handoff beside it) are bound to ANOTHER epoch's
+  // plan hash. Both files survive activation by design, so a presence-keyed predicate re-wedges
+  // the authority one epoch later against a handoff readSource itself rejects
+  // (`replan_source_attempt_unsettled` on the plan_hash mismatch).
+  const fxStale = initFixture();
+  try {
+    const foreignHash = sha256(Buffer.from('#838 foreign parent epoch'));
+    const journal = journalOf(fxStale);
+    journal.plan_hash = foreignHash;
+    journal.attempts[0].plan_hash = foreignHash;
+    writeJournal(fxStale, journal);
+    ok(fs.existsSync(path.join(fxStale.cacheDir, 'replan-source.json')),
+      '#838: the stale-epoch fixture keeps the orphaned handoff on disk (activation never removes it)');
+    const admitted = shapePrepare(fxStale);
+    equal(admitted.reason, 'shape_refutation_evidence_missing',
+      '#838: a journal bound to a FOREIGN plan hash carries no authority over THIS parent: '
+        + JSON.stringify(admitted));
+  } finally { fs.rmSync(fxStale.root, { recursive: true, force: true }); }
+});
+
+// #838 cross-epoch, on a REAL driven lineage (never a hand-edited journal): a committed REVIEW
+// re-plan leaves both authority files on disk, still bound to the PARENT epoch's plan hash and
+// still carrying an unconsumed settled-FAILED attempt. In the CHILD epoch that pair is inert —
+// readSource refuses it — so it must not wedge the shape authority.
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const committed = driveReplanToCommit(fx);
+    equal(committed.result, 'committed',
+      '#838: the review re-plan commits, activating the child epoch: ' + JSON.stringify(committed));
+    const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+    const sourcePath = path.join(fx.cacheDir, 'replan-source.json');
+    ok(fs.existsSync(journalPath) && fs.existsSync(sourcePath),
+      '#838: activation preserves BOTH authority files (the cleanup band excludes them)');
+    const survivor = JSON.parse(fs.readFileSync(journalPath, 'utf8')).attempts[0];
+    equal(survivor.lifecycle_settled, true, '#838: the surviving attempt is settled');
+    equal(survivor.outcome, 'fail', '...and FAILED');
+    equal(survivor.consumed_by, null, '...and still unconsumed — presence alone would wedge forever');
+    const childHash = validator.readStoredHash(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'));
+    ok(survivor.plan_hash !== childHash,
+      '#838: ...but it is bound to the PARENT plan hash, so it is inert against this parent');
+
+    // The review lane agrees the pair is SPENT: asking it to re-plan on the surviving handoff
+    // opens nothing — it only replays the receipt that was already committed. There is no live
+    // authority here for the shape entry to defer to.
+    const reviewAgain = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' });
+    equal(reviewAgain.result, 'already_committed',
+      '#838: the surviving handoff opens no new review re-plan — it replays a spent receipt: '
+        + JSON.stringify(reviewAgain));
+
+    // A FRESH sealed packet is a new transition. Its identity is the packet — never an unrelated
+    // review handoff that happens to have survived the epoch. Deferring to that stale attempt id
+    // replays the spent receipt and silently drops the reshape request, which is the same
+    // presence-keyed wedge in its quietest form (a no-op instead of a typed refusal).
+    fs.writeFileSync(path.join(fx.cacheDir, 'recon-838.md'), 'child-epoch evidence that refutes the shape\n');
+    const dispatch = replan.prepareShapeRefutation({ repoRoot: fx.root, project: fx.project,
+      premise: 'the child spine still assumes a single writer; child-epoch evidence refutes it',
+      evidence: ['.cache/recon-838.md'], now: () => '2026-07-16T05:00:00.000Z' });
+    equal(dispatch.result, 'planner_dispatch_required',
+      '#838: the inert parent-epoch authority does NOT wedge the child epoch\'s shape entry: '
+        + JSON.stringify(dispatch));
+    ok(dispatch.transaction_id && dispatch.transaction_id !== committed.transaction_id,
+      '#838: ...and it opens a NEW transaction rather than replaying the spent one: '
+        + JSON.stringify(dispatch));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #838 deviation route (the #824 AC, shipped only partially): `replan_source_journal_missing` is
+// the "I want to re-plan and no gate failed" deviation, so it must name the legal verb rather
+// than dead-end. Both emit sites carry it.
+scenario(() => {
+  // Site 1 — readSourceAuthority: neither authority file exists at all.
+  const fxNone = initShapeFixture();
+  try {
+    const refused = replan.prepareReplan({ repoRoot: fxNone.root, project: fxNone.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    equal(refused.reason, 'replan_source_journal_missing',
+      '#838: a review re-plan with no review history refuses replan_source_journal_missing: '
+        + JSON.stringify(refused));
+    equal(refused.route, 'shape_refutation',
+      '#838: ...and routes the operator to the recorded form of the same decision: '
+        + JSON.stringify(refused));
+  } finally { fs.rmSync(fxNone.root, { recursive: true, force: true }); }
+
+  // Site 2 — readSource: the handoff survived but the journal did not.
+  const fxHandoff = initFixture();
+  try {
+    fs.unlinkSync(path.join(fxHandoff.cacheDir, 'review-attempts.json'));
+    const refused = replan.prepareReplan({ repoRoot: fxHandoff.root, project: fxHandoff.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' });
+    equal(refused.reason, 'replan_source_journal_missing',
+      '#838: a handoff with no journal refuses replan_source_journal_missing: ' + JSON.stringify(refused));
+    equal(refused.route, 'shape_refutation',
+      '#838: ...carrying the same typed route at the second emit site: ' + JSON.stringify(refused));
+  } finally { fs.rmSync(fxHandoff.root, { recursive: true, force: true }); }
+});
+
+// #838 budget seam, cross-authority: a shape transition rides its OWN allowance for the ADMISSION
+// check but still COSTS one shared automatic slot. So two autonomous reshapes exhaust the shared
+// automatic-transition budget every other authority draws on — the interaction the inline comment
+// at the budget seam denies ("and vice versa"). It fails toward MORE consent, which is safe; this
+// pins the direction so the corrected comment can never drift back into a behaviour change.
+scenario(() => {
+  const fx = initShapeFixture();
+  try {
+    const stateOf = () => replan.parseStateFields(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'));
+    equal(String(stateOf().automatic_review_replans), '0', '#838: the shared counter starts at zero');
+
+    const first = driveShapeRefutationToCommit(fx, {
+      premise: 'first refutation: the spine assumed one writer; evidence shows two',
+      evidence: ['.cache/impl.md'] });
+    equal(first.result, 'committed', '#838: the first autonomous reshape commits: ' + JSON.stringify(first));
+    const firstReceipt = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(firstReceipt.budget.count_before, 0, '#838: the receipt records the SHARED slot it drew');
+    equal(firstReceipt.budget.prospective_count_after, 1,
+      '#838: ...advanced by the shape transition itself');
+    equal(firstReceipt.budget.transition_cost, 1,
+      '#838: ...at a cost of one shared slot (never zero)');
+    deepEqual(firstReceipt.budget.shape_refutation_allowance, { count_before: 0, ceiling: 2 },
+      '#838: ...while its OWN allowance is what admitted it: ' + JSON.stringify(firstReceipt.budget));
+    equal(String(stateOf().automatic_review_replans), '1',
+      '#838: the shared automatic counter moved, not just the per-authority one');
+
+    fs.writeFileSync(path.join(fx.cacheDir, 'recon-838b.md'), 'evidence for the second reshape\n');
+    const second = driveShapeRefutationToCommit(fx, {
+      premise: 'second refutation: the rebuilt spine assumed a frozen surface; recon shows churn',
+      evidence: ['.cache/recon-838b.md'] });
+    equal(second.result, 'committed', '#838: the second autonomous reshape commits: ' + JSON.stringify(second));
+    const after = stateOf();
+    equal(String(after.automatic_review_replans), '2',
+      '#838: TWO autonomous reshapes spend TWO shared slots');
+    equal(String(after.authorized_epoch_ceiling), '2',
+      '#838: ...against an unmoved shared ceiling');
+    ok(Number(after.automatic_review_replans) >= Number(after.authorized_epoch_ceiling),
+      '#838: the shape authority alone can exhaust the SHARED autonomous budget — every other '
+        + 'authority now needs a recorded consent turn. The budget-seam comment must say so.');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// #838 documentation contract — `docs/api.md` § kaola-workflow-replan.js documents only the two
+// OLD authorities. The third shipped with a subcommand, three evidence flags, a scoped consent
+// flag, its own allowance and seven typed refusals, plus five module exports — none of it written
+// down. A CLI an operator cannot find is a wedge of a different kind.
+//
+// BOTH halves are checked, because either alone is vacuous: the doc must NAME each symbol, and
+// each named export must actually EXIST on the module. A doc that invents a symbol is worse than
+// one that omits it.
+scenario(() => {
+  const api = fs.readFileSync(path.join(__dirname, '..', 'docs', 'api.md'), 'utf8');
+  const sliceSection = (heading, terminator) => {
+    const at = api.indexOf(heading);
+    if (at === -1) return null;
+    const end = api.indexOf(terminator, at + heading.length);
+    return api.slice(at, end === -1 ? api.length : end);
+  };
+
+  const cli = sliceSection('### Script: `kaola-workflow-replan.js`', '\n### ');
+  ok(cli, '#838: docs/api.md carries the kaola-workflow-replan.js section');
+
+  // The one-command fast path, its evidence inputs, the non-fused `prepare` entry, and the
+  // per-authority consent scope. `--reason` is the flag name (NOT `--transition-reason`).
+  for (const token of ['shape-refutation', '--premise', '--mismatch', '--evidence',
+    '--authority-scope', '--reason shape_refutation']) {
+    ok(cli.includes(token),
+      '#838: the replan section must document `' + token + '` (the third authority is undocumented)');
+  }
+  // The evidence-flag contract an operator gets wrong first: repeatable AND comma-splittable,
+  // project-relative only.
+  ok(/project-relative/i.test(cli),
+    '#838: ...and that evidence paths are project-relative only');
+
+  // Every typed refusal the entry can emit, so a caller can classify structurally.
+  for (const reason of ['shape_refutation_not_quiescent', 'shape_refutation_review_pending',
+    'shape_refutation_review_authority_present', 'shape_refutation_evidence_missing',
+    'shape_refutation_evidence_path_invalid', 'shape_refutation_evidence_mismatch',
+    'shape_refutation_lineage_invalid']) {
+    ok(cli.includes(reason), '#838: the replan section must name the typed refusal `' + reason + '`');
+  }
+
+  // The allowance: two autonomous transitions plus one per shape-scoped consent entry, drawn from
+  // committed receipts — and the fact that it STILL costs one shared automatic slot.
+  ok(cli.includes('shape_refutation_allowance'),
+    '#838: ...and the receipt/packet field that publishes the per-authority allowance');
+
+  const exportsBlock = sliceSection('**`scripts/kaola-workflow-replan.js`:**', '\n**`');
+  ok(exportsBlock, '#838: docs/api.md carries the replan module-exports block');
+  for (const name of ['verifyShapeRefutationPacket', 'prepareShapeRefutation',
+    'sealShapeRefutationPacket', 'countShapeRefutationTransitions', 'shapeRefutationAllowance']) {
+    ok(exportsBlock.includes(name),
+      '#838: the module-exports block must list `' + name + '`');
+    equal(typeof replan[name], 'function',
+      '#838: ...and `' + name + '` must be a real export (documentation can never invent one)');
+  }
 });
 
 shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);

@@ -28398,6 +28398,126 @@ scenario(() => {
     + ' regressed: ' + regressions.slice(0, 12).join('; '));
 });
 
+// ===========================================================================
+// #838-PASS-INVARIANT — the premise the re-plan entry predicate leans on, made checkable.
+//
+// The shape_refutation entry may proceed over a journal whose attempts all settled PASSED. That
+// is only sound because a settled PASS is STRUCTURALLY not a repair authority: the journal
+// validator refuses any pass attempt that names a repair writer, a consumer, or a rebind. If that
+// ever loosened, "an all-passed journal carries nothing to consume" would silently become false
+// and the entry would be dodging a live authority. Pinned bidirectionally — the clean pass is
+// accepted, each of the three repair-authority shapes is refused — so this is a proof, not a claim.
+// ===========================================================================
+scenario(() => {
+  const crypto = require('crypto');
+  const hash = 'a'.repeat(64);
+  const gate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review', origin: ['writer'], members: ['review'] });
+  const generations = [{ member: 'review', nonce: 'passnonce1234' }];
+  const candidate = 'b'.repeat(64);
+  const body = 'evidence-binding: review passnonce1234\nverdict: pass\nfindings_blocking: 0\n';
+  const passAttempt = {
+    attempt_id: 'review:1', ordinal: 1, plan_hash: hash, logical_gate: gate,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: hash,
+      logical_gate_key: gate.key, candidate_digest: candidate, generations })).digest('hex'),
+    candidate_digest: candidate, candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64),
+    generations, settlement_command: 'close-node', outcome: 'pass', reason: null,
+    receipts: [{ node_id: 'review', generation: 'passnonce1234', body,
+      receipt_sha256: crypto.createHash('sha256').update(body).digest('hex'),
+      effective_pass: true, verdict: 'pass', findings_blocking: 0 }],
+    findings: [], route_candidates: [], lifecycle_settled: true,
+    repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null,
+  };
+  const journalOf = attempt => ({ schema_version: 1, plan_hash: hash, attempts: [attempt] });
+
+  assert(validateReviewJournal(journalOf(passAttempt), hash).ok === true,
+    '#838-PASS-INVARIANT: a settled PASS with no repair authority is a valid journal: '
+      + JSON.stringify(validateReviewJournal(journalOf(passAttempt), hash)));
+
+  const withWriter = validateReviewJournal(journalOf({ ...passAttempt,
+    repair: { selected_writer: 'writer', settled: null } }), hash);
+  assert(withWriter.ok === false,
+    '#838-PASS-INVARIANT: a PASS naming a repair writer must be refused, got ' + JSON.stringify(withWriter));
+
+  const withConsumer = validateReviewJournal(journalOf({ ...passAttempt, consumed_by: 'writer' }), hash);
+  assert(withConsumer.ok === false,
+    '#838-PASS-INVARIANT: a PASS naming a consumer must be refused, got ' + JSON.stringify(withConsumer));
+
+  const withRebind = validateReviewJournal(journalOf({ ...passAttempt,
+    repair: { selected_writer: 'writer', settled: true },
+    producer_bindings: { writer: { baseline: 'c'.repeat(40), anchored_ref: 'c'.repeat(40),
+      open_token: 'c'.repeat(40), generation: 'ccccccccccccc', ref: 'refs/kaola-workflow/barrier/x/writer' } },
+    rebind: [{ generation: 1, base_before: 'c'.repeat(40), base_after: 'e'.repeat(40),
+      candidate_digest: candidate, candidate_declared: {}, producer_bindings: {}, absorbed: [],
+      attributed_to: [], settled: true, aborted: false }] }), hash);
+  assert(withRebind.ok === false,
+    '#838-PASS-INVARIANT: a PASS carrying a rebind must be refused, got ' + JSON.stringify(withRebind));
+});
+
+// ===========================================================================
+// #838-ROUTE — the deviation-route table. A barrier/ledger refusal that fires because the
+// intended action falls OUTSIDE the frozen shape must NAME the legal verb in a typed `route:`
+// field; leaving the operator to infer it from prose is what turns a recoverable refusal into a
+// dead end. The routes are stamped at the ONE emit-time decorator (decorateOperatorHint), so a
+// new emit site inherits its route for free and none of the many close_transition_disallowed /
+// node_not_in_ledger emit sites has to be touched.
+//
+// The mapping is DERIVED from the barrier reason precedence the plan validator already owns, so
+// the two can never drift:
+//   write_set_overflow | write_set_granularity | lockfile_write | mirror_write | count_bump
+//                              -> revert-overflow   (discard the out-of-set writes)
+//   unattributed_write         -> amend-surface     (attribute + re-review them instead)
+//   sensitive_write_unreviewed -> shape_refutation  (the legal cure is ADDING a security-reviewer
+//                                                    gate, which is a spine change, not a node fix)
+//   foreign_archive            -> NO route          (never legal under any verb)
+//
+// The negative arms are load-bearing: a `route` field that is always present carries no
+// information. Enforcement must be bidirectional or the field is decoration.
+// ===========================================================================
+scenario(() => {
+  const routed = [
+    { reason: 'write_set_overflow', route: 'revert-overflow' },
+    { reason: 'write_set_granularity', route: 'revert-overflow' },
+    { reason: 'lockfile_write', route: 'revert-overflow' },
+    { reason: 'mirror_write', route: 'revert-overflow' },
+    { reason: 'count_bump', route: 'revert-overflow' },
+    { reason: 'unattributed_write', route: 'amend-surface' },
+    { reason: 'sensitive_write_unreviewed', route: 'shape_refutation' },
+  ];
+  for (const tc of routed) {
+    const out = decorateOperatorHint({ result: 'refuse', reason: tc.reason, nodeId: 'w1' });
+    assert(out.route === tc.route,
+      '#838-ROUTE[' + tc.reason + ']: the out-of-shape refusal must carry route "' + tc.route
+        + '", got ' + JSON.stringify(out.route));
+    assert(typeof out.operator_hint === 'string' && out.operator_hint.length > 0,
+      '#838-ROUTE[' + tc.reason + ']: ...alongside the operator hint, which is unchanged');
+  }
+
+  // NEGATIVE 1 — foreign_archive has no legal verb: writing another run's archive is never
+  // curable by revert-overflow, amend-surface, or a reshape. It must carry NO route.
+  const archive = decorateOperatorHint({ result: 'refuse', reason: 'foreign_archive', nodeId: 'w1' });
+  assert(archive.route === undefined,
+    '#838-ROUTE: foreign_archive names no legal verb and must carry NO route, got '
+      + JSON.stringify(archive.route));
+
+  // NEGATIVE 2 — a refusal that is not an out-of-shape deviation at all gains nothing.
+  const unrelated = decorateOperatorHint({ result: 'refuse', reason: 'plan_missing' });
+  assert(unrelated.route === undefined,
+    '#838-ROUTE: a non-deviation refusal must carry NO route, got ' + JSON.stringify(unrelated.route));
+
+  // NEGATIVE 3 — a success envelope gains neither a hint nor a route. Presence of either is
+  // itself the "there is a next step" signal.
+  const okEnv = decorateOperatorHint({ result: 'ok', nodeId: 'n1' });
+  assert(okEnv.route === undefined && okEnv.operator_hint === undefined,
+    '#838-ROUTE: a success envelope must gain neither operator_hint nor route');
+
+  // IDEMPOTENT — exactly like operator_hint: a route a callee already decided is never
+  // overwritten by the table (the callee knows the concrete situation; the table is the default).
+  const preset = decorateOperatorHint({ result: 'refuse', reason: 'write_set_overflow',
+    nodeId: 'w1', route: 'reexpand-open' });
+  assert(preset.route === 'reexpand-open',
+    '#838-ROUTE: an existing route must not be overwritten, got ' + JSON.stringify(preset.route));
+});
+
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
 
 if (failed > 0) {
