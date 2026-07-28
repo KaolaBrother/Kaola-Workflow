@@ -234,14 +234,19 @@ const OPERATOR_HINT_REGISTRY = {
     'Another scheduler command holds this project\'s lock'
     + (ctx.holder && ctx.holder.subcommand ? ' (' + ctx.holder.subcommand + (ctx.holder.pid ? ' pid ' + ctx.holder.pid : '') + ')' : '')
     + '. Only one orchestrator may drive a project\'s scheduler at a time — wait for the in-flight command to finish, then retry. (A dead/crashed holder refuses separately as scheduler_lock_stale, whose recovery is the unlock verb.)',
-  // `unlock` refused because the recorded holder is still LIVE. This is the guard that keeps the
-  // verb from reintroducing the double-acquire hazard: a running orchestrator's lock is never taken.
-  scheduler_lock_held: (ctx) => {
-    const h = (ctx.holder && typeof ctx.holder === 'object') ? ctx.holder : {};
-    return 'The scheduler lock is held by a LIVE holder ('
-      + (h.subcommand || 'unknown subcommand') + ', pid ' + (h.pid != null ? h.pid : '?')
-      + '); it is never removed while its owner is running. Wait for that command to finish, then retry — or, if you believe the process is gone, re-run the wedged command to re-probe liveness.';
-  },
+  // DELETED (rung-1 subtraction): scheduler_lock_held. It classifies to kernel_lock_held/scheduler,
+  // whose derived hint renders MORE than the template did — the FACT names the holder's subcommand,
+  // pid AND host and states LIVE from the payload, the WHY carries the "a lock is a claim on state,
+  // not a file to delete" rule, and the ROUTE resolves the live arm to the environment wait.
+  //
+  // scheduler_lock_stale is RETAINED, and the reason is a measured one rather than a preference.
+  // Its sibling arm has a copy-runnable exit — the pinned green arc reads the hint, runs the verb it
+  // spells, and expects it to work — and `routeProse` renders `route.args` as a STATIC template, so
+  // the derived exit can only ever say `--holder <pid|none>`. A hint whose command has to be
+  // hand-edited before it runs is not the same artifact as one that can be pasted. Deleting this
+  // template needs the lock route to interpolate the holder pid it already has in the payload; until
+  // it does, the template is the only rung that carries the concrete value.
+  //
   // #585 (repair): the lock's holder is DEAD/crashed (dead same-host PID, or an old cross-host/corrupt
   // payload). The lock is still never auto-reclaimed by the ACQUIRE path — an unlink fused into
   // acquire double-acquires under concurrency — but recovery is no longer a prose `rm`: the `unlock`
@@ -543,8 +548,10 @@ const OPERATOR_HINT_REGISTRY = {
         + 'of the flagged findings.'),
   no_active_reviewer: () =>
     'No active reviewer node to attach the repair to. Open the reviewer gate before repair-node.',
-  ledger_splice_failed: (ctx) =>
-    'Could not reset the writer ' + (ctx.nodeId || '<id>') + ' to pending (ledger splice failed). Inspect the ## Node Ledger for a malformed row.',
+  // DELETED (rung-1 subtraction): ledger_splice_failed. It classifies to kernel_write_failed/position,
+  // whose derived hint states the same fact truthfully (a position-record write that did not take),
+  // adds the failing path and errno from the payload, carries the half-applied-position WHY, and
+  // routes to reconcile-running-set — a real verb where the template dead-ended on "inspect".
   barrier_base_missing: (ctx) =>
     'No barrier-base recorded for ' + (ctx.nodeId || '<id>') + '. Run open-next first so a baseline exists, then retry revert-overflow.',
   barrier_base_empty: (ctx) =>
@@ -661,6 +668,39 @@ const OPERATOR_HINT_REGISTRY = {
   invalid_project: (ctx) =>
     'The --project segment is reserved/illegal (' + (ctx.detail || 'must be issue-N, never the literal kaola-workflow') + '). Pass a valid project name.',
 };
+
+// ---------------------------------------------------------------------------
+// THE RUNG-1 CENSUS — a tighten-only ratchet on the legacy hint table.
+//
+// This table is the hand-kept condition-specific mirror the kernel refusal registry exists to
+// replace, so its size is a DEBT figure and may only ever go DOWN. Without a trigger the debt
+// silently re-grows: adding a template is a one-line diff nobody reads as a policy change.
+//
+// The check is EQUALITY, not a ceiling, and it runs at MODULE LOAD — which makes every suite that
+// requires this file an enforcement point, and makes both directions loud:
+//   * ADDING a template fails until someone raises this number, which is the visible admission that
+//     rung 1 grew. Do not raise it: register the condition's cure as a cell-keyed WHY clause in the
+//     kernel registry instead.
+//   * DELETING one fails until someone lowers it, so the census can never drift below the table and
+//     quietly re-open room.
+// Equality is also what catches the clean-merge hazard: two branches that each delete a different
+// template merge without conflict into a table whose size matches neither side's census, and a
+// ceiling would pass that silently.
+//
+// This is a STATIC property of committed source checked dynamically — it cannot fire in the field
+// unless the committed table itself disagrees with the committed number.
+// ---------------------------------------------------------------------------
+const OPERATOR_HINT_RUNG_CENSUS = 90;
+{
+  const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
+  if (live !== OPERATOR_HINT_RUNG_CENSUS) {
+    throw new Error('operator_hint_rung_census_mismatch: OPERATOR_HINT_REGISTRY holds ' + live
+      + ' templates, the recorded census says ' + OPERATOR_HINT_RUNG_CENSUS
+      + '. Rung 1 is TIGHTEN-ONLY: delete a template and lower the census. If you are adding one,'
+      + ' add a cell-keyed WHY clause to the kernel refusal registry instead — a new template here'
+      + ' re-grows the mirror this table is being deleted to remove.');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // DEVIATION_ROUTES — the typed `route:` verb for a refusal that fires because the intended action

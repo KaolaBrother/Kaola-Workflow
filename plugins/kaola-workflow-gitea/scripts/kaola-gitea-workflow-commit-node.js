@@ -57,6 +57,39 @@ const OPERATOR_HINT_REGISTRY = {
 };
 
 // ---------------------------------------------------------------------------
+// THE RUNG-1 CENSUS — a tighten-only ratchet on the legacy hint table.
+//
+// This table is the hand-kept condition-specific mirror the kernel refusal registry exists to
+// replace, so its size is a DEBT figure and may only ever go DOWN. Without a trigger the debt
+// silently re-grows: adding a template is a one-line diff nobody reads as a policy change.
+//
+// The check is EQUALITY, not a ceiling, and it runs at MODULE LOAD — which makes every suite that
+// requires this file an enforcement point, and makes both directions loud:
+//   * ADDING a template fails until someone raises this number, which is the visible admission that
+//     rung 1 grew. Do not raise it: register the condition's cure as a cell-keyed WHY clause in the
+//     kernel registry instead.
+//   * DELETING one fails until someone lowers it, so the census can never drift below the table and
+//     quietly re-open room.
+// Equality is also what catches the clean-merge hazard: two branches that each delete a different
+// template merge without conflict into a table whose size matches neither side's census, and a
+// ceiling would pass that silently.
+//
+// This is a STATIC property of committed source checked dynamically — it cannot fire in the field
+// unless the committed table itself disagrees with the committed number.
+// ---------------------------------------------------------------------------
+const OPERATOR_HINT_RUNG_CENSUS = 6;
+{
+  const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
+  if (live !== OPERATOR_HINT_RUNG_CENSUS) {
+    throw new Error('operator_hint_rung_census_mismatch: OPERATOR_HINT_REGISTRY holds ' + live
+      + ' templates, the recorded census says ' + OPERATOR_HINT_RUNG_CENSUS
+      + '. Rung 1 is TIGHTEN-ONLY: delete a template and lower the census. If you are adding one,'
+      + ' add a cell-keyed WHY clause to the kernel refusal registry instead — a new template here'
+      + ' re-grows the mirror this table is being deleted to remove.');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // getOperatorHint — emit-time accessor: looks up reason in OPERATOR_HINT_REGISTRY,
 // calls the template with ctx, returns a one-sentence string.
 // Falls back to a safe generic when no entry is registered for the reason.
