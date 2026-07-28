@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 'use strict';
+// Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
+// file destructures child_process so the counted wrappers are what it binds. Advisory,
+// pass-through and fail-open: the require itself is guarded, so a census that is absent
+// or faulty can change no assertion and fail no run.
+try { require('../../../scripts/test-spawn-census').install('simulate-gitea-workflow-walkthrough'); } catch (_) { /* advisory only */ }
 
 const { execFileSync } = require('child_process');
 const path = require('path');
