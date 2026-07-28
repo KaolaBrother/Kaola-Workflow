@@ -293,9 +293,11 @@ choices, or ambiguity that blocks correctness.
   final-fix-commit --project {project} --json --stdin`, one entry per fix (exact failed command, fix
   commit, touched paths, green rerun receipt bound to the post-fix candidate). The finalize
   attribution sweep credits that register as a third source; an unrecorded finalize-time fix refuses
-  `unattributed_change`. A fix touching production behavior additionally needs a bound
-  re-certification receipt (a settled PASS review attempt over the post-fix candidate) or the verb
-  refuses `final_fix_production_surface`. The lane closes at the sink's first irreversible step: once
+  `unattributed_change`. The register records **validation apparatus only**: a fix touching production
+  behavior refuses `final_fix_production_surface` and no receipt admits it — that deviation is itself
+  evidence the standing certification no longer describes the candidate, so the refusal routes to
+  `shape_refutation` (a re-plan that puts a certifying authority over the work) instead of being
+  laundered into an entry. The lane closes at the sink's first irreversible step: once
   the branch is pushed the verb refuses `final_fix_after_sink_started` and recovery is a follow-up
   issue, never a history rewrite.
 - A one-line, mechanically obvious inline edit (no behavior/API/security/design judgment) that fixes

@@ -487,11 +487,13 @@ const OPERATOR_HINT_REGISTRY = {
     + ' other command, or one bound to a candidate the tree has moved past, proves nothing about what ships.',
   final_fix_production_surface: (ctx) =>
     'This fix touches PRODUCTION behavior (' + (((ctx && ctx.production_paths) || []).join(', ') || 'unnamed path')
-    + ') and its re-certification receipt is "' + ((ctx && ctx.recertification) || 'missing')
-    + '". Production surfaces ARE admissible through this lane, but only behind a settled PASS review attempt'
-    + ' over the POST-FIX candidate, named by the entry and agreeing with the run\'s own review journal. Run the'
-    + ' re-review, then cite its attempt_id + candidate_digest in `recertification`. If no authority in this plan'
-    + ' can certify the change, the shape itself is refuted — take that exit instead of widening this one.',
+    + '), and this wall does not open. A behavior change arriving after every reviewer is discharged is a'
+    + ' DEVIATION THAT IS ITSELF EVIDENCE — evidence that the certification standing over this candidate no'
+    + ' longer describes it — so it is REPORTED, never converted into an admission by a finalize register.'
+    + ' The exit is the SHAPE: no authority in the frozen plan can certify the change, so the shape is refuted'
+    + ' — take the recorded route (' + ((ctx && ctx.route) || 'shape_refutation') + ') and let the re-plan put'
+    + ' a certifying authority over the work. The lane still records VALIDATION APPARATUS fixes (tests,'
+    + ' fixtures, build/tooling glue, allowband docs) behind their bound green rerun receipt.',
   final_fix_register_unverified: (ctx) =>
     'The sink-owned final-fix register did not verify (' + ((ctx && ctx.register_reason) || 'unknown')
     + '). It is written only by final-fix-commit, so a mismatch means it was edited out of band. Do NOT delete'
@@ -15555,13 +15557,18 @@ function defaultSinkProgressProbe(opts, content) {
 // candidate: this verb, recording a digest-bound entry into the sink-owned register that the sweep
 // then reads as its THIRD attributed source.
 //
-// THE SCOPE WALL WAS DELIBERATELY WIDENED (see docs/decisions/D-826-01.md). The filed issue REJECTED
-// production-behavior paths outright. The owner ADMITS them — behind a BOUND RE-CERTIFICATION
-// RECEIPT: a settled PASS review attempt over the POST-FIX candidate, read out of the run's OWN
-// review journal (the existing settlement machinery, inside the ledger-chain tamper boundary), never
-// a self-asserted field. That receipt is now the load-bearing safeguard that REPLACES the wall, so it
-// is verified in all four of its failure directions. Validation-apparatus paths keep the cheap path:
-// the bound green rerun receipt alone.
+// THE SCOPE WALL IS HARD, AND IT STAYS HARD (see docs/decisions/D-826-01.md). A finalize-time fix
+// touching PRODUCTION behavior is REFUSED `final_fix_production_surface`. No receipt, entry field or
+// verifier admits it: under ADR 0013's R4 a behavior change arriving after every reviewer is
+// discharged is not a non-canonical FORM of correct content, it is a DEVIATION THAT IS ITSELF
+// EVIDENCE — evidence that the certification standing over this candidate no longer describes it.
+// Admitting it behind a re-certification receipt would LAUNDER that signal, converting a fact about
+// the run into a receipt saying the opposite, so the deviation is reported and never repaired.
+// Validation-apparatus paths keep the cheap path: the bound green rerun receipt alone.
+//
+// THE WALL IS NOT A DEAD END — THAT IS WHAT THE ROUTE IS FOR. The refusal carries a typed exit
+// (`route: shape_refutation`): if no authority in the frozen plan can certify the change, the SHAPE
+// is what is refuted, and the re-plan epoch is the recorded way out.
 //
 // THE PRISTINE (pre-push) BOUNDARY IS THE LANE'S HARD CLOSE. After the sink's first irreversible step
 // the record is immutable history and recovery is a follow-up issue, never a rewrite.
@@ -15574,37 +15581,10 @@ function classifyFinalFixSurface(paths, project) {
   return require('./kaola-workflow-plan-validator').classifyFinalFixSurface(paths, project);
 }
 
-// verifyFinalFixRecertification — the receipt that replaced the certifier wall, with teeth in every
-// direction. PURE: `journal` is the already-read review journal object (`{ attempts: [...] }`), so
-// this never invents a settlement store of its own.
-//
-//   missing     — the entry names no re-certification at all (an absent key is never a silent pass).
-//   unresolved  — the pointer names an attempt the journal does not carry, or there is no journal.
-//                 Bare presence of an attempt_id is not provenance.
-//   unsettled   — the attempt exists but did not settle PASS. A failed or in-flight review is not a
-//                 certification.
-//   stale       — a genuine settled PASS, but over a DIFFERENT candidate than the post-fix one (the
-//                 receipt-replay: re-pointing at the PRE-fix review), or an entry whose recorded
-//                 digest disagrees with the attempt it cites.
-//   ok          — settled PASS, bound to the post-fix candidate, agreed by entry and journal.
-function verifyFinalFixRecertification(entry, journal, expectedCandidateDigest) {
-  const rc = entry && entry.recertification;
-  if (!rc || typeof rc !== 'object' || Array.isArray(rc)
-    || typeof rc.attempt_id !== 'string' || !rc.attempt_id) {
-    return { ok: false, state: 'missing' };
-  }
-  const attempts = (journal && typeof journal === 'object' && Array.isArray(journal.attempts))
-    ? journal.attempts : null;
-  if (!attempts) return { ok: false, state: 'unresolved' };
-  const attempt = attempts.find(a => a && typeof a === 'object' && a.attempt_id === rc.attempt_id);
-  if (!attempt) return { ok: false, state: 'unresolved' };
-  if (attempt.outcome !== 'pass') return { ok: false, state: 'unsettled' };
-  if (!expectedCandidateDigest || attempt.candidate_digest !== expectedCandidateDigest) {
-    return { ok: false, state: 'stale' };
-  }
-  if (rc.candidate_digest !== attempt.candidate_digest) return { ok: false, state: 'stale' };
-  return { ok: true, attempt_id: rc.attempt_id, candidate_digest: attempt.candidate_digest };
-}
+// There is deliberately NO re-certification verifier here. A mechanism whose only purpose is to open
+// the production wall is one edit away from opening it, so the reversal DELETES it rather than
+// leaving it dormant: the surface classifier below decides which side of the wall a path is on, and
+// nothing decides whether the wall opens, because it does not open.
 
 // The structural shape of a submitted entry, checked before anything is recomputed so a malformed
 // submission never reaches the (git-shelling) candidate recompute. Returns null when the shape holds.
@@ -15702,24 +15682,19 @@ function runFinalFixCommit(opts) {
     });
   }
 
-  // ---- RUNG 4: the SCOPE class. Apparatus takes the cheap path; production is ADMITTED only ----
-  // ---- behind a bound re-certification receipt (D-826-01 — the wall was widened, not deleted). ----
+  // ---- RUNG 4: the SCOPE class, and this wall is HARD (D-826-01 + its DIR-2 reversal). Apparatus ----
+  // ---- takes the cheap path; a PRODUCTION surface is refused, whatever paperwork it carries. The ----
+  // ---- entry is not consulted for a receipt at all: a verdict that varied with one would be a ----
+  // ---- verdict that CONSULTS it, and that is the first half of laundering a deviation into an ----
+  // ---- admission. The refusal is zero-write and carries the typed exit, so it is a fork, not a wall. ----
   const surface = classifyFinalFixSurface(entry.files, project);
-  let recertification = null;
   if (surface.surface_class === 'production') {
-    const journalState = readReviewJournal(opts, content);
-    const journal = (journalState && journalState.ok) ? journalState.journal : null;
-    const verdict = verifyFinalFixRecertification(entry, journal, candidate);
-    if (!verdict.ok) {
-      return refuse('final_fix_production_surface', {
-        recertification: verdict.state,
-        production_paths: surface.production,
-        detail: 'a production-behavior final fix is admissible only behind a settled PASS review attempt over '
-          + 'the POST-FIX candidate, named by the entry and agreed by the run\'s review journal (state: '
-          + verdict.state + ')',
-      });
-    }
-    recertification = { attempt_id: verdict.attempt_id, candidate_digest: verdict.candidate_digest };
+    return refuse('final_fix_production_surface', {
+      production_paths: surface.production,
+      detail: 'a finalize-time fix that touches production behavior is a deviation that is ITSELF EVIDENCE — '
+        + 'evidence that the certification standing over this candidate no longer describes it — so it is '
+        + 'reported, never recorded into this register; the exit is the refuted shape, not a wider lane',
+    });
   }
 
   // ---- ADMIT. Append one entry. NO per-run cap: each entry's own receipt is the natural bound. ----
@@ -15751,7 +15726,8 @@ function runFinalFixCommit(opts) {
     files: entry.files.map(p => String(p).trim().replace(/^\.\//, '')).slice().sort(),
     surface_class: surface.surface_class,
     rerun: { command: entry.rerun.command, exit_code: 0, candidate_hash: entry.rerun.candidate_hash },
-    recertification,
+    // NO `recertification` SLOT. A dead field is the seam a widening grows back through, and the
+    // register only ever holds validation-apparatus entries now, so there is nothing for it to say.
     // AUDIT-ONLY: the custody rule (a dispatched test fix goes to the role that owns the test
     // artifact) stays PROSE and judgment-enforced. The register RECORDS the producing role; it does
     // not adjudicate it — a mechanical custody check here would re-regulate the free route.
@@ -15773,7 +15749,6 @@ function runFinalFixCommit(opts) {
     files: recorded.files,
     fix_commit: recorded.fix_commit,
     candidate_hash: recorded.rerun.candidate_hash,
-    recertification: recertification ? 'verified' : 'not_required',
     register: path.join('kaola-workflow', project, '.cache', reviewSchema.FINAL_FIX_REGISTER_NAME),
     plan_hash: register.plan_hash,
     digest: register.digest,
@@ -16785,10 +16760,10 @@ function main() {
       '  final-fix-commit    --project P --stdin  (record ONE finalize-time fix into the sink-owned register at\n' +
       '                      .cache/final-fixes.json — the ONE commitment point for a repair made during finalization.\n' +
       '                      HOW the fix is produced is free: inline, or dispatched to whichever role fits. The entry is\n' +
-      '                      {failed_command, fix_commit, files[], rerun:{command,exit_code,candidate_hash}, role?,\n' +
-      '                      recertification?:{attempt_id,candidate_digest}}. Validation apparatus needs only the green\n' +
-      '                      rerun receipt; a PRODUCTION surface additionally needs a settled PASS review attempt over\n' +
-      '                      the post-fix candidate. Closes at the sink\'s first irreversible step.)\n' +
+      '                      {failed_command, fix_commit, files[], rerun:{command,exit_code,candidate_hash}, role?}.\n' +
+      '                      VALIDATION APPARATUS only (tests, fixtures, build/tooling glue, allowband docs), behind the\n' +
+      '                      green rerun receipt; a PRODUCTION surface is REFUSED — that shape is refuted, not recorded.\n' +
+      '                      Closes at the sink\'s first irreversible step.)\n' +
       '\n' +
       '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n' +
       '  --main-session-direct  (close-node / close-and-open-next) record this node as main-session-direct\n'
@@ -17552,13 +17527,12 @@ module.exports = {
   reExpansionFixFiles,
   deriveSinkProgress,
   defaultSinkProgressProbe,
-  // #826 — the finalize deviation route. The verb itself plus the TWO pure predicates the owner's
-  // widening rests on: the surface classifier (conservative by default — an unrecognized path is
-  // production) and the re-certification verifier (missing / unresolved / unsettled / stale all
-  // refuse; only a settled PASS bound to the post-fix candidate admits a production surface).
+  // #826 — the finalize deviation route. The verb itself plus the ONE pure predicate the hard scope
+  // wall rests on: the surface classifier (conservative by default — an unrecognized path is
+  // PRODUCTION, so an unanticipated surface fails toward the wall rather than through the cheap
+  // path). There is no re-certification verifier to export: production is refused, not admitted.
   runFinalFixCommit,
   classifyFinalFixSurface,
-  verifyFinalFixRecertification,
   finalizeDeviationRoute,
   // #762 (declared-not-walled surfaces): the attribute→amend→re-review transaction, the amend-block
   // writer, the exact-file gate, and the durable-amendment merge — exported for direct both-direction pins.

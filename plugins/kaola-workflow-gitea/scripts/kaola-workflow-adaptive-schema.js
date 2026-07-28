@@ -4773,10 +4773,11 @@ const REFUSAL_WHY = Object.freeze({
   'sink_verdict/candidate_drift': 'The candidate moved after it was certified, so every receipt taken over the old '
     + 'bytes now describes something other than what would ship. Re-reading the whole set is the only way to learn '
     + 'what is still true.',
-  'sink_verdict/final_fix_production_surface': 'A finalize-time fix touched production behavior. That lane admits '
-    + 'production surfaces only behind a settled PASS review over the POST-FIX candidate; if no authority in this '
-    + 'plan can certify the change, the shape itself is refuted and that is the exit to take rather than widening '
-    + 'this one.',
+  'sink_verdict/final_fix_production_surface': 'A finalize-time fix touched production behavior, and that lane '
+    + 'records validation apparatus only. A behavior change arriving after every reviewer is discharged is a '
+    + 'deviation that is itself evidence — the certification standing over this candidate no longer describes it — '
+    + 'so it is reported rather than converted into an admission by a register. No authority in the frozen plan '
+    + 'can certify it, so the shape itself is refuted and that is the exit.',
   'sink_verdict/final_fix_register_unverified': 'The register that would attribute this fix does not verify, so it '
     + 'cannot widen the attributed set. It is written by the commit verb alone, so a mismatch means it was edited '
     + 'out of band — and deleting the changed files answers a different fault than the one being reported.',
@@ -5452,8 +5453,8 @@ function computeFinalFixRegisterDigest(register) {
 // verifyFinalFixRegister — total, never throws. Re-proves the file AND every entry's own gates.
 // Returns { ok: true, files: [...] } (the union of attributed paths, sorted) or { ok: false, reason,
 // detail }. FAIL-CLOSED in every direction: an unknown schema, a foreign plan_hash, a broken digest,
-// a red rerun, a receipt bound to another command, or a production entry with no re-certification
-// receipt all refuse rather than attribute.
+// a red rerun, a receipt bound to another command, or a PRODUCTION-surface entry (whatever paperwork
+// it carries) all refuse rather than attribute.
 function verifyFinalFixRegister(parsed, planHash, classify) {
   if (!isPlainObject(parsed)) return { ok: false, reason: 'register_malformed', detail: 'not a JSON object' };
   if (parsed.schema_version !== FINAL_FIX_REGISTER_SCHEMA_VERSION) {
@@ -5518,13 +5519,16 @@ function verifyFinalFixEntry(entry, classify) {
         detail: 'recorded surface_class "' + entry.surface_class + '" does not match the paths it names' };
     }
   }
+  // THE SCOPE WALL, re-proved on the READ side. The register attributes VALIDATION APPARATUS only, so
+  // a production-surface entry never verifies — with or without paperwork. The commit verb refuses to
+  // write one, so an entry that carries it was edited out of band; and crediting it would let the sink
+  // ship product behavior no reviewing authority ever saw, with a finalize register standing in for
+  // the certification. That is a deviation laundered into a receipt, which R4 forbids outright: the
+  // deviation is itself the evidence, and evidence is reported, not repaired.
   if (entry.surface_class === 'production') {
-    const rc = entry.recertification;
-    if (!isPlainObject(rc) || typeof rc.attempt_id !== 'string' || !rc.attempt_id
-      || typeof rc.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/.test(rc.candidate_digest)) {
-      return { ok: false, reason: 'register_entry_recertification_missing',
-        detail: 'a production-surface entry carries no bound re-certification receipt' };
-    }
+    return { ok: false, reason: 'final_fix_production_surface',
+      detail: 'a production-surface entry is never attributable — the lane records validation-apparatus '
+        + 'fixes only, and no receipt on the entry can stand in for a certification over the product' };
   }
   return { ok: true };
 }
