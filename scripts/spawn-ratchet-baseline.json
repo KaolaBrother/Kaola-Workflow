@@ -50,7 +50,6 @@
     "scripts/test-mega-mutation-spotcheck.js": 1,
     "scripts/test-plan-run.js": 1,
     "scripts/test-plan-shape-audit.js": 2,
-    "scripts/test-plan-validator.js": 4,
     "scripts/test-release.js": 4,
     "scripts/test-replan.js": 8,
     "scripts/test-route-reachability.js": 1,

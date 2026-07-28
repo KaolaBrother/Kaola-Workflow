@@ -44,6 +44,24 @@
 //
 // A new spawn site therefore ships either classified as one of the four, or not at all.
 //
+// UNRESOLVED, and NOT for a conversion wave to settle on its own
+// --------------------------------------------------------------
+// The node-CLI slice — a suite spawning one of this repo's own CLIs — is where ADR 0013 says
+// conversion belongs, and it is also where docs/decisions/D-523-01.md says conversion is a
+// COVERAGE REGRESSION. That record measured the question and concluded that the cross-process
+// on-disk handoff (one process writes the ledger + baseline and exits, the next re-reads it)
+// IS the property under test, and that collapsing those spawns into one process re-introduces
+// the in-process false-green class the discipline exists to prevent. It also measured the
+// speed premise away: bare process startup is ~3% of a ~935ms adaptive-node CLI call, so
+// removing the process removes almost none of the cost.
+//
+// Both documents are live and they disagree about the same sites. That is a values call about
+// what counts as evidence, not a fact a codemod can settle, so this wave deliberately left the
+// node slice alone and converted only the git ARRANGEMENT slice, where nothing is asserted.
+// Whoever picks the node slice up should resolve the conflict explicitly first — and note that
+// "one process writes and exits, the next re-reads" has no home in the four-class vocabulary,
+// so an honest resolution may require amending the class list rather than annotating around it.
+//
 // Usage
 //   node scripts/test-spawn-ratchet.js
 //   node scripts/test-spawn-ratchet.js --json   # measured counts, for lowering the baseline
