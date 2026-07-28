@@ -7,6 +7,9 @@
 try { require('./test-spawn-census').install('simulate-gitlab-codex-workflow-walkthrough'); } catch (_) { /* advisory only */ }
 
 const { execFileSync } = require('child_process');
+// Git FIXTURE arrangement routes through the shared library — one process-boundary
+// decision for the repo instead of one per line. See scripts/test-git-fixture.js.
+const G = require('./test-git-fixture');
 const fs = require('fs');
 const path = require('path');
 
@@ -181,16 +184,15 @@ const glOs = require('os');
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-426-')));
   const kwRoot = tmp + '.kw';
   try {
-    glSpawn('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['config', 'user.email', 't@t.t'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['config', 'user.name', 'T'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['config', 'user.email', 't@t.t'], { encoding: 'utf8' });
+    G.git(tmp, ['config', 'user.name', 'T'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
-    glSpawn('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
     const wtPath = path.join(kwRoot, 'issue-426glcx');
     fs.mkdirSync(kwRoot, { recursive: true });
-    glSpawn('git', ['worktree', 'add', '-b', 'workflow/issue-426glcx', '--', wtPath, 'HEAD'],
-      { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-426glcx', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
     const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426glcx');
     fs.mkdirSync(projDir, { recursive: true });
     fs.writeFileSync(path.join(projDir, 'phase-note.md'), 'partial\n');
@@ -200,7 +202,7 @@ const glOs = require('os');
     if (result.archive_incomplete !== true) throw new Error('gitlab-codex #426: archive_incomplete must be true, got: ' + JSON.stringify(result));
     if (result.snapshot_error !== 'state_missing') throw new Error('gitlab-codex #426: malformed source must fail the authority preflight (same contract as the canonical twin), got: ' + JSON.stringify(result));
   } finally {
-    try { glSpawn('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    try { G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -212,12 +214,12 @@ const glOs = require('os');
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-427-')));
   const project = 'bundle-42-47';
   try {
-    glSpawn('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['config', 'user.email', 't@t.t'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['config', 'user.name', 'T'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['config', 'user.email', 't@t.t'], { encoding: 'utf8' });
+    G.git(tmp, ['config', 'user.name', 'T'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
-    glSpawn('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
     const dir = path.join(tmp, 'kaola-workflow', project);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
@@ -258,12 +260,12 @@ const glOs = require('os');
 {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-428-')));
   try {
-    glSpawn('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['config', 'user.email', 't@t.t'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['config', 'user.name', 'T'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.git(tmp, ['config', 'user.email', 't@t.t'], { encoding: 'utf8' });
+    G.git(tmp, ['config', 'user.name', 'T'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
-    glSpawn('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
-    glSpawn('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
     const dir = path.join(tmp, 'kaola-workflow', 'issue-428glcx');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
