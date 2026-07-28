@@ -6319,8 +6319,8 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
     alignFinalizeFixtureAcrossRoots(tmp, wtPath, 'issue-701');
 
     // Use --keep-worktree so the linked worktree directory is not removed after archiving;
-    // this lets us assert that the archive exists inside the linked worktree.
-    // archiveProjectDir runs (and performs cleanup) regardless of --keep-worktree.
+    // this lets us assert where the archive landed. archiveProjectDir runs (and performs
+    // cleanup) regardless of --keep-worktree.
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-701', '--keep-worktree'], {
       cwd: wtPath,
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
@@ -6335,9 +6335,12 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
       !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-701')),
       'main worktree copy of issue-701 must be cleaned up after finalize from linked worktree'
     );
+    // #832: the archive is anchored to MAIN's project root, not the invoking worktree. The sink
+    // removes the linked worktree at cleanup, so an archive written inside it is destroyed by the
+    // very next step (this assertion used to require the opposite — it pinned the data loss).
     assert(
-      fs.existsSync(path.join(wtPath, 'kaola-workflow', 'archive', 'issue-701')),
-      'archive must exist in linked worktree after finalize --keep-worktree'
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-701')),
+      'archive must exist in MAIN after finalize --keep-worktree from the linked worktree (#832)'
     );
     assert(
       !fs.existsSync(path.join(wtPath, 'kaola-workflow', 'issue-701')),
@@ -6347,6 +6350,164 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// #832 — the run archive must not be written into the tree the sink is about to delete.
+//
+// `finalize --project P --keep-worktree` is invoked FROM the linked worktree (the documented
+// node-cwd locus). The destination was derived per call site — `keepWorktree ? linkedRoot :
+// mainRoot` — so the run's whole evidence trail landed at `.kw/worktrees/P/kaola-workflow/archive/P`
+// and `sink-merge --sink` removed that worktree at cleanup, taking the archive with it. ONE
+// resolution rule: the archive destination resolves against MAIN's project root regardless of
+// invocation cwd. The last assertion is the incident itself — remove the worktree exactly as the
+// sink does, and the run record must still be there.
+// ---------------------------------------------------------------------------
+function testArchiveDestinationResolvesAgainstMain832() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-archive-dest-832-')));
+  const kwRoot = tmp + '.kw';
+  const project = 'issue-8321';
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, project, 8321, null);
+    const wtPath = path.join(kwRoot, project);
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], {
+      cwd: tmp, encoding: 'utf8'
+    });
+    plantActiveFolder(wtPath, project, 8321, null);
+    seedAdaptiveFinalizeFixture(tmp, project);
+    seedAdaptiveFinalizeFixture(wtPath, project);
+    alignFinalizeFixtureAcrossRoots(tmp, wtPath, project);
+    // The per-node gate evidence — the artifact class the incident destroyed. It lives in the
+    // WORKTREE copy (the executor's cwd), which is the folder this finalize archives.
+    const EVIDENCE = 'evidence-binding: n1 nonce8321\nverdict: pass\n';
+    fs.writeFileSync(path.join(wtPath, 'kaola-workflow', project, '.cache', 'n1.md'), EVIDENCE);
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
+      cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      '#832: finalize --keep-worktree from the linked worktree must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const emitted = String(result.stdout).trim().split('\n').filter(l => l.trim().startsWith('{'));
+    const out = emitted.length ? JSON.parse(emitted[emitted.length - 1]) : {};
+
+    // (1) ONE resolution rule: the emitted destination is anchored to MAIN's project root...
+    const mainArchiveBase = path.join(tmp, 'kaola-workflow', 'archive') + path.sep;
+    assert(
+      typeof out.dest === 'string' && out.dest.startsWith(mainArchiveBase),
+      '#832: the archive destination must resolve against MAIN\'s project root regardless of '
+        + 'invocation cwd; expected a path under ' + mainArchiveBase + ', got ' + JSON.stringify(out.dest)
+    );
+    // ...and never into the linked worktree the sink removes.
+    assert(
+      typeof out.dest === 'string' && !out.dest.startsWith(kwRoot + path.sep),
+      '#832: the archive destination must never resolve into the linked worktree; got ' + JSON.stringify(out.dest)
+    );
+
+    // (2) the archive is really on main's disk, with the run's evidence inside it.
+    const mainArchive = path.join(tmp, 'kaola-workflow', 'archive', project);
+    assert(
+      fs.existsSync(path.join(mainArchive, 'workflow-state.md')),
+      '#832: main must hold the archived workflow-state.md after the keep-worktree finalize'
+    );
+    assert(
+      fs.existsSync(path.join(mainArchive, '.cache', 'n1.md'))
+        && fs.readFileSync(path.join(mainArchive, '.cache', 'n1.md'), 'utf8') === EVIDENCE,
+      '#832: main\'s archive must carry the run\'s per-node gate evidence byte-for-byte'
+    );
+
+    // (3) THE INCIDENT: the sink removes the linked worktree at cleanup. The run record survives.
+    spawnSync('git', ['worktree', 'remove', '--force', '--', wtPath], { cwd: tmp, encoding: 'utf8' });
+    assert(
+      !fs.existsSync(wtPath),
+      '#832: precondition — the worktree teardown the sink performs actually removed the tree'
+    );
+    assert(
+      fs.existsSync(path.join(mainArchive, '.cache', 'n1.md')),
+      '#832: the run archive must SURVIVE the sink\'s worktree removal — this is the data loss'
+    );
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+  console.log('testArchiveDestinationResolvesAgainstMain832: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #832 — `archive_commit` must never report success for an operation git REFUSED.
+//
+// On a consumer whose .gitignore covers `kaola-workflow/archive`, git prints "The following paths
+// are ignored by one of your .gitignore files" and stages nothing from the archive. The staging
+// failure was swallowed in a bare `catch (_)`, and the staged-ness probe that followed carried NO
+// pathspec — so the roadmap bookkeeping staged alongside it was enough to make the transaction
+// record archive_commit:'committed'. Every "archived" claim on such a consumer is silently false.
+// The honest token is `skipped_gitignored`; 'committed' and 'nothing_to_commit' both read as success.
+// ---------------------------------------------------------------------------
+function testArchiveCommitHonestUnderGitignore832() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-archive-ignored-832-')));
+  const kwRoot = tmp + '.kw';
+  const project = 'issue-8322';
+  try {
+    initGitRepo(tmp);
+    // The consumer ignores the archive band (the vrpai-cli shape). Committed BEFORE the worktree
+    // is created so the feature branch inherits it.
+    fs.writeFileSync(path.join(tmp, '.gitignore'), 'kaola-workflow/archive/\n');
+    plantActiveFolder(tmp, project, 8322, null);
+    plantRoadmapIssue(tmp, 8322, '');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant + gitignore archive'], { encoding: 'utf8' });
+
+    const wtPath = path.join(kwRoot, project);
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], {
+      cwd: tmp, encoding: 'utf8'
+    });
+    plantActiveFolder(wtPath, project, 8322, null);
+    seedAdaptiveFinalizeFixture(tmp, project);
+    seedAdaptiveFinalizeFixture(wtPath, project);
+    alignFinalizeFixtureAcrossRoots(tmp, wtPath, project);
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
+      cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      '#832: finalize on a gitignored-archive consumer must still exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const emitted = String(result.stdout).trim().split('\n').filter(l => l.trim().startsWith('{'));
+    const out = emitted.length ? JSON.parse(emitted[emitted.length - 1]) : {};
+
+    // Precondition — git genuinely refused: no archive path reached the feature branch HEAD.
+    const tree = spawnSync('git', ['-C', wtPath, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).stdout || '';
+    assert(
+      !/kaola-workflow\/archive\//.test(tree),
+      '#832: precondition — the ignored archive genuinely never reached HEAD; got:\n' + tree
+    );
+
+    // ...so the transaction ledger must SAY so, in one word, rather than report a commit.
+    const tx = out.finalize_transaction || {};
+    assert(
+      tx.archive_commit === 'skipped_gitignored',
+      '#832: finalize_transaction.archive_commit must be "skipped_gitignored" when git refuses the '
+        + 'ignored archive paths; got ' + JSON.stringify(tx.archive_commit)
+        + '\nfull transaction: ' + JSON.stringify(tx)
+    );
+
+    // The honest skip must not also destroy the archive it declined to commit.
+    assert(
+      typeof out.dest === 'string' && fs.existsSync(path.join(out.dest, 'workflow-state.md')),
+      '#832: the archive must survive on disk after an honest skipped_gitignored; dest=' + JSON.stringify(out.dest)
+    );
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', '--', path.join(kwRoot, project)], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+  console.log('testArchiveCommitHonestUnderGitignore832: PASSED');
 }
 
 function testFinalizeNarrowStagingExcludesForeignArchive() {
@@ -8802,6 +8963,61 @@ function testProbeHelpersFailClosed() {
       '#563 guard: ' + s.file + ' ' + s.fn + '() must have >=' + s.arms + ' fail-closed `catch { return true }` arm(s), found ' + closed);
   }
   console.log('testProbeHelpersFailClosed: PASSED');
+}
+
+// #832: claim.js / sink-merge.js / closure-audit.js are DIVERGENT HAND-PORTS on the gitlab + gitea
+// editions — edition-sync does NOT generate them (they are COMMON_SCRIPTS byte-copies for codex
+// only), so every one of the four remedies has to be carried across by hand. The behavioral
+// coverage lives in the canonical suites; this is the cheap cross-edition pin that catches a hand
+// port which silently skipped a remedy on one forge. Same shape as the #563 guard above.
+//
+// Each token is a contract string this fix OWNS, so a grep is not a proxy for behavior — it IS the
+// name the emit/receipt/report must carry, per edition. The `keepWorktree ? linkedRoot : mainRoot`
+// entry is the SUBTRACTION half: the per-call-site destination derivation must be gone, replaced by
+// one rule anchored to main (RED today — all four copies still carry that expression).
+function testArchiveIntegrityPortedToAllEditions832() {
+  const claims = [
+    'scripts/kaola-workflow-claim.js',
+    'plugins/kaola-workflow/scripts/kaola-workflow-claim.js',
+    'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js',
+    'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js',
+  ];
+  const sinks = [
+    'scripts/kaola-workflow-sink-merge.js',
+    'plugins/kaola-workflow/scripts/kaola-workflow-sink-merge.js',
+    'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-merge.js',
+    'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-merge.js',
+  ];
+  const audits = [
+    'scripts/kaola-workflow-closure-audit.js',
+    'plugins/kaola-workflow/scripts/kaola-workflow-closure-audit.js',
+    'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-closure-audit.js',
+    'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-closure-audit.js',
+  ];
+  const requiredIn = (files, token, label) => {
+    for (const rel of files) {
+      const src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+      assert(src.includes(token),
+        '#832 port guard: ' + rel + ' must carry ' + label + ' (' + JSON.stringify(token) + ') — '
+          + 'these are DIVERGENT hand-ports; edition-sync will not write them for you');
+    }
+  };
+  // R2 — the archive-presence precondition on worktree teardown.
+  requiredIn(claims, 'archive_only_in_worktree', 'the R2 teardown refusal reason');
+  // R3 — the honest archive_commit token, on both writers of that field.
+  requiredIn(claims, 'skipped_gitignored', 'the R3 honest archive_commit token');
+  requiredIn(sinks, 'skipped_gitignored', 'the R3 honest archive_commit token');
+  // R4 — the archive-content drift class.
+  requiredIn(audits, 'archive_content_incomplete', 'the R4 archive-content drift class');
+  // R1 — the per-call-site destination derivation is SUBTRACTED, not patched around.
+  for (const rel of claims) {
+    const src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+    assert(!src.includes('keepWorktree ? linkedRoot : mainRoot'),
+      '#832 port guard: ' + rel + ' still derives the archive destination per call site '
+        + '(`keepWorktree ? linkedRoot : mainRoot`) — the archive must resolve against MAIN\'s '
+        + 'project root regardless of invocation cwd, by ONE rule');
+  }
+  console.log('testArchiveIntegrityPortedToAllEditions832: PASSED');
 }
 
 function testSinkMergeBlocksUnpushedCommits() {
@@ -11662,6 +11878,130 @@ function testClosureAuditDedupRoadmapAndArchive() {
       'closed_remote must win over archive_closed and dedupe to one entry, got: ' + JSON.stringify(sources)
     );
     console.log('testClosureAuditDedupRoadmapAndArchive: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #832 — closure-audit must prove archive CONTENT, not existence.
+//
+// The incident left `kaola-workflow/archive/<project>/` as a bare `.cache/` skeleton (the sink's own
+// receipt writer mkdir-s that path), and the audit passed: archiveClosedIssues `continue`s on ANY
+// read error, so an archive with no workflow-state.md simply drops out of the closed set and
+// produces no finding. #676's verifyArchiveComplete cannot cover this — it is SOURCE-relative and
+// runs at copy time, before the loss.
+//
+// The required set is derived from the archive's OWN record, never a blanket demand (a blanket
+// "plan + summary + evidence" rule flags 76 of the 184 plan-bearing closed archives in this repo,
+// which is noise, not drift):
+//   - workflow-state.md is ALWAYS required — the identity anchor, exactly #676's unconditional rule.
+//   - a state naming a real plan_hash / active_plan_hash requires workflow-plan.md.
+//   - a plan whose `## Node Ledger` has `complete` rows requires each `.cache/<id>.md`
+//     (listRecordedNodeEvidence — the run record that survives a gutted .cache/).
+// Report-only in both modes: an incomplete archive is unrepairable, so --execute must never touch it.
+// ---------------------------------------------------------------------------
+function testClosureAuditArchiveContentDrift832() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-archive-content-832-'));
+  try {
+    initGitRepo(tmp);
+    const archiveBase = path.join(tmp, 'kaola-workflow', 'archive');
+    const plan = [
+      '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | lib/x.js | 1 | sequence |',
+      '| n2 | code-reviewer | n1 | — | 1 | sequence |',
+      '| n3 | finalize | n2 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | complete |', '| n2 | complete |', '| n3 | n/a |', '',
+    ].join('\n');
+
+    // (i) the incident shape: an archive dir holding nothing but an empty .cache/ skeleton.
+    fs.mkdirSync(path.join(archiveBase, 'issue-8324', '.cache'), { recursive: true });
+
+    // (ii) evidence-gutted: state + plan whose ledger PROVES n1/n2 recorded evidence, but the
+    //      .cache/ files are gone (the worktree that held them was deleted).
+    const gutted = path.join(archiveBase, 'issue-8325');
+    fs.mkdirSync(path.join(gutted, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(gutted, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 8325\nplan_hash: ' + 'a'.repeat(64) + '\n');
+    fs.writeFileSync(path.join(gutted, 'workflow-plan.md'), plan);
+    fs.writeFileSync(path.join(gutted, 'finalization-summary.md'), '# Finalization Summary\n');
+
+    // (iii) COMPLETE — must produce no finding (the over-report guard).
+    const complete = path.join(archiveBase, 'issue-8326');
+    fs.mkdirSync(path.join(complete, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(complete, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 8326\nplan_hash: ' + 'b'.repeat(64) + '\n');
+    fs.writeFileSync(path.join(complete, 'workflow-plan.md'), plan);
+    fs.writeFileSync(path.join(complete, 'finalization-summary.md'), '# Finalization Summary\n');
+    fs.writeFileSync(path.join(complete, '.cache', 'n1.md'), 'binding: n1\nverdict: pass\n');
+    fs.writeFileSync(path.join(complete, '.cache', 'n2.md'), 'binding: n2\nverdict: pass\n');
+
+    // (iv) a LEGACY/minimal archive (state only, no plan envelope) — must stay quiet. This repo
+    //      holds 170 plan-less archives; flagging them would drown the real signal.
+    fs.mkdirSync(path.join(archiveBase, 'issue-8327'), { recursive: true });
+    fs.writeFileSync(path.join(archiveBase, 'issue-8327', 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 8327\n');
+
+    // The class is LOCAL — it must report the same offline, where every remote class is skipped.
+    const result = runClosureAuditOffline([], tmp);
+    const drift = result.drift.archive_content_incomplete;
+    assert(
+      Array.isArray(drift),
+      '#832: closure-audit must report an archive_content_incomplete drift class; got: ' + JSON.stringify(result.drift)
+    );
+    const byProject = new Map((drift || []).map(d => [d.project, d]));
+
+    assert(
+      byProject.has('issue-8324')
+        && Array.isArray(byProject.get('issue-8324').missing)
+        && byProject.get('issue-8324').missing.includes('workflow-state.md'),
+      '#832: the empty .cache/ skeleton must be reported with workflow-state.md missing; got: '
+        + JSON.stringify(drift)
+    );
+    assert(
+      byProject.has('issue-8325')
+        && byProject.get('issue-8325').missing.includes('.cache/n1.md')
+        && byProject.get('issue-8325').missing.includes('.cache/n2.md'),
+      '#832: an archive whose ledger proves recorded node evidence must be reported when that '
+        + 'evidence is absent; got: ' + JSON.stringify(drift)
+    );
+    assert(
+      !byProject.get('issue-8325').missing.includes('.cache/n3.md'),
+      '#832: an n/a ledger row carries no evidence obligation; got: ' + JSON.stringify(byProject.get('issue-8325'))
+    );
+    assert(
+      !byProject.has('issue-8326'),
+      '#832: a COMPLETE archive must produce no finding; got: ' + JSON.stringify(byProject.get('issue-8326'))
+    );
+    assert(
+      !byProject.has('issue-8327'),
+      '#832: a legacy plan-less archive must stay quiet (record-derived, never a blanket demand); got: '
+        + JSON.stringify(byProject.get('issue-8327'))
+    );
+    assert(
+      result.counts.archive_content_incomplete === drift.length,
+      '#832: counts.archive_content_incomplete must match the drift list; got '
+        + JSON.stringify(result.counts.archive_content_incomplete) + ' vs ' + drift.length
+    );
+
+    // --execute is REPORT-ONLY for this class: nothing is repaired, nothing is deleted.
+    const executed = runClosureAuditOffline(['--execute'], tmp);
+    assert(
+      Array.isArray(executed.reported_not_repaired.archive_content_incomplete)
+        && executed.reported_not_repaired.archive_content_incomplete.length === drift.length,
+      '#832: --execute must carry archive_content_incomplete under reported_not_repaired; got: '
+        + JSON.stringify(executed.reported_not_repaired)
+    );
+    assert(
+      fs.existsSync(path.join(archiveBase, 'issue-8324', '.cache'))
+        && fs.existsSync(path.join(gutted, 'workflow-state.md')),
+      '#832: --execute must never delete or rewrite an incomplete archive'
+    );
+    console.log('testClosureAuditArchiveContentDrift832: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -19043,6 +19383,8 @@ function buildRegistry() {
   add('testSinkFallbackSkipsArchivedProject',             testSinkFallbackSkipsArchivedProject);
   add('testFinalizeReleaseCleansWorktree',                testFinalizeReleaseCleansWorktree);
   add('testFinalizeFromLinkedWorktreeCleansMainCopy',     testFinalizeFromLinkedWorktreeCleansMainCopy);
+  add('testArchiveDestinationResolvesAgainstMain832',     testArchiveDestinationResolvesAgainstMain832);
+  add('testArchiveCommitHonestUnderGitignore832',         testArchiveCommitHonestUnderGitignore832);
   add('testFinalizeNarrowStagingExcludesForeignArchive',  testFinalizeNarrowStagingExcludesForeignArchive);
   add('testFinalizeFromMainRootNoSpuriousRemoval',        testFinalizeFromMainRootNoSpuriousRemoval);
   add('testFinalizeCleansRoadmapEntry',                   testFinalizeCleansRoadmapEntry);
@@ -19076,6 +19418,7 @@ function buildRegistry() {
   add('testSinkLegacyPathRefusesLingeringLaneGroup',      testSinkLegacyPathRefusesLingeringLaneGroup);
   add('testSinkRefusesDirtyWorktree',                     testSinkRefusesDirtyWorktree);
   add('testProbeHelpersFailClosed',                       testProbeHelpersFailClosed);
+  add('testArchiveIntegrityPortedToAllEditions832',       testArchiveIntegrityPortedToAllEditions832);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
   add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);
@@ -19130,6 +19473,7 @@ function buildRegistry() {
   add('testClosureAuditClosedRemoteRoadmapSource',        testClosureAuditClosedRemoteRoadmapSource);
   add('testClosureAuditArchiveClosedDrift',               testClosureAuditArchiveClosedDrift);
   add('testClosureAuditDedupRoadmapAndArchive',           testClosureAuditDedupRoadmapAndArchive);
+  add('testClosureAuditArchiveContentDrift832',           testClosureAuditArchiveContentDrift832);
   add('testClosureAuditArchiveOnlyNotProbed',             testClosureAuditArchiveOnlyNotProbed);
   add('testClosureAuditMirrorListsClosedIssues',          testClosureAuditMirrorListsClosedIssues);
   add('testClosureAuditStaleInProgressLabels',            testClosureAuditStaleInProgressLabels);
