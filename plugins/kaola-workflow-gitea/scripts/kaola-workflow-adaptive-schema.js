@@ -5150,6 +5150,47 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     // here so the `/^replan_/` suffix rule below cannot re-claim it into a kernel-write cell whose
     // rendered sentence is false in every clause.
     'replan_planner_dispatch_required',
+
+    // --- READS A TOOL COULD NOT RESOLVE, AND NO KERNEL ANCHOR STANDS ON THEM -------------
+    //
+    // These are the second half of the `_unavailable` split (the first half is the anchor-read
+    // block down in the integrity section). The suffix rule that used to claim the whole family
+    // said `record: 'position'` about every one of them, which rendered "the position record write
+    // did not take … a half-applied position leaves the ledger and the running set disagreeing" —
+    // false in every clause, because nothing was being written and no position exists to half-apply.
+    //
+    // The split is by WHAT the unresolved read was, never by the token's spelling:
+    //   * a KERNEL PROOF ANCHOR could not be read  -> kernel_integrity_broken/absent_anchor. Absence
+    //     is not a pass, so the transition may not proceed and the anchor may not be re-derived.
+    //   * a TOOL'S OWN PROBE would not answer, and nothing the kernel certifies depends on it -> here.
+    //     `kaola-workflow-release.js` asking git for its tag list, `kaola-workflow-claim.js` asking
+    //     the forge whether an issue is claimable: a subprocess that would not answer is a fact the
+    //     tool reports about its own environment, not a verdict about this run's kernel records.
+    //     The vocabulary has SEVEN rows and no row for "a tool's read probe failed"; minting one is
+    //     the additive move the ADR forbids, so the honest classification is that these carry no
+    //     family. That is a statement, not a gap — a wrong family plus a route that dead-ends is
+    //     strictly worse for an operator than no claim at all.
+    'release_tag_list_unavailable', 'release_history_unavailable', 'worktree_status_unavailable',
+    'candidate_baseline_unavailable', 'candidate_history_unavailable', 'candidate_diff_unavailable',
+    // Pre-claim, at Gate 1: the forge would not answer, or the issue is not claimable. Nothing is
+    // written (an explicit-target claim refuses with zero side effects), and `target_unavailable` is
+    // literally a `verdict:` VALUE on the classifier's envelope — an outcome, like the block above.
+    'target_unavailable', 'target_set_unavailable',
+    // No leg branches exist to merge. The exact shape of `no_barrier_base` / `no_group_base` /
+    // `no_leg_base` three lines up, which are already advisories; it reached a write-failed cell
+    // only because `/^no_leg_branches$/` had no rule of its own and the suffix list swept it up.
+    'no_leg_branches',
+    // `replan_consent_not_requested` is the NEGATION of a consent refusal: the ledger shows no
+    // pending request and the budget is not spent, so there is nothing to extend. Nothing was
+    // attempted and nothing failed — the tool is reporting the state it found.
+    'replan_consent_not_requested',
+    // `replan abort` without `--transaction <id>`: a usage error, exactly like the block above.
+    'replan_abort_transaction_required',
+    // A routing ANSWER, and one that already carries its own exit: the source finding lies inside a
+    // milestone's declared surface, so the local re-expansion path answers it and NO EPOCH IS SPENT.
+    // The payload sets `route: 'reexpand-open'` itself, so a stamped `replan resume` route
+    // CONTRADICTED it — one refusal with two exits, one of which can never clear it.
+    'replan_superseded_by_local_reexpansion',
   ] },
 
   // --- A3: the consent valve ----------------------------------------------
@@ -5287,6 +5328,44 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     match: ['snapshot_child_binding_invalid', 'snapshot_lineage_binding_invalid',
       'legacy_snapshot_binding_unsealed', 'legacy_external_seal_mismatch', 'legacy_child_not_pending'] },
 
+  // --- L1: integrity broken — THE ANCHOR-READ BAND (R4) --------------------
+  //
+  // A READ THAT COULD NOT RESOLVE IS NOT A WRITE THAT DID NOT TAKE. Every condition here reports
+  // that the anchor some proof stands on could not be read — the barrier verdict, the review
+  // candidate, the writer identity, the epoch authority, the plan contract, the reviewer profile,
+  // the validation vectors, the leg's own cleanliness. Nothing was being written when any of them
+  // fired, so the write-failed suffix rule was wrong twice over, exactly as it was for the sealed
+  // archive verifiers above: it rendered "the position record write did not take … a half-applied
+  // position leaves the ledger and the running set disagreeing" about a read, and it stamped
+  // `auto_remediable: true` plus a RETRY verb on a proof that could not be made.
+  //
+  // `absent_anchor` is the cell that already says the true thing — "an anchor that cannot be read is
+  // indistinguishable from one that would have failed" — and it is what every one of these sites
+  // already DOES: they fail closed rather than guess. `classifyWriterReconcile` halts on an
+  // unverifiable barrier because "neither is proof the writer is clean"; `baseline_partition` refuses
+  // rather than guess "absent", because guessing would DELETE a file the baseline still holds;
+  // `leg_dirty_probe_failed` refuses because reading a failed probe as "leg is clean" would silently
+  // omit real leg content from the octopus merge. Absence is not a pass, in all three.
+  //
+  // ABSENT IS NOT "PRESENT AND WRONG", and this band keeps the two apart rather than folding them.
+  // `review_profile_identity_unavailable` (the identity block is NOT THERE) is here;
+  // `review_profile_identity_ambiguous` (it is there TWICE) and `review_profile_hash_mismatch` (it is
+  // there and disagrees) are different conditions with different cures and are deliberately not
+  // swept in beside it.
+  //
+  // Every kind here is `absent_anchor`, whose route is `adaptive-node orient` — read-only, in
+  // INVESTIGATION_OR_DISCARD, and NOT in REPLAN_GUARDED_SUBCOMMANDS, so it stays reachable under the
+  // re-plan fence. The `anchor` field is deliberately left unset: no rule in this list has ever
+  // derived one, and inventing a per-condition anchor is how a kind-keyed route becomes a
+  // per-incident table again.
+  { family: 'kernel_integrity_broken', patch: { kind: 'absent_anchor' },
+    match: ['barrier_unavailable', 'baseline_partition_unavailable',
+      'candidate_digest_unavailable', 'candidate_partition_unavailable', 'candidate_hash_unavailable',
+      'writer_identity_unavailable', 'current_epoch_authority_unavailable', 'plan_contract_unavailable',
+      'finding_anchor_index_unavailable', 'finding_uid_unavailable', 'review_repair_delta_unavailable',
+      'review_profile_unavailable', 'review_profile_identity_unavailable',
+      'snapshot_verifier_unavailable', 'validation_vector_read_failed', 'leg_dirty_probe_failed'] },
+
   // --- L1: CAS lost -------------------------------------------------------
   { family: 'kernel_cas_lost', patch: { record: 'ledger_row' },
     match: ['close_transition_disallowed', 'node_not_complete', 'ledger_row_missing',
@@ -5313,8 +5392,14 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
   // --- L1: write failed — the SUFFIX patterns, matched LAST ---------------
   { family: 'kernel_write_failed', patch: (c) => ({ record: 'plan', step: 'freeze', target: c }),
     match: [/^plan_invalid:/, /^freeze_failed/, 'cannot_reread_plan_after_freeze'] },
-  { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', blocked_on: c.replace(/_unavailable$/, '') }),
-    match: [/_unavailable$/] },
+  // THERE IS NO `/_unavailable$/` SWEEP RULE, AND ITS ABSENCE IS THE POINT. One suffix pattern used
+  // to claim every token spelled that way into `record: 'position'`, on the strength of the spelling
+  // alone — a read that could not resolve and a write that did not take are opposite events, and the
+  // rule declared them the same one. The band is now split by WHAT the unresolved read was: a kernel
+  // proof anchor (the anchor-read band, `kernel_integrity_broken/absent_anchor`) or a tool's own
+  // probe (out of the vocabulary, in the first block). A future `_unavailable` token matching neither
+  // is UNCLASSIFIED, which is this list's honest remaining-work signal and is what the deleted rule
+  // was hiding.
   // THE REPLAN BAND'S EXIT IS `replan resume`, AND ONLY `replan resume`.
   //
   // The record-class default for `position` is `adaptive-node reconcile-running-set`, and every
