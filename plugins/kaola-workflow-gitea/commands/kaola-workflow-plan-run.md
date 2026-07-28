@@ -683,8 +683,10 @@ You decide and record the premise; the planner authors every plan row, and the c
 parent `## Acceptance` forward unchanged. Entry is mechanically gated, and every refusal is a
 route, not a trap: `shape_refutation_not_quiescent` (an `in_progress` ledger row, an open
 speculative leg, or a live halt — settle them first), `shape_refutation_review_pending` (a gate
-is in flight — let it settle), `shape_refutation_review_authority_present` (a review authority
-exists — consume it through the review re-plan), `shape_refutation_evidence_missing` (the premise
+is in flight — let it settle), `shape_refutation_review_authority_present` (a settled-failed
+review authority is still CONSUMABLE against this plan — consume it through the review re-plan;
+a journal carrying only passed gates, an already-consumed repair, or another epoch's residue is
+not an authority and does not block this entry), `shape_refutation_evidence_missing` (the premise
 is empty or no evidence digest verifies), `replan_superseded_by_local_reexpansion` with
 `route: reexpand-open` (the refuted surface is an expansion interior — reshape it locally, no
 epoch spent), and `replan_consent_required` after two autonomous shape transitions per run —

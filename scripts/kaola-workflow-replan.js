@@ -729,7 +729,10 @@ function readSource(paths, planHash, sourceAttemptId, options) {
   try { journal = readAuthorityJsonOrNull(journalPath); handoff = readAuthorityJsonOrNull(sourcePath); }
   catch (_) { return { ok: false, reason: 'replan_source_authority_invalid' }; }
   if (!journal || !Array.isArray(journal.attempts)) {
-    return { ok: false, reason: 'replan_source_journal_missing' };
+    // #838 deviation route: no journal means no gate ever recorded a finding here, so there is no
+    // review authority to spend. The recorded form of "re-plan anyway" is the shape_refutation
+    // packet — name it rather than dead-ending the operator on a missing file.
+    return { ok: false, reason: 'replan_source_journal_missing', route: SHAPE_REFUTATION_KIND };
   }
   let planContent;
   let schema2ReviewGates;
@@ -1238,6 +1241,31 @@ function hasUnsettledReviewAttempt(journalPath) {
   return journal.attempts.some(attempt => attempt && attempt.lifecycle_settled !== true);
 }
 
+// #838 — a CONSUMABLE review authority: the EXACT conjunction `readSource` itself enforces before
+// it will spend an attempt (settled, FAILED, unspent, and bound to the CURRENT parent plan hash).
+// Reusing that gate is what keeps the two lanes from disagreeing about what is live: anything this
+// returns false for is something the review re-plan would refuse `replan_source_attempt_unsettled`,
+// so there is no authority for the shape entry to defer to. A settled PASS is structurally not a
+// repair authority (the journal validator pins a pass to a null selected writer, a null consumer
+// and an empty rebind), an already-consumed attempt was spent by its repair writer, and a journal
+// bound to another epoch's plan hash is parent-epoch residue that activation deliberately leaves
+// behind. Returns true/false on a readable journal, null when the journal cannot be parsed (the
+// caller then fails closed to `shape_refutation_review_authority_present`).
+//
+// Deliberately NOT routed through `schema.validateReviewJournal`: that validator refuses on a
+// plan-hash mismatch, which would turn the post-epoch residue back into a permanent wedge — the
+// precise failure mode this predicate exists to remove.
+function hasConsumableReviewAttempt(journalPath, parentPlanHash) {
+  if (!entryExists(journalPath)) return false;
+  let journal;
+  try { journal = readAuthorityJson(journalPath); }
+  catch (_) { return null; }
+  if (!journal || !Array.isArray(journal.attempts)) return null;
+  return journal.attempts.some(attempt => attempt && attempt.lifecycle_settled === true
+    && attempt.outcome === 'fail' && attempt.consumed_by == null
+    && String(attempt.plan_hash || journal.plan_hash || '') === String(parentPlanHash || ''));
+}
+
 function readShapeRefutationAuthority(paths, parentPlan, parentPlanHash, lineage) {
   const ledger = validator.parseLedger(parentPlan);
   const openNodes = Array.from(ledger.entries())
@@ -1375,30 +1403,41 @@ function sealShapeRefutationPacket(paths, opts) {
 function readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage) {
   const journalPath = path.join(paths.cacheDir, 'review-attempts.json');
   const outcomePath = path.join(paths.cacheDir, 'replan-source.json');
+  // #824 precedence, #838-narrowed: a review authority wins over the shape_refutation entry —
+  // but the predicate is CONSUMABILITY against the current parent plan hash, never the EXISTENCE
+  // of `.cache/review-attempts.json` / `.cache/replan-source.json`. Every schema-2 gate settlement
+  // appends the journal (pass AND fail), no code path ever deletes it, and epoch activation
+  // deliberately preserves both files, so existence-keying made this authority unreachable from
+  // the first green gate onward — the exact wedge it was filed to remove — and would have
+  // re-created it one epoch later against a handoff `readSource` itself rejects.
+  //
+  // An UNSETTLED attempt keeps its own reason and stays plan-hash-agnostic: a gate in flight, yet
+  // to record findings, must never be dodgeable, whatever epoch it belongs to.
+  if (opts.transitionReason === SHAPE_REFUTATION_KIND) {
+    const unsettled = hasUnsettledReviewAttempt(journalPath);
+    if (unsettled === true) return { ok: false, reason: 'shape_refutation_review_pending' };
+    const consumable = hasConsumableReviewAttempt(journalPath, parentPlanHash);
+    // Fail closed on an unreadable journal (either probe returning null): an authority we cannot
+    // read is treated as present, never as absent.
+    if (unsettled === null || consumable !== false) {
+      return { ok: false, reason: 'shape_refutation_review_authority_present' };
+    }
+    return readShapeRefutationAuthority(paths, parentPlan, parentPlanHash, lineage);
+  }
   const reviewAuthorityPresent = entryExists(journalPath) || entryExists(outcomePath);
   if (reviewAuthorityPresent) {
     if (opts.transitionReason === 'diagnosis_to_build') {
       return { ok: false, reason: 'case_b_review_authority_present' };
-    }
-    // #824 precedence, mirroring case_b_review_authority_present: a review authority wins over
-    // the shape_refutation entry. An UNSETTLED attempt refuses with its own reason — this
-    // authority must never be usable to dodge a gate about to record findings.
-    if (opts.transitionReason === SHAPE_REFUTATION_KIND) {
-      if (hasUnsettledReviewAttempt(journalPath) === true) {
-        return { ok: false, reason: 'shape_refutation_review_pending' };
-      }
-      return { ok: false, reason: 'shape_refutation_review_authority_present' };
     }
     const review = readSource(paths, parentPlanHash, opts.sourceAttemptId,
       { verifyCandidate: true, planContent: parentPlan, lineage });
     if (!review.ok) return review;
     return Object.assign(review, { transition_reason: 'review_repair_requires_replan', case_b: null });
   }
-  if (opts.transitionReason === SHAPE_REFUTATION_KIND) {
-    return readShapeRefutationAuthority(paths, parentPlan, parentPlanHash, lineage);
-  }
   if (opts.transitionReason !== 'diagnosis_to_build') {
-    return { ok: false, reason: 'replan_source_journal_missing' };
+    // #838 deviation route: "I want to re-plan and no gate failed" is exactly the decision the
+    // shape_refutation authority records. Name the legal verb instead of dead-ending.
+    return { ok: false, reason: 'replan_source_journal_missing', route: SHAPE_REFUTATION_KIND };
   }
   const proof = verifyCaseBProof(paths, parentPlan, null, 'diagnosis_to_build', lineage);
   if (!proof.ok) return proof;
@@ -1441,12 +1480,18 @@ function evaluateTransitionBudget(state, request, authority) {
     return { ok: false, reason: 'replan_consent_ledger_invalid', count, ceiling, cost: 1,
       case_b_exemption: false };
   }
-  // #824: a shape_refutation transition is admitted on its OWN per-authority allowance (two
-  // autonomous transitions per run, plus one per shape-scoped consent entry), never on the
-  // shared automatic-transition counter — a run that spent its review budget on failed gates
-  // still gets its two free reshapes, and vice versa. The transition still COSTS one shared
-  // slot of bookkeeping (count_before/count_after flow unchanged below), so the committed
-  // receipt and promoted state stay byte-compatible with every existing authority check.
+  // #824: a shape_refutation transition is ADMITTED on its OWN per-authority allowance (two
+  // autonomous transitions per run, plus one per shape-scoped consent entry) — it skips the
+  // shared-ceiling CHECK below, so a run that spent its review budget on failed gates still gets
+  // its two free reshapes.
+  //
+  // #838: the converse does NOT hold, and the earlier "and vice versa" here said it did. The
+  // admission check is per-authority, but the COST is shared: `cost` stays 1 and `count_after =
+  // count + cost`, so every reshape spends one slot of `automatic_review_replans` against
+  // `authorized_epoch_ceiling`. Two autonomous reshapes therefore exhaust the shared autonomous
+  // budget and every other authority then needs a recorded consent turn. That direction is safe —
+  // it fails toward MORE consent, never less — and keeping the shared bookkeeping is what keeps
+  // the committed receipt and promoted state byte-compatible with every existing authority check.
   const shape = request && request.transition_reason === SHAPE_REFUTATION_KIND
     ? authority && authority.shape_refutation_allowance : null;
   if (shape) {
@@ -2221,7 +2266,13 @@ function prepareReplanUnlocked(paths, opts) {
     if (!checked.ok) return schema.refuse(checked.reason);
     if (existing.phase === 'committed' && existing.activation.state_unfenced.status === 'complete') {
       let requestedAttempt = opts.sourceAttemptId || null;
-      if (!requestedAttempt) {
+      // #838: a shape_refutation request NEVER inherits its identity from `.cache/replan-source.json`.
+      // That handoff survives epoch activation (the cleanup band excludes it, and the committed
+      // rotation COPIES it into `.cache/replan-sources/` rather than removing the live file), so
+      // inheriting it made a FRESH sealed packet replay the spent review receipt as
+      // `already_committed` — a silent no-op that dropped the reshape request instead of refusing
+      // it. The sealed packet is this authority's identity, and nothing else is.
+      if (!requestedAttempt && opts.transitionReason !== SHAPE_REFUTATION_KIND) {
         try {
           const handoff = readAuthorityJson(path.join(paths.cacheDir, 'replan-source.json'));
           requestedAttempt = handoff && handoff.attempt_id || null;
@@ -2283,7 +2334,13 @@ function prepareReplanUnlocked(paths, opts) {
   const lineage = resolveClaimLineage(paths, parentState);
   if (!lineage.ok) return schema.refuse(lineage.reason, { detail: lineage.detail || null });
   const sourceResult = readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage);
-  if (!sourceResult.ok) return schema.refuse(sourceResult.reason, { detail: sourceResult.detail || null });
+  // #838: carry the typed deviation `route` through to the emitted envelope when the authority
+  // named one. Added only when present, so every other refusal's shape is byte-unchanged.
+  if (!sourceResult.ok) {
+    return schema.refuse(sourceResult.reason, sourceResult.route
+      ? { detail: sourceResult.detail || null, route: sourceResult.route }
+      : { detail: sourceResult.detail || null });
+  }
   // #761 RETIRE-AS-PRIMARY: an epoch replan is the SPINE-CHANGE path only. Before spending an epoch,
   // consult the local re-expansion router on a SPINE plan: if the source finding routes LOCAL (its
   // files lie inside some milestone's declared+amended surface), refuse the replan and direct the
