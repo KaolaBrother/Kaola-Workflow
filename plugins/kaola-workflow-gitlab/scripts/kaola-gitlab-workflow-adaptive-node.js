@@ -46,7 +46,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -359,7 +359,7 @@ const OPERATOR_HINT_REGISTRY = {
     ctx.route_mismatch_class === 'projection_missing'
       ? 'The review journal routes findings into the discharged interior of expansion point ' + (ctx.point || '<point>') + ', but no .cache/epoch-projections/ owner projection covers it (the discharge or journal predates the projection). Re-run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it re-writes the discharge projection. NEVER hand-edit the journal.'
       : ctx.route_mismatch_class === 'reexpansion_in_flight'
-        ? 'The review journal\'s recorded routes diverge from the plan ONLY by the interior of expansion point ' + (ctx.point || '<point>') + ' that an in-flight re-expansion has opened and no discharge covers yet — the run\'s own append, not tamper. It closes at the RE-DISCHARGE: settle the open unit(s), then run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it appends the superseding owner projection. NEVER hand-edit the journal.'
+        ? 'The review journal\'s recorded routes diverge from the plan ONLY by the interior of expansion point ' + (ctx.point || '<point>') + ' that an in-flight re-expansion has composed and no discharge covers yet — the run\'s own append, not tamper. It closes at the RE-DISCHARGE: settle the open unit(s) — running ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json first when the record carries no open() proof, which rolls its frontier forward — then run ' + ADAPTIVE_NODE_SCRIPT + ' expand-close --project <P> --node-id ' + (ctx.point || '<point>') + ' --json — idempotent: it appends the superseding owner projection. NEVER hand-edit the journal.'
         : 'The review journal\'s recorded finding routes do not match the frozen plan — an owner unknown to both the current node table and the discharge projection (tamper-class). The journal is the run\'s integrity anchor and is NEVER hand-edited; run orient to inspect, and finish or discard runs that predate the current release before re-freezing.',
 
   // --- the bounded re-anchor verb (route: rebind-base) ---
@@ -5425,10 +5425,16 @@ function loadOwnerProjection(opts, planHash) {
 // the read-side fold UNIONS them; valid existing entries are carried over byte-for-byte (entries
 // failing verification are inert on read and dropped on rewrite — the self-healing direction).
 // Idempotent: an entry covering this exact (point, records, leaves) triple is already durable, so the
-// write is skipped. Returns 'appended' | 'present' | 'skipped' | 'write_failed' — never throws,
-// because the discharge itself commits FIRST and the already-discharged re-ensure is the crash repair
-// for a missed write.
-function ensureOwnerProjection(opts, planHash, point, recs, dischargedAt) {
+// write is skipped. Returns 'appended' | 'present' | 'skipped' | 'write_failed' — never throws.
+//
+// NOT-THROWING IS NOT THE SAME AS FAIL-OPEN, and the two callers differ on exactly that. The
+// DISCHARGE commits FIRST and its already-discharged re-ensure is the idempotent crash repair for a
+// missed write, so it may carry on over a `write_failed`. The RE-OPEN has no such repair — the write
+// is a PRECONDITION of its plan write — so it treats `write_failed` as fatal (see that call site).
+// `fault`, when supplied, is the out-parameter that carries the substrate measurement (errno + path)
+// out of the catch: a caller that refuses on this must name the REAL blocker, and a bare catch that
+// swallowed the errno would leave it naming a downstream symptom instead.
+function ensureOwnerProjection(opts, planHash, point, recs, dischargedAt, fault) {
   if (!planHash || !point || !Array.isArray(recs) || !recs.length) return 'skipped';
   const leaves = recs.flatMap(r => ((r && Array.isArray(r.units)) ? r.units : []).map(u => u.id))
     .filter(Boolean).sort();
@@ -5454,19 +5460,36 @@ function ensureOwnerProjection(opts, planHash, point, recs, dischargedAt) {
     if (typeof opts.mkdirp === 'function') opts.mkdirp(path.dirname(filePath));
     else { try { require('fs').mkdirSync(path.dirname(filePath), { recursive: true }); } catch (_) {} }
     opts.writeFile(filePath, JSON.stringify(out, null, 2) + '\n');
-  } catch (_) { return 'write_failed'; }
+  } catch (err) {
+    if (fault && typeof fault === 'object') {
+      fault.errno = (err && err.code) || null;
+      fault.path = filePath;
+      fault.message = (err && err.message) || null;
+    }
+    return 'write_failed';
+  }
   return 'appended';
 }
 
 // reExpansionWindowUnits — the interior a re-expansion has ALREADY composed but no discharge covers
-// yet, keyed by unit id -> { point, record }. A record qualifies only when ALL of these hold:
+// yet, keyed by unit id -> { point, record, opened }. A record qualifies when BOTH of these hold:
 //   * its point is COVERED by the owner projection (so a previous discharge already projected that
-//     point — a never-discharged point is a first expansion, which cannot diverge this way);
-//   * no `discharge(<point>)` block lists the record id in its `records:` field (un-discharged); and
-//   * the record is POSITIVELY PROVEN opened (`open(<record>)`), the same fail-closed predicate the
-//     expansion lifecycle uses everywhere else.
+//     point — a never-discharged point is a first expansion, which cannot diverge this way); and
+//   * no `discharge(<point>)` block lists the record id in its `records:` field (un-discharged).
 // Returns the LITERAL unit ids of those records — never a shape/prefix rule — which is what keeps
 // the class below unforgeable: an id that merely LOOKS like an interior leaf is not in this map.
+//
+// THE `open(<record>)` PROOF IS CARRIED, NOT REQUIRED, and that is a deliberate correction. It once
+// gated membership, on the reasoning that the expansion lifecycle fails closed to not-opened
+// everywhere else. But the lifecycle uses that predicate to decide whether to ROLL A FRONTIER
+// FORWARD, where "unproven" must mean "re-open it"; here the question is whether a divergence is the
+// run's OWN append or a forgery, and for THAT question the proof block buys nothing: `record(...)`
+// and `open(...)` are both plan bytes appended by the same transaction, so anyone able to forge one
+// can forge the other. What requiring it did buy was a false accusation — a record committed by
+// Phase 1 whose Phase-2 open has not (yet) landed is precisely the run's own half-landed append, and
+// it fell through to `tamper`, the class that names no route and tells a current-release run to
+// discard itself as pre-release. Membership therefore turns on the COMMITTED RECORD, and `opened`
+// rides along so the detail can name the right first step for each half.
 function reExpansionWindowUnits(parsed, covered) {
   const byUnit = new Map();
   if (!parsed || !Array.isArray(parsed.records)) return byUnit;
@@ -5479,9 +5502,10 @@ function reExpansionWindowUnits(parsed, covered) {
   }
   for (const rec of parsed.records) {
     if (!rec || !rec.point || !covered.has(rec.point)) continue;
-    if (dischargedRecords.has(rec.id) || !validator.expansionRecordOpened(parsed, rec.id)) continue;
+    if (dischargedRecords.has(rec.id)) continue;
+    const opened = validator.expansionRecordOpened(parsed, rec.id);
     for (const unit of (rec.units || [])) {
-      if (unit && unit.id) byUnit.set(unit.id, { point: rec.point, record: rec.id });
+      if (unit && unit.id) byUnit.set(unit.id, { point: rec.point, record: rec.id, opened });
     }
   }
   return byUnit;
@@ -5494,13 +5518,15 @@ function reExpansionWindowUnits(parsed, covered) {
 //     detail names the migration: re-run expand-close for the point (idempotent — it re-writes the
 //     projection); NEVER hand-edit the journal.
 //   reexpansion_in_flight — the two sides diverge ONLY by unit ids of a record a re-expansion has
-//     already OPENED on a projection-COVERED point and no discharge covers yet. The execution view
+//     already COMMITTED on a projection-COVERED point and no discharge covers yet. The execution view
 //     names those units the instant the record lands, while the projection still carries the
 //     PREVIOUS discharge's interior, so this divergence is the run's own append — not forgery — and
-//     it closes at the RE-DISCHARGE, which the detail names. NARROW BY CONSTRUCTION: every diverging
-//     id must be a LITERAL unit of such a record, so a forged interior-shaped owner keeps refusing
-//     tamper even while a real window is open on the same point, and a point carrying no open
-//     un-discharged record is untouched (coverage alone never relieves).
+//     it closes at the RE-DISCHARGE, which the detail names. A record whose `open()` proof has not
+//     landed is the SAME append one phase earlier, so it classifies here too and the detail names the
+//     roll-forward as its first step. NARROW BY CONSTRUCTION: every diverging id must be a LITERAL
+//     unit of such a record, so a forged interior-shaped owner keeps refusing tamper even while a real
+//     window is open on the same point, and a point carrying no un-discharged record is untouched
+//     (coverage alone never relieves).
 //   tamper — every other mismatch (an owner unknown to the current node table AND the projection,
 //     or a route-shape divergence). Unchanged fail-closed behavior.
 function routeMismatchDetail(recordedRows, expectedRows, projection, planContent, execNodeIds) {
@@ -5546,14 +5572,23 @@ function routeMismatchDetail(recordedRows, expectedRows, projection, planContent
       if (points.size === 1) {
         const point = [...points][0];
         const recs = [...new Set(owners.map(o => o.record))].sort();
+        // The first step differs by half. A record whose `open()` proof landed has live units to
+        // settle; one whose proof did not has a frontier to roll forward first. Naming "settle the
+        // open unit(s)" for a record with no open units would route the operator at nothing.
+        const unopened = [...new Set(owners.filter(o => !o.opened).map(o => o.record))].sort();
         return { route_mismatch_class: 'reexpansion_in_flight', point,
           detail: 'route rows diverge ONLY by the interior of expansion point "' + point + '" that '
-            + 're-expansion record(s) ' + recs.join(', ') + ' have already opened and no discharge covers '
-            + 'yet — the execution view names those units while the .cache/epoch-projections/ owner '
-            + 'projection still carries the previous discharge. This is the re-expansion window, not '
-            + 'tamper, and it closes at the RE-DISCHARGE: settle the open unit(s), then run '
-            + 'kaola-gitlab-workflow-adaptive-node.js expand-close --node-id ' + point + ' — idempotent: it '
-            + 'appends the superseding owner projection. NEVER hand-edit the journal.' };
+            + 're-expansion record(s) ' + recs.join(', ') + ' have already composed and no discharge '
+            + 'covers yet — the execution view names those units while the .cache/epoch-projections/ '
+            + 'owner projection still carries the previous discharge. This is the re-expansion window, '
+            + 'not tamper, and it closes at the RE-DISCHARGE: '
+            + (unopened.length
+              ? 'record(s) ' + unopened.join(', ') + ' carry no open() proof, so roll the frontier '
+                + 'forward first with kaola-gitlab-workflow-adaptive-node.js reconcile-running-set, then '
+                + 'settle the unit(s)'
+              : 'settle the open unit(s)')
+            + ', then run kaola-gitlab-workflow-adaptive-node.js expand-close --node-id ' + point
+            + ' — idempotent: it appends the superseding owner projection. NEVER hand-edit the journal.' };
       }
     }
   }
@@ -14831,12 +14866,48 @@ function runExpandOpen(opts) {
   // ORDER IS DELIBERATE — projection BEFORE the plan write. The band is barrier-invisible and an
   // entry for units that never landed is INERT (canonicalization only ever sees ids the route rows
   // actually carry), whereas the reverse order re-opens the exact window on any crash in between.
-  // Fail-open like every other .cache write on this path: ensureOwnerProjection never throws, and a
-  // `write_failed` leaves the classifier's typed reexpansion_in_flight class as the operator route.
+  //
+  // AND IT IS A PRECONDITION, NOT A COURTESY — this write FAILING CLOSED is what makes "the window
+  // never exists" unconditionally true. Ordering alone only defeats a CRASH between the two writes;
+  // it does nothing about the write simply not taking (ENOSPC, EACCES on .cache/epoch-projections/),
+  // and carrying on past that lands the record with no projection to cover it — the window, re-opened
+  // by the one branch that was supposed to close it. The fail-open posture the rest of this path uses
+  // is not available here: the discharge may carry on over a failed projection write because its
+  // already-discharged re-ensure re-attempts it idempotently, and the re-open has no such repair —
+  // the re-activation cascade rides in the very write below, so the instant it lands the point reads
+  // `pending` and the re-open verb refuses `reexpansion_point_not_discharged` on every retry.
+  //
+  // So: no plan write, no cascade, no residue — the milestone is byte-identical to before the call,
+  // and the refusal names the substrate fault at the moment and place it happened rather than
+  // surfacing three layers downstream as a review-journal route mismatch. A second failure is a
+  // second identical no-op refusal; retrying after the substrate recovers is a fresh transaction.
+  const reopenFault = {};
   const reopenProjection = opts._allowDischarged
     ? ensureOwnerProjection(opts, planHash, nodeId, [{ id: recordId, units: unitIds.map(id => ({ id })) }],
-      (typeof now === 'function') ? now() : new Date().toISOString())
+      (typeof now === 'function') ? now() : new Date().toISOString(), reopenFault)
     : null;
+  if (reopenProjection === 'write_failed') {
+    // The verb to name is the one the OPERATOR ran: an amend-surface re-open carries its amendment in
+    // `_amendBlockText`, and pointing that operator at bare reexpand-open would silently drop it.
+    const retryVerb = opts._amendBlockText ? 'amend-surface' : 'reexpand-open';
+    return refuse('owner_projection_write_failed', {
+      node_id: nodeId,
+      path: reopenFault.path || null,
+      // The FIELD is enum-bound to the errnos that mean "blocker outside the runtime" (that is what
+      // selects the environment route); any other errno is still reported, in the detail.
+      ...(WRITE_FAILED_ENVIRONMENT_ERRNOS.indexOf(reopenFault.errno) >= 0 ? { errno: reopenFault.errno } : {}),
+      retry_script: 'adaptive-node',
+      retry_verb: retryVerb,
+      retry_args: '--project <P> --node-id ' + nodeId
+        + (retryVerb === 'amend-surface' ? ' --files "<paths>"' : '') + ' --json',
+      detail: 'the re-open could not write the owner projection'
+        + (reopenFault.errno ? ' (' + reopenFault.errno + ')' : '')
+        + (reopenFault.path ? ' at ' + reopenFault.path : '')
+        + '. That write is a PRECONDITION of the record append, so NOTHING was committed: the plan, '
+        + 'the ledger and the milestone are exactly as they were before this call. Clear the substrate '
+        + 'fault, then re-run ' + retryVerb + ' — a fresh transaction, not a resume.',
+    });
+  }
   writeFile(planPath, seeded);
 
   // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
