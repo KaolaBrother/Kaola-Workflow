@@ -1653,7 +1653,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     /throw new Error\(\s*'([a-z][a-z0-9_]{3,})'\s*\)/g,
   ];
 
-  // Extract the sweep's own EMISSION_SHAPES literals as `source flags` strings.
+  // Extract the sweep's own EMISSION_SHAPES literals as `source+flags` strings.
+  // The joiner is NUL and not a readable character because a regex SOURCE may itself
+  // contain spaces, slashes and punctuation (shape 4 does), and a separator the payload
+  // can contain makes the comparison ambiguous in exactly the direction that hides drift.
   // Returns null on ANY shape it does not recognize — a gutted array, a renamed anchor,
   // a non-literal entry — so the comparison below fails closed rather than comparing
   // against nothing.
@@ -1665,14 +1668,14 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     for (const line of m[1].split('\n')) {
       const lm = line.match(/^\s*\/(.*)\/([gimsuy]*),\s*$/);
       if (!lm) return null;
-      out.push(lm[1] + ' ' + lm[2]);
+      out.push(lm[1] + '\u0000' + lm[2]);
     }
     return out.length ? out : null;
   }
 
   const sweepShapes = extractSweepShapes(fs.readFileSync(
     path.join(REPO, 'scripts/test-refusal-route-sweep.js'), 'utf8'));
-  const mineShapes = CONDITION_EMISSION_SHAPES.map(r => r.source + ' ' + r.flags);
+  const mineShapes = CONDITION_EMISSION_SHAPES.map(r => r.source + '\u0000' + r.flags);
   assert(sweepShapes !== null,
     'K0 shapes: the refusal sweep\'s `const EMISSION_SHAPES = [...]` block must still be locatable — '
     + 'if it was renamed or reshaped, re-point this extractor rather than letting the two censuses fork');
@@ -1727,7 +1730,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     // The joined blob is a fast negative filter only; the per-file loop is what names
     // the reader. Both read the SAME bytes, so the blob can never say "consumed" where
     // the loop would say otherwise.
-    return { name, entries, joined: entries.map(e => e[1]).join('\n \n') };
+    return { name, entries, joined: entries.map(e => e[1]).join('\n\u0000\n') };
   }
 
   const routingFiles = []
@@ -1972,7 +1975,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       'K0 mutation: extractSweepShapes must return null when the anchor is absent or renamed');
     assert(extractSweepShapes(null) === null,
       'K0 mutation: extractSweepShapes must be total on a non-string input');
-    assert(JSON.stringify(extractSweepShapes('\nconst EMISSION_SHAPES = [\n  /a_b/g,\n];\n')) === JSON.stringify(['a_b g']),
+    assert(JSON.stringify(extractSweepShapes('\nconst EMISSION_SHAPES = [\n  /a_b/g,\n];\n')) === JSON.stringify(['a_b\u0000g']),
       'K0 mutation: extractSweepShapes must read a well-formed block');
   }
 
