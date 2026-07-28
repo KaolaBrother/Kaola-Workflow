@@ -6004,6 +6004,8 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
     'the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label'],
   ['.cache/wedged-attestation.json', 'preference', null, 'script',
     'historical residue; no producer and no consumer remains in the tree'],
+  [/^\.cache\/aborted-transactions\/[^/]+\.json$/, 'preference', null, 'script',
+    'the abort log of a DISCARDED re-plan transaction, a deliberate sibling of committed-transactions/ that is deliberately NOT in the committed-authority chain — an abandoned transaction has no successor to bind to. Its only reader is the re-abort merge in writeAbortRecord, which treats absence as a first abort; no gate, transition or successor decision reads it, and crash-mid-abort resume is carried by the fence plus the missing transaction file through the orphaned-fence branch, which reads no record back. Losing it costs the forensic trail — phase, parent binding, removed-artifact digests — never a verdict. NOT derivable: the artifacts whose digests it names are unlinked by the same call'],
   ['fast-summary.md', 'preference', null, 'agent',
     'legacy marker, never newly authored; both readers (classifier scope parse, router folder detection) are tolerant'],
   [/^phase[0-9]+-[a-z-]+\.md$/, 'preference', null, 'agent',
