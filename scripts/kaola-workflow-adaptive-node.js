@@ -3152,9 +3152,69 @@ function resolveRoleSubstitution(ctx, nodeInfo) {
   return null;
 }
 
+// The SPAWN PARAMETERS of a dispatch card: the identity of the role that will actually be dispatched
+// plus every tier-derived knob an orchestrator is forbidden to improvise. Factored out of
+// `buildDispatch` so the card the three openers emit and the card `substitute-role` re-issues after a
+// mid-node swap are ONE derivation instead of two that can silently drift. Key order matches the object
+// literal it replaces, so every dispatch card stays byte-identical.
+//
+// `dispatchRole` is the DISPATCH TARGET (the substitute when one is on record, the frozen role
+// otherwise) — the task identity derives from it, because the runtime has already consumed the frozen
+// one. The Codex profile pair deliberately reads the FROZEN `nodeInfo.role`: the named role profile is
+// the plan's own declaration and a substitution redirects the dispatch, not the plan.
+function spawnParameterFields(nodeInfo, dispatchRole, sessionProof, opencodeProvider) {
+  return {
+    agent_type:          dispatchRole,
+    codex_dispatch_mode: resolveCodexDispatchMode(),
+    codex_task_name:     codexTaskNameForNode(nodeInfo, dispatchRole),
+    ...dispatchEffort(nodeInfo.model, sessionProof),
+    // Current-Codex adapter: the named role profile inherits the parent pair. The historical role
+    // class remains declarative metadata and never creates a tier/profile conflict.
+    ...codexProfilePolicy(nodeInfo.role, nodeInfo.model),
+    // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
+    // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
+    // present on EVERY dispatch card so no timeout is left to model improvisation.
+    ...waitBudgetMinutes(nodeInfo.model),
+    // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
+    // effort variant (reasoning→top, standard→second) when ctx.opencode_provider is set (opencode
+    // runtime). null/absent provider → role_default (the agent's configured variant wins).
+    ...dispatchEffortOpencode(nodeInfo.model, opencodeProvider),
+  };
+}
+
+// The card a mid-node `substitute-role` RE-ISSUES on its own ok payload. A substitution lands on a node
+// that is ALREADY `in_progress`, and no opener can re-card one: every `buildDispatch` call site resolves
+// its target from the scheduler's readySet and an in_progress row is never in it. So the only card left
+// on disk is the envelope the CONSUMED open wrote, while the plan-run surfaces mandate that every spawn
+// parameter come from the dispatch card and forbid improvising a task name — which left the re-dispatch
+// with no sanctioned source at all. The commit therefore hands the spawn parameters back itself, built
+// from the SAME derivation the openers use, so the payload and the card can never disagree.
+//
+// No session proof and no opencode provider are threaded: both are per-invocation runtime facts this
+// subcommand does not hold, and both resolve to the same role-default sentinels the openers emit when
+// they are absent.
+function reissuedSpawnCard(nodeInfo, substitution) {
+  const card = {
+    ...spawnParameterFields(nodeInfo, substitution.to_role, null, null),
+    // Both roles, exactly as the openers' card states them: what to dispatch (agent_type, above) and
+    // what the frozen plan says. Naming only the substitute would hide the divergence the record
+    // exists to make visible.
+    agent_type_frozen:       nodeInfo.role,
+    role_substituted:        true,
+    role_substitution_basis: substitution.basis,
+  };
+  // A validated planner wait-budget override outranks the tier floor on the openers' card; mirror it
+  // so the re-issued budget is the one the join loop would have honored. Not re-validated here — the
+  // freeze gate already did that, and this value sits on a frozen plan.
+  if (Number.isInteger(nodeInfo.wait_budget_minutes)) {
+    card.wait_budget_minutes = nodeInfo.wait_budget_minutes;
+    card.wait_budget_source = 'planner_override';
+  }
+  return card;
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
-  const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
   // A recorded role substitution redirects the DISPATCH TARGET only. The plan's `role` cell is what
   // was frozen and stays the node's identity everywhere else (model tier still resolves from the
   // plan's own `model` column, so a substitution can never lower a floor). Conditionally attached
@@ -3165,7 +3225,6 @@ function buildDispatch(nodeInfo, context) {
   // card is byte-identical to before.
   const substitution = resolveRoleSubstitution(ctx, nodeInfo);
   const agentType = substitution ? substitution.to_role : nodeInfo.role;
-  const codexTaskName = codexTaskNameForNode(nodeInfo, agentType);
   const d = {
     node_id:            nodeInfo.id,
     role:               nodeInfo.role,
@@ -3177,21 +3236,10 @@ function buildDispatch(nodeInfo, context) {
     required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
-    agent_type:         agentType,
-    codex_dispatch_mode: codexDispatchMode,
-    codex_task_name:    codexTaskName,
-    ...dispatchEffort(nodeInfo.model, nodeInfo.codex_session_proof || ctx.session_proof),
-    // Current-Codex adapter: the named role profile inherits the parent pair. The historical role
-    // class remains declarative metadata and never creates a tier/profile conflict.
-    ...codexProfilePolicy(nodeInfo.role, nodeInfo.model),
-    // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
-    // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
-    // present on EVERY dispatch card so no timeout is left to model improvisation.
-    ...waitBudgetMinutes(nodeInfo.model),
-    // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
-    // effort variant (reasoning→top, standard→second) when ctx.opencode_provider is set (opencode
-    // runtime). null/absent provider → role_default (the agent's configured variant wins).
-    ...dispatchEffortOpencode(nodeInfo.model, ctx.opencode_provider),
+    ...spawnParameterFields(
+      nodeInfo, agentType,
+      nodeInfo.codex_session_proof || ctx.session_proof,
+      ctx.opencode_provider),
   };
   if (ctx.runtime === 'codex' || nodeInfo.codex_session_proof) {
     const proof = nodeInfo.codex_session_proof || ctx.session_proof || { status: 'absent', source: 'session_jsonl' };
@@ -15681,6 +15729,10 @@ function runSubstituteRole(opts, project) {
       basis: active.basis, recorded_at: active.ts, idempotent: true,
       substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
       evidence_reset: evidenceReset,
+      // The replay must be as dispatchable as the first call: this IS the resume path, and a resume
+      // that answered with less would land the orchestrator back in the improvisation. Pure in the
+      // node + the active record, so both calls re-issue the identical card.
+      ...reissuedSpawnCard(node, active),
     };
   }
 
@@ -15702,6 +15754,11 @@ function runSubstituteRole(opts, project) {
     substitutions_file: '.cache/' + ROLE_SUBSTITUTIONS_NAME,
     plan_unchanged: true,
     evidence_reset: evidenceReset,
+    // RE-ISSUE the dispatch card. Recording the swap without handing back a spawn identity is what
+    // wedged the recovery: the node is in_progress, so no opener will ever re-card it. Only an ok
+    // return carries this — a refusal recorded nothing, and a card behind a refusal would be a spawn
+    // identity for a substitution that never happened.
+    ...reissuedSpawnCard(node, record),
   };
 }
 
