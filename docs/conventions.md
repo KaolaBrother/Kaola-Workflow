@@ -486,7 +486,9 @@ direction; the file prints its own size), never an opt-in allowlist. It splits i
   exist is RED); R4 discipline; payload-schema validation; and the cell-keyed WHY pins — the hint
   layer alive, no fabricated fields, hint/route agreement, cell closure. Every checker is fed a
   deliberately broken input by an in-suite mutation battery and must reject. Measured on HEAD:
-  `node scripts/test-refusal-route-sweep.js` → 7 codes, 64 cells walked, 1187 assertions, exit 0.
+  `node scripts/test-refusal-route-sweep.js` → 7 codes, 64 cells walked, exit 0. It prints its own
+  assertion count on every run; read it there rather than from this page, because a count quoted in
+  prose goes stale the next time a pin lands and then reads as a measurement.
 - **Tier B — behavioural (provoke the refusal for real, follow its recorded route, arrive green) —
   is still review-time for every cell.** `TIER_B_PROVOKERS` is empty and a single blanket `"*"` entry
   in the exempt ledger covers all 64 cells (`exempt_cells=64`), so no cell yet has a mechanically
