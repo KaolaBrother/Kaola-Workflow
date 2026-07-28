@@ -7,41 +7,25 @@
 //   A1 (Successor). At any interruption, a fresh agent with zero conversational context must
 //   be able to pick the run up from durable state alone.
 //
-// Everything in the architecture decision is derived from A1, and until this suite existed A1
-// was the one axiom nothing ran. `test-kernel-conformance.js` rules WHICH artifacts are the
-// kernel (record / derivable / preference) and proves the atomic-write obligation is scoped to
-// it; that ruling is this suite's specification. What it cannot do is interrupt anything: it
-// observes writes that all completed. So it establishes the four records exist and are written
-// atomically, and leaves open the only question A1 actually asks — after a real interruption,
-// can a fresh process finish the run from those records and nothing else?
+// Everything else is derived from A1, and until this suite existed A1 was the one axiom
+// nothing ran. `test-kernel-conformance.js` rules WHICH artifacts are the kernel and proves
+// the atomic-write obligation is scoped to it — that ruling is this suite's specification —
+// but it only observes writes that COMPLETED. It cannot interrupt anything.
 //
-// The shape, and why each step is load-bearing:
+//   1. Drive a REAL run to a genuinely mid-lifecycle point: the production CLI over a real
+//      git repository and a real frozen plan, advanced until a node is open.
+//   2. KILL IT MID-WRITE — SIGKILL inside the atomic-replace window, after the bytes are
+//      fsynced to the temp file and before the rename publishes them. A kill that only ever
+//      lands between transactions cannot observe T2 at all.
+//   3. Delete every artifact the ruling calls `derivable` or `preference`. What survives is
+//      the durable kernel and nothing else.
+//   4. Prove a FRESH PROCESS orients coherently and the run advances.
+//   5. MUTATION-PROVE it: delete one genuine RECORD band and the successor must FAIL. Without
+//      this, every green above is equally consistent with "the successor needed nothing at
+//      all", and A1 would be satisfied and untested by the same run.
 //
-//   1. Drive a REAL run to a genuinely mid-lifecycle point. Not a hand-built fixture of what
-//      mid-run "looks like" — the production CLI over a real git repository and a real frozen
-//      plan, advanced until a node is open with a recorded baseline: the ledger says
-//      in_progress and the work is not closed.
-//   2. KILL IT MID-WRITE. SIGKILL inside the atomic-replace window of a kernel record — after
-//      the replacement bytes are written and fsynced to the temp file, before the rename
-//      publishes them. A kill that only ever lands between transactions cannot observe T2 at
-//      all: the whole content of "kernel writes are atomic" is that a successor never sees half
-//      a record, and only a kill inside the window can witness that.
-//   3. Take away everything the successor is NOT entitled to. Delete every artifact the ruling
-//      classifies `derivable` or `preference` — a successor may re-decide those — and keep only
-//      the `record` bands. What survives is the durable kernel and nothing else.
-//   4. Prove a FRESH PROCESS resumes: `orient` reports a coherent position, and the run
-//      advances to the next node.
-//   5. MUTATION-PROVE it. Delete one genuine RECORD band and assert the successor now FAILS.
-//      This is the most important assertion in the file: without it, every green above is
-//      equally consistent with "the successor needed nothing at all", and A1 would be
-//      *satisfied* and *untested* by exactly the same run.
-//
-// Both process boundaries here are the property under test, not an implementation detail:
-// killing a process and re-reading what it left is not expressible in-process, and the
-// cross-process durable handoff IS A1. See the architecture decision's fifth spawn class.
-//
-// POSIX: the crash vehicle uses SIGKILL via `process.kill`, as the rest of the suite tree
-// already assumes a POSIX shell and `/dev/null`.
+// Both process boundaries are the property under test: killing a process and re-reading what
+// it left is not expressible in-process, and the cross-process durable handoff IS A1.
 //
 // Run: node scripts/test-kernel-successor.js        (~40s; every scenario does real git work)
 // ---------------------------------------------------------------------------
@@ -557,29 +541,22 @@ function part6_theEntitlementHolds() {
 }
 
 // ===========================================================================
-// MEASURED — recorded here rather than asserted, because pinning them would freeze
-// today's behavior as the specification. Each is a finding, not a failure.
+// MEASURED — findings, recorded rather than asserted so that fixing one is not a test failure.
 //
-//  1. Three RECORD bands can be deleted from the mid-transition state above and the node still
-//     closes and advances: `.cache/barrier-open-impl` (Position), `workflow-state.md` (Position)
-//     and `.cache/context-packet.md` (Evidence, via the broad free-form band). That is NOT
-//     evidence the ruling is wrong — barrier-open is consumed by staleness detection and
-//     workflow-state.md by the sink, neither of which this scenario reaches — but it does mean
-//     the node-advance path alone does not witness their necessity. A P1 that also drives
-//     finalize would.
-//  2. `.cache/context-packet.md` is re-derived byte-identically by `orient` (PART 6), yet the
-//     registry rules it `record`/`evidence` with `writer: 'agent'` — it is swallowed by the
-//     broad free-form evidence band and is in fact script-written and derivable. A candidate
-//     mis-ruling: it inherits the atomic-write obligation without needing it.
-//  3. A torn atomic replace leaves `.<basename>.<pid>.<ms>.<rand>.tmp`, which
-//     `classifyDurableArtifact` rules `unclassified`. The Layer-0 totality check is total over
-//     what an ARCHIVED run left behind, and no archived run crashed, so crash residue is outside
-//     the corpus that proved totality. PART 6 pins the property that matters (it is inert)
-//     rather than the classification.
-//  4. With the Plan record deleted, `close-and-open-next` exits on an uncaught ENOENT with a
-//     stack trace and no JSON envelope, where `orient` returns a typed `plan_missing` refusal.
-//     PART 5b asserts the fix-safe half (it must not report success); the untyped exit is
-//     reported rather than pinned so that typing it later is not a test failure.
+//  1. Three RECORD bands can be deleted from the mid-transition state and the node still closes
+//     and advances: `.cache/barrier-open-impl`, `workflow-state.md`, `.cache/context-packet.md`.
+//     Not evidence the ruling is wrong — barrier-open is consumed by staleness detection and
+//     workflow-state.md by the sink, neither of which this scenario reaches — but the
+//     node-advance path alone does not witness their necessity. A P1 driving finalize would.
+//  2. `.cache/context-packet.md` re-derives byte-identically from `orient` (PART 6) yet the
+//     registry rules it `record`/`evidence`, `writer: 'agent'`, via the broad free-form band.
+//     A candidate mis-ruling: it inherits the atomic-write obligation without needing it.
+//  3. A torn replace leaves `.<basename>.<pid>.<ms>.<rand>.tmp`, ruled `unclassified` — the
+//     totality corpus is what ARCHIVED runs left, and no archived run crashed. PART 6 pins the
+//     property that matters (it is inert) rather than the classification.
+//  4. With the Plan record deleted, `close-and-open-next` exits on an uncaught ENOENT with no
+//     JSON envelope where `orient` returns a typed `plan_missing`. PART 5b asserts the fix-safe
+//     half only (it must not report success).
 // ===========================================================================
 
 function main() {
