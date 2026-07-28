@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 
 // uninstall.sh must carry a working removal path for EVERY forge the install manifest ships.
 // Deleting one forge's removal branch used to leave all four chains green — `bash -n` is
@@ -70,6 +78,7 @@ function childEnv(home) {
 
 function runScript(script, args, home) {
   assertSandboxed(home);
+  // spawn-class: environment
   return spawnSync('bash', [script].concat(args), {
     cwd: path.join(home, 'cwd'), // uninstall.sh's Codex cleanup is $PWD-relative
     env: childEnv(home),

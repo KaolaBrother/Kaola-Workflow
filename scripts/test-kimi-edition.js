@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 
 // ---------------------------------------------------------------------------
 // test-kimi-edition.js — structural + parity validator for the Kimi Code
@@ -50,6 +58,7 @@ function assert(cond, msg) {
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
+  // spawn-class: environment
   const r = spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), '--write'],
     { encoding: 'utf8' });
@@ -192,6 +201,7 @@ assert(read(skillDir('kaola-workflow-adapt')).includes(
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
+  // spawn-class: environment
   const r = spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), '--check'],
     { encoding: 'utf8' });
@@ -503,6 +513,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     const kimiHome = opts.kimiHome || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-kh-'));
     const dest = opts.dest || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-dest-'));
     const args = ['--target', dest, '--yes'].concat(extraArgs || []);
+    // spawn-class: environment
     const r = spawnSync('bash', [INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
       encoding: 'utf8',
@@ -559,6 +570,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     assert(existsSync(scriptsHome),
       'P1: support scripts land at <kimi_home>/kaola-workflow/scripts');
     const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    // spawn-class: environment
     const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
       .stdout.split('\n').map(s => s.trim()).filter(Boolean);
     assert(names.length > 0, 'P1: install manifest lists at least one support script');
@@ -617,6 +629,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     const r1 = runInstaller([]);
     assert(r1.ok, 'U1: seed install exits 0');
     assert(existsSync(skillsDir(r1)), 'U1: skills present before uninstall');
+    // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home, KIMI_CODE_HOME: r1.kimiHome }), encoding: 'utf8' });
     assert(ru.status === 0,
@@ -689,6 +702,7 @@ for (const script of sync.HOOK_SCRIPTS) {
         + "const r=m.resolveReviewerProfileIdentity('code-reviewer',{});"
         + 'console.log(JSON.stringify({ok:r.ok,reason:r.reason||null,runtime:r.runtime||null,'
         + 'hash:r.resolved_profile_hash||null,path:r.profile_path||null}));';
+      // spawn-class: environment
       const r = spawnSync(process.execPath, ['-e', script],
         { cwd, env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }), encoding: 'utf8' });
       try { return JSON.parse(String(r.stdout).trim()); }
@@ -712,6 +726,7 @@ for (const script of sync.HOOK_SCRIPTS) {
       'K9[project]: resolved_profile_hash verifies against the deployed SKILL.md bytes');
 
     // case 2 — a global install into the SAME kimi home does not override the project win.
+    // spawn-class: environment
     const rg = spawnSync('bash', [INSTALLER, '--global', '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home, KIMI_CODE_HOME: r1.kimiHome }), encoding: 'utf8' });
     assert(rg.status === 0,
@@ -758,6 +773,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 {
   const { spawnSync } = require('child_process');
   const probeDir = path.join(REPO, '.kimi', 'skills', 'kaola-workflow-__kw_retired_probe');
+  // spawn-class: environment
   const runSync = (flag) => spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), flag], { encoding: 'utf8' });
   try {
@@ -867,9 +883,11 @@ for (const script of sync.HOOK_SCRIPTS) {
     const tree = sync.treeLabel(forge);
 
     // F3: every forge renders, and re-renders to byte-parity.
+    // spawn-class: environment
     const w = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--write'], { encoding: 'utf8' });
     assert(w.status === 0, 'FA3[' + forge + ']: sync --write exits 0 (got ' + w.status + ': '
       + String(w.stderr || '').slice(0, 200) + ')');
+    // spawn-class: environment
     const c = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--check'], { encoding: 'utf8' });
     assert(c.status === 0, 'FA3[' + forge + ']: sync --check is green after --write (got ' + c.status + ': '
       + String(c.stderr || '').slice(0, 300) + ')');
@@ -926,6 +944,7 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 
   // F8: an unknown forge is REFUSED, not silently defaulted to github.
+  // spawn-class: environment
   const bad = spawnSync(process.execPath, [SYNC, '--forge=svn', '--check'], { encoding: 'utf8' });
   assert(bad.status === 2,
     'FA8: sync --forge=svn refuses with exit 2 rather than defaulting to github (got ' + bad.status + ')');
@@ -951,6 +970,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     const dest = mkdtempSync(path.join(os.tmpdir(), 'km-forge-dest-'));
     const kimiHome = path.join(home, '.kimi-code');
     try {
+      // spawn-class: environment
       const r = spawnSync('bash', [INSTALLER, '--forge=' + forge, '--target', dest, '--yes'], {
         env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
         encoding: 'utf8',

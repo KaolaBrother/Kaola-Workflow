@@ -43,18 +43,11 @@
     "scripts/test-gap-sweep.js": 1,
     "scripts/test-generate-routing-surfaces.js": 1,
     "scripts/test-git-fixture.js": 2,
-    "scripts/test-install-adaptive-config.js": 9,
-    "scripts/test-install-all.js": 1,
-    "scripts/test-install-manifest-single-source.js": 1,
-    "scripts/test-install-model-rendering.js": 71,
-    "scripts/test-install-upgrade-rewrite.js": 1,
     "scripts/test-interior-gate-freshness.js": 2,
     "scripts/test-issue-probe-memo.js": 1,
-    "scripts/test-kimi-edition.js": 12,
     "scripts/test-ledger-chain-tamper.js": 2,
     "scripts/test-ledger-compare.js": 1,
     "scripts/test-mega-mutation-spotcheck.js": 1,
-    "scripts/test-opencode-edition.js": 15,
     "scripts/test-plan-run.js": 1,
     "scripts/test-plan-shape-audit.js": 2,
     "scripts/test-plan-validator.js": 4,
@@ -64,7 +57,6 @@
     "scripts/test-run-chains.js": 5,
     "scripts/test-shard-lib.js": 1,
     "scripts/test-sink-merge.js": 3,
-    "scripts/test-uninstall-forge-branches.js": 1,
     "scripts/test-validation-runner.js": 1
   }
 }

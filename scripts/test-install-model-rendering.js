@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 
 const assert = require('assert');
 const { execFileSync, spawnSync } = require('child_process');
@@ -49,6 +57,7 @@ function resignCodexReviewer(source) {
 }
 
 function runCodexInstaller(installerPath, projectRoot, homeRoot) {
+  // spawn-class: environment
   return spawnSync(process.execPath, [installerPath, projectRoot], {
     cwd: path.dirname(path.dirname(installerPath)),
     env: { ...process.env, HOME: homeRoot },
@@ -1162,6 +1171,7 @@ function enableMultiAgentV2(homeRoot) {
         env.KAOLA_TEST_HOOK_STABLE_DIR = stableDir;
       }
 
+      // spawn-class: environment
       const result = spawnSync(process.execPath, [installerPath, projectRoot], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'),
         env,
@@ -1247,6 +1257,7 @@ function enableMultiAgentV2(homeRoot) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-project-override-'));
   const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-global-base-'));
   try {
+    // spawn-class: environment
     const runInstaller = args => execFileSync(process.execPath, [installerPath, ...args], {
       cwd: pluginRoot,
       env: { ...process.env, HOME: homeRoot },
@@ -1276,6 +1287,7 @@ function enableMultiAgentV2(homeRoot) {
     manifest.profile_contracts['code-reviewer.toml'] = parseCodexReviewerIdentity(mutated);
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
+    // spawn-class: environment
     const refused = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1288,6 +1300,7 @@ function enableMultiAgentV2(homeRoot) {
       (entry.reasons || []).some(reason => reason.includes('profile_bytes_mismatch'))),
     'project override refusal must preserve the exact bundled-source mismatch reason');
 
+    // spawn-class: environment
     const repaired = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1417,12 +1430,14 @@ function enableMultiAgentV2(homeRoot) {
       + '\n[agents.my-local-role]\n'
       + 'description = "unrelated project user role"\n'
       + 'config_file = "./agents/my-local-role.toml"\n');
+    // spawn-class: environment
     let unrelated = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
     assert.strictEqual(unrelated.status, 0,
       'an unrelated project role outside canonical managed markers remains allowed: '
       + unrelated.stderr + unrelated.stdout);
+    // spawn-class: environment
     unrelated = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1437,6 +1452,7 @@ function enableMultiAgentV2(homeRoot) {
       assert.notStrictEqual(mutated, canonical, fixture.label + ': mutation must change config bytes');
       fs.writeFileSync(configPath, mutated);
 
+      // spawn-class: environment
       const normal = spawnSync(process.execPath,
         [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
         { cwd: pluginRoot, encoding: 'utf8' });
@@ -1452,6 +1468,7 @@ function enableMultiAgentV2(homeRoot) {
           fixture.label + ': managed block byte drift is typed config_stale');
       }
 
+      // spawn-class: environment
       const doctor = spawnSync(process.execPath,
         [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
         { cwd: pluginRoot, encoding: 'utf8' });
@@ -1470,6 +1487,7 @@ function enableMultiAgentV2(homeRoot) {
 
     fs.writeFileSync(configPath,
       '[mcp_servers.context7.env]\nagents = "ordinary-env-value"\n\n' + canonical);
+    // spawn-class: environment
     const nestedAgentsKey = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1484,6 +1502,7 @@ function enableMultiAgentV2(homeRoot) {
       + '"""\n'
       + "literal_notes = '''\n[agents.security-reviewer]\n[features]\n'''\n";
     fs.writeFileSync(configPath, proseOnly);
+    // spawn-class: environment
     const decoyPreflight = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1499,6 +1518,7 @@ function enableMultiAgentV2(homeRoot) {
     assert(proseInstalledConfig.includes(
       '# BEGIN kaola-workflow agents\n[agents.'),
     'multiline prose that says [features] must not suppress the canonical managed agents-only body');
+    // spawn-class: environment
     const prosePreflight = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1522,6 +1542,7 @@ function enableMultiAgentV2(homeRoot) {
     assert(quotedFeaturesConfig.includes(
       '# BEGIN kaola-workflow agents\n[agents.'),
     'the managed block always selects the canonical agent-only body');
+    // spawn-class: environment
     const quotedFeaturesPreflight = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1547,6 +1568,7 @@ function enableMultiAgentV2(homeRoot) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-layered-project-'));
   const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-layered-home-'));
   try {
+    // spawn-class: environment
     const globalInstall = spawnSync(process.execPath, [installerPath, '--global'], {
       cwd: pluginRoot,
       env: { ...process.env, HOME: homeRoot },
@@ -1563,6 +1585,7 @@ function enableMultiAgentV2(homeRoot) {
       '[agents.code-reviewer]\n'
       + 'description = "override"\n'
       + 'config_file = "./agents/kaola-workflow/code-reviewer.toml"\n');
+    // spawn-class: environment
     let result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1573,6 +1596,7 @@ function enableMultiAgentV2(homeRoot) {
 
     fs.writeFileSync(projectConfig,
       '[agents.code-reviewer.extra]\nvalue = "shadow"\n');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1588,6 +1612,7 @@ function enableMultiAgentV2(homeRoot) {
       '[agents.my-local-role]\n'
       + 'description = "unrelated local role"\n'
       + 'config_file = "./agents/my-local-role.toml"\n');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1601,6 +1626,7 @@ function enableMultiAgentV2(homeRoot) {
     fs.writeFileSync(globalConfigPath, globalCanonical
       + '\n[agents."code-reviewer"]\n'
       + 'config_file = "./agents/kaola-workflow/code-reviewer.toml"\n');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1608,6 +1634,7 @@ function enableMultiAgentV2(homeRoot) {
       'a duplicate managed Kaola role outside the global managed markers must fail closed');
     assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
       'a duplicate global managed-role declaration requires manual repair');
+    // spawn-class: environment
     let doctor = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1627,12 +1654,14 @@ function enableMultiAgentV2(homeRoot) {
       + '\n[agents.global-user-role]\n'
       + 'description = "unrelated global user role"\n'
       + 'config_file = "./agents/global-user-role.toml"\n');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
     assert.strictEqual(result.status, 0,
       'an unrelated global user role must coexist with managed Kaola roles: '
       + result.stderr + result.stdout);
+    // spawn-class: environment
     doctor = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1646,12 +1675,14 @@ function enableMultiAgentV2(homeRoot) {
     // at all never resets a higher (global) layer's explicit true; an explicit lower-layer
     // `enabled = false` DOES override the higher layer (overlay-per-field, not per-table).
     fs.writeFileSync(projectConfig, '');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
     assert.strictEqual(JSON.parse(result.stdout).multi_agent_v2_enabled, true,
       "an absent project-layer [agents] table never resets the global layer's enabled=true");
     fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nenabled = false\n');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1665,6 +1696,7 @@ function enableMultiAgentV2(homeRoot) {
     // only max_concurrent_threads_per_session combines with a lower layer's max_wait_timeout_ms.
     fs.writeFileSync(globalConfigPath, '[features.multi_agent_v2]\nenabled = true\nmax_wait_timeout_ms = 1800000\n\n' + globalCanonical);
     fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 6\n');
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1687,6 +1719,7 @@ function enableMultiAgentV2(homeRoot) {
     fs.writeFileSync(rootProjectConfig, fs.readFileSync(rootProjectConfig, 'utf8').replace(
       'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
       'config_file = "./agents/kaola-workflow/security-reviewer.toml"'));
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nested, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1694,6 +1727,7 @@ function enableMultiAgentV2(homeRoot) {
       'nested cwd must refuse stale repository-root managed config');
     assert.strictEqual(JSON.parse(result.stdout).status, 'config_stale',
       'root project layer drift remains a typed config refusal from nested cwd');
+    // spawn-class: environment
     doctor = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', nested, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1723,6 +1757,7 @@ function enableMultiAgentV2(homeRoot) {
   try {
     fs.mkdirSync(path.join(projectRoot, '.git'));
     fs.mkdirSync(nestedRoot, { recursive: true });
+    // spawn-class: environment
     let install = spawnSync(process.execPath, [installerPath, '--global'], {
       cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
     });
@@ -1739,6 +1774,7 @@ function enableMultiAgentV2(homeRoot) {
     for (const managedDir of managedDirs) {
       fs.rmSync(path.join(managedDir, 'implementer.toml'));
     }
+    // spawn-class: environment
     let result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--no-autofix', '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1747,6 +1783,7 @@ function enableMultiAgentV2(homeRoot) {
     assert.strictEqual(JSON.parse(result.stdout).status, 'profiles_missing',
       'multi-layer missing profiles retain the typed refusal');
 
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1764,6 +1801,7 @@ function enableMultiAgentV2(homeRoot) {
       fs.writeFileSync(profile, fs.readFileSync(profile, 'utf8').replace(
         'name = "tdd-guide"', 'name = "wrong-role"'));
     }
+    // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--json'],
       { cwd: pluginRoot, encoding: 'utf8' });
@@ -1828,6 +1866,7 @@ function enableMultiAgentV2(homeRoot) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-selected-home-project-'));
   const originalHome = process.env.HOME;
   try {
+    // spawn-class: environment
     const install = spawnSync(process.execPath, [installerPath, '--global'], {
       cwd: pluginRoot,
       env: { ...process.env, HOME: selectedHome },
@@ -2240,6 +2279,7 @@ function enableMultiAgentV2(homeRoot) {
   const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-root-doctor-home-'));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-root-doctor-project-'));
   try {
+    // spawn-class: environment
     const install = spawnSync(process.execPath, [installerPath, '--global'], {
       cwd: pluginRoot,
       env: { ...process.env, HOME: homeRoot },
@@ -2248,6 +2288,7 @@ function enableMultiAgentV2(homeRoot) {
     assert.strictEqual(install.status, 0, 'root-entrypoint fixture global install: ' + install.stderr);
     enableMultiAgentV2(homeRoot);
 
+    // spawn-class: environment
     const normal = spawnSync(process.execPath,
       [path.join(root, 'scripts', 'kaola-workflow-codex-preflight.js'),
         '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
@@ -2258,6 +2299,7 @@ function enableMultiAgentV2(homeRoot) {
     assert.strictEqual(JSON.parse(normal.stdout).status, 'ok',
       'repository-root normal command verifies the selected installed scope');
 
+    // spawn-class: environment
     const doctorResult = spawnSync(process.execPath,
       [path.join(root, 'scripts', 'kaola-workflow-codex-preflight.js'),
         '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
@@ -2292,6 +2334,7 @@ function enableMultiAgentV2(homeRoot) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-project-'));
   const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-fixture-'));
   try {
+    // spawn-class: environment
     const install = spawnSync(process.execPath, [installerPath, '--global'], {
       cwd: pluginRoot,
       env: { ...process.env, HOME: homeRoot },
@@ -2324,6 +2367,7 @@ function enableMultiAgentV2(homeRoot) {
     }
 
     function runPlanPreflight(planPath) {
+      // spawn-class: environment
       return spawnSync(process.execPath,
         [rootPreflightPath, '--project-root', projectRoot, '--home', homeRoot,
           '--no-autofix', '--json', '--plan', planPath],
@@ -2468,6 +2512,7 @@ function enableMultiAgentV2(homeRoot) {
   const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-root-marker-home-'));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-root-marker-project-'));
   try {
+    // spawn-class: environment
     const install = spawnSync(process.execPath, [installerPath, '--global'], {
       cwd: pluginRoot,
       env: { ...process.env, HOME: homeRoot },
@@ -2478,6 +2523,7 @@ function enableMultiAgentV2(homeRoot) {
     enableMultiAgentV2(homeRoot);
     const globalConfig = path.join(homeRoot, '.codex', 'config.toml');
     const canonical = fs.readFileSync(globalConfig, 'utf8');
+    // spawn-class: environment
     const invoke = () => spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot,
         '--no-autofix', '--json'],
@@ -2531,6 +2577,7 @@ function enableMultiAgentV2(homeRoot) {
   const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
   const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
   const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
+  // spawn-class: environment
   const invoke = (projectRoot, homeRoot, doctor = false) => spawnSync(process.execPath,
     [preflightPath, ...(doctor ? ['--doctor'] : []), '--project-root', projectRoot,
       '--home', homeRoot, '--no-autofix', '--json'],
@@ -2540,6 +2587,7 @@ function enableMultiAgentV2(homeRoot) {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${trustLevel}-project-`));
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${trustLevel}-home-`));
     try {
+      // spawn-class: environment
       let install = spawnSync(process.execPath, [installerPath, '--global'], {
         cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
       });
@@ -2586,6 +2634,7 @@ function enableMultiAgentV2(homeRoot) {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${ambiguity}-project-`));
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${ambiguity}-home-`));
     try {
+      // spawn-class: environment
       let install = spawnSync(process.execPath, [installerPath, '--global'], {
         cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
       });
@@ -2626,6 +2675,7 @@ function enableMultiAgentV2(homeRoot) {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-trust-ignored-transport-project-'));
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-trust-ignored-transport-home-'));
     try {
+      // spawn-class: environment
       const install = spawnSync(process.execPath, [installerPath, '--global'], {
         cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
       });
@@ -2671,6 +2721,7 @@ function enableMultiAgentV2(homeRoot) {
       fs.mkdirSync(repositoryRoot, { recursive: true });
       fs.writeFileSync(path.join(repositoryRoot, 'ROOT.marker'), 'root\n');
       fs.mkdirSync(nestedRoot, { recursive: true });
+      // spawn-class: environment
       let install = spawnSync(process.execPath, [installerPath, '--global'], {
         cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
       });
@@ -2801,6 +2852,7 @@ function enableMultiAgentV2(homeRoot) {
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-safe-home-'));
     const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-safe-outside-'));
     try {
+      // spawn-class: environment
       const globalInstall = spawnSync(process.execPath, [installerPath, '--global'], {
         cwd: pluginRoot,
         env: { ...process.env, HOME: homeRoot },
@@ -2813,6 +2865,7 @@ function enableMultiAgentV2(homeRoot) {
       fs.mkdirSync(projectCodex);
       const configPath = path.join(projectCodex, 'config.toml');
       fixture.prepare(configPath, outsideRoot);
+      // spawn-class: environment
       const result = spawnSync(process.execPath,
         [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
         { cwd: pluginRoot, encoding: 'utf8' });
@@ -2898,12 +2951,14 @@ function enableMultiAgentV2(homeRoot) {
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-home-'));
     const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-outside-'));
     try {
+      // spawn-class: environment
       const install = spawnSync(process.execPath, [installerPath, '--global'], {
         cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
       });
       assert.strictEqual(install.status, 0, fixture.label + ': global fixture install');
       fixture.redirect(homeRoot, outsideRoot);
 
+      // spawn-class: environment
       const normal = spawnSync(process.execPath,
         [preflightPath, '--project-root', projectRoot, '--home', homeRoot,
           '--no-autofix', '--json'],
@@ -2915,6 +2970,7 @@ function enableMultiAgentV2(homeRoot) {
         fixture.label + ': normal typed authority refusal');
       assert(!/\n\s+at /.test(normal.stderr), fixture.label + ': normal refusal has no Node stack');
 
+      // spawn-class: environment
       const doctor = spawnSync(process.execPath,
         [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
         { cwd: pluginRoot, encoding: 'utf8' });
@@ -3197,6 +3253,7 @@ function parseCodexAgentMetadata(pluginRoot) {
 }
 
 try {
+  // spawn-class: environment
   const installOutput = execFileSync(
     'bash',
     ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
@@ -3308,6 +3365,7 @@ try {
     synthesizer: 'opus',
     'metric-optimizer': 'sonnet'
   };
+  // spawn-class: environment
   const resolveRole = (agentDir, role) => execFileSync('node',
     [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), role, '--agent-dir', agentDir, '--raw'],
     { cwd: root, encoding: 'utf8' }).trim();
@@ -3315,6 +3373,7 @@ try {
   {
     const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-default-'));
     try {
+      // spawn-class: environment
       execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: dtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       const agentDir = path.join(dtmp, '.claude', 'agents');
@@ -3342,6 +3401,7 @@ try {
     try {
       let threw = null;
       try {
+        // spawn-class: environment
         execFileSync('bash', ['install.sh', '--yes', '--forge=github', flag, '--no-settings-merge'],
           { cwd: root, env: { ...process.env, HOME: ptmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (e) { threw = e; }
@@ -3357,6 +3417,7 @@ try {
   for (const forge of ['gitlab', 'gitea']) {
     const ftmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-' + forge + '-'));
     try {
+      // spawn-class: environment
       execFileSync('bash', ['install.sh', '--yes', '--forge=' + forge, '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: ftmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       assert(!fs.existsSync(path.join(ftmp, '.claude', 'agents', '.kaola-agent-models.json')),
@@ -3385,6 +3446,7 @@ try {
         "  gitea: ['kaola-gitea-NONEXISTENT-typo-363.js', 'kaola-gitea-forge.js',");
       assert(injected !== original, 'planted-typo test: failed to inject a bogus gitea manifest entry');
       fs.writeFileSync(typoManifest, injected);
+      // spawn-class: environment
       const result = require('child_process').spawnSync('bash', ['install.sh', '--yes', '--forge=gitea', '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: home, KAOLA_INSTALL_MANIFEST: typoManifest, KAOLA_MANIFEST_REPO_ROOT: root }, encoding: 'utf8' });
       assert(result.status !== 0, '#363/#407: a typo\'d gitea manifest support entry must FAIL the install, got exit ' + result.status);
@@ -3403,6 +3465,7 @@ try {
     const etmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-quote-'));
     try {
       const out = path.join(etmp, 'manifest.json');
+      // spawn-class: environment
       execFileSync('node',
         ['-e', 'const fs=require("fs");const o2=process.argv[1];const a=process.argv.slice(2);const o={};for(let i=0;i<a.length;i+=2)o[a[i]]=a[i+1];fs.writeFileSync(o2,JSON.stringify(o,null,2)+"\\n");',
          out, 'planner', 'op"us\\back'],
@@ -3423,6 +3486,7 @@ try {
     const cproj = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-447-proj-'));
     const chome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-447-home-'));
     try {
+      // spawn-class: environment
       execFileSync('node', [codexInstallerPath, cproj], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'),
         env: { ...process.env, HOME: chome },
@@ -3512,6 +3576,7 @@ try {
 
       function runPreflightForConfig(body) {
         fs.writeFileSync(projectConfigPath, body);
+        // spawn-class: environment
         return spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           encoding: 'utf8',
@@ -3520,6 +3585,7 @@ try {
       }
 
       // --- #775: Codex version floor — checked before anything else in runPreflight. ---
+      // spawn-class: environment
       const belowFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json', '--codex-version', '0.144.9'], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
       });
@@ -3531,6 +3597,7 @@ try {
       assert.strictEqual(belowFloorJson.required_version, '0.145.0', '#775: refusal names the required floor version');
       assert(/upgrade the codex cli/i.test(belowFloorJson.repair), '#775: refusal repair tells the operator to upgrade: ' + belowFloorJson.repair);
 
+      // spawn-class: environment
       const envBelowFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8',
         env: { ...process.env, KAOLA_CODEX_VERSION: '0.140.0' },
@@ -3538,11 +3605,13 @@ try {
       assert.strictEqual(JSON.parse(envBelowFloor.stdout).status, 'codex_version_unsupported', '#775: KAOLA_CODEX_VERSION env fallback also gates the version floor');
       assert.strictEqual(JSON.parse(envBelowFloor.stdout).detected_version_source, 'env', '#775: env override is the reported source when no flag is passed');
 
+      // spawn-class: environment
       const atFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json', '--codex-version', '0.145.0'], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
       });
       assert.notStrictEqual(JSON.parse(atFloor.stdout).status, 'codex_version_unsupported', '#775: exactly the floor version passes the version check');
 
+      // spawn-class: environment
       const aboveFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json', '--codex-version', '0.146.2'], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
       });
@@ -3584,6 +3653,7 @@ try {
       const reviewerProfileBeforeDrift = fs.readFileSync(reviewerProfilePath, 'utf8');
       fs.writeFileSync(reviewerProfilePath, reviewerProfileBeforeDrift.replace(
         'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+      // spawn-class: environment
       const reviewerDrift = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
         { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
@@ -3594,6 +3664,7 @@ try {
         '#reviewer-contract: exact-byte drift must be classified profiles_stale');
       assert.strictEqual(reviewerDriftJson.repair, `node ${codexInstallerPath} ${cproj}`,
         '#reviewer-contract: project drift must name the exact scoped installer command');
+      // spawn-class: environment
       const repairedReviewer = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
         { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
@@ -3607,6 +3678,7 @@ try {
       fs.writeFileSync(legacyProfilePath, inheritedProfile.replace(/^developer_instructions/m,
         'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions'));
       const configBeforeMigration = fs.readFileSync(projectConfigPath, 'utf8');
+      // spawn-class: environment
       const staleLegacy = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
         { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
@@ -3615,6 +3687,7 @@ try {
       assert.strictEqual(staleLegacyJson.status, 'profiles_stale', 'legacy full pin has the stale migration status');
       assert(Array.isArray(staleLegacyJson.stale_profiles)
         && staleLegacyJson.stale_profiles.some(p => p.role === 'implementer'), 'stale result names the legacy profile');
+      // spawn-class: environment
       const migratedLegacy = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
         { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
@@ -3747,6 +3820,7 @@ try {
       const postureProj = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-775-proj-'));
       const postureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-775-home-'));
       try {
+        // spawn-class: environment
         const freshInstall = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           env: { ...process.env, HOME: postureHome },
@@ -3775,6 +3849,7 @@ try {
         const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
         const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
         fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
+        // spawn-class: environment
         const reinstall = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           env: { ...process.env, HOME: postureHome },
@@ -3796,6 +3871,7 @@ try {
         fs.writeFileSync(postureConfigPath, beforeBounds.replace('[features.multi_agent_v2]\nenabled = true\n',
           '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\n'
           + 'max_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n'));
+        // spawn-class: environment
         const v2Install = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           env: { ...process.env, HOME: postureHome },
@@ -3958,6 +4034,7 @@ try {
     // (a) env var set to "1" -> teams, regardless of settings state.
     const teamsEnvHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-606-teams-env-'));
     try {
+      // spawn-class: environment
       const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'], {
         cwd: root,
         env: { ...process.env, HOME: teamsEnvHome, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' },
@@ -3975,6 +4052,7 @@ try {
     try {
       const env = { ...process.env, HOME: classicHome };
       delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+      // spawn-class: environment
       const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env, encoding: 'utf8' });
       assert.strictEqual(result.status, 0, '#606: classic posture must not fail the install: ' + result.stderr);
@@ -4002,6 +4080,7 @@ try {
 
       const env = { ...process.env, HOME: settingsHome };
       delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+      // spawn-class: environment
       const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env, encoding: 'utf8' });
       assert.strictEqual(result.status, 0, '#606: teams posture (settings fallback) must not fail the install: ' + result.stderr);

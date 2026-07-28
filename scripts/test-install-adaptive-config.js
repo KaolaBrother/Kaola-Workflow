@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 
 // issue #725: fast/full retirement. Adaptive is the unconditional and sole workflow path.
 // install.sh seeds ~/.config/kaola-workflow/config.json with parallel_mode only (never
@@ -19,11 +27,13 @@ function freshHome(slug) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-adaptive-' + slug + '-'));
 }
 function runInstall(home, extraArgs) {
+  // spawn-class: environment
   return execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge', ...extraArgs], {
     cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 function runUninstall(home, extraArgs) {
+  // spawn-class: environment
   return execFileSync('bash', ['uninstall.sh', '--forge=github', ...extraArgs], {
     cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -32,6 +42,7 @@ function runUninstall(home, extraArgs) {
 // github install writes (parallel_mode default-ON parity). Deploy into a throwaway target dir
 // (--no-scripts skips the manifest-driven support-script copy that needs node round-trips).
 function runOpencodeInstall(home, target) {
+  // spawn-class: environment
   return execFileSync('bash', ['install-opencode.sh', '--yes', '--no-scripts', '--target', target], {
     cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -81,6 +92,7 @@ try {
   // and no fast/full command artifact is installed.
   for (const flag of ['--with-fast', '--with-full']) {
     const home = freshHome('ac2-refuse-' + flag.replace(/[^a-z]/gi, '')); homes.push(home);
+    // spawn-class: environment
     const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge', flag], {
       cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8',
     });
@@ -132,6 +144,7 @@ try {
   // than rejected so callers passing it are not broken.
   {
     const home = freshHome('ac5-deprecated'); homes.push(home);
+    // spawn-class: environment
     const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge', '--enable-adaptive=yes'], {
       cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8',
     });
@@ -165,6 +178,7 @@ try {
       'install.sh must name the disposed manifest on stdout, got: ' + upgradeOut);
     // uninstall.sh keeps its disposal line: plant once more, then uninstall.
     fs.writeFileSync(manifestPath, JSON.stringify({ contractor: 'opus' }));
+    // spawn-class: environment
     execFileSync('bash', ['uninstall.sh', '--forge=github'],
       { cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert(!fs.existsSync(manifestPath), 'uninstall.sh must remove .kaola-agent-models.json');
@@ -176,6 +190,7 @@ try {
     const h = freshHome('retired-profile-' + flag.replace(/[^a-z]/gi, '')); homes.push(h);
     let threw = null;
     try {
+      // spawn-class: environment
       execFileSync('bash', ['install.sh', '--yes', '--forge=github', flag, '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) { threw = e; }
@@ -188,6 +203,7 @@ try {
   {
     const h = freshHome('implementer-default'); homes.push(h);
     runInstall(h, []);
+    // spawn-class: environment
     const resolved = execFileSync('node',
       [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), 'implementer',
         '--agent-dir', path.join(h, '.claude', 'agents'), '--raw'],
@@ -215,6 +231,7 @@ try {
       '#816: the sweep must name the removal on stdout, got: ' + upgradeOut2);
     // uninstall path: plant it again (no manifest row needed — RETIRED_AGENTS removes by name).
     fs.writeFileSync(stale, staleBody);
+    // spawn-class: environment
     execFileSync('bash', ['uninstall.sh', '--forge=github'],
       { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert(!fs.existsSync(stale),

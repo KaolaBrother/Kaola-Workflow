@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 'use strict';
+// EVERY child process in this file is boundary class `environment` (ADR 0013): the property
+// under test is what an INSTALL / MATERIALIZATION does to a filesystem tree and a synthetic
+// HOME. There is no in-process equivalent — the installers are shell scripts, and the node-side
+// preflight and doctor probes read the process's own HOME/cwd, so hosting them in the suite
+// process would test the suite's environment instead of the fixture's. The annotations are
+// per site rather than per file on purpose: the ratchet reads lines, so a site added later
+// still has to declare itself.
+
 
 // ---------------------------------------------------------------------------
 // test-opencode-edition.js — structural + parity validator for the opencode
@@ -36,6 +44,7 @@ function assert(cond, msg) {
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
+  // spawn-class: environment
   const r = spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--write'],
     { encoding: 'utf8' });
@@ -745,6 +754,7 @@ if (exists(pluginRel)) {
   writeFileSync(tmpMjs, read(pluginRel));
   let r;
   try {
+    // spawn-class: environment
     r = spawnSync(process.execPath, ['--check', tmpMjs], { encoding: 'utf8' });
   } finally {
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* tmp leak; non-fatal */ }
@@ -796,6 +806,7 @@ if (exists(pluginRel)) {
   const probeFile = path.join(canonPluginsDir, '__kw_probe_unregistered.js');
   try {
     fs.writeFileSync(probeFile, '// transient probe — must not persist\n');
+    // spawn-class: environment
     const r = spawnSync(process.execPath,
       [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--check'],
       { encoding: 'utf8' });
@@ -820,6 +831,7 @@ if (exists(pluginRel)) {
 {
   const { spawnSync } = require('child_process');
   const probe = path.join(REPO, '.opencode', 'command', 'kaola-workflow-__kw_retired_probe.md');
+  // spawn-class: environment
   const runSync = (flag) => spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), flag], { encoding: 'utf8' });
   try {
@@ -900,6 +912,7 @@ if (exists(pluginRel)) {
     const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'opencode-p-home-'));
     const dest = opts.dest || mkdtempSync(path.join(os.tmpdir(), 'opencode-p-dest-'));
     const args = ['--target', dest, '--yes', '--no-scripts'].concat(extraArgs || []);
+    // spawn-class: environment
     const r = spawnSync('bash', [INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home }),
       encoding: 'utf8',
@@ -980,6 +993,7 @@ if (exists(pluginRel)) {
     const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'opencode-g-home-'));
     const cfg = opts.cfg || mkdtempSync(path.join(os.tmpdir(), 'opencode-g-cfg-'));
     const args = ['--global', '--yes'].concat(opts.withScripts ? [] : ['--no-scripts']).concat(extraArgs || []);
+    // spawn-class: environment
     const r = spawnSync('bash', [INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: cfg }),
       encoding: 'utf8',
@@ -1050,6 +1064,7 @@ if (exists(pluginRel)) {
     assert(existsSync(scriptsDir), 'S1 (#F9): support scripts dir exists at <config>/kaola-workflow/scripts');
     // Every manifest script for the github forge must be present.
     const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    // spawn-class: environment
     const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
       .stdout.split('\n').map(s => s.trim()).filter(Boolean);
     assert(names.length > 0, 'S1: install manifest lists at least one support script');
@@ -1075,6 +1090,7 @@ if (exists(pluginRel)) {
     assert(r1.ok, 'U1: seed install exits 0');
     assert(existsSync(path.join(r1.dest, 'opencode.json')), 'U1: opencode.json present before uninstall');
     // Uninstall the same scope.
+    // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
     assert(ru.status === 0, 'U1: --uninstall exits 0 (got ' + ru.status + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
@@ -1156,6 +1172,7 @@ if (exists(pluginRel)) {
       "const missing = hookPath(process.env.KW_FAKEROOT, 'definitely-not-a-real-hook.sh');",
       "process.stdout.write(JSON.stringify({ resolved, missing }));",
     ].join('\n');
+    // spawn-class: environment
     const h = spawnSync('node', ['--input-type=module', '-e', harness], {
       env: Object.assign({}, process.env, {
         OPENCODE_CONFIG_DIR: emptyCfg, KW_PLUGIN: pluginPath,
@@ -1284,6 +1301,7 @@ if (exists(pluginRel)) {
     // an orphan survived it). A never-recorded user agent still survives.
     fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
     fs.appendFileSync(manifestPath, 'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
+    // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
     assert(ru.status === 0, 'R3: --uninstall exits 0 (got ' + ru.status + ')');
@@ -1371,6 +1389,7 @@ if (exists(pluginRel)) {
       '../VICTIM.txt\tignored\n' +
       '../../DEEP-VICTIM.txt\tignored\n');
 
+    // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
     assert(ru.status === 0, 'R4: --uninstall exits 0 (got ' + ru.status + ')');
@@ -1442,9 +1461,11 @@ if (exists(pluginRel)) {
     const tree = sync.treeLabel(forge);
 
     // F3: every forge renders, and re-renders to byte-parity.
+    // spawn-class: environment
     const w = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--write'], { encoding: 'utf8' });
     assert(w.status === 0, 'FA3[' + forge + ']: sync --write exits 0 (got ' + w.status + ': '
       + String(w.stderr || '').slice(0, 200) + ')');
+    // spawn-class: environment
     const c = spawnSync(process.execPath, [SYNC, '--forge=' + forge, '--check'], { encoding: 'utf8' });
     assert(c.status === 0, 'FA3[' + forge + ']: sync --check is green after --write (got ' + c.status + ': '
       + String(c.stderr || '').slice(0, 300) + ')');
@@ -1487,6 +1508,7 @@ if (exists(pluginRel)) {
   }
 
   // F7: an unknown forge is REFUSED, not silently defaulted to github.
+  // spawn-class: environment
   const bad = spawnSync(process.execPath, [SYNC, '--forge=svn', '--check'], { encoding: 'utf8' });
   assert(bad.status === 2,
     'FA7: sync --forge=svn refuses with exit 2 rather than defaulting to github (got ' + bad.status + ')');
@@ -1514,6 +1536,7 @@ if (exists(pluginRel)) {
     const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-forge-dest-'));
     const ocCfg = path.join(home, '.config', 'opencode');
     try {
+      // spawn-class: environment
       const r = spawnSync('bash', [INSTALLER, '--forge=' + forge, '--target', dest, '--yes'], {
         env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: ocCfg }),
         encoding: 'utf8',
