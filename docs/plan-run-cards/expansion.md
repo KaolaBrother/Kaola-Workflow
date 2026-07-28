@@ -98,6 +98,15 @@ composed units' own, and they are applied by the same rule: a named id the list 
 status move, not an insert. Apply them, or the list keeps asserting "milestone done, review passed"
 about work the run has re-opened.
 
+Re-opening a discharged point also re-projects that point's new interior into the
+`.cache/epoch-projections/` owner projection, inside the SAME phase-1 transaction that composes it —
+otherwise the execution view would name unit ids the projection does not, and every review-journal
+read would refuse over the run's own append. That projection write is a **precondition**, not a
+courtesy: if it cannot land (a full or read-only disk, a permission fault under `.cache/`), the
+command refuses `owner_projection_write_failed` with **zero mutation** — no record, no unit rows, no
+re-activation cascade, the milestone exactly as it was. Clear the substrate fault named in the
+refusal and re-run the command you ran; it is a fresh transaction, not a resume.
+
 ---
 
 ## 4. `expand-close` — discharge the milestone
