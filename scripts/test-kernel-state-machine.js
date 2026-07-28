@@ -34,8 +34,10 @@
 //   * unit states           `LEDGER_STATUSES` in kaola-workflow-adaptive-schema.js
 //   * unit transitions      every `spliceLedgerNode(…, <to>, { allowFrom: [<from>…] })` call
 //                           site in kaola-workflow-adaptive-node.js. EVERY one: a site whose
-//                           to-status the scanner cannot read is an ERROR naming its line, not
-//                           a silent skip — see 1d
+//                           to-status the scanner cannot read is an ERROR naming its line, and
+//                           so is a reference it cannot follow — an alias, a destructure, a
+//                           pass-as-argument, or a caller in another production script. Never a
+//                           silent skip — see 1d for exactly what is guaranteed
 //   * mid-run row creation  `appendLedgerRows`, which seeds new rows `pending`
 //   * the verb on a row     the CLI subcommand that reaches that call site, resolved by
 //                           walking the static call graph UPWARD from the splice site to
@@ -390,9 +392,36 @@ const READ_ONLY_SUBCOMMANDS = Object.freeze(['orient', 'mirror-project']);
 // false by construction — the NEXT splice written with a variable carrying an UNDRAWN status
 // would stay green forever. Same class as the swallowing catch that once hid a dead layer here.
 //
-// So the scanner now finds every call site, RESOLVES a simple local constant when the argument
-// is an identifier, and returns everything it still cannot read in `unresolved` — which the
-// non-vacuity block below turns RED, naming file and line. Unreadable is an error, not a skip.
+// The same class recurred one layer out, and the wording above was where it hid: "finds every
+// call site" was true only of a DIRECT call. `const _spl = spliceLedgerNode; _spl(plan, id,
+// 'n/a', { allowFrom: ['complete'] })` matched neither the call regex nor anything else, so it
+// was not a site AND not unresolved — invisible, with the banner reporting the same count as a
+// tree without it. And `spliceLedgerNode` is EXPORTED, so a production `require()`-caller in
+// another script was invisible for the same reason: this scanner reads one file.
+//
+// WHAT THIS SCANNER ACTUALLY GUARANTEES, stated so the next reader can check it:
+//   1. Every DIRECT call `spliceLedgerNode(...)` in the code-only view of adaptive-node.js is a
+//      site. Its to-status is read from a literal, or RESOLVED from a single local string
+//      constant; anything it still cannot read lands in `unresolved`.
+//   2. Every OTHER reference to the bare identifier in that file — an alias binding, a
+//      destructure, a pass-as-argument, a second call sharing a line with the first — also
+//      lands in `unresolved`. The scanner does NOT resolve aliases. Refusing to accept the
+//      shape is simpler than chasing it, provable, and honest about what is checked; guessing
+//      at an alias would put this back where it started.
+//   3. Exactly ONE non-call reference is tolerated: the `module.exports` entry, located by
+//      brace-matching the export object rather than by matching its text. It is reported in
+//      `exported`, never waved through by name.
+//   4. Because of (3) the symbol leaves the file, so EVERY OTHER PRODUCTION SCRIPT under
+//      scripts/ is swept for the bare identifier and any hit is an error naming file and line.
+//      Chosen over deleting the export to make it un-callable: two suites legitimately import
+//      it (test-adaptive-node.js, simulate-workflow-walkthrough.js), and removing a testability
+//      seam to satisfy a scanner trades a real capability for an easier check. Sweeping is also
+//      strictly stronger — it catches a copied-out reimplementation, which killing the export
+//      would not. Test files are excluded because calling it is their job; the edition copies
+//      under plugins/ are generated from this tree and pinned by the edition-sync guards.
+//
+// `unresolved` and the external sweep both turn RED in the non-vacuity block below, naming file
+// and line. Unreadable is an error, not a skip — and so is unreachable-by-this-scanner.
 
 /**
  * Split a call's argument list. `text` starts immediately after the opening paren.
@@ -451,29 +480,111 @@ function resolveLocalConst(idx, fnName, ident) {
   return (assignments === 1 && values.size === 1) ? Array.from(values)[0] : null;
 }
 
+const SPLICE_FN = 'spliceLedgerNode';
+
 /**
- * @returns {{sites: Array, unresolved: Array<{line:number, fn:string, reason:string, text:string}>}}
+ * Every reference to the bare `spliceLedgerNode` identifier in the CODE-ONLY view of `src`,
+ * as 1-based line numbers. Comment and string mentions are not references — this file, the ADR
+ * and the suites all name the function in prose, and a scanner that cried wolf on those would
+ * be disarmed within the week. PURE, and shared by the in-file classifier and the cross-file
+ * sweep so both agree on what "a reference" is.
+ */
+function symbolRefLines(src, symbol) {
+  const name = symbol || SPLICE_FN;
+  const out = [];
+  const rawLines = String(src || '').split('\n');
+  const codeLines = stripNonCode(String(src || '')).split('\n');
+  const re = new RegExp('\\b' + name.replace(/\$/g, '\\$') + '\\b', 'g');
+  for (let i = 0; i < codeLines.length; i++) {
+    re.lastIndex = 0;
+    if (!re.test(codeLines[i] || '')) continue;
+    out.push({ line: i + 1, text: (rawLines[i] || '').trim() });
+  }
+  return out;
+}
+
+/**
+ * The line range (1-based, inclusive) of the file's `module.exports = { … }` object, found by
+ * brace-matching in the code-only view — where every string and comment is blanked, so the
+ * braces counted are real ones. Returns null when there is no export object.
+ *
+ * Located structurally rather than by matching a line like `  spliceLedgerNode,` because a
+ * text match would tolerate that same line ANYWHERE in the file, which is precisely the alias
+ * shape this scanner exists to refuse.
+ */
+function exportsObjectLines(src) {
+  const code = stripNonCode(String(src || ''));
+  const at = code.indexOf('module.exports');
+  if (at < 0) return null;
+  const open = code.indexOf('{', at);
+  if (open < 0) return null;
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}') { depth--; if (depth === 0) { close = i; break; } }
+  }
+  if (close < 0) return null;
+  const lineOf = (off) => code.slice(0, off).split('\n').length;   // 1-based
+  return { first: lineOf(open), last: lineOf(close) };
+}
+
+/**
+ * @returns {{sites: Array, unresolved: Array<{line:number, fn:string, reason:string, text:string}>,
+ *            exported: Array<{line:number, text:string}>}}
  */
 function spliceSites(src, idx) {
   const sites = [];
   const unresolved = [];
+  const exported = [];
   const rawLines = String(src || '').split('\n');
   // The code-only view decides WHERE a call is (a call written inside a comment or a template
   // string is not a call); the raw view supplies the literals it is written with.
   const codeLines = stripNonCode(String(src || '')).split('\n');
-  const callRe = /\bspliceLedgerNode\s*\(/g;
+  const exportRange = exportsObjectLines(src);
+  // ONE regex, on the bare identifier: a `\bspliceLedgerNode\s*\(` matcher can only ever find
+  // what it already accepts, so it cannot report what it does not understand. Classification
+  // happens after the match, which is what makes the alias shape reportable at all.
+  const refRe = /\bspliceLedgerNode\b/g;
   for (let i = 0; i < codeLines.length; i++) {
     const code = codeLines[i] || '';
+    refRe.lastIndex = 0;
+    if (!refRe.test(code)) continue;
     if (/\bfunction\s+spliceLedgerNode\s*\(/.test(code)) continue;   // the declaration
-    callRe.lastIndex = 0;
-    const hit = callRe.exec(code);
-    if (!hit) continue;
     const fn = idx.enclosing(i);
     if (fn === 'spliceLedgerNode') continue;                          // its own internals
     const raw = rawLines[i] || '';
+    const bad = (reason) => unresolved.push({ line: i + 1, fn, reason, text: raw.trim() });
+
+    // Classify EVERY occurrence on the line before parsing any of them. A reference that is
+    // not `spliceLedgerNode(` is a ledger write this scanner cannot follow, and a silent skip
+    // is the whole defect — so it is reported, not resolved.
+    let calls = 0;
+    let bare = 0;
+    refRe.lastIndex = 0;
+    let m;
+    while ((m = refRe.exec(code)) !== null) {
+      if (/^\s*\(/.test(code.slice(m.index + SPLICE_FN.length))) calls++;
+      else bare++;
+    }
+    if (bare) {
+      if (exportRange && i + 1 >= exportRange.first && i + 1 <= exportRange.last && !calls) {
+        exported.push({ line: i + 1, text: raw.trim() });
+        continue;
+      }
+      bad(bare + ' bare `' + SPLICE_FN + '` reference(s) that are not a direct call — an alias '
+        + 'binding, a destructure, or a pass-as-argument. This scanner does not resolve aliases, '
+        + 'so a call made through one is a ledger transition compared against NOTHING');
+      continue;
+    }
+    if (calls > 1) {
+      bad(calls + ' call sites share this line; this scanner reads ONE call per line, so the '
+        + 'others would be dropped in silence');
+      continue;
+    }
+
     const at = raw.indexOf('spliceLedgerNode');
     const open = at < 0 ? -1 : raw.indexOf('(', at);
-    const bad = (reason) => unresolved.push({ line: i + 1, fn, reason, text: raw.trim() });
     if (open < 0) { bad('the call could not be located in the raw source line'); continue; }
 
     const { args, closed } = splitCallArgs(raw.slice(open + 1));
@@ -498,7 +609,33 @@ function spliceSites(src, idx) {
 
     sites.push({ line: i + 1, to, from, fn });
   }
-  return { sites, unresolved };
+  return { sites, unresolved, exported };
+}
+
+// --- 1d'. the cross-file half. `spliceLedgerNode` is exported, and the scanner above reads ONE
+// file, so a production `require()`-caller in any other script performs ledger transitions this
+// suite never sees. Sweep every production script under scripts/ for the bare identifier.
+//
+// Test files are excluded by name: importing and calling the seam is exactly what they are for
+// (test-adaptive-node.js and simulate-workflow-walkthrough.js both do). The exclusion is a
+// closed prefix list, not a per-file allowlist, so a NEW production script is swept by default
+// — an opt-in allowlist here would mean the next script added is the unguarded one.
+const PRODUCTION_SCAN_DIR = 'scripts';
+const isTestScript = (name) => /^test-/.test(name) || name === 'simulate-workflow-walkthrough.js';
+
+function externalSpliceRefs() {
+  const hits = [];
+  let scanned = 0;
+  let names;
+  try { names = fs.readdirSync(path.join(REPO, PRODUCTION_SCAN_DIR)).sort(); } catch (_) { return { hits, scanned }; }
+  for (const name of names) {
+    if (!name.endsWith('.js') || isTestScript(name)) continue;
+    const rel = PRODUCTION_SCAN_DIR + '/' + name;
+    if (rel === NODE_REL) continue;                       // scanned in full by spliceSites
+    scanned++;
+    for (const r of symbolRefLines(read(rel))) hits.push({ file: rel, line: r.line, text: r.text });
+  }
+  return { hits, scanned };
 }
 
 // --- 1e. verb existence, per script, from that script's OWN dispatch.
@@ -590,6 +727,7 @@ const NODE_IDX = functionIndex(NODE_SRC);
 const NODE_DISPATCH = dispatchMap(NODE_SRC, NODE_IDX.byName);
 const SPLICE_SCAN = spliceSites(NODE_SRC, NODE_IDX);
 const SPLICES = SPLICE_SCAN.sites;
+const EXTERNAL_SPLICE = externalSpliceRefs();
 for (const s of SPLICES) {
   s.verbs = Array.from(attributeVerbs(s.fn, NODE_DISPATCH.fnToVerbs, NODE_IDX.callers)).sort();
 }
@@ -628,13 +766,36 @@ assert(SPLICES.length >= 20,
 // FAIL CLOSED on anything the scanner could not read. A skipped site is not a smaller
 // measurement — it is a transition checked against nothing, and it is silent by definition.
 assert(SPLICE_SCAN.unresolved.length === 0,
-  'DERIVE: ' + SPLICE_SCAN.unresolved.length + ' spliceLedgerNode call site(s) in ' + NODE_REL
-    + ' have a to-status this scanner cannot read, so the transition each performs is compared '
-    + 'against NOTHING and P6 exhaustiveness is unfalsifiable for them:\n'
+  'DERIVE: ' + SPLICE_SCAN.unresolved.length + ' spliceLedgerNode reference(s) in ' + NODE_REL
+    + ' are a ledger write this scanner cannot read — either a call whose to-status it cannot resolve, '
+    + 'or a reference it cannot follow at all. Each performs a transition compared against NOTHING, so '
+    + 'P6 exhaustiveness is unfalsifiable for them:\n'
     + SPLICE_SCAN.unresolved.map(u => '    ' + NODE_REL + ':' + u.line + ' in ' + (u.fn || '(top level)')
       + ' — ' + u.reason + '\n      ' + u.text).join('\n')
-    + '\n  State the status literally at the call site, or assign it once in the enclosing function '
-    + 'as `const x = \'<status>\';` (that shape IS resolved). Do not widen the scanner to guess.');
+    + '\n  Call `spliceLedgerNode` DIRECTLY, one call per line, and state the status literally at the '
+    + 'call site — or assign it once in the enclosing function as `const x = \'<status>\';` (that shape '
+    + 'IS resolved). Do not widen the scanner to chase an alias: resolving aliases is how it goes back '
+    + 'to guessing at values it reports as checked.');
+// The ONE tolerated non-call reference is the module.exports entry, and it is tolerated by
+// POSITION. More than one means the export-object brace match has drifted and the tolerance has
+// widened to cover lines it was never meant to.
+assert(SPLICE_SCAN.exported.length <= 1,
+  'DERIVE: ' + SPLICE_SCAN.exported.length + ' non-call `spliceLedgerNode` references were accepted as '
+    + 'the module.exports entry in ' + NODE_REL + '; exactly one export entry exists, so the export-object '
+    + 'range has drifted and bare references outside it are now being waved through:\n'
+    + SPLICE_SCAN.exported.map(e => '    ' + NODE_REL + ':' + e.line + ' — ' + e.text).join('\n'));
+// The cross-file half. The symbol is exported; the scanner above reads one file.
+assert(EXTERNAL_SPLICE.scanned >= 20,
+  'DERIVE: the production-script sweep read only ' + EXTERNAL_SPLICE.scanned + ' file(s) under '
+    + PRODUCTION_SCAN_DIR + '/ — the directory listing or the test-file exclusion has broken, and a '
+    + 'sweep over nothing is green forever');
+assert(EXTERNAL_SPLICE.hits.length === 0,
+  'DERIVE: ' + EXTERNAL_SPLICE.hits.length + ' production script(s) outside ' + NODE_REL + ' reference '
+    + '`spliceLedgerNode`. This suite derives the unit transitions from ONE file, so a ledger write made '
+    + 'from any of these is a transition compared against NOTHING and P6 exhaustiveness is unfalsifiable:\n'
+    + EXTERNAL_SPLICE.hits.map(h => '    ' + h.file + ':' + h.line + '\n      ' + h.text).join('\n')
+    + '\n  Route the write through ' + NODE_REL + ', or widen this scanner to derive from that file too. '
+    + 'Do not add the file to the exclusion list.');
 assert(CODE_PAIRS.size >= 5,
   'DERIVE: only ' + CODE_PAIRS.size + ' distinct (from -> to) ledger pairs were derived — the allowFrom '
     + 'parse has stopped working');
@@ -1139,6 +1300,93 @@ function mutationBattery() {
     const { sites, unresolved } = spliceSites(src, functionIndex(src));
     assert(sites.length === 0 && unresolved.length === 0,
       'MUTATION: the spliceLedgerNode declaration must not be scanned as a call to itself');
+  }
+  {
+    // THE ALIAS SHAPE. A reference that is not a direct call was neither a site nor an
+    // unresolved entry — it was INVISIBLE, and the only floor under it was a site COUNT that an
+    // alias does not change. Each shape below is planted on its own.
+    const cases = [
+      ['an alias binding whose call goes through the alias',
+        'function runQuuux(o) {\n'
+        + '  const _spl = spliceLedgerNode;\n'
+        + "  _spl(plan, id, 'n/a', { allowFrom: ['complete'] });\n"
+        + '}\n'],
+      ['a destructured import of the symbol',
+        'function runGarply(o) {\n'
+        + "  const { spliceLedgerNode } = require('./kaola-workflow-adaptive-node');\n"
+        + '}\n'],
+      ['the symbol passed as an argument to another function',
+        'function runWaldo(o) {\n'
+        + '  applyAll(rows, spliceLedgerNode);\n'
+        + '}\n'],
+      ['a property-position reference on a required module',
+        'function runFred(o) {\n'
+        + '  const f = mod.spliceLedgerNode;\n'
+        + '}\n'],
+      ['two call sites sharing one line, only the first of which this scanner reads',
+        'function runPlugh(o) {\n'
+        + "  const a = spliceLedgerNode(c, id, 'complete', { allowFrom: ['in_progress'] }), "
+        + "b = spliceLedgerNode(c, id, 'n/a', { allowFrom: ['pending'] });\n"
+        + '}\n'],
+    ];
+    for (const [label, src] of cases) {
+      const { sites, unresolved } = spliceSites(src, functionIndex(src));
+      assert(sites.length === 0 && unresolved.length === 1 && unresolved[0].line >= 1,
+        'MUTATION: spliceSites must report ' + label + ' as UNRESOLVED with a line number rather than '
+          + 'letting it pass unseen — got ' + JSON.stringify({ sites, unresolved }));
+    }
+  }
+  {
+    // ...and the ONE legitimate non-call reference, the module.exports entry, must be accepted
+    // by POSITION — a fail-closed scanner that reds on the shipped tree gets deleted.
+    const src = 'function runXyzzy(o) {\n'
+      + "  const r = spliceLedgerNode(plan, id, 'complete', { allowFrom: ['in_progress'] });\n"
+      + '}\n'
+      + 'module.exports = {\n'
+      + '  spliceLedgerNode,\n'
+      + '  readLedgerStatuses,\n'
+      + '};\n';
+    const { sites, unresolved, exported } = spliceSites(src, functionIndex(src));
+    assert(sites.length === 1 && unresolved.length === 0 && exported.length === 1,
+      'MUTATION: the module.exports entry is the one tolerated non-call reference — got '
+        + JSON.stringify({ sites, unresolved, exported }));
+    // The tolerance is POSITIONAL, not textual: the same line outside the export object is an
+    // alias binding wearing the export's clothes.
+    const aliased = 'function runThud(o) {\n  const spliceLedgerNode2 = spliceLedgerNode;\n}\n'
+      + 'module.exports = {\n  readLedgerStatuses,\n};\n';
+    const b = spliceSites(aliased, functionIndex(aliased));
+    assert(b.unresolved.length === 1 && b.exported.length === 0,
+      'MUTATION: a bare reference OUTSIDE the module.exports object must not be excused as the export — '
+        + 'got ' + JSON.stringify(b));
+  }
+  {
+    // The cross-file sweep's reference test, armed on its own.
+    assert(symbolRefLines("const { spliceLedgerNode } = require('./x');").length === 1,
+      'MUTATION: symbolRefLines must see a bare symbol reference in a would-be external caller');
+    assert(symbolRefLines('const f = mod.spliceLedgerNode;').length === 1,
+      'MUTATION: symbolRefLines must see a property-position reference on a required module');
+    assert(symbolRefLines('// spliceLedgerNode is the seam\nconst m = "spliceLedgerNode";\n').length === 0,
+      'MUTATION: symbolRefLines must NOT fire on a comment or string mention — this repo names the '
+        + 'function in prose constantly, and a scanner that cries wolf gets disarmed');
+    assert(symbolRefLines('const x = 1;').length === 0,
+      'MUTATION: symbolRefLines must find nothing in an unrelated source');
+    assert(isTestScript('test-adaptive-node.js') && isTestScript('simulate-workflow-walkthrough.js')
+      && !isTestScript('kaola-workflow-replan.js'),
+      'MUTATION: the production/test split must exclude the suites that legitimately import the seam '
+        + 'and admit every production script');
+  }
+  {
+    // exportsObjectLines is what makes the tolerance positional; prove it brace-matches rather
+    // than matching text, and returns null rather than a permissive range when there is no export.
+    assert(exportsObjectLines('const a = 1;\n') === null,
+      'MUTATION: exportsObjectLines must return null when there is no export object — a null range '
+        + 'must tolerate nothing, not everything');
+    const r = exportsObjectLines('module.exports = {\n  a,\n  b: { c: 1 },\n  d,\n};\n');
+    assert(r && r.first === 1 && r.last === 5,
+      'MUTATION: exportsObjectLines must brace-match a NESTED export object to its real closing brace — '
+        + 'got ' + JSON.stringify(r));
+    assert(exportsObjectLines('const s = "module.exports = { spliceLedgerNode }";\n') === null,
+      'MUTATION: a module.exports written inside a string is not an export object');
   }
   assert(scanVerbs("const x = ['--porcelain', '--name-only'];", 'flag').size === 0,
     'MUTATION: the flag scan must NOT admit flags that merely appear as literals in a forwarded array — '
