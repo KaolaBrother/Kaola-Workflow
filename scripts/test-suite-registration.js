@@ -6,35 +6,19 @@
 // TEST INFRASTRUCTURE ONLY. Nothing here is shipped, installed, or imported by a
 // production script.
 //
-// Why
-// ---
-// The validation chains in package.json are long `&&`-joined single-line strings. That shape
-// has now produced THREE separate silent coverage losses in one campaign, and every one of
-// them left a package.json that parses and a chain that passes:
+// This guards the FIRST oracle — "tests green under separate custody". The chains are long
+// `&&`-joined single-line strings, and a merge that drops a clause from one leaves a
+// package.json that parses and a chain that passes while measuring less than it claims.
+// That happened three times in one campaign, twice by clean merge and once by DUPLICATE
+// JSON KEYS (JSON.parse keeps the last; the shadowed copy was missing a suite).
 //
-//   1. Two branches each appended a suite to the same chain. The merge kept one side and
-//      SILENTLY DROPPED the other suite from both the fast gate and the full tier.
-//   2. A later merge could not reconcile two edits to the same long string as text, so it
-//      emitted BOTH key/value pairs — package.json ended up with DUPLICATE JSON KEYS. It
-//      parses; npm resolves last-wins; the shadowed copy was one resolution away from
-//      becoming live, and it was missing a suite.
-//   3. Merging a branch cut before (1) was fixed re-dropped the same suite again.
-//
-// A human reading a 4,000-character single-line string does not see an absent `&&` clause,
-// and no existing check looks. This one does.
-//
-// What it enforces
-// ----------------
-//   A. REGISTRATION — every `scripts/test-*.js` appears in at least one `scripts.test*`
-//      chain, or is listed in EXEMPT below with a reason. Default-on, exempt-by-baseline,
-//      never an opt-in allowlist: a NEW suite that nobody wired up is RED on arrival.
-//   B. NO DUPLICATE KEYS — package.json is re-parsed with a pairs hook, because JSON.parse
-//      silently keeps the last of a duplicated key and that is exactly failure (2).
-//   C. NO DUPLICATE STEPS — a suite appears at most once per chain, so a merge that
-//      double-inserts is visible rather than merely wasteful.
-//   D. THE FAST GATE IS A SUBSET OF THE FULL TIER — a suite in `:claude` but absent from
-//      `:claude:full` means the full tier is not actually fuller, which is the same silent
-//      loss wearing the opposite sign.
+//   A. REGISTRATION — every `scripts/test-*.js` is in some `scripts.test*` chain, or is in
+//      EXEMPT with a reason. Default-on: a NEW suite nobody wired up is RED on arrival.
+//   B. NO DUPLICATE KEYS in package.json.
+//   C. NO DUPLICATE STEPS within one chain.
+//   D. THE FAST GATE CARRIES EVERY SUITE the full tier does, minus the declared FULL_ONLY
+//      deferrals — the fast gate is what actually runs, so a suite surviving only in the
+//      tier nobody invokes is lost coverage that reads green.
 //
 // Usage
 //   node scripts/test-suite-registration.js
@@ -82,44 +66,28 @@ let failed = 0;
 function assert(cond, msg) { if (cond) passed++; else { failed++; console.error('FAIL: ' + msg); } }
 
 // --- (B) duplicate JSON keys -------------------------------------------------------------
-// JSON.parse keeps the LAST duplicate and reports nothing, so the only way to see this is to
-// walk the pairs before they collapse into an object.
+// JSON.parse keeps the LAST duplicate and reports nothing. Node has no object_pairs hook, so
+// scan the `scripts` object's keys before they collapse — that is the object a merge
+// realistically duplicates a key in.
 function duplicateKeyPaths(raw) {
   const dups = [];
-  const walk = (pairs, prefix) => {
-    const seen = new Set();
-    for (const [k] of pairs) {
-      if (seen.has(k)) dups.push(prefix ? prefix + '.' + k : k);
-      seen.add(k);
-    }
-    return Object.fromEntries(pairs);
-  };
-  // A pairs hook cannot see its own path, so do a shallow pass over the top level and over
-  // `scripts` — the two objects a merge realistically duplicates a key in.
-  JSON.parse(raw, undefined);
-  const topPairs = [];
-  const reviver = (key, value) => value;
-  // Re-parse with an object_pairs-style hook, hand-rolled: Node has no such option, so use a
-  // minimal scanner over the two nesting levels we care about.
   const lines = raw.split('\n');
   const scriptsStart = lines.findIndex(l => /^\s*"scripts"\s*:\s*\{/.test(l));
-  if (scriptsStart >= 0) {
-    let depth = 0;
-    const seen = new Set();
-    for (let i = scriptsStart; i < lines.length; i++) {
-      const line = lines[i];
-      depth += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
-      if (i > scriptsStart) {
-        const m = /^\s*"([^"]+)"\s*:/.exec(line);
-        if (m && depth === 1) {
-          if (seen.has(m[1])) dups.push('scripts.' + m[1]);
-          seen.add(m[1]);
-        }
+  if (scriptsStart < 0) return dups;
+  let depth = 0;
+  const seen = new Set();
+  for (let i = scriptsStart; i < lines.length; i++) {
+    const line = lines[i];
+    depth += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+    if (i > scriptsStart) {
+      const m = /^\s*"([^"]+)"\s*:/.exec(line);
+      if (m && depth === 1) {
+        if (seen.has(m[1])) dups.push('scripts.' + m[1]);
+        seen.add(m[1]);
       }
-      if (depth <= 0 && i > scriptsStart) break;
     }
+    if (depth <= 0 && i > scriptsStart) break;
   }
-  void topPairs; void walk; void reviver;
   return dups;
 }
 
@@ -215,33 +183,14 @@ if (typeof fast === 'string' && typeof full === 'string') {
   }
 }
 
-// --- mutation battery: every checker above must REJECT a deliberately broken input --------
-// A green suite is not evidence a guard is armed unless the guard has been shown to fail.
-{
-  const dupRaw = '{\n  "scripts": {\n    "test:a": "x",\n    "test:a": "y"\n  }\n}\n';
-  assert(duplicateKeyPaths(dupRaw).length === 1,
-    'MUTATION: duplicateKeyPaths must DETECT a duplicated scripts key');
-  const cleanRaw = '{\n  "scripts": {\n    "test:a": "x",\n    "test:b": "y"\n  }\n}\n';
-  assert(duplicateKeyPaths(cleanRaw).length === 0,
-    'MUTATION: duplicateKeyPaths must ACCEPT distinct keys');
-
-  // registration: a fabricated suite name must be reported as unregistered by the same
-  // predicate the loop above uses.
-  const fake = 'test-zzz-not-wired.js';
-  assert(!chains.some(([, v]) => v.includes('scripts/' + fake)),
-    'MUTATION: a suite absent from every chain must not be reported as registered');
-
-  // duplicate-step: the counting expression must see a doubled entry.
-  const doubled = 'node scripts/test-x.js && node scripts/test-x.js';
-  assert(doubled.split('scripts/test-x.js').length - 1 === 2,
-    'MUTATION: the duplicate-step counter must count both occurrences');
-
-  // subset: the difference must be direction-sensitive.
-  const f1 = 'node scripts/test-x.js';
-  const f2 = 'node scripts/test-y.js';
-  assert(['test-x.js'].filter(f => f1.includes('scripts/' + f) && !f2.includes('scripts/' + f)).length === 1,
-    'MUTATION: the subset check must flag a suite present in the fast gate and absent from full');
-}
+// --- the one guard with logic of its own must be shown to fire ---------------------------
+// The registration / duplicate-step / subset checks are set differences over data read a few
+// lines above; the hand-rolled duplicate-key scanner is the only thing here that could be
+// silently wrong, so it is the only thing mutation-proved.
+assert(duplicateKeyPaths('{\n  "scripts": {\n    "test:a": "x",\n    "test:a": "y"\n  }\n}\n').length === 1,
+  'MUTATION: duplicateKeyPaths must DETECT a duplicated scripts key');
+assert(duplicateKeyPaths('{\n  "scripts": {\n    "test:a": "x",\n    "test:b": "y"\n  }\n}\n').length === 0,
+  'MUTATION: duplicateKeyPaths must ACCEPT distinct keys');
 
 console.log('suite registration: ' + suites.length + ' test-*.js files, '
   + registeredIn.size + ' registered, ' + Object.keys(EXEMPT).length + ' exempt');

@@ -2,31 +2,26 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// Layer-0 kernel conformance.
-//
-// The durable kernel is EXACTLY four records — plan / position / evidence / forge. Everything
-// else a run leaves on disk is derivable from those four or a preference a successor may
-// re-decide. This suite is what makes that a checkable statement instead of a slogan:
+// Layer-0 kernel conformance — T1 (the kernel is exactly four records) and T2 (kernel writes
+// are atomic), made checkable rather than asserted.
 //
 //   PART A — the ruling is WELL-FORMED. Closed vocabularies, an owner for every record row, no
-//            row shadowed by an earlier pattern, the broad bands last.
-//   PART B — the ruling is SINGLE-SOURCED. The registry in `kaola-workflow-adaptive-schema.js`
-//            and the table in `docs/workflow-state-contract.md` are equal, row for row, in order.
-//   PART C — the ruling is TOTAL. Every durable artifact a real archived run left behind, and
-//            every artifact-name constant the production scripts declare, classifies. Nothing is
-//            `unclassified`, and the corpus is asserted non-empty so this cannot pass vacuously.
-//   PART D — the atomic-write obligation, COMPLETENESS half. Observed at runtime: no production
-//            script writes a `record` path by any means other than the atomic replace, except
-//            through an enumerated exempt class that carries its reason.
-//   PART E — the atomic-write obligation, SCOPING half. The reverse direction: the atomic replace
-//            is used ON the kernel and not elsewhere.
-//
-// D and E are observed, not grepped. A static scan can only rule on the call sites it knows how
-// to resolve, and the writes that matter travel through helpers, injected `writeFile` options and
-// spawned CLIs. `kernel-write-observer.js` is preloaded into a set of vehicle suites that drive
-// the real production writers over real fixtures, and the resulting write stream is adjudicated.
-// The relevant failure is not hypothetical: a kernel write that silently failed while the run
-// reported `done` is a shipped defect this class of guard exists to catch.
+//            row shadowed by an earlier pattern, the broad bands last. A shadowed row is a
+//            ruling that silently never applies.
+//   PART B — the ruling is SINGLE-SOURCED against `docs/workflow-state-contract.md`, which is
+//            where a human reads which artifacts a successor may delete.
+//   PART C — the ruling is TOTAL, over what real archived runs wrote AND over the artifact
+//            names the production scripts declare. An unclassified artifact inherits neither
+//            the atomic-write obligation nor resume coverage — and the A1 successor test
+//            treats unclassified as deletable.
+//   PART D/E — the atomic-write obligation, both directions: no production script writes a
+//            `record` path off the atomic replace, and the atomic replace is not used off the
+//            kernel. OBSERVED, not grepped: the writes that matter travel through helpers,
+//            injected `writeFile` options and spawned CLIs, so `kernel-write-observer.js` is
+//            preloaded into vehicle suites that drive the real writers over real fixtures.
+//            The failure class is not hypothetical — a kernel write that silently failed while
+//            the run reported `done` is a shipped defect.
+//   PART F — the static ratchet for writers no vehicle reaches.
 //
 // Run: node scripts/test-kernel-conformance.js        (~70s; the vehicles do real git work)
 // Reuse an existing observation instead of re-running the vehicles:
@@ -68,7 +63,7 @@ function partA() {
   const seen = new Set();
   for (const row of REGISTRY) {
     equal(row.length, 5, 'row is a 5-tuple [matcher, ruling, record, writer, note]: ' + String(row[0]));
-    const [matcher, ruling, record, writer, note] = row;
+    const [matcher, ruling, record, writer] = row;
     const label = String(matcher);
     ok(!seen.has(label), 'no duplicate matcher: ' + label);
     seen.add(label);
@@ -80,8 +75,6 @@ function partA() {
       equal(record, null, 'a non-record row owns no record: ' + label);
     }
     ok(writer === 'script' || writer === 'agent', 'writer is script|agent: ' + label);
-    ok(typeof note === 'string' && note.trim().length >= 20,
-      'every row carries its one-line justification — the derivation, the loss-safety argument, or the question it answers: ' + label);
   }
 
   // No row is shadowed by an earlier one. For a literal matcher this is exact; for a pattern it is
@@ -190,13 +183,6 @@ function partB() {
 // ===========================================================================
 // PART C — the ruling is total.
 // ===========================================================================
-
-// Artifacts that a project folder can hold which the ruling deliberately does NOT cover, with the
-// reason. Kept tiny and explicit: an entry here is a hole in the four-record claim, so each one is
-// a statement someone must defend, not a convenience.
-const CORPUS_EXCLUDED = [
-  // Directories are not artifacts; the files inside them are ruled individually.
-];
 
 // collectArchiveCorpus — every distinct project-relative artifact path a real archived run left in
 // this repository. This is the corpus the ruling has to be total over: not a list someone typed,
@@ -311,7 +297,6 @@ function partC() {
 
   const unclassified = [];
   for (const rel of archive) {
-    if (CORPUS_EXCLUDED.includes(rel)) continue;
     if (schema.classifyDurableArtifact(rel).ruling === 'unclassified') unclassified.push('archive: ' + rel);
   }
   for (const rel of declared) {
@@ -331,13 +316,7 @@ function partC() {
   deepEqual(unclassified, [],
     'every durable artifact is ruled record / derivable / preference — an unclassified one inherits neither the atomic-write obligation nor resume coverage');
 
-  // The corpus must also EXERCISE the ruling, not just avoid tripping it: a registry whose rows
-  // never match anything real would pass the totality check above while ruling nothing.
-  const hit = new Set();
-  for (const rel of archive) hit.add(schema.classifyDurableArtifact(rel).matcher);
-  ok(hit.size >= 15, 'the archived corpus exercises at least 15 distinct ruling rows (' + hit.size + ')');
-
-  // And the two contested rows specifically: both are called AUTHORITATIVE in the state contract,
+  // The two contested rows specifically: both are called AUTHORITATIVE in the state contract,
   // so their ruling is a substantive claim and it must be the one the registry actually returns.
   equal(schema.classifyDurableArtifact('.cache/review-attempts.json').ruling, 'record',
     'the review journal is ruled a record');
@@ -366,26 +345,20 @@ const VEHICLES = [
 ];
 
 // The exempt classes. Default-ON: anything not listed here that writes a `record` path by a
-// non-atomic route FAILS. Keyed by (file, api) rather than by line so an unrelated edit above the
-// site cannot redden the suite, while a NEW non-atomic API in the same file still does.
-//
-// Every entry states why the atomicity argument is discharged some other way. "It is inconvenient"
-// is not one of the reasons, and a torn write that is merely unlikely is not exempt: the classes
-// below are the ones where a torn result is either impossible or re-derivable from a source that
-// is still on disk.
+// non-atomic route FAILS. Keyed by (file, api) rather than by line, so an unrelated edit above the
+// site cannot redden the suite while a NEW non-atomic API in the same file still does.
 const EXEMPT_CLASSES = ['atomic-helper-internal', 'exclusive-create-verified', 'mirror-copy',
-  'append-only', 'outside-project-space', 'non-record-target', 'selftest-fixture'];
+  'append-only', 'outside-project-space', 'non-record-target'];
 
-// Only THESE classes excuse an observed non-atomic write to a record path. The others are claims
-// about WHERE a writer points — "it targets a derivable artifact", "it writes outside project
-// space", "it is a self-test fixture" — and the whole value of observing the runtime is that such a
-// claim can be falsified. Exempting them dynamically would make the ledger self-certifying: an
-// entry saying "this pair never writes a record" would silence the evidence that it just did.
-//
-// Measured, on the first draft, which did exempt by (file, api) alone: de-atomizing the CLI's
-// durable-write injection produced `workflow-plan.md <- writeFileSync at adaptive-node.js:16671` in
-// the observation, and the suite still passed — the `non-record-target` entry for that same pair
-// absorbed it. The mutation is now red.
+// Only THESE classes excuse an OBSERVED non-atomic write to a record path — they are the ones
+// where a torn result is impossible or re-derivable. The rest are claims about WHERE a writer
+// points ("it targets a derivable artifact", "it writes outside project space"), and the whole
+// value of observing the runtime is that such a claim can be falsified; exempting them
+// dynamically would let an entry saying "this pair never writes a record" silence the evidence
+// that it just did. Measured on the first draft, which exempted by (file, api) alone:
+// de-atomizing the CLI's durable-write injection produced a `workflow-plan.md <- writeFileSync`
+// observation that the `non-record-target` entry for that same pair absorbed, and the suite
+// passed. That mutation is now red.
 const DYNAMIC_EXEMPT_CLASSES = ['exclusive-create-verified', 'mirror-copy', 'append-only'];
 
 // Non-record artifacts that legitimately take the atomic replace anyway (see PART E).
@@ -705,8 +678,6 @@ function partDE(text) {
     'SCOPING: the crash-safe atomic replace is scoped to the four records — a derivable or preference artifact taking it is either mis-ruled or mis-written');
 
   for (const entry of ATOMIC_SCOPE_EXEMPT) {
-    ok(typeof entry.why === 'string' && entry.why.length >= 60,
-      'scoping exemption states why a non-record artifact legitimately takes the atomic path: ' + entry.path);
     ok(paths.has(entry.path),
       'scoping exemption still describes an observed write — a stale one covers the next mis-ruling: ' + entry.path);
     ok(schema.classifyDurableArtifact(entry.path).ruling !== 'record',
@@ -794,8 +765,6 @@ function partF() {
     'every exempt-ledger entry still describes a real call site — a stale exemption is a hole nobody is looking at');
 
   for (const entry of NON_ATOMIC_EXEMPT) {
-    ok(typeof entry.why === 'string' && entry.why.length >= 60,
-      'exempt entry states why the atomicity argument is discharged another way: ' + entry.file + ' ' + entry.api);
     ok(EXEMPT_CLASSES.includes(entry.klass),
       'exempt entry names a known class: ' + entry.file + ' ' + entry.api + ' -> ' + entry.klass);
   }

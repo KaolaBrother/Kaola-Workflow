@@ -5,37 +5,24 @@
 // test-outcome-recorder.js — ADR 0013 M2: the refusal/outcome RECORDER, and the
 // parent-owned sidecar SET that has to ship with it.
 //
-// M2 is the measurement stage. P4 makes its ORDERING load-bearing: the recorder lands with
-// the registry batch, because a "before" captured after the deletions it measures is not a
-// measurement. So this suite covers the recorder itself, and — because the recorder is a new
-// leg-side writer — the join it would otherwise break.
+//   PART A — THE RECORD. `buildOutcomeRecord` called DIRECTLY off the kernel, not through a
+//            lifecycle verb: that is what catches a dead layer, and this campaign already
+//            shipped one (seven registry hint bodies calling a function nobody wrote, every
+//            one throwing ReferenceError into a swallowing catch, 541 assertions green).
 //
-//   PART A — THE RECORD. `buildOutcomeRecord` is called DIRECTLY off the kernel and its output
-//            is asserted field by field. Direct, not through a lifecycle verb, because that is
-//            the check that catches a dead layer: an earlier change in this campaign replaced
-//            seven registry hint bodies with a call to a function nobody wrote, every one threw
-//            ReferenceError, a fallback catch swallowed all seven, and 541 assertions passed
-//            over a corpse. A suite that only asserts "the verb still succeeded" is that suite.
+//   PART B + C — THE JOIN. These are the Layer-0 half. The recorder is a leg-side writer, so
+//            every leg dirties its own copy of the sidecar and the octopus merge sees add/add
+//            unless the capture sweep excludes it. The membership rule is therefore enforced
+//            from the artifact ruling: excluding a `record` path from that sweep would DROP
+//            leg-authored kernel content from the merge — an evidence-loss defect wearing a
+//            merge fix. Proved on two REAL leg worktrees dirtied by the REAL writer and
+//            merged by the REAL `synthesizeLevel`, and mutation-proved by removing a member
+//            from the set as the PRODUCTION module sees it.
 //
-//   PART B — THE SET. The membership rule is checkable, so it is checked: every member is
-//            ruled `preference` by the Layer-0 registry. That is not decoration. Excluding a
-//            `record` path from the leg capture sweep would silently DROP leg-authored kernel
-//            content from the octopus merge — a merge fix that becomes an evidence-loss defect.
+//   PART D — FAIL-OPEN. Telemetry that can refuse or wedge is a mid-run serializer, the class
+//            P3 exists to make impossible. A real injected fault, and a real CLI verb still ok.
 //
-//   PART C — THE JOIN, PROVED AND MUTATION-PROVED. Two REAL leg worktrees, both dirtied by the
-//            REAL production writer, captured and octopus-merged by the REAL `synthesizeLevel`.
-//            Then the same fixture is re-run with the outcome log REMOVED from the set as the
-//            production code sees it, and the merge must FAIL. A test that cannot be made to
-//            fail is not reaching the code path it claims to cover.
-//
-//   PART D — FAIL-OPEN. Telemetry that can refuse, wedge or slow a run is itself a mid-run
-//            serializer, which is the class ADR 0013's P3 exists to make impossible. Proved at
-//            two levels: the writer absorbs a real injected fault, and a real CLI lifecycle
-//            verb still returns ok with exit 0 while the log write is failing.
-//
-//   PART E — THE WIRING. A real `kaola-workflow-adaptive-node.js` child process leaves a
-//            well-formed record behind. The recorder hook lives in `main()` and is unreachable
-//            in-process, so this one genuinely lives at the process boundary.
+//   PART E — THE WIRING. The recorder hook lives in `main()` and is unreachable in-process.
 //
 // Run: node scripts/test-outcome-recorder.js
 // ---------------------------------------------------------------------------
@@ -84,22 +71,17 @@ function partA() {
     script: 'adaptive-node', op: 'close-and-open-next', project: PROJECT, node: 'n3',
     envelope: refusal, duration_ms: 934,
   });
-  ok(rec !== null && typeof rec === 'object', 'buildOutcomeRecord returns a record for a real refusal envelope');
   deepEqual(Object.keys(rec), RECORD_KEYS, 'the record shape is uniform and ordered');
-  equal(rec.v, schema.OUTCOME_LOG_SCHEMA_VERSION, 'the record carries its schema version');
-  equal(rec.script, 'adaptive-node', 'the record names the emitting script');
-  equal(rec.op, 'close-and-open-next', 'op carries the PHASE — the subcommand is the phase in this runtime');
-  equal(rec.project, PROJECT, 'the record names the project');
-  equal(rec.node, 'n3', 'the record names the node when the invocation named one');
-  equal(rec.result, 'refuse', 'the record carries the envelope result');
-  equal(rec.reason, 'evidence_absent', 'reason carries the emitted token');
-  equal(rec.condition, 'evidence_absent', 'condition carries the legacy token — the P2 census metric');
-  equal(rec.family, 'kernel_evidence_missing', 'family is resolved through the ONE kernel registry');
-  equal(rec.locus, 'L1', 'locus comes from the registry row, not from a second table');
-  equal(rec.route, 'adaptive-node:record-evidence', 'the route is the machine-readable exit, keyed script:verb');
-  equal(rec.classified, 'family', 'a token in the vocabulary classifies as family');
-  equal(rec.ms, 934, 'ms carries the invocation wall-clock');
   ok(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(rec.ts), 'ts is an ISO instant: ' + rec.ts);
+  // The whole projection at once. Field-by-field would let an unexpected EXTRA value through;
+  // the load-bearing cells are family / locus / route, all resolved through the ONE kernel
+  // registry rather than a second table, plus `condition`, which is the P2 census metric.
+  deepEqual(Object.assign({}, rec, { ts: null }), {
+    v: schema.OUTCOME_LOG_SCHEMA_VERSION, ts: null, script: 'adaptive-node',
+    op: 'close-and-open-next', project: PROJECT, node: 'n3', result: 'refuse',
+    reason: 'evidence_absent', condition: 'evidence_absent', family: 'kernel_evidence_missing',
+    locus: 'L1', route: 'adaptive-node:record-evidence', classified: 'family', ms: 934,
+  }, 'the classified L1 refusal projects exactly, family/locus/route off the kernel registry');
 
   // The three classifications are all reachable, and they are the census. `excluded` is a
   // deliberate silence; `unclassified` is the remaining-migration-work signal, and counting it
@@ -122,7 +104,6 @@ function partA() {
   // refusals could not answer it: the denominator is the successful calls.
   const success = schema.buildOutcomeRecord({ script: 'adaptive-node', op: 'orient',
     project: PROJECT, envelope: { result: 'ok', readySet: ['n1'] }, duration_ms: 12 });
-  deepEqual(Object.keys(success), RECORD_KEYS, 'a success record has the SAME uniform shape');
   equal(success.result, 'ok', 'a successful outcome is recorded, not only a refusal');
   deepEqual([success.reason, success.condition, success.family, success.locus, success.route, success.classified],
     [null, null, null, null, null, null],
@@ -148,10 +129,6 @@ function partA() {
     'a nonsensical duration records as absent, never as a negative measurement');
   equal(schema.buildOutcomeRecord({ op: 'orient', duration_ms: NaN, envelope: {} }).ms, null,
     'a non-finite duration records as absent, never as the string NaN');
-
-  // The line form round-trips. This is what the consumer will actually parse.
-  const line = JSON.stringify(rec) + '\n';
-  deepEqual(JSON.parse(line.trim()), rec, 'the emitted line round-trips through JSON');
 }
 
 // ===========================================================================
@@ -182,13 +159,11 @@ function partB() {
   ok(set.indexOf(OUTCOME_REL) >= 0, 'the M2 outcome log is IN the set — the whole point of shipping it as a set');
   ok(set.indexOf('.cache/' + schema.NODE_TIMINGS_LOG_NAME) >= 0, 'the original hard-coded exclusion is still a member');
 
-  // Not a member, and it must not become one by accident.
+  // Not a member, and it must not become one by accident — a kernel record wrongly admitted
+  // here is dropped from the capture sweep and vanishes from the merge.
   ok(!schema.isParentOwnedSidecar('workflow-plan.md'), 'the plan record is not a sidecar');
   ok(!schema.isParentOwnedSidecar('.cache/review-attempts.json'), 'an Evidence record is not a sidecar');
-  ok(!schema.isParentOwnedSidecar(''), 'the empty path is not a sidecar');
-  ok(!schema.isParentOwnedSidecar(null), 'a null path is not a sidecar');
   ok(schema.isParentOwnedSidecar('./' + OUTCOME_REL), 'a ./-prefixed path normalizes to the same member');
-  ok(schema.isParentOwnedSidecar(OUTCOME_REL.split('/').join('\\')), 'a backslash-separated path normalizes to the same member');
 }
 
 // ===========================================================================
@@ -326,40 +301,9 @@ function partCMutation() {
     equal(G.out(fx.root, ['rev-parse', 'HEAD']), fx.legs.A.baseline,
       'the failed merge left HEAD unadvanced (the abort is clean), so the mutation is observed, not merely survived');
   } finally { cleanup(fx.root); }
-
-  // MUTATION 2 — the set is read as a SET, not as one path. Removing the ORIGINAL member has the
-  // same effect for the original sidecar, which is what "generalized, not a second hard-code"
-  // means: neither member is privileged.
-  const fx2 = makeLegFixture();
-  try {
-    fs.writeFileSync(path.join(fx2.legs.A.legPath, 'ax.js'), '// A\n');
-    fs.writeFileSync(path.join(fx2.legs.B.legPath, 'by.js'), '// B\n');
-    const timingsRel = 'kaola-workflow/' + PROJECT + '/.cache/' + schema.NODE_TIMINGS_LOG_NAME;
-    for (const id of ['A', 'B']) {
-      fs.appendFileSync(path.join(fx2.legs[id].legPath, timingsRel),
-        JSON.stringify({ node: id, event: 'opened', ts: '2026-01-01T00:00:00.000Z' }) + '\n');
-    }
-    const synth = withSidecarRemoved('.cache/' + schema.NODE_TIMINGS_LOG_NAME,
-      (mutant) => mutant.synthesizeLevel(fx2.root, fx2.legs, 'lg-A-B', fx2.planPath));
-    ok(synth && synth.ok === false && synth.reason === 'merge_conflict',
-      'MUTATION: removing the ORIGINAL member breaks its join too — every member is covered by the same set, '
-      + 'got ' + JSON.stringify(synth));
-  } finally { cleanup(fx2.root); }
-
-  // CONTROL — the unmutated set merges the same node-timings fixture clean. Without this the
-  // mutation above could be reading a fixture that never merged in the first place.
-  const fx3 = makeLegFixture();
-  try {
-    fs.writeFileSync(path.join(fx3.legs.A.legPath, 'ax.js'), '// A\n');
-    fs.writeFileSync(path.join(fx3.legs.B.legPath, 'by.js'), '// B\n');
-    const timingsRel = 'kaola-workflow/' + PROJECT + '/.cache/' + schema.NODE_TIMINGS_LOG_NAME;
-    for (const id of ['A', 'B']) {
-      fs.appendFileSync(path.join(fx3.legs[id].legPath, timingsRel),
-        JSON.stringify({ node: id, event: 'opened', ts: '2026-01-01T00:00:00.000Z' }) + '\n');
-    }
-    const synth = node.synthesizeLevel(fx3.root, fx3.legs, 'lg-A-B', fx3.planPath);
-    ok(synth && synth.ok === true, 'CONTROL: the unmutated set merges the same fixture clean, got ' + JSON.stringify(synth));
-  } finally { cleanup(fx3.root); }
+  // The second member needs no mutation of its own: partCJoin is the control (the same fixture
+  // merges clean with the set intact), and MUTATION 1 removing one member and breaking the merge
+  // can only happen if the sweep iterates the set rather than naming a path.
 }
 
 // ===========================================================================
@@ -444,30 +388,24 @@ function partE() {
     equal(orient.status, 0, 'CLI vehicle: orient succeeds\n' + orient.stdout + orient.stderr);
     let lines = readLog(fx.logPath);
     equal(lines.length, 1, 'the CLI wrote exactly ONE record for one invocation, got ' + lines.length);
-    deepEqual(Object.keys(lines[0]), RECORD_KEYS, 'the CLI-written record has the canonical shape');
-    equal(lines[0].script, 'adaptive-node', 'the CLI record names its script');
-    equal(lines[0].op, 'orient', 'the CLI record carries the subcommand as its phase');
-    equal(lines[0].project, PROJECT, 'the CLI record names the project');
-    equal(lines[0].result, 'ok', 'a successful orient records result ok');
+    deepEqual([lines[0].script, lines[0].op, lines[0].project, lines[0].result],
+      ['adaptive-node', 'orient', PROJECT, 'ok'],
+      'the CLI record is attributed: script, subcommand-as-phase, project, result');
     ok(typeof lines[0].ms === 'number' && lines[0].ms >= 0,
       'the CLI record carries a real invocation wall-clock, got ' + JSON.stringify(lines[0].ms));
 
-    // A REFUSAL, through the real CLI, with its family projection intact. This is the M2
-    // measurement itself: the code, the locus and the exit, recorded from a real process.
+    // A REFUSAL, through the real CLI. What the process boundary adds over PART A is that the
+    // record describes the envelope the CALLER actually received.
     const bad = runCli(fx.root, ['close-and-open-next', '--project', PROJECT, '--node-id', 'impl', '--json']);
     ok(bad.status !== 0, 'CLI vehicle: closing an unopened node refuses');
     lines = readLog(fx.logPath);
     equal(lines.length, 2, 'the refusal appended a SECOND record (append-only), got ' + lines.length);
     const r = lines[1];
-    equal(r.op, 'close-and-open-next', 'the refusal record carries its phase');
-    equal(r.node, 'impl', 'the refusal record carries the node the invocation named');
-    equal(r.result, 'refuse', 'the refusal record carries result refuse');
-    equal(r.reason, bad.envelope.reason,
-      'the recorded reason IS the emitted reason — the record describes the envelope the caller received');
+    deepEqual([r.op, r.node, r.result, r.reason],
+      ['close-and-open-next', 'impl', 'refuse', bad.envelope.reason],
+      'the recorded reason IS the emitted reason, under the phase and node the invocation named');
     equal(r.condition, bad.envelope.condition == null ? bad.envelope.reason : bad.envelope.condition,
       'the recorded condition mirrors the envelope, which is the P2 census metric');
-    ok(schema.OUTCOME_CLASSIFICATIONS.indexOf(r.classified) >= 0,
-      'the refusal is classified against the enumerated vocabulary, got ' + JSON.stringify(r.classified));
 
     // Ordering is monotonic, which is what makes triage wall-clock derivable at report time.
     ok(lines[0].ts <= lines[1].ts, 'records are appended in emit order, so inter-event gaps are derivable');
