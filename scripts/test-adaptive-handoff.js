@@ -3300,7 +3300,7 @@ const FWW_WARNING = {
     for (const round of [1, 2, 3]) {
       const v = handoff825.clarificationRequired(
         'Should the fold overwrite an existing .cache/origin/ file or refuse?',
-        ['kaola-workflow/.origin/issue-825/survey.md', 'docs/decisions/0013-free-origin.md'],
+        ['kaola-workflow/.origin/issue-825/survey.md', 'docs/decisions/0014-free-origin.md'],
         round
       );
       assert(v && v.handoff_status === 'clarification_required',

@@ -1,4 +1,4 @@
-# 13. Free origin: orchestrator-owned selection behind a typed commitment gate
+# 14. Free origin: orchestrator-owned selection behind a typed commitment gate
 
 Date: 2026-07-28
 Status: Accepted
@@ -6,7 +6,8 @@ Issue: #825
 Supersedes: ADR 0006 (planner-first entry, #287) — its *entry lock* only; the control
 boundary it protects is retained and restated here.
 Related: ADR 0003 (adaptive front-end planner), ADR 0012 (finalize seam is
-orchestrator-owned)
+orchestrator-owned), ADR 0013 (the Successor Test and the Two-Gate Target
+Architecture — this decision's Gate 1 is re-examined against its R1 locus rule)
 
 ## Context
 

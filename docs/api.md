@@ -33,7 +33,7 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Impact**: No active folder is created; `claim: 'none'`; exit non-zero. The `reasoning` field names the error code and signal from the final failed attempt. The `reasoning_class` field is `'classifier_error'`.
 - **On `result: 'refuse'`**: Hard stop — do not retry; diagnose the underlying condition named by `reasoning`.
 
-### Gate 1: the typed selection record at claim (issue #825, ADR 0013)
+### Gate 1: the typed selection record at claim (issue #825, ADR 0014)
 
 Selection is orchestrator-owned. `cmdStartup` (and `cmdPickNext`, which delegates to it) gains two flags:
 
@@ -64,7 +64,7 @@ Selection is orchestrator-owned. `cmdStartup` (and `cmdPickNext`, which delegate
 
 **Planning Evidence.** When the frozen plan carries no `## Meta` selection block, `kaola-workflow-adaptive-handoff.js` folds the six fields of `.cache/origin/selection-record.json` into `## Planning Evidence`. This is the reporting end, not a gate: a missing or corrupt record never blocks the freeze, because the claim already refused zero-write on an invalid one.
 
-### Adaptive handoff: `--clarification-required` (issue #825, ADR 0013)
+### Adaptive handoff: `--clarification-required` (issue #825, ADR 0014)
 
 ```
 node kaola-workflow-adaptive-handoff.js --clarification-required --question "..." \
