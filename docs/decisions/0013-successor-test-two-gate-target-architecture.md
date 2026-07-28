@@ -168,8 +168,14 @@ conforming-intent input: they normalize it, remedy it, or answer with advice and
 recommended next step.
 
 **Layer 2 — Two hard gates.** A small, enumerated refusal set at L1 and L2 — nothing
-else refuses. Target: the refusal census drops by roughly an order of magnitude and is
-located 100% at the two loci.
+else refuses. The taxonomy is by **family, not incident**: single-digit code counts per
+locus (L1: kernel write failed / CAS lost / integrity broken / lock held; L2: one
+composite sink verdict whose payload enumerates ALL its findings in one pass — red
+tests, unattributed paths, unsettled review, missing consent — the report-all shape),
+with specificity carried in the payload, never by minting a new code. The enumerated
+vocabulary is part of this ADR: adding a code means amending the ADR — deliberately
+heavy, the anti-growth ratchet. Target: the vocabulary collapses to family granularity
+and is located 100% at the two loci.
 
 **Layer 3 — Free orchestration.** Scheduling, fan-out width, ordering, speculation, halt
 handling: agent judgment guided by skill prose. No typed refusal shapes any of it.
@@ -201,6 +207,33 @@ transition out, and a proposed mechanism that would create a condition without o
 rejected by construction (it would violate P3). This also answers the standing question
 "is a state machine enough?": *as the durable contract, yes — this one; as police, no
 machine is needed at all.*
+
+### Every refusal names its exit — the route contract
+
+A refusal that fires without telling the agent the way out is a wedge with a label. The
+current state does not guarantee an exit: three per-script `OPERATOR_HINT_REGISTRY`
+tables coexist with five CLIs that decorate nothing, exactly one typed `route:` field
+exists in the codebase, and one shipped hint is circular (it names a precondition its
+own sibling mechanism destroyed). Three mechanisms make "every refusal has a way
+through" structural rather than prose discipline:
+
+1. **A typed `route` on every refusal envelope.** Each L1/L2 refusal carries
+   `route: {verb, args-template}` from a **closed vocabulary**: an in-grammar verb (the
+   next legal subcommand with its arguments), `consent` (the A3 valve — a human
+   decides), or `environment` (the blocker is outside the runtime: disk, forge,
+   network). Prose `operator_hint` remains as commentary; the route is the
+   machine-readable exit. R4 refusals route to investigation/discard verbs, never to an
+   auto-repair — the signal must not be laundered.
+2. **One registry.** The three per-script hint tables unify into a single kernel table
+   keyed by reason code: `{route, hint}`. This is feasible *only after* the census
+   shrinks to ~L1+L2 size — at 459 codes a unified table would be one more hand-kept
+   compliance mirror of the kind #833 subtracts.
+3. **The registry sweep — R2 generalized.** A suite walks every registered code:
+   provoke the refusal, follow its recorded route, arrive green. A route that dead-ends
+   fails the sweep, so the #840 class (route to a dead verb) and the circular-hint class
+   become build-time failures instead of post-release audit findings. Enforcement is
+   default-on with an exempt list carrying a one-line reason per entry — never an
+   opt-in allowlist.
 
 ### The parallel structure, retained — and mechanically strengthened (T9)
 
@@ -260,8 +293,11 @@ six surfaces.
 
 ## Standing admission rules (in force from acceptance, before any migration)
 
-- **R1 — Locus.** A new refusal must sit at L1 or L2. A mid-run refusal proposal ships
-  instead as an advisory or a tool.
+- **R1 — Locus and severity.** A new refusal must sit at L1 or L2, **and** be crucial
+  there: proceeding would irreversibly corrupt or lose a kernel record, let
+  unverified / unreviewed / unconsented content reach mainline, or override a human
+  values call. A condition recoverable in place ships as an advisory even at the two
+  loci; a mid-run refusal proposal ships as an advisory or a tool.
 - **R2 — Green arc, bidirectional.** Adding *or removing* a refusal requires a pinned
   green traversal — the legal path through, not only the refusing path. Three of the four
   2026-07-28 defects shipped with refusal pins only; the #778 physical dedup broke the
@@ -311,7 +347,10 @@ one-rule-one-wording; the single adaptive path.
   mid-finalize); a fresh session given only the kernel resumes to completion. This
   becomes a suite scenario, not a hope. **If P1 fails on the kernel alone, T1 is wrong
   and the kernel spec must grow — grow the kernel, never the police.**
-- **P2 — Census.** Refusal codes reduced ~an order of magnitude, located 100% at L1/L2.
+- **P2 — Census.** The enumerated refusal vocabulary collapses to family granularity —
+  on the order of a dozen codes, not fifty — located 100% at L1/L2 (plus the A3 consent
+  family), every one carrying a route. Specific conditions appear as payload findings,
+  never as new codes.
 - **P3 — Wedge extinction.** Permanent mid-run stuck states (the #839 class) are
   impossible by construction: nothing mid-run refuses hard.
 - **P4 — Economics.** Tokens and wall-clock per equivalent issue drop, measured by M2
@@ -322,7 +361,9 @@ one-rule-one-wording; the single adaptive path.
   a violation of T11 to be hunted, not tolerated.
 - **P6 — Drawn-machine exhaustiveness.** Every reachable run condition appears in the
   transition table with a named exit; a walkthrough scenario asserts no reachable
-  condition lacks one (the mechanical form of "no undeclared states").
+  condition lacks one (the mechanical form of "no undeclared states"). The route
+  contract's registry sweep is its per-refusal refinement: every surviving reason code
+  is walked refusal → route → green, so an exit-less refusal cannot ship.
 
 ## Risks
 
