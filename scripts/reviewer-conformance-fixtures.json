@@ -222,7 +222,8 @@
   "validation_policy": [
     { "name": "valid schema-2 policy", "meta": ["validation_cwd: sub/dir", "validation_repetitions: 3", "validation_pass_rule: all", "validation_timeout_minutes: 10", "validation_env_allowlist: A,B"], "expected_ok": true },
     { "name": "unknown validation field", "meta": ["validation_bogus: x"], "expected_reason": "validation_policy_unknown_field" },
-    { "name": "duplicate validation field", "meta": ["validation_repetitions: 1", "validation_repetitions: 2"], "expected_reason": "validation_policy_duplicate_field" },
+    { "name": "duplicate validation field, values DISAGREE", "meta": ["validation_repetitions: 1", "validation_repetitions: 2"], "expected_reason": "validation_policy_duplicate_field" },
+    { "name": "duplicate validation field, values AGREE (ADR 0013 R3: collapsed, not refused)", "meta": ["validation_repetitions: 2", "validation_repetitions: 2"], "expected_ok": true },
     { "name": "cwd path escape", "meta": ["validation_cwd: ../evil"], "expected_reason": "validation_cwd_invalid" },
     { "name": "cwd absolute path", "meta": ["validation_cwd: /abs/path"], "expected_reason": "validation_cwd_invalid" },
     { "name": "repetitions above range", "meta": ["validation_repetitions: 9"], "expected_reason": "validation_repetitions_invalid" },
@@ -230,6 +231,7 @@
     { "name": "pass rule not all", "meta": ["validation_pass_rule: any"], "expected_reason": "validation_pass_rule_invalid" },
     { "name": "timeout above range", "meta": ["validation_timeout_minutes: 999"], "expected_reason": "validation_timeout_invalid" },
     { "name": "env allowlist bad key", "meta": ["validation_env_allowlist: 1BAD"], "expected_reason": "validation_env_allowlist_invalid" },
-    { "name": "env allowlist unsorted", "meta": ["validation_env_allowlist: B,A"], "expected_reason": "validation_env_allowlist_invalid" }
+    { "name": "env allowlist unsorted (ADR 0013 R3: normalized, not refused)", "meta": ["validation_env_allowlist: B,A"], "expected_ok": true },
+    { "name": "env allowlist duplicated (ADR 0013 R3: de-duplicated, not refused)", "meta": ["validation_env_allowlist: A,B,A"], "expected_ok": true }
   ]
 }

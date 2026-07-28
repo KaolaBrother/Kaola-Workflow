@@ -154,9 +154,9 @@ refusals teach the walls at freeze — author to them, never clamp around them.
   the join/gate. `main-session-gate` carries no model.
 - **Wait budget — optionally fill `wait_budget_minutes`, record its source.** Use the role/tier
   default unless concrete duration evidence justifies whole minutes; the tier floor applies
-  through 720 minutes. Record an extension as `planner_override` (extends, never shortens). Refuse a
-  nondelegable task rather than invent a budget; refuse an optimizer conflict rather than compete
-  with `optimize_budget`. State the concrete-duration evidence: difficulty alone is not evidence;
+  through 720 minutes. Record an extension as `planner_override` (extends, never shortens). Leave a
+  nondelegable node's cell blank — the freeze drops an inert budget rather than refusing it; refuse
+  an optimizer conflict rather than compete with `optimize_budget`. State the concrete-duration evidence: difficulty alone is not evidence;
   never inflate a budget to hide a wedged agent.
 - **Node Ledger header MUST be canonical** — `| id | status |` exactly (an alias fails
   `ledger_header_invalid`; `--repair` normalizes). Author `## Node Briefs` (one column-0

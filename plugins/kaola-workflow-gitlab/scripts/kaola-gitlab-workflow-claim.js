@@ -388,15 +388,64 @@ function provisionWorktree(root, project, branch) {
 // probes are exactly why #676/#707/#746/#497 each fixed one site and left the family alive.
 // Existence-only, on the plain archive/<project> path, no git state involved — when the run's
 // archive exists ONLY inside the tree about to be deleted, `git worktree remove --force` would
-// destroy the run's only evidence trail. Refuse with a typed reason and touch nothing.
+// destroy the run's only evidence trail.
+//
+// ADR 0013 R3 — the precondition is DISCHARGED, not demanded. This used to refuse with a typed
+// archive-only-in-the-worktree reason and hand the operator an rsync: the remedy was a deterministic
+// copy of a directory the script already knows the source and destination of, which makes the
+// refusal a missing tool wearing a uniform. (The retired token is deliberately not spelled here —
+// a dead code name in a live comment is the residue T11 exists to delete.) It is now the same
+// subtraction #837 made for the finalize worktree->main sync, and for the same reason: the blocker is state the workflow manufactured out
+// of its own commit policy (the archive resolves under MAIN, the worktree holds the only copy until
+// the sink commits it), so it is a repair obligation the machinery discharges before the gate.
+// The teardown RESCUES the archive up into the main checkout, VERIFIES the copy landed, and only
+// then removes the tree. Nothing is laundered (R4): the transformation preserves evidence — losing
+// it is the exact outcome the refusal existed to prevent — and it is fail-closed on both halves,
+// because a copy that throws OR a destination that does not verify leaves the tree untouched and
+// reports the machine failure under the same `mirror_sync_failed` reason #837 already ships for a
+// sync the script owes and cannot perform. One rule, one wording: there is no second code for
+// "the archive could not be moved to safety".
 function removeWorktree(root, project, folder) {
   const wtPath = (folder && folder.worktree_path) || worktreePathFor(root, project);
   if (!wtPath || !fs.existsSync(wtPath)) return { removed: false, reason: 'missing' };
+  let archiveRescued = false;
   if (isSafeName(project)) {
     const wtArchive = path.join(wtPath, 'kaola-workflow', 'archive', project);
     const rootArchive = path.join(root, 'kaola-workflow', 'archive', project);
     if (fs.existsSync(wtArchive) && !fs.existsSync(rootArchive)) {
-      return { removed: false, reason: 'archive_only_in_worktree', path: wtPath };
+      let rescueFailure = null;
+      try {
+        mergeCopyDir(wtArchive, rootArchive);
+      } catch (e) {
+        if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+        rescueFailure = String((e && e.message) || e).slice(0, 400);
+      }
+      // Positive proof, not an absence of exceptions: every regular file under the worktree archive
+      // must exist at the destination. A partial copy that threw nothing is still evidence loss, and
+      // this is the last moment it is detectable.
+      let unrescued = [];
+      if (!rescueFailure) {
+        try {
+          unrescued = listArchiveFilesRelative(wtArchive)
+            .filter(rel => !fs.existsSync(path.join(rootArchive, ...rel.split('/'))));
+        } catch (e) {
+          if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+          rescueFailure = 'the rescue could not be VERIFIED (' + String((e && e.message) || e).slice(0, 200) + ')';
+        }
+      }
+      if (rescueFailure || unrescued.length) {
+        return {
+          removed: false,
+          reason: 'mirror_sync_failed',
+          path: wtPath,
+          detail: 'the run archive exists ONLY inside the worktree being deleted and the teardown '
+            + 'could not sync it up into the main checkout'
+            + (rescueFailure ? ': ' + rescueFailure
+              : ' (' + unrescued.length + ' file(s) did not land: ' + unrescued.slice(0, 5).join(', ') + ')'),
+          ...(unrescued.length ? { unrescued } : {})
+        };
+      }
+      archiveRescued = true;
     }
   }
   try {
@@ -404,10 +453,29 @@ function removeWorktree(root, project, folder) {
       cwd: root,
       stdio: ['ignore', 'ignore', 'ignore']
     });
-    return { removed: true, path: wtPath };
+    return { removed: true, path: wtPath, ...(archiveRescued ? { archive_rescued: true } : {}) };
   } catch (_) {
-    return { removed: false, path: wtPath };
+    return { removed: false, path: wtPath, ...(archiveRescued ? { archive_rescued: true } : {}) };
   }
+}
+
+// Every regular file under an archive directory, as `/`-joined relative paths. Symlinks are skipped
+// for the same reason mergeCopyDir skips them (never follow a link out of the tree), so the two
+// walks agree on what "landed" means and the verification cannot false-fail on a link.
+function listArchiveFilesRelative(dir) {
+  const out = [];
+  (function walk(abs, rel) {
+    // Deliberately NOT guarded: an unreadable source directory must propagate to the caller, which
+    // records it as a rescue failure. Swallowing it here would return a SHORT list and make the
+    // verification pass vacuously — a green answer produced by not looking.
+    for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+      if (e.isSymbolicLink()) continue;
+      const childRel = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) walk(path.join(abs, e.name), childRel);
+      else if (e.isFile()) out.push(childRel);
+    }
+  })(dir, '');
+  return out;
 }
 
 function extractIssueNumber(branch) {

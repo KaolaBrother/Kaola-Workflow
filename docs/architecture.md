@@ -35,8 +35,13 @@ ignored, never refused (scripts validate, never auto-pick — #44). The agent
   `docs/decisions/D-765-01.md`).** What a run freezes is a **spine**: an ordered sequence of
   milestone nodes plus the unique `finalize` sink, declared by the hash-covered `## Meta` field
   `plan_form: spine`. That is the only authorable plan form — the legacy full-DAG grammar is
-  retired at the freeze wall with a typed `plan_form_dag_retired`, freeze-only, so a plan frozen
-  before the cutover still resumes. A spine node is either a **concrete single-role node**
+  retired at the freeze wall, which **normalizes** it rather than refusing: an explicit
+  `plan_form: dag` (or an omitted field, which defaults to `dag`) resolves to `spine` and freezes,
+  reporting a `plan_form_normalized` advisory. A discriminator with one legal value discriminates
+  nothing, so demanding the token was a missing tool wearing a uniform (ADR 0013 R3); the
+  normalization is lossless because an all-concrete spine is semantically equal to the retired DAG.
+  The form is not read at all on the resume wall, so a plan frozen before the cutover still
+  resumes. A spine node is either a **concrete single-role node**
   (identical semantics to everything above — every harness-owned rule applies to it verbatim) or a
   typed **expansion point**: a milestone whose interior frontier cannot be proven at freeze. A
   spine carrying *no* expansion point is legal and is how a fully-known task is planned; it is the

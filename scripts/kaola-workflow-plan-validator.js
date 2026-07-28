@@ -256,15 +256,27 @@ const MAIN_SESSION_GATE = schema.MAIN_SESSION_GATE_ROLE;
 //
 // `plan_form` is the EXPLICIT shape discriminator (D-note: discriminate, never loosen a shared
 // check). `spine` is the ONLY authorable shape at freeze: the legacy full-DAG grammar is RETIRED
-// (#765 Wave E2) — an explicit `plan_form: dag` and the absent-⇒-dag default both refuse with the
-// typed `plan_form_dag_retired` at the freeze wall. A fully-known-at-freeze DAG is now authored as
-// an all-concrete spine (zero expansion points), which is semantically equal to the old dag.
+// (#765 Wave E2). The retirement used to be a WALL — an explicit `plan_form: dag` and the
+// absent-⇒-dag default both refused `plan_form_dag_retired` — and that wall was a missing tool
+// wearing a uniform: the only legal answer was the single token `spine`, so the agent's next step
+// after the refusal was a deterministic transformation the freeze could simply perform. It now
+// NORMALIZES: `dag` (explicit or defaulted) resolves to `spine` at the freeze wall and the
+// normalization is reported as an advisory, never as a refusal. The normalization is lossless by
+// the cutover's own argument, restated at SPINE-1 below: a zero-expansion (all-concrete) spine IS
+// how a fully-known-at-freeze DAG is authored, every whole-plan proof ranges over the concrete node
+// table identically, and SPINE-2..5 are empty no-ops when there are no expansion points — so a
+// normalized plan reaches STRICTLY MORE grammar than it did as a `dag`, never less.
 //
 // SPINE_EXPANSION_ROLE is a BUILT-IN role token like TERMINAL_ROLE / MAIN_SESSION_GATE — it has
 // no agents/*.md profile, so the closed-library check exempts it, but ONLY inside a spine plan.
-// The retired `dag` never reaches the closed-library check (it refuses first at the freeze wall);
-// on the resume path — which stays tolerant of pre-cutover frozen dag plans — the token has no
-// spine exemption and refuses through the EXISTING unknown-role error, as it always has.
+// The normalization lives in `parsePlanForm`, the single reader, so the freeze wall AND the resume
+// wall both judge a spine and the exemption applies on both — by construction rather than by two
+// hand-kept discriminators. That is required, not incidental: while only freeze normalized, a plan
+// carrying expansion points could freeze without the token and then be refused forever at resume
+// and at expand-open, a wedge the conversion would have manufactured. Granting it on the resume
+// side is sound because `plan_hash` is verified before the form is read, so the token can only be
+// present if it was present at freeze. An out-of-vocabulary form is NOT normalized and still
+// refuses through the EXISTING unknown-role error, as it always has.
 //
 // Why no shared check needed loosening: an expansion point is read-only (not in WRITE_ROLES ⇒ a
 // declared write set is already refused), shape `sequence` only, and not a gate role. It is
@@ -961,8 +973,17 @@ function parseValidationPolicy(content, opts) {
   }
   const unknown = seenValidationFields.find(name => !allowed.has(name));
   if (unknown) return { ok: false, reason: 'validation_policy_unknown_field', field: unknown };
+  // ADR 0013 R3/R4 — a REPEATED field with the SAME value is a non-canonical FORM of correct
+  // content: both lines say one thing, `one()` below would read that thing either way, and no decoy
+  // can re-shape anything by agreeing with the plan. It is collapsed silently, which is the whole
+  // remedy the refusal used to demand. Values that DISAGREE stay refused: which line the author
+  // meant is genuinely unknown, there is no deterministic transformation, and picking one would be
+  // the validator inventing policy. R3 never overrides that (R4).
   for (const name of allowed) {
-    if (metaFieldValues(content, name).length > 1) return { ok: false, reason: 'validation_policy_duplicate_field', field: name };
+    const declared = metaFieldValues(content, name).map(v => String(v || '').trim());
+    if (declared.length > 1 && new Set(declared).size > 1) {
+      return { ok: false, reason: 'validation_policy_duplicate_field', field: name, values: declared };
+    }
   }
   const one = (name, fallback) => {
     const values = metaFieldValues(content, name);
@@ -984,11 +1005,18 @@ function parseValidationPolicy(content, opts) {
   }
   const envRaw = one('validation_env_allowlist', '');
   const env = envRaw ? envRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
-  const sorted = Array.from(new Set(env)).sort();
-  if (env.some(name => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-    || JSON.stringify(env) !== JSON.stringify(sorted)) {
-    return { ok: false, reason: 'validation_env_allowlist_invalid' };
+  // ADR 0013 R3 — the canonical form was already being COMPUTED here and then used only to refuse
+  // the input for not matching it, which is the missing-tool-wearing-a-uniform shape in its purest
+  // form: an unsorted or duplicated allowlist denotes the same SET, so ordering and de-duplication
+  // are non-canonical form of correct content and are normalized. What survives is the half that is
+  // not form at all: a token that is not a legal environment-variable name is a genuine unknown —
+  // dropping it would silently narrow the allowlist and "fixing" it would be a guess — so an
+  // illegal identifier still refuses, and the offending tokens are named in the payload.
+  const illegal = env.filter(name => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name));
+  if (illegal.length) {
+    return { ok: false, reason: 'validation_env_allowlist_invalid', invalid_names: illegal };
   }
+  const sorted = Array.from(new Set(env)).sort();
   return { ok: true, plan_schema_version: 2, contract_version: 2, command,
     cwd: cwdRaw || '.', repetitions: Number(repetitionsRaw), pass_rule: 'all',
     timeout_minutes: timeoutRaw ? Number(timeoutRaw) : null, env_allowlist: sorted,
@@ -1082,12 +1110,30 @@ function optimizeHeaderCounts(content) {
   return counts;
 }
 // #758: resolve the `plan_form` shape discriminator from the hash-covered `## Meta` body.
-// Returns { values, form } — `values` is every occurrence (so a DUPLICATE field, which would let a
-// decoy `plan_form: spine` line silently re-shape the grammar, can be refused rather than
-// last-wins-resolved). An ABSENT field resolves to `dag`: legacy plans are untouched.
+// Returns { values, rawForm, form, normalized } — `values` is every occurrence (so a DUPLICATE
+// field, which would let a decoy `plan_form: spine` line silently re-shape the grammar, can be
+// refused rather than last-wins-resolved). An ABSENT field resolves to `dag`.
+//
+// ADR 0013 R3 — THE NORMALIZATION LIVES HERE, in the single reader, and that placement is the whole
+// point. `spine` is the only authorable shape (#765 Wave E2), so `dag` names no live grammar and
+// `form` reports `spine` for it; `rawForm` preserves what the plan actually said, which is what the
+// vocabulary check must judge (an out-of-vocabulary value is a genuine unknown and still refuses —
+// only the ONE retired token is coerced).
+//
+// Why not normalize at the freeze wall alone: the freeze wall is not the only reader. The resume
+// wall gates the built-in `expansion-point` token on this discriminator, and `expand-open`,
+// `reexpand-open` and `amend-surface` each refuse `not_a_spine_plan` off it. A freeze-only
+// normalization would therefore let a plan carrying expansion points freeze without the token and
+// then WEDGE at its first expansion — trading a cheap freeze-time refusal for a permanent mid-run
+// stuck state, which is precisely the class this ADR exists to make impossible (P3). Normalizing in
+// the reader makes every consumer agree by construction. It is safe on the resume side because the
+// bytes are already proven: `revalidateForResume` verifies `plan_hash` before it reads the form, so
+// no plan can acquire the spine grammar by post-freeze edit — only by being frozen with it.
 function parsePlanForm(content) {
   const values = metaFieldValues(content, 'plan_form').map(v => String(v || '').trim().toLowerCase());
-  return { values, form: values.length === 1 ? values[0] : (values.length === 0 ? 'dag' : values[values.length - 1]) };
+  const rawForm = values.length === 1 ? values[0] : (values.length === 0 ? 'dag' : values[values.length - 1]);
+  const normalized = rawForm === 'dag';
+  return { values, rawForm, form: normalized ? 'spine' : rawForm, normalized };
 }
 // #758: parse the `expansion(<id>):` contracts out of the hash-covered `## Meta` body. Same block
 // grammar (column-0 header + indented `key: value` fields) as the `optimize(<id>):` contracts, so
@@ -1750,8 +1796,20 @@ function validateWaitBudgetNode(node, opts) {
   // #758: an expansion point is not dispatched at all — its frontier (and therefore its per-unit
   // tier and wait budget) is composed at OPEN time, so a frozen wait budget on it is meaningless.
   // Same non-delegable family as the sink and the main-session gate.
+  //
+  // ADR 0013 R3 — this DROPS the field instead of refusing `wait_budget_nondelegable`. A budget on a
+  // role nothing waits on is not wrong content, it is inert content, and the agent's next step after
+  // the refusal was the single deterministic edit of deleting the cell. So the reader performs that
+  // edit: the override resolves to "none declared", exactly as if the cell had been blank, and the
+  // fact is reported on the result rather than thrown. The parsed node's own field is nulled with it
+  // — a value the validator has ruled meaningless must not survive onto a dispatch descriptor, or the
+  // conversion would trade one defect for a quieter one. Nothing is laundered (R4): no hash, diff or
+  // chain is repaired, and no wait is shortened, because these roles are never delegated.
   if (node.role === MAIN_SESSION_GATE || node.role === TERMINAL_ROLE || node.role === SPINE_EXPANSION_ROLE) {
-    return refuse('wait_budget_nondelegable', `node ${node.id} role ${node.role} is not delegated and cannot declare wait_budget_minutes`);
+    if (node && typeof node === 'object') node.wait_budget_minutes = null;
+    return { ok: true, wait_budget_minutes: null, wait_budget_source: null,
+      dropped: 'nondelegable_role',
+      advice: `node ${node.id} role ${node.role} is not delegated, so its wait_budget_minutes cell is inert and was dropped` };
   }
   const resolveModel = opts.resolveModel || (role => resolveAgentModel(role));
   const value = Number(raw);
@@ -4214,25 +4272,31 @@ function validatePlan(content, opts) {
       errors: ['## Meta carries more than one plan_form field (values: ' + planFormInfo.values.join(', ') + ') — exactly one shape discriminator per plan'],
       planHash: computePlanHash(content) };
   }
-  if (!PLAN_FORM_LEGAL.includes(planFormInfo.form)) {
+  // Vocabulary is judged on the RAW value, never the normalized one: the reader coerces exactly one
+  // retired token (`dag` ⇒ `spine`) and nothing else, so an out-of-vocabulary value is still a
+  // genuine unknown with no deterministic remedy and still refuses.
+  if (!PLAN_FORM_LEGAL.includes(planFormInfo.rawForm)) {
     return { result: 'refuse', reason: 'plan_form_unsupported', operator_hint: getOperatorHint('plan_invalid'),
-      errors: ['plan_form: "' + planFormInfo.form + '" is not a legal plan shape (legal: ' + PLAN_FORM_LEGAL.join('|') + ')'],
+      errors: ['plan_form: "' + planFormInfo.rawForm + '" is not a legal plan shape (legal: ' + PLAN_FORM_LEGAL.join('|') + ')'],
       planHash: computePlanHash(content) };
   }
   // #765 (Wave E2 cutover): the legacy full-DAG grammar is RETIRED at the freeze wall. `spine` is the
-  // only authorable shape. This catches BOTH an explicit `plan_form: dag` AND the absent-⇒-dag default
-  // (parsePlanForm returns 'dag' when the field is missing), so every newly authored plan must declare
-  // `plan_form: spine`. An all-concrete spine (zero expansion points) is semantically equal to the old
-  // DAG — the whole-plan proofs (gates, disjointness, unique sink, caps, governance) range over the
-  // node table identically — so migrating a DAG to an all-concrete spine drops NO proof coverage.
-  // Typed reason folds into the plan_invalid / typed-reason envelope exactly like the two plan_form
-  // refusals above. FREEZE-ONLY: revalidateForResume deliberately does NOT refuse dag (a plan frozen
-  // before this cutover is a dag and must still resume — the established no-brick policy).
-  if (planFormInfo.form === 'dag') {
-    return { result: 'refuse', reason: 'plan_form_dag_retired', operator_hint: getOperatorHint('plan_invalid'),
-      errors: ['plan_form: dag is retired — author plan_form: spine (an all-concrete spine when the whole DAG is known at freeze; add typed expansion points where the interior is composed at open time)'],
-      planHash: computePlanHash(content) };
-  }
+  // only authorable shape, which is exactly why this is no longer a refusal: a discriminator with ONE
+  // legal value discriminates nothing, and refusing over the missing token asked the author to type
+  // the only answer the script already knew. The retirement is now performed instead of demanded —
+  // BOTH an explicit `plan_form: dag` AND the absent-⇒-dag default (parsePlanForm returns 'dag' when
+  // the field is missing) NORMALIZE to `spine`, and the normalization is surfaced as an advisory.
+  //
+  // Lossless, and the cutover's own reasoning is the proof: an all-concrete spine (zero expansion
+  // points) is semantically equal to the old DAG — the whole-plan proofs (gates, disjointness, unique
+  // sink, caps, governance) range over the node table identically — and SPINE-1 explicitly rules a
+  // zero-expansion spine LEGAL while SPINE-2..5 loop over an empty expansion set. So a normalized
+  // plan is judged by every rule it faced as a `dag` PLUS the spine rules, which are no-ops for it.
+  // Nothing is laundered (R4): no hash, diff or chain is repaired here — only a shape token whose
+  // sole legal value is fixed. NO-BRICK, unchanged: the resume wall has never refused a `dag` plan
+  // and still does not; it reads the same normalized form from the same reader, so freeze and resume
+  // cannot disagree about which grammar a plan is judged under.
+  const planFormNormalized = planFormInfo.normalized;
   const isSpine = planFormInfo.form === 'spine';
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
@@ -4412,9 +4476,11 @@ function validatePlan(content, opts) {
     // #334: MAIN_SESSION_GATE is a built-in non-subagent token (like the finalize sink) — skip
     // the installed-library lookup (it has no agents/*.md profile and is never dispatched).
     if (n.role === TERMINAL_ROLE || n.role === MAIN_SESSION_GATE) continue;
-    // #758: the expansion-point token is built-in ONLY under `plan_form: spine`. In a `dag` plan it
-    // falls through to the unchanged unknown-role error — a legacy plan can never gain the token by
-    // accident, and the spine grammar is never reachable without the explicit discriminator.
+    // #758: the expansion-point token is built-in under `plan_form: spine`, which the shared reader
+    // now resolves for the retired `dag` spelling too — so an authored expansion point is admitted
+    // whether or not the author typed the discriminator, at this wall and at the resume wall alike.
+    // A legacy plan still cannot gain the token by accident: gaining it requires the row to be in
+    // the frozen bytes, and `plan_hash` is what proves those bytes.
     if (isSpine && n.role === SPINE_EXPANSION_ROLE) continue;
     if (!roles.has(n.role)) errors.push(`unknown role "${n.role}" not in installed library (node ${n.id})`);
   }
@@ -5260,8 +5326,8 @@ function validatePlan(content, opts) {
   const planHash = computePlanHash(content);
   if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink,
     plan_schema_version: planSchemaVersion, contract_version: contractVersion,
-    // #765: only `spine` reaches the freeze wall now (dag refuses earlier), so isSpine is always true
-    // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
+    // Post-normalization the freeze wall always judges a spine, so isSpine is always true here;
+    // the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}) };
 
   // `## Design` completeness gate (FREEZE-ONLY). Placed at the END of the freeze wall — after every
@@ -5336,14 +5402,25 @@ function validatePlan(content, opts) {
     diagnostics: { wideFanout: wideFanouts },
     plan_shape: planShape,
     ...(selectionRecord ? { selection: selectionRecord } : {}),
-    // #830 `frontier_without_writer` — NAMED ADVISORY, never a refusal: a review_repair child with a
-    // non-empty inherited frontier and zero writer nodes freezes (a certification-only epoch is a
-    // legitimate shape), but a NEW finding its gate surfaces has no possible owner. The planner sees
-    // the flag and decides. Audit-only; never moves the verdict.
-    ...(frontierWithoutWriter ? { warnings: [{ warning: 'frontier_without_writer',
-      detail: 'this review_repair child epoch inherits a non-empty findings frontier but declares zero writer nodes — a new finding surfaced by its gate has no possible owner (legal for a certification-only epoch; confirm the shape)' }] } : {}),
-    // #765: only `spine` reaches the freeze wall now (dag refuses earlier), so isSpine is always true
-    // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
+    // NAMED ADVISORIES — never refusals, never verdict-moving. Accumulated into ONE array so a
+    // second advisory cannot silently displace the first (a single conditional spread had exactly
+    // that hazard the moment a second warning existed).
+    //   `frontier_without_writer` (#830): a review_repair child with a non-empty inherited frontier
+    //     and zero writer nodes freezes (a certification-only epoch is a legitimate shape), but a
+    //     NEW finding its gate surfaces has no possible owner. The planner sees the flag and decides.
+    //   `plan_form_normalized`: the plan declared `plan_form: dag` (or omitted the field, which
+    //     defaults to dag) and the freeze wall resolved it to the only authorable shape, `spine`.
+    //     Reported so the normalization is visible in the freeze payload rather than silent.
+    ...(planFormNormalized || frontierWithoutWriter
+      ? { warnings: [
+        ...(frontierWithoutWriter ? [{ warning: 'frontier_without_writer',
+          detail: 'this review_repair child epoch inherits a non-empty findings frontier but declares zero writer nodes — a new finding surfaced by its gate has no possible owner (legal for a certification-only epoch; confirm the shape)' }] : []),
+        ...(planFormNormalized ? [{ warning: 'plan_form_normalized',
+          detail: 'plan_form resolved to the only authorable shape `spine` (the plan declared `dag`, or omitted the field and defaulted to it). An all-concrete spine is semantically equal to the retired DAG grammar, so nothing was lost; declare `plan_form: spine` in ## Meta to state the shape explicitly.' }] : []),
+      ] }
+      : {}),
+    // Post-normalization the freeze wall always judges a spine, so this always emits
+    // plan_form: 'spine'; the conditional stays as a defensive spread.
     ...(isSpine ? { plan_form: 'spine' } : {}),
   };
 }
@@ -5383,11 +5460,15 @@ function revalidateForResume(content, opts) {
   // hash-verified Meta above. Structural only: the SPINE-1..5 rules stay freeze-only, matching the
   // established policy that a tightened rubric must never brick an in-flight plan.
   //
-  // #765 (Wave E2) FREEZE-ONLY: the freeze wall retires the legacy `dag` grammar, but resume does
-  // NOT — a plan frozen BEFORE this cutover is a dag (parsePlanForm returns 'dag' when the field is
-  // absent) and must still resume. Refusing dag here would brick every in-flight legacy plan, the
-  // exact no-brick landmine the freeze-only convention exists to avoid. So the dag_retired refusal
-  // is deliberately absent from this path: resume stays tolerant of both dag and spine.
+  // #765 (Wave E2) NO-BRICK: resume has never refused the legacy `dag` grammar and still does not —
+  // a plan frozen BEFORE the cutover is a dag by absence and must still resume. Under ADR 0013 R3
+  // `parsePlanForm` normalizes that one retired token in the READER, so this wall and the freeze
+  // wall now agree by construction instead of by two hand-kept discriminators. That agreement is
+  // load-bearing, not cosmetic: while the freeze wall alone normalized, a plan carrying expansion
+  // points could freeze without the token and then be refused HERE (`unknown_role`) and at
+  // expand-open (`not_a_spine_plan`) forever — a wedge manufactured by the conversion itself.
+  // Widening the exemption is safe because the bytes are already proven: `plan_hash` is verified
+  // above, so the token can only be present if it was present at freeze.
   const resumeIsSpine = parsePlanForm(content).form === 'spine';
   for (const n of nodes) {
     // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.

@@ -755,10 +755,15 @@ Consequences of the one rule:
   carries the archive path at all.
 - `cmdFinalize --keep-worktree` cannot stage a path outside its own worktree, so it records the
   archive's fate as `deferred_to_sink` (or `skipped_gitignored`) rather than claiming a commit.
-- `removeWorktree` — the single choke point every destructive caller funnels through — refuses
-  `{ removed: false, reason: 'archive_only_in_worktree' }` when `<wt>/kaola-workflow/archive/<project>`
-  exists and `<root>/kaola-workflow/archive/<project>` does not, and performs no git call. The probe
-  is existence-only on the plain path and never gates on git state.
+- `removeWorktree` — the single choke point every destructive caller funnels through — **rescues**
+  the archive when `<wt>/kaola-workflow/archive/<project>` exists and
+  `<root>/kaola-workflow/archive/<project>` does not: it merge-copies the worktree archive up into
+  the main checkout, verifies every regular file landed, and only then performs the git removal,
+  reporting `{ removed: true, archive_rescued: true }`. The probe is existence-only on the plain
+  path and never gates on git state. A rescue that throws, or that does not verify, is fail-closed:
+  the tree is left standing and the machine failure reports
+  `{ removed: false, reason: 'mirror_sync_failed', detail }` — the same reason the finalize
+  worktree→main sync already uses for a sync the script owes and cannot perform.
 - `resume --project X` treats a settled main-resident archive as `already_finalized`; it reports
   `finalize_incomplete` only while the branch still carries the live folder (proof the transaction's
   own `chore: archive` commit never landed).

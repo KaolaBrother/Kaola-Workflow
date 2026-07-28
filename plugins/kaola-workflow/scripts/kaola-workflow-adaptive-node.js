@@ -2695,19 +2695,20 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
     // #425: emit a structured diagnostic when the ledger is present but non-canonical.
     // The caller (open-next) surfaces this to the orchestrator so it knows exactly why the
     // node was not found — not just "found:false" with no context.
-    // #774: the hint names a remedy that is actually REACHABLE. `--freeze --repair` routes through the
-    // full freeze wall, which refuses a legacy dag plan outright (plan_form_dag_retired) — and a
-    // pre-cutover dag plan is exactly the population that can still carry a non-canonical header. The
-    // ledger sits OUTSIDE plan_hash, so rewriting that one header line in place is the remedy that
-    // works on every frozen plan; --freeze --repair stays the mechanical route where it is admissible.
+    // #774: the hint names a remedy that is actually REACHABLE. It used to carve out the legacy-dag
+    // population, because `--freeze --repair` routes through the full freeze wall and that wall
+    // refused a dag plan outright — and a pre-cutover dag plan is exactly the population that can
+    // still carry a non-canonical header. The freeze wall now NORMALIZES the retired form instead of
+    // refusing it, so the carve-out is dead choreography and is deleted with the refusal it navigated
+    // (ADR 0013 T11). `--freeze --repair` is the mechanical route on every plan; the in-place rewrite
+    // stays named because the ledger sits OUTSIDE plan_hash, so it is always available too.
     const diagnostic = {
       ledger_present: true,
       detected_columns: header,
       required_columns: ['id', 'status'],
       hint: "Rewrite the ledger header as '| id | status |' — the ## Node Ledger is outside plan_hash, "
-        + "so editing that line in place does not break the frozen plan. On a plan_form: spine plan "
-        + "`--freeze --repair` normalizes it mechanically; on a legacy dag plan that route refuses "
-        + "(plan_form_dag_retired), so edit the header directly.",
+        + "so editing that line in place does not break the frozen plan. `--freeze --repair` "
+        + "normalizes it mechanically.",
     };
     return { content, changed: false, found: false, alreadyAtTarget: false, diagnostic };
   }
