@@ -919,6 +919,42 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// The `verify-snapshots` CLI arc — BOTH directions, driven as a real subprocess.
+//
+// verifyAllEpochSnapshots answers in the bare library `{ ok, reason }` form that claim.js,
+// adaptive-node.js and the scenarios above read. main() emitted that form verbatim while keying its
+// exit code on `result === 'refuse'` alone, so a FAILED lineage verification printed its typed
+// reason and still exited 0 — a tampered epoch snapshot read as a pass to every shell caller, the
+// exact inversion a fail-closed seal exists to prevent. The pass arc is pinned alongside it: an
+// exit-code fix that reds a healthy lineage would be just as wrong, and only the pair proves the
+// exit code tracks the verdict rather than a constant.
+scenario(() => {
+  const fx = initFixture();
+  const runCli = () => {
+    const child = spawnSync(process.execPath,
+      [path.join(__dirname, 'kaola-workflow-replan.js'), 'verify-snapshots', '--project', fx.project, '--json'],
+      { cwd: fx.root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    return { status: child.status,
+      out: JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()) };
+  };
+  try {
+    const passed = runCli();
+    equal(passed.status, 0, 'verify-snapshots exits 0 on an intact epoch lineage');
+    equal(passed.out.result, 'ok', 'the pass arc carries the typed ok envelope');
+    equal(passed.out.ok, true, 'the pass arc keeps the library predicate readable');
+
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    const intact = fs.readFileSync(statePath, 'utf8');
+    fs.writeFileSync(statePath, intact.replace(/^epoch_lineage_id:.*$/m, 'epoch_lineage_id: ' + 'f'.repeat(64)));
+    const refused = runCli();
+    equal(refused.status, 1, 'verify-snapshots exits NON-ZERO once the lineage fails to verify');
+    equal(refused.out.result, 'refuse', 'the fail arc carries the typed refuse envelope');
+    equal(refused.out.reason, 'state_epoch_lineage_mismatch',
+      'the fail arc preserves the library reason verbatim — no reclassification at the boundary');
+    equal(refused.out.ok, false, 'the fail arc keeps the library predicate readable');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 // A schema-2 plan freezes and resumes only when Required Agent Compliance is
 // the exact one-row-per-node requirement set, including the finalize sink.
 // Runtime status/evidence advancement remains mutable and is intentionally not
