@@ -173,7 +173,6 @@ const OPERATOR_HINT_REGISTRY = {
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
-  foreign_selector: (ctx) => `selector "${ctx.selector || '(unknown)'}" is not a valid arm of the select group. Use one of the declared arm IDs.`,
   missing_node_id: () => 'This subcommand requires --node-id <id>. Provide the node ID.',
   plan_invalid: () => 'Plan is out of grammar. Fix the listed errors and re-freeze.',
   plan_unreadable: () => 'Cannot read the plan file. Check the path and file permissions.',
@@ -221,7 +220,7 @@ const OPERATOR_HINT_REGISTRY = {
 // This is a STATIC property of committed source checked dynamically — it cannot fire in the field
 // unless the committed table itself disagrees with the committed number.
 // ---------------------------------------------------------------------------
-const OPERATOR_HINT_RUNG_CENSUS = 77;
+const OPERATOR_HINT_RUNG_CENSUS = 76;
 {
   const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
   if (live !== OPERATOR_HINT_RUNG_CENSUS) {
@@ -2221,6 +2220,17 @@ function g4CertifierIdentity(kind, members, aggregation) {
     certified_producers: Array.from(new Set(ordered.flatMap(member => member.certifies || []))).sort(),
   };
   return { ordered, identity };
+}
+
+// The project a plan belongs to is its own directory name (kaola-workflow/<project>/workflow-plan.md),
+// which is the same resolution the .cache lookup beside it already uses. Fails closed: an unreadable
+// ledger is not `in_progress`, so the advice names no route rather than one the verb would refuse.
+function selectorAdviceFor(content, planPath, nodeId, selected, group, armIds) {
+  let status = '';
+  try { status = parseLedger(content).get(nodeId) || ''; } catch (_) { status = ''; }
+  let project = '';
+  try { project = path.basename(path.dirname(path.resolve(planPath))); } catch (_) { project = ''; }
+  return schema.foreignSelectorAdvice(nodeId, selected, group, armIds, status, project);
 }
 
 function resolveNamedCertifierDetailed(nodes, reference, role) {
@@ -7257,7 +7267,14 @@ function main() {
         if (!parsed.found) {
           selectorCheckOut = { ok: false, isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
         } else if (!arms.map(a => a.id).includes(parsed.selector)) {
-          selectorCheckOut = { ok: false, isSelector: true, errors: [`selector "${parsed.selector}" is not an arm of select group "${group}" (${arms.map(a => a.id).join(', ')})`] };
+          // Same advice on the FUSED path, from the same kernel function: the legacy standalone
+          // `--selector-check` is not the only caller, and advice that reaches only one of two
+          // paths is the defect it exists to fix.
+          const foreignAdvice = selectorAdviceFor(content, planPath, nodeId, parsed.selector, group,
+            arms.map(a => a.id));
+          selectorCheckOut = { ok: false, isSelector: true, route: foreignAdvice.route,
+            detail: foreignAdvice.detail,
+            errors: [`selector "${parsed.selector}" is not an arm of select group "${group}" (${arms.map(a => a.id).join(', ')})`] };
         } else {
           selectorCheckOut = { ok: true, isSelector: true, selected: parsed.selector, group, armsToNa: arms.map(a => a.id).filter(id => id !== parsed.selector) };
         }
@@ -7325,8 +7342,15 @@ function main() {
     const armIds = arms.map(a => a.id);
     // FAIL-CLOSED: selector names an id not among the arms (foreign).
     if (!armIds.includes(selected)) {
-      const out = { result: 'refuse', reason: 'foreign_selector', operator_hint: getOperatorHint('foreign_selector', { selector: selected }), isSelector: true, errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
-      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      // ADVISE, not a refusal (see foreignSelectorAdvice in the kernel for the derivation and for
+      // why the route is conditional). The node still does NOT close: commit-node gates on
+      // `exitCode === 0 && ok === true` and never reads `result`, so `ok` stays false and the exit
+      // stays 1 — retiring the code in favour of a route does not make the arm succeed.
+      const advice = selectorAdviceFor(content, planPath, nodeId, selected, group, armIds);
+      const out = { result: 'advise', ok: false, isSelector: true, selector: selected, group,
+        arms: armIds, route: advice.route, detail: advice.detail,
+        errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
+      process.stdout.write((json ? JSON.stringify(out) : 'advise: ' + advice.detail) + '\n');
       process.exitCode = 1; return;
     }
     // Valid selected arm: return armsToNa (all arms except the selected one).

@@ -13595,14 +13595,33 @@ function testAdaptiveVerdictCheck() {
     assert(Array.isArray(scJson.armsToNa) && scJson.armsToNa.length === 1 && scJson.armsToNa[0] === 'arm-html',
       '--selector-check valid: armsToNa must be [arm-html], got ' + cr.stdout);
 
-    // selector_source with foreign selector -> exit 1, ok:false
+    // A foreign selector ADVISES rather than refusing — but the node still does not close, and
+    // that is the property worth pinning: `commit-node` gates the close on exitCode + ok and never
+    // reads `result`, so demoting the verb may not relax either of them.
     fs.writeFileSync(path.join(scCacheDir, 'classify.md'), 'selector: arm-unknown\n');
     cr = runNode(planValidatorScript, [scPlanPath, '--selector-check', '--node-id', 'classify', '--json'], scDir);
     assert(cr.status === 1,
       '--selector-check --node-id classify (foreign selector) must exit 1, got ' + cr.status + ' ' + cr.stdout);
     scJson = JSON.parse(cr.stdout);
-    assert(scJson.result === 'refuse' && scJson.isSelector === true,
-      '--selector-check foreign selector: result:refuse/isSelector:true, got ' + cr.stdout);
+    assert(scJson.result === 'advise' && scJson.ok === false && scJson.isSelector === true,
+      '--selector-check foreign selector advises and stays un-closeable (ok:false), got ' + cr.stdout);
+    // This fixture's plan carries NO ## Node Ledger, so the node's generation is unreadable and the
+    // advice must name NO route: record-evidence would refuse a write outside the in_progress
+    // generation, and a route the verb would reject on arrival is worse than none.
+    assert(scJson.route === null && typeof scJson.detail === 'string' && scJson.detail.indexOf('arm-csv') >= 0,
+      '--selector-check foreign selector: no ledger row => no route, and the detail names the real arms, got ' + cr.stdout);
+
+    // Same node with a LIVE generation: the correction is accepted by record-evidence, so the
+    // advice carries that route. Same fixture, one ledger row added — the route is the only change.
+    fs.writeFileSync(scPlanPath, scPlanContent
+      + ['## Node Ledger', '', '| id | status |', '| --- | --- |', '| classify | in_progress |', ''].join('\n'));
+    cr = runNode(planValidatorScript, [scPlanPath, '--selector-check', '--node-id', 'classify', '--json'], scDir);
+    assert(cr.status === 1,
+      '--selector-check foreign selector with a live generation still exits 1, got ' + cr.status + ' ' + cr.stdout);
+    scJson = JSON.parse(cr.stdout);
+    assert(scJson.route && scJson.route.verb === 'record-evidence' && scJson.route.script === 'adaptive-node',
+      '--selector-check foreign selector on an in_progress node routes to record-evidence, got ' + cr.stdout);
+    fs.writeFileSync(scPlanPath, scPlanContent);
 
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
