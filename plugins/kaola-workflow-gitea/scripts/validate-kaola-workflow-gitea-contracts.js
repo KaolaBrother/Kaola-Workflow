@@ -1228,6 +1228,35 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'prob
     const installedResult = JSON.parse(String(installedCli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
     assert(installedCli.status !== 0 && installedResult.reason === 'replan_authority_path_invalid',
       'installed Gitea re-plan aggregator must execute its typed refusal contract');
+
+    // EXECUTION PIN for the gap sweep. Two assertions earlier in this file already certify that
+    // kaola-gitea-workflow-gap-sweep.js EXISTS and that the install manifest emits it — and a port
+    // still shipped whose module require named a file no tree contains, because nothing ever ran it.
+    // Structure certified, behaviour not. A third existence assertion would be worth nothing; the
+    // only evidence that the writer resolves is an artifact that was actually written and parses.
+    // run-gaps.json is a kernel Evidence record — the sweep result the finalization gate reads back
+    // — so a sweep that cannot write it leaves the gate reading nothing on this edition.
+    const installedSweep = path.join(tempHome, '.claude', 'kaola-workflow-gitea', 'scripts',
+      'kaola-gitea-workflow-gap-sweep.js');
+    const sweepRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kw-n5-gitea-sweep-'));
+    try {
+      const sweepCache = path.join(sweepRoot, 'kaola-workflow', 'n5sweep', '.cache');
+      fs.mkdirSync(sweepCache, { recursive: true });
+      const swept = require('child_process').spawnSync(process.execPath,
+        [installedSweep, '--project', 'n5sweep', '--json'],
+        { cwd: sweepRoot, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome } });
+      assert(swept.status === 0,
+        'installed Gitea gap sweep must EXECUTE, not merely exist: '
+        + String(swept.stderr || '').split('\n').filter(Boolean)[0]);
+      const artifactPath = path.join(sweepCache, 'run-gaps.json');
+      assert(fs.existsSync(artifactPath),
+        'installed Gitea gap sweep must WRITE run-gaps.json — the kernel Evidence record the '
+        + 'finalization gate reads back');
+      const record = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+      assert(record.project === 'n5sweep' && Array.isArray(record.sweptClasses),
+        'installed Gitea run-gaps.json must parse as the Evidence record, got: '
+        + JSON.stringify(record));
+    } finally { fs.rmSync(sweepRoot, { recursive: true, force: true }); }
   } finally { fs.rmSync(tempHome, { recursive: true, force: true }); }
 }
 
