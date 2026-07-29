@@ -5809,7 +5809,11 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     'process.exit(0);\n'
   );
 
-  function runClaim825(argv, extraEnv) {
+  // `preload` (a --require path) is how #862 injects a REAL filesystem failure into the shipped
+  // claim, rather than stubbing the writer. The whole defect there is that a swallowed failure is
+  // indistinguishable from success, so a fixture supplying its own failure signal would reproduce
+  // the bug instead of catching it.
+  function runClaim825(argv, extraEnv, preload) {
     const e = Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
@@ -5822,7 +5826,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
     // domain checks live in the callers.
     // spawn-class: cli-contract
-    const res = spawnS825('node', [CLAIM825, ...argv], { cwd: repo825, encoding: 'utf8', env: e });
+    const res = spawnS825('node', (preload ? ['--require', preload] : []).concat([CLAIM825], argv), { cwd: repo825, encoding: 'utf8', env: e });
     const stdout = String(res.stdout || '');
     const stderr = String(res.stderr || '');
     let json = null;
@@ -5943,6 +5947,80 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         '--selection-record', recPath]);
       assertCanonicalRecordClaim825(82530, '#825(e)', r, 'not a JSON object');
       cleanup825(82530);
+    }
+
+    // --- (#862) A DIGEST MAY NOT OUTLIVE THE BYTES IT ATTESTS TO.
+    //
+    // `selection_record_digest` in workflow-state.md is a claim ABOUT the persisted record. The
+    // record used to be written AFTER the claim stamped that digest, behind a bare catch, so a
+    // failed write left state asserting a sha256 for a file that does not exist — and a successor
+    // cannot tell that from a healthy claim. Since #855 deleted the record's grader those bytes are
+    // the sole custody of why this issue was claimed, so the failure loses the only copy.
+    //
+    // THE FAILURE IS REAL, NOT SIMULATED. The preload fails the rename that `writeFileAtomicReplace`
+    // finishes with, for this destination only — the state write, the folder and the branch all
+    // proceed normally. Stubbing the writer, or calling the persist helper directly, would supply
+    // the very failure signal whose ABSENCE is the defect.
+    {
+      cleanup825(82560);
+      const preload = path.join(mocks825, 'fail-record-write.js');
+      fs.writeFileSync(preload, [
+        'const fs = require("fs"); const p = require("path");',
+        'const real = fs.renameSync;',
+        'fs.renameSync = function (from, to) {',
+        '  if (p.basename(String(to)) === "selection-record.json") {',
+        '    const e = new Error("EACCES: permission denied, rename selection record");',
+        '    e.code = "EACCES"; throw e;',
+        '  }',
+        '  return real.apply(fs, arguments);',
+        '};',
+      ].join('\n') + '\n');
+      const recPath = path.join(mocks825, 'rec-862.json');
+      fs.writeFileSync(recPath, JSON.stringify({
+        selection_mode: 'explicit-target', selection_bundle: 'none',
+        selection_priority_basis: 'the user named it', selection_rejected: 'none',
+        selection_disjointness: 'n/a', clarifications: 'none' }, null, 2) + '\n');
+
+      const r = runClaim825(['startup', '--target-issue', '82560', '--target-source', 'orchestrator_selected',
+        '--selection-record', recPath], null, preload);
+
+      assert(r.code !== 0,
+        '#862: a claim whose selection record did not persist must not report success — exit 0 '
+        + 'tells every caller the claim and its record both landed, got ' + r.code);
+      assert(!fs.existsSync(recordPath825(82560)),
+        '#862 precondition: the record really did fail to persist, so this measures the defect and '
+        + 'not a healthy claim');
+      assert(!/^selection_record_digest:/m.test(stateOf825(82560)),
+        '#862: ...and NO digest is stamped. A digest with no bytes behind it is worse than an '
+        + 'absent one: a successor reads it and believes a record exists that hashed to that '
+        + 'value, got ' + JSON.stringify((stateOf825(82560).match(/^selection_record_digest:.*$/m) || [])[0]));
+      assert(!fs.existsSync(path.join(projDir825(82560), 'workflow-state.md')),
+        '#862: ...and the claim rolled back whole rather than leaving a half-provisioned project — '
+        + 'the record write sits inside the transaction, so its failure reverses every applied step');
+      cleanup825(82560);
+    }
+
+    // --- (#862 control) The SAME claim without the injected fault acquires, persists the record,
+    // and stamps its digest. Its own issue and its own fixture, so it survives any mutation of the
+    // arm above rather than co-failing with it and reading as corroboration.
+    {
+      cleanup825(82561);
+      const recPath = path.join(mocks825, 'rec-862-control.json');
+      fs.writeFileSync(recPath, JSON.stringify({
+        selection_mode: 'explicit-target', selection_bundle: 'none',
+        selection_priority_basis: 'the user named it', selection_rejected: 'none',
+        selection_disjointness: 'n/a', clarifications: 'none' }, null, 2) + '\n');
+      const r = runClaim825(['startup', '--target-issue', '82561', '--target-source', 'orchestrator_selected',
+        '--selection-record', recPath]);
+      assert(r.code === 0 && r.json && r.json.status === 'acquired',
+        '#862 control: with no injected fault the identical claim acquires — so the arm above '
+        + 'measured the failed write and not a broken fixture, got ' + r.code + ' '
+        + JSON.stringify(r.json && r.json.status));
+      assert(fs.existsSync(recordPath825(82561))
+        && /^selection_record_digest:/m.test(stateOf825(82561)),
+        '#862 control: ...and the record and its digest BOTH land, which is the invariant the arm '
+        + 'above checks the other half of');
+      cleanup825(82561);
     }
 
     // --- (f) pick-next walks the SAME claim path, so it answers the same way.
