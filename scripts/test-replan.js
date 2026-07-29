@@ -7910,5 +7910,132 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// ---------------------------------------------------------------------------
+// #847-J — THE KERNEL PROJECTION THAT THROWS THE NAMED EXIT AWAY.
+//
+// `projectMutationGuard` is the kernel's own projection of the fence:
+//
+//     const fence = readReplanFence(stateContent, transaction);
+//     if (!fence.ok) return refuse(fence.reason, { action: action || null });
+//     ...
+//     return refuse('replan_in_progress', { phase, transaction_id, legal_mutation, action });
+//
+// The SECOND return carries the orientation; the first drops all of it. Every arm #847 just
+// taught to name an exit is a `!fence.ok` arm, so this projection undoes that fix on arrival —
+// and it does not merely go silent. Measured on the orphaned-fence arm:
+//
+//   fence -> legal_mutation: "replan abort", phase: "orphaned_fence", transaction_id: <the id>
+//   guard -> {"result":"refuse","reason":"replan_integrity_mismatch","action":"open-next",
+//             ...,"refusal_route":{"verb":"resume","script":"replan",...}}
+//
+// The one exit that survives the projection is `resume` — which `readReplanFence`'s own source
+// comment three lines up rules out in as many words: "`replan resume` is NOT the exit here — it
+// refuses `replan_transaction_missing` and the wedge survives." The static per-condition route
+// cannot be right for all three arms of `replan_integrity_mismatch`, because the three arms have
+// different correct exits; substituting it for the one the fence resolved is residual (b)'s
+// failure mode living in the kernel.
+//
+// SATISFIED BY DELETION, AND THAT IS THE PREFERRED ANSWER. The scan below counts this function's
+// call sites; at the time of writing it has NONE in any of the four editions — definition,
+// export, and two comments, nothing else. An unreferenced export cannot wedge an operator, so
+// there is no wedge here to repair, only a decoy to remove. The assertions are therefore fenced
+// behind the function's own existence: delete it and they pass, keep it and it must be right.
+// The decoy is not harmless while it stands — `test-refusal-route-sweep.js` cites this function's
+// behaviour as the stated RATIONALE for a whole band of route-admissibility assertions, so a live
+// band of pins currently rests on a projection that never runs.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  // Call sites, SCANNED rather than remembered, across every edition that ships the kernel.
+  const callSites = [];
+  const scanRoots = [__dirname,
+    ...['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']
+      .map(name => path.join(__dirname, '..', 'plugins', name, 'scripts'))];
+  for (const dir of scanRoots) {
+    let names = [];
+    // Suites are excluded by PREFIX, not by this file's own name: the question is whether
+    // PRODUCTION invokes the guard, and a name-based self-exclusion silently stops working the
+    // moment the file is copied — which is exactly how this scan first reported itself.
+    try {
+      names = fs.readdirSync(dir).filter(name => name.endsWith('.js') && !name.startsWith('test-'));
+    } catch (_) { continue; }
+    for (const name of names) {
+      const text = fs.readFileSync(path.join(dir, name), 'utf8');
+      const re = /projectMutationGuard\s*\(/g;
+      let match;
+      while ((match = re.exec(text)) !== null) {
+        const lineStart = text.lastIndexOf('\n', match.index);
+        // The definition itself is not a call site.
+        if (/function\s*$/.test(text.slice(lineStart + 1, match.index))) continue;
+        callSites.push(name + ':' + text.slice(0, match.index).split('\n').length);
+      }
+    }
+  }
+  const deletable = ' [projectMutationGuard call sites: ' + (callSites.join(', ') || 'NONE')
+    + '. With none, DELETING this function satisfies this pin outright, and for an unreferenced '
+    + 'export that is the better answer — there is no operator to unwedge, only a decoy whose '
+    + 'stated behaviour is already being cited as the rationale for live route pins.]';
+
+  if (typeof schema.projectMutationGuard !== 'function') {
+    ok(true, '#847-J: the projection is gone.' + deletable);
+    return;
+  }
+
+  // Every exit the envelope names, from whichever field carries it. Two fields naming two
+  // different verbs is not "more helpful" — it is the operator choosing which of the machine's
+  // two answers to believe.
+  const namedExits = (envelope) => {
+    const found = new Set();
+    if (envelope && envelope.legal_mutation) found.add(String(envelope.legal_mutation));
+    const route = envelope && envelope.refusal_route;
+    if (route && route.script === 'replan' && route.verb) found.add('replan ' + route.verb);
+    return [...found].sort();
+  };
+
+  const arms = [];
+
+  // Arm 1 — the orphaned fence, the arm #847 fixed first and the one whose source comment names
+  // `resume` as the WRONG answer explicitly. No fixture is needed: the state block is the input.
+  {
+    const id = 'a'.repeat(64);
+    const stateContent = '# Kaola-Workflow State\nstatus: active\nreplan_status: in_progress\n'
+      + 'replan_transaction_id: ' + id + '\nreplan_phase: prepared\n';
+    arms.push({ label: 'orphaned fence', stateContent, transaction: null });
+  }
+
+  // Arm 2 — the transaction-mismatch arm, so the pin is a BAND over the arms that name an exit
+  // rather than one token. The fence resolves `abort` against the id the FILE records.
+  const fx = initFixture();
+  try {
+    liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    fs.writeFileSync(statePath, schema.writeEpochStateBlock(fs.readFileSync(statePath, 'utf8'),
+      { replan_transaction_id: 'b'.repeat(64) }));
+    arms.push({
+      label: 'transaction mismatch',
+      stateContent: fs.readFileSync(statePath, 'utf8'),
+      transaction: JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8')),
+    });
+
+    for (const arm of arms) {
+      const fence = schema.readReplanFence(arm.stateContent, arm.transaction);
+      ok(fence.ok === false && !!fence.legal_mutation,
+        '#847-J control (' + arm.label + '): the fence resolves an exit on a `!ok` arm — the exact '
+        + 'input this projection discards: ' + JSON.stringify({ ok: fence.ok, legal_mutation: fence.legal_mutation }));
+
+      const guarded = schema.projectMutationGuard(arm.stateContent, arm.transaction, 'open-next');
+      equal(guarded.legal_mutation, fence.legal_mutation,
+        '#847-J (' + arm.label + '): the guard must CARRY OUT the exit the fence named. It projects '
+        + 'the same fence one function later and drops it, so the #847 fix is undone downstream of '
+        + 'itself: ' + JSON.stringify(guarded) + deletable);
+      deepEqual(namedExits(guarded), [fence.legal_mutation],
+        '#847-J (' + arm.label + '): ...and the envelope must name that exit and ONLY that exit. The '
+        + 'static per-condition route cannot be right for all three arms of one reason code, so '
+        + 'letting it stand in for the resolved exit prints the verb the fence explicitly ruled '
+        + 'out: ' + JSON.stringify(namedExits(guarded)) + deletable);
+    }
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
 console.log(`test-replan: PASSED (${passed} assertions)`);
