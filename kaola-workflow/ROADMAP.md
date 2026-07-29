@@ -7,7 +7,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #850 | Routes that cannot be honoured: ~25 certain dead exits across 297 route-carrying conditions — fix is subtractive (delete a route source) | open | — | — |
 | #851 | The mid-run demotion IS the campaign: the mid-run refusal set (measured band ~278-607 of 778) refuses at a locus the two-gate architecture forbids | open | — | — |
 | #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
 | #855 | Gate 1 demotion wave: the claim-time refusals become answers | open | — | — |
