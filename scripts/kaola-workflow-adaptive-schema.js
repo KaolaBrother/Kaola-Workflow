@@ -1317,11 +1317,23 @@ function readReplanFence(stateContent, transaction) {
     //     `consent`). Naming a replan verb here prints a route that dead-ends on arrival — the
     //     same defect one hop further out — so the honest answer is the ESCALATION itself, and no
     //     command. `consent` is already the vocabulary `abortReplan` uses for exactly this.
+    // NAMING `abort` REQUIRES AN ID `abort` WILL ACCEPT, and on this arm the file is present, so
+    // `abortReplan` CAS-matches `String(raw.transaction_id || 'none')` — the FILE's id, never the
+    // state's. A missing `transaction_id` is one of the things that MAKES a payload schema-invalid,
+    // so it lands here routinely, and falling back to the state id would print
+    // `abort --transaction <stateId>` against a file recording `none`: refused
+    // `replan_abort_transaction_mismatch` on arrival. That is the dead route this whole issue
+    // exists to remove, rebuilt one corner over.
+    //
+    // The orphaned arm above CAN fall back to the state id, and the difference is not a style
+    // choice: with no file, `abort` takes its `!raw` branch and compares against the STATE, where
+    // that id is the right one. Same fallback, opposite outcome, decided by which branch the file's
+    // presence sends `abort` down. So an id is only nameable here when the FILE carries it.
     const phase = isPlainObject(transaction) && typeof transaction.phase === 'string'
       ? transaction.phase : null;
     const fileId = isPlainObject(transaction) && typeof transaction.transaction_id === 'string'
-      ? transaction.transaction_id : null;
-    const abortable = REPLAN_ABORTABLE_PHASES.includes(phase);
+      && transaction.transaction_id.trim() ? transaction.transaction_id : null;
+    const abortable = REPLAN_ABORTABLE_PHASES.includes(phase) && Boolean(fileId);
     return { ok: false, fenced: true, reason: checked.reason,
       phase: phase || 'unknown', transaction_id: fileId || stateTx,
       legal_mutation: abortable ? 'replan abort' : 'consent', state };
