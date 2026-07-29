@@ -5028,10 +5028,49 @@ function parseArgs(argv) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// ADR 0013 M2 — THE OUTCOME RECORDER, wired at this CLI's terminating envelope emissions.
+//
+// It REUSES the recorder that already ships — the kernel's canonical record builder plus
+// adaptive-node's append helper, reached through ONE lazy require — rather than re-typing an
+// append-only sidecar writer here: a second implementation is a second thing to drift. The require
+// is lazy so a run that records nothing has the same module graph and startup cost as before, and
+// so the module-scope import graph is untouched (adaptive-node reaches back into this file).
+//
+// FAIL-OPEN IS THE WHOLE CONTRACT, and the catch wraps the BUILDER as well as the write. The
+// helper creates no directory and never creates the log on a refusal — so a refusal that is
+// contractually a zero-write no-op stays byte-for-byte zero-write — and the return value is
+// discarded. Telemetry can never alter, delay or refuse the outcome it observes.
+//
+// `outcomeContext` is module-scoped because the LAST emission point is the top-level catch,
+// outside main()'s scope: an argv parse that throws before the context is set records nothing
+// (there is no project to attribute it to), which is the same silence the helper already keeps for
+// an unresolvable project directory.
+// ---------------------------------------------------------------------------
+const outcomeStartedAt = Date.now();
+let outcomeContext = null;
+
+function recordOutcome(envelope) {
+  try {
+    if (!outcomeContext || !outcomeContext.project) return;
+    const recorder = require('./kaola-workflow-adaptive-node');
+    recorder.appendOutcomeRecord(
+      path.join(getRepoRoot(), 'kaola-workflow', outcomeContext.project, '.cache'),
+      recorder.buildOutcomeRecord({
+        script: 'replan',
+        op: outcomeContext.op,
+        project: outcomeContext.project,
+        envelope: envelope,
+        duration_ms: Date.now() - outcomeStartedAt,
+      }));
+  } catch (_) { /* fail-open: telemetry never refuses, wedges or alters an outcome */ }
+}
+
 function main() {
   const subcommand = process.argv[2];
   const args = parseArgs(process.argv.slice(3));
   if (!args.project) throw new Error('--project required');
+  outcomeContext = { op: subcommand, project: args.project };
   let result;
   if (subcommand === 'prepare') {
     result = prepareReplan({ project: args.project, sourceAttemptId: args.sourceAttemptId,
@@ -5050,7 +5089,9 @@ function main() {
     if (args.acceptanceChangeFile) {
       try { acceptanceChangeSurface = fs.readFileSync(path.resolve(args.acceptanceChangeFile), 'utf8'); }
       catch (error) {
-        schema.emit(schema.refuse('replan_consent_acceptance_binding_invalid', { detail: error.message }));
+        const out = schema.refuse('replan_consent_acceptance_binding_invalid', { detail: error.message });
+        recordOutcome(out);
+        schema.emit(out);
         process.exitCode = 1;
         return;
       }
@@ -5080,6 +5121,7 @@ function main() {
   } else {
     throw new Error('unknown_subcommand:' + subcommand);
   }
+  recordOutcome(result);
   schema.emit(result);
   if (result && result.result === 'refuse') process.exitCode = 1;
 }
@@ -5087,7 +5129,9 @@ function main() {
 if (require.main === module) {
   try { main(); }
   catch (error) {
-    schema.emit(schema.refuse('replan_internal_error', { detail: error.message }));
+    const out = schema.refuse('replan_internal_error', { detail: error.message });
+    recordOutcome(out);
+    schema.emit(out);
     process.exitCode = 1;
   }
 }

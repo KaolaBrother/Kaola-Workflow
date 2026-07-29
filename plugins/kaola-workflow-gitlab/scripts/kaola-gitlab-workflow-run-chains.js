@@ -892,6 +892,49 @@ async function main(argv) {
   // #546: resolve the receipt path now that cwd is known + all flags are parsed.
   const outputPath = resolveOutputPath(pathOpts, cwd);
 
+  // -------------------------------------------------------------------------
+  // ADR 0013 M2 — the outcome recorder, at this CLI's terminating envelope emissions.
+  //
+  // It REUSES the recorder that already ships — the kernel's canonical record builder plus
+  // adaptive-node's append helper, reached through ONE lazy require — rather than re-typing an
+  // append-only sidecar writer here: a second implementation is a second thing to drift. Both
+  // symbols come from adaptive-node rather than from the kernel directly, and that is NOT a
+  // stylistic choice: this file is rename-normalized into the forge trees, where every
+  // `kaola-workflow-<name>` token is rewritten, and the kernel is base-named in ALL trees — so a
+  // direct kernel require here would resolve to a `kaola-{forge}-workflow-adaptive-schema` that
+  // does not exist. `adaptive-node` HAS a forge port under the rewritten name, so the rewrite is
+  // correct there. (This is the same trap the isEditionCouplingPath comment below names.)
+  //
+  // PROJECT-SCOPED ONLY. A bare run is a WHOLE-REPO runner writing its receipt to the cwd
+  // `.cache/`, which is not a project folder — recording there would plant a run's telemetry at
+  // the repository root. Only `--project` / `--plan` resolve a real project folder, and only
+  // those record.
+  //
+  // FAIL-OPEN is the whole contract, and the catch wraps the BUILDER as well as the write: the
+  // helper creates no directory and never creates the log on a refusal, and the return value is
+  // discarded. Telemetry can never alter, delay or refuse the outcome it observes.
+  // -------------------------------------------------------------------------
+  const outcomeStartedAt = Date.now();
+  const outcomeProjectDir = pathOpts.plan != null
+    ? path.dirname(path.resolve(cwd, pathOpts.plan))
+    : (pathOpts.project != null
+      ? path.join(getGitTopLevel(cwd), 'kaola-workflow', pathOpts.project)
+      : null);
+  const recordOutcome = (envelope) => {
+    try {
+      if (!outcomeProjectDir) return;
+      const recorder = require('./kaola-gitlab-workflow-adaptive-node.js');
+      recorder.appendOutcomeRecord(path.join(outcomeProjectDir, '.cache'),
+        recorder.buildOutcomeRecord({
+          script: 'run-chains',
+          op: 'run-chains',
+          project: path.basename(outcomeProjectDir),
+          envelope: envelope,
+          duration_ms: Date.now() - outcomeStartedAt,
+        }));
+    } catch (_) { /* fail-open: telemetry never refuses, wedges or alters an outcome */ }
+  };
+
   // #475: resolve the npm edition chain set for this repo (npm-default > chains_config_missing refuse).
   // The chains.json repo-config tier is retired (consumer repos gate on final-validation.md).
   // `--mock-chain` (a test hook) supplies a command for a name directly, so a mocked name is
@@ -904,6 +947,9 @@ async function main(argv) {
     // plan-validator --finalize-check in consumer mode. So the only refusal is chains_config_missing
     // (this repo declares no edition test scripts), and the hint points at the consumer contract.
     const hint = 'This repo declares no test:kaola-workflow:* scripts, so it cannot run the npm edition chains. Only the Kaola-Workflow self-host runs these; a consumer (non-npm) repo does NOT run run-chains.js — finalize gates on the agent-recorded .cache/final-validation.md (#475).';
+    // Recorded on BOTH arms: the outcome is the same refusal whether it was rendered as JSON or as
+    // a stderr line, and a measurement that only saw the --json callers would under-count itself.
+    recordOutcome({ result: 'refuse', reason: resolved.error });
     if (asJson) {
       process.stdout.write(JSON.stringify({ result: 'refuse', reason: resolved.error, operator_hint: hint, errors: [resolved.detail] }) + '\n');
     } else {
@@ -944,6 +990,7 @@ async function main(argv) {
   // for red chains) would PASS it — a zero-chains-verified finalization. Reachable via
   // `--chains ","` (splits/filters to []) or a config that resolves to nothing.
   if (chains.length === 0) {
+    recordOutcome({ result: 'refuse', reason: 'no_chains' });
     if (asJson) {
       process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'no_chains', operator_hint: 'No chains to run. Pass --chains with at least one valid edition chain name (a declared `test:kaola-workflow:*` script). A consumer (non-npm) repo does not run chains — finalize gates on the agent-recorded .cache/final-validation.md (#475).' }) + '\n');
     } else {
@@ -1094,6 +1141,12 @@ async function main(argv) {
   // Determine exit code: 0 iff all non-waived chains passed.
   const failed = chainResults.filter(ch => ch.exitCode !== 0 && !ch.accepted_red);
   const overallExitCode = failed.length > 0 ? 1 : 0;
+
+  // Recorded on BOTH arms, for the same reason the two refusals above are. `pass`/`fail` are
+  // OUTSIDE the recorder's ok/refuse/halt/warn vocabulary and land in its declared `other` bucket
+  // — deliberately not remapped: a red chain is a tool verdict, not a CLI refusal, and folding it
+  // into `refuse` would put test failures into an interruption-cost ranking of refusals.
+  recordOutcome({ result: overallExitCode === 0 ? 'pass' : 'fail' });
 
   if (asJson) {
     process.stdout.write(JSON.stringify({

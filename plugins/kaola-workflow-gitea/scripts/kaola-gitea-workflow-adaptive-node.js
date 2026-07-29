@@ -17928,6 +17928,12 @@ module.exports = {
   // lifecycle verb alone cannot distinguish "the write failed and was absorbed" from "the write
   // was never attempted".
   appendOutcomeRecord,
+  // ADR 0013 M2: the recorder's BUILD half, re-exported beside its write half so the other
+  // instrumented CLIs reach ONE recorder through ONE require. It is the kernel's function
+  // unchanged (see the import at the top of this file) — re-exported rather than re-implemented
+  // because the alternative for a forge port is a `kaola-{forge}-workflow-adaptive-schema`
+  // require the rename-normalizer would point at a module that does not exist.
+  buildOutcomeRecord,
   // #727: the single role-kind selector for the reviewer-contract domain_outcome vocabulary.
   allowedDomainOutcomes,
   // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.
