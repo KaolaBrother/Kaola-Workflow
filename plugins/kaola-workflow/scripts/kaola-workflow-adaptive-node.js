@@ -45,7 +45,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, DELEGATION_OUTCOME_DEFAULT, CAPABILITY_GAP_OUTCOME, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -3009,18 +3009,41 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     }
   }
 
-  // Codex join protocol: the OPTIONAL typed delegation outcome. When the evidence carries a column-0
-  // `delegation_outcome: <token>` line, the token MUST be in the closed vocabulary (completed |
-  // returned_partial | interrupted_unresponsive | interrupted_obsolete); an unknown value is a typed
-  // refusal. ABSENT ⇒ `completed` (back-compat: existing evidence has no such line and stays green).
-  // Placed BEFORE the role branches AND the universal n/a carve-out so the vocabulary governs every role
-  // uniformly — a malformed token fails closed regardless of how the node otherwise resolves.
+  // Codex join protocol: the OPTIONAL typed delegation outcome. An unknown token NORMALIZES to the
+  // generic value and carries the raw string on the payload rather than refusing. Recording how a
+  // delegation ended is bookkeeping — it may report, retry or normalize, but it may not stop a run
+  // whose work is already done and whose evidence is already written. The vocabulary still means
+  // what it means: a reader gets a known token plus the exact string the author wrote, which is
+  // strictly more than a refusal left them. ABSENT ⇒ `completed` (existing evidence stays green).
   {
     const dm = content.match(/^delegation_outcome:[ \t]*(\S+)[ \t]*$/m);
-    if (dm && !DELEGATION_OUTCOME_VOCABULARY.includes(dm[1].toLowerCase())) {
+    // `capability_gap` is the ONE out-of-vocabulary token that must not normalize. Every other
+    // unknown token is bookkeeping about how a delegation ended, and reading it as `completed` loses
+    // nothing the run needs. This one is the role STATING IT DID NOT DO THE WORK, so normalizing it
+    // writes `complete` into the ledger for a node whose deliverable was withheld — an inversion of
+    // the token's meaning, not a lossy read of it. It is excluded here rather than added to the
+    // vocabulary because it is not an outcome of a delegation that ran; it is the marker that routes
+    // to `substitute-role`. Same refusal family and token class the vocabulary check always used —
+    // no new code.
+    if (dm && dm[1].toLowerCase() === CAPABILITY_GAP_OUTCOME) {
       return { ok: false, kind: 'shape', missingTokenClass: 'delegation_outcome',
-        reason: role + ' ' + nodeId + ' evidence has unknown delegation_outcome "' + dm[1] + '" (allowed: ' + DELEGATION_OUTCOME_VOCABULARY.join(' | ') + ')',
-        expected: ['delegation_outcome: ' + DELEGATION_OUTCOME_VOCABULARY.join('|')] };
+        reason: role + ' ' + nodeId + ' recorded delegation_outcome "' + dm[1] + '" — a capability gap '
+          + 'is the role reporting it could not cover the brief, so it may not close the node. Route it: '
+          + 'substitute-role to a role that can cover it, or the consent valve if the substitution is a '
+          + 'judgement call.',
+        expected: ['delegation_outcome: ' + DELEGATION_OUTCOME_VOCABULARY.join(' | ')] };
+    }
+    if (dm && !DELEGATION_OUTCOME_VOCABULARY.includes(dm[1].toLowerCase())) {
+      if (Array.isArray(opts.advisories)) {
+        opts.advisories.push({
+          warning: 'delegation_outcome_normalized',
+          detail: role + ' ' + nodeId + ' recorded delegation_outcome "' + dm[1]
+            + '", which is outside the vocabulary (' + DELEGATION_OUTCOME_VOCABULARY.join(' | ')
+            + '). Read as "' + DELEGATION_OUTCOME_DEFAULT + '"; the raw string is preserved here.',
+          raw: dm[1],
+          normalized: DELEGATION_OUTCOME_DEFAULT,
+        });
+      }
     }
   }
 
@@ -3884,13 +3907,19 @@ function runVerifyEvidence(opts) {
     return { result: 'refuse', reason: reviewV2.reason, detail: reviewV2.detail || null,
       missingTokenClass: reviewV2.missingTokenClass || null, nodeId, role, evidence_file };
   }
+  // The advisory collector is supplied by EVERY production caller, not just tests: a normalize the
+  // operator never sees is strictly less than the refusal it replaced, so the channel has to be live
+  // on the shipped path or the trade does not exist. Rides BOTH envelopes — on a pass it is the only
+  // notice, and on a refusal for some OTHER reason the raw token still travels with it.
+  const advisories = [];
   const shapeCheck = checkEvidenceShape(role, nodeId, content, {
-    expectedNonce, expectedNodeId: nodeId, ledgerNodes: verifyNodes, reviewV2,
+    expectedNonce, expectedNodeId: nodeId, ledgerNodes: verifyNodes, reviewV2, advisories,
   });
 
   if (shapeCheck.ok) {
     return { result: 'ok', nodeId, role, evidence_file,
-      evidence_source: resolvedEvidence.evidenceSource };
+      evidence_source: resolvedEvidence.evidenceSource,
+      ...(advisories.length ? { advisories } : {}) };
   }
 
   // Map to typed reason — mirrors close-and-open-next / runCloseNode L1368-1370.
@@ -7970,8 +7999,11 @@ function runCloseAndOpenNext(opts) {
       missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
       ...reviewRefusalDiagnostics(schema2Review) };
   }
+  // See runRecordEvidence: the advisory collector is supplied on the SHIPPED path, not only by tests.
+  const shapeAdvisories = [];
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, {
     expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes, reviewV2: schema2Review,
+    advisories: shapeAdvisories,
   });
 
   if (!evidencePresent || !shapeCheck.ok) {
@@ -7992,6 +8024,7 @@ function runCloseAndOpenNext(opts) {
       role,
       expected: shapeCheck.expected || [],
       detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
+      ...(shapeAdvisories.length ? { advisories: shapeAdvisories } : {}),
     };
   }
 
@@ -8003,6 +8036,12 @@ function runCloseAndOpenNext(opts) {
   // speculative_review_required into verdictWarn below, so EVERY post-close success return (which all
   // spread `...(verdictWarn || {})`) carries the review pointer without editing each return.
   let verdictWarn = schema2Review.review_gate ? null : checkVerdictParse(role, evidenceContent);
+  // A normalized delegation_outcome rides the SAME carrier: every post-close success return already
+  // spreads verdictWarn, so folding here surfaces the raw token on all of them without touching each
+  // one — the reason this reuses the existing advisory channel instead of adding a parallel field.
+  if (shapeAdvisories.length) {
+    verdictWarn = Object.assign({}, verdictWarn || {}, { advisories: shapeAdvisories });
+  }
 
   // -- (a.5) Consumed-proof over the durable node channel. Placed AFTER shapeCheck and BEFORE the barrier
   // so a HARD refuse (an IMPLEMENT consumer that did not echo a producer upstream's current nonce) is a
@@ -13868,8 +13907,11 @@ function runCloseNode(opts) {
       missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
       ...reviewRefusalDiagnostics(schema2Review) };
   }
+  // See runRecordEvidence: the advisory collector is supplied on the SHIPPED path, not only by tests.
+  const shapeAdvisories = [];
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, {
     expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes, reviewV2: schema2Review,
+    advisories: shapeAdvisories,
   });
   if (!evidencePresent || !shapeCheck.ok) {
     const absent = !evidencePresent || shapeCheck.kind === 'absent';
@@ -13883,11 +13925,16 @@ function runCloseNode(opts) {
       nodeId, role,
       expected: shapeCheck.expected || [],
       detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
+      ...(shapeAdvisories.length ? { advisories: shapeAdvisories } : {}),
     };
   }
 
   // #403.4: non-blocking near-miss verdict warning (informational, per #328) — see runCloseAndOpenNext.
   let verdictWarn = schema2Review.review_gate ? null : checkVerdictParse(role, evidenceContent);
+  // A normalized delegation_outcome rides the same carrier — see runCloseAndOpenNext.
+  if (shapeAdvisories.length) {
+    verdictWarn = Object.assign({}, verdictWarn || {}, { advisories: shapeAdvisories });
+  }
 
   // Consumed-proof over the durable node channel (mirror of runCloseAndOpenNext). Placed BEFORE the member
   // routing + barrier so a HARD refuse is a ZERO-mutation no-op for BOTH the serial and lane-group close

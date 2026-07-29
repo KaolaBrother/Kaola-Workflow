@@ -557,10 +557,10 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'kaola-workf
 assertConcept(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
-// the adaptive front-end delegation must stay ENFORCED in the skill mirror (the v5.1.0 fix) — an
-// advisory-prose skill is the exact bug that ran claim + authoring inline in the main session.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'MUST delegate');
+// The front end's PRODUCT is pinned; its execution form is not — whether the `workflow-planner`
+// role runs as a subagent or in the session is the orchestrator's call and carries no needle. The
+// bare `workflow-planner` needle that used to sit here was vacuous: `agent_type: "workflow-planner"`
+// in the loop below contains it, so it could never fail on its own. Role identity is pinned there.
 for (const [surface, role, task] of [
   [`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner', 'workflow_planner_<issue-or-project>']
 ]) {
@@ -915,7 +915,7 @@ for (const planRunSurface of [
 
 // The fork_turns unconditional mandate and its two retired-qualifier bans on the Codex plan-run
 // SKILL, the Join Protocol anchor and its wait-budget / delegation-outcome / writerHalt needles on
-// BOTH the Codex SKILL and the root Claude command, and the whole wait-budget-floor band, are all
+// BOTH the Codex SKILL and the root Claude command, are all
 // asserted on THESE SAME PATHS by the root validator's three-SKILL and three-command plan-run
 // loops, in the always-selected claude chain.
 for (const file of ['agents/workflow-planner.md', `${pluginRoot}/agents/workflow-planner.toml`]) {

@@ -75,11 +75,12 @@ The exact active cache root is
 The base invocation is `--project-root "$PWD" --no-autofix --json`; the gate
 merges persisted config from HOME through the repository root to `"$PWD"`. When this
 skill owns a frozen adaptive plan, set `KAOLA_CODEX_PREFLIGHT_PLAN` to that
-exact plan before running the block so `--plan` is also enforced. Continue only
-after exit 0 and parsed `status: "ok"`. Exact-byte drift such as
-`profile_bytes_mismatch` is `profile_preflight_refused`: STOP before any
-`agents.spawn_agent` call, never record `subagent-invoked`, and do not relabel
-profile/config drift as tool unavailability or local fallback. Re-run the gate if the installed profile set changes.
+exact plan before running the block so `--plan` is also enforced. Read
+the exit code and parsed `status`. On drift such as `profile_bytes_mismatch` the
+gate reports `profile_preflight_refused` with the offending profile and its
+remediation: weigh that against what you are about to dispatch and decide. Drift
+is a profile/config fact, not tool unavailability, so record it as what it is.
+Re-run the gate if the installed profile set changes.
 <!-- /PIN -->
 <!-- /REGION -->
 
@@ -184,9 +185,8 @@ Detailed mechanics: `docs/plan-run-cards/join-protocol.md`.
 
 **A. Wait budget.** Every dispatch card carries `dispatch.wait_budget_minutes` — tier-derived (e.g.
 40 minutes for a reasoning-tier node, 20 for standard; an unresolved tier still resolves to a
-concrete role-default, never null). **A `running` agent is NEVER interrupted before its wait
-budget expires.** Read the budget off the card at dispatch time; never substitute an improvised
-patience ceiling.
+concrete role-default, never null). It is the planner's estimate of how long the work takes; a
+`running` agent interrupted well inside it is usually just being interrupted.
 
 **B. Long-poll join loop — one wait per iteration, drain every completed member, no status
 probes.** After dispatching a frontier, loop: call `wait_agent` ONCE per iteration with a LONG
@@ -194,32 +194,30 @@ timeout (minutes — at or near the host's `max_wait_timeout_ms`), passing every
 where the tool supports multi-id wait. On wake, call `list_agents` ONCE, then drain EVERY completed
 member before re-waiting — integrate its result, `record-evidence`, `close-node`, and, where the
 tool surface exposes it, `close_agent` (best-effort hygiene: some sessions never expose it and the
-harness auto-reaps completed agents, so its absence is not an error). `send_message` status-probe
-requests to a still-running agent are PROHIBITED as a liveness check — a busy agent answers at its
-own turn boundary, not on demand, and a probe is structurally unanswerable evidence of nothing.
+harness auto-reaps completed agents, so its absence is not an error). A `send_message` status probe to a
+still-running agent buys nothing as a liveness check — a busy agent answers at its own turn
+boundary, not on demand, so silence and work look identical from outside.
 
-**C. Escalation ladder — replaces impatience-kill.** Applied ONLY after the wait budget (A) has
-expired, each rung gated on the previous:
-1. Budget expired → send a `followup_task` demanding the bounded deliverable now (evidence +
-   changed-file list); this reaches a running agent at its next message boundary.
-2. Grace window (~5 minutes) passes with no response → `interrupt_agent`, then a further
-   `followup_task` asking the still-available agent for partial evidence and its changed-file list.
-3. Only then: reclaim the node. Inline redo by the orchestrator is the documented LAST resort.
+**C. Escalation, after the budget expires.** Ask for the bounded deliverable (evidence +
+changed-file list) via `followup_task`; it reaches a running agent at its next message boundary.
+If that goes unanswered, `interrupt_agent` and ask the still-available agent for partial evidence.
+Reclaiming the node, and inline redo, are the expensive options — reach for them last.
 
 Record a typed `delegation_outcome` in the node's evidence for every delegation: `completed |
 returned_partial | interrupted_unresponsive | interrupted_obsolete` — never a free-text "it
 stalled so I did it myself".
 
-**Writer kill-safety.** An in-place writer (shared worktree) is non-interruptible before the wait
-budget and the full escalation ladder above — no exception. A writer that must be interruptible
-belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism); interrupting an
-isolated-leg writer discards the leg atomically, never partially. After reclaiming ANY writer
-(ladder step 2 or the reclaim itself), run `reconcile-running-set` and HONOR its verdict before
-re-opening the node: a `writerHalt: true` result means at least one departing writer's changes
-could not be positively confirmed inside its declared write set — do NOT re-open that node until the
-out-of-set paths are resolved (`revert-overflow`, `repair-node`, or a consent halt). Re-opening on a
-`halt` verdict without resolving it first is the exact halt-then-reopen laundering hole this
-protocol closes.
+**Writer kill-safety.** An in-place writer shares the parent worktree, so interrupting one leaves
+whatever it had half-written sitting in the tree with no owner. A writer that must be interruptible
+belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism), where an
+interrupt discards the leg atomically rather than partially. After reclaiming ANY writer, run
+`reconcile-running-set`: a `writerHalt: true` result means at least one departing writer's changes
+could not be positively confirmed inside its declared write set, and it NAMES the out-of-set paths.
+Resolving them first (`revert-overflow`, `repair-node`, or a consent halt) is cheaper than not:
+re-opening the node re-anchors its baseline, so the stray paths drop underneath it and that node's
+own barrier stops seeing them — but they do not go away. The sink diffs the WHOLE claim against the
+union of every declared write set, so they resurface there as writes nothing declared, on a diff you
+will be explaining after the work is done instead of here, where they are already named for you.
 
 **F. Frontier dispatch discipline + slot awareness.** On `enterBatch: true`, issue every
 `spawn_agent` call for the frontier back-to-back in ONE turn, then run exactly ONE join loop (B) for
@@ -231,22 +229,16 @@ proactive closure.
 
 <!-- /REGION -->
 
-<!-- PIN: planner-wait-budget -->
-The dispatch card's frozen `wait_budget_minutes` value and source are authoritative. A
-`planner_override` may extend but never shorten the existing no-interrupt floor. The join loop must
-not interrupt or re-nudge before that floor expires; after it expires, the bounded escalation still
-requires a complete governed deliverable. This planner-authored floor is distinct from
-`optimize_budget`: only a metric-optimizer contract supplies the specialized optimization wall-clock
-source described by the metric-optimizer card.
+The dispatch card's `wait_budget_minutes` is data the planner froze; a `planner_override` may
+extend it. It is distinct from `optimize_budget`, which only a metric-optimizer contract supplies.
 
 ## Gate-Role Degradation Notice
 
 <!-- REGION:skill -->
 The Codex Profile Freshness Gate above is authoritative for profile/config availability. Missing,
-stale, malformed, or shadowed project profiles are `profile_preflight_refused`: STOP before opening
-the first node; never route that drift through this degradation path. After a successful gate,
-determine runtime dispatch-tool availability before opening the first node and re-check if it
-changes mid-run.
+stale, malformed, or shadowed project profiles report `profile_preflight_refused` — that is profile
+drift, not the degradation this path is for, so do not route it through here. Determine runtime
+dispatch-tool availability before opening the first node and re-check if it changes mid-run.
 <!-- /REGION -->
 <!-- REGION:command -->
 Determine runtime Agent/teammate availability before opening the first node and re-check if it
@@ -407,8 +399,12 @@ authored. On `enterBatch: true`: run `open-ready` (it marks the whole frontier `
 dispatch the returned nodes' role agents **in ONE assistant message** — multiple `Agent` calls in a
 single turn. The single-message dispatch is the *only* thing that yields real concurrency; dispatching
 one agent per turn is itself a serial barrier and silently serializes a frontier the planner authored as
-parallel. Do NOT `open-next`-then-single-dispatch a ≥2 frontier (the script now refuses to single-open
-it). **Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
+parallel. Left to auto-pick, `open-next` will not choose one node out of a ≥2 frontier — it hands the
+frontier back instead (`opened: null`, zero ledger mutation), so the batch path is what you get by
+default. An explicit `--node-id` is still honoured at any width, and that choice is one-way: once one
+node is `in_progress` the scheduler refuses `serial_node_live` and the rest of the frontier waits
+behind it, so opening 1 of N serializes all N with no route back inside the run.
+**Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
 NO `enterBatch` and runs serially (the normal single-dispatch path) — never force a minimum width, a
 "default to ≥2," or a "prefer wide" posture.
 <!-- /REGION -->
@@ -531,9 +527,11 @@ duplicate deliveries.
 `dispatch.wait_budget_minutes`; a still-working teammate is never interrupted or re-nudged before it
 expires, then the bounded escalation ladder runs — one `SendMessage` for the deliverable, a ~5-minute
 grace window, reclaim as the LAST resort — recording a typed `delegation_outcome`. **Writer
-kill-safety:** after reclaiming ANY writer, run `reconcile-running-set` and HONOR its verdict — a
-`writerHalt: true` means a departing writer's out-of-set paths must be resolved (`revert-overflow`,
-`repair-node`, or a consent halt) before you re-open the node. Full mechanics in the card below.
+kill-safety:** after reclaiming ANY writer, run `reconcile-running-set` — a `writerHalt: true` NAMES
+out-of-set paths a departing writer left behind. Re-opening the node re-anchors its baseline and
+hides them from that node's barrier, but not from the sink, which diffs the whole claim against every
+declared write set: resolve them now (`revert-overflow`, `repair-node`, or a consent halt) or explain
+them there. Full mechanics in the card below.
 
 <!-- CARD: join-protocol -->
 The Codex-runtime version of this same protocol (`spawn_agent`/`wait_agent`/`close_agent`
@@ -844,8 +842,12 @@ authored. On `enterBatch: true`: run `open-ready` (it marks the whole frontier `
 dispatch the returned nodes' role agents **in ONE assistant message** — multiple `Agent` calls in a
 single turn. The single-message dispatch is the *only* thing that yields real concurrency; dispatching
 one agent per turn is itself a serial barrier and silently serializes a frontier the planner authored as
-parallel. Do NOT `open-next`-then-single-dispatch a ≥2 frontier (the script now refuses to single-open
-it). **Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
+parallel. Left to auto-pick, `open-next` will not choose one node out of a ≥2 frontier — it hands the
+frontier back instead (`opened: null`, zero ledger mutation), so the batch path is what you get by
+default. An explicit `--node-id` is still honoured at any width, and that choice is one-way: once one
+node is `in_progress` the scheduler refuses `serial_node_live` and the rest of the frontier waits
+behind it, so opening 1 of N serializes all N with no route back inside the run.
+**Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
 NO `enterBatch` and runs serially (the normal single-dispatch path) — never force a minimum width, a
 "default to ≥2," or a "prefer wide" posture.
 

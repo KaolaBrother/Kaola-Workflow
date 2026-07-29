@@ -291,9 +291,6 @@ Delivered, Files Changed, Test Coverage, Final Validation Evidence, Documentatio
 Validation Failure Ledger table (Failing Command | Classification | Routed To | Evidence | Status),
 Follow-Up Items, `## Run gaps` (one line per swept `(reasonClass, sample)` as `filed: #N` or
 `noise: <justification>`; omit if empty), Closure Decision, Gitea Issue, Roadmap, Archive, a
-`## Required Agent Compliance` table (doc-updater, documentation docking, final-validation fix
-executors, roadmap refresh, archive completed folder, final commit and push — each with
-Status/Evidence/Skip Reason; no `pending` rows except `final commit and push` may be `ready`), and
 `## Status: READY FOR FINAL GIT GATE`.
 
 **Step 6 — Closure Decision Gate.** Scan all node evidence for deferred items, unresolved
@@ -308,8 +305,7 @@ the substantive partial-close comment (the mechanical keep-open comment is poste
 The actual roadmap closure (rm `.roadmap/issue-N.md` + regenerate `ROADMAP.md`) and archive are done
 once by the finalize transaction in Step 8b, which also stages the result — do not rm/generate/`git
 mv` here. Update `finalization-summary.md` with the
-final issue/roadmap/archive/docking/closure state; verify every other Required Agent Compliance row
-is `invoked`/`skipped`/`N/A` with evidence (except `final commit and push` may be `ready`).
+final issue/roadmap/archive/docking/closure state.
 
 ## Staging Guard
 

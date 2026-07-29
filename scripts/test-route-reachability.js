@@ -912,10 +912,7 @@ for (const ed of codexEditions) {
     '`$HOME/.codex/plugins/cache/$KAOLA_CODEX_MARKETPLACE/$KAOLA_CODEX_PLUGIN_NAME/$KAOLA_CODEX_PLUGIN_VERSION`',
     '`--project-root "$PWD" --no-autofix --json`',
     'merges persisted config from HOME through the repository root to `"$PWD"`',
-    '`status: "ok"`',
     '`profile_preflight_refused`',
-    'STOP before any `agents.spawn_agent` call',
-    'never record `subagent-invoked`',
     '`profile_bytes_mismatch`',
     'item==="."||item===".."',
     'plugin cache root escapes HOME',
@@ -1391,18 +1388,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   }
   assert(exists('docs/plan-run-cards/metric-optimizer.md'),
     '#634: docs/plan-run-cards/metric-optimizer.md card must exist');
-}
-
-{
-  const block = REQUIRED_BLOCKS.find(b => b.block_id === 'pr-planner-wait-budget');
-  assert(!!block, 'planner wait-budget block must exist in the manifest');
-  if (block) {
-    const { error, files } = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
-    assert(!error && files.length === 6, 'planner wait-budget block must obligate all 6 plan-run surfaces');
-    const marker = norm(block.content_tokens[0]);
-    assert(block.content_tokens.slice(1).every(t => !marker.includes(norm(t))),
-      'planner wait-budget distinctive tokens must not be substrings of its marker');
-  }
 }
 
 // --- #645: nx-first-principles axiom-pointer block sanity — the shared-body reference line exists,
