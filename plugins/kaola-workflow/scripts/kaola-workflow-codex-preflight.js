@@ -2438,7 +2438,8 @@ function resolveCodexVersion({ override, env } = {}) {
 function codexVersionUnsupportedRemediation(detected) {
   return `Codex ${detected || '(version undetermined — no --codex-version/KAOLA_CODEX_VERSION override and no codex binary on PATH)'} `
     + `is below the supported floor ${CODEX_MIN_VERSION}. Upgrade the Codex CLI to >=${CODEX_MIN_VERSION} `
-    + '(ships multi_agent_v2 as the stable, only dispatch path; the switch lives at features.multi_agent_v2.enabled), '
+    + '(ships multi_agent_v2, the dispatch path this workflow requires — it is opt-in and OFF by '
+    + 'default, so the switch at features.multi_agent_v2.enabled must be set explicitly), '
     + 'then re-run this preflight. On a sandbox/CI host with no codex binary on PATH, pass '
     + '--codex-version <installed-version> or set KAOLA_CODEX_VERSION=<installed-version> to attest the '
     + 'version explicitly.';
