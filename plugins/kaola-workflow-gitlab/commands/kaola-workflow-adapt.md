@@ -142,10 +142,10 @@ plan unfrozen). ASK THE USER the question verbatim, append the answer to the sel
 bounded at THREE round-trips; a fourth returns `clarification_exhausted` with a `stop_and_ask`
 posture — stop and take the design question to the user rather than looping.
 
-## Front end: claim + author (the `workflow-planner` subagent)
+## Front end: claim + author (the `workflow-planner` role)
 
-ONE enforced dispatch: the main session never runs the claim or authoring write but keeps every
-judgment. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
+The claim and the authoring write are the front end's product, and the main session keeps every
+judgment either way. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
 issue a task description resolved to under the Entry contract above — always a RESOLVED target,
 because the orchestrator settled the selection before entering. The planner
 RETURNS `{project}`. **Re-entry:** a *frozen*

@@ -397,10 +397,10 @@ bounded at THREE round-trips; a fourth returns `clarification_exhausted` with a 
 posture — stop and take the design question to the user rather than looping.
 <!-- REGION:command -->
 
-## Front end: claim + author (the `workflow-planner` subagent)
+## Front end: claim + author (the `workflow-planner` role)
 
-ONE enforced dispatch: the main session never runs the claim or authoring write but keeps every
-judgment. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
+The claim and the authoring write are the front end's product, and the main session keeps every
+judgment either way. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
 issue a task description resolved to under the Entry contract above — always a RESOLVED target,
 because the orchestrator settled the selection before entering. The planner
 RETURNS `{project}`. **Re-entry:** a *frozen*
@@ -413,13 +413,12 @@ never a frozen one) with prior validator errors; a pre-freeze exit is resumable
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 
-The adaptive path opens by delegating to ONE subagent. **You MUST delegate the starting contract
-and the DAG authoring to the `workflow-planner` agent role** — do NOT run the claim or author
-the `## Nodes` table inline in this session. The Codex Profile Freshness Gate above is authoritative
-for profile/config drift; weigh a reported `profile_preflight_refused` before delegating. If the
-runtime agent tool itself is genuinely unavailable or model-refuses the spawn, this session may run
-the claim + author inline; record that runtime evidence as `local-fallback-tool-unavailable`. The
-planner never freezes, judges risk, asks the user, or dispatches further — it returns control here.
+The adaptive path opens with the starting contract and the DAG authoring. What the front end
+PRODUCES is fixed: the claim writes its record and stamps `selection_record_digest:`, and the
+`## Nodes` table is the `workflow-planner` role's product. WHERE that role runs is not — dispatch it
+or run it here, whichever fits the work. The Codex Profile Freshness Gate above is authoritative for
+profile/config drift; weigh a reported `profile_preflight_refused` before dispatching. The planner
+never freezes, judges risk, asks the user, or dispatches further — it returns control here.
 
 The persisted detection paths are `.codex/agents/kaola-workflow/` for a trusted project override
 and `~/.codex/agents/kaola-workflow/` for the global default; the preflight alone resolves precedence.
@@ -625,7 +624,7 @@ different set.
 <!-- REGION:skill -->
 
 Sanitize the stable task suffix to lowercase letters, digits, and underscores. With no target, use
-the literal suffix `no_target`. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
+the literal suffix `no_target`. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once.
 
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)

@@ -693,7 +693,8 @@ assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'path_
 assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
-// v5.1.0: the workflow-planner dispatch must stay ENFORCED (Agent block + model badge), not inline prose.
+// A documented workflow-planner dispatch block must stay COMPLETE (Agent block + model badge); the
+// SHAPE is pinned, never that a dispatch is taken — running the role in-session is a free choice.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
 // v5.1.0: the refusal consumer branch must stay FAIL-CLOSED (any non-acquired/owned verdict = refusal).

@@ -85,3 +85,26 @@ on the absence of the state file rather than blind-reading it.
   **re-runs** the validator on the durable plan (the planner's self-check `--json` is orientation
   only). Resume is hardened: the front end refuses-and-returns if a plan already exists.
 - **Versions:** Claude/main `5.0.0 → 5.1.0`; Codex packs `3.0.0 → 3.1.0`.
+
+## Status update (2026-07-29, #854 row 6b)
+
+**The delegation MANDATE is superseded; everything else in this ADR stands.** The owner ruled that
+the execution form is free — whether the front end runs as a subagent or in the calling session does
+not matter. What the workflow actually requires is that the issue is claimed with its bookkeeping
+record, that a plan exists before the run, and that the sequence of work is understood.
+
+So the "Enforced in both surfaces, all editions" bullet above no longer describes shipped behaviour:
+the skill's `MUST delegate` instruction and the exemption ladder hanging off it (the
+runtime-tool-unavailable clause and its `local-fallback-tool-unavailable` recording step) are
+deleted, and the contract validator no longer needles the mandate token. The documented
+`Agent(subagent_type="workflow-planner", …)` block survives as the shape a dispatch must take WHEN
+one is taken — the validators pin that the block is complete, never that it is used.
+
+What this ADR got right and is unchanged: the `workflow-planner` role owns the claim and the
+`## Nodes` design, the claim writes its record and stamps `selection_record_digest:`, governance
+re-runs the validator on the durable plan, and the front end refuses-and-returns when a plan already
+exists. The v5.1.0 evidence that advisory prose produced inline runs is real and was verified; it is
+overridden rather than disputed — the ruling is that an inline run was never the failure, while a
+missing claim record, a missing plan, or an un-understood sequence would be.
+
+This ADR is retained as the historical record of the design as shipped.

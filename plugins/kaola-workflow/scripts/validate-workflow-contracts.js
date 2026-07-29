@@ -947,9 +947,9 @@ assertNotIncludes('commands/workflow-next.md', 'ISSUE_SCOUT_MODEL');
 assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
-// the adaptive front-end dispatch must stay ENFORCED (a workflow-planner Agent block carrying its
-// model badge), never drift back to advisory prose — the bug fixed in v5.1.0 where a skill-driven
-// run claimed + authored inline in the main session.
+// Where a workflow-planner dispatch block is documented it must stay COMPLETE (the Agent block AND
+// its model badge) — a block missing its badge is a broken call. This pins the SHAPE of the block,
+// never that one is taken: running the planner role in-session instead is a free choice.
 assertIncludes('commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
 assertIncludes('commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
 assertIncludes('commands/kaola-workflow-adapt.md', 'isolated, self-contained control-plane brief');
