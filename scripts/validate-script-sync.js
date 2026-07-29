@@ -25,9 +25,9 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 //   kaola-workflow-compact-context.js — NOT Claude-only (issue #401 Part 3 corrected this
 //     formerly-stale rationale). A plugin-local copy EXISTS at
 //     plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js and is byte-identical to
-//     the canonical script; the gitlab/gitea forges carry rename-normalized ports
+//     the canonical script; the gitlab/gitea forges carry rename-generated ports
 //     (kaola-{forge}-workflow-compact-context.js). The whole family is now covered: canonical
-//     <-> codex in the BYTE_IDENTICAL_GROUPS below, the forge ports in RENAME_NORMALIZED_FAMILIES.
+//     <-> codex in the BYTE_IDENTICAL_GROUPS below, the forge ports by edition-sync generation.
 //     It is therefore NOT in COMMON_SCRIPTS to avoid duplicate enforcement (the byte group already
 //     enforces the claude<->codex parity COMMON_SCRIPTS would).
 //
@@ -81,21 +81,25 @@ const COMMON_SCRIPTS = [
   // load is side-effect-free (repoRoot is computed but no fs access until a function is called),
   // and only the claude validator (run from repo-root scripts/) ever invokes its probes.
   'kaola-workflow-install-manifest.js',
-  // #432: multi-chain test runner (run-chains). Byte-identical claude↔codex; gitlab/gitea carry
-  // rename-normalized ports (kaola-{forge}-workflow-run-chains.js) in RENAME_NORMALIZED_FAMILIES.
+  // #432: multi-chain test runner (run-chains). Byte-identical claude↔codex; the gitlab/gitea
+  // ports are GENERATED (edition-sync GENERATED_AGGREGATORS, promoted in #868).
   'kaola-workflow-run-chains.js',
-  // #442: release aggregator CLI. Byte-identical claude↔codex; gitlab/gitea carry
-  // rename-normalized ports (kaola-{forge}-workflow-release.js) in RENAME_NORMALIZED_FAMILIES.
+  // #442: release aggregator CLI. Byte-identical claude↔codex; the gitlab/gitea ports are
+  // GENERATED (edition-sync GENERATED_AGGREGATORS, promoted in #868).
   'kaola-workflow-release.js',
-  // #435: run-gap capture gate. Byte-identical claude↔codex; gitlab/gitea carry
-  // rename-normalized ports (kaola-{forge}-workflow-gap-sweep.js) in RENAME_NORMALIZED_FAMILIES.
+  // #435: run-gap capture gate. Byte-identical claude↔codex; the gitlab/gitea ports are GENERATED
+  // (edition-sync GENERATED_AGGREGATORS, promoted in #868 — this is the script the rename-normalizer
+  // pointed at a nonexistent kernel module, so generation is what makes its ports runnable at all).
   'kaola-workflow-gap-sweep.js',
   // #843: the outcome-telemetry ranking reporter. Byte-identical claude↔codex; the gitlab/gitea
   // copies keep the CANONICAL base name (see the 'telemetry-report forge copies' byte group
   // below) rather than joining RENAME_NORMALIZED_FAMILIES — the script require()s the base-named
   // Oracle Kernel, and the rename-normalizer rewrites EVERY kaola-workflow-<name> token, which
-  // would point the forge ports at a `kaola-{forge}-workflow-adaptive-schema` that does not exist
-  // (the same trap run-chains documents at its own kernel-free line).
+  // would point the forge ports at a `kaola-{forge}-workflow-adaptive-schema` that does not exist.
+  // #868: gap-sweep required the kernel AND sat in the rename family, and fell into exactly this
+  // trap — its ports were unloadable in both forges. The workaround was applied here and not there;
+  // the resolution was to promote those ports to edition-sync generation, whose declared rename set
+  // does not contain the kernel. This byte group stays as-is: base-named copies need no rename.
   'kaola-workflow-telemetry-report.js',
 ];
 
@@ -180,8 +184,8 @@ const BYTE_IDENTICAL_GROUPS = [
   {
     // issue #401 Part 3: the compact-context hook's canonical<->codex pair. The script carries
     // no forge identity strings, so the codex copy is byte-identical to canonical (the gitlab/gitea
-    // forge ports — kaola-{forge}-workflow-compact-context.js — are covered separately under
-    // RENAME_NORMALIZED_FAMILIES because they live at a forge-renamed PATH, not a renamed body).
+    // forge ports — kaola-{forge}-workflow-compact-context.js — are covered separately as edition-sync
+    // GENERATED_AGGREGATORS because they live at a forge-renamed PATH, not a renamed body).
     // This closes the live drift where the forge ports carried backticked `fast-summary.md` that
     // canonical+codex did not, and nothing guarded the family.
     label: 'compact-context base-name copies',
@@ -283,27 +287,22 @@ const BYTE_IDENTICAL_GROUPS = [
     })),
 ];
 
-// issue #401 Part 3: SELF-CONTAINED rename-normalized families — forge ports that live at a
-// forge-RENAMED path (kaola-{forge}-workflow-X.js) and are body-identical to a base-named
-// reference after the path-rename `kaola-workflow-` -> `kaola-{forge}-workflow-` is normalized
-// out. Deliberately NOT routed through edition-sync.js GENERATED_AGGREGATORS (the @generated /
-// regeneration class) — these are hand-ported NON-aggregator scripts, and promoting them into
-// edition generation would collide with the #407 install.sh single-source manifest plumbing and
-// the deferred plan-validator promotion (#401 Part 2). This check is whole-file: it normalizes the
-// reference's body for each forge and byte-compares against the committed port. `reference` is the
-// base-named source; each `port` declares its forge + on-disk path.
+// SELF-CONTAINED rename-normalized families — forge ports that live at a forge-RENAMED path
+// (kaola-{forge}-workflow-X.js) and are body-identical to a base-named reference after the
+// path-rename `kaola-workflow-` -> `kaola-{forge}-workflow-` is normalized out. This check is
+// whole-file: it normalizes the reference's body for each forge and byte-compares against the
+// committed port. `reference` is the base-named source; each `port` declares its forge + path.
+//
+// #868: ONE family is left here, and the reason is that it has no root canonical to generate FROM.
+// Everything that had one moved to edition-sync's GENERATED_AGGREGATORS, because `renameNormalize`
+// below is the WRONG tool wherever a real generator can run: it rewrites EVERY kaola-workflow-<name>
+// token, including the base-named Oracle Kernel, so it made `kaola-workflow-adaptive-schema` render
+// to a module that exists in no forge tree — and then passed the port that matched its own wrong
+// expectation, while turning RED on the port that was actually correct. A normalizer derives what a
+// port should say from a regex; a generator derives it from the declared rename set, which does not
+// contain the kernel. Prefer promotion. If a family ever has to live here AND require the kernel,
+// that is the case that needs the normalizer bounded, not another exemption.
 const RENAME_NORMALIZED_FAMILIES = [
-  {
-    // compact-context forge ports: the script body carries no identity strings, so the
-    // rename is a no-op and the ports are byte-identical to canonical — but they live at a
-    // forge-renamed PATH, so they cannot ride the base-name BYTE_IDENTICAL_GROUP above.
-    label: 'compact-context forge ports',
-    reference: 'scripts/kaola-workflow-compact-context.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-compact-context.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-compact-context.js' },
-    ],
-  },
   {
     // codex-compact-resume: a 3-tree family with NO root canonical. The codex copy is the
     // reference; the gitlab/gitea ports are rename-normalized identical (the only identity
@@ -314,39 +313,6 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-codex-compact-resume.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-codex-compact-resume.js' },
-    ],
-  },
-  {
-    // #432: run-chains multi-chain test runner forge ports. The script carries no forge identity
-    // strings, so the rename-normalized ports are body-identical to canonical after the prefix
-    // transform. Reference = canonical scripts/ copy.
-    label: 'run-chains forge ports',
-    reference: 'scripts/kaola-workflow-run-chains.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-run-chains.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-run-chains.js' },
-    ],
-  },
-  {
-    // #442: release aggregator CLI forge ports. The script carries no forge-specific CLI tokens,
-    // so the rename-normalized ports are body-identical to canonical after the prefix transform.
-    // Reference = canonical scripts/ copy.
-    label: 'release forge ports',
-    reference: 'scripts/kaola-workflow-release.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-release.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-release.js' },
-    ],
-  },
-  {
-    // #435: run-gap capture gate forge ports. The script carries no forge-specific tokens,
-    // so the rename-normalized ports are body-identical to canonical after the prefix transform.
-    // Reference = canonical scripts/ copy.
-    label: 'gap-sweep forge ports',
-    reference: 'scripts/kaola-workflow-gap-sweep.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-gap-sweep.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-gap-sweep.js' },
     ],
   },
 ];

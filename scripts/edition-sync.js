@@ -24,12 +24,14 @@
 //             guard, and that check must read git rather than the working tree because
 //             the chains' own --materialize-kernel preamble repairs the working copy first.
 //
-// SCOPE (locked 2026-06-10, "incremental generation"): only the five forge
-// AGGREGATOR ports are generated — they carry NO forge vocabulary beyond script
-// names, so a pure rename map reproduces them. The data-layer forge ports
-// (claim / sink-merge / sink-pr / repair-state / active-folders / classifier /
-// roadmap / plan-validator / ...) stay HAND-PORTED (covered behaviorally per #342)
-// and are NOT touched here.
+// SCOPE ("incremental generation"): a port is generated here IFF a pure rename map
+// reproduces it — i.e. it carries NO forge vocabulary beyond script names. The list
+// below is the membership test; do not read a count out of this prose, which is how
+// it went stale twice. The data-layer forge ports (claim / sink-merge / sink-pr /
+// repair-state / active-folders / classifier / roadmap) stay HAND-PORTED (covered
+// behaviorally per #342) and are NOT touched here — measured 2026-07-29, forge
+// vocabulary is 2.5% of claim's divergence from the render, so generation could not
+// own them even with every forge call extracted behind an adapter.
 //
 // The rename map is DECLARED, not derived from a reference port (a derived map is
 // circular — it can never disagree with the file it was read from). A canonical
@@ -57,6 +59,18 @@ const GENERATED_AGGREGATORS = [
   // rename pass keeps the canonical+codex names; the header/usage strings render to the forge name.
   'kaola-workflow-plan-validator.js',
   'kaola-workflow-replan.js',
+  // #868: four scripts promoted out of validate-script-sync's RENAME_NORMALIZED_FAMILIES. They were
+  // reproducible by the rename pass already — compact-context and release differed from the render by
+  // NOTHING but the @generated header — so the normalizer was carrying files generation could own.
+  // Promoting them is a CORRECTNESS move, not tidying: the normalizer rewrites EVERY
+  // kaola-workflow-<name> token, so it renamed gap-sweep's `kaola-workflow-adaptive-schema` require
+  // into a module that does not exist in any forge tree, and then certified the result because it was
+  // comparing against its own wrong expectation. The rename map HERE is the declared, on-disk set, and
+  // the base-named kernel is absent from it, so the same require renders correctly and stays correct.
+  'kaola-workflow-compact-context.js',
+  'kaola-workflow-release.js',
+  'kaola-workflow-gap-sweep.js',
+  'kaola-workflow-run-chains.js',
 ];
 
 const canonRel = base => 'scripts/' + base;

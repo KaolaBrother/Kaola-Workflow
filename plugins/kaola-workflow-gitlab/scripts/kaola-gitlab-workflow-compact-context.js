@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-compact-context.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 const fs = require('fs');
 const path = require('path');
 
