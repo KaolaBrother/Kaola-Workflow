@@ -111,9 +111,15 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
   not added to. `scripts/test-mega-mutation-spotcheck.js` is the standing regression floor proving
   this division loses no real coverage: it reintroduces historical bug shapes into isolated
   `$TMPDIR` copies of `scripts/` (never the working tree) and must stay red on each reintroduced
-  shape — re-run it (`node scripts/test-mega-mutation-spotcheck.js`, exit 0 = all caught) after any
-  further prune at either altitude. It is a persistent, on-demand gate, not wired into `npm test`
-  or any `test:kaola-workflow:*` chain.
+  shape (exit 0 = all caught). **It runs in the claude chain, both tiers** — `~32s` measured
+  against a `~6.5 min` fast gate — so a prune that drops real coverage reds a gate rather than
+  waiting for someone to remember. Claude only: the mutations are over root `scripts/`, and the
+  codex mirrors are byte-synced, so per-forge runs would re-measure the same bytes.
+  **This is the only gate that can see a lost assertion.** Deleting an assertion never reds the
+  suite it was deleted from — the survivors still pass on an unmutated tree — so coverage loss is
+  invisible everywhere else. When it reds, the answer is to restore the coverage or to argue on the
+  record that the shape no longer needs catching; re-pointing the probe at whatever the code now
+  does is how the floor gets quietly lowered to the floor.
 
 - **Lifecycle and boundary coverage for frozen dispatch fields.** A field added to `## Nodes` must
   be tested through the real validator and every descriptor/opener that consumes it, durable
