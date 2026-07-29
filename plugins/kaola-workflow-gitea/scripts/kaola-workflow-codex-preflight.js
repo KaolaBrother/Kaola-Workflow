@@ -951,6 +951,19 @@ function deriveDispatchPosture(configContent) {
 // *_wait_timeout_ms bounds have no independently verified default — read ONLY when explicitly
 // present in config; null when absent (no fabricated fallback for those three).
 //
+// EXEMPTION — MULTI_AGENT_V2_BOUNDS_NOTE below says a stray `agents.max_threads` "does not
+// raise the MultiAgentV2 cap". That is a claim about someone else's software, so here is the
+// command that measured its boundary (codex-cli 0.145.0, isolated CODEX_HOME):
+//
+//   $ printf '[features.multi_agent_v2]\nenabled = true\n' > "$CODEX_HOME/config.toml"
+//   $ CODEX_HOME=... codex doctor --json   # then again with `[agents] max_threads = 6` added
+//
+// The two reports are identical apart from the timestamp and the home paths, and NEITHER
+// exposes max_concurrent_threads_per_session or any other resolved thread cap. That is the
+// boundary: our own reported budget is checkable, Codex's internal handling of the value is
+// not observable from outside, so the note must not be strengthened past "does not raise the
+// cap" — test-install-model-rendering.js pins the stronger wordings OUT of both copies.
+//
 // Bounds are only meaningful when v2 dispatch is actually active (dispatch_mode ===
 // 'v2-task-name'); when v2 is not enabled, every field reports not_applicable/null —
 // mirrors how dispatch_posture itself collapses to 'none' when features are off.
@@ -1583,6 +1596,16 @@ function unsafeScopeAuthorityResult(codexDir, scopeName, issue) {
   };
 }
 
+// EXEMPTION — the `repair` string below states a Codex behavior: project .codex layers are not
+// read unless the project is trusted. Reproduced on codex-cli 0.145.0, with a project
+// `.codex/config.toml` carrying `[features.multi_agent_v2] enabled = true`:
+//
+//   $ cd <project> && CODEX_HOME=<home with NO [projects."<project>"] entry> codex features list
+//   multi_agent_v2   stable   false
+//   $ cd <project> && CODEX_HOME=<home with trust_level = "trusted"> codex features list
+//   multi_agent_v2   stable   true
+//
+// The project layer takes effect only once trusted, which is what makes this repair actionable.
 function projectTrustRequiredResult(projectRoot, trustLevel) {
   return {
     exitCode: 4,
