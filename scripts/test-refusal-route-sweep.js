@@ -1363,7 +1363,7 @@ for (const cond of emitted) {
 // (8b) THE REPLAN BAND — an exit must be REACHABLE FROM THE STATE IT IS OFFERED IN.
 //
 // Every `replan_*` / `snapshot_*` / `cleanup_*` condition fires while the project is
-// REPLAN-FENCED. `projectMutationGuard` refuses every action except the literal `'replan resume'`
+// REPLAN-FENCED. The live fence projection refuses every action except the literal `'replan resume'`
 // with `replan_in_progress` while that fence stands, so a route naming any member of
 // `REPLAN_GUARDED_SUBCOMMANDS` is dead ON ARRIVAL — the operator is refused a second time, by a
 // different code, with no exit named. That is the #840 class one level deeper than "the verb does
