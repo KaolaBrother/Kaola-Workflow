@@ -16,6 +16,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #866 | Nothing measures whether a path stops the run: build the driven-envelope recorder, with a completeness assertion | open | — | — |
 | #867 | Two vocabularies for one diagnosis: collapse the certifier-resolution twin in plan-validator | open | — | — |
 | #868 | Both forge editions crash writing run-gaps.json — gap-sweep requires a renamed kernel module that does not exist, and no chain executes it | open | — | — |
+| #869 | speculative_review_required merge at adaptive-node:8174 has no witness and may be unreachable in the fused close path | open | — | — |
 
 ## Rules
 
