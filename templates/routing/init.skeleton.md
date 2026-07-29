@@ -224,8 +224,11 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > leaves the cap where it was instead of erroring. Note that
 > `multi_agent_v2` is not carried in the public Codex configuration reference, which documents
 > `[features] multi_agent` for enabling subagents and `[agents]` only for role/limit settings
-> (`max_threads`, `max_depth`); the V2 flag and its bounds are verified behavior on Codex
-> >=0.145.0 rather than published defaults, and may change in a future release. Kaola never
+> (`max_threads`, `max_depth`). The V2 flag and its bounds are verified against upstream SOURCE at
+> tag `rust-v0.145.0` — `codex-rs/core/src/config/mod.rs` defines
+> `DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4` and `effective_agent_max_threads`
+> uses `saturating_sub(1)` — source-verified, never documentation-verified, and both may change in a
+> future release. Kaola never
 > writes this flag for you; if it is not explicitly true, preflight refuses
 > `codex_multi_agent_v2_required` and its diff must be applied by hand with user authorization —
 > never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone

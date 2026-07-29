@@ -9,7 +9,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 |-------|-------|--------|------------------|-----------|
 | #851 | The mid-run demotion premise is refuted — the census cannot answer the question it was asked | open | — | — |
 | #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
-| #857 | Four surfaces disagree on where the MultiAgentV2 default of 4 comes from: three say documented upstream, one says our own probe and explicitly not documentation | open | — | — |
 | #863 | result is not total on the claim surface, and two status tokens classify differently depending on which internal arm emitted them | open | — | — |
 | #864 | The sink's diff attribution is one-directional: 8 nodes marked COMPLETE against an empty diff returns result: pass | open | — | — |
 | #865 | The run can lower its own consent fence — clear-halt requires no attestation, so the valve is enforced by convention rather than mechanism | open | — | — |

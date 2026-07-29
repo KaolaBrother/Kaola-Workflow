@@ -2726,13 +2726,19 @@ function deriveDispatchPosture(configContent) {
 // MultiAgentV2 concurrency + wait-timeout bounds — extends the dispatch-posture report
 // above with the effective v2 slot budget and wait-timeout knobs. `max_concurrent_threads_per_session`
 // INCLUDES the root/orchestrator thread, so effective subagent width = threads - 1 — CONFIRMED
-// against rust-v0.145.0 source (`effective_agent_max_threads` = `saturating_sub(1)`,
-// codex-rs/core/src/config/mod.rs) and upstream PR #19792 ("it counts the root thread and all open
-// subagent threads... default 4... derive the existing internal subagent slot limit as
-// max_concurrent_threads_per_session - 1"). This arithmetic is UNCHANGED by #775 — only the config
-// TABLE moved (see detectCodexDispatchMode / parseMultiAgentV2NumericFields). The default of 4 when
-// the key is absent is now a documented upstream default (not merely 'observed'); the constant name
-// and the 'observed_default' source tag are kept for output-shape back-compat. The three
+// against upstream SOURCE at tag rust-v0.145.0 — codex-rs/core/src/config/mod.rs defines
+// DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4, and effective_agent_max_threads
+// returns saturating_sub(1) for V2, so the cap counts the root thread. Introduced by PR #19792, but
+// verified at the released TAG rather than at the PR: the constant moved from
+// codex-rs/features/src/feature_configs.rs to core/src/config/mod.rs between merge and release, so
+// a PR-only check would have named a path that no longer exists. Re-check with:
+//   gh api "repos/openai/codex/contents/codex-rs/core/src/config/mod.rs?ref=rust-v0.145.0" \
+//     --jq .content | base64 -d | grep -nE 'DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT|saturating_sub'
+// It is SOURCE-verified, not documentation-verified: the public configuration reference does not
+// document multi_agent_v2 at all. This arithmetic is UNCHANGED by #775 — only the config TABLE
+// moved (see detectCodexDispatchMode / parseMultiAgentV2NumericFields). The constant name and the
+// 'observed_default' source tag are kept for output-shape back-compat: the VALUE is source-verified,
+// the LABEL is legacy. The three
 // *_wait_timeout_ms bounds have no independently verified default — read ONLY when explicitly
 // present in config; null when absent (no fabricated fallback for those three).
 //
@@ -2766,7 +2772,7 @@ const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config
   + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n'
   + 'max_wait_timeout_ms = 1800000\n'
   + 'Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session '
-  + 'is absent are documented Codex >=0.145.0 behavior (rust-v0.145.0, PR #19792); the wait-timeout bounds '
+  + 'is absent are Codex >=0.145.0 SOURCE behavior, verified at tag rust-v0.145.0 in codex-rs/core/src/config/mod.rs (DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4; effective_agent_max_threads uses saturating_sub(1)) and introduced by PR #19792 — source-verified, not documented: the public configuration reference does not carry multi_agent_v2 at all. The wait-timeout bounds '
   + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
   + 'agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for '
   + 'max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from '
