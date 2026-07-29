@@ -137,7 +137,7 @@ Must exit 0 with "Workflow walkthrough simulation passed".
 
 Two tiers. `test:kaola-workflow:claude` is the **fast gate** (~6.5 min): every cheap step at full coverage, but the three heavyweight suites run a rotating 1/12 slice and six non-samplable suites are deferred. `test:kaola-workflow:claude:full` runs everything.
 
-For any **cross-edition** diff (see Validation Policy), run all four chains sequentially:
+To run all four chains by hand (finalize selects them for you — see Validation Policy):
 ```bash
 npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
   npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
@@ -171,8 +171,7 @@ On any user-visible change: `README.md` (features, usage, env vars) · API docs 
 
 - Background hooks (subagent-dispatch-log) are advisory; do not re-run their checks redundantly.
 - Verify with `node scripts/simulate-workflow-walkthrough.js` before claiming workflow-related changes complete.
-- **Cross-edition diffs require all four chains green.** A diff touching the edition trees (`plugins/kaola-workflow-{gitlab,gitea}/`, the codex/forge contract validators, or any edition-port script) MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green — run sequentially — recorded before Finalization. A green claude chain alone is **insufficient evidence**: `npm test` chains the four with `&&`, so it short-circuits on the first failure and a red codex/gitlab/gitea chain behind a green claude one is never reached. See `docs/conventions.md`.
-- **`kaola-workflow-run-chains.js` applies that rule automatically at finalize.** In finalize context (`--project`/`--plan`, no `--chains`/`--mock-chain` override) it diff-scopes the chain selection: a non-edition-touching diff runs the `claude` chain alone, and an edition-touching diff — or an unresolved diff base — fails closed to all four. The rule itself is unchanged; only who evaluates it moved from the operator to the producer. A release tag always requires the full, unwaived four-chain receipt regardless of scope.
+- **Chain selection belongs to the producer, not to you.** `kaola-workflow-run-chains.js` diff-scopes it at finalize (`--project`/`--plan`, no `--chains`/`--mock-chain` override): a non-edition-touching diff runs the `claude` chain alone, and an edition-touching diff — or an unresolved diff base — fails closed to all four. A release tag always requires the full, unwaived four-chain receipt regardless of scope. See `docs/conventions.md` for what counts as cross-edition.
 - **Adaptive / routing / finalize-wiring prose propagates to SIX surfaces.** The propagation surfaces are the 3 Claude commands + the 3 Codex SKILL packs, including the two forge-codex SKILL packs. A change reaching only 4 of 6 is a propagation gap; the route-reachability contract (`scripts/test-route-reachability.js` + all four `validate-*-contracts.js`) machine-enforces it. See `docs/conventions.md` § Routing / adaptive prose.
 - **opencode edition is additive.** It is a runtime edition, not a forge: it is **not** wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX routing surfaces. An opencode-only diff triggers no four-chain obligation; run its own suite (`node scripts/test-opencode-edition.js`) instead.
 - **kimi edition is additive.** It is a runtime edition, not a forge: it is **not** wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX routing surfaces. A kimi-only diff triggers no four-chain obligation; run its own suite (`node scripts/test-kimi-edition.js`) instead.

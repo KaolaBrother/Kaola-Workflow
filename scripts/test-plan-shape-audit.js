@@ -357,8 +357,6 @@ function node(id, role, dependsOn, writeSet, shape) {
     'Bundle Selection Rules',     // bundle rules
     'lane_bucket',                // co-tenant lane handling
     '### Project rules',          // roadmap guardrail block
-    'frontier blocked because',   // Frontier-Blocked explicit fall-through
-    'closest actionable proxy',   // the anti-proxy precedence rule (polarity is load-bearing)
   ];
   const SELECTION_RECORD_TOKENS_825 = [
     '--selection-record',

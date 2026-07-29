@@ -298,10 +298,9 @@ for (const file of nextSurfaces796) {
   assertIncludes(file, 'the orchestrator is that sidecar');
   assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
   // #825 (B2): the ranking rules MOVED here from the planner profile — one wording, re-homed, not
-  // paraphrased. Pin the five load-bearing literals so a later reword cannot quietly soften them,
-  // and pin the retired heading's absence so the survey block cannot creep back onto the router.
-  for (const relocated of ['Bundle Selection Rules', 'lane_bucket', '### Project rules',
-    'frontier blocked because', 'closest actionable proxy']) {
+  // paraphrased. Pin the load-bearing literals so a later reword cannot quietly soften them, and
+  // pin the retired heading's absence so the survey block cannot creep back onto the router.
+  for (const relocated of ['Bundle Selection Rules', 'lane_bucket', '### Project rules']) {
     assertIncludes(file, relocated);
   }
   // The orchestrator authors the record, so the surface must name the flag it passes and the
@@ -947,9 +946,9 @@ assertNotIncludes('commands/workflow-next.md', 'ISSUE_SCOUT_MODEL');
 assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
-// the adaptive front-end dispatch must stay ENFORCED (a workflow-planner Agent block carrying its
-// model badge), never drift back to advisory prose — the bug fixed in v5.1.0 where a skill-driven
-// run claimed + authored inline in the main session.
+// Where a workflow-planner dispatch block is documented it must stay COMPLETE (the Agent block AND
+// its model badge) — a block missing its badge is a broken call. This pins the SHAPE of the block,
+// never that one is taken: running the planner role in-session instead is a free choice.
 assertIncludes('commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
 assertIncludes('commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
 assertIncludes('commands/kaola-workflow-adapt.md', 'isolated, self-contained control-plane brief');

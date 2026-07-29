@@ -518,9 +518,10 @@ ignored, never refused (scripts validate, never auto-pick — #44). The agent
   opposite (fail-open) behavior of the first implementation end-to-end and it was repaired before
   merge. Reconcile stays non-destructive — it never auto-deletes; a `halt` verdict (surfaced per
   writer in `writerReconciliation[]`, plus a top-level `writerHalt` boolean) hands the named
-  out-of-set paths to the orchestrator, which resolves them (`revert-overflow` / `repair-node` /
-  a consent halt) before re-opening the node — never re-opening directly on a `halt`, which would
-  be the halt-then-reopen laundering hole this mechanism closes. See `docs/api.md` §
+  out-of-set paths to the orchestrator to resolve (`revert-overflow` / `repair-node` / a consent
+  halt). Re-opening directly on a `halt` re-anchors the node's baseline, so its own barrier stops
+  seeing those paths; the whole-plan barrier at the sink still does, because it diffs the entire
+  claim against the union of every declared write set. See `docs/api.md` §
   `reconcile-running-set` — writer kill-safety verdicts and `docs/decisions/D-611-01.md`.
 
   **`max_concurrent` in `running-set.json`.** `open-ready` writes an optional `max_concurrent`

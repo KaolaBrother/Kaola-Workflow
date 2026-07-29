@@ -71,11 +71,24 @@ function loadFixture(tmpScriptsDir) {
 
 function probeDelegationVocab(tmpScriptsDir) {
   const { checkEvidenceShape } = require(path.join(tmpScriptsDir, 'kaola-workflow-adaptive-node.js'));
-  // Lifted verbatim from scripts/test-adaptive-node.js T611-AC5 (~:14962-14964): an unknown
-  // delegation_outcome token is a typed refusal, independent of role, checked before role branches.
-  const bad = checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: exploded\nRED\nGREEN');
-  const ok = bad.ok === false && bad.missingTokenClass === 'delegation_outcome';
-  return { ok, detail: 'unknown delegation_outcome -> ' + JSON.stringify({ ok: bad.ok, missingTokenClass: bad.missingTokenClass }) };
+  // An unknown delegation_outcome NORMALIZES rather than refusing, so the vocabulary check's whole
+  // remaining job is SAYING SO — disarming it makes the normalize silent, which is precisely the
+  // failure this mutation must be caught doing.
+  //
+  // The body is a VALID implementer deliverable on purpose. The previous fixture was a bare
+  // `RED\nGREEN` under `tdd-guide`, which is NOT valid tdd-guide evidence (no red_baseline); it
+  // passed only because the retired refusal fired before the role branch that would have rejected it.
+  // A fixture whose validity depends on an upstream short-circuit stops proving anything the moment
+  // that short-circuit is removed, and reports the wrong token class when it fails.
+  const advisories = [];
+  const r = checkEvidenceShape('implementer', 'n1',
+    'delegation_outcome: exploded\nregression-green: npm test passed', { advisories });
+  const ok = r.ok === true
+    && advisories.length === 1
+    && advisories[0].warning === 'delegation_outcome_normalized'
+    && advisories[0].raw === 'exploded'
+    && advisories[0].normalized === 'completed';
+  return { ok, detail: 'unknown delegation_outcome -> ' + JSON.stringify({ ok: r.ok, advisories }) };
 }
 
 function probeDeriveGateMode(tmpScriptsDir) {

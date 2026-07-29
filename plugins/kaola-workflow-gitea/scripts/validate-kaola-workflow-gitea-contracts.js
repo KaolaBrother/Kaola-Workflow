@@ -694,7 +694,8 @@ assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'path_n
 assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
-// v5.1.0: the workflow-planner dispatch must stay ENFORCED (Agent block + model badge), not inline prose.
+// A documented workflow-planner dispatch block must stay COMPLETE (Agent block + model badge); the
+// SHAPE is pinned, never that a dispatch is taken — running the role in-session is a free choice.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
 // v5.1.0: the refusal consumer branch must stay FAIL-CLOSED (any non-acquired/owned verdict = refusal).
@@ -857,15 +858,10 @@ for (const planRunSurface of [
   // three-SKILL join-protocol loops, in the always-selected claude chain.
 }
 
-// The Join Protocol anchor and its wait-budget floor rule on this edition's plan-run SKILL, and the
-// "Writer kill-safety" heading on this edition's plan-run COMMAND, are asserted on THESE SAME
-// EDITION PATHS by the root validator's three-SKILL and three-command join-protocol loops.
-for (const planRunSurface of [pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/commands/kaola-workflow-plan-run.md']) {
-  assertIncludes(planRunSurface, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
-  assertIncludes(planRunSurface, '`planner_override` may extend but never shorten');
-  assertIncludes(planRunSurface, 'must not interrupt or re-nudge before that floor expires');
-  assertIncludes(planRunSurface, 'complete governed deliverable');
-}
+// The Join Protocol anchor, the `writerHalt` / `delegation_outcome` needles on this edition's plan-run
+// SKILL and the "Writer kill-safety" heading on its COMMAND are asserted on THESE SAME EDITION PATHS
+// by the root validator's three-SKILL and three-command join-protocol loops. (There is no wait-budget
+// FLOOR rule to pin: the budget is data on the dispatch card, not a no-interrupt wall.)
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'planner_override');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'difficulty alone is not evidence');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a budget to hide a wedged agent');
