@@ -7,20 +7,13 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #825 | Free origin: orchestrator-owned survey/selection with typed selection gate; planner narrowed to synthesis | open | — | adaptive |
-| #826 | Finalize deviation route: sink-owned final-fix lane with a typed attribution gate | open | — | adaptive |
-| #831 | Spine-run residue (re-scoped): freeze-time decoy consent_halt guard; test pins + record accuracy for the landed six-site series | open | — | adaptive |
-| #832 | Run archive self-destructs at finalize/sink; gitignored archive reported done; closure-audit passes an empty skeleton | open | — | adaptive |
-| #833 | Subtract the Required Agent Compliance table: derive compliance from ledger + evidence at read time | open | — | adaptive |
-| #834 | Subtract derive-and-refuse from the review journal: trust recorded producer bindings | open | — | adaptive |
-| #835 | Subtract the expansion point from the serial-open surface; delete the three serialExclude compensations | open | — | adaptive |
-| #836 | Subtract byte-exact evidence-token and gap-sample grammar: refuse on missing meaning, not serialization | open | — | adaptive |
-| #837 | Subtract the finalize refusal ladder: one precondition report, script-owned mirror sync, standing consent classes | open | — | adaptive |
-| #838 | shape_refutation is unreachable after any settled gate: precedence keys on journal existence, not consumability | open | — | adaptive |
-| #839 | Post-discharge re-expansion window wedges the run permanently: route recompute precedes projection coverage, misclassified as tamper | open | — | adaptive |
-| #840 | rebind-base is unreachable: lane-group teardown deletes the leg-base ref before any post-dominating gate can settle | open | — | adaptive |
-| #841 | Mid-node substitution never re-issues the dispatch card: fresh Codex spawn identity is inference-from-prose | open | — | adaptive |
-| #842 | Docs/strings accuracy sweep: inverted MultiAgentV2 claims, retired-claim residue, superseded CHANGELOG site-4 entry | open | — | adaptive |
+| #850 | Routes that cannot be honoured: ~25 certain dead exits across 297 route-carrying conditions — fix is subtractive (delete a route source) | open | — | — |
+| #851 | The mid-run demotion IS the campaign: the mid-run refusal set (measured band ~278-607 of 778) refuses at a locus the two-gate architecture forbids | open | — | — |
+| #853 | Delete the 121 duplicated content-token assertions across the four contract validators | open | — | — |
+| #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
+| #855 | Gate 1 demotion wave: the claim-time refusals become answers | open | — | — |
+| #856 | Demote the planner control-boundary refusal to a divergence answer | open | — | — |
+| #857 | Four surfaces disagree on where the MultiAgentV2 default of 4 comes from: three say documented upstream, one says our own probe and explicitly not documentation | open | — | — |
 
 ## Rules
 
