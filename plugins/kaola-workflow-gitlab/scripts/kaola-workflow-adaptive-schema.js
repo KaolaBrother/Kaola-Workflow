@@ -4244,13 +4244,8 @@ function terminalRoute(verb, args) {
 // --- family 1: kernel_write_failed -----------------------------------------
 // A durable kernel write was ATTEMPTED and factually did not take. Factual, never
 // normative. The route splits on the payload, not on a second code: a substrate fault
-// (errno, or a subprocess that would not answer) is `environment`; anything else is the
-// idempotent retry verb for the record class.
+// (errno) is `environment`; anything else is the idempotent retry verb for the record class.
 const WRITE_FAILED_RECORDS = Object.freeze(['plan', 'position', 'evidence', 'forge_chain']);
-const WRITE_FAILED_BLOCKED_ON = Object.freeze([
-  'candidate_digest', 'candidate_partition', 'anchor_index', 'validation_vectors',
-  'claim_root_base', 'writer_identity', 'plan_contract', 'epoch_authority',
-]);
 const WRITE_FAILED_ENVIRONMENT_ERRNOS = Object.freeze(['ENOSPC', 'EACCES', 'EROFS', 'EMFILE', 'EIO']);
 // Every transition below is idempotent BY CONSTRUCTION — re-running it after the
 // substrate recovers either completes the write or reports it already landed.
@@ -4428,8 +4423,8 @@ const CONSENT_KINDS = Object.freeze([
 const REFUSAL_PAYLOAD_SCHEMAS = Object.freeze({
   kernel_write_failed: Object.freeze({
     discriminator: 'record', values: WRITE_FAILED_RECORDS,
-    enums: Object.freeze({ blocked_on: WRITE_FAILED_BLOCKED_ON, errno: WRITE_FAILED_ENVIRONMENT_ERRNOS }),
-    fields: Object.freeze(['record', 'target', 'step', 'blocked_on', 'path', 'errno',
+    enums: Object.freeze({ errno: WRITE_FAILED_ENVIRONMENT_ERRNOS }),
+    fields: Object.freeze(['record', 'target', 'step', 'path', 'errno',
       'git_stderr_first_line', 'exit_status', 'detail', 'rolled_back', 'retry_verb',
       'retry_script', 'retry_args', 'node_id', 'project', 'condition']),
   }),
@@ -4517,14 +4512,12 @@ function refusalFactWriteFailed(p) {
   const step = refusalScalar(p.step);
   const at = refusalScalar(p.path);
   const errno = refusalScalar(p.errno);
-  const blocked = refusalScalar(p.blocked_on);
   const detail = refusalScalar(p.detail);
   let s = 'The ' + (record ? record + ' record' : 'durable kernel') + ' write did not take';
   if (target) s += ' (' + target + ')';
   if (step) s += ' at step ' + step;
   if (at) s += ' at ' + at;
   if (errno) s += ': ' + errno;
-  if (blocked) s += ': ' + blocked + ' could not be computed';
   if (detail) s += ': ' + detail;
   return s + '.';
 }
@@ -4929,9 +4922,9 @@ const KERNEL_REFUSAL_REGISTRY = Object.freeze({
     locus: 'L1', auto_remediable: true,
     payload_schema: REFUSAL_PAYLOAD_SCHEMAS.kernel_write_failed,
     route: (p) => {
-      const env = (p.errno && WRITE_FAILED_ENVIRONMENT_ERRNOS.indexOf(p.errno) >= 0)
-        || (p.blocked_on && WRITE_FAILED_BLOCKED_ON.indexOf(p.blocked_on) >= 0);
-      if (env) return terminalRoute('environment', { blocker: p.blocked_on || p.errno || 'unknown', path: p.path || null });
+      if (p.errno && WRITE_FAILED_ENVIRONMENT_ERRNOS.indexOf(p.errno) >= 0) {
+        return terminalRoute('environment', { blocker: p.errno, path: p.path || null });
+      }
       if (p.retry_verb && p.retry_script) return inGrammar(p.retry_script, p.retry_verb, p.retry_args);
       return WRITE_FAILED_RETRY_BY_RECORD[p.record] || null;
     },
@@ -6463,7 +6456,6 @@ module.exports = {
   ROUTE_SCRIPT_IDS,
   INVESTIGATION_OR_DISCARD,
   WRITE_FAILED_RETRY_BY_RECORD,
-  WRITE_FAILED_BLOCKED_ON,
   WRITE_FAILED_ENVIRONMENT_ERRNOS,
   CAS_ROUTE_BY_RECORD,
   INTEGRITY_ROUTE_BY_KIND,
