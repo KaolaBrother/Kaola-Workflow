@@ -7652,15 +7652,23 @@ scenario(() => {
 // with `transaction_id: null` so the working verb cannot be reconstructed either.
 // ===========================================================================
 
-// Corrupt the live transaction so it PARSES but fails schema validation, leaving `transaction_id`
-// and `phase` intact — the shape a partial/interrupted write leaves behind, and the one that
-// reaches the fourth arm. Returns the id the file still records.
-function corruptTransactionParseable847(fx) {
+// Corrupt the live transaction so it PARSES but fails schema validation — the shape a partial or
+// interrupted write leaves behind, and the one that reaches the fourth arm. The default mutation
+// leaves `transaction_id` and `phase` intact; a caller may supply its own to reach a different ROW
+// of the same arm (the id-less row below), so the two rows are visibly one arm rather than two
+// fixtures that happen to look alike.
+//
+// `stateId` is returned separately and deliberately. In the default row it EQUALS the file's id,
+// but only because `prepareReplan` wrote both from one value — nothing keeps them equal, and the
+// whole hazard of this arm is that `abort` compares against the FILE's id while the fence can only
+// see the STATE's.
+function corruptTransactionParseable847(fx, mutate) {
   const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
   const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
-  tx.budget.prospective_count_after = 999;
+  const stateId = tx.transaction_id;
+  (mutate || (t => { t.budget.prospective_count_after = 999; }))(tx);
   fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
-  return { id: tx.transaction_id, phase: tx.phase };
+  return { id: tx.transaction_id, phase: tx.phase, stateId };
 }
 
 function replanVerb847(fx, argv) {
@@ -7855,6 +7863,90 @@ scenario(() => {
     const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
     ok(ranOk === null || ranOk.result !== 'refuse',
       '#847-H: ...and any command it prints must survive being pasted: '
+      + JSON.stringify({ command, ran: ranOk }));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-K — THE ID-LESS ROW OF THE SAME ARM, WHERE NAMING `abort` REFUSES ON ARRIVAL.
+//
+// A transaction that PARSES, sits at an ABORTABLE phase, and carries NO `transaction_id`. A
+// missing id is one of the things that makes validation fail, so this is squarely inside
+// #847-F's arm — same `:1302` return, and reached by the same helper with a different mutation.
+// But #847-F's answer is wrong here, and wrong in the way #847 exists to remove:
+//
+//   fence  -> legal_mutation 'replan abort', transaction_id <the STATE's id>   (the only id it sees)
+//   abort  -> String(raw.transaction_id || 'none') === 'none' !== <STATE id>
+//             -> replan_abort_transaction_mismatch
+//
+// The fence names a verb that refuses the moment it is pasted. Measured end to end below through
+// the real CLI, not reasoned about — the existing evidence for this row was a fence read and an
+// abort read, each in isolation, and that separation is exactly how the row survived #847-F.
+//
+// WHY IT HIDES. The state-id fallback genuinely does mirror the orphaned-fence arm, and there it
+// is correct: with NO file, `abort` takes the `!raw` branch and compares `stateTx !== requested`,
+// which the state id satisfies. This row HAS a file, so the very next branch compares against the
+// FILE's id instead. Same expression, opposite branch, opposite outcome.
+//
+// MEASURED, AND DELIBERATELY NOT PINNED: one abort invocation does succeed here —
+// `abort --transaction none` returns `ok, aborted: true` and clears the fence, because
+// `String(raw.transaction_id || 'none')` coerces an ABSENT id into the same value that means "no
+// transaction at all". That is a sentinel collision, not a CAS match, and a fence that named it
+// would be instructing an operator to target a sentinel. So it is recorded here as a finding and
+// asserted nowhere: the pin below requires the arm to name the escalation, exactly as #847-G and
+// #847-H do, rather than to buy a route by leaning on that coercion.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const row = corruptTransactionParseable847(fx, tx => { delete tx.transaction_id; });
+
+    // Controls: the row is what it claims to be, and it is the SAME arm as #847-F.
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    let parsed = null;
+    try { parsed = JSON.parse(fs.readFileSync(txPath, 'utf8')); } catch (_) { parsed = null; }
+    ok(parsed !== null,
+      '#847-K control: the transaction file is present and PARSES — this is not the unparseable row');
+    equal(Object.prototype.hasOwnProperty.call(parsed, 'transaction_id'), false,
+      '#847-K control: ...and carries no transaction_id at all');
+    ok(schema.REPLAN_ABORTABLE_PHASES.includes(row.phase),
+      '#847-K control: ...at phase ' + row.phase + ', which the discard exit still admits — so the '
+      + 'fence resolves this row through the ABORT arm, not the escalation one');
+    equal(fence847(fx).reason, 'replan_transaction_invalid',
+      '#847-K control: ...and it reaches the same validation arm #847-F pins');
+    equal(replan.parseStateFields(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'))
+      .replan_transaction_id, row.stateId,
+    '#847-K control: the STATE still records an id (' + row.stateId.slice(0, 12) + ') — the only id '
+      + 'the fence can see, and the one `abort` will not accept');
+
+    // What each verb actually does in THIS state, run through the real CLI. Neither mutates on
+    // refusal, so both are safe to probe before the pin.
+    const abortedWithStateId = replanVerb847(fx, ['abort', '--transaction', row.stateId]);
+    equal(abortedWithStateId.reason, 'replan_abort_transaction_mismatch',
+      '#847-K control: `abort` targeting the id the FENCE can see refuses on arrival — the file '
+      + 'records no id, so the CAS comparand is `none` and the state id can never match it: '
+      + JSON.stringify(abortedWithStateId));
+    const resumed = replanVerb847(fx, ['resume']);
+    equal(resumed.reason, 'replan_transaction_invalid',
+      '#847-K control: `resume` re-validates and refuses too, so neither replan verb is an exit: '
+      + JSON.stringify(resumed));
+
+    // THE PIN.
+    const out = orient847(fx).out;
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-K: this row must name an exit like every other arm: ' + JSON.stringify(out));
+    ok(out.legal_mutation !== 'replan resume' && out.legal_mutation !== 'replan abort',
+      '#847-K: ...and it must not name either replan verb. Both were just run against this exact '
+      + 'state and both refused, so naming `abort` here reproduces the #847 defect one hop out — a '
+      + 'printed command that dead-ends on arrival: ' + JSON.stringify(out.legal_mutation));
+    // PARTIAL-PRESERVATION, as in #847-G and #847-H: satisfiable by printing nothing. The naming
+    // clauses above are what carry the change.
+    const command = namedReplanCommand847(out);
+    const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
+    ok(ranOk === null || ranOk.result !== 'refuse',
+      '#847-K: ...and any command it prints must survive being pasted: '
       + JSON.stringify({ command, ran: ranOk }));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
