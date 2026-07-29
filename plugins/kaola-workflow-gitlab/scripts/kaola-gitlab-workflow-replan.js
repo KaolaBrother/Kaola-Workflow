@@ -142,7 +142,7 @@ function durableLabelBase(label) {
 
 function assertDurableLabel(label) {
   if (!schema.REPLAN_DURABLE_WRITE_LABELS.includes(durableLabelBase(label))) {
-    throw new Error('replan_durable_label_invalid:' + label);
+    throw new Error('durable write label is not in REPLAN_DURABLE_WRITE_LABELS: ' + label);
   }
 }
 
@@ -4101,7 +4101,7 @@ function cleanupActiveCache(paths, transaction, opts) {
       continue;
     }
     if (receipt && receipt.disposition === 'preserved') {
-      if (!entryExists(abs)) throw new Error('cleanup_preserved_path_missing:' + rel);
+      if (!entryExists(abs)) throw new Error('a path the cleanup receipt records as preserved is gone: ' + rel);
       let liveDigest = null;
       try {
         const stat = fs.lstatSync(abs);
@@ -4119,7 +4119,7 @@ function cleanupActiveCache(paths, transaction, opts) {
       throw new Error('cleanup_missing_without_receipt:' + rel);
     }
     let stat;
-    try { stat = fs.lstatSync(abs); } catch (_) { throw new Error('cleanup_unreadable:' + rel); }
+    try { stat = fs.lstatSync(abs); } catch (_) { throw new Error('a cleanup candidate could not be stat-ed: ' + rel); }
     const liveDigest = stat.isFile() && !stat.isSymbolicLink()
       ? schema.sha256Hex(fs.readFileSync(abs)) : null;
     if (!stat.isFile() || stat.isSymbolicLink() || liveDigest !== entry.digest) {
@@ -5140,7 +5140,7 @@ function main() {
       result = schema.refuse(reason || 'replan_internal_error', detail);
     }
   } else {
-    throw new Error('unknown_subcommand:' + subcommand);
+    throw new Error('no such subcommand: ' + subcommand);
   }
   recordOutcome(result);
   schema.emit(result);

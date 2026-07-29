@@ -2571,12 +2571,18 @@ function reduceReviewReceipts(input) {
   const members = Array.isArray(value.expected_members) ? value.expected_members.map(String) : [];
   const surfaces = Array.isArray(value.expected_surfaces) ? value.expected_surfaces.map(String) : [];
   const receipts = Array.isArray(value.receipts) ? value.receipts : [];
+  // The shape rejections below carry PROSE, not a condition token. Nothing outside this function
+  // ever matched those tokens — both callers pass `reason` straight through to an operator-facing
+  // refusal, exactly as the plan-validator's own gate-verify reasons already do — so the token was
+  // migration staging with no reader, and the sentence is what the operator actually needs.
   const incomplete = reason => ({ complete: false, execution_status: 'failed', domain_outcome: null, gate_effect: null, reason });
   if (!REVIEW_AGGREGATIONS.includes(aggregation) || !REVIEW_GATE_ROLES.includes(role)
-    || !members.length || members.length !== surfaces.length) return incomplete('review_reducer_shape_invalid');
-  if (aggregation === 'sequence' && members.length !== 1) return incomplete('review_sequence_cardinality_invalid');
-  if (aggregation === 'replicated_majority' && new Set(surfaces).size !== 1) return incomplete('review_replica_surface_mismatch');
-  if (aggregation === 'partitioned_all' && new Set(surfaces).size !== surfaces.length) return incomplete('review_partition_surface_duplicate');
+    || !members.length || members.length !== surfaces.length) {
+    return incomplete('reducer inputs are not a known aggregation/role over corresponding members and surfaces');
+  }
+  if (aggregation === 'sequence' && members.length !== 1) return incomplete('a sequence gate must name exactly one member');
+  if (aggregation === 'replicated_majority' && new Set(surfaces).size !== 1) return incomplete('a replicated_majority gate must name one shared surface');
+  if (aggregation === 'partitioned_all' && new Set(surfaces).size !== surfaces.length) return incomplete('a partitioned_all gate must name a distinct surface per member');
   if (receipts.length !== members.length) return incomplete('review_receipt_missing');
   const byMember = new Map();
   for (const receipt of receipts) {
@@ -2588,7 +2594,7 @@ function reduceReviewReceipts(input) {
   }
   for (let i = 0; i < members.length; i++) {
     if (!byMember.has(members[i]) || String(byMember.get(members[i]).surface || '') !== surfaces[i]) {
-      return incomplete('review_receipt_surface_mismatch');
+      return incomplete('a receipt surface does not match the surface expected for its member');
     }
   }
   const ordered = members.map(id => byMember.get(id));
@@ -2864,7 +2870,8 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       || !isCanonicalBlobMap(attempt.candidate_declared)
       || !HEX64_RE.test(String(attempt.epoch_lineage_id || ''))
       || !HEX64_RE.test(String(attempt.scope_lineage_id || ''))) {
-      return refuseJournal('review_journal_identity_mismatch');
+      return refuseJournal('review_journal_malformed',
+        'attempt identity invalid: contract_version, plan_hash, transaction_key, candidate digests, candidate_declared or lineage ids');
     }
     txs.add(attempt.transaction_key);
     if (!Number.isInteger(attempt.ordinal) || attempt.ordinal < 1
@@ -2887,13 +2894,13 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       || gate.surface_digests.some(value => !HEX64_RE.test(String(value || '')))
       || !Array.isArray(gate.certified_producers)
       || JSON.stringify(gate.members) !== JSON.stringify(Array.from(new Set(gate.members.map(String))).sort())) {
-      return refuseJournal('review_journal_identity_mismatch');
+      return refuseJournal('review_journal_malformed', 'logical_gate shape invalid');
     }
     const gateIdentity = { kind: gate.kind, members: gate.members, claim_digest: gate.claim_digest,
       surface_digests: gate.surface_digests, aggregation: gate.aggregation,
       certified_producers: gate.certified_producers };
     if (sha256Hex(canonicalJson(gateIdentity)) !== gate.key) {
-      return refuseJournal('review_journal_identity_mismatch');
+      return refuseJournal('review_journal_malformed', 'logical_gate key does not hash its own identity');
     }
     if (!Array.isArray(attempt.context_hashes)) {
       return refuseJournal('review_journal_malformed', 'context_hashes must be an array');
@@ -2904,7 +2911,7 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       context_hash: attempt.context_hashes.length === 1 ? attempt.context_hashes[0] : null,
     }));
     if (expectedTransaction !== attempt.transaction_key) {
-      return refuseJournal('review_journal_transaction_key_mismatch');
+      return refuseJournal('review_journal_malformed', 'transaction_key does not hash the attempt identity');
     }
     if (!ordinals.has(scopeKey(attempt))) ordinals.set(scopeKey(attempt), []);
     ordinals.get(scopeKey(attempt)).push(attempt.ordinal);
@@ -3011,20 +3018,20 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
         || !HEX64_RE.test(String(vector.vector_id || ''))
         || !['pass', 'fail', 'inconclusive'].includes(vector.outcome)
         || !HEX64_RE.test(String(vector.receipt_sha256 || ''))) {
-        return refuseJournal('review_journal_validation_vector_malformed');
+        return refuseJournal('review_journal_malformed', 'a receipt validation vector is not well-formed for this candidate');
       }
       const key = canonicalJson(vector);
       if (!vectorKeys.has(key)) { vectorKeys.add(key); vectors.push(vector); }
     }
     vectors.sort((a, b) => (a.command_id + ':' + a.vector_id).localeCompare(b.command_id + ':' + b.vector_id));
     if (canonicalJson(vectors) !== canonicalJson(attempt.validation_vectors)) {
-      return refuseJournal('review_journal_validation_vector_mismatch');
+      return refuseJournal('review_journal_malformed', 'recorded validation_vectors do not match the receipts they are drawn from');
     }
     for (const obligation of attempt.validation_obligations) {
       if (!isPlainObject(obligation) || Object.keys(obligation).sort().join(',') !== 'command_id,required_pass_vector_id'
         || !HEX64_RE.test(String(obligation.command_id || ''))
         || !HEX64_RE.test(String(obligation.required_pass_vector_id || ''))) {
-        return refuseJournal('review_journal_validation_obligation_malformed');
+        return refuseJournal('review_journal_malformed', 'a validation obligation is not a {command_id, required_pass_vector_id} pair');
       }
     }
     const expectedSurfaces = gate.members.map(member => {
@@ -3043,14 +3050,15 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
     const lineage = lineageByScope.get(scopeKey(attempt)) || [];
     if (attempt.ordinal !== lineage.length + 1
       || attempt.review_phase !== (lineage.length ? 'closure' : 'discovery')) {
-      return refuseJournal('review_journal_phase_mismatch');
+      return refuseJournal('review_journal_malformed', 'ordinal or review_phase does not continue this scope lineage');
     }
     const previous = lineage.length ? lineage[lineage.length - 1] : null;
     let expectedProgress;
     if (!previous) {
       if (attempt.repair_delta !== null || attempt.prior_open_uids.length !== 0
         || attempt.resolutions.length !== 0) {
-        return refuseJournal('review_journal_phase_mismatch');
+        return refuseJournal('review_journal_malformed',
+          'a discovery attempt must carry no repair_delta, prior open uids or resolutions');
       }
       expectedProgress = { progress: null, reason: null, stop_reason: null, replan_required: false,
         consecutive_nonprogress: 0, idempotency_key: null,
@@ -3060,13 +3068,14 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       if (attempt.scope_lineage_id !== previous.scope_lineage_id
         || attempt.epoch_lineage_id !== previous.epoch_lineage_id
         || canonicalJson(attempt.validation_obligations) !== canonicalJson(previous.validation_obligations)) {
-        return refuseJournal('review_journal_lineage_mismatch');
+        return refuseJournal('review_journal_malformed',
+          'scope/epoch lineage or validation obligations do not continue the previous attempt');
       }
       const delta = deriveRepairDelta({ previous_attempt: previous,
         current_candidate: { digest: attempt.candidate_digest, declared: attempt.candidate_declared,
           residue_digest: attempt.candidate_residue_digest } });
       if (!delta.ok || canonicalJson(delta.repair_delta) !== canonicalJson(attempt.repair_delta)) {
-        return refuseJournal('review_journal_repair_delta_mismatch');
+        return refuseJournal('review_journal_malformed', 'recorded repair_delta does not match the delta derived from the previous attempt');
       }
       const expectedPriorFindings = previous.current_findings
         .filter(finding => finding.status !== 'resolved');
@@ -3090,7 +3099,7 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
         .map(finding => finding.uid).sort();
       if (canonicalJson(previousOpen) !== canonicalJson(attempt.prior_open_uids)
         || canonicalJson(currentOpen) !== canonicalJson(attempt.current_open_uids)) {
-        return refuseJournal('review_journal_frontier_mismatch');
+        return refuseJournal('review_journal_malformed', 'recorded prior/current open uids do not match the derived finding frontier');
       }
       const validation = compareValidationObligations(attempt.validation_obligations, attempt.validation_vectors,
         attempt.candidate_digest);
@@ -3127,7 +3136,9 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
     lineage.push(attempt);
     lineageByScope.set(scopeKey(attempt), lineage);
     for (const identity of Object.values(attempt.producer_bindings)) {
-      if (!isWriterIdentityTuple(identity)) return refuseJournal('review_journal_writer_identity_malformed');
+      if (!isWriterIdentityTuple(identity)) {
+        return refuseJournal('review_journal_malformed', 'a producer binding is not a writer identity tuple');
+      }
     }
     const selectedWriter = attempt.repair.selected_writer;
     if (Object.keys(attempt.repair).sort().join(',') !== 'selected_writer,settled'
@@ -3138,7 +3149,7 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       || (attempt.consumed_by !== null && attempt.consumed_by !== selectedWriter)
       || (attempt.consumed_by !== null && attempt.repair.settled !== true)
       || (attempt.outcome === 'pass' && (selectedWriter !== null || attempt.consumed_by !== null || attempt.rebind.length))) {
-      return refuseJournal('review_journal_repair_state_malformed');
+      return refuseJournal('review_journal_malformed', 'repair selection/settlement state invalid for this outcome');
     }
     // The fold boundary marker. repair-node durably records this tuple on a gate attempt it
     // folds whose latest outcome is a settled PASS, so a later reopen of that gate synthesizes
@@ -3163,7 +3174,8 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
         || canonicalJson(fold.candidate_declared) !== canonicalJson(attempt.candidate_declared)
         || !folding || folding.outcome !== 'fail'
         || !isPlainObject(folding.repair) || folding.repair.selected_writer !== fold.selected_writer) {
-        return refuseJournal('review_journal_fold_marker_invalid');
+        return refuseJournal('review_journal_malformed',
+          'fold marker invalid: it must seal a settled PASS onto a real failed attempt with the same selected writer');
       }
     }
     let expectedBase = selectedWriter && attempt.producer_bindings[selectedWriter]
@@ -3196,7 +3208,9 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
   }
   for (const values of ordinals.values()) {
     values.sort((a, b) => a - b);
-    if (values.some((value, index) => value !== index + 1)) return refuseJournal('review_journal_duplicate_ordinal');
+    if (values.some((value, index) => value !== index + 1)) {
+      return refuseJournal('review_journal_malformed', 'attempt ordinals are not a gap-free 1..n sequence within a scope');
+    }
   }
   return { ok: true };
 }
@@ -3314,14 +3328,16 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
     if (!isCanonicalBlobMap(attempt.candidate_declared)) {
       return refuseJournal('review_journal_malformed', 'candidate_declared must be a canonical {path: "<mode> <sha>"} map with sorted keys');
     }
-    if (txKeys.has(attempt.transaction_key)) return refuseJournal('review_journal_duplicate_transaction_key');
+    if (txKeys.has(attempt.transaction_key)) {
+      return refuseJournal('review_journal_malformed', 'two attempts share one transaction_key');
+    }
     txKeys.add(attempt.transaction_key);
     if (!attempt.logical_gate || typeof attempt.logical_gate !== 'object') return refuseJournal('review_journal_malformed', 'logical_gate required');
     const canonical = canonicalLogicalGateIdentity(attempt.logical_gate);
     if (attempt.logical_gate.key !== canonical.key || attempt.logical_gate.kind !== canonical.kind
       || JSON.stringify(attempt.logical_gate.origin) !== JSON.stringify(canonical.origin)
       || JSON.stringify(attempt.logical_gate.members) !== JSON.stringify(canonical.members)) {
-      return refuseJournal('review_journal_identity_mismatch');
+      return refuseJournal('review_journal_malformed', 'logical_gate does not match its canonical identity');
     }
     const intersectingContracts = schema2Contracts.filter(contract =>
       contract.logical_gate_key === canonical.key
@@ -3338,7 +3354,9 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
     }
     if (!Number.isInteger(attempt.ordinal) || attempt.ordinal < 1) return refuseJournal('review_journal_malformed', 'ordinal must be a positive integer');
     const ordinalKey = canonical.key + '\n' + attempt.ordinal;
-    if (ordinalKeys.has(ordinalKey)) return refuseJournal('review_journal_duplicate_ordinal');
+    if (ordinalKeys.has(ordinalKey)) {
+      return refuseJournal('review_journal_malformed', 'two attempts share one gate ordinal');
+    }
     ordinalKeys.add(ordinalKey);
     if (!Array.isArray(attempt.generations) || attempt.generations.length !== canonical.members.length) {
       return refuseJournal('review_journal_malformed', 'generations must cover every logical-gate member');
@@ -3347,14 +3365,16 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
       .sort((a, b) => a.member.localeCompare(b.member));
     if (generations.some(g => !g.member || !g.nonce)
       || JSON.stringify(generations.map(g => g.member)) !== JSON.stringify(canonical.members)) {
-      return refuseJournal('review_journal_identity_mismatch');
+      return refuseJournal('review_journal_malformed', 'generations do not cover the canonical gate members');
     }
     const crypto = require('crypto');
     const expectedTx = crypto.createHash('sha256').update(JSON.stringify({
       plan_hash: journal.plan_hash, logical_gate_key: canonical.key,
       candidate_digest: attempt.candidate_digest, generations,
     })).digest('hex');
-    if (expectedTx !== attempt.transaction_key) return refuseJournal('review_journal_transaction_key_mismatch');
+    if (expectedTx !== attempt.transaction_key) {
+      return refuseJournal('review_journal_malformed', 'transaction_key does not hash the attempt identity');
+    }
     if (!['close-node', 'close-and-open-next'].includes(attempt.settlement_command)
       || ![null, 'pass', 'fail'].includes(attempt.outcome)
       || !(attempt.reason === null || typeof attempt.reason === 'string')
@@ -3372,11 +3392,13 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
         || typeof receipt.receipt_sha256 !== 'string' || typeof receipt.effective_pass !== 'boolean'
         || ![null, 'pass', 'fail'].includes(receipt.verdict)
         || !Number.isInteger(receipt.findings_blocking) || receipt.findings_blocking < 0) {
-        return refuseJournal('review_journal_identity_mismatch');
+        return refuseJournal('review_journal_malformed', 'a receipt does not identify a distinct gate member at its recorded generation');
       }
       receiptMembers.add(receipt.node_id);
       const expectedReceipt = crypto.createHash('sha256').update(receipt.body).digest('hex');
-      if (receipt.receipt_sha256 !== expectedReceipt) return refuseJournal('review_journal_receipt_hash_mismatch');
+      if (receipt.receipt_sha256 !== expectedReceipt) {
+        return refuseJournal('review_journal_malformed', 'receipt_sha256 does not hash the receipt body');
+      }
       const bindingLines = Array.from(receipt.body.matchAll(/^evidence-binding:[^\n]*$/gm));
       const exactBinding = /^evidence-binding:[ \t]+([^ \t\n]+)[ \t]+([^ \t\n]+)[ \t]*$/.exec(
         bindingLines.length === 1 ? bindingLines[0][0] : '');
@@ -3481,7 +3503,7 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
       }
       for (const [producer, identity] of Object.entries(attempt.producer_bindings)) {
         if (!producer || !isWriterIdentityTuple(identity)) {
-          return refuseJournal('review_journal_writer_identity_malformed');
+          return refuseJournal('review_journal_malformed', 'a producer binding is not a writer identity tuple');
         }
       }
     }
@@ -3565,7 +3587,7 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
       || (attempt.outcome === 'pass' && attempt.reason !== null)
       || (attempt.outcome === 'fail' && typeof attempt.reason !== 'string')
       || (attempt.lifecycle_settled && attempt.outcome === null)) {
-      return refuseJournal('review_journal_illegal_transition');
+      return refuseJournal('review_journal_malformed', 'outcome, reason and lifecycle_settled are not a legal combination');
     }
     const selected = attempt.repair.selected_writer;
     const repairSettled = attempt.repair.settled;
@@ -3574,7 +3596,7 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
       || (attempt.consumed_by !== null && (typeof attempt.consumed_by !== 'string' || attempt.consumed_by === ''))
       || (attempt.consumed_by !== null && (attempt.outcome !== 'fail' || repairSettled !== true || selected !== attempt.consumed_by))
       || (attempt.outcome === 'pass' && (selected !== null || repairSettled !== null || attempt.consumed_by !== null))) {
-      return refuseJournal('review_journal_illegal_transition');
+      return refuseJournal('review_journal_malformed', 'repair selection, settlement and consumption are not a legal combination for this outcome');
     }
   }
   return { ok: true, journal };

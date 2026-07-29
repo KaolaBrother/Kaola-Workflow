@@ -1288,18 +1288,69 @@ const CENSUS_FILES = fs.readdirSync(path.join(REPO, 'scripts'))
   .filter(f => /^kaola-workflow-.*\.js$/.test(f))
   .map(f => 'scripts/' + f);
 
+// Shape 5 is a thrown condition whose message CONTINUES after the token (`'unknown_arg:' + arg`).
+// The colon is the discriminator, not the space: `'timeout_minutes must be an integer'` is a prose
+// message whose leading word is a FIELD NAME, and counting it would inflate the metric with things
+// that were never conditions. Kept OUTSIDE the array literal because the mirror's extractor requires
+// every line between the brackets to be a bare regex — that strictness is the fail-closed property,
+// so the comment moves rather than the extractor loosening.
 const EMISSION_SHAPES = [
   /(?:reason|reasonCode|status|verdict|handoff_status|inner_reason|condition)\s*:\s*'([a-z][a-z0-9_:]{3,})'/g,
   /\b(?:refuse|bad|fail)\(\s*'([a-z][a-z0-9_:]{3,})'/g,
   /reasons\.push\(\s*'([a-z][a-z0-9_:]{3,})'/g,
   /throw new Error\(\s*'([a-z][a-z0-9_]{3,})'\s*\)/g,
+  /throw new Error\(\s*'([a-z][a-z0-9_]{3,}):/g,
 ];
+
+// A LOCAL REFUSAL CONSTRUCTOR is a function whose FIRST parameter is carried into a returned
+// object literal as the condition-bearing key — `const reject = reason => ({ ok: false, reason })`.
+// That is the SAME role as `refuse`/`bad`/`fail` in shape 2, and shape 2 missed it for one reason
+// only: the name was not on a hard-coded list of three. Hard-coding a longer list rebuilds the same
+// blind spot one rename later, so the names are DERIVED per file instead. Measured at introduction:
+// six such constructors (`reject`, `incomplete`, `refuseJournal`, `selectionRecordRefusal`,
+// `refuseLineage`, `deferFailure`) minting 41 conditions the four static shapes could not see.
+const REFUSAL_CONSTRUCTOR_KEYS = 'reason|reasonCode|status|verdict|handoff_status|inner_reason|condition';
+
+function deriveRefusalConstructors(content) {
+  const names = new Set();
+  const keyRe = new RegExp('^(?:' + REFUSAL_CONSTRUCTOR_KEYS + ')$');
+  const carries = (param, body) => {
+    const shorthand = new RegExp('(?:^|[{,]\\s*)' + param + '\\s*(?:[,}]|$)', 'm').test(body);
+    const explicit = new RegExp('(?:' + REFUSAL_CONSTRUCTOR_KEYS + ')\\s*:\\s*' + param + '\\s*(?:[,}]|$)', 'm').test(body);
+    return (shorthand && keyRe.test(param)) || explicit;
+  };
+  const arrow = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\(\s*([A-Za-z_$][\w$]*)[^)]*\)|([A-Za-z_$][\w$]*))\s*=>\s*\(?\{([\s\S]{0,400}?)\}\)?[;,\n]/g;
+  let m;
+  while ((m = arrow.exec(content)) !== null) {
+    const param = m[2] || m[3];
+    if (param && carries(param, m[4] || '')) names.add(m[1]);
+  }
+  const declared = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)[^)]*\)\s*\{([\s\S]{0,600}?)\n\}/g;
+  while ((m = declared.exec(content)) !== null) {
+    const body = m[3] || '';
+    if (/return\s*\{/.test(body) && carries(m[2], body)) names.add(m[1]);
+  }
+  // The three hard-coded names already have their own shape; re-deriving them would double-scan.
+  for (const already of ['refuse', 'bad', 'fail']) names.delete(already);
+  return names;
+}
+
+function refusalConstructorShape(names) {
+  if (!names.size) return null;
+  const alternation = [...names].map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return new RegExp('\\b(?:' + alternation + ')\\(\\s*\'([a-z][a-z0-9_:]{3,})\'', 'g');
+}
 
 function scanEmittedConditions(files) {
   const seen = new Set();
   for (const rel of files) {
     const content = read(rel);
-    for (const re of EMISSION_SHAPES) {
+    const shapes = EMISSION_SHAPES.slice();
+    // Derived per FILE: a constructor is local to the file that defines it, so a name meaning
+    // "refusal" in one file must not be read as one in another that happens to reuse the word.
+    const derived = refusalConstructorShape(deriveRefusalConstructors(content));
+    if (derived) shapes.push(derived);
+    for (const re of shapes) {
       re.lastIndex = 0;
       let m;
       while ((m = re.exec(content)) !== null) if (m[1].indexOf('_') >= 0) seen.add(m[1]);
