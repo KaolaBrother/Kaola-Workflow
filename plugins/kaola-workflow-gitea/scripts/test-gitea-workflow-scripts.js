@@ -1422,7 +1422,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
       cwd: root, encoding: 'utf8',
       env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
     });
-    assert.strictEqual(result.status, 1, 'offline unverified startup must exit 1');
+    assert.strictEqual(result.status, 0, 'offline unverified startup ANSWERS at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'target_unverified');
     assert.strictEqual(out.claim, 'none');
@@ -1446,7 +1446,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
       cwd: root, encoding: 'utf8',
       env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
     });
-    assert.strictEqual(result.status, 1, 'offline blocked startup must exit 1');
+    assert.strictEqual(result.status, 0, 'offline blocked startup ANSWERS at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'user_target_blocked');
     assert.strictEqual(out.claim, 'none');
@@ -1599,7 +1599,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test'], {
       cwd: root, encoding: 'utf8', env: process.env
     });
-    assert.strictEqual(result.status, 1, 'startup without --target-issue must exit 1');
+    assert.strictEqual(result.status, 0, 'startup without --target-issue answers usage at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'no_target', 'startup without --target-issue must return no_target');
     assert.strictEqual(out.claim, 'none');
@@ -1616,7 +1616,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
     const result = spawnSync(process.execPath, [claimScript, 'pick-next'], {
       cwd: root, encoding: 'utf8', env: process.env
     });
-    assert.strictEqual(result.status, 1, 'pick-next without --target-issue must exit 1');
+    assert.strictEqual(result.status, 0, 'pick-next without --target-issue answers usage at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'no_target', 'pick-next without --target-issue must return no_target');
     assert.strictEqual(out.claim, 'none');
@@ -4593,7 +4593,7 @@ function testGiteaBoundary2FetchRetry507() {
     }
   }
 
-  // (c) forge claimExplicitTarget with transient classifyIssue → target_indeterminate result:escalate
+  // (c) forge claimExplicitTarget with transient classifyIssue → target_indeterminate result:answer
   // Exercises the #495 forward-compat handler in the gitea claim.js.
   {
     const root = tempRoot('kw-gt-b2c-root-');
@@ -4611,8 +4611,8 @@ function testGiteaBoundary2FetchRetry507() {
       });
       assert.strictEqual(result && result.status, 'target_indeterminate',
         '#507(gt-b2c): forge claimExplicitTarget persistent transient → target_indeterminate (got ' + JSON.stringify(result) + ')');
-      assert.strictEqual(result && result.result, 'escalate',
-        '#507(gt-b2c): result must be escalate (got ' + JSON.stringify(result) + ')');
+      assert.strictEqual(result && result.result, 'answer',
+        '#507(gt-b2c): result must be answer (got ' + JSON.stringify(result) + ')');
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }
@@ -4639,8 +4639,8 @@ function testGiteaBoundary2FetchRetry507() {
       });
       assert.strictEqual(result && result.status, 'target_unavailable',
         '#511(gt): genuine-negative 404 → claimExplicitTarget target_unavailable (got ' + JSON.stringify(result) + ')');
-      assert.strictEqual(result && result.result, 'refuse',
-        '#511(gt): genuine-negative 404 → result:refuse, NEVER escalate (got ' + JSON.stringify(result) + ')');
+      assert.notStrictEqual(result && result.status, 'target_indeterminate',
+        '#511(gt): a genuine-negative 404 is DETERMINATE — never the transient status (got ' + JSON.stringify(result) + ')');
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }

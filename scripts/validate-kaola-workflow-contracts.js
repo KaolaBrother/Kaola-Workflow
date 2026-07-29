@@ -153,11 +153,11 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'validat
 // n5 (#653 finding D): selection-evidence docking must reach the next SKILL; the
 // observed_gap_unseeded refusal and run-gap manual-seed prose must reach the finalize/plan-run SKILLs.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection-evidence');
-// #825: Gate 1 + the typed clarification channel are runtime-neutral rules, so the Codex SKILL
-// pack must speak both or the codex runtime silently loses a refusal the script still enforces.
+// The selection record + the typed clarification channel are runtime-neutral rules, so the Codex
+// SKILL pack must speak both or the codex runtime silently loses a contract the script still keeps.
 // The re-pin is bidirectional in the SAME diff: the retired planner-first lock is asserted ABSENT
 // from the codex planner profile beside the new positive pins.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection_record_missing');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection_record_note');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--selection-record');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'clarification_required');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.cache/origin/');

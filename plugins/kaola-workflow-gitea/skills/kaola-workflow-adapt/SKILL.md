@@ -316,10 +316,12 @@ dispatch below. Resolve the shape FIRST, before the authoring guard.
 
 ## Origin evidence and the selection record
 
-Selection is orchestrator-owned, and the claim script is the commitment point: an
-orchestrator-originated claim carries `--target-source orchestrator_selected --selection-record
-<path>` or refuses `selection_record_missing` with zero side effects. On an acquiring claim the
-record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
+Selection is orchestrator-owned, so the orchestrator authors the record: an orchestrator-originated
+claim carries `--target-source orchestrator_selected --selection-record <path>`. The claim does not
+grade it and never refuses over it — a record that parses is persisted byte-for-byte as authored,
+and a claim that arrives without a usable one gets the canonical "none recorded" record written in
+its place plus a `selection_record_note` on the emitted envelope saying so. On an acquiring claim
+the record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
 stamped into `workflow-state.md` as `selection_record_digest:`, and any pre-claim reconnaissance
 staged under `kaola-workflow/.origin/<target-key>/` is folded into the same `.cache/origin/`
 directory.
@@ -393,16 +395,20 @@ dispatched workflow-planner passes it; add `--sink pr` only for a requested PR s
 empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
 as a self-check (NOT `--freeze`, NOT `authoring-allowed`), then RUNS `kaola-gitea-workflow-adaptive-handoff.js --project {project} --json` (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate), and RETURNS the handoff packet. It never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches. If the project already has a
 `workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). <!-- PIN: claim-escalate -->
-On a claim refusal — any `claim_verdict` that is NOT `acquired`/`owned` — no `workflow-state.md` is
-written. Surface `claim_reasoning` and classify by `result`:
-- `result: refuse` (e.g. `target_occupied`, `user_target_blocked`,
-  `user_target_red`, `user_target_closed`, `target_unavailable`, `target_unverified`, or
-  `claim: none`): **HARD STOP** (**fail closed** — do not retry a different issue, do not
-  blind-read a missing state file). The determinate RED is final.
-- `result: escalate` (`target_indeterminate` / `target_set_indeterminate`): the classifier
-  subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
-  pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
-  no plan/ledger exists yet at claim time.
+When `claim_verdict` is NOT `acquired`/`owned`, no `workflow-state.md` was written. Surface
+`claim_reasoning` and classify by `result`:
+- `result: answer` (e.g. `no_target`, `target_ambiguity`, `user_target_blocked`, `user_target_red`,
+  `target_unavailable`, `target_unverified`, `target_indeterminate`): the claim did not happen and
+  nothing was written. This is a fact to act on, not a stop — fix the argv, retry, go offline, or
+  re-state the reason and claim a different target. Never blind-read a missing state file.
+- `result: consent` (`dirty_tree_refused`): the subject is the user's own uncommitted work. **ASK
+  THE USER the `ask` on the envelope verbatim** and act on the answer (commit, stash, or worktree).
+- `result: refuse` (`target_occupied`, `user_target_closed`, `target_set_*` other than the
+  indeterminate one, or `claim: none` with no other reading): **HARD STOP** (**fail closed** — do
+  not retry a different issue, do not blind-read a missing state file).
+- `result: escalate` (`target_set_indeterminate`): the bundle classifier faulted and bounded retry
+  is exhausted. **PAUSE and ASK THE USER** — offer to retry, pick a different target, go offline,
+  or abort. This is NOT an `adaptive-node write-halt`; no plan/ledger exists yet at claim time.
 
 **Planner-first control boundary.** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 
@@ -467,8 +473,8 @@ node "$claim_script" startup \
 
 Compatibility rule: `--target-issue` / `KAOLA_TARGET_ISSUE` keep current one-issue
 behavior unchanged. `--target-issues` / `KAOLA_TARGET_ISSUES` are the ONLY
-multi-issue startup path. If both are set, the script refuses with
-`target_ambiguity`; never pass both.
+multi-issue startup path. If both are set, the script answers `target_ambiguity`
+usage at exit 0 and writes nothing; pass exactly one.
 
 ### Bundle project and branch shape
 
@@ -500,11 +506,11 @@ A bundle run ends at ONE finalization. The finalization step:
 - produces one closure receipt recording `primary_issue`, `issue_numbers`,
   `closed_issues`, `failed_issue_closures`, and removed roadmap sources.
 
-### Claim refusals (bundle-specific)
+### Claim outcomes (bundle-specific)
 
 | code | trigger |
 |------|---------|
-| `target_ambiguity` | both `--target-issue` and `--target-issues` set |
+| `target_ambiguity` | both `--target-issue` and `--target-issues` set (usage answer, exit 0) |
 | `target_set_empty` | issue list empty or missing |
 | `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | any member is already claimed |
@@ -513,7 +519,6 @@ A bundle run ends at ONE finalization. The finalization step:
 | `target_set_unavailable` | member state probe failed (online) |
 | `target_set_unverified` | member unverifiable (offline, no local evidence) |
 | `target_set_label_rollback_failed` | partial claim could not be fully rolled back |
-| `target_set_mismatch` | persisted `issue_numbers` in `workflow-state.md` does not match the claimed `--target-issues` set — startup validated the claim but the persisted state is inconsistent |
 
 On any bundle claim refusal, treat it the same as a single-issue claim refusal:
 surface the typed code and STOP; do not retry with a different issue set.

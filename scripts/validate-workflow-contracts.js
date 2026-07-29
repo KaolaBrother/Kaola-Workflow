@@ -304,10 +304,10 @@ for (const file of nextSurfaces796) {
     'frontier blocked because', 'closest actionable proxy']) {
     assertIncludes(file, relocated);
   }
-  // #825 (Gate 1): the orchestrator authors the record, so the surface must name the flag it
-  // passes and the typed refusal it gets without one.
+  // The orchestrator authors the record, so the surface must name the flag it passes and the
+  // note it gets back when the claim had to synthesize one instead.
   assertIncludes(file, '--selection-record');
-  assertIncludes(file, 'selection_record_missing');
+  assertIncludes(file, 'selection_record_note');
   assertIncludes(file, 'selection_mode');
   assertNotIncludes(file, "planner's no-target survey mode");
   // The FRONT-END-ENTRY enumeration must carry the described-task case too — not just the Step 0
@@ -373,10 +373,9 @@ for (const profile of plannerProfiles825) {
 }
 assertNotIncludes('agents/workflow-planner.md', 'surveys the backlog itself');
 assertNotIncludes('agents/workflow-planner.md', 'selects a bundle jointly with how it decomposes');
-// #825 (Gate 1): the commitment point is a SCRIPT refusal now, not prose — pin both typed codes
-// and the durable anchor they produce, at the machine end that emits them.
-assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_missing');
-assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_invalid');
+// The commitment point does not refuse: the record is persisted and digested, and what the claim
+// found is reported. Pin the durable anchor and the report, at the machine end that emits them.
+assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_note');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_digest');
 assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'clarification_required');
 assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'CLARIFICATION_ROUND_CAP');

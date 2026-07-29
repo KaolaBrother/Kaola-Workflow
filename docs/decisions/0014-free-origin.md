@@ -1,5 +1,11 @@
 # 14. Free origin: orchestrator-owned selection behind a typed commitment gate
 
+> **Superseded in part (#855).** The two selection-record refusals below no longer exist:
+> `selection_record_invalid` is deleted as a token together with its field grader, and
+> `selection_record_missing` is demoted to an answer. The record is still authored, persisted
+> byte-for-byte and digested — what is gone is the grading of its contents and the refusal
+> built on it. See `CHANGELOG.md` and `docs/api.md` § The typed selection record at claim.
+
 Date: 2026-07-28
 Status: Accepted
 Issue: #825

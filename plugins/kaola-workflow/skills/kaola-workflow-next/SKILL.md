@@ -250,7 +250,7 @@ several issues or when auto-bundle mode identifies a high-confidence same-scope 
 When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
 and pass `--target-issues 42,47,53` (project/branch `bundle-42-47-53`, sorted
 + deduplicated; the script validates the exact set, never reorders). The bundle lane runs on `workflow_path: adaptive`.
-`--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
+`--target-issue` keeps single-issue behavior; pass exactly one (both answers `target_ambiguity`).
 
 ### Auto-bundle entry
 
@@ -370,29 +370,31 @@ writing any state. State the typed verdict and STOP:
 - **`selection_indeterminate`** — selection cannot be resolved determinately (e.g. an `ambiguous`
   co-tenant lane blocks the frontier, or the priority signal is genuinely contradictory).
 
-Both join the `target_indeterminate` verdict family (`result: 'escalate'`, `claim: 'none'`). A CLEAN
+Both are pre-claim survey verdicts (`result: 'escalate'`, `claim: 'none'`) — nothing is written and
+the user is asked. A CLEAN
 selection — frontier honored, no ambiguity — claims autonomously; only ambiguity or a policy conflict
 asks the user first.
 
-### Gate 1 — the typed selection record at claim
+### The typed selection record at claim
 **Selection record.** The selection is the orchestrator's, so the orchestrator persists it. Author a
-JSON record with exactly six non-empty fields — `selection_mode`, `selection_bundle`,
+JSON record with six fields — `selection_mode`, `selection_bundle`,
 `selection_priority_basis`, `selection_rejected`, `selection_disjointness`, and `clarifications` (the
 questions asked and the answers received, or `none`) — and pass it to the claim as
-`--target-source orchestrator_selected --selection-record <path>`. Startup refuses
-`selection_record_missing` when the flag or the file is absent, and `selection_record_invalid` when
-the record is unparseable or any of the six fields is empty; both refuse with zero side effects, so a
-missing record never half-claims. On an acquiring claim startup copies the record verbatim to
+`--target-source orchestrator_selected --selection-record <path>`. Startup never grades the record
+and never refuses over it: what parses is persisted byte-for-byte as authored, and a claim arriving
+without a usable record gets the canonical "none recorded" record written in its place plus a
+`selection_record_note` on the emitted envelope naming what was found. Claiming is bookkeeping — the
+record is the evidence, not the door. On an acquiring claim startup copies the record verbatim to
 `kaola-workflow/{project}/.cache/origin/selection-record.json`, stamps its sha256 into
 `workflow-state.md` as `selection_record_digest:`, and folds any pre-claim reconnaissance staged under
 `kaola-workflow/.origin/<target-key>/` into that same `.cache/origin/` directory (`<target-key>` is the
 project name the claim resolves to). A user-named claim passes neither flag and startup writes the
-degenerate record (`selection_mode: explicit-target`) itself, so the durable field is never optional.
+canonical record (`selection_mode: explicit-target`) itself, so the durable field is never optional.
 
 Everything BEFORE that claim is free: dispatch read-only agents, read what you need, and ask the user
 when the pick is genuinely ambiguous — just land the findings in files under
-`kaola-workflow/.origin/<target-key>/`, never only in run context. Nothing else is regulated until
-the commitment point, and the commitment point is a script refusal rather than a convention. The
+`kaola-workflow/.origin/<target-key>/`, never only in run context. Nothing is regulated at the
+commitment point either — it records what it was handed and reports what it found. The
 router may also dock a human-readable `kaola-workflow/{project}/.cache/selection-evidence.md` with a
 leading `selection_mode: auto-bundle|single-issue` line; the orchestrator is that sidecar's only
 writer, so it exists only on this no-target branch — a user-named claim legitimately has none.
@@ -478,7 +480,7 @@ router-side dispatch at all, on either branch):
 
 **Skip this transaction** — the adaptive front end (above) always claims via the
 `workflow-planner`, not here. This transaction never runs; it is retained only for the shared
-typed-refusal classification below.
+claim-outcome classification below.
 
 Run the startup transaction with the agent-selected target. Startup validates
 the explicit issue, refreshes PR-backed folders with `watch-pr`, and atomically
@@ -514,11 +516,17 @@ fi
 
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
 `verdict: no_target`, the agent must select a target and re-run. <!-- PIN: claim-escalate -->
-If startup returns a typed refusal, read the `reasoning` field and classify by `result`:
-- `result: refuse` (`target_occupied`, `user_target_blocked`, `user_target_red`,
-  `target_unavailable`, `target_unverified`): **HARD STOP** — the determinate RED is final; do
+When startup does not acquire, read the `reasoning` field and classify by `result`:
+- `result: answer` (`no_target`, `target_ambiguity`, `user_target_blocked`, `user_target_red`,
+  `target_unavailable`, `target_unverified`, `target_indeterminate`): nothing was written and the
+  claim did not happen. Act on the fact — fix the argv, retry, go offline, or re-state the reason
+  and claim a different target. Do not blind-read a missing state file.
+- `result: consent` (`dirty_tree_refused`): the subject is the user's own uncommitted work. **ASK
+  THE USER the `ask` on the envelope verbatim** and act on the answer (commit, stash, or worktree).
+- `result: refuse` (`target_occupied`, `user_target_closed`, `target_set_*` other than the
+  indeterminate one): **HARD STOP** — the determinate RED is final; do
   not blind-proceed to a different issue without explicit user direction.
-- `result: escalate` (`target_indeterminate` / `target_set_indeterminate`): the classifier
+- `result: escalate` (`target_set_indeterminate`): the bundle classifier
   subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
   pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
   no plan/ledger exists yet at claim time.
@@ -526,7 +534,7 @@ If the startup script is unavailable, stop for repair. If startup returns `claim
 stopping, print the refusal diagnostics:
 
 ```text
-Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
+Startup outcome: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
 ```
 
 Do not inspect active project folders unless the user explicitly names the project to resume. If a

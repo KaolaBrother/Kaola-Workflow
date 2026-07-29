@@ -5747,37 +5747,33 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 }}
 
 // ---------------------------------------------------------------------------
-// #825 (B1 + B2): Gate 1 — the typed selection record at claim, and the pre-claim
-// `.origin/<target-key>/` staging fold.
+// The typed selection record at claim, and the pre-claim `.origin/<target-key>/` staging fold.
 //
-// Selection/survey moves OUT of the planner and INTO the orchestrator, and the only thing that
-// makes that safe is a SCRIPT refusal at the commitment point (ADR 0006's planner-first lock was
-// prose + contract-pins only). So `startup` gains two flags:
+// Selection is the ORCHESTRATOR'S, so `startup` takes two flags:
 //
 //   --target-source <user_directed|orchestrator_selected>   (default: user_directed)
 //   --selection-record <path>                                (JSON, orchestrator-authored)
 //
-// and the gate is: an ORCHESTRATOR-SELECTED claim without a VALID record REFUSES, zero-write.
-//   * flag absent, or path unreadable          → `selection_record_missing`
-//   * unparseable, or any required field
-//     absent / empty / whitespace-only         → `selection_record_invalid`
-// Required fields (fields-present-and-non-empty, nothing deeper): selection_mode,
-// selection_bundle, selection_priority_basis, selection_rejected, selection_disjointness,
-// clarifications.
+// and NEITHER can refuse. Claiming is bookkeeping: a claim that should not stand is one the agent
+// re-states and re-makes elsewhere, so a commitment point that would not proceed is a stop nobody
+// can act on. What the caller supplied is REPORTED and the claim goes through:
+//   * flag absent, path unreadable, or bytes that will not parse as a JSON object
+//       -> the canonical self-describing record is written in its place, a `selection_record_note`
+//          names what was found, and the claim ACQUIRES at exit 0.
+//   * a record that parses -> persisted BYTE-FOR-BYTE as authored, never graded. Its fields carry
+//          the orchestrator's reasoning, and a script that graded reasoning would be re-deciding
+//          the thing the agent already decided.
 //
-// On EVERY acquiring claim the record becomes durable state: it is persisted at
-// kaola-workflow/<project>/.cache/origin/selection-record.json and its sha256 is stamped into
+// On EVERY acquiring claim the record becomes durable state: persisted at
+// kaola-workflow/<project>/.cache/origin/selection-record.json with its sha256 stamped into
 // workflow-state.md as `selection_record_digest:`. An EXPLICIT-target claim supplies no record —
-// startup writes the DEGENERATE one itself (`selection_mode: explicit-target`), so the field is
+// startup writes the canonical one itself (`selection_mode: explicit-target`), so the field is
 // never optional and never empty.
 //
 // B1: pre-claim reconnaissance has no durable home (the project folder does not exist yet), so it
 // stages under kaola-workflow/.origin/<target-key>/ and the claim FOLDS it into
 // kaola-workflow/<project>/.cache/origin/ and REMOVES the staging dir. <target-key> is the project
 // name the claim resolves to (issue-<N> / bundle-<a>-<b>). Absent staging is a clean no-op.
-//
-// RED (pre-impl): --target-source/--selection-record are unknown flags, nothing refuses, no record
-// is persisted, no digest is stamped, and .origin/ staging survives untouched beside the claim.
 // ---------------------------------------------------------------------------
 {
   const { spawnSync: spawnS825 } = require('child_process');
@@ -5843,10 +5839,6 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   function recordPath825(issueN) {
     return path.join(projDir825(issueN), '.cache', 'origin', 'selection-record.json');
   }
-  function branchesFor825(issueN) {
-    const r = G.git(repo825, ['branch', '--list', '*' + issueN + '*'], { encoding: 'utf8' });
-    return String(r.stdout || '').trim();
-  }
   function cleanup825(issueN) {
     try { fs.rmSync(projDir825(issueN), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(repo825, 'kaola-workflow', '.origin'), { recursive: true, force: true }); } catch (_) {}
@@ -5859,107 +5851,105 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     }
     try { G.git(repo825, ['worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
   }
-  // A refusal must leave NOTHING behind: no project folder, no branch, no record, no .origin fold.
-  function assertZeroWrite825(issueN, label, r) {
-    assert(!fs.existsSync(projDir825(issueN)),
-      label + ': the refusal must create NO project folder (zero-write gate), got ' + projDir825(issueN));
-    assert(branchesFor825(issueN) === '',
-      label + ': the refusal must create NO claim branch, got ' + JSON.stringify(branchesFor825(issueN)));
-    assert(r.code === 1, label + ': the refusal must exit 1, got ' + r.code + ' raw=' + r.raw.trim());
+  // A claim that had no usable record still CLAIMS, and the canonical record it wrote in place of
+  // the missing one is what the digest covers. `note` and `mode` are FREE of whatever selected this
+  // case, so a body that reported the wrong thing cannot pass by tautology.
+  function assertCanonicalRecordClaim825(issueN, label, r, noteNeedle) {
+    assert(r.code === 0, label + ': the claim must ANSWER at exit 0, got ' + r.code + ' raw=' + r.raw.trim());
+    assert(r.json && r.json.status === 'acquired',
+      label + ': the claim must acquire, got ' + JSON.stringify(r.json && r.json.status) + ' raw=' + r.raw.trim());
+    assert(fs.existsSync(projDir825(issueN)),
+      label + ': an acquiring claim must create its project folder, missing ' + projDir825(issueN));
+    const persisted = recordPath825(issueN);
+    assert(fs.existsSync(persisted), label + ': the canonical record must be persisted at ' + persisted);
+    const bytes = fs.existsSync(persisted) ? fs.readFileSync(persisted, 'utf8') : '';
+    let parsed = null; try { parsed = JSON.parse(bytes); } catch (_) {}
+    assert(parsed && parsed.selection_mode === 'none-recorded',
+      label + ': the synthesized record must SAY it recorded nothing, got '
+        + JSON.stringify(parsed && parsed.selection_mode));
+    assert(parsed && String(parsed.selection_priority_basis || '').indexOf('none recorded') === 0,
+      label + ': every field of the synthesized record must be self-describing, got '
+        + JSON.stringify(parsed && parsed.selection_priority_basis));
+    const state = stateOf825(issueN);
+    const m = state.match(/^selection_record_digest:\s*(\S+)\s*$/m);
+    assert(m && m[1].toLowerCase() === crypto825.createHash('sha256').update(bytes).digest('hex'),
+      label + ': the stamped digest must cover the canonical bytes actually written, got '
+        + JSON.stringify(m && m[1]));
+    assert(r.json && typeof r.json.selection_record_note === 'string'
+      && r.json.selection_record_note.indexOf(noteNeedle) >= 0,
+      label + ': the envelope must REPORT what it found, expected a note naming '
+        + JSON.stringify(noteNeedle) + ' got ' + JSON.stringify(r.json && r.json.selection_record_note));
   }
 
   try {
-    // --- (a) GATE: orchestrator-selected claim with NO --selection-record → selection_record_missing
+    // --- (a) an orchestrator-selected claim with NO --selection-record still CLAIMS, on the
+    // canonical record, and says so on the envelope.
     {
       cleanup825(82501);
       const r = runClaim825(['startup', '--target-issue', '82501', '--target-source', 'orchestrator_selected']);
-      assert(r.json && (r.json.status === 'selection_record_missing' || r.json.verdict === 'selection_record_missing'),
-        '#825(a): an orchestrator-selected claim without --selection-record must refuse '
-          + 'selection_record_missing, got ' + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
-      assert(r.json && r.json.claim === 'none',
-        '#825(a): the refusal must report claim:none, got ' + JSON.stringify(r.json && r.json.claim));
-      assert(r.json && typeof r.json.reasoning === 'string' && r.json.reasoning.length > 0,
-        '#825(a): the refusal must carry a reasoning line (sibling-refusal uniformity), got ' + JSON.stringify(r.json));
-      assertZeroWrite825(82501, '#825(a)', r);
+      assertCanonicalRecordClaim825(82501, '#825(a)', r, '--target-source orchestrator_selected');
       cleanup825(82501);
     }
 
-    // --- (b) GATE: --selection-record pointing at a path that does not exist → selection_record_missing
+    // --- (b) a --selection-record path that does not exist: same, and the note NAMES the path
+    // that would not read (a note that only said "something was wrong" would not survive this).
     {
       cleanup825(82502);
+      const missingPath = path.join(mocks825, 'does-not-exist.json');
       const r = runClaim825(['startup', '--target-issue', '82502', '--target-source', 'orchestrator_selected',
-        '--selection-record', path.join(mocks825, 'does-not-exist.json')]);
-      assert(r.json && (r.json.status === 'selection_record_missing' || r.json.verdict === 'selection_record_missing'),
-        '#825(b): an unreadable --selection-record path must refuse selection_record_missing, got '
-          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
-      assertZeroWrite825(82502, '#825(b)', r);
+        '--selection-record', missingPath]);
+      assertCanonicalRecordClaim825(82502, '#825(b)', r, missingPath);
       cleanup825(82502);
     }
 
-    // --- (c) GATE: a record with an EMPTY required field → selection_record_invalid, zero-write.
-    // One case per required field: the validation is fields-present-and-non-empty, so every field
-    // must be load-bearing (a check that only looks at selection_mode would pass 5 of these).
+    // --- (c) A RECORD THAT PARSES IS NEVER GRADED. Blank and absent fields alike ride through
+    // BYTE-FOR-BYTE: the fields carry the orchestrator's reasoning, and a script that graded
+    // reasoning would be re-deciding what the agent already decided. Pinned on the persisted BYTES
+    // (free of any predicate that could have selected this case) and on the claim going through.
     {
-      let i = 0;
-      for (const fieldName of REQUIRED_RECORD_FIELDS_825) {
-        const issueN = 82510 + (i++);
-        cleanup825(issueN);
-        const rec = goodRecord825();
-        rec[fieldName] = '   ';   // whitespace-only counts as empty
-        const recPath = path.join(mocks825, 'rec-empty-' + fieldName + '.json');
-        fs.writeFileSync(recPath, JSON.stringify(rec, null, 2) + '\n');
-        const r = runClaim825(['startup', '--target-issue', String(issueN), '--target-source', 'orchestrator_selected',
-          '--selection-record', recPath]);
-        assert(r.json && (r.json.status === 'selection_record_invalid' || r.json.verdict === 'selection_record_invalid'),
-          '#825(c): an EMPTY `' + fieldName + '` must refuse selection_record_invalid, got '
-            + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
-        assertZeroWrite825(issueN, '#825(c) empty ' + fieldName, r);
-        cleanup825(issueN);
-      }
+      cleanup825(82510);
+      const rec = goodRecord825();
+      rec.selection_rejected = '   ';        // whitespace-only
+      delete rec.selection_disjointness;      // absent outright
+      const recPath = path.join(mocks825, 'rec-thin.json');
+      // Deliberately NON-canonical bytes: 4-space indent, a trailing blank line, and a key the
+      // record schema never named. Canonical re-serialization would silently produce different
+      // bytes here, which is the whole point — a fixture written with `JSON.stringify(rec, null, 2)`
+      // is byte-identical to its own round-trip and could not tell byte-through from re-encoding.
+      const bytes = JSON.stringify(rec, null, 4) + '\n\n';
+      fs.writeFileSync(recPath, bytes);
+      const r = runClaim825(['startup', '--target-issue', '82510', '--target-source', 'orchestrator_selected',
+        '--selection-record', recPath]);
+      assert(r.code === 0 && r.json && r.json.status === 'acquired',
+        '#825(c): a thin-but-parseable record must still claim, got code=' + r.code + ' '
+          + JSON.stringify(r.json && r.json.status) + ' raw=' + r.raw.trim());
+      const persistedBytes = fs.readFileSync(recordPath825(82510), 'utf8');
+      assert(persistedBytes === bytes,
+        '#825(c): the authored bytes must persist UNCHANGED — no normalization, no re-serialization; got '
+          + JSON.stringify(persistedBytes));
+      assert(r.json && r.json.selection_record_note === undefined,
+        '#825(c): a record that parsed is not a finding, so no note rides on the envelope, got '
+          + JSON.stringify(r.json && r.json.selection_record_note));
+      cleanup825(82510);
     }
 
-    // --- (d) GATE: a record with a required field ABSENT → selection_record_invalid, zero-write.
-    {
-      let i = 0;
-      for (const fieldName of REQUIRED_RECORD_FIELDS_825) {
-        const issueN = 82520 + (i++);
-        cleanup825(issueN);
-        const rec = goodRecord825();
-        delete rec[fieldName];
-        const recPath = path.join(mocks825, 'rec-absent-' + fieldName + '.json');
-        fs.writeFileSync(recPath, JSON.stringify(rec, null, 2) + '\n');
-        const r = runClaim825(['startup', '--target-issue', String(issueN), '--target-source', 'orchestrator_selected',
-          '--selection-record', recPath]);
-        assert(r.json && (r.json.status === 'selection_record_invalid' || r.json.verdict === 'selection_record_invalid'),
-          '#825(d): an ABSENT `' + fieldName + '` must refuse selection_record_invalid, got '
-            + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
-        assertZeroWrite825(issueN, '#825(d) absent ' + fieldName, r);
-        cleanup825(issueN);
-      }
-    }
-
-    // --- (e) GATE: unparseable record bytes → selection_record_invalid, zero-write.
+    // --- (e) bytes that will not parse: the one property still checked, because a record a later
+    // reader cannot parse is not a record. Answers, on the canonical record.
     {
       cleanup825(82530);
       const recPath = path.join(mocks825, 'rec-garbage.json');
       fs.writeFileSync(recPath, 'not json at all\n');
       const r = runClaim825(['startup', '--target-issue', '82530', '--target-source', 'orchestrator_selected',
         '--selection-record', recPath]);
-      assert(r.json && (r.json.status === 'selection_record_invalid' || r.json.verdict === 'selection_record_invalid'),
-        '#825(e): an unparseable record must refuse selection_record_invalid, got '
-          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
-      assertZeroWrite825(82530, '#825(e)', r);
+      assertCanonicalRecordClaim825(82530, '#825(e)', r, 'not a JSON object');
       cleanup825(82530);
     }
 
-    // --- (f) pick-next carries the same gate (it delegates to the startup claim path).
+    // --- (f) pick-next walks the SAME claim path, so it answers the same way.
     {
       cleanup825(82531);
       const r = runClaim825(['pick-next', '--target-issue', '82531', '--target-source', 'orchestrator_selected']);
-      assert(r.json && (r.json.status === 'selection_record_missing' || r.json.verdict === 'selection_record_missing'),
-        '#825(f): pick-next must carry the SAME Gate 1 refusal as startup, got '
-          + JSON.stringify(r.json) + ' raw=' + r.raw.trim());
-      assertZeroWrite825(82531, '#825(f)', r);
+      assertCanonicalRecordClaim825(82531, '#825(f)', r, '--target-source orchestrator_selected');
       cleanup825(82531);
     }
 

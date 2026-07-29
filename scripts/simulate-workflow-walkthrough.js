@@ -5934,8 +5934,10 @@ function testWorktreeNativeInPlaceIdempotentReclaim() {
   }
 }
 
-function testWorktreeNativeDirtyTreeRefusal() {
-  // Case C: dirty tree -> dirty_tree_refused, no folder, no branch, HEAD unchanged
+// Case C: a dirty tree is a QUESTION about the user's own uncommitted work, not a verdict on it.
+// The claim writes nothing and hands back an ask with named options; what happens to somebody's
+// unstaged edits is theirs to decide.
+function testWorktreeNativeDirtyTreeAsksConsent() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-dirty-'));
   const kwRoot = fs.realpathSync(tmp) + '.kw';
   try {
@@ -5944,7 +5946,6 @@ function testWorktreeNativeDirtyTreeRefusal() {
     fs.writeFileSync(path.join(tmp, 'README.md'), 'dirty\n');
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
-    // cmdStartup exits 1 for dirty_tree_refused, so use raw spawnSync
     const spawnResult = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '505'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -5958,18 +5959,29 @@ function testWorktreeNativeDirtyTreeRefusal() {
       }
     });
     const lastLine = spawnResult.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop();
-    assert(lastLine, 'expected JSON output from dirty_tree_refused, got: ' + spawnResult.stdout);
+    assert(lastLine, 'expected JSON output from the dirty-tree ask, got: ' + spawnResult.stdout);
     const parsed = JSON.parse(lastLine);
-    assert(parsed.status === 'dirty_tree_refused', 'dirty tree must yield dirty_tree_refused, got: ' + JSON.stringify(parsed.status));
-    assert(parsed.claim === 'none', 'dirty_tree_refused must have claim===none, got: ' + JSON.stringify(parsed.claim));
+    assert(parsed.result === 'consent', 'a dirty tree must route to the consent valve, got: ' + JSON.stringify(parsed.result));
+    // The consent valve is a DOOR, not an answer: unlike every demoted claim-time finding, the
+    // question is still open and the caller must not read this as "proceed". Exit stays non-zero,
+    // matching the halt_pending consent refusal elsewhere in the workflow.
+    assert(spawnResult.status !== 0, 'the consent ask keeps a non-zero exit, got: ' + spawnResult.status);
+    assert(typeof parsed.ask === 'string' && parsed.ask.indexOf('?') > 0,
+      'the consent route must carry an ASK, got: ' + JSON.stringify(parsed.ask));
+    assert(Array.isArray(parsed.options) && parsed.options.join(',') === 'commit,stash,worktree',
+      'the ask must name the choices its owner picks between, got: ' + JSON.stringify(parsed.options));
+    assert(parsed.claim === 'none', 'the ask must claim nothing, got: ' + JSON.stringify(parsed.claim));
     // No project folder should be created
-    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-505')), 'project folder must not be created on dirty_tree_refused');
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-505')), 'project folder must not be created while the ask is open');
     // No feature branch should be created
     const branchCheck = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
-    assert(branchCheck.status !== 0, 'feature branch must not be created on dirty_tree_refused');
+    assert(branchCheck.status !== 0, 'feature branch must not be created while the ask is open');
     // HEAD must remain on main
     const head = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    assert(head === 'main', 'HEAD must remain on main after dirty_tree_refused, got: ' + head);
+    assert(head === 'main', 'HEAD must remain on main while the ask is open, got: ' + head);
+    // And the user's own uncommitted work is exactly where they left it.
+    assert(fs.readFileSync(path.join(tmp, 'README.md'), 'utf8') === 'dirty\n',
+      'the uncommitted work the ask is ABOUT must be untouched');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
@@ -5977,9 +5989,11 @@ function testWorktreeNativeDirtyTreeRefusal() {
 }
 
 // #557: an UNPROBEABLE tree must fail CLOSED (treeDirty returns true). With the KAOLA_WORKFLOW_FORCE_STATUS_FAIL
-// [TEST ONLY] seam set on a CLEAN tree, the in-place feature-branch gate must STILL refuse dirty_tree_refused
-// — not proceed on a false "clean". RED before the fix (treeDirty caught the probe fault → returned false →
-// "clean" → claim acquired); GREEN after (catch → return true → dirty_tree_refused). Mirrors the #496 fix.
+// [TEST ONLY] seam set on a CLEAN tree, the in-place feature-branch path must STILL stop and ask —
+// not proceed on a false "clean". RED before the fix (treeDirty caught the probe fault → returned false →
+// "clean" → claim acquired); GREEN after (catch → return true → the consent ask). Mirrors the #496 fix.
+// The ask replaced the exit-1 refusal, and the property under test is unchanged: an unverifiable
+// tree does not claim, and leaves no folder and no branch behind.
 function testTreeDirtyFailsClosedOnProbeFault() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-557-treedirty-fault-'));
   const kwRoot = fs.realpathSync(tmp) + '.kw';
@@ -6001,10 +6015,13 @@ function testTreeDirtyFailsClosedOnProbeFault() {
     const lastLine = spawnResult.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop();
     assert(lastLine, '#557: expected JSON output, got: ' + spawnResult.stdout + ' / ' + spawnResult.stderr);
     const parsed = JSON.parse(lastLine);
-    assert(parsed.status === 'dirty_tree_refused', '#557: an unprobeable tree must fail CLOSED (dirty_tree_refused), got: ' + JSON.stringify(parsed.status));
-    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-557')), '#557: no project folder on the fail-closed refusal');
+    assert(parsed.claim === 'none' && parsed.result === 'consent',
+      '#557: an unprobeable tree must fail CLOSED — no claim, and the ask raised instead of a guess, got: ' + JSON.stringify(parsed));
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-557')), '#557: no project folder on the fail-closed stop');
     const branchCheck = G.git(tmp, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-557'], { encoding: 'utf8' });
-    assert(branchCheck.status !== 0, '#557: no feature branch on the fail-closed refusal');
+    assert(branchCheck.status !== 0, '#557: no feature branch on the fail-closed stop');
+    const head557 = G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(head557 === 'main', '#557: HEAD must be unmoved on the fail-closed stop, got: ' + head557);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
@@ -7949,42 +7966,25 @@ function testSinkRefusesOnCloseFailure() {
   }
 }
 
-function testNoTargetZeroActive() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-zero-'));
-  try {
-    const result = runNode(claimScript, ['startup'], tmp);
-    assert(result.status === 1, 'no-target + zero active should exit 1, got ' + result.status);
-    const out = JSON.parse(result.stdout);
-    assert(out.verdict === 'no_target', 'expected verdict: no_target, got ' + out.verdict);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-function testNoTargetOneActive() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-one-'));
-  try {
-    plantActiveFolder(tmp, 'issue-600', 600, null);
-    const result = runNode(claimScript, ['startup'], tmp);
-    assert(result.status === 1, 'no-target + one active should exit 1, got ' + result.status);
-    const out = JSON.parse(result.stdout);
-    assert(out.verdict === 'no_target', 'expected verdict: no_target, got ' + out.verdict);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-function testNoTargetMultipleActive() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-multi-'));
-  try {
-    plantActiveFolder(tmp, 'issue-601', 601, null);
-    plantActiveFolder(tmp, 'issue-602', 602, null);
-    const result = runNode(claimScript, ['startup'], tmp);
-    assert(result.status === 1, 'no-target + multiple active should exit 1, got ' + result.status);
-    const out = JSON.parse(result.stdout);
-    assert(out.verdict === 'no_target', 'expected verdict: no_target, got ' + out.verdict);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+// Startup NEVER auto-picks, and the number of active folders sitting there does not change that:
+// zero, one and many all answer the same way. It is a usage answer, so nothing is written and the
+// exit is 0 — the caller names a target and re-runs. The active-folder count is the discriminating
+// variable, so it stays a loop; three copies of one property was three chances to drift.
+function testNoTargetNeverAutoPicks() {
+  for (const planted of [[], [600], [601, 602]]) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-' + planted.length + '-'));
+    try {
+      for (const n of planted) plantActiveFolder(tmp, 'issue-' + n, n, null);
+      const result = runNode(claimScript, ['startup'], tmp);
+      const label = planted.length + ' active folder(s)';
+      assert(result.status === 0,
+        'no-target with ' + label + ' is a usage answer at exit 0, got ' + result.status);
+      const out = JSON.parse(result.stdout);
+      assert(out.claim === 'none' && out.project === null,
+        'no-target with ' + label + ' must adopt NOTHING, got ' + JSON.stringify(out));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   }
 }
 
@@ -9818,9 +9818,9 @@ function writeGhShimFailingIssueView(binDir) {
   ]);
 }
 
-function runClaimOnlineExpectFail(args, cwd, binDir, extraEnv) {
-  // The REFUSAL-envelope vehicle for the claim CLI: callers assert on the non-zero exit code
-  // and the stderr text, which is the argv-to-envelope mapping itself.
+function runClaimOnlineNonAcquiring(args, cwd, binDir, extraEnv) {
+  // The NON-ACQUIRING-envelope vehicle for the claim CLI: callers assert on the emitted envelope
+  // and on what did NOT get written, which is the argv-to-envelope mapping itself.
   // spawn-class: cli-contract
   return spawnSync(process.execPath, [claimScript, ...args], {
     cwd,
@@ -9843,12 +9843,13 @@ function testClassifierFailClosedOnRemoteError() {
     const binDir = path.join(tmp, 'bin');
     writeGhShimFailingIssueView(binDir);
 
-    const result = runClaimOnlineExpectFail(['startup', '--target-issue', '155'], tmp, binDir);
+    const result = runClaimOnlineNonAcquiring(['startup', '--target-issue', '155'], tmp, binDir);
     assert(!result.signal, 'startup must not be killed/timed out: ' + result.signal);
 
-    // Must exit 1 (non-zero) — refusing to claim when gh fetch fails in ONLINE mode
-    assert(result.status === 1,
-      'startup must exit 1 when gh issue view fails in ONLINE mode, got ' + result.status +
+    // ANSWERS at exit 0: the forge would not say whether #155 is claimable. Nothing was written,
+    // so the caller retries, goes offline, or picks another target on the strength of the reason.
+    assert(result.status === 0,
+      'startup must ANSWER at exit 0 when gh issue view fails in ONLINE mode, got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
 
     const parsed = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
@@ -9876,8 +9877,8 @@ function testClassifierOfflineUnverifiedNoLocalEvidence() {
 
     const result = runNode(claimScript, ['startup', '--target-issue', '156'], tmp);
     assert(!result.signal, 'unverified startup must not be killed/timed out: ' + result.signal);
-    assert(result.status === 1,
-      'startup must exit 1 when target unverified, got ' + result.status +
+    assert(result.status === 0,
+      'an unverifiable target is an ANSWER at exit 0, got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
 
     const parsed = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
@@ -9957,8 +9958,8 @@ function testClassifierOfflineUnverifiedWithUnrelatedActiveFolder() {
     // Target M=301: no roadmap, no active folder for 301
     const result = runNode(claimScript, ['startup', '--target-issue', '301'], tmp);
     assert(!result.signal, 'unrelated-active startup must not be killed: ' + result.signal);
-    assert(result.status === 1,
-      'startup must exit 1 for unverified target with unrelated active folder, got ' + result.status +
+    assert(result.status === 0,
+      'an unverified target beside an unrelated active folder ANSWERS at exit 0, got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
 
     const parsed = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
@@ -9979,8 +9980,8 @@ function testClassifierOfflineUnverifiedWithUnrelatedActiveFolder() {
   console.log('testClassifierOfflineUnverifiedWithUnrelatedActiveFolder: PASSED');
 }
 
-function testStartupExplicitTargetRedRefuses() {
-  // #27: claimExplicitTarget maps classifier red → user_target_red (claim.js:443-444).
+function testStartupExplicitTargetRedAnswers() {
+  // #27: claimExplicitTarget maps classifier red → user_target_red, reported on the envelope.
   // cmdStartup routes through claimExplicitTarget; no active folder must be created.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-startup-red-'));
   try {
@@ -9990,8 +9991,8 @@ function testStartupExplicitTargetRedRefuses() {
     plantRoadmapIssue(tmp, 71, 'body: also touches scripts/kaola-workflow-claim.js');
     const result = runNode(claimScript, ['startup', '--target-issue', '71'], tmp);
     assert(!result.signal, 'startup red must not be killed: ' + result.signal);
-    assert(result.status === 1,
-      'startup must exit 1 for red target, got ' + result.status +
+    assert(result.status === 0,
+      'a red target is an ANSWER at exit 0 — the finding is on the envelope, got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     // Parse last JSON object line (output may have git lines prepended)
     const lastLine = result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop();
@@ -10007,7 +10008,7 @@ function testStartupExplicitTargetRedRefuses() {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
-  console.log('testStartupExplicitTargetRedRefuses: PASSED');
+  console.log('testStartupExplicitTargetRedAnswers: PASSED');
 }
 
 function testClassifierTopLevelIssueFlag() {
@@ -19518,7 +19519,7 @@ function buildRegistry() {
   add('testStartupJsonAndHiddenLocalWorktrees',           testStartupJsonAndHiddenLocalWorktrees);
   add('testWorktreeNativeDefaultOff',                     testWorktreeNativeDefaultOff);
   add('testWorktreeNativeInPlaceIdempotentReclaim',        testWorktreeNativeInPlaceIdempotentReclaim);
-  add('testWorktreeNativeDirtyTreeRefusal',               testWorktreeNativeDirtyTreeRefusal);
+  add('testWorktreeNativeDirtyTreeAsksConsent',           testWorktreeNativeDirtyTreeAsksConsent);
   add('testTreeDirtyFailsClosedOnProbeFault',             testTreeDirtyFailsClosedOnProbeFault);
   add('testWorktreeNativeDetachedHeadRecordOnly',         testWorktreeNativeDetachedHeadRecordOnly);
   add('testWorktreeNativeDiscardRestoresBase',            testWorktreeNativeDiscardRestoresBase);
@@ -19554,9 +19555,7 @@ function buildRegistry() {
   add('testStatusShowsClosedIssueDrift',                  testStatusShowsClosedIssueDrift);
   add('testStaleWorktreeCheck',                           testStaleWorktreeCheck);
   add('testStaleWorktreeCleanup',                         testStaleWorktreeCleanup);
-  add('testNoTargetZeroActive',                           testNoTargetZeroActive);
-  add('testNoTargetOneActive',                            testNoTargetOneActive);
-  add('testNoTargetMultipleActive',                       testNoTargetMultipleActive);
+  add('testNoTargetNeverAutoPicks',                       testNoTargetNeverAutoPicks);
   add('testSoleActiveRoundTrip',                          testSoleActiveRoundTrip);
   add('testSinkPrLeavesCleanWorktree',                    testSinkPrLeavesCleanWorktree);
   add('testReadPriorityConfig',                           testReadPriorityConfig);
@@ -19588,7 +19587,7 @@ function buildRegistry() {
   add('testClassifierOfflineVerifiedRoadmapAcquires',     testClassifierOfflineVerifiedRoadmapAcquires);
   add('testClassifierOfflineVerifiedOwnedFolderRoutes',   testClassifierOfflineVerifiedOwnedFolderRoutes);
   add('testClassifierOfflineUnverifiedWithUnrelatedActiveFolder', testClassifierOfflineUnverifiedWithUnrelatedActiveFolder);
-  add('testStartupExplicitTargetRedRefuses',              testStartupExplicitTargetRedRefuses);
+  add('testStartupExplicitTargetRedAnswers',              testStartupExplicitTargetRedAnswers);
   add('testClassifierTopLevelIssueFlag',                  testClassifierTopLevelIssueFlag);
   add('testClaimProjectOwnedFolderFailingRemote',         testClaimProjectOwnedFolderFailingRemote);
   add('testFinalizeRemovesClaimLabel',                    testFinalizeRemovesClaimLabel);
@@ -19732,7 +19731,7 @@ function buildRegistry() {
   add('testFinalizeClosesIssueBundleMembers',             testFinalizeClosesIssueBundleMembers);
   add('testFinalizeRoadmapResidueDetection',              testFinalizeRoadmapResidueDetection);
   add('testFinalizeBaseFlagScopesAttributionSweep',       testFinalizeBaseFlagScopesAttributionSweep);
-  add('testStartupRefusesTargetSetMismatch',              testStartupRefusesTargetSetMismatch);
+  add('testOrientRefusesBundleStateIncoherent',              testOrientRefusesBundleStateIncoherent);
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
   // #429 sink transaction tests
   add('testSinkTransactionBlockedByForeignDirt',          testSinkTransactionBlockedByForeignDirt);
@@ -21648,7 +21647,7 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
 // Test (a): bundle_id present + issue_numbers absent → incoherent.
 // Test (b): bundle_id present + mismatched (bundle_id says 42-47 but issue_numbers is 42,53) → incoherent.
 // ---------------------------------------------------------------------------
-function testStartupRefusesTargetSetMismatch() {
+function testOrientRefusesBundleStateIncoherent() {
   const tmp = adaptiveTmp('430-incoherent');
   try {
     const project = 'bundle-42-47';
@@ -21720,7 +21719,7 @@ function testStartupRefusesTargetSetMismatch() {
       '#430 incoherent (b): orient reason must be bundle_state_incoherent, got: ' + JSON.stringify(o2.reason));
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  console.log('testStartupRefusesTargetSetMismatch: PASSED');
+  console.log('testOrientRefusesBundleStateIncoherent: PASSED');
 }
 
 // ---------------------------------------------------------------------------

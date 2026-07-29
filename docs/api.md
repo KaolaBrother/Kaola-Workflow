@@ -10,16 +10,16 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 
 - **Returned when**: Remote issue validation fails (GitHub `gh`, GitLab `glab`, or Gitea `tea` CLI call fails) and `KAOLA_WORKFLOW_OFFLINE=1` is NOT set
 - **Applies to**: `cmdStartup --target-issue N`, `cmdPickNext`, and parallel-work classifier verdict logic
-- **Impact**: Startup refuses to claim the target issue, agent must diagnose the network problem, and retry when the forge is reachable
+- **Impact**: Startup does not claim the target issue and ANSWERS at exit 0 with the finding on the envelope (`claim: 'none'`, `result: 'answer'`); the agent diagnoses the network problem and retries when the forge is reachable, or claims something else
 - **Offline fallback**: When `KAOLA_WORKFLOW_OFFLINE=1`, classification proceeds without remote validation and uses local `.roadmap/issue-N.md` evidence only
-- **Helper function**: New `probeIssueState(issueNum, opts)` in `scripts/kaola-workflow-active-folders.js` (all three forge editions) returns `{state, reason}`. `state` is `open`, `closed`, or `unavailable`; claim scripts treat `unavailable` as the typed refusal path outside explicit offline mode.
+- **Helper function**: `probeIssueState(issueNum, opts)` in `scripts/kaola-workflow-active-folders.js` (all three forge editions) returns `{state, reason}`. `state` is `open`, `closed`, or `unavailable`; claim scripts report `unavailable` as a typed finding outside explicit offline mode.
 
 ### Verdict: `target_unverified`
 
 - **Returned when**: `KAOLA_WORKFLOW_OFFLINE=1` AND no local `.roadmap/issue-N.md` exists AND no active folder in the cwd repo for the target issue
 - **Applies to**: `cmdStartup --target-issue N` and parallel-work classifier verdict logic
 - **Distinct from**: `target_unavailable` (network failure online); `user_target_red` (overlap/risk)
-- **Impact**: Startup refuses to claim with this distinct diagnostic; no active folder created; exit code 1
+- **Impact**: Startup does not claim, and reports this distinct diagnostic; no active folder created; exit code 0 (`claim: 'none'`, `result: 'answer'`)
 - **Root cause**: Offline operation requires local roadmap evidence or an active folder. When neither exists, the target cannot be verified.
 - **Agent remedy**: Run online to validate the target exists on the forge, or create a `.roadmap/issue-N.md` entry offline with explicit scope.
 
@@ -28,41 +28,44 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Returned when**: The classifier subprocess spawned by `classifyIssue` in `claim.js` faults transiently (spawn error, signal kill, or timeout) and the fault persists through **all 3 attempts** (1 original + up to 2 retries). A clean non-zero exit from the subprocess is **not** retried — it is determinate (`target_unavailable`). `status === 2` from the subprocess means an active folder already exists and is returned immediately as `owned`, never reaching retry.
 - **Applies to**: `cmdStartup --target-issue N` and `cmdPickNext` (single-issue path only; see `target_set_indeterminate` for the bundle path)
 - **Distinct from**: `target_unavailable` (determinate: the classifier subprocess ran and made a decision — forge unreachable, or classifier exited non-zero); `target_unverified` (determinate: offline + no local evidence)
-- **`result` field**: `result: 'escalate'` — this is the only single-issue startup verdict that carries `result: escalate`. The determinate forge-unreachable verdict `target_unavailable` carries `result: 'refuse'`. Other determinate verdicts (`user_target_red`, `target_unverified`, etc.) do not carry a `result` field on the pre-#495 paths.
-- **Agent routing**: On `result: 'escalate'`, **pause and ask the user** whether to retry or abort. This is the front-door analog of the consent valve (#44/#287) — at claim time no plan or ledger exists, so there is no adaptive-node write-halt ledger marker; the escalation is a plain consent-halt asking a human to decide whether the transient fault has cleared.
-- **Impact**: No active folder is created; `claim: 'none'`; exit non-zero. The `reasoning` field names the error code and signal from the final failed attempt. The `reasoning_class` field is `'classifier_error'`.
-- **On `result: 'refuse'`**: Hard stop — do not retry; diagnose the underlying condition named by `reasoning`.
+- **`result` field**: `result: 'answer'`, like every other single-issue claim-time finding. A classifier that would not answer is not the target failing a test, and nothing was written either way — so the exit is 0 and the caller decides. The DETERMINATE/INDETERMINATE split lives in `status` (`target_unavailable` vs `target_indeterminate`), not in `result`. The bundle path still carries `result: 'escalate'` on `target_set_indeterminate`.
+- **Agent routing**: retry when the fault clears, go offline, or claim another target. Asking the user is one legitimate choice among those, not a required stop.
+- **Impact**: No active folder is created; `claim: 'none'`; exit 0. The `reasoning` field names the error code and signal from the final failed attempt. The `reasoning_class` field is `'classifier_error'`.
 
-### Gate 1: the typed selection record at claim (issue #825, ADR 0014)
+### The typed selection record at claim (issue #825, ADR 0014)
 
-Selection is orchestrator-owned. `cmdStartup` (and `cmdPickNext`, which delegates to it) gains two flags:
+Selection is orchestrator-owned. `cmdStartup` (and `cmdPickNext`, which delegates to it) takes two flags:
 
 | Flag | Values | Default |
 | --- | --- | --- |
 | `--target-source` | `user_directed` \| `orchestrator_selected` | `user_directed` |
 | `--selection-record` | path to a JSON record | — |
 
-`--target-source orchestrator_selected` declares a **no-target-originated** claim: the orchestrator surveyed, ranked, and then claims with a resolved `--target-issue` / `--target-issues`. That is the only mode the gate refuses in; `user_directed` (the default) is an explicit-target claim.
+`--target-source orchestrator_selected` declares a **no-target-originated** claim: the orchestrator surveyed, ranked, and then claims with a resolved `--target-issue` / `--target-issues`. `user_directed` (the default) is an explicit-target claim.
 
-**Required record fields** (exactly six, validated fields-present-and-non-empty — a whitespace-only string, an empty array, and an empty object all count as empty; nothing deeper is validated):
+**Record fields** (six, by convention — the claim does NOT validate them):
 `selection_mode`, `selection_bundle`, `selection_priority_basis`, `selection_rejected`, `selection_disjointness`, `clarifications`.
 
-**Typed refusals** — both exit 1 and are ZERO-WRITE (resolved before any project folder, branch, worktree, or forge call). Both carry `status`/`verdict` set to the code, `claim: 'none'`, and a non-empty `reasoning`:
+**Nothing here refuses.** Claiming is bookkeeping: if a claim should not stand, the agent re-states its reason and claims another issue or batch, so a commitment point that would not proceed is a stop nobody can act on. What the caller supplied is REPORTED and the claim proceeds:
 
-| Code | Condition |
+| Input | Behaviour |
 | --- | --- |
-| `selection_record_missing` | `--target-source orchestrator_selected` with no `--selection-record`, OR a `--selection-record <path>` that is absent/unreadable |
-| `selection_record_invalid` | record present but unparseable JSON, or any of the six fields absent / empty / whitespace-only |
+| a record that parses as a JSON object | persisted **byte-for-byte** as authored; never graded; no note |
+| `--target-source orchestrator_selected` with no `--selection-record` | the canonical `selection_mode: "none-recorded"` record is written in its place; `selection_record_note` on the envelope names the flag |
+| `--selection-record <path>` absent or unreadable | same, and the note names the path that would not read |
+| bytes that will not parse as a JSON object | same, and the note says so. This is the ONE property still checked — a record a later reader cannot parse is not a record |
+
+The claim exits 0 in every one of those cases, and the fields of an authored record are never inspected: they carry the orchestrator's REASONING, and a script that graded reasoning would be re-deciding what the agent already decided.
 
 **On every acquiring claim** (scalar AND bundle):
 
-1. The record is persisted at `kaola-workflow/<project>/.cache/origin/selection-record.json`. An orchestrator-supplied file is copied through **byte-unchanged** (the authored `selection_priority_basis` is the record; re-serializing it would turn a rationale into a stub). A `user_directed` claim supplies none, so startup synthesizes the DEGENERATE record itself with `selection_mode: "explicit-target"` and every other required field non-empty.
+1. The record is persisted at `kaola-workflow/<project>/.cache/origin/selection-record.json`. An orchestrator-supplied file is copied through **byte-unchanged** (the authored `selection_priority_basis` is the record; re-serializing it would turn a rationale into a stub). A `user_directed` claim supplies none, so startup synthesizes the canonical record itself with `selection_mode: "explicit-target"` and every field self-describing.
 2. `selection_record_digest: <64 lowercase hex>` is stamped into `kaola-workflow/<project>/workflow-state.md` as its own line. The value is `sha256` of the bytes of the PERSISTED record file.
 3. The same digest is echoed on the emitted claim JSON as `selection_record_digest`.
 
 **`.origin/` staging fold (same claim transaction).** Pre-claim reconnaissance has no durable home — the project folder does not exist yet — so the origin phase stages findings under `kaola-workflow/.origin/<target-key>/`, where `<target-key>` is the PROJECT NAME the claim resolves to (`issue-<N>` for a scalar claim, `bundle-<a>-<b>[-<c>]` for a bundle). If that directory exists at claim time its whole subtree is moved into `kaola-workflow/<project>/.cache/origin/` preserving relative layout and byte content (`survey.md` → `.cache/origin/survey.md`, `probes/seams.json` → `.cache/origin/probes/seams.json`), and the staging directory is removed. Absent staging is a clean no-op — `kaola-workflow/.origin/` is never manufactured when nothing was staged — and the fold never blocks the claim.
 
-**Planning Evidence.** When the frozen plan carries no `## Meta` selection block, `kaola-workflow-adaptive-handoff.js` folds the six fields of `.cache/origin/selection-record.json` into `## Planning Evidence`. This is the reporting end, not a gate: a missing or corrupt record never blocks the freeze, because the claim already refused zero-write on an invalid one.
+**Planning Evidence.** When the frozen plan carries no `## Meta` selection block, `kaola-workflow-adaptive-handoff.js` folds the six fields of `.cache/origin/selection-record.json` into `## Planning Evidence`. This is the reporting end, not a gate: a missing or corrupt record never blocks the freeze, and the claim already wrote a parseable record in place of an unusable one.
 
 ### Adaptive handoff: `--clarification-required` (issue #825, ADR 0014)
 
@@ -92,7 +95,7 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 
 **Env var:** `KAOLA_TARGET_ISSUES=A,B,C` — equivalent to the flag; resolved before flag parsing.
 
-**Ambiguity gate (`target_ambiguity`):** If both `--target-issue` (or `KAOLA_TARGET_ISSUE`) and `--target-issues` (or `KAOLA_TARGET_ISSUES`) resolve to non-empty values simultaneously, `cmdStartup` refuses with `target_ambiguity` before any state is written. This gate fires regardless of which combination of flag vs env-var is used.
+**Ambiguity answer (`target_ambiguity`):** If both `--target-issue` (or `KAOLA_TARGET_ISSUE`) and `--target-issues` (or `KAOLA_TARGET_ISSUES`) resolve to non-empty values simultaneously, `cmdStartup` emits `target_ambiguity` usage at **exit 0** and writes nothing. It was never a gate — nothing is written either way, and the caller re-runs with exactly one. Fires regardless of which combination of flag vs env-var is used.
 
 **`result` field on bundle startup refusals (issue #495):** Determinate failure verdicts (`target_set_unavailable`, `target_set_red`, `target_set_conflicts_active_work`, `target_set_has_closed_issue`) carry `result: 'refuse'` — hard stop, do not retry. The new indeterminate verdict `target_set_indeterminate` carries `result: 'escalate'` — pause and ask the user whether to retry or abort (same consent-halt posture as the single-issue `target_indeterminate` path). Pre-#495 verdicts (e.g. `target_set_unverified`, `target_set_empty`, early validation gates) do not carry a `result` field and remain unchanged.
 
@@ -100,7 +103,7 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 
 | Code | `result` field | Condition |
 |------|----------------|-----------|
-| `target_ambiguity` | — | Both scalar and multi-target provided simultaneously |
+| `target_ambiguity` | `answer` | Both scalar and multi-target provided simultaneously (usage answer, **exit 0**) |
 | `target_set_empty` | — | Resolved issue list is empty after sort+dedup |
 | `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | `refuse` | One or more targets overlap an already-claimed active folder |
@@ -110,7 +113,6 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 | `target_set_indeterminate` | `escalate` | Classifier subprocess faulted transiently on one or more targets and exhausted all 3 attempts (issue #495); pause and ask the user |
 | `target_set_unverified` | — | Offline with no local evidence for one or more targets |
 | `target_set_label_rollback_failed` | — | Claim succeeded but in-progress-label rollback on a partial failure itself failed |
-| `target_set_mismatch` | — | Bundle re-startup — persisted `issue_numbers` does not match the claimed `--target-issues` set (issue #430) |
 | `bundle_state_incoherent` | — | Handoff or orient — `bundle_id` is present in `workflow-state.md` but `issue_numbers` is absent or inconsistent with `bundle_id` (issue #430) |
 
 **All-or-nothing invariant:** `claimExplicitBundle` validates the complete set before mutating any state. If any single issue in the set fails validation the entire bundle is refused and no active folder is created.
@@ -236,7 +238,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
   **NATIVE=0 in-place branch creation (online + git history + HEAD not detached):** When `KAOLA_WORKTREE_NATIVE=0`, online, and the repo has git history, the claim/startup scripts create and check out the feature branch (`workflow/issue-N` on GitHub, `workflow/gitlab-issue-N` on GitLab, `workflow/gitea-issue-N` on Gitea) directly in the repo root — equivalent to `git checkout -b <branch>` (or `git checkout <branch>` if the branch already exists). The pre-checkout branch is recorded as `base_branch` in the `## Sink` block of `workflow-state.md`. On `discard`/`release`, the scripts restore `base_branch` (or the repo default branch when `base_branch` is absent) and delete the created feature branch. The release also archives the live folder into a `kaola-workflow/archive/<project>.discarded-<ts>/` destination and, since #715, commits that discard archive locally as part of the release action (after the branch restore, so the commit lands on the restored base branch — a binding the commit helper itself enforces by refusing to stage on any other branch, by validating that the recorded base names a real surviving branch — the detached-HEAD sentinel and a falsified `base_branch` are refused, not trusted — and by re-verifying the landed commit against that base); the emitted JSON carries the commit outcome as `discard_archive_committed: true|false` plus `discard_archive_branch` (the branch that received — or did not receive — the commit) — see the Closure Contract section for the full field contract.
 
   **NATIVE=0 edge cases:**
-  - **Dirty working tree** (NATIVE=0 + online + git history + HEAD on a real branch + uncommitted changes): `claim` returns a typed refusal with `status: dirty_tree_refused` and `claim: 'none'`. No project folder and no branch are created. Commit or stash your changes, or use a worktree (`KAOLA_WORKTREE_NATIVE=1`).
+  - **Dirty working tree** (NATIVE=0 + online + git history + HEAD on a real branch + uncommitted changes): `claim` routes to the **consent valve** — `status: dirty_tree_refused`, `result: 'consent'`, `claim: 'none'`, plus an `ask` and `options: ['commit','stash','worktree']`. The subject is the user's own uncommitted work, so the claim asks rather than deciding. No project folder and no branch are created and HEAD is unmoved; an UNPROBEABLE tree reads as dirty (fail-closed), so an unverifiable tree asks too.
   - **Detached HEAD** (NATIVE=0 + online + git history + HEAD detached): claim still acquires (`status: acquired`), but in-place branch creation is skipped (record-only). No `base_branch` is recorded; a surfaced note (`inPlaceNote`) is included in the returned JSON. Dirty detached HEAD is not refused — it falls through to this record-only path.
   - **Offline or no git history**: in-place branch creation does not fire. Claim proceeds as a plain repo-root run (identical to prior behavior). No note is surfaced.
   - **Re-claim on existing branch** (folder absent, feature branch present, HEAD on feature branch): the branch is checked out (no `-b`), claim acquires, `base_branch` is recorded as `''` (feature branch is its own head — no prior branch to restore).
@@ -3886,7 +3888,7 @@ claim_planner_attested: <value>
 
 The column-0 status field is always written, even when `attested` — a clean result is a positive statement, not an absence. Called in `cmdFinalize` immediately after `checkDispatchAttestations`, before `computeGoalCheck`. `appendClosureBlock`'s field set independently carries the same attestation field in the archived `workflow-state.md`'s `## Closure` block (see `docs/workflow-state-contract.md`), so the archive carries two durable, mutually-reinforcing copies of the attestation outcome. The presence guard is ALSO the legacy-tolerance rule (#816): an archived section carrying the retired finalize-seam field is left byte-identical. **Known residual:** a summary that pre-seeds a column-0 `## Attestation` heading before finalize suppresses the append (the presence guard exists for crash-resume idempotence, not tamper-resistance) — fenced by the `## Closure` block + stdout receipt still carrying the true field in the same run, and by finalize prose forbidding removal/summarization of the section; see `docs/decisions/D-653-01.md`.
 
-**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since the orchestrator-owned no-target survey only runs on the auto-bundle branch. Since #825 the machine-readable selection record lives separately at .cache/origin/selection-record.json and is bound by Gate 1; this sidecar stays the human-readable docking artifact and its probe is unchanged. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
+**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since the orchestrator-owned no-target survey only runs on the auto-bundle branch. Since #825 the machine-readable selection record lives separately at .cache/origin/selection-record.json; this sidecar stays the human-readable docking artifact and its probe is unchanged. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
 
 Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`

@@ -2310,10 +2310,11 @@ function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-active-folders-'));
   try {
     initGitRepo(tmp);
-    // No-evidence offline case must return target_unverified (post-#169 contract).
+    // No-evidence offline case ANSWERS target_unverified (post-#169 contract) at exit 0 — the
+    // finding rides the envelope, nothing was written, and the caller acts on it.
     const unverified = runClaimRaw(['startup', '--target-issue', '163', '--runtime', 'codex', '--sink', 'pr'], tmp);
-    assert(unverified.exitStatus === 1,
-      'startup with no local evidence must exit 1, got ' + unverified.exitStatus);
+    assert(unverified.exitStatus === 0,
+      'startup with no local evidence must ANSWER at exit 0, got ' + unverified.exitStatus);
     assert(unverified.parsed.verdict === 'target_unverified',
       'no-evidence startup must return target_unverified, got: ' + unverified.parsed.verdict);
     assert(unverified.parsed.claim === 'none',

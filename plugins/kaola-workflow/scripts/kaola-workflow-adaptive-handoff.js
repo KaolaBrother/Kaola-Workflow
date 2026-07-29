@@ -700,9 +700,8 @@ function runHandoff(opts) {
   // Verify coherence: if bundle_id is set then issue_numbers must be present
   // and non-empty (a silently-collapsed bundle would have bundle_id but no
   // issue_numbers), and the bundle_id must match the sorted issue list.
-  // Complements the target_set_mismatch check in cmdStartup (#430 n5): the
-  // handoff runs AFTER startup, so a surviving incoherent state indicates a
-  // startup bug that wasn't caught. Refuse with plan_invalid (no mutation).
+  // The handoff runs AFTER startup, so an incoherent bundle state here is a
+  // startup bug that reached durable state. Refuse with plan_invalid (no mutation).
   // -------------------------------------------------------------------------
   const bundleId = (stateContent.match(/^bundle_id:\s*(.+)$/m) || [])[1]?.trim() || '';
   if (bundleId) {
