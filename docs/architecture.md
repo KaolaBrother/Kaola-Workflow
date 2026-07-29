@@ -1231,3 +1231,39 @@ resolving to a gate, an advisory, a tool, or deletion.
 The failure mode this ordering exists to prevent has already occurred once: a campaign that never
 re-measured its own headline number added refusals for hours while believing it was subtracting.
 Measurement is not preparation for the work — it is the thing that makes the work honest.
+
+### Derive, Never Reduce — the method that makes subtraction possible
+
+Measurement makes the work honest, but it does not make it *shrink*. That takes a different method,
+and getting it wrong is why the campaign above went net-additive while calling itself subtraction.
+
+**Reduction** starts from what exists and argues for deletions. It cannot shrink a system, because
+the incumbent never has to justify itself while every removal must win an argument against it. Faced
+with any individual refusal, test, pin or paragraph, a careful reader will always find a reason to
+keep it — the reason is usually true, and the aggregate is still unaffordable. Measured here: the
+condition census rose 712 → 733 across a wave explicitly chartered to reduce it.
+
+**Derivation** starts from nothing. From the axioms, derive what MUST exist; whatever is not derived
+is not there. Nothing is deleted, because nothing unjustified was ever admitted. The burden of proof
+moves from removal to existence, which is the only place it can sit if a corpus is to get smaller.
+
+Four rules make it work:
+
+- **Derive blind, then look.** Write the derived set down before reading the current one. Reading
+  first anchors you onto what exists, and you will reliably rediscover it and call that derivation.
+  The written set is a *pre-registered prediction*; the gap between it and reality is the finding.
+- **Name the harm.** For each candidate: what concrete, irreversible harm occurs if this does *not*
+  refuse? If no harm can be named, it is a tool, not a gate. This single test does most of the work,
+  and it is why "there is nowhere to report it" must be rejected — the emitted envelope is always a
+  surface, so a milder verb is nearly always available.
+- **Converge independent lenses.** Derive several times from unrelated starting points — the kernel
+  records, a zero-context successor, the irreversible effects, the calls that belong to a human.
+  Agreement across lenses is the strongest available evidence of necessity. Disagreement is a design
+  question for a human, not an average to split.
+- **State what the derivation missed.** After looking, report every genuine necessity the blind pass
+  failed to predict. A derivation that cannot name its own misses has not been checked and must not
+  be acted on. This is the rule that keeps the method from becoming wishful.
+
+The method generalises past refusals. Tests, pins, durable artifacts, generated prose and prompt
+obligations are all subject to the same question — *derive it, or it is not there* — and all of them
+grow by the same mechanism when the question is asked the other way round.

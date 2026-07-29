@@ -110,6 +110,12 @@ The workflow is not "execute by rule and refuse what does not comply." It **pres
 
 Two consequences worth stating: mid-run hard refusals **are** serializers, so deleting them makes the workflow more parallel — parallel-by-default is a theorem, not a convention. And real subprocesses in tests are needed only for genuine boundary properties; most of the spawn corpus is not.
 
+### Derive, Never Reduce
+
+Justification is owed by **existence**, not by removal. Never start from the current set and argue deletions — you will always find a reason to keep one, and the corpus grows while the work is called subtraction. Start from nothing, derive from the axioms what MUST exist; whatever is not derived is not there. This governs refusals, tests, pins, artifacts and prose alike.
+
+**Derive blind, then look** — write the derived set down *before* reading the current one, or you anchor onto what exists and merely rediscover it; the derivation is a pre-registered prediction, the gap between it and reality is the finding, and one that cannot name its own misses has not been checked. **The test that does the work:** name the concrete irreversible harm if this does *not* refuse — no nameable harm ⇒ it is a tool, not a gate ("nowhere to report it" is almost never true; the emitted envelope is always a surface). **Converge independent lenses:** agreement across unrelated starting points is the evidence of necessity, while disagreement is a design question for a human, not an average to split.
+
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, authoring-allowed, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize, sink-fallback, verify-sink, stale-worktree-check/-cleanup, legacy-worktree-cleanup, audit-labels, repair-labels, barrier-ref-sweep subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
@@ -140,12 +146,7 @@ npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
 
 ## Documentation Update Checklist
 
-- [ ] README.md - update feature list, usage examples, env vars
-- [ ] API docs - add/update endpoint descriptions and examples
-- [ ] CHANGELOG.md - add entry under [Unreleased]
-- [ ] Architecture docs - update if structure changed
-- [ ] .env.example - add any new environment variables
-- [ ] Inline comments - update where public interfaces changed
+On any user-visible change: `README.md` (features, usage, env vars) · API docs (endpoints + examples) · `CHANGELOG.md` under `[Unreleased]` · architecture docs if structure changed · `.env.example` for new variables · inline comments where public interfaces changed.
 
 ## Commands
 
