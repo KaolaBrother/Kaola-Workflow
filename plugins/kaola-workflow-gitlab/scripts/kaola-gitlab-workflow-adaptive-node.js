@@ -136,7 +136,13 @@ function lastReplanCas(transaction) {
   return found || { seam: 'none', result: 'none' };
 }
 
-function replanOrientation(fence, project) {
+// `extra` is folded into the envelope, matching the handoff twin. Callers pass `{ detail }` on the
+// anchor-read refusals (`current_epoch_authority_unavailable` / `_invalid`), where that message is
+// the whole diagnostic content — everything else in the envelope is structure the operator already
+// had. This helper used to take two parameters while one call site passed three, so the field was
+// dropped silently on the pure-core seam; the CLI never saw it because it re-attaches `detail` by
+// hand a line later, which is the evidence the field is wanted rather than tolerated.
+function replanOrientation(fence, project, extra) {
   const tx = fence && fence.transaction;
   const cas = lastReplanCas(tx);
   const out = {
@@ -162,7 +168,7 @@ function replanOrientation(fence, project) {
     out.abort_command = 'node scripts/kaola-gitlab-workflow-replan.js abort --project ' + project
       + ' --transaction ' + out.transaction_id + ' --json';
   }
-  return out;
+  return Object.assign(out, extra || {});
 }
 
 function readProjectReplanFence(statePath, cacheDir, readFile) {

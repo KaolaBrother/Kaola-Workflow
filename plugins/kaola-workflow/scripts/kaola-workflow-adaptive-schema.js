@@ -1299,7 +1299,33 @@ function readReplanFence(stateContent, transaction) {
       legal_mutation: 'replan abort', state };
   }
   const checked = validateReplanTransaction(transaction);
-  if (!checked.ok) return { ok: false, fenced: true, reason: checked.reason, state };
+  if (!checked.ok) {
+    // THE VALIDATION ARM — the fourth arm, and it splits THREE ways rather than one. It is reached
+    // by the same corruption class as the other three, so answering it with nothing is the same
+    // permanent stuck state the orphaned arm above was taught to escape.
+    //
+    // The discriminator is whether the payload can still prove WHERE the epoch stands. A phase
+    // only counts when the object carries a recognised one: an unparseable file arrives here as
+    // `{}` (the readers' present-but-unreadable sentinel), and a payload that cannot name its
+    // phase cannot prove it is pre-activation.
+    //
+    //   * PRE-ACTIVATION, phase readable -> `replan abort` genuinely works; NAME it, with the id
+    //     the FILE records, because that is the id `abort` CAS-matches when the file is present.
+    //   * PAST THE WALL, or phase unreadable -> NEITHER verb accepts. `resume` re-validates and
+    //     hands back the identical code; `abort` refuses `replan_abort_irreversible` (whose own
+    //     `legal_next` points back at `resume`) or `replan_abort_undecidable` (which already names
+    //     `consent`). Naming a replan verb here prints a route that dead-ends on arrival — the
+    //     same defect one hop further out — so the honest answer is the ESCALATION itself, and no
+    //     command. `consent` is already the vocabulary `abortReplan` uses for exactly this.
+    const phase = isPlainObject(transaction) && typeof transaction.phase === 'string'
+      ? transaction.phase : null;
+    const fileId = isPlainObject(transaction) && typeof transaction.transaction_id === 'string'
+      ? transaction.transaction_id : null;
+    const abortable = REPLAN_ABORTABLE_PHASES.includes(phase);
+    return { ok: false, fenced: true, reason: checked.reason,
+      phase: phase || 'unknown', transaction_id: fileId || stateTx,
+      legal_mutation: abortable ? 'replan abort' : 'consent', state };
+  }
   const preFenceCrash = transaction.phase === 'prepared' && stateStatus === 'none' && stateTx === 'none';
   if (!preFenceCrash && stateTx !== transaction.transaction_id) {
     // The fence names one transaction and the file on disk names another. Both exits exist; WHICH
@@ -1345,18 +1371,12 @@ function readReplanFence(stateContent, transaction) {
   };
 }
 
-function projectMutationGuard(stateContent, transaction, action) {
-  const fence = readReplanFence(stateContent, transaction);
-  if (!fence.ok) return refuse(fence.reason, { action: action || null });
-  if (!fence.fenced) return { ok: true };
-  if (action === 'replan resume') return { ok: true, fenced: true, phase: fence.phase };
-  return refuse('replan_in_progress', {
-    phase: fence.phase,
-    transaction_id: fence.transaction_id,
-    legal_mutation: fence.legal_mutation,
-    action: action || null,
-  });
-}
+// `projectMutationGuard` was DELETED here (#847-J). It projected the fence but dropped everything
+// the fence resolved on its `!fence.ok` arms — precisely the arms #847 taught to name an exit —
+// leaving a static per-condition route that cannot be correct for all four, since the four arms
+// have different correct exits. It had no call site in any of the four editions: definition,
+// export and one comment, nothing else. An unreferenced export cannot wedge an operator, so there
+// was no wedge to repair, only a decoy to remove.
 
 function snapshotManifestDigest(manifest) {
   if (!isPlainObject(manifest)) throw new Error('snapshot_manifest_invalid');
@@ -5431,7 +5451,7 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
   //
   // The record-class default for `position` is `adaptive-node reconcile-running-set`, and every
   // condition matched here fires while the project is REPLAN-FENCED. `reconcile-running-set` is in
-  // `REPLAN_GUARDED_SUBCOMMANDS`, so `projectMutationGuard` refuses it `replan_in_progress` for any
+  // `REPLAN_GUARDED_SUBCOMMANDS`, so the live guard refuses it `replan_in_progress` for any
   // action except the literal `'replan resume'` — an operator who followed the recorded route was
   // refused a second time, by a different code, with no exit named. That is the exact dead-end the
   // route contract exists to make impossible, and it is fixed here rather than by minting finer
@@ -6375,7 +6395,6 @@ module.exports = {
   writeEpochStateBlock,
   validateReplanTransaction,
   readReplanFence,
-  projectMutationGuard,
   snapshotManifestDigest,
   validateSnapshotManifestShape,
   MAX_NODES,

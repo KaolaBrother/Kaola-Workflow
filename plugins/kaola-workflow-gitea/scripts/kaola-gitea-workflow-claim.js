@@ -3588,9 +3588,15 @@ function cmdFinalize() {
       catch (_) { transaction = txPath && fs.existsSync(txPath) ? {} : null; }
       const fence = adaptiveSchema.readReplanFence(stateContent, transaction);
       if (!fence.ok || fence.fenced) {
+        // #847-I: report the exit the FENCE resolved, never a default. The `||` that used to sit
+        // here fired on precisely the arms carrying no exit, and named `replan resume` — the one
+        // verb the validation arm REJECTS, so the operator arrived at a second refusal carrying
+        // the code they started with. Silence sends them looking; a wrong verb sends them nowhere
+        // and costs a round trip to learn it. Every arm names its own exit now, so there is
+        // nothing left for a default to cover.
         output({ result: 'refuse', reason: fence.reason || 'replan_in_progress',
           phase: fence.phase || null, transaction_id: fence.transaction_id || null,
-          legal_mutation: fence.legal_mutation || 'replan resume' });
+          legal_mutation: fence.legal_mutation || null });
         process.exitCode = 1;
         return;
       }
