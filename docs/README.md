@@ -10,6 +10,7 @@
 - [Decisions](decisions/)
   - [0001 — Legacy session/lock cleanup: no tooling](decisions/0001-legacy-session-lock-cleanup.md)
   - (0002–0011 and D-422-01 listed separately; see decisions/ for full catalog)
+  - **[0016 — The substrate: bookkeeping over gates](decisions/0016-the-substrate-bookkeeping-over-gates.md) — the current design. Supersedes the "two gates" premise; read before ADR 0013 or CLAUDE.md's kernel section.**
   - [0012 — The finalize seam is orchestrator-owned; its mechanical residue is one transaction](decisions/0012-finalize-seam-is-orchestrator-owned.md)
   - [0013 — The Successor Test and the Two-Gate Target Architecture: axioms A1–A3, the four-record durable kernel, oracles as tools, refusal legal only at kernel-integrity + sink, parallel-by-default as theorem, prompts re-derived by the same razor](decisions/0013-successor-test-two-gate-target-architecture.md)
   - [0014 — Free origin: orchestrator-owned selection behind a typed commitment gate (supersedes 0006's entry lock; retains its control boundary)](decisions/0014-free-origin.md)

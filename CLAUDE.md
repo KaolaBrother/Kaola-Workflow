@@ -87,9 +87,11 @@ The workflow runs one path; the orchestrator does not spend tokens or wall-clock
 - **There is no path to select or refuse, and no residue of one.** A stale `KAOLA_PATH` / `--workflow-path` request runs adaptive (the flag is a warn-and-ignore shim; the env var is ignored), rather than refusing — and the request leaves no trace: the persisted `workflow_path` field is the constant `adaptive`, never an echo, so a retired selector can never be misread as a live switch (a legacy folder's stale value is still tolerated on read). This deliberately supersedes the former "never silently substitute adaptive for a named path" stance and retires the `fast`/`full` vocabulary and the `path_not_installed` refusal — a values call (First Principle 4) that became moot once exactly one path remained.
 - **When adaptive can't proceed, it recovers inside adaptive**: bounded planner repair → discard+restart → stop+ask. Repair and the in-place posture are the only fallbacks.
 
-### Four Records, Two Gates, Everything Else Is a Tool
+### Four Records, Everything Else Is a Tool
 
-The workflow is not "execute by rule and refuse what does not comply." It **preserves four hand-off-able records, gates at exactly two doors, and offers everything else to the agent as tools.**
+> **Superseded in part by [ADR 0016 — The substrate: bookkeeping over gates](docs/decisions/0016-the-substrate-bookkeeping-over-gates.md). Read it before acting on this section.** The four records survive intact. The *two gates* framing does not: it was built for an agent that could not orchestrate itself, and that premise expired. Refusals are now admissible only under three tests, three survive system-wide, and the governing rule for every change is **delete the verdict, keep the measurement**. Where this section and ADR 0016 disagree, the ADR wins.
+
+The workflow is not "execute by rule and refuse what does not comply." It **preserves four hand-off-able records, refuses at a very small number of doors, and offers everything else to the agent as tools.**
 
 **Three axioms.** (1) Interrupted at any point, a zero-context successor can continue. (2) Correct means *the issue is genuinely done* at a sound time/token balance — formal compliance is not correctness. (3) Irreversible and value-laden calls belong to a human.
 

@@ -7,14 +7,12 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #851 | The mid-run demotion premise is refuted — the census cannot answer the question it was asked | open | — | — |
 | #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
 | #863 | result is not total on the claim surface, and two status tokens classify differently depending on which internal arm emitted them | open | — | — |
 | #864 | The sink's diff attribution is one-directional: 8 nodes marked COMPLETE against an empty diff returns result: pass | open | — | — |
 | #865 | The run can lower its own consent fence — clear-halt requires no attestation, so the valve is enforced by convention rather than mechanism | open | — | — |
 | #866 | Nothing measures whether a path stops the run: build the driven-envelope recorder, with a completeness assertion | open | — | — |
 | #867 | Two vocabularies for one diagnosis: collapse the certifier-resolution twin in plan-validator | open | — | — |
-| #868 | Both forge editions crash writing run-gaps.json — gap-sweep requires a renamed kernel module that does not exist, and no chain executes it | open | — | — |
 | #869 | speculative_review_required merge at adaptive-node:8174 has no witness and may be unreachable in the fused close path | open | — | — |
 | #870 | ADR 0016 — execute the substrate design: START HERE for a zero-context pickup | open | — | — |
 | #871 | Conversion wave: nine refusals whose measurement is already built and then discarded | open | — | — |
