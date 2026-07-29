@@ -1231,8 +1231,13 @@ function claimProject(root, args) {
   // never refused; it silently runs adaptive (the claim's scaffolding is adaptive-only anyway).
   if (issueNumber != null) {
     const probe = probeIssueState(issueNumber);
+    // `result` is TOTAL across the claim surface: every emitted envelope carries one, so a caller
+    // reads that field alone and never has to fall back to reading `status`. This arm and the
+    // `target_occupied` arm below are determinate facts about the target — the issue is closed, or a
+    // local folder already holds it — so both route as `refuse`, not as the `answer` the demoted
+    // claim-time statuses carry.
     if (probe.state === 'closed') {
-      return { status: 'user_target_closed', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
+      return { status: 'user_target_closed', result: 'refuse', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
     }
     // #519: a TRANSIENT-infra probe fault is reported as such — a TLS timeout / rate-limit / DNS
     // blip must not be read as "target unavailable". Both arms ANSWER: nothing was written, and
@@ -1276,7 +1281,7 @@ function claimProject(root, args) {
   } catch (e) {
     if (e.code === 'EEXIST') {
       if (fs.existsSync(stateFile(root, project))) {
-        return { status: 'target_occupied', issue: issueNumber, project, reasoning: 'local project folder exists' };
+        return { status: 'target_occupied', result: 'refuse', issue: issueNumber, project, reasoning: 'local project folder exists' };
       }
       // orphaned stateless dir (crash between mkdir and writeState) — fall through and reclaim
     } else { throw e; }
