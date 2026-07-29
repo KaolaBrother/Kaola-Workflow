@@ -1535,11 +1535,11 @@ function readDurableConsentHalt(planContent) {
   return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
 }
 
-// The DECOY consent-halt detector — ONE rule, ONE wording, shared by BOTH freeze doors: the
-// adaptive-handoff entry and `plan-validator --freeze`, the writer the handoff shells and a
-// documented public CLI in its own right. A guard living at only one door is a guard on one of two
-// doors, and two copies of one refusal is how the typed reason acquires a second spelling; the token
-// and the operator prose therefore live HERE, beside the marker they are about.
+// The DECOY consent-halt STRIP — ONE rule, ONE wording, ONE implementation, shared by BOTH freeze
+// doors: the adaptive-handoff entry and `plan-validator --freeze`, the writer the handoff shells and
+// a documented public CLI in its own right. A repair living at only one door is a repair on one of
+// two doors, and two copies of one transformation is how the behaviour acquires a second spelling;
+// the strip and the operator prose therefore live HERE, beside the marker they are about.
 //
 // The discriminator is NEVER-FROZEN, not the marker alone. A GENUINE halt sits on a FROZEN, mid-run
 // plan whose marker write-halt wrote; that plan must still re-freeze (the plan-repair path) and must
@@ -1548,22 +1548,37 @@ function readDurableConsentHalt(planContent) {
 // from an archived plan used as a skeleton, and because computePlanHash covers `## Meta` + `## Nodes`
 // only it would ride the freeze unremarked and wedge the run's very first open-next on halt_pending.
 //
-// REFUSE rather than strip: stripping would silently clear a consent the user may still be owed.
-// PURE (no fs, content only). Returns null when there is nothing to refuse, else the typed
-// { reason, error } the caller emits verbatim.
-const DECOY_CONSENT_HALT_REASON = 'decoy_consent_halt';
-function detectDecoyConsentHalt(planContent) {
+// STRIP rather than refuse. A draft with zero halt events carries no evidence the marker could be —
+// it is non-canonical FORM, not signal — so removing it clears no consent anyone is owed, and freeze
+// is an ADVISE door: a deterministic repair the freeze can simply perform is not a decision to hand
+// back to a human. What IS owed is the record, so the strip is reported as a named advisory and is
+// never silent. Hash-neutral by construction: the marker sits in `## Node Ledger`, which
+// computePlanHash excludes, so a --governance-ack recorded before the strip still matches after it.
+//
+// PURE (no fs, content only). Returns null when there is nothing to strip, else the stripped content
+// plus the { warning, detail } advisory the caller passes through.
+const DECOY_CONSENT_HALT_WARNING = 'decoy_consent_halt_stripped';
+function stripDecoyConsentHalt(planContent) {
   const text = String(planContent || '');
   if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(text)) return null;
   if (!readDurableConsentHalt(text)) return null;
+  // Section-scoped, mirroring readDurableConsentHalt: only the `## Node Ledger` slice is rewritten,
+  // so a same-looking line anywhere else in the plan stays exactly where its author put it.
+  const { start, next } = locateSection(text, LEDGER_HEADING);
+  const body = next < 0 ? text.slice(start) : text.slice(start, next);
+  const strippedBody = body.split('\n')
+    .filter(line => !/^consent_halt:[ \t]*pending[ \t]*$/.test(line)).join('\n');
   return {
-    reason: DECOY_CONSENT_HALT_REASON,
-    error: DECOY_CONSENT_HALT_REASON + ': the plan draft carries "' + CONSENT_HALT_MARKER
-      + '" in its ## Node Ledger, but nothing has run yet — a fresh run cannot be halted for a '
-      + 'consent no one asked for, and the first open-next would refuse halt_pending. The marker '
-      + 'is written by write-halt and cleared by clear-halt; it is never authored. Remove the '
-      + '"' + CONSENT_HALT_MARKER + '" line from the ## Node Ledger section and '
-      + 're-submit (it is most likely copied in from an archived plan used as a skeleton).',
+    content: text.slice(0, start) + strippedBody + (next < 0 ? '' : text.slice(next)),
+    warning: {
+      warning: DECOY_CONSENT_HALT_WARNING,
+      detail: 'the draft carried "' + CONSENT_HALT_MARKER + '" in its ## Node Ledger, but nothing had '
+        + 'run yet — a fresh run cannot be halted for a consent no one asked for, and the first '
+        + 'open-next would have refused halt_pending. The marker is written by write-halt and cleared '
+        + 'by clear-halt; it is never authored, and a draft with zero halt events carries no consent '
+        + 'to preserve. The line was removed from the ## Node Ledger section and the freeze proceeded '
+        + '(it is most likely copied in from an archived plan used as a skeleton).',
+    },
   };
 }
 
@@ -6512,8 +6527,8 @@ module.exports = {
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
-  DECOY_CONSENT_HALT_REASON,
-  detectDecoyConsentHalt,
+  DECOY_CONSENT_HALT_WARNING,
+  stripDecoyConsentHalt,
   MAIN_SESSION_GATE_ROLE,
   ROLE_KINDS,
   ROLE_CAPABILITY_MANIFEST,

@@ -3278,17 +3278,22 @@ const FWW_WARNING = {
 // human ever raised. That is the identical wedge, entered through the other door.
 //
 // The four pins below, in the order they matter:
-//   (1) `--freeze` on an UNFROZEN draft carrying the marker REFUSES, with the SAME typed reason the
-//       handoff fence emits. One rule, one wording: a second spelling of this refusal (a
-//       `consent_halt_decoy`, a `halt_marker_on_draft`) is itself the defect, so the pin is on the
-//       exact token, not on a regex over the prose. Every writing arm of --freeze is covered
-//       (bare, --governance-ack, --repair) — a fence installed in one arm leaks through the others.
-//   (2) the refusal is ZERO-WRITE: no plan_hash stamped, the draft byte-identical, no file created.
+//   (1) `--freeze` on an UNFROZEN draft carrying the marker STRIPS it and FREEZES, reporting the
+//       strip as the named `decoy_consent_halt_stripped` advisory. A draft with zero halt events
+//       carries no evidence the marker could be, so the marker is non-canonical FORM and the freeze
+//       repairs it rather than handing a mechanical edit back to a human — but a repair the operator
+//       is not told about is the silent half of that trade, so the advisory is pinned as hard as the
+//       freeze is. Every writing arm of --freeze is covered (bare, --governance-ack, --repair) — a
+//       repair installed in one arm leaks through the others.
+//   (2) the write is exactly the stripped draft: the marker gone, plan_hash stamped, and NOTHING
+//       else in the plan disturbed — a strip that also ate a ledger row would pass a marker-only
+//       check. No file is created either.
 //   (3) a GENUINE halt is untouched. A real consent halt sits on a FROZEN, mid-run plan; the
 //       marker is written by write-halt, never authored. The mid-run re-freeze must still succeed
-//       and must still carry the marker out the other side, or the fix converts the consent valve
-//       itself into a freeze refusal. This arm is GREEN today by construction and stays green.
-//   (4) the two entries AGREE. Same draft bytes in, same typed reason out, whichever door was used.
+//       and must still carry the marker out the other side, or the fix strips a consent the user
+//       is still owed. This is the pin the never-frozen discriminator exists for.
+//   (4) the two entries AGREE. Same draft bytes in, same stripped ledger out, whichever door was
+//       used, and the same advisory token names it.
 //
 // The fixture is a real freezable schema-2 spine driven through the REAL validator subprocess in a
 // real temp dir (the #641 block's shape) — the CLI is what the finding is about, so stubbing it
@@ -3373,39 +3378,47 @@ const FWW_WARNING = {
     ['--freeze --repair', p => [p, '--freeze', '--repair', '--json']],
   ];
 
-  const cliReasons = {};
+  const cliAdvisories = {};
   for (const [label, argv] of FREEZE_ARMS) {
     inTempProject(DRAFT_DECOY, (planPath, proj) => {
       const beforeBytes = fs.readFileSync(planPath, 'utf8');
       const beforeLs = fs.readdirSync(proj).sort().join(',');
       const v = shellHandoff(VALIDATOR_CLI, argv(planPath));
       const afterBytes = fs.readFileSync(planPath, 'utf8');
-      cliReasons[label] = v.reason;
+      const advisory = (v.warnings || []).find(w => w && w.warning === 'decoy_consent_halt_stripped');
+      cliAdvisories[label] = advisory ? advisory.warning : undefined;
 
-      // (1) TYPED refusal, one wording with the handoff fence.
-      assert(v.result === 'refuse' && v.reason === 'decoy_consent_halt',
+      // (1) The freeze SUCCEEDS, and says what it repaired.
+      assert(v.result === 'in-grammar' && v.frozen === true && v.exitCode === 0,
         'T-DECOY-HALT-CLI (1) ' + label + ': freezing a never-frozen draft that carries '
-        + '"' + schemaCli.CONSENT_HALT_MARKER + '" in its ## Node Ledger must refuse with the SAME '
-        + 'typed reason the handoff fence uses (decoy_consent_halt) — otherwise the direct CLI '
-        + 'freezes a halt no human raised and the first open-next wedges on halt_pending. got '
-        + JSON.stringify({ result: v.result, reason: v.reason, frozen: v.frozen }));
-      assert(v.frozen !== true && v.exitCode !== 0,
-        'T-DECOY-HALT-CLI (1) ' + label + ': the refusal reports frozen:false and exits non-zero, so '
-        + 'a shelling caller cannot read it as a freeze, got '
-        + JSON.stringify({ frozen: v.frozen, exitCode: v.exitCode }));
-      const errBlob = (v.errors || []).join('\n');
-      assert(errBlob.includes(schemaCli.CONSENT_HALT_MARKER) && errBlob.includes('## Node Ledger'),
-        'T-DECOY-HALT-CLI (1) ' + label + ': the refusal NAMES the offending line and the section it '
-        + 'sits in, so the planner can repair its own draft through the bounded repair loop, got '
-        + JSON.stringify(v.errors));
+        + '"' + schemaCli.CONSENT_HALT_MARKER + '" in its ## Node Ledger must STRIP the marker and '
+        + 'freeze — the line is non-canonical form on a draft with zero halt events, not a consent '
+        + 'anyone is owed, and freeze is an advise door. got '
+        + JSON.stringify({ result: v.result, reason: v.reason, frozen: v.frozen, exitCode: v.exitCode,
+          errors: v.errors }));
+      assert(advisory !== undefined,
+        'T-DECOY-HALT-CLI (1) ' + label + ': the strip is reported as the named '
+        + '`decoy_consent_halt_stripped` advisory — a repair the operator is never told about is '
+        + 'exactly the silent clearing this conversion must not become. got '
+        + JSON.stringify(v.warnings));
+      assert(String(advisory.detail || '').includes(schemaCli.CONSENT_HALT_MARKER)
+        && String(advisory.detail || '').includes('## Node Ledger'),
+        'T-DECOY-HALT-CLI (1) ' + label + ': the advisory NAMES the line it removed and the section '
+        + 'it sat in, so the record of the repair is legible without re-reading the diff, got '
+        + JSON.stringify(advisory));
 
-      // (2) ZERO-WRITE. A refusal that half-froze would leave a stamped decoy behind.
-      assert(afterBytes === beforeBytes,
-        'T-DECOY-HALT-CLI (2) ' + label + ': the refused freeze leaves the draft BYTE-IDENTICAL');
-      assert(!/<!--\s*plan_hash:/.test(afterBytes),
-        'T-DECOY-HALT-CLI (2) ' + label + ': no plan_hash is stamped by a refused freeze');
+      // (2) The write is the STRIPPED draft, and nothing beyond it.
+      assert(schemaCli.readDurableConsentHalt(afterBytes) === false,
+        'T-DECOY-HALT-CLI (2) ' + label + ': the frozen plan on disk no longer carries the marker — '
+        + 'the whole point is that the first open-next does not wedge on halt_pending');
+      assert(/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(afterBytes),
+        'T-DECOY-HALT-CLI (2) ' + label + ': ...and it IS frozen — plan_hash is stamped');
+      assert(beforeBytes.split('\n').filter(l => l !== schemaCli.CONSENT_HALT_MARKER)
+        .every(l => afterBytes.includes(l)),
+        'T-DECOY-HALT-CLI (2) ' + label + ': the strip removes the marker LINE and disturbs nothing '
+        + 'else — a strip that also ate a ledger row would pass a marker-only check');
       assert(fs.readdirSync(proj).sort().join(',') === beforeLs,
-        'T-DECOY-HALT-CLI (2) ' + label + ': the refused freeze creates no files in the project dir, '
+        'T-DECOY-HALT-CLI (2) ' + label + ': the freeze creates no files in the project dir, '
         + 'got ' + fs.readdirSync(proj).sort().join(','));
     });
   }
@@ -3474,41 +3487,78 @@ const FWW_WARNING = {
       + JSON.stringify({ handoff_status: r3b.handoff_status, reason: r3b.reason }));
   }
 
-  // (4) THE TWO DOORS AGREE. Same draft bytes, both entries, one typed reason. The handoff fence
-  // fires before any spawn, so a stub shell that refuses every call cannot mask it.
+  // (4) THE TWO DOORS AGREE. Same draft bytes, both entries, one stripped ledger and one advisory
+  // token. The handoff performs the strip itself rather than relying on the freeze it shells, so the
+  // shell is stubbed to a NON-writing success: whatever the handoff writes is the handoff's own work.
   {
     const written4 = {};
+    const PLAN4 = '/fake/kaola-workflow/test-project/workflow-plan.md';
     const handoff4 = runHandoff({
-      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      planPath: PLAN4,
       statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
       project: 'test-project', json: true,
-      shell: () => ({ exitCode: 1, result: 'refuse', errors: ['stub: no spawn expected'] }),
+      shell: makeShellStub({
+        'kaola-workflow-plan-validator.js:--freeze-checked': {
+          exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: DRAFT_ACK,
+          frozen: false, governance: { decision: 'auto-run', risk: {} }, risk: {},
+        },
+        'kaola-workflow-plan-validator.js:--freeze': {
+          exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: DRAFT_ACK,
+          frozen: true, resumeOk: true, risk: {},
+        },
+        'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+        'git:add': { exitCode: 0 },
+        'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: DRAFT_ACK,
+          dest: '/wt/kaola-workflow/test-project' },
+      }),
       computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
       resolveModel: () => 'sonnet',
       readFile: (fpath) => {
-        if (fpath.endsWith('workflow-plan.md')) return DRAFT_DECOY;
+        if (fpath.endsWith('workflow-plan.md')) {
+          return written4[PLAN4] !== undefined ? written4[PLAN4] : DRAFT_DECOY;
+        }
         if (fpath.endsWith('workflow-state.md')) return makeStateContent({ issueNumber: 42 });
         return '';
       },
       writeFile: (fpath, content) => { written4[fpath] = content; },
       stateMtime: undefined,
     });
-    assert(handoff4.reason === 'decoy_consent_halt' && handoff4.result === 'refuse',
-      'T-DECOY-HALT-CLI (4) BASELINE: the handoff door refuses this exact draft decoy_consent_halt, '
-      + 'got ' + JSON.stringify({ handoff_status: handoff4.handoff_status, reason: handoff4.reason }));
-    assert(Object.keys(written4).length === 0,
-      'T-DECOY-HALT-CLI (4) BASELINE: ...writing nothing');
-    const viaCli = inTempProject(DRAFT_DECOY, (planPath) =>
-      shellHandoff(VALIDATOR_CLI, [planPath, '--freeze', '--governance-ack', DRAFT_ACK, '--json']));
-    assert(viaCli.reason === handoff4.reason,
+    const handoffAdvisory = (handoff4.warnings || [])
+      .find(w => w && w.warning === 'decoy_consent_halt_stripped');
+    assert(handoffAdvisory !== undefined,
+      'T-DECOY-HALT-CLI (4): the handoff door reports the strip with the same named advisory the '
+      + 'freeze writer uses, got ' + JSON.stringify({ handoff_status: handoff4.handoff_status,
+        reason: handoff4.reason, warnings: handoff4.warnings }));
+    assert(written4[PLAN4] !== undefined
+      && schemaCli.readDurableConsentHalt(written4[PLAN4]) === false,
+      'T-DECOY-HALT-CLI (4): ...and it WRITES the stripped draft back rather than leaving the decoy '
+      + 'for the run to wedge on, got ' + JSON.stringify(Object.keys(written4)));
+    const viaCli = inTempProject(DRAFT_DECOY, (planPath) => {
+      const out = shellHandoff(VALIDATOR_CLI, [planPath, '--freeze', '--governance-ack', DRAFT_ACK, '--json']);
+      return { out, after: fs.readFileSync(planPath, 'utf8') };
+    });
+    const cliAdvisory = (viaCli.out.warnings || [])
+      .find(w => w && w.warning === 'decoy_consent_halt_stripped');
+    assert(cliAdvisory !== undefined && cliAdvisory.detail === handoffAdvisory.detail,
       'T-DECOY-HALT-CLI (4): freezing through adaptive-handoff and freezing through '
-      + 'plan-validator --freeze must produce the SAME typed refusal for the SAME draft — one rule, '
-      + 'one wording. handoff=' + JSON.stringify(handoff4.reason)
-      + ' plan-validator=' + JSON.stringify(viaCli.reason));
-    for (const [label, reason] of Object.entries(cliReasons)) {
-      assert(reason === handoff4.reason,
-        'T-DECOY-HALT-CLI (4): every --freeze arm agrees with the handoff wording — ' + label
-        + ' gave ' + JSON.stringify(reason) + ', handoff gave ' + JSON.stringify(handoff4.reason));
+      + 'plan-validator --freeze must produce the SAME advisory for the SAME draft — one rule, '
+      + 'one wording, and the shared kernel function is what makes that true rather than two copies '
+      + 'agreeing by luck. handoff=' + JSON.stringify(handoffAdvisory)
+      + ' plan-validator=' + JSON.stringify(cliAdvisory));
+    const ledgerSlice = (text) => {
+      const { start, next } = schemaCli.locateSection(String(text), 'Node Ledger');
+      return start < 0 ? null : (next < 0 ? String(text).slice(start) : String(text).slice(start, next));
+    };
+    assert(ledgerSlice(written4[PLAN4]) !== null
+      && ledgerSlice(written4[PLAN4]) === ledgerSlice(viaCli.after),
+      'T-DECOY-HALT-CLI (4): ...and both doors leave the SAME `## Node Ledger` bytes — the strip is '
+      + 'the same edit whichever entry performed it (the stamped plan_hash lives outside the ledger, '
+      + 'so the sections are directly comparable)');
+    for (const [label, token] of Object.entries(cliAdvisories)) {
+      assert(token === handoffAdvisory.warning,
+        'T-DECOY-HALT-CLI (4): every --freeze arm agrees with the handoff advisory — ' + label
+        + ' gave ' + JSON.stringify(token) + ', handoff gave '
+        + JSON.stringify(handoffAdvisory.warning));
     }
   }
 }

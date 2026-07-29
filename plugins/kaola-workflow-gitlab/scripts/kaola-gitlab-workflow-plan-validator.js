@@ -5526,34 +5526,35 @@ function freezePlan(content, opts) {
   // rather than wedging. Hash-neutral (the head is outside computePlanHash by construction);
   // a no-op on the common initial freeze (no head yet).
   content = schema.stripLedgerChainHead(content);
-  // The DECOY consent-halt fence, at the freeze WRITER. The adaptive-handoff entry carries the same
-  // fence, but the handoff is a CONVENIENCE over this function, not the writer: `--freeze` is what
+  // The DECOY consent-halt STRIP, at the freeze WRITER. The adaptive-handoff entry performs the same
+  // strip, but the handoff is a CONVENIENCE over this function, not the writer: `--freeze` is what
   // stamps plan_hash and replaces workflow-plan.md, and the `--freeze-checked` then
-  // `--freeze --governance-ack <hash>` chain is a documented public CLI reachable directly. Guarding
-  // only the handoff guards one of two doors, and the wedge simply enters through the other.
-  // Detection AND wording are shared (schema.detectDecoyConsentHalt) so the two doors cannot drift
-  // into two spellings of one refusal. Runs BEFORE the contract/grammar wall, mirroring the handoff's
-  // ordering, so the decoy is named for what it is rather than for whatever else the draft trips.
-  // Pure and zero-write: freezePlan never touches the filesystem, and the CLI writes only on frozen.
-  const decoyHalt = schema.detectDecoyConsentHalt(content);
-  if (decoyHalt) {
-    return { result: 'refuse', reason: decoyHalt.reason, errors: [decoyHalt.error],
-      planHash: computePlanHash(content), frozen: false,
-      plan_schema_version: null, contract_version: null };
-  }
+  // `--freeze --governance-ack <hash>` chain is a documented public CLI reachable directly. Repairing
+  // only at the handoff repairs one of two doors, and the wedge simply enters through the other.
+  // The transformation AND its wording are shared (schema.stripDecoyConsentHalt) so the two doors
+  // cannot drift. Runs BEFORE the contract/grammar wall so what the grammar judges — and what gets
+  // stamped — is the canonical draft. Hash-neutral: the marker lives in `## Node Ledger`, which
+  // computePlanHash excludes, so a --governance-ack asserted upstream still matches.
+  let decoyStripped = null;
+  const decoy = schema.stripDecoyConsentHalt(content);
+  if (decoy) { content = decoy.content; decoyStripped = decoy.warning; }
+  // The strip is an ADVISORY on whatever verdict follows, refusals included: an operator who is told
+  // the draft is out of grammar still needs to know the freeze rewrote its ledger.
+  const advise = res => (decoyStripped
+    ? { ...res, warnings: [...(res.warnings || []), decoyStripped] } : res);
   const contract = resolvePlanContract(content, { forFreeze: true });
   if (!contract.ok) {
-    return { result: 'refuse', reason: contract.reason, errors: [contract.detail || contract.reason],
+    return advise({ result: 'refuse', reason: contract.reason, errors: [contract.detail || contract.reason],
       planHash: computePlanHash(content), frozen: false,
-      plan_schema_version: null, contract_version: null };
+      plan_schema_version: null, contract_version: null });
   }
   const v = validatePlan(content, opts || {});
-  if (v.result !== 'in-grammar') return { ...v, frozen: false };
+  if (v.result !== 'in-grammar') return advise({ ...v, frozen: false });
   // #833: freeze no longer PRE-SEEDS a `## Required Agent Compliance` table. The #719 seed
   // existed only so a downstream authority would find the section it demanded; with compliance
   // derived at read time there is nothing to pre-seed and nothing downstream that demands it,
   // so every freeze — schema-1 and schema-2 alike — emits the same bytes it validated.
-  return { ...v, frozen: true, content: injectHash(content, v.planHash) };
+  return advise({ ...v, frozen: true, content: injectHash(content, v.planHash) });
 }
 function injectHash(content, hash) {
   const marker = `<!-- plan_hash: ${hash} -->`;
@@ -6281,8 +6282,8 @@ function main() {
       const rr = revalidateForResume(r.content, { root });
       resumeOk = !!rr.ok;
     }
-    // Carry the TYPED reason out to the wire. freezePlan's refusals — resolvePlanContract's,
-    // validatePlan's, and the decoy consent-halt fence's alike — have always set `reason`, and this
+    // Carry the TYPED reason out to the wire. freezePlan's refusals — resolvePlanContract's and
+    // validatePlan's alike — have always set `reason`, and this
     // payload has always dropped it, so every shelling caller of the freeze WRITER saw an untyped
     // `result:'refuse'` and had no choice but to string-match the prose. That is a general defect of
     // this emission, not a property of any one refusal, so it is repaired generally rather than

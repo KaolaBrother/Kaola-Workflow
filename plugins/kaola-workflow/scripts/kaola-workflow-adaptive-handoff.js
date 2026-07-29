@@ -27,8 +27,10 @@
 //            'decision_id_conflict:' plus an additive `conflicts` field ([{id, hits}]).
 //            #749 legacy-claim admission refusals carry an additive typed
 //            `reason:'legacy_claim_upgrade_required'` (state lacks the epoch lineage envelope).
-//            A never-frozen draft carrying `consent_halt: pending` in its ## Node Ledger refuses
-//            with `reason:'decoy_consent_halt'` (a fresh run cannot start already halted).
+//            A never-frozen draft carrying `consent_halt: pending` in its ## Node Ledger does NOT
+//            refuse: the freeze strips the decoy (a fresh run cannot start already halted, and a
+//            draft with zero halt events carries no consent to preserve) and reports it as the
+//            `decoy_consent_halt_stripped` advisory on the ready_to_run verdict.
 //
 // 2-state only: branch on validator --json `result` ('in-grammar'|'refuse'), NEVER on `decision`.
 // decision:ask is audit METADATA that freezes-and-proceeds — NO needs_user_approval, NO --authorized.
@@ -764,6 +766,11 @@ function runHandoff(opts) {
   // unchanged. Fail-open only if the validator module cannot be loaded at all, in which case nothing
   // downstream could freeze either.
   // -------------------------------------------------------------------------
+  // The DECOY consent-halt strip is DECIDED here and APPLIED at Step 1.7 — see that step for why the
+  // rule exists. It is decided here because this is where the draft is read BEFORE any spawn, so the
+  // bytes are the operator's own and not something a later step wrote; it is applied later so the
+  // refuse-gates below still mutate nothing when they fire.
+  let decoyStrip = null;
   {
     let planForHash = null;
     try { planForHash = readFile(planPath); } catch (_) { planForHash = null; }
@@ -771,33 +778,8 @@ function runHandoff(opts) {
       ? ((planForHash.match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/) || [])[1] || null)
       : null;
 
-    // Step 0.86: the DECOY consent-halt fence. `consent_halt: pending` in the `## Node Ledger` is the
-    // durable consent valve — every mutating adaptive-node subcommand refuses `halt_pending` while it
-    // is set. That is correct for a run that actually halted, and a wedge for one that has not started:
-    // there is nothing to consent TO, and the run's very first open-next refuses on a halt no human
-    // raised. It is a real, observed shape — a planner that copies its skeleton from an ARCHIVED plan
-    // (where the marker legitimately survives) carries the line into a brand-new ledger — and
-    // `computePlanHash` covers `## Meta` + `## Nodes` only, so the marker rides the freeze unremarked.
-    // The freeze path is the only place that can tell FRESH from RESUMED, and a never-frozen draft (no
-    // stored plan_hash) is exactly that discriminator: an unfrozen draft has never run, so a marker on
-    // it cannot be a real halt. Refuse (zero mutation, before the validator and the freeze) and NAME
-    // the marker so the planner can repair its own draft through the bounded repair loop; an
-    // already-frozen plan is untouched, so a genuinely halted run still resumes.
-    //
-    // Detection and wording live in the kernel (`detectDecoyConsentHalt`) because the OTHER freeze
-    // door — `plan-validator --freeze`, the writer this handoff shells and a documented public CLI —
-    // fences on the identical rule. One rule, one wording: both doors return the same typed reason and
-    // the same operator prose for the same draft bytes.
-    const decoyHalt = adaptiveSchema.detectDecoyConsentHalt(planForHash);
-    if (decoyHalt) {
-      return {
-        handoff_status: 'plan_invalid',
-        result: 'refuse',
-        reason: decoyHalt.reason,
-        errors: [decoyHalt.error],
-        validator_verdict: null,
-      };
-    }
+    try { decoyStrip = planForHash ? adaptiveSchema.stripDecoyConsentHalt(planForHash) : null; }
+    catch (_) { decoyStrip = null; }
 
     if (storedHash) {
       let computedHash = null;
@@ -926,6 +908,42 @@ function runHandoff(opts) {
   // Fail-safe: any error leaves the plan on disk untouched and falls back to the SPAWN-1 hash.
   const schemaMod = require('./kaola-workflow-adaptive-schema');
   let ackHash = validateResult.planHash;
+
+  // -------------------------------------------------------------------------
+  // Step 1.7: the DECOY consent-halt STRIP. `consent_halt: pending` in the `## Node Ledger` is the
+  // durable consent valve — every mutating adaptive-node subcommand refuses `halt_pending` while it
+  // is set. That is correct for a run that actually halted, and a wedge for one that has not started:
+  // there is nothing to consent TO, and the run's very first open-next refuses on a halt no human
+  // raised. It is a real, observed shape — a planner that copies its skeleton from an ARCHIVED plan
+  // (where the marker legitimately survives) carries the line into a brand-new ledger — and
+  // `computePlanHash` covers `## Meta` + `## Nodes` only, so the marker rides the freeze unremarked.
+  // The freeze path is the only place that can tell FRESH from RESUMED, and a never-frozen draft (no
+  // stored plan_hash) is exactly that discriminator, so an already-frozen plan is untouched and a
+  // genuinely halted run still resumes.
+  //
+  // A draft with zero halt events carries no evidence the marker could be, so the line is FORM, not
+  // signal: the freeze removes it and ADVISES rather than handing a mechanical edit back to a human.
+  // The transformation and its wording live in the kernel (`stripDecoyConsentHalt`) because the OTHER
+  // freeze door — `plan-validator --freeze`, the writer this handoff shells — performs the identical
+  // repair; one rule, one wording, and SPAWN 2 therefore finds an already-canonical draft and strips
+  // nothing. That no-op is idempotency, NOT evidence the doors agree — a detector that could see
+  // nothing would look identical from here. What the doors agree is shown by comparing the bytes each
+  // one produces from the same draft, which is what the T-DECOY-HALT-CLI (4) pin does.
+  //
+  // Hash-neutral, which is why the write may sit AFTER the SPAWN-1 governance verdict: the ledger is
+  // outside computePlanHash, so `ackHash` is untouched and SPAWN 2's --governance-ack still matches.
+  // The strip was DECIDED at Step 0.85 off the pre-spawn draft bytes and is only APPLIED here, so a
+  // refuse-gate that fires before this point still mutates nothing. Same fail-safe posture as the
+  // materialization below — any error leaves the draft on disk untouched, and SPAWN 2's own call to
+  // the identical kernel function still strips it.
+  let decoyStripWarning = null;
+  if (decoyStrip) {
+    try {
+      writeFile(planPath, decoyStrip.content);
+      decoyStripWarning = decoyStrip.warning;
+    } catch (_) { /* best-effort: SPAWN 2's own strip still covers it */ }
+  }
+
   try {
     const preFreeze = readFile(planPath);
     const alreadyFrozen = /<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(preFreeze || '');
@@ -1166,8 +1184,13 @@ function runHandoff(opts) {
     risk,
     // #830: freeze-time named advisories (e.g. frontier_without_writer) pass through from the
     // --freeze-checked verdict — audit signal for the planner/orchestrator, NEVER a gate;
-    // ready_to_run is unchanged.
-    ...(validateResult.warnings ? { warnings: validateResult.warnings } : {}),
+    // ready_to_run is unchanged. Step 1.7's `decoy_consent_halt_stripped` joins them: the strip is a
+    // repair the freeze PERFORMED on the operator's draft, so it is the one advisory that must never
+    // be lost, and it is accumulated into the same array rather than displacing what SPAWN 1 said.
+    ...((validateResult.warnings || decoyStripWarning)
+      ? { warnings: [...(validateResult.warnings || []),
+        ...(decoyStripWarning ? [decoyStripWarning] : [])] }
+      : {}),
     worktree_mirror: {
       status: mirrorResult.status
         || (mirrorResult.exitCode === 0 ? 'unknown' : 'failed'),
