@@ -152,8 +152,15 @@ function replanOrientation(fence, project) {
     out.first_node_id = tx.child.first_node_id || 'none';
     out.first_node_role = tx.child.first_node_role || 'none';
   }
+  // The fence names ONE legal exit; this prints it as a command that can be pasted. Exactly one is
+  // emitted, because a second, contradicting exit is one answer too many. `abort` is CAS-targeted,
+  // so the transaction id the fence resolved travels with it — that id is the half of the string
+  // that can be wrong, and a printed command that refuses on arrival is worse than none.
   if (fence && fence.legal_mutation === 'replan resume') {
     out.resume_command = 'node scripts/kaola-gitlab-workflow-replan.js resume --project ' + project + ' --json';
+  } else if (fence && fence.legal_mutation === 'replan abort') {
+    out.abort_command = 'node scripts/kaola-gitlab-workflow-replan.js abort --project ' + project
+      + ' --transaction ' + out.transaction_id + ' --json';
   }
   return out;
 }

@@ -4035,16 +4035,26 @@ function readStoredHash(content) {
 
 function finalizeReplanEnvelope(fence) {
   const transaction = fence && fence.transaction;
+  const project = path.basename(path.dirname((fence && fence.planPath) || 'project'));
+  const transactionId = (fence && fence.transaction_id)
+    || (transaction && transaction.transaction_id) || 'none';
   return {
     result: 'refuse', reason: (fence && fence.reason) || 'replan_in_progress',
     replan_phase: (fence && fence.phase) || (transaction && transaction.phase) || 'unknown',
-    transaction_id: (fence && fence.transaction_id) || (transaction && transaction.transaction_id) || 'none',
+    transaction_id: transactionId,
     parent_plan_hash: transaction && transaction.parent && transaction.parent.plan_hash || 'none',
     child_plan_hash: transaction && transaction.child && transaction.child.plan_hash || 'none',
     legal_mutation: (fence && fence.legal_mutation) || 'none',
+    // The fence names ONE legal exit; this prints it as a command that can be pasted. Exactly one
+    // is emitted, and the CAS-targeted `abort` carries the id the fence resolved — the half of the
+    // string that can be wrong.
     ...(fence && fence.legal_mutation === 'replan resume'
       ? { resume_command: 'node scripts/kaola-workflow-replan.js resume --project '
-          + path.basename(path.dirname(fence.planPath || 'project')) + ' --json' }
+          + project + ' --json' }
+      : {}),
+    ...(fence && fence.legal_mutation === 'replan abort'
+      ? { abort_command: 'node scripts/kaola-workflow-replan.js abort --project '
+          + project + ' --transaction ' + transactionId + ' --json' }
       : {}),
   };
 }

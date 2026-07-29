@@ -1448,6 +1448,136 @@ for (const cond of emitted) {
 }
 
 // ===========================================================================
+// (8c) #848 — "THE ANCHOR IS NOT THERE" MUST NOT BE SAID ABOUT A VALUE THAT WAS THERE.
+//
+// ABSENT and PRESENT-BUT-WRONG are different events with opposite cures, and the anchor-read band
+// above keeps them apart deliberately: `review_profile_identity_unavailable` (the identity block
+// is NOT THERE) sits at `absent_anchor` while `review_profile_identity_ambiguous` (it is there
+// TWICE) and `review_profile_hash_mismatch` (it is there and disagrees) are elsewhere. Four
+// conditions were swept into `absent_anchor` that report the second event, not the first:
+//
+//   condition                          fires when
+//   finding_anchor_index_unavailable   the object-format probe ANSWERED with an unrecognized
+//                                      value; and the catch swallows the explicit
+//                                      `tree entry malformed` / `blob length malformed` throws
+//   candidate_partition_unavailable    the partition WAS computed, then failed the canonical
+//                                      blob-map / residue-digest shape check
+//   candidate_digest_unavailable       a digest WAS produced and is not 64-hex
+//   baseline_partition_unavailable     the catch swallows `presentAtBase seam returned a
+//                                      non-array` — a probe that answered, in the wrong shape
+//
+// What an operator is told today, for every one of them, is the absence clause: "The anchor this
+// proof stands on is not there." That sentence sends an investigation looking for a missing
+// record when the record is sitting right there in the wrong shape.
+//
+// THE FIX ADDS NOTHING. `kernel_integrity_broken` already carries `schema_mismatch`,
+// `noncanonical_bytes` and `hash_mismatch`; all three route to the same `adaptive-node orient`
+// and carry the same `auto_remediable: false`. So the ROUTE and the REMEDIABILITY are identical
+// either way and are pinned here as UNCHANGED — this is a truthfulness repair, and a fix that
+// moved behaviour would be a different change wearing this one's name.
+// ===========================================================================
+{
+  const ABSENT_CLAUSE = REFUSAL_WHY && REFUSAL_WHY['kernel_integrity_broken/absent_anchor'];
+  assert(typeof ABSENT_CLAUSE === 'string' && /is not there/.test(ABSENT_CLAUSE),
+    '#848 fixture: the absence clause is read from REFUSAL_WHY, never restated here, so this pin '
+    + 'cannot drift from the sentence production actually prints: ' + JSON.stringify(ABSENT_CLAUSE));
+
+  const integrityHint = (patch) => {
+    const row = KERNEL_REFUSAL_REGISTRY.kernel_integrity_broken;
+    return (row && typeof row.hint === 'function') ? String(row.hint(patch) || '') : '';
+  };
+  const kindOf = (condition) => {
+    const c = classifyRefusalCondition(condition);
+    return (c && c.patch && typeof c.patch.kind === 'string') ? c.patch.kind : null;
+  };
+
+  // The kinds that say PRESENT AND WRONG. All three already exist; naming them as a closed set is
+  // what keeps the repair from minting an eleventh kind for four conditions.
+  const PRESENT_AND_WRONG_KINDS = ['schema_mismatch', 'noncanonical_bytes', 'hash_mismatch'];
+
+  const MISLABELLED = [
+    ['finding_anchor_index_unavailable', 'the probe answered with an unrecognized object format, and '
+      + 'the catch swallows the explicit `tree entry malformed` / `blob length malformed` throws'],
+    ['candidate_partition_unavailable', 'the partition was COMPUTED and then failed its canonical '
+      + 'blob-map / residue-digest shape check'],
+    ['candidate_digest_unavailable', 'a digest was PRODUCED and is not 64-hex'],
+    ['baseline_partition_unavailable', 'the presence probe ANSWERED, in a shape that is not an array'],
+  ];
+
+  for (const [condition, event] of MISLABELLED) {
+    // --- the half that must NOT move. Recorded first, so a fix that quietly changes the cure is
+    //     caught by the same block that asks for the sentence to change.
+    const env = schema.refuse(condition, {});
+    assert(env.refusal_family === 'kernel_integrity_broken',
+      '#848: `' + condition + '` stays in the integrity family — the deviation is still the evidence: '
+      + env.refusal_family);
+    assert(env.refusal_route && env.refusal_route.script === 'adaptive-node'
+      && env.refusal_route.verb === 'orient',
+      '#848: ...and its exit is UNCHANGED. Every present-and-wrong kind routes exactly where '
+      + '`absent_anchor` does, so nothing about where the operator goes may move: '
+      + JSON.stringify(env.refusal_route));
+    assert(env.auto_remediable === false,
+      '#848: ...and it stays NON-remediable. A record in the wrong shape is evidence just as much as '
+      + 'a missing one: ' + JSON.stringify(env.auto_remediable));
+
+    // --- the half that must move: the sentence.
+    const kind = kindOf(condition);
+    assert(kind !== 'absent_anchor',
+      '#848: `' + condition + '` fires when ' + event + '. Telling an operator the anchor "is not '
+      + 'there" sends the investigation after a missing record while the record is sitting in front '
+      + 'of it in the wrong shape — absent and present-but-wrong have opposite cures, got kind='
+      + JSON.stringify(kind));
+    assert(PRESENT_AND_WRONG_KINDS.indexOf(kind) >= 0,
+      '#848: ...and the kind it moves to must be one that ALREADY EXISTS ('
+      + PRESENT_AND_WRONG_KINDS.join(' / ') + '). Minting an eleventh kind for four conditions is how '
+      + 'a kind-keyed route becomes a per-incident table again, got ' + JSON.stringify(kind));
+    assert(integrityHint({ kind: kind }).indexOf(ABSENT_CLAUSE) < 0,
+      '#848: ...so the sentence an operator actually reads no longer claims absence: '
+      + JSON.stringify(integrityHint({ kind: kind })));
+  }
+
+  // THE BOUNDARY THAT ALREADY HOLDS. These report a read that genuinely could not resolve, and
+  // their absent/present separation was verified condition by condition. They are pinned so the
+  // repair above cannot be over-applied — a sweep that took the whole band with it would trade one
+  // false sentence for a wider one.
+  const VERIFIED_ABSENT = ['review_profile_identity_unavailable', 'plan_contract_unavailable',
+    'snapshot_verifier_unavailable', 'barrier_unavailable', 'writer_identity_unavailable',
+    'validation_vector_read_failed'];
+  for (const condition of VERIFIED_ABSENT) {
+    assert(kindOf(condition) === 'absent_anchor',
+      '#848: `' + condition + '` reports a read that genuinely did not resolve and STAYS at '
+      + '`absent_anchor` — this repair is four conditions wide, not a band sweep: '
+      + JSON.stringify(kindOf(condition)));
+  }
+  // Their present-but-wrong twins are the reason the separation is worth keeping, and they are
+  // already elsewhere. If these ever collapsed into the same cell the distinction would be gone.
+  for (const [twin, expected] of [['validation_vector_malformed', 'schema_mismatch'],
+    ['validation_vector_not_canonical', 'noncanonical_bytes'],
+    ['review_profile_hash_mismatch', 'hash_mismatch']]) {
+    assert(kindOf(twin) === expected,
+      '#848: `' + twin + '` is the present-but-wrong twin of an `_unavailable` condition and must keep '
+      + 'its own cell (' + expected + '): ' + JSON.stringify(kindOf(twin)));
+  }
+
+  // NO NEW KIND. The integrity discriminator enum is closed; this repair re-uses it and does not
+  // extend it. Both directions, so neither an addition nor a deletion can slip through.
+  const EXPECTED_INTEGRITY_KINDS = ['absent_anchor', 'chain_break', 'cycle', 'hash_mismatch',
+    'identity_mismatch', 'last_copy_in_target', 'noncanonical_bytes', 'replay_binding',
+    'schema_mismatch', 'unattributed_delta'];
+  assert(Object.keys(INTEGRITY_ROUTE_BY_KIND).slice().sort().join(',') === EXPECTED_INTEGRITY_KINDS.join(','),
+    '#848: the integrity kind set is CLOSED — an accuracy repair that mints a kind has stopped being '
+    + 'an accuracy repair: ' + JSON.stringify(Object.keys(INTEGRITY_ROUTE_BY_KIND).slice().sort()));
+
+  // MUTATION ARM — a green pin proves nothing unless its detector has been shown to fire.
+  assert(integrityHint({ kind: 'absent_anchor' }).indexOf(ABSENT_CLAUSE) >= 0,
+    'MUTATION #848: the absence-clause detector must FIRE on the cell that carries the clause');
+  assert(integrityHint({ kind: 'schema_mismatch' }).indexOf(ABSENT_CLAUSE) < 0,
+    'MUTATION #848: ...and must NOT fire on a cell that does not');
+  assert(kindOf('no_such_condition_848') === null,
+    'MUTATION #848: the kind reader must report an unclassified token as null, never as a kind');
+}
+
+// ===========================================================================
 // (9) THE MUTATION BATTERY — a green suite is not evidence a guard is armed. Each checker
 //     is fed a deliberately broken input and must REJECT it.
 // ===========================================================================
