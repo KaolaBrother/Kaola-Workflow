@@ -8464,11 +8464,16 @@ function computeTriage(barrierOut, cacheDir, nodeId, readFile) {
 // LIFETIME = THE CLAIM. Every entry is bound to a SCOPE digest over the claim identity, the epoch
 // lineage, the plan epoch + active plan hash, and the re-plan status/transaction. A re-plan epoch,
 // a discard+restart (new claim identity) and a new candidate digest each move that digest, and the
-// first verb to observe the move REVOKES every live grant. Revocation is durable and TERMINAL for
-// the claim: it is written into the journal, so restoring the surrounding scalars cannot resurrect
-// a grant, and a class already revoked here is never re-granted inside this claim — the valve
-// simply keeps asking for it. That is the narrow reading, and narrow is the direction this feature
-// is allowed to be wrong in: it can only ever cause one more question, never one fewer.
+// first verb to observe the move REVOKES every live grant. Revocation is durable, not derived: it is
+// written into the journal, so restoring the surrounding scalars cannot resurrect a grant.
+//
+// WHAT REVOCATION ENDS. The ANSWER, not the class. The next request for a revoked class ASKS AGAIN —
+// and the human's answer to that fresh question is an ordinary new grant, made under the plan
+// actually in front of them, with its application count restarted at zero. A revocation that also
+// barred re-granting would be a second rule (the issue states only "the next request asks again"),
+// and since re-plans are routine it would make this whole subtraction inert after the first one.
+// The narrow direction is preserved by the PENDING request, not by a ban: the revoking sync clears
+// `pending`, so a grant can only ever be minted from a question raised after the revocation.
 // ===========================================================================
 const CONSENT_GRANT_SCHEMA_VERSION = 1;
 
@@ -8513,7 +8518,10 @@ function foldConsentGrants(store) {
   for (const entry of (store && store.journal) || []) {
     if (!entry || typeof entry.class !== 'string' || !entry.class) continue;
     const row = byClass.get(entry.class) || { class: entry.class, state: 'none', applications: 0 };
-    if (entry.event === 'granted' && row.state !== 'revoked') { row.state = 'live'; row.applications = 0; }
+    // A `granted` entry always makes the class live and RESTARTS the count at zero — including one
+    // that follows a `revoked`. Zero, not the prior tally: an application count that outlived the
+    // thing that revoked it would report applications of a grant that no longer exists.
+    if (entry.event === 'granted') { row.state = 'live'; row.applications = 0; }
     else if (entry.event === 'revoked') { row.state = 'revoked'; }
     else if (entry.event === 'applied' && row.state === 'live') { row.applications += 1; }
     byClass.set(entry.class, row);
@@ -8764,9 +8772,12 @@ function runClearHalt(opts) {
   // question that was actually put, so it is structurally impossible to widen it at clear time, and
   // a halt raised without a class grants nothing at all (nothing is granted by omission).
   //
-  // A class already REVOKED inside this claim is not re-granted — see the scope note above. The
-  // halt still clears and the work still proceeds; only the STANDING part is withheld, so the
-  // valve degrades to asking every time rather than to a grant made under a vanished plan.
+  // A class REVOKED earlier in this claim is granted here like any other: revocation ends the ANSWER
+  // given under the vanished plan, not the human's standing to answer the question the new plan puts.
+  // The pending request is the whole guard, and it is enough — the revoking sync clears `pending`, so
+  // the only thing clearable here is a question raised AFTER the revocation, under the plan actually
+  // in front of the human. Withholding the grant instead would be a second rule the issue does not
+  // state, and it would make the subtraction inert after the first re-plan.
   let standingGrantRecorded = null;
   if (reason === 'consent' && typeof writeFile === 'function') {
     const consentCacheDir = path.join(path.dirname(planPath), '.cache');
@@ -8774,11 +8785,8 @@ function runClearHalt(opts) {
     const pendingClass = store && store.pending && typeof store.pending.class === 'string'
       ? store.pending.class : null;
     if (pendingClass) {
-      const row = foldConsentGrants(store).get(pendingClass);
-      if (!row || row.state !== 'revoked') {
-        store.journal.push({ ts: new Date().toISOString(), event: 'granted', class: pendingClass });
-        standingGrantRecorded = pendingClass;
-      }
+      store.journal.push({ ts: new Date().toISOString(), event: 'granted', class: pendingClass });
+      standingGrantRecorded = pendingClass;
       store.pending = null;
       writeConsentStore(consentCacheDir, writeFile, store);
     }
