@@ -484,8 +484,10 @@ and written Planning Evidence by the time you return; it does NOT open node1. Re
 structured object, no extra prose:
 
 - **`ready_to_run`** — plan frozen + evidence durable. Return `checklist`, `first_node` (advisory),
-  `decision`, `risk`; the orchestrator routes to `/kaola-workflow-plan-run {project}` even on
-  `decision:ask`.
+  `decision`, `risk`, and — when the claim envelope carried one — `bundle_size_note` verbatim; the
+  orchestrator routes to `/kaola-workflow-plan-run {project}` even on `decision:ask`. The size note
+  is ADVICE about the shape of the set you selected, never a limit: nothing caps a bundle, and
+  forwarding it is the only way the advice reaches the orchestrator on a no-target claim.
 - **`plan_invalid`** — the validator refused; nothing froze/wrote. Return
   `{handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict}` verbatim; the
   orchestrator drives repair.
