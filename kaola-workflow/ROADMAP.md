@@ -19,7 +19,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #872 | Three genuine builds: the run-debt register, a real lease, an asynchronous human mailbox | open | — | — |
 | #873 | Three one-field additions: content locator on the ledger row, mandate digest at claim, epistemic status | open | — | — |
 | #874 | Two fabrications in shipped records: goal_check can never say no, and a 24h guess renders as a category | open | — | — |
-| #875 | wave35/851-pilot is built, pushed, and has never had a chain run — 34 commits behind main | open | — | — |
 | #876 | The forge bundle lanes have no behavioural oracle — the #862 dead-port mutation would pass four chains today | open | — | — |
 
 ## Rules
