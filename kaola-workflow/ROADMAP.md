@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #851 | The mid-run demotion IS the campaign: the mid-run refusal set (measured band ~278-607 of 778) refuses at a locus the two-gate architecture forbids | open | — | — |
+| #851 | The mid-run demotion premise is refuted — the census cannot answer the question it was asked | open | — | — |
 | #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
 | #857 | Four surfaces disagree on where the MultiAgentV2 default of 4 comes from: three say documented upstream, one says our own probe and explicitly not documentation | open | — | — |
 | #863 | result is not total on the claim surface, and two status tokens classify differently depending on which internal arm emitted them | open | — | — |
