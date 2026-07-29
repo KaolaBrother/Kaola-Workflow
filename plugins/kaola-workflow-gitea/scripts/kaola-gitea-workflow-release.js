@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-release.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // Forge-neutral release transaction: prepare -> operator commit + full offline

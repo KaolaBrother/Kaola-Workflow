@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-gap-sweep.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -237,7 +238,7 @@ function runScan(opts) {
   // and one this writer deliberately refuses to recompute over a prior cycle. So it takes the
   // crash-safe atomic replace like every other record write: a half-written artifact would parse as
   // a SHORTER swept-class list, and the gate would pass on gaps that were swept but never stored.
-  require('./kaola-gitlab-workflow-adaptive-schema').writeFileAtomicReplace(
+  require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(
     outputPath, JSON.stringify(artifact, null, 2) + '\n');
 
   if (asJson) {

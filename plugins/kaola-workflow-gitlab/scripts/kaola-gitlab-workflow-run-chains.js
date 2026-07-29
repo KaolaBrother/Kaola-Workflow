@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-run-chains.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -677,7 +678,7 @@ function isEditionCouplingPath(rel, cwd, forgeRefs) {
   // even though it touches plugins/ paths. Without this clause the committed mirrors would re-couple
   // every kernel diff to all four chains and undo the frequency win.
   // Matched rename-safely: the kernel is base-named in every tree, so a literal
-  // `kaola-gitlab-workflow-adaptive-schema` would be rewritten to a nonexistent name in the forge ports.
+  // `kaola-workflow-adaptive-schema` would be rewritten to a nonexistent name in the forge ports.
   if (/^plugins\/[^/]+\/scripts\/[^/]*-adaptive-schema\.js$/.test(p)) return false;
   if (p.indexOf('plugins/') === 0) return true;             // any edition tree (codex twin + both forges)
   if (p === 'package.json') return true;                    // the chain-script definitions
