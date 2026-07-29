@@ -1651,7 +1651,43 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     /\b(?:refuse|bad|fail)\(\s*'([a-z][a-z0-9_:]{3,})'/g,
     /reasons\.push\(\s*'([a-z][a-z0-9_:]{3,})'/g,
     /throw new Error\(\s*'([a-z][a-z0-9_]{3,})'\s*\)/g,
+    /throw new Error\(\s*'([a-z][a-z0-9_]{3,}):/g,
   ];
+
+  // Mirror of the sweep's derived-constructor stage — see its comment for why the names are
+  // derived rather than listed. Pinned to the sweep's source below on the same
+  // two-measurements-may-not-disagree rule that governs the static shapes.
+  const REFUSAL_CONSTRUCTOR_KEYS = 'reason|reasonCode|status|verdict|handoff_status|inner_reason|condition';
+
+  function deriveRefusalConstructors(content) {
+    const names = new Set();
+    const keyRe = new RegExp('^(?:' + REFUSAL_CONSTRUCTOR_KEYS + ')$');
+    const carries = (param, body) => {
+      const shorthand = new RegExp('(?:^|[{,]\\s*)' + param + '\\s*(?:[,}]|$)', 'm').test(body);
+      const explicit = new RegExp('(?:' + REFUSAL_CONSTRUCTOR_KEYS + ')\\s*:\\s*' + param + '\\s*(?:[,}]|$)', 'm').test(body);
+      return (shorthand && keyRe.test(param)) || explicit;
+    };
+    const arrow = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\(\s*([A-Za-z_$][\w$]*)[^)]*\)|([A-Za-z_$][\w$]*))\s*=>\s*\(?\{([\s\S]{0,400}?)\}\)?[;,\n]/g;
+    let m;
+    while ((m = arrow.exec(content)) !== null) {
+      const param = m[2] || m[3];
+      if (param && carries(param, m[4] || '')) names.add(m[1]);
+    }
+    const declared = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)[^)]*\)\s*\{([\s\S]{0,600}?)\n\}/g;
+    while ((m = declared.exec(content)) !== null) {
+      const body = m[3] || '';
+      if (/return\s*\{/.test(body) && carries(m[2], body)) names.add(m[1]);
+    }
+    // The three hard-coded names already have their own shape; re-deriving them would double-scan.
+    for (const already of ['refuse', 'bad', 'fail']) names.delete(already);
+    return names;
+  }
+
+  function refusalConstructorShape(names) {
+    if (!names.size) return null;
+    const alternation = [...names].map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    return new RegExp('\\b(?:' + alternation + ')\\(\\s*\'([a-z][a-z0-9_:]{3,})\'', 'g');
+  }
 
   // Extract the sweep's own EMISSION_SHAPES literals as `source+flags` strings.
   // The joiner is NUL and not a readable character because a regex SOURCE may itself
@@ -1684,6 +1720,34 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     + 'two measurements of the same K may not disagree. sweep=' + JSON.stringify(sweepShapes)
     + ' here=' + JSON.stringify(mineShapes));
 
+  // The derived-constructor stage is the SECOND source of census truth, so it needs the same
+  // anti-fork pin as the static shapes: a constructor rule tightened in one file and not the other
+  // forks K exactly as a regex would. Compared whitespace-NORMALIZED because the two copies sit at
+  // different nesting depths; the pin is over the logic, not the indentation.
+  function normalizeFnSource(src) {
+    if (typeof src !== 'string') return null;
+    const lines = src.split('\n').map(l => l.trim()).filter(l => l.length && !l.startsWith('//'));
+    return lines.length ? lines.join('\n') : null;
+  }
+  function extractSweepFn(src, name) {
+    if (typeof src !== 'string') return null;
+    const m = src.match(new RegExp('\\nfunction ' + name + '\\([\\s\\S]*?\\n\\}\\n'));
+    return m ? normalizeFnSource(m[0]) : null;
+  }
+  const sweepSrc = fs.readFileSync(path.join(REPO, 'scripts/test-refusal-route-sweep.js'), 'utf8');
+  for (const [name, local] of [
+    ['deriveRefusalConstructors', deriveRefusalConstructors],
+    ['refusalConstructorShape', refusalConstructorShape],
+  ]) {
+    const theirs = extractSweepFn(sweepSrc, name);
+    assert(theirs !== null,
+      'K0 constructors: the refusal sweep\'s `function ' + name + '` must still be locatable — '
+      + 'if it was renamed or inlined, re-point this extractor rather than letting the two censuses fork');
+    assert(theirs === normalizeFnSource(local.toString()),
+      'K0 constructors: `' + name + '` must be logically identical to the refusal sweep\'s copy — '
+      + 'two measurements of the same K may not disagree');
+  }
+
   // ---- the emitted universe: token -> the emission sites that mint it ------
   // PURE: `readFile` is injected so the mutation battery drives the identical scanner
   // over in-memory fixtures and never touches the real tree.
@@ -1693,7 +1757,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       const content = readFile(rel);
       if (typeof content !== 'string') continue;
       const lines = content.split('\n');
-      for (const re of CONDITION_EMISSION_SHAPES) {
+      const shapes = CONDITION_EMISSION_SHAPES.slice();
+      const derived = refusalConstructorShape(deriveRefusalConstructors(content));
+      if (derived) shapes.push(derived);
+      for (const re of shapes) {
         for (let i = 0; i < lines.length; i++) {
           re.lastIndex = 0;
           let m;

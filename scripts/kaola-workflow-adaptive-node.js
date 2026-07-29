@@ -711,7 +711,7 @@ const OPERATOR_HINT_RUNG_CENSUS = 89;
 {
   const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
   if (live !== OPERATOR_HINT_RUNG_CENSUS) {
-    throw new Error('operator_hint_rung_census_mismatch: OPERATOR_HINT_REGISTRY holds ' + live
+    throw new Error('OPERATOR_HINT_REGISTRY holds ' + live
       + ' templates, the recorded census says ' + OPERATOR_HINT_RUNG_CENSUS
       + '. Rung 1 is TIGHTEN-ONLY: delete a template and lower the census. If you are adding one,'
       + ' add a cell-keyed WHY clause to the kernel refusal registry instead — a new template here'
