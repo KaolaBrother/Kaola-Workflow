@@ -95,7 +95,7 @@ The workflow is not "execute by rule and refuse what does not comply." It **pres
 
 **The four kernel records — only these must be durable:** plan → progress → per-step evidence → the forge operation chain (commit / merge / push / issue). Every other durable artifact must be **derivable** from these four, or it is a preference a successor may simply re-decide. If it is neither, it does not deserve to persist.
 
-**Only two gates may refuse.**
+**Only two gates may refuse — and there is no third door.** Claiming is bookkeeping: if a claim should not stand, the agent re-states its reason and claims another issue or batch. Whether or not a gate exists there, an agent resolves it — so the commitment point answers, and never refuses.
 - **L1 — kernel-write integrity:** did the write land. Atomic-write failure, forge-operation failure, lost CAS, broken integrity.
 - **L2 — the sink:** before anything reaches mainline. Tests red, diff not attributable, review not settled, consent missing.
 

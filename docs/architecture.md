@@ -1267,3 +1267,41 @@ Four rules make it work:
 The method generalises past refusals. Tests, pins, durable artifacts, generated prose and prompt
 obligations are all subject to the same question — *derive it, or it is not there* — and all of them
 grow by the same mechanism when the question is asked the other way round.
+
+### There is no third door — claiming is bookkeeping
+
+A claim-time refusal shipped for a long time under the name **Gate 1**: `cmdStartup` / `cmdPickNext`
+refuse when an orchestrator-originated claim arrives without a selection record. It is neither of the
+two sanctioned doors. Nothing has been written, so it is not L1; nothing is reaching mainline, so it
+is not L2. The same document that permits exactly two refusing loci documented a third one refusing.
+
+**Owner ruling: no third door.** The reasoning is not about the strength of the check — it is about
+the kind of act being checked.
+
+**Claiming is bookkeeping.** If a claim should not stand, the agent re-states its reason and claims
+another issue or batch. Nothing is destroyed, nothing reaches mainline, and no kernel record is left
+half-written; the whole situation is one an agent resolves by deciding again. That is the definition
+of the bookkeeping class this project already refuses to let block — *"caching a subagent's or a
+procedure's result, mirroring, syncing, regenerating a derived artifact — it may report, retry or
+normalize, but it may not stop the run."* Gate 1 was that same class wearing a gate's uniform, and it
+contradicted a shipped principle rather than extending one.
+
+The decisive test is not whether the check is *good* but whether an agent can resolve the situation
+without it: **whether or not the gate exists, an agent solves it.** A door is for what an agent
+cannot undo.
+
+Two consequences follow, and both are larger than the one refusal:
+
+- **The admission rule is settled, so instances stop being arguments.** With the locus question open,
+  every candidate refusal could be argued into a third home, and each subtraction wave had to
+  re-litigate the rule and the instance at once. Closed, the test is mechanical: *name the concrete
+  irreversible harm, and show recovery is not one command.* Everything else is a tool.
+- **An admission rule is the one thing that has never been narrowed after the fact here.** The
+  measured history is a corpus that grew 712 → 733 during a wave chartered to shrink it. Deciding the
+  rule on its weakest instance — a self-declared flag, a presence-only check over six free-text
+  fields, a state reversible in two commands, and no recorded firing across 366 archived runs — is
+  the cheapest possible place to settle it, and the reasoning generalises without further argument.
+
+The selection record itself is not retired by this ruling. It may still be written; it simply may not
+stop anything. Whether the record survives is a separate and much cheaper question, decidable later
+from evidence about whether anything ever reads it.
