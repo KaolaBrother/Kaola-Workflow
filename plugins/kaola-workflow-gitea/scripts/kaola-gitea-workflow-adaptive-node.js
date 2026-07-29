@@ -16054,6 +16054,27 @@ function finalFixEntryShapeFault(entry) {
   return null;
 }
 
+// sinkIsNextOpenable — is the terminal sink the node `open-next` would actually open RIGHT NOW?
+//
+// This is the discriminator for the not-in-finalization advise's route, and it is deliberately NOT
+// the ledger status: a `pending` sink whose dependencies are still running reads EXACTLY the same as
+// one whose dependencies are all complete, while `open-next --node-id <sink>` accepts the second and
+// refuses `node_not_ready` on the first. Routing off the status alone would therefore hand an
+// operator a verb that opens some OTHER node while telling them it opens the sink — a route that
+// cannot be kept, which is the class of defect this project has already had to file as a bug.
+//
+// Read-only and in-process: `computeNextAction` is a pure function of the plan content, and the
+// require goes through the SAME rename-normalized constant the shell path uses, so every edition
+// resolves its own file. FAILS CLOSED — an unparseable or stalled DAG measures as NOT openable,
+// because silence is the floor and a wrongly-emitted route is the failure being prevented.
+function sinkIsNextOpenable(sink, content) {
+  if (!sink || !sink.id) return false;
+  try {
+    const next = require(nextActionPath).computeNextAction(content);
+    return !!(next && next.nextNode && next.nextNode.id === sink.id);
+  } catch (_) { return false; }
+}
+
 // evaluateFinalFixPreconditions — ONE PASS over EVERY precondition of the final-fix lane (ADR 0013,
 // the #837 report-all shape applied to the second ladder in the codebase).
 //
@@ -16109,7 +16130,9 @@ function evaluateFinalFixPreconditions(opts, content) {
   // out-rank one of the three REFUSING walls below in the composite.
   const statuses = readLedgerStatuses(content);
   const sink = reviewSchema.finalizeSinkStatus(parseNodesFromContent(content), id => statuses[id]);
-  const advice = sink.live ? null : reviewSchema.finalFixSinkAdvice(sink, project);
+  const advice = sink.live
+    ? null
+    : reviewSchema.finalFixSinkAdvice(sink, project, sinkIsNextOpenable(sink, content));
   if (advice) {
     checks.sink = sink.status || 'none';
     // The facts ride on EVERY path, so a composite refusal below still names the sink row and still
