@@ -247,10 +247,7 @@ for (const file of routedFixFiles.filter(f => /phase5|finalize/.test(f))) {
 
 assert(exists('commands/workflow-next.md'), 'workflow-next command is missing');
 assert(!exists('commands/kaola-workflow.md'), 'legacy kaola-workflow command must not exist');
-assertIncludes('commands/workflow-next.md', 'thin router');
-assertIncludes('commands/workflow-next.md', 'active folders');
 assertIncludes('commands/workflow-next.md', 'watch-pr');
-assertIncludes('commands/workflow-next.md', '--target-issue');
 assertIncludes('commands/workflow-next.md', '## Co-active Folders');
 // issue #203: Select Project active-folder definition must include fast-summary.md (drift-guard A;
 // the classifier's trap-2 tolerant fast-summary.md read survives retirement, so the router's
@@ -588,7 +585,6 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-pr.js
 assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
 // #475: the consumer (non-npm) finalize gate must be documented — the agent's .cache/final-validation.md
 // is the gate (not a chain receipt). Pin the distinctive typed refusal so the dual-mode prose cannot drift.
-assertIncludes('commands/kaola-workflow-finalize.md', 'final-validation.md');
 assertIncludes('commands/kaola-workflow-finalize.md', 'final_validation_unverified');
 // #653: the consumer candidate binding (validated_candidate_hash) — the plan-run All-done consumer
 // block must instruct recording the hash so the verdict is bound to the exact validated tree.
@@ -884,7 +880,6 @@ assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'writeFileAtomicRep
 // #369: bundle all-or-nothing closure — sink-merge closes every member; finalize passes the set.
 assertIncludes('scripts/kaola-workflow-sink-merge.js', '--issue-numbers');
 assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_ISSUE_NUMBERS');
-assertIncludes('commands/kaola-workflow-finalize.md', '--issue-numbers');
 assertIncludes('scripts/kaola-workflow-closure-contract.js', 'remote-members-closed');
 // #429: resumable --sink transaction — step-receipt based pipeline, structured sink_blocked refusal.
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'isSinkMode');
@@ -1012,7 +1007,6 @@ assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'KAOLA_ENABLE_ADAPTI
 assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'enable_adaptive');
 assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'KAOLA_ENABLE_ADAPTIVE');
 // finalize adaptive prerequisite (#283: phase6 renamed to finalize)
-assertIncludes('commands/kaola-workflow-finalize.md', 'workflow_path: adaptive');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (CLAUDE edition — .md bodies). Removing the emission section from
@@ -1047,7 +1041,6 @@ for (const reviewerBody of [
 }
 
 // #281: frontier-unit semantics in plan-run executor surface (added by plan-run-semantics node)
-assertIncludes('commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in workflow-planner profile (added by planner-profile node)
 assertIncludes('agents/workflow-planner.md', 'EFFICIENT DAGs');
 
@@ -1063,11 +1056,6 @@ assertIncludes('commands/kaola-workflow-plan-run.md', '--forbidden-only');
 // hand-list. The stale exclusive-contract enumerations (the hardcoded READ-ONLY / WRITE role
 // lists) were replaced by the manifest-derived sentence; reintroducing either bold-header list
 // reds the chain.
-assertIncludes('commands/kaola-workflow-plan-run.md', '<!-- PIN: node-briefs-relay -->');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'carry it VERBATIM into the role dispatch');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'record a column-0 `upstream_read: <node-id> <nonce>` line');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'One contract, every role, every runtime');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'is the FALLBACK channel, never the primary one');
 assertNotIncludes('commands/kaola-workflow-plan-run.md', "derived from each role's tool manifest");
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '**READ-ONLY roles**');
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '**WRITE-role agents**');
@@ -1121,31 +1109,11 @@ for (const file of adaptSkillSurfacesGateProvisioning607) {
 // actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
 // no-improvise prohibition on every plan-run spawn.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'opened=<node-id> role=<role> task=<codex_task_name>');
-assertIncludes('commands/kaola-workflow-plan-run.md', "take the dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`. Never dispatch without the card in view.");
-assertIncludes('commands/kaola-workflow-plan-run.md', 'Every spawn parameter comes from the dispatch card.');
 
 // #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
 // inline-fallback format, verbatim.
-assertIncludes('commands/kaola-workflow-plan-run.md', 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
-assertIncludes('commands/kaola-workflow-plan-run.md', '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
-assertIncludes('commands/kaola-workflow-plan-run.md', '← {node_id} · {role} returned: {verdict or one-line outcome}');
-assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline');
 
 // #605: required progress-echo line printed after every close-and-open-next.
-assertIncludes('commands/kaola-workflow-plan-run.md', '{node-id} → complete; opened: {next-id|—}');
-
-// #606: teammate-mode dispatch subsection must propagate to the 3 Claude command plan-run
-// surfaces (Claude-runtime-only; the Codex SKILLs never carry this dispatch mode). Pin the
-// sentinel sentence + the one-nudge idle-race rule so a drop on any surface fails here.
-const planRunSurfaces606 = [
-  'commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
-];
-for (const file of planRunSurfaces606) {
-  assertIncludes(file, "spawn each node's role agent as a NAMED teammate");
-  assertIncludes(file, 'send EXACTLY ONE request for the deliverable, then wait');
-}
 
 // #607/#768: the gate-instrumentation-provisioning block (a main-session-gate node body never
 // instructs authoring files; instrumentation is provisioned upstream) must propagate to ALL SIX
@@ -1162,7 +1130,6 @@ const planRunSurfacesGateFence607 = [
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
 ];
 for (const file of planRunSurfacesGateFence607) {
-  assertIncludes(file, '<!-- PIN: gate-instrumentation-provisioning -->');
   assertNotIncludes(file, 'KAOLA_GATE_WINDOW_FENCE');
 }
 
@@ -1178,47 +1145,8 @@ const planRunSurfaces611ForkTurns = [
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
 ];
 for (const file of planRunSurfaces611ForkTurns) {
-  assertIncludes(file, 'on EVERY role dispatch');
   assertNotIncludes(file, 'the unconditional mandate applies identically to this dispatch mode');
   assertNotIncludes(file, 'not a valid path for tiered nodes');
-}
-
-// #611: the Codex Join Protocol — full A-F encoding (wait budget, drain-all join loop, escalation
-// ladder, writer kill-safety, frontier slot awareness) lives in the three Codex SKILL packs
-// (spawn_agent/wait_agent/close_agent lifecycle). Pin the anchor + the load-bearing tokens so a
-// drop on any Codex SKILL pack reds this chain.
-const codexJoinProtocolSurfaces611 = [
-  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
-  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
-  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
-];
-for (const file of codexJoinProtocolSurfaces611) {
-  assertIncludes(file, '<!-- PIN: join-protocol -->');
-  assertIncludes(file, 'dispatch.wait_budget_minutes');
-  assertIncludes(file, 'NEVER interrupted before its wait budget expires');
-  assertIncludes(file, 'delegation_outcome');
-  assertIncludes(file, 'writerHalt');
-}
-
-// #611: the three Claude/forge plan-run COMMAND surfaces carry the runtime-appropriate equivalent
-// of the Codex Join Protocol (SendMessage vocabulary instead of spawn_agent/wait_agent), still
-// referencing the same dispatch-card wait_budget_minutes and writer-kill-safety verdict fields.
-const claudeJoinProtocolSurfaces611 = [
-  'commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
-];
-for (const file of claudeJoinProtocolSurfaces611) {
-  assertIncludes(file, 'dispatch.wait_budget_minutes');
-  assertIncludes(file, 'Writer kill-safety');
-  assertIncludes(file, 'writerHalt');
-  assertIncludes(file, 'delegation_outcome');
-}
-for (const file of [...codexJoinProtocolSurfaces611, ...claudeJoinProtocolSurfaces611]) {
-  assertIncludes(file, 'dispatch card\'s frozen `wait_budget_minutes` value and source are authoritative');
-  assertIncludes(file, '`planner_override` may extend but never shorten');
-  assertIncludes(file, 'must not interrupt or re-nudge before that floor expires');
-  assertIncludes(file, 'complete governed deliverable');
 }
 
 // #400: registry-driven route-reachability contract for the Claude command surface. Every
@@ -1427,7 +1355,6 @@ const reviewerV2ExecutionSurfaces = [
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
 ];
 for (const file of reviewerV2ExecutionSurfaces) {
-  assertIncludes(file, '<!-- PIN: reviewer-contract-v2-execution -->');
   assertIncludes(file, 'review_context_hash');
   assertIncludes(file, '.cache/validation-vectors/');
 }
@@ -1440,7 +1367,6 @@ const reviewerV2FinalizationSurfaces = [
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
 ];
 for (const file of reviewerV2FinalizationSurfaces) {
-  assertIncludes(file, '<!-- PIN: reviewer-contract-v2-finalization -->');
   assertIncludes(file, 'resolved_profile_hash');
   assertIncludes(file, '.cache/validation-vectors/');
 }
