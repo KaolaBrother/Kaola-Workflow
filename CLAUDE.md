@@ -23,7 +23,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 
 **Tie-breaker protocol:** when no shipped rule covers a situation, resolve it by walking these axioms in order and record a one-line derivation in the node's evidence file. This derivation is optional — its absence never blocks a gate.
 
-**Tighten-only boundary:** an axiom may only make an agent stricter, never looser. Never cite an axiom to skip a typed gate, refusal, or barrier — gates define the allowed space; axioms only break ties inside it.
+**Gate boundary:** no axiom licenses stepping around a surviving gate — L1, L2 and the consent valve define the allowed space, and a tie-breaker may not be cited to skip one. Everywhere else the axioms cut **both ways**: an axiom arguing that machinery should not exist is exactly as admissible as one arguing for more care. A rule that can only ever ratchet tighter is how a corpus grows while its owners believe they are shrinking it.
 
 ## Workflow Design Principles
 
@@ -36,7 +36,7 @@ Issue selection is an agent decision, not a hidden script decision — and it is
 - **When user asks for "next issue"**: the ORCHESTRATOR reads the backlog (local roadmap incl. its `### Project rules`, forge issues, recent completed work, active folders and their `lane_bucket`, and the user goal), ranks by the priority frontier, states the selection aloud, and claims it. A CLEAN selection — frontier honored, no ambiguity — claims autonomously; only ambiguity or a policy conflict asks. The `workflow-planner` is then dispatched as a SYNTHESIST with the resolved target, the selection record, and the reconnaissance evidence PATHS; it never ranks the backlog.
 - **Gate 1 — the commitment point is a script refusal**: `cmdStartup` / `cmdPickNext` require an explicit `--target-issue N` (or `--target-issues`), and an orchestrator-originated claim (`--target-source orchestrator_selected`) additionally requires `--selection-record <path>` or refuses `selection_record_missing` / `selection_record_invalid` with zero side effects. The record's six fields are validated present-and-non-empty and nothing deeper. An explicit-target claim writes the degenerate record itself, so `selection_record_digest:` is never optional in `workflow-state.md`.
 - **Briefs carry evidence, never prescriptions.** The control boundary is unchanged and load-bearing: a pre-authored `## Nodes`, an `AUTHOR EXACTLY`, or a `do not redesign` still refuses `planner_control_boundary_violation`. Cite what you FOUND; never dictate what the plan must CONCLUDE. An under-determined brief comes back as `clarification_required` (escalate family, bounded at 3 round-trips, then stop+ask) — answer it and re-dispatch.
-- **Ambiguity handling**: When next issue is ambiguous or conflicts with active state, ask or stop. Do not let a script silently choose.
+- **Ambiguity handling**: resolve it — dispatch a reader, get the fact, decide. Missing is a routing problem, never a stop. Ask only when the ambiguity is genuinely a value call; a script must still never silently choose.
 
 ### Maximize Workflow Efficiency by Faithful Decomposition
 
