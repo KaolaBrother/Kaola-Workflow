@@ -16,6 +16,11 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #867 | Two vocabularies for one diagnosis: collapse the certifier-resolution twin in plan-validator | open | — | — |
 | #868 | Both forge editions crash writing run-gaps.json — gap-sweep requires a renamed kernel module that does not exist, and no chain executes it | open | — | — |
 | #869 | speculative_review_required merge at adaptive-node:8174 has no witness and may be unreachable in the fused close path | open | — | — |
+| #870 | ADR 0016 — execute the substrate design: START HERE for a zero-context pickup | open | — | — |
+| #871 | Conversion wave: nine refusals whose measurement is already built and then discarded | open | — | — |
+| #872 | Three genuine builds: the run-debt register, a real lease, an asynchronous human mailbox | open | — | — |
+| #873 | Three one-field additions: content locator on the ledger row, mandate digest at claim, epistemic status | open | — | — |
+| #874 | Two fabrications in shipped records: goal_check can never say no, and a 24h guess renders as a category | open | — | — |
 
 ## Rules
 
@@ -26,36 +31,72 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 - Close linked GitHub issues only after acceptance criteria pass.
 
 ### Project rules
-## Campaign goal — derive the gates from zero
+## The design — read `docs/decisions/0016-the-substrate-bookkeeping-over-gates.md` first
 
-The goal is to establish which gates are **crucial** by DERIVING them from zero, and to
-construct upward from that skeleton. It is not to reduce the set that already exists.
+**The derivation is finished and the owner has ruled.** The campaign is no longer "derive the
+gates"; it is **execute ADR 0016**. Everything below is settled unless an issue says otherwise.
 
-- **Start from nothing, then look.** Write the derived set down *before* reading the
-  current one; whatever is not derived is not there. The gap between derivation and
-  reality is the finding, and looking first destroys it.
-  Reduction does not shrink this system — measured: a subtraction charter moved the
-  census 712 → 733.
+### The premise
 
-- **The unit of progress is a MECHANISM removed. Never a test removed.**
-  Tests are downstream: cut the mechanism and its tests fall out with it. An issue whose
-  deliverable is an assertion count, a pin count, or a duplication count is not campaign
-  work — it is doing by hand what a real cut does for free.
+The workflow was built when agents were weak orchestrators, so it encoded orchestration **as
+constraint**. That premise expired. An agent today plans, decomposes, dispatches, verifies and
+self-corrects unaided. **What remains is durable memory across discontinuity, plus tools that
+extend reach.** Every gate justified by *"the agent might get this wrong"* is rent against a
+capability that already exists.
 
-- **A gate earns its place only by naming the concrete irreversible harm** that follows
-  if it does not refuse — what is destroyed, what escapes recall, what value call is
-  made without the human. No nameable harm ⇒ it is a **tool**: report, retry, normalize,
-  reroute or ask, and the run continues. "There is nowhere to report it" is almost never
-  true; the emitted envelope is always a surface.
+### The hinge
 
-- **Agreement across unrelated starting points is the evidence of necessity.** Converge
-  independent derivations; do not average a disagreement — a genuine one is a design
-  question for a human.
+Adaptation requires **observability**. A *missing* record leaves a successor correctly uncertain,
+which it solves by going and getting the fact. A **complete, coherent, false** record leaves it no
+move. **The bookkeeping's obligation is HONESTY, not completeness.**
 
-- **Correctness is never traded for the count.** A defect found while cutting gets fixed
-  even when the fix adds code. Rework is the most expensive outcome, and a subtraction
-  that ships a defect has not subtracted anything.
+### The governing rule for every change
 
-- **Premises get measured before they get built on.** A campaign issue states its
-  premise as a number and re-measures it before work starts. A premise that collapses is
-  the result, not a setback.
+> **Delete the verdict. Keep the measurement.**
+
+Deleting a gate is cheap and almost always right. Deleting the computation underneath it can be
+catastrophic — the harm becomes *invisible* rather than merely unenforced. Measured instance: all
+three derivations cut the post-dominance gate reasoning "the agent would hit that at runtime." It
+would not. A missing reviewer over a code-producing node produces **a merge**.
+
+### Three tests, all of which must pass, before anything may refuse
+
+1. **Reach** — the harm persists for an agent that uses every tool correctly.
+2. **Locus** — the harm sits entirely in a *future reader's* epistemic state.
+3. **Witness** — proceeding would destroy the evidence of the finding itself.
+
+**Consequence:** when a refusal becomes a report, the report must durably capture what the refusal
+was freezing. Otherwise it is a deletion wearing a conversion's name.
+
+### The three refusals — everything else is a tool or an obligation
+
+- **R1** unrecordable irreversible effect (not armable until a fallback record location exists)
+- **R2** the run clearing a human fence it did not get answered (#865)
+- **R3** publication to mainline without a content-bound witness
+
+### Owner rulings, 2026-07-29 — do not re-litigate
+
+- **The system keeps merging to mainline itself.** R3 therefore survives permanently. It would have
+  dissolved into a tool under "open a PR and let a human merge"; full autonomy was chosen.
+- **A consent fence never expires.** Silence is never consent. What changes is scope: park the
+  *dependent subgraph*, not the whole run.
+- **No run-cost ledger is built.** Both long runs were fixed at the cause, not by a bound. Residual
+  risk accepted: if it recurs, it recurs silently.
+
+### Working rules
+
+- **The unit of progress is a MECHANISM removed. Never a test removed.** Tests fall out with the
+  mechanism. An issue whose deliverable is an assertion or duplication count is not campaign work.
+- **A tool the agent is forced to use is a gate wearing a tool's name.** Test: can the agent decline
+  it and still finish?
+- **Correctness is never traded for the count.** A defect found while cutting gets fixed even when
+  the fix adds code.
+- **Premises get measured before they get built on.** A premise that collapses is the result, not a
+  setback.
+- **Grade against driven behaviour, never the condition census.** The census includes a literal only
+  if it contains an underscore — measured, it sees 747 of 786 tokens and 1,413 of 1,526 sites, and
+  what it drops is disproportionately the refusal vocabulary. It is a sound ratchet and an index of
+  emission sites. It is not a population.
+- **Convergence is weaker evidence than it looks.** Two of three blind derivations re-derived
+  shipped machinery while calling it invisible to the framing that shipped it, and all three
+  declared contamination from `CLAUDE.md` being auto-injected. **Prefer the disagreements.**
