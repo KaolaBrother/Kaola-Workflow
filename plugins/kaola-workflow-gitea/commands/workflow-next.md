@@ -178,8 +178,8 @@ same-scope bundle when every rule below holds. Then claim through Gate 1 and rou
 adaptive front end (Step 0a-2), where the `workflow-planner` authors + freezes in ONE dispatch.
 
 A bundle requires ALL of: every candidate open + unclaimed, no dependency unresolved outside
-the set, a shared coherent scope signal, and a count at or below `KAOLA_BUNDLE_MAX_ISSUES`
-(default 8). If any rule fails, or confidence is not high, select a single `primary_issue` →
+the set, a shared coherent scope signal, and a count the orchestrator judges shippable as ONE
+plan (8 or fewer is the recommended shape; nothing enforces it). If any rule fails, or confidence is not high, select a single `primary_issue` →
 single-issue selection.
 
 **The main orchestrator STATES the selected issue set aloud BEFORE it claims.**
@@ -253,7 +253,8 @@ JSON record with six fields — `selection_mode`, `selection_bundle`,
 questions asked and the answers received, or `none`) — and pass it to the claim as
 `--target-source orchestrator_selected --selection-record <path>`. Startup never grades the record
 and never refuses over it: what parses is persisted byte-for-byte as authored, and a claim arriving
-without a usable record gets the canonical "none recorded" record written in its place plus a
+without a usable record gets the canonical "none recorded" record in its place (persisted only
+if the claim acquires) plus a
 `selection_record_note` on the emitted envelope naming what was found. Claiming is bookkeeping — the
 record is the evidence, not the door. On an acquiring claim startup copies the record verbatim to
 `kaola-workflow/{project}/.cache/origin/selection-record.json`, stamps its sha256 into

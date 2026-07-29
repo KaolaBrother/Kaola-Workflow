@@ -122,8 +122,8 @@ dispatch below. Resolve the shape FIRST, before the authoring guard.
 Selection is orchestrator-owned, so the orchestrator authors the record: an orchestrator-originated
 claim carries `--target-source orchestrator_selected --selection-record <path>`. The claim does not
 grade it and never refuses over it — a record that parses is persisted byte-for-byte as authored,
-and a claim that arrives without a usable one gets the canonical "none recorded" record written in
-its place plus a `selection_record_note` on the emitted envelope saying so. On an acquiring claim
+and a claim that arrives without a usable one gets the canonical "none recorded" record in its
+place (persisted only if the claim acquires) plus a `selection_record_note` on the emitted envelope saying so. On an acquiring claim
 the record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
 stamped into `workflow-state.md` as `selection_record_digest:`, and any pre-claim reconnaissance
 staged under `kaola-workflow/.origin/<target-key>/` is folded into the same `.cache/origin/`
@@ -283,8 +283,9 @@ node "$CLAIM_JS" startup --runtime claude --target-issues 42,47,53
 `KAOLA_TARGET_ISSUES` are the only multi-issue path — setting both answers `target_ambiguity` usage.
 Shape: active folder + branch `bundle-42-47-53` (sorted, deduplicated); `workflow-state.md` records
 `issue_number: 42` + `issue_numbers: 42,47,53`, `bundle_id`, `closure_policy: all_or_nothing`. The
-bundle lane always runs `workflow_path: adaptive` (the set may exceed
-`KAOLA_BUNDLE_MAX_ISSUES`, default 8). The planner authors ONE implementation-lane DAG (not
+bundle lane always runs `workflow_path: adaptive`, and bundle size is NOT capped — how many
+issues one claim takes is the orchestrator's call. A set wider than the recommended 8 acquires
+normally and the claim reports `bundle_size_note` as advice. The planner authors ONE implementation-lane DAG (not
 one-node-per-issue); `## Meta` carries a conservative union of labels. A bundle run ends at ONE
 finalization that closes every issue in `issue_numbers` (all-or-nothing), removes each
 `.roadmap/issue-N.md`, regenerates `ROADMAP.md` once, archives one bundle folder, and writes one

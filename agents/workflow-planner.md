@@ -484,14 +484,17 @@ and written Planning Evidence by the time you return; it does NOT open node1. Re
 structured object, no extra prose:
 
 - **`ready_to_run`** — plan frozen + evidence durable. Return `checklist`, `first_node` (advisory),
-  `decision`, `risk`; the orchestrator routes to `/kaola-workflow-plan-run {project}` even on
-  `decision:ask`.
+  `decision`, `risk`, and — when the claim envelope carried one — `bundle_size_note` verbatim; the
+  orchestrator routes to `/kaola-workflow-plan-run {project}` even on `decision:ask`. The size note
+  is ADVICE about the shape of the set you selected, never a limit: nothing caps a bundle, and
+  forwarding it is the only way the advice reaches the orchestrator on a no-target claim.
 - **`plan_invalid`** — the validator refused; nothing froze/wrote. Return
   `{handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict}` verbatim; the
   orchestrator drives repair.
 - **Claim not acquired** — no state written. Return `claim_verdict` + `claim_reasoning` verbatim,
-  including any `selection_record_note`: that note says the claim proceeded on the canonical record
-  because the brief carried no usable one, and re-authoring it is the orchestrator's call.
+  including any `selection_record_note`: that note names what the claim found in place of a usable
+  record, NOT that the claim proceeded — on this return nothing was written at all. Re-authoring
+  the record is the orchestrator's call.
 - **`clarification_required`** — the brief is under-determined. Return
   `{handoff_status:'clarification_required', result:'escalate', question, context_refs, round}`
   verbatim (see § Origin inputs); nothing authored beyond what was already claimed. Bounded at three

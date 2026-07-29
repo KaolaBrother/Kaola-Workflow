@@ -7,10 +7,15 @@ Issue: #287
 > **Supersession note (ADR 0014, #825).** The *entry lock* below — "nothing happens before
 > the planner runs; the planner owns backlog survey, selection, claim, and authoring in one
 > dispatch" — is superseded. ADR 0014 replaces it with (a) no claim, no plan authoring, and
-> no tracked-file write before Gate 1, a SCRIPT refusal in `claim.js startup`, and (b) briefs
-> that carry evidence, never prescriptions. Net enforcement is stronger: this ADR's own
-> `## Enforcement` section records that the lock was behavioral rather than runtime-scriptable,
-> and Gate 1 is exactly the runtime refusal it said did not exist.
+> no tracked-file write before Gate 1, and (b) briefs that carry evidence, never prescriptions.
+>
+> **Amended (#855).** Gate 1 is no longer a script REFUSAL. `cmdStartup` / `cmdPickNext` still
+> want an explicit target and, on an orchestrator-originated claim, a selection record — but a
+> missing target, both targets at once, and a classifier that will not answer are findings on
+> the emitted envelope at exit 0 with `claim: 'none'`, and an absent or unusable record does not
+> stop the claim at all. The ordering property this ADR cares about is unchanged: nothing is
+> claimed, authored, or written before the commitment point. What changed is that the point
+> ANSWERS instead of refusing.
 >
 > **What is NOT superseded, and is deliberately retained:** the control boundary and the
 > `planner_control_boundary_violation` refusal. The diagnosis in `## Context` below — a main

@@ -1231,8 +1231,13 @@ function claimProject(root, args) {
   // never refused; it silently runs adaptive (the claim's scaffolding is adaptive-only anyway).
   if (issueNumber != null) {
     const probe = probeIssueState(issueNumber);
+    // The routing surfaces classify a NON-ACQUIRING claim by `result` alone, so this arm and the
+    // `target_occupied` arm below have to carry one — both are already listed on those surfaces
+    // under `result: refuse` and neither emitted the field. Each is a determinate fact about the
+    // target (the issue is closed; a local folder already holds it), so `refuse` is the verb, not
+    // the `answer` the demoted claim-time statuses carry.
     if (probe.state === 'closed') {
-      return { status: 'user_target_closed', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
+      return { status: 'user_target_closed', result: 'refuse', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
     }
     // #519: a TRANSIENT-infra probe fault is reported as such — a TLS timeout / rate-limit / DNS
     // blip must not be read as "target unavailable". Both arms ANSWER: nothing was written, and
@@ -1276,7 +1281,7 @@ function claimProject(root, args) {
   } catch (e) {
     if (e.code === 'EEXIST') {
       if (fs.existsSync(stateFile(root, project))) {
-        return { status: 'target_occupied', issue: issueNumber, project, reasoning: 'local project folder exists' };
+        return { status: 'target_occupied', result: 'refuse', issue: issueNumber, project, reasoning: 'local project folder exists' };
       }
       // orphaned stateless dir (crash between mkdir and writeState) — fall through and reclaim
     } else { throw e; }
@@ -1420,6 +1425,13 @@ function digestSelectionRecord(bytes) {
   return require('crypto').createHash('sha256').update(String(bytes), 'utf8').digest('hex');
 }
 
+// One wording for what the substitution means, shared by all three arms below. It has to hold on
+// BOTH claim outcomes: completeSelectionOrigin persists nothing unless the claim ACQUIRED, so a
+// past-tense "was written" would be false on exactly the non-acquiring path the planner profiles
+// tell an agent to surface.
+const NONE_RECORDED_SUBSTITUTION = 'the canonical "none recorded" record stands in its place — it '
+  + 'is what selection_record_digest covers, and it is what gets persisted if this claim acquires.';
+
 // Resolve the record to persist, with ZERO side effects and no way to refuse.
 // Returns { bytes, digest } and, when nothing usable was supplied, a `note` naming what was found.
 // `label` names the resolved target(s) for the synthesized record.
@@ -1441,8 +1453,8 @@ function resolveSelectionRecord(args, label) {
     if (orchestratorSelected) {
       return synthesize('none-recorded',
         '--target-source ' + targetSource + ' declares a no-target-originated claim and no '
-        + '--selection-record <path> came with it, so the canonical "none recorded" record was '
-        + 'written in its place. Author one and re-claim if the reasoning is worth keeping.');
+        + '--selection-record <path> came with it, so ' + NONE_RECORDED_SUBSTITUTION
+        + ' Author one and re-claim if the reasoning is worth keeping.');
     }
     return synthesize('explicit-target');
   }
@@ -1454,7 +1466,7 @@ function resolveSelectionRecord(args, label) {
     return synthesize('none-recorded',
       '--selection-record ' + recordPath + ' is absent or unreadable ('
       + ((e && e.code) || (e && e.message) || 'unreadable')
-      + '); the canonical "none recorded" record was written in its place.');
+      + '); ' + NONE_RECORDED_SUBSTITUTION);
   }
 
   let record = null;
@@ -1464,8 +1476,7 @@ function resolveSelectionRecord(args, label) {
     // persist rather than a judgement about content: bytes that will not parse cannot be a
     // record a later reader can use.
     return synthesize('none-recorded',
-      '--selection-record ' + recordPath + ' is not a JSON object; the canonical "none recorded" '
-      + 'record was written in its place.');
+      '--selection-record ' + recordPath + ' is not a JSON object; ' + NONE_RECORDED_SUBSTITUTION);
   }
   // Byte-through: the orchestrator's OWN wording is the record. Re-serializing it here would turn
   // an authored rationale into a normalized stub, and grading its fields would re-decide the
@@ -1801,7 +1812,7 @@ function claimBundle(root, opts) {
 
 // #328: the bundle analog of claimExplicitTarget — validates every member (steps 1-4 from design.md)
 // before any mutation, then delegates provisioning to claimBundle (step 5-6).
-// KAOLA_BUNDLE_MAX_ISSUES default 8 (#789); bundle lane is adaptive-only.
+// Bundle size is not capped: the count rides out as advice, never as a refusal.
 function claimExplicitBundle(root, args) {
   const targets = args.targetIssues;
   // Step 0 (#370): refuse malformed tokens (echo the offender) BEFORE the empty check, so
@@ -1817,15 +1828,16 @@ function claimExplicitBundle(root, args) {
     return { status: 'target_set_empty', claim: 'none', project: null, issue: null,
       reasoning: '--target-issues <A,B,...> required' };
   }
-  // Step 2: cap. #370/#789: KAOLA_BUNDLE_MAX_ISSUES (default 8) is clamped to a documented HARD ceiling
-  // so a runaway env value cannot claim an unbounded bundle. The ceiling stays 10.
-  const BUNDLE_HARD_CEILING = 10;
-  const maxRaw = parseInt(process.env.KAOLA_BUNDLE_MAX_ISSUES || '8', 10);
-  const max = Math.min((Number.isFinite(maxRaw) && maxRaw > 0) ? maxRaw : 8, BUNDLE_HARD_CEILING);
-  if (targets.length > max) {
-    return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
-      reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
-  }
+  // Step 2: bundle size is SHAPE, and shape is the orchestrator's to decide — how many issues one
+  // claim takes is a judgement about the work, not a fact a script can get right. Nothing is
+  // enforced here: the count and a recommended ceiling ride out as ADVICE on the emitted envelope,
+  // and an orchestrator that wants a wider bundle simply takes one. KAOLA_BUNDLE_MAX_ISSUES went
+  // with the enforcement rather than staying as a knob that tunes a limit nothing applies.
+  const BUNDLE_SIZE_ADVISORY = 8;
+  const sizeAdvice = targets.length > BUNDLE_SIZE_ADVISORY
+    ? { bundle_size_note: 'bundle of ' + targets.length + ' issues; ' + BUNDLE_SIZE_ADVISORY
+        + ' or fewer is the recommended shape for one plan. Advice only — nothing was capped.' }
+    : null;
   // issue #770: the path selector is retired — the bundle lane always runs adaptive now, so
   // there is no separate "adaptive-only" legality question left to gate here.
   // Step 4: per-issue validation loop (NO mutation yet)
@@ -1886,7 +1898,7 @@ function claimExplicitBundle(root, args) {
   const project = 'bundle-' + targets.join('-');
   const branch = buildBranchName(null, project, args.branch);
   // Step 5-6: all-or-nothing provision
-  return claimBundle(root, {
+  const claimed = claimBundle(root, {
     targets,
     project,
     branch,
@@ -1895,6 +1907,8 @@ function claimExplicitBundle(root, args) {
     attestPlannerSpawn: args.attestPlannerSpawn, // #370: honor the planner attest back-fill on the bundle path
     selectionRecordDigest: args.selectionRecordDigest // the selection record's durable anchor
   });
+  // Advice rides the envelope the claim actually emits; it never changes the outcome.
+  return sizeAdvice ? Object.assign(claimed, sizeAdvice) : claimed;
 }
 
 function output(obj, code) {

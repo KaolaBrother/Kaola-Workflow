@@ -51,7 +51,7 @@ Selection is orchestrator-owned. `cmdStartup` (and `cmdPickNext`, which delegate
 | Input | Behaviour |
 | --- | --- |
 | a record that parses as a JSON object | persisted **byte-for-byte** as authored; never graded; no note |
-| `--target-source orchestrator_selected` with no `--selection-record` | the canonical `selection_mode: "none-recorded"` record is written in its place; `selection_record_note` on the envelope names the flag |
+| `--target-source orchestrator_selected` with no `--selection-record` | the canonical `selection_mode: "none-recorded"` record stands in its place (persisted only if the claim acquires); `selection_record_note` on the envelope names the flag |
 | `--selection-record <path>` absent or unreadable | same, and the note names the path that would not read |
 | bytes that will not parse as a JSON object | same, and the note says so. This is the ONE property still checked — a record a later reader cannot parse is not a record |
 
@@ -97,15 +97,14 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 
 **Ambiguity answer (`target_ambiguity`):** If both `--target-issue` (or `KAOLA_TARGET_ISSUE`) and `--target-issues` (or `KAOLA_TARGET_ISSUES`) resolve to non-empty values simultaneously, `cmdStartup` emits `target_ambiguity` usage at **exit 0** and writes nothing. It was never a gate — nothing is written either way, and the caller re-runs with exactly one. Fires regardless of which combination of flag vs env-var is used.
 
-**`result` field on bundle startup refusals (issue #495):** Determinate failure verdicts (`target_set_unavailable`, `target_set_red`, `target_set_conflicts_active_work`, `target_set_has_closed_issue`) carry `result: 'refuse'` — hard stop, do not retry. The new indeterminate verdict `target_set_indeterminate` carries `result: 'escalate'` — pause and ask the user whether to retry or abort (same consent-halt posture as the single-issue `target_indeterminate` path). Pre-#495 verdicts (e.g. `target_set_unverified`, `target_set_empty`, early validation gates) do not carry a `result` field and remain unchanged.
+**`result` field on bundle startup refusals (issue #495):** Determinate failure verdicts (`target_set_unavailable`, `target_set_red`, `target_set_conflicts_active_work`, `target_set_has_closed_issue`) carry `result: 'refuse'` — hard stop, do not retry. The new indeterminate verdict `target_set_indeterminate` carries `result: 'escalate'` — pause and ask the user whether to retry or abort. The single-issue `target_indeterminate` path is NOT this: it answers at **exit 0** with `result: 'answer'` and the caller acts on the fact (see §`target_indeterminate` above). **`result` is NOT total on the bundle path, measured.** Six emitting sites carry no `result` field: `target_set_invalid_token`, `target_set_empty` and `target_set_unverified` in `claimExplicitBundle`, plus the `claimBundle` copies of `target_set_unavailable`, `target_set_conflicts_active_work` and `target_set_label_rollback_failed`. The last two matter most: the SAME status token carries `result: 'refuse'` from `claimExplicitBundle` and no `result` at all from `claimBundle`, so which arm fired changes how the token classifies. Until that is fixed, a caller switching on `result` must treat an absent field as non-acquisition, which `claim: 'none'` already says on every one of them.
 
-**Typed refusal codes** returned by `claimExplicitBundle` (all exit non-zero; no mutation on refusal):
+**Claim outcome codes** returned by `claimExplicitBundle` (none of them mutates anything; `target_ambiguity` exits **0** as a usage answer, the rest exit non-zero):
 
 | Code | `result` field | Condition |
 |------|----------------|-----------|
 | `target_ambiguity` | `answer` | Both scalar and multi-target provided simultaneously (usage answer, **exit 0**) |
 | `target_set_empty` | — | Resolved issue list is empty after sort+dedup |
-| `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | `refuse` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | `refuse` | One or more targets are already closed on the forge |
 | `target_set_red` | `refuse` | One or more targets are red per the overlap classifier |
@@ -225,9 +224,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
 ### Bundle Lane
 
-- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Adaptive is the only workflow path, so the bundle lane always runs it — there is no `bundle_requires_adaptive` refusal (retired). Numbers are sorted and deduped before validation.
-
-- **`KAOLA_BUNDLE_MAX_ISSUES`** (default `8`) — Maximum number of issues allowed in a single bundle. Bundles whose resolved size exceeds this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and planner-selected auto-bundles.
+- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` at exit 0, writing nothing). Adaptive is the only workflow path, so the bundle lane always runs it — there is no `bundle_requires_adaptive` refusal (retired). Numbers are sorted and deduped before validation.
 
 ### Worktree Provisioning
 
@@ -362,9 +359,9 @@ Both are **audit-only and never gate** — no mechanical pass/fail attaches to a
 - **`plan_shape`** is computed at freeze by `plan-validator.js` and surfaced through `--freeze-checked` into `## Planning Evidence` by `adaptive-handoff.js`: node count, critical-path length, parallelism ratio (nodes ÷ critical-path length), per-depth widths, derived disjoint-write antichains (count + max width), and the evidence-less serializing-edge list below.
 - **`evidenceLessSerializingEdges(nodes, briefs, design)`** flags a plan-level `sequence` edge (a `depends_on` edge u→v) as an unjustified serial claim **iff** both endpoints are writers with EXACT-path-disjoint write sets (an exact overlap IS the S2 serializer and is excluded), NEITHER endpoint carries a gate/selector/loop relation, and NEITHER the dependent node's brief NOR the `## Design` section names an `S1`/`S2`/`S3` serializer token. Existence-only, mirroring `expansionRecordEfficiency`'s `/\bS[123]\b/` read — the token's CONTENT is never judged.
 
-### Bundle cap default (issue #789)
+### Bundle size is advice, not a ceiling
 
-`KAOLA_BUNDLE_MAX_ISSUES` defaults to **8** (raised from 4); the hard ceiling remains **10**. A set larger than the effective cap refuses `target_set_too_large`.
+Nothing caps a bundle. How many issues one claim takes is shape, and shape is the orchestrator's to decide, so `claimExplicitBundle` enforces no limit and `KAOLA_BUNDLE_MAX_ISSUES` no longer exists. A set wider than the recommended **8** acquires normally and the emitted envelope carries `bundle_size_note` — the actual count plus the recommendation — for the orchestrator to weigh. Below the recommendation the field is absent.
 
 ### Mutual-exclusion + integrity reason codes (Cluster S — #383/#384/#387/#391/#392)
 

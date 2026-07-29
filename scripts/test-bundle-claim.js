@@ -12,7 +12,7 @@
 //       closure_policy, label+comment applied per member (mocked gh).
 //   (2) Refused bundle (closed member): leaves NO active folder, NO lingering label (rollback).
 //   (3) target_ambiguity when both --target-issue and --target-issues set.
-//   (4) target_set_too_large above the cap (default 4).
+//   (4) a wide bundle acquires and carries size advice; (4b) an ordinary one carries none.
 //   (5) Single-issue --target-issue N still works unchanged (AC#1 regression).
 //   (6) target_set_empty when --target-issues is missing/empty.
 //   (7) #770: a stale --workflow-path (e.g. full) on the bundle lane silently acquires (no
@@ -387,30 +387,35 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (4): target_set_too_large — above KAOLA_BUNDLE_MAX_ISSUES (#789: default 8, not 4)
+// Test (4) — bundle size is ADVICE, not a ceiling. How many issues one claim takes is a decision
+// about the work, so nothing enforces it: a bundle wider than the recommended shape acquires, and
+// the count plus the recommendation ride out on the envelope for the orchestrator to weigh.
 // ---------------------------------------------------------------------------
 
-(function testTargetSetTooLarge() {
-  console.log('Test (4): target_set_too_large when more than 8 issues (#789 default cap 8)');
+(function testWideBundleAcquiresWithAdvice() {
+  console.log('Test (4): a 9-issue bundle acquires and carries size advice');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
+  const wide = [11, 12, 13, 14, 15, 16, 17, 18, 19];
   try {
     initGitRepo(tmpRoot);
-    writeGhMockScript(binDir, { openIssues: [1, 2, 3, 4, 5, 6, 7, 8, 9] });
+    for (const n of wide) writeRoadmapFile(tmpRoot, n);
+    writeGhMockScript(binDir, { openIssues: wide });
 
     const result = runClaim(
-      ['startup', '--target-issues', '1,2,3,4,5,6,7,8,9', '--workflow-path', 'adaptive'],
+      ['startup', '--target-issues', wide.join(','), '--workflow-path', 'adaptive'],
       tmpRoot, binDir
     );
 
     const out = parseClaim(result);
-    assert(result.status === 1, 'target_set_too_large exits 1, got ' + result.status);
-    assert(out !== null, 'target_set_too_large emits JSON');
-    assert(out.status === 'target_set_too_large',
-      'status is target_set_too_large, got ' + JSON.stringify(out && out.status));
-    // #789: lock the DEFAULT to 8 (not 4) — the refusal message names the resolved cap.
-    assert(typeof out.reasoning === 'string' && /KAOLA_BUNDLE_MAX_ISSUES=8/.test(out.reasoning),
-      '#789: default bundle cap is 8 (reasoning names =8), got ' + JSON.stringify(out && out.reasoning));
+    assert(result.status === 0,
+      'a wide bundle exits 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out !== null && out.claim === 'acquired',
+      'a wide bundle is acquired, got ' + JSON.stringify(out && (out.status || out.claim)));
+    assert(out && out.bundle_id === 'bundle-' + wide.join('-'),
+      'wide bundle_id is bundle-' + wide.join('-') + ', got ' + JSON.stringify(out && out.bundle_id));
+    assert(typeof out.bundle_size_note === 'string' && out.bundle_size_note.indexOf('9 issues') >= 0,
+      'the advice names the actual count, got ' + JSON.stringify(out && out.bundle_size_note));
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -418,12 +423,12 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (4b) — #789: a 5-issue bundle (above the OLD default 4) now SUCCEEDS under the new default 8.
-// This is the RED→GREEN for the D3 cap bump: on the old default 4 this refused target_set_too_large.
+// Test (4b) — the advice is silent at or below the recommended shape, so an ordinary bundle's
+// envelope carries no note to read past.
 // ---------------------------------------------------------------------------
 
-(function testFiveIssueBundleUnderNewDefault() {
-  console.log('Test (4b): #789 5-issue bundle acquires under the new default cap 8');
+(function testOrdinaryBundleCarriesNoAdvice() {
+  console.log('Test (4b): a 5-issue bundle acquires with no size advice');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   try {
@@ -438,11 +443,11 @@ function readState(tmpRoot, project) {
 
     const out = parseClaim(result);
     assert(result.status === 0,
-      '#789: 5-issue bundle exits 0 under default 8, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      'a 5-issue bundle exits 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     assert(out !== null && out.claim === 'acquired',
-      '#789: 5-issue bundle is acquired (not target_set_too_large) under default 8, got ' + JSON.stringify(out && (out.status || out.claim)));
-    assert(out && out.bundle_id === 'bundle-11-12-13-14-15',
-      '#789: 5-issue bundle_id is bundle-11-12-13-14-15, got ' + JSON.stringify(out && out.bundle_id));
+      'a 5-issue bundle is acquired, got ' + JSON.stringify(out && (out.status || out.claim)));
+    assert(out && out.bundle_size_note === undefined,
+      'no advice below the recommended shape, got ' + JSON.stringify(out && out.bundle_size_note));
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });

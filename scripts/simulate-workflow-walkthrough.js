@@ -12751,6 +12751,23 @@ function testClaimReclaimsStatelessOrphanDir() {
       result2.status === 'target_occupied',
       '#14 NEGATIVE: dir with non-active state file must return target_occupied, got: ' + JSON.stringify(result2)
     );
+    // The routing surfaces tell an agent to classify a non-acquiring claim by `result` ALONE, so
+    // every non-acquiring envelope has to carry one. This arm and the closed-target arm below are
+    // the two that did not, and `result` is a FREE field here — the fixture selected this row by
+    // its state file, and `status` is asserted separately above.
+    assert(
+      result2.result === 'refuse',
+      'a non-acquiring claim must be classifiable by `result` alone; the occupied arm carried none: '
+        + JSON.stringify(result2)
+    );
+    // Same property on the closed-target arm, which needs a live probe rather than a folder.
+    const binDir890 = path.join(tmp, 'bin890');
+    writeBundleGhMockScript(binDir890, { closedIssues: [890] });
+    const result3 = runClaimOnline(['claim', '--project', 'issue-890', '--issue', '890'], tmp, binDir890);
+    assert(
+      result3.status === 'user_target_closed' && result3.result === 'refuse',
+      'a claim against a CLOSED target must answer through `result`, got: ' + JSON.stringify(result3)
+    );
     console.log('testClaimReclaimsStatelessOrphanDir: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
