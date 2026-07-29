@@ -1574,10 +1574,34 @@ function testCodexMultiAgentV2Bounds611() {
     assert(!/effective subagent width/.test(fresh.stdout),
       '#611 AC6: v2 not enabled -> must NOT print a concrete effective-width line: ' + fresh.stdout);
     assert(/0\.145\.0/.test(fresh.stdout), '#775 AC6: report must carry the version-guard note (0.145.0): ' + fresh.stdout);
+    // #842: this note keeps its ADVICE about agents.max_threads and loses its false MECHANISM. It
+    // used to be required to quote "agents.max_threads cannot be set when multi_agent_v2 is enabled"
+    // VERBATIM as "the real Codex constraint" — from this chain, while scripts/test-install-model-
+    // rendering.js required the identical quote from the claude chain. Two independently authored
+    // assertions in two chains, both labelled verbatim, both holding a sentence that does not exist.
+    // MEASURED on the installed codex-cli 0.145.0, isolated CODEX_HOME, read-only probes:
+    //   * `[features.multi_agent_v2] enabled = true` + `[agents] max_threads = 6` loads CLEAN —
+    //     `codex doctor --summary` reports "config loaded", `codex features list` exits 0 with
+    //     multi_agent_v2 stable true. ACCEPTED, not rejected.
+    //   * Non-vacuity: an UNRECOGNISED [agents] scalar in the same position IS refused
+    //     (`invalid type: integer 6, expected struct AgentRoleToml`, exit 1), so that acceptance is
+    //     a real acceptance and not an unchecked path.
+    //   * The quoted error is absent from the shipped binary — neither "cannot be set when" nor
+    //     "multi_agent_v2 is enabled" occurs in the 271MB Mach-O — so no Codex code path can print
+    //     it at config load, session start, or spawn.
+    // Same predicates as AC1 in scripts/test-install-model-rendering.js, deliberately: one claim,
+    // one wording, and the two chains must not be able to disagree about it again.
     assert(/agents\.max_threads/.test(fresh.stdout),
-      'AC6: note must name agents.max_threads as the key to avoid under v2: ' + fresh.stdout);
-    assert(/cannot be set when multi_agent_v2 is enabled/.test(fresh.stdout),
-      'AC6: note must quote the real Codex constraint verbatim: ' + fresh.stdout);
+      'AC6: note must name agents.max_threads — the advice to leave it out is correct, and a reader '
+      + 'who has already set it deserves to learn it does nothing: ' + fresh.stdout);
+    assert(!/cannot be set when multi_agent_v2 is enabled/.test(fresh.stdout),
+      'AC6 (#842): the note must NOT quote "agents.max_threads cannot be set when multi_agent_v2 is '
+      + 'enabled". That string exists in no Codex 0.145.0 binary; printing it tells the operator '
+      + 'their config will be refused when it loads clean: ' + fresh.stdout);
+    assert(/not an alias/i.test(fresh.stdout),
+      'AC6 (#842): the note must state the ACCURATE relationship — agents.max_threads is a separate '
+      + 'key and NOT an alias for the V2 budget, which comes from '
+      + 'features.multi_agent_v2.max_concurrent_threads_per_session alone: ' + fresh.stdout);
 
     // Enable [agents] with explicit bounds ahead of the managed block, re-install (idempotent
     // update) — the report must now print the concrete width + every configured bound.
@@ -1593,9 +1617,11 @@ function testCodexMultiAgentV2Bounds611() {
     assert(/max_wait_timeout_ms=1800000/.test(v2Install.stdout), '#611 AC6: must report configured max_wait_timeout_ms: ' + v2Install.stdout);
     assert(/default_wait_timeout_ms=60000/.test(v2Install.stdout), '#611 AC6: must report configured default_wait_timeout_ms: ' + v2Install.stdout);
 
-    // max_threads is NOT an alias: it is a separate top-level [agents] key that Codex REJECTS once
-    // multi_agent_v2 is enabled ("agents.max_threads cannot be set when multi_agent_v2 is enabled"),
-    // so a stray one must leave the cap at the observed default rather than silently setting it.
+    // max_threads is NOT an alias for max_concurrent_threads_per_session, so a stray one must leave
+    // the cap at the observed default rather than silently setting it. That is a property of THIS
+    // parser and is unaffected by #842: the comment here used to add that Codex REJECTS
+    // agents.max_threads once multi_agent_v2 is enabled, which is false (measured on 0.145.0 — see
+    // the AC6 note assertions above), but the key being inert for this cap math is true either way.
     fs.writeFileSync(boundsConfigPath, '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n\n' + beforeV2);
     const aliasInstall = runInstallProfiles(boundsProj, { HOME: boundsHome });
     assert(/effective subagent width 3 \(max_concurrent_threads_per_session=4 \[observed_default\]\)/.test(aliasInstall.stdout),
@@ -1612,7 +1638,7 @@ function testCodexMultiAgentV2Bounds611() {
       '#611: absent threads value must derive the observed default 4 (width 3), got ' + JSON.stringify(observedDefault));
     const strayMaxThreads = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', true);
     assert(strayMaxThreads.max_concurrent_threads_per_session === 4 && strayMaxThreads.effective_subagent_width === 3,
-      'max_threads is NOT an alias (Codex rejects agents.max_threads under v2) — must stay at the observed default, got ' + JSON.stringify(strayMaxThreads));
+      'max_threads is NOT an alias for max_concurrent_threads_per_session — must stay at the observed default, got ' + JSON.stringify(strayMaxThreads));
 
     console.log('testCodexMultiAgentV2Bounds611 (#611 AC6 installer report): PASSED');
   } finally {
