@@ -30473,8 +30473,10 @@ scenario(() => {
   const APPARATUS_FILE_826 = { path: 'scripts/test-final-fix-826.js', body: '// stale-test correction\n' };
 
   // -------------------------------------------------------------------------
-  // #826-A — THE REFUSAL LADDER. Four typed refusals, precedence-ordered, every one ZERO-WRITE.
-  //   A1-A5 + A8 pin the lane's structural walls and are unaffected by the scope question.
+  // #826-A — THE REFUSAL LADDER. THREE typed refusals, precedence-ordered, every one ZERO-WRITE.
+  //   RUNG 1 is no longer one of them: `final_fix_sink_not_live` is converted to an advise under
+  //     ADR 0013 R1/R3 and lives in the #826-ADV block below. A1 is deleted with it — see there.
+  //   A2-A5 + A8 pin the lane's structural walls and are unaffected by the scope question.
   //   A6-A7 pin the SCOPE wall, and are RED against the shipped widened form: today a production
   //     surface refuses with a `recertification:` state that says which receipt would open it, and
   //     the two submissions (with / without a receipt) produce DIFFERENT refusals — which is the
@@ -30483,18 +30485,13 @@ scenario(() => {
   //     wall is unconditional — a receipt is not consulted, so it cannot change the verdict.
   // -------------------------------------------------------------------------
 
-  // A1 — SINK NOT LIVE. The lane is sink-OWNED: with no `in_progress` finalize row there is no sink
-  // to own the register, and the run is not in finalization at all.
-  scenario(() => {
-    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
-    const before = witness826(fx);
-    const r = finalFix826(fx, fixEntry826(fx));
-    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_sink_not_live',
-      '#826-A1: a final-fix-commit with no live sink refuses final_fix_sink_not_live, got '
-      + JSON.stringify({ result: r.result, reason: r.reason, errors: r.errors }));
-    assertZeroWrite826(fx, before, '#826-A1');
-    cleanup826(fx.repoRoot);
-  });
+  // A1 — DELETED, not moved. It ran this exact fixture and this exact call and asserted
+  // `exitCode === 1 && result === 'refuse' && reason === 'final_fix_sink_not_live'` plus
+  // assertZeroWrite826. Every one of those properties is now pinned by #826-ADV1 (the shape, and the
+  // non-zero exit kept at its exact value) and #826-ADV2 (register absent + the same zero-write
+  // witness) — on the same fixture, from the same call — except the two clauses the conversion
+  // reverses. Nothing survived that was not already asserted twice, so keeping a trimmed A1 would be
+  // a second name for ADV1 rather than a second proof.
 
   // A2 — AFTER THE SINK STARTED (the pristine boundary, the lane's HARD CLOSE). `origin/<branch>`
   // exists ⇒ the sink has pushed ⇒ the record is immutable history. Recovery after this point is a
