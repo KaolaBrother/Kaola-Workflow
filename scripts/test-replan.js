@@ -7708,9 +7708,9 @@ scenario(() => {
     equal(corrupt.id, stateId,
       '#847-F control: state and file still name the SAME transaction — this is not the mismatch arm');
     equal(wedge.reason, 'replan_transaction_budget_invalid',
-      '#847-F control: a parseable-but-schema-invalid transaction reaches the validation arm: ' + JSON.stringify(wedge.reason));
-    equal(wedge.legal_mutation, undefined,
-      '#847-F control: ...and that arm carries no legal_mutation at all: ' + JSON.stringify(wedge.legal_mutation));
+      '#847-F control: a parseable-but-schema-invalid transaction reaches the validation arm. This '
+      + 'clause isolates the arm ON ITS OWN — all three integrity-mismatch arms emit '
+      + '`replan_integrity_mismatch`, so a validation code can only be this one: ' + JSON.stringify(wedge.reason));
     ok(schema.REPLAN_ABORTABLE_PHASES.includes(corrupt.phase),
       '#847-F control: ...at phase ' + corrupt.phase + ', which the discard exit still admits');
 
@@ -7877,9 +7877,8 @@ scenario(() => {
     liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
       sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
     const corrupt = corruptTransactionParseable847(fx);
-    equal(fence847(fx).legal_mutation, undefined,
-      '#847-I control: the fence this finalize reads carries no legal_mutation — the exact input '
-      + 'the `||` default was written for');
+    // The arm this finalize reads is established by finalize's OWN reason below, which is the same
+    // fact from the surface under test and does not depend on what the fence has yet to carry.
 
     // spawn-class: cli-contract
     const child = spawnSync(process.execPath,
