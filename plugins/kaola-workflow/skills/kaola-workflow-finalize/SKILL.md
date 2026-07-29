@@ -599,15 +599,6 @@ command, result, evidence path
 ## Documentation Docking
 DOCKED, .cache/doc-docking.md
 
-## Required Agent Compliance
-| Requirement | Status | Evidence | Skip Reason |
-|-------------|--------|----------|-------------|
-| final validation | invoked | .cache/final-validation.md | |
-| doc-updater | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable/N/A | .cache/doc-updater.md | reason if N/A |
-| documentation docking | invoked | .cache/doc-docking.md | |
-| roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
-| archive completed folder | invoked | kaola-workflow/archive/{project} | |
-| final commit and push | invoked | git status --short --branch | clean and synced |
 ```
 
 `sink-receipt.json` / `sink-fallback.json` are transaction journals owned by the sink script — they

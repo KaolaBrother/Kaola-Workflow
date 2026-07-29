@@ -477,9 +477,6 @@ Delivered, Files Changed, Test Coverage, Final Validation Evidence, Documentatio
 Validation Failure Ledger table (Failing Command | Classification | Routed To | Evidence | Status),
 Follow-Up Items, `## Run gaps` (one line per swept `(reasonClass, sample)` as `filed: #N` or
 <!-- SPLICE:fz-cmd-006 -->
-`## Required Agent Compliance` table (doc-updater, documentation docking, final-validation fix
-executors, roadmap refresh, archive completed folder, final commit and push — each with
-Status/Evidence/Skip Reason; no `pending` rows except `final commit and push` may be `ready`), and
 `## Status: READY FOR FINAL GIT GATE`.
 
 **Step 6 — Closure Decision Gate.** Scan all node evidence for deferred items, unresolved
@@ -494,8 +491,7 @@ the substantive partial-close comment (the mechanical keep-open comment is poste
 The actual roadmap closure (rm `.roadmap/issue-N.md` + regenerate `ROADMAP.md`) and archive are done
 once by the finalize transaction in Step 8b, which also stages the result — do not rm/generate/`git
 mv` here. Update `finalization-summary.md` with the
-final issue/roadmap/archive/docking/closure state; verify every other Required Agent Compliance row
-is `invoked`/`skipped`/`N/A` with evidence (except `final commit and push` may be `ready`).
+final issue/roadmap/archive/docking/closure state.
 
 ## Staging Guard
 
@@ -1077,15 +1073,6 @@ command, result, evidence path
 ## Documentation Docking
 DOCKED, .cache/doc-docking.md
 
-## Required Agent Compliance
-| Requirement | Status | Evidence | Skip Reason |
-|-------------|--------|----------|-------------|
-| final validation | invoked | .cache/final-validation.md | |
-| doc-updater | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable/N/A | .cache/doc-updater.md | reason if N/A |
-| documentation docking | invoked | .cache/doc-docking.md | |
-| roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
-| archive completed folder | invoked | kaola-workflow/archive/{project} | |
-| final commit and push | invoked | git status --short --branch | clean and synced |
 ```
 
 `sink-receipt.json` / `sink-fallback.json` are transaction journals owned by the sink script — they

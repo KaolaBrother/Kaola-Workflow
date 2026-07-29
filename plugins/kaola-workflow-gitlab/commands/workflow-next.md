@@ -75,8 +75,6 @@ Use `$ARGUMENTS` as either:
   reading and the selection; it then routes with no target to the adaptive front end, whose
   `workflow-planner` (dispatched by that command, never by this router) runs the claim and
   authors the DAG in ONE dispatch.
-- Do not advance the run while any `Required Agent Compliance` row is
-  `pending`, missing, or lacks evidence/skip reason.
 - Prefer `workflow-state.md` for exact resume position.
 - If `workflow-state.md` is missing or stale, reconstruct conservatively from
   node evidence and cache files.
@@ -434,8 +432,8 @@ stop and resolve the conflict.
 
 ## Resume Detection
 
-Read `workflow-state.md` first; if valid (its `next_command` is `/kaola-workflow-plan-run`, pending
-gates match the `Required Agent Compliance` table), use it as authoritative. Otherwise run the repair
+Read `workflow-state.md` first; if its `next_command` is `/kaola-workflow-plan-run`, use it as
+authoritative. Otherwise run the repair
 helper (`node "$REPAIR_JS" "$ARGUMENTS"` when available), then reconstruct:
 
 ```text
@@ -448,7 +446,6 @@ no workflow-plan.md and no finalization-summary.md -> /kaola-workflow-adapt <tas
 
 When `workflow-state.md` is missing/stale/invalid but node evidence identifies exactly one safe next
 command, write a conservative repaired state (`step: router-reconstructed`, `task: N/A` unless proven,
-pending gates mirroring unresolved `Required Agent Compliance` rows,
 `last_result: state_repaired_from_artifacts`) before routing. Do NOT fabricate state for brand-new
 work, ambiguous/contradictory projects, or unresolved compliance gates. Phase commands own exact
 intra-phase step detection.
