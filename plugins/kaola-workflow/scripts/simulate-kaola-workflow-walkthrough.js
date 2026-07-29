@@ -1519,9 +1519,16 @@ function testCodexDispatchPosture598() {
     fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
     const reinstalled = runInstallProfiles(postureProj, { HOME: postureHome });
     assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
-      '#775 AC1: [agents] enabled=true + effort=ultra must report proactive posture: ' + reinstalled.stdout);
-    assert(/Kaola-Workflow Codex multi_agent_v2: enabled \(\[agents\] enabled = true\)/.test(reinstalled.stdout),
+      '#775 AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    // #842: the label reports STATE and must not credit the RETIRED key for it. The fixture two
+    // lines above enables V2 through [features.multi_agent_v2]; `[agents] enabled = true` is not
+    // what enabled it, and does not enable it anywhere. Same predicates as AC1 in
+    // scripts/test-install-model-rendering.js — one claim, one wording, across all four chains that
+    // pinned the old label.
+    assert(/Kaola-Workflow Codex multi_agent_v2: enabled/.test(reinstalled.stdout),
       '#775 AC1: enabled config must report multi_agent_v2 enabled: ' + reinstalled.stdout);
+    assert(!/multi_agent_v2: enabled \([^)]*\[agents\]/.test(reinstalled.stdout),
+      '#842 AC1: ...and must NOT attribute it to [agents]: ' + reinstalled.stdout);
     assert(!/refuse sub-agent spawns/.test(reinstalled.stdout),
       '#598 AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
     // #601: the remediation (still printed while posture is non-proactive, i.e. the FIRST fresh

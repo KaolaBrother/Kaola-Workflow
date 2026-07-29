@@ -3881,9 +3881,20 @@ try {
         });
         assert.strictEqual(reinstall.status, 0, '#775 AC1: re-install with [agents] enabled + effort=ultra must still exit 0: ' + reinstall.stderr);
         assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstall.stdout),
-          '#775 AC1: [agents] enabled=true + effort=ultra must report proactive posture: ' + reinstall.stdout);
-        assert(/Kaola-Workflow Codex multi_agent_v2: enabled \(\[agents\] enabled = true\)/.test(reinstall.stdout),
+          '#775 AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstall.stdout);
+        // #842: the label reports STATE and must not credit the RETIRED key for it. The detector
+        // reads features.multi_agent_v2 — three shapes plus dotted-root equivalents — and this
+        // fixture turns V2 on through [features.multi_agent_v2]; `[agents] enabled = true` is not
+        // what enabled it. An operator reading the old parenthetical either believes their [agents]
+        // block did it, or writes that key and gets nothing. Four assertions in four chains pinned
+        // it, which is the #849 shape: a pin proves a sentence is PRESENT, never that it is TRUE.
+        // A label that only reports state cannot be wrong about mechanism, so dropping the
+        // parenthetical satisfies both halves; naming the real switch does too.
+        assert(/Kaola-Workflow Codex multi_agent_v2: enabled/.test(reinstall.stdout),
           '#775 AC1: enabled config must report multi_agent_v2 enabled: ' + reinstall.stdout);
+        assert(!/multi_agent_v2: enabled \([^)]*\[agents\]/.test(reinstall.stdout),
+          '#842 AC1: ...and must NOT attribute it to [agents] — that key did not enable V2 here and '
+          + 'does not enable it anywhere: ' + reinstall.stdout);
         assert(!/refuse sub-agent spawns/.test(reinstall.stdout),
           '#775 AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstall.stdout);
         assert(/effective subagent width 3 \(max_concurrent_threads_per_session=4 \[observed_default\]\)/.test(reinstall.stdout),
