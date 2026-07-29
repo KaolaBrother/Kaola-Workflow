@@ -2988,7 +2988,13 @@ function main() {
   // ATTESTATION-STYLE / NON-FATAL treatment as the dispatch posture above (never
   // changes the exit code). Read back the same post-install config.toml content.
   const v2DispatchMode = detectCodexDispatchMode(postInstallConfigContent);
-  console.log(`Kaola-Workflow Codex multi_agent_v2: ${v2DispatchMode.multi_agent_v2_enabled ? 'enabled ([agents] enabled = true)' : 'NOT enabled (see codex_multi_agent_v2_required at preflight)'}`);
+  // Reports STATE, and deliberately names no cause for it. The parenthetical here used to read
+  // `enabled ([agents] enabled = true)`, crediting a key that does not enable MultiAgentV2 anywhere
+  // — `detectCodexDispatchMode` reads features.multi_agent_v2, in three shapes plus dotted-root
+  // equivalents. An operator either believed their [agents] block had done it, or wrote that key
+  // and got nothing. A label that only reports state cannot be wrong about mechanism, and the
+  // switch is already named in full by the preflight remediation this line points at.
+  console.log(`Kaola-Workflow Codex multi_agent_v2: ${v2DispatchMode.multi_agent_v2_enabled ? 'enabled' : 'NOT enabled (see codex_multi_agent_v2_required at preflight)'}`);
   const v2Bounds = deriveMultiAgentV2Bounds(postInstallConfigContent, v2DispatchMode.multi_agent_v2_enabled);
   if (v2Bounds.max_concurrent_threads_per_session !== null) {
     console.log(
