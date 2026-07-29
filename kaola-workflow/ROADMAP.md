@@ -9,7 +9,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 |-------|-------|--------|------------------|-----------|
 | #850 | Routes that cannot be honoured: ~25 certain dead exits across 297 route-carrying conditions — fix is subtractive (delete a route source) | open | — | — |
 | #851 | The mid-run demotion IS the campaign: the mid-run refusal set (measured band ~278-607 of 778) refuses at a locus the two-gate architecture forbids | open | — | — |
-| #853 | Delete the 121 duplicated content-token assertions across the four contract validators | open | — | — |
+| #853 | Delete the 119 duplicated content-token assertions in the two root contract validators | open | — | — |
 | #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
 | #855 | Gate 1 demotion wave: the claim-time refusals become answers | open | — | — |
 | #856 | Demote the planner control-boundary refusal to a divergence answer | open | — | — |
