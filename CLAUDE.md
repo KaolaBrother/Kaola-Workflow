@@ -87,16 +87,28 @@ The workflow runs one path; the orchestrator does not spend tokens or wall-clock
 - **There is no path to select or refuse, and no residue of one.** A stale `KAOLA_PATH` / `--workflow-path` request runs adaptive (the flag is a warn-and-ignore shim; the env var is ignored), rather than refusing — and the request leaves no trace: the persisted `workflow_path` field is the constant `adaptive`, never an echo, so a retired selector can never be misread as a live switch (a legacy folder's stale value is still tolerated on read). This deliberately supersedes the former "never silently substitute adaptive for a named path" stance and retires the `fast`/`full` vocabulary and the `path_not_installed` refusal — a values call (First Principle 4) that became moot once exactly one path remained.
 - **When adaptive can't proceed, it recovers inside adaptive**: bounded planner repair → discard+restart → stop+ask. Repair and the in-place posture are the only fallbacks.
 
-### A Refusal Is a Cost; Admission Is Ruled, Measured, and Ratcheted
+### Four Records, Two Gates, Everything Else Is a Tool
 
-Every refusal spends a human's attention. Admission is therefore governed by three parts that only work together — a **rule** for deciding, an **instrument** for ordering, and a **ratchet** for holding. A rule without measurement subtracts by anecdote; measurement without a ratchet regrows; a ratchet without a rule freezes whatever happens to exist.
+The workflow is not "execute by rule and refuse what does not comply." It **preserves four hand-off-able records, gates at exactly two doors, and offers everything else to the agent as tools.**
 
-- **Rule.** A refusal must sit at kernel-write integrity, the sink, or the consent valve — **and** be crucial there. A condition recoverable in place ships as an advisory even at those loci. A refusal whose remedy is mechanical is a missing tool wearing a uniform: perform the transformation and retire the refusal. The bound: a deviation that is itself evidence (hash mismatch, unattributed diff, chain break) is never auto-repaired — that would launder the signal. Full rules and their wording live in `docs/conventions.md` § Refusal admission.
-- **Instrument.** Refusal telemetry records what each interruption costs, so the corpus is walked by measurement rather than by whatever an audit last surfaced. Until instrumented runs exist the corpus census is the honest ordering — **say which ordering is in force, and never present one as the other.**
-- **Ratchet.** Enforcement is forward-only: red on new unclassified growth, silent on removal. A guard that reddens on deletion taxes the subtraction it exists to protect.
-- **Removal costs a green arc, and that is the point.** Adding *or* removing a refusal requires a pinned traversal of the legal path, not only the refusing one. Budget for it; it is why subtraction gets deferred.
-- **Retiring a code is one diff, not two.** A demoted code takes its recovery choreography off every prompt surface and its needle pins off the contract validators in the same change. A demotion that leaves choreography behind subtracted a token and nothing else.
-- **Pin behaviour, never token spelling.** An assertion that names a refusal code is a vote against ever removing it.
+**Three axioms.** (1) Interrupted at any point, a zero-context successor can continue. (2) Correct means *the issue is genuinely done* at a sound time/token balance — formal compliance is not correctness. (3) Irreversible and value-laden calls belong to a human.
+
+**The four kernel records — only these must be durable:** plan → progress → per-step evidence → the forge operation chain (commit / merge / push / issue). Every other durable artifact must be **derivable** from these four, or it is a preference a successor may simply re-decide. If it is neither, it does not deserve to persist.
+
+**Only two gates may refuse.**
+- **L1 — kernel-write integrity:** did the write land. Atomic-write failure, forge-operation failure, lost CAS, broken integrity.
+- **L2 — the sink:** before anything reaches mainline. Tests red, diff not attributable, review not settled, consent missing.
+
+**Mid-run, nothing refuses hard.** Former gates are tools; the verbs are **answer / advise / normalize / remedy / report-all**. A mid-run stop that is not the consent escalation is a missing tool wearing a uniform.
+
+- **Only the crucial survive.** A refusal earns its place only if proceeding would irreversibly destroy a record, let unverified content reach mainline, or override a human's value call.
+- **By family, not by event.** Roughly a dozen codes, ceiling included; detail rides the payload, and the sink reports everything at once. Minting a code means amending the decision record.
+- **Every refusal carries a route** — a machine-readable exit (verb / consent / environment) — and a test that walks refusal → route → green. **An exit that does not actually work is a build-time red, not a runtime surprise.**
+- **Removal costs a green arc.** Adding *or* removing a refusal needs a pinned traversal of the legal path. Budget for it; it is why subtraction gets deferred.
+- **Retiring a code is one diff.** Its recovery choreography leaves every prompt surface and its needle pins leave the contract validators in the same change.
+- **Pin behaviour, never token spelling.** An assertion naming a refusal code is a vote against ever removing it.
+
+Two consequences worth stating: mid-run hard refusals **are** serializers, so deleting them makes the workflow more parallel — parallel-by-default is a theorem, not a convention. And real subprocesses in tests are needed only for genuine boundary properties; most of the spawn corpus is not.
 
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, authoring-allowed, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize, sink-fallback, verify-sink, stale-worktree-check/-cleanup, legacy-worktree-cleanup, audit-labels, repair-labels, barrier-ref-sweep subcommands; explicit-target validation via `claimExplicitTarget()` helper
