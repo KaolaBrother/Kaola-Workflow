@@ -195,7 +195,9 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > configures roles and limits (`agents.<name>.*`, `max_depth`, `max_threads`) and has no `enabled`
 > key, so Codex parses it and applies nothing. Put the concurrency budget at
 > `features.multi_agent_v2.max_concurrent_threads_per_session` and do **not** also set
-> `agents.max_threads` — Codex rejects that key once MultiAgentV2 is on. Note that
+> `agents.max_threads` — it is a separate `[agents]` key, **not an alias**, and it does not raise
+> the MultiAgentV2 cap; Codex 0.145.0 accepts the key rather than complaining, so a stray one
+> leaves the cap where it was instead of erroring. Note that
 > `multi_agent_v2` is not carried in the public Codex configuration reference, which documents
 > `[features] multi_agent` for enabling subagents and `[agents]` only for role/limit settings
 > (`max_threads`, `max_depth`); the V2 flag and its bounds are verified behavior on Codex

@@ -965,10 +965,11 @@ const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config
   + 'is absent are documented Codex >=0.145.0 behavior (rust-v0.145.0, PR #19792); the wait-timeout bounds '
   + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
   + 'agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for '
-  + 'max_concurrent_threads_per_session, and it does not set the V2 budget. Codex 0.145.0 accepts the '
-  + 'key rather than complaining — a config carrying both loads clean — so a stray max_threads is '
-  + 'silently ineffective here instead of an error, which is why it is easy to leave in place '
-  + 'believing it raised the budget.';
+  + 'max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from '
+  + 'features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key '
+  + 'rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the '
+  + 'cap where it was instead of erroring, which is why it is easy to leave in place believing it '
+  + 'widened the budget.';
 
 const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'max_concurrent_threads_per_session',
@@ -2462,9 +2463,9 @@ const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Kaola-Workflow requires Multi
   + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n\n'
   + 'The equivalent inline form under [features] (multi_agent_v2 = { enabled = true, ... }) and a bare '
   + 'multi_agent_v2 = true are both accepted. Do NOT set agents.max_threads alongside it — that is a '
-  + 'separate [agents] key, NOT an alias, and it does not set the V2 budget; Codex 0.145.0 accepts it '
-  + 'rather than complaining, so a stray one is silently ineffective here instead of an error. The '
-  + 'concurrency budget lives at features.multi_agent_v2.max_concurrent_threads_per_session '
+  + 'separate [agents] key, NOT an alias, and it does not raise the MultiAgentV2 cap; Codex 0.145.0 '
+  + 'accepts it rather than complaining, so a stray one leaves the cap where it was instead of '
+  + 'erroring. The concurrency budget comes from features.multi_agent_v2.max_concurrent_threads_per_session alone '
   + '(PR #19792). A top-level [agents] enabled = true does NOT enable MultiAgentV2: [agents] has no '
   + '"enabled" key, so Codex parses it and applies nothing. Kaola never writes or overrides '
   + 'agents.default_subagent_model / agents.default_subagent_reasoning_effort; Codex resolves the '

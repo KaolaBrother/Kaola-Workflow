@@ -2756,10 +2756,11 @@ const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config
   + 'is absent are documented Codex >=0.145.0 behavior (rust-v0.145.0, PR #19792); the wait-timeout bounds '
   + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
   + 'agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for '
-  + 'max_concurrent_threads_per_session, and it does not set the V2 budget. Codex 0.145.0 accepts the '
-  + 'key rather than complaining — a config carrying both loads clean — so a stray max_threads is '
-  + 'silently ineffective here instead of an error, which is why it is easy to leave in place '
-  + 'believing it raised the budget.';
+  + 'max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from '
+  + 'features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key '
+  + 'rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the '
+  + 'cap where it was instead of erroring, which is why it is easy to leave in place believing it '
+  + 'widened the budget.';
 
 const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'max_concurrent_threads_per_session',

@@ -200,7 +200,9 @@ roles and limits and has no `enabled` key, so Codex parses it and applies
 nothing. `features.multi_agent_v2.max_concurrent_threads_per_session` governs
 sub-agent concurrency: the cap is inclusive of the root session, so sub-agent
 width is the configured cap minus one. Do NOT also set `agents.max_threads` —
-Codex rejects that key once MultiAgentV2 is enabled. Warning suppression is
+it is a separate `[agents]` key, not an alias, and it does not raise the
+MultiAgentV2 cap; Codex 0.145.0 accepts the key rather than complaining, so a
+stray one leaves the cap where it was instead of erroring. Warning suppression is
 independent: never treat `[notice].suppress_unstable_features_warning = true`
 as evidence that MultiAgentV2 is enabled. Kaola does not silently edit
 `~/.codex/config.toml`'s `[features]` table on the user's behalf — satisfying
