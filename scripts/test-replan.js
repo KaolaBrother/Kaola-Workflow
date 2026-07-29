@@ -7360,6 +7360,7 @@ function runNamedReplanCommand847(root, command) {
   const parts = String(command).trim().split(/\s+/);
   const at = parts.findIndex(part => /workflow-replan\.js$/.test(part));
   const argv = [path.join(__dirname, path.basename(parts[at])), ...parts.slice(at + 1)];
+  // spawn-class: cli-contract
   const child = spawnSync(process.execPath, argv, { cwd: root, encoding: 'utf8', env: gitEnv });
   let out = {};
   try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
@@ -7367,8 +7368,8 @@ function runNamedReplanCommand847(root, command) {
   return { out, status: child.status };
 }
 
-// spawn-class: cli-contract
 function orient847(fx) {
+  // spawn-class: cli-contract
   const child = spawnSync(process.execPath,
     [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'orient', '--project', fx.project, '--json'],
     { cwd: fx.root, encoding: 'utf8', env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '1' } });
@@ -7604,6 +7605,308 @@ scenario(() => {
     notEqualReason({ reason: out.legal_mutation }, 'none',
       '#847-E: ...and a route that answers "nothing you can do" is a route that dead-ends. '
       + 'Reachability is not an answer');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ===========================================================================
+// #847 RESIDUALS — THE FOURTH ARM, AND THE FALLBACK THAT NAMES THE WRONG VERB.
+//
+// The three-site table above is INCOMPLETE. `readReplanFence` has a FOURTH bare return, ahead of
+// all three:
+//
+//     const checked = validateReplanTransaction(transaction);
+//     if (!checked.ok) return { ok: false, fenced: true, reason: checked.reason, state };
+//
+// — no `legal_mutation`, so it lands in exactly the dead end #847 exists to remove. The acceptance
+// is stated over ARMS, not over the three sites that happened to be tabulated ("a fenced `orient`
+// ALWAYS names a legal exit; no arm returns `legal_mutation: 'none'` with no command"), and this
+// arm fails it. Measured against production, all four shapes below answer identically:
+//
+//   {"result":"refuse","reason":"replan_transaction_budget_invalid","replan_phase":"unknown",
+//    "transaction_id":"none",...,"legal_mutation":"none"}                          exit 1
+//
+// AND THE EXIT IS NOT ONE ANSWER. `abortReplan` splits this class deliberately, and the split is
+// measured here rather than assumed:
+//
+//   shape                                    resume                     abort
+//   parseable, schema-invalid, abortable     refuses (same code)        OK — fence dropped
+//   parseable, schema-invalid, past the wall refuses (same code)        refuses irreversible
+//   UNPARSEABLE bytes                        refuses                    refuses undecidable
+//
+// So a blanket "name abort" is wrong for two of the three, and a blanket "name resume" is wrong
+// for all three. Only the first shape has a mechanical exit at all. For the other two BOTH verbs
+// refuse — and `abort` says so in its own vocabulary: `replan_abort_undecidable` carries
+// `legal_next: 'consent'` and the prose "Escalate: this is a broken kernel record, not a routine
+// discard." That is the honest answer for a state with no keepable route: name the escalation,
+// print no command. A fabricated command is the thing these pins forbid, not the thing they
+// demand — every pin below that asks for a command first proves, by running it, that one exists.
+//
+// The routing today is worse than silent, it is CIRCULAR: `replan_transaction_invalid` and
+// `replan_abort_undecidable` both declare `refusal_route: adaptive-node orient`, and `orient` on
+// this fence answers `legal_mutation: "none"`. The operator is returned to the door they came
+// through. That is the P3 wedge with a signpost on it.
+//
+// A FIFTH surface projects the same fence and invents its own default:
+// `kaola-workflow-claim.js` finalize emits `legal_mutation: fence.legal_mutation || 'replan
+// resume'` — so every arm that carries none is told to run the ONE verb this state rejects,
+// with `transaction_id: null` so the working verb cannot be reconstructed either.
+// ===========================================================================
+
+// Corrupt the live transaction so it PARSES but fails schema validation, leaving `transaction_id`
+// and `phase` intact — the shape a partial/interrupted write leaves behind, and the one that
+// reaches the fourth arm. Returns the id the file still records.
+function corruptTransactionParseable847(fx) {
+  const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+  const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+  tx.budget.prospective_count_after = 999;
+  fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
+  return { id: tx.transaction_id, phase: tx.phase };
+}
+
+function replanVerb847(fx, argv) {
+  // spawn-class: cli-contract
+  const child = spawnSync(process.execPath,
+    [path.join(__dirname, 'kaola-workflow-replan.js'), ...argv, '--project', fx.project, '--json'],
+    { cwd: fx.root, encoding: 'utf8', env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  let out = {};
+  try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
+  catch (_) { out = { result: 'unparseable', stdout: String(child.stdout).slice(0, 400) }; }
+  return out;
+}
+
+// The verb an envelope NAMES, executed. `legal_mutation` is a verb phrase, not a command line, so
+// the id the envelope reports is the only thing that can complete it — which is precisely why an
+// arm that names `replan abort` while reporting `transaction_id: null` has still named nothing.
+function runNamedLegalMutation847(fx, envelope) {
+  const named = String((envelope && envelope.legal_mutation) || 'none');
+  if (named === 'replan resume') return replanVerb847(fx, ['resume']);
+  if (named === 'replan abort') {
+    return replanVerb847(fx, ['abort', '--transaction',
+      String((envelope && envelope.transaction_id) || 'none')]);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// #847-F — THE FOURTH ARM, PRE-ACTIVATION. A transaction file that parses but does not validate,
+// at a phase the discard exit still admits. `abort` reads the transaction WITHOUT validating for
+// exactly this reason ("a schema-invalid transaction is precisely one of the wedges this exit
+// serves, so it must remain reachable") — so the remedy is present, mechanical, and unnamed:
+// the R3 signature, one arm over from where #847 found it.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const stateId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const corrupt = corruptTransactionParseable847(fx);
+
+    // Controls: this is the FOURTH arm, not any of the three already answered. The file is present
+    // (not `:1290`), it parses, the state names the same id the file does (not `:1296`), and the
+    // reason is a validation code (not `replan_integrity_mismatch`, so not `:1311`).
+    const wedge = fence847(fx);
+    equal(corrupt.id, stateId,
+      '#847-F control: state and file still name the SAME transaction — this is not the mismatch arm');
+    equal(wedge.reason, 'replan_transaction_budget_invalid',
+      '#847-F control: a parseable-but-schema-invalid transaction reaches the validation arm: ' + JSON.stringify(wedge.reason));
+    equal(wedge.legal_mutation, undefined,
+      '#847-F control: ...and that arm carries no legal_mutation at all: ' + JSON.stringify(wedge.legal_mutation));
+    ok(schema.REPLAN_ABORTABLE_PHASES.includes(corrupt.phase),
+      '#847-F control: ...at phase ' + corrupt.phase + ', which the discard exit still admits');
+
+    const out = orient847(fx).out;
+    equal(out.reason, 'replan_transaction_budget_invalid',
+      '#847-F precondition: orient is projected through this arm too: ' + JSON.stringify(out));
+
+    // Which exit this state actually admits, MEASURED before anything is pinned. `resume`
+    // re-validates and hands back the identical code, so it is not an exit — following it leaves
+    // the operator exactly where they started, one refusal poorer.
+    const resumed = replanVerb847(fx, ['resume']);
+    equal(resumed.reason, 'replan_transaction_budget_invalid',
+      '#847-F control: `replan resume` re-validates and refuses with the SAME code — it is not the '
+      + 'exit here: ' + JSON.stringify(resumed));
+
+    // THE PIN.
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-F: the validation arm must NAME a legal exit. It is the fourth `orient` arm and it is '
+      + 'reached by the same corruption class as the other three — answering it with nothing is the '
+      + 'same permanent stuck state #847 removed one arm over: ' + JSON.stringify(out));
+    const command = namedReplanCommand847(out);
+    ok(command !== null,
+      '#847-F: ...and PRINT it as a runnable command. `abort` deliberately reads the transaction '
+      + 'without validating so this exact wedge stays reachable — the remedy exists, it is '
+      + 'mechanical, and it is unnamed: ' + JSON.stringify(out));
+    ok(String(command).includes(corrupt.id),
+      '#847-F: ...carrying the transaction id the FILE records (' + corrupt.id.slice(0, 12) + '), which '
+      + 'is the id this CAS-targeted exit accepts: ' + command);
+
+    // END TO END.
+    const ran = runNamedReplanCommand847(fx.root, command);
+    equal(ran.out.result, 'ok',
+      '#847-F: ...and the exit an operator is sent to must actually work: ' + JSON.stringify(ran.out));
+    const cleared = fence847(fx);
+    ok(cleared.ok === true && cleared.fenced === false,
+      '#847-F: ...following it genuinely drops the wedge: ' + JSON.stringify({ ok: cleared.ok, fenced: cleared.fenced, reason: cleared.reason }));
+    notEqualReason(orient847(fx).out, 'replan_transaction_budget_invalid',
+      '#847-F: ...so the successor that re-orients is no longer wedged');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-G — THE FOURTH ARM, PAST THE IRREVERSIBILITY WALL. Same arm, and now NEITHER verb accepts:
+// `resume` re-validates and refuses, `abort` refuses `replan_abort_irreversible`. This is where a
+// blanket "the validation arm names abort" fix breaks, and it breaks silently — the printed
+// command refuses on arrival and its own `legal_next` points at `resume`, which refuses too. Two
+// hops, both dead.
+//
+// Where no exit is keepable, the answer is the escalation, printed as prose with no command.
+// PARTIAL-PRESERVATION NOTE: the "no dead command" clause below is satisfiable by an
+// implementation that prints nothing at all — that is the point of pairing it with the clause
+// above it, which is not.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    advanceToAttestedChild(fx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      '#847-G control: the fixture drives the transaction past the abort wall');
+    const corrupt = corruptTransactionParseable847(fx);
+    ok(!schema.REPLAN_ABORTABLE_PHASES.includes(corrupt.phase),
+      '#847-G control: ...so the discard exit is closed at phase ' + corrupt.phase);
+    equal(fence847(fx).reason, 'replan_transaction_budget_invalid',
+      '#847-G control: and the validation arm is reached with a past-the-wall transaction');
+
+    // BOTH verbs, measured. Neither mutates on refusal, so both may be probed before the pin.
+    const resumed = replanVerb847(fx, ['resume']);
+    const aborted = replanVerb847(fx, ['abort', '--transaction', corrupt.id]);
+    equal(resumed.reason, 'replan_transaction_budget_invalid',
+      '#847-G control: `replan resume` refuses — the transaction cannot be rolled forward: ' + JSON.stringify(resumed));
+    equal(aborted.reason, 'replan_abort_irreversible',
+      '#847-G control: `replan abort` refuses — the epoch is rotating: ' + JSON.stringify(aborted));
+    equal(aborted.legal_next, 'replan resume',
+      '#847-G control: ...and the exit IT names is the one that just refused, so the chain dead-ends '
+      + 'on the second hop as well: ' + JSON.stringify(aborted.legal_next));
+
+    const out = orient847(fx).out;
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-G: this arm must answer too. "No mechanical exit" is not the same as no answer — a '
+      + 'state whose only route is escalation must SAY escalation, which is what `abort` itself '
+      + 'does when it has nothing to offer (`legal_next: "consent"`): ' + JSON.stringify(out));
+    ok(out.legal_mutation !== 'replan resume' && out.legal_mutation !== 'replan abort',
+      '#847-G: ...and it must not name either replan verb. Both were just run against this exact '
+      + 'state and both refused, so naming one prints a route that dead-ends on arrival — the '
+      + 'operator turned away a third time, by a third code, still with nowhere to go: '
+      + JSON.stringify(out.legal_mutation));
+    const command = namedReplanCommand847(out);
+    const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
+    ok(ranOk === null || ranOk.result !== 'refuse',
+      '#847-G: ...and any command it DOES print must survive being pasted. A printed command that '
+      + 'refuses is worse than none: ' + JSON.stringify({ command, ran: ranOk }));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-H — THE FOURTH ARM, UNPARSEABLE BYTES. The class `abort` refuses BY DESIGN: a payload that
+// will not parse cannot prove it is pre-activation, so discarding it could destroy a half-rotated
+// epoch. `replan_abort_undecidable` therefore carries `legal_next: 'consent'` — the escalation is
+// already named, one script over, in a refusal whose own `refusal_route` sends the operator to
+// `orient`. `orient` currently answers `legal_mutation: "none"`. The route is a closed loop.
+//
+// PARTIAL-PRESERVATION NOTE: as in #847-G, the "no dead command" clause alone is satisfied by
+// printing nothing; it is the naming clause that carries the change.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const stateId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    fs.writeFileSync(txPath, '{not json');
+    let parses = true;
+    try { JSON.parse(fs.readFileSync(txPath, 'utf8')); } catch (_) { parses = false; }
+    equal(parses, false, '#847-H control: the transaction file is present and does NOT parse');
+
+    const aborted = replanVerb847(fx, ['abort', '--transaction', stateId]);
+    equal(aborted.reason, 'replan_abort_undecidable',
+      '#847-H control: `abort` refuses this class deliberately — unparseable bytes cannot prove the '
+      + 'epoch is pre-activation: ' + JSON.stringify(aborted));
+    equal(aborted.legal_next, 'consent',
+      '#847-H control: ...and names the escalation itself, so the answer this arm owes already '
+      + 'exists in the vocabulary: ' + JSON.stringify(aborted.legal_next));
+    ok(aborted.refusal_route && aborted.refusal_route.script === 'adaptive-node'
+      && aborted.refusal_route.verb === 'orient',
+    '#847-H control: ...while ROUTING the operator to `adaptive-node orient` — the door they came '
+      + 'through: ' + JSON.stringify(aborted.refusal_route));
+    const resumed = replanVerb847(fx, ['resume']);
+    equal(resumed.reason, 'replan_transaction_invalid',
+      '#847-H control: `resume` refuses as well, so neither verb is an exit: ' + JSON.stringify(resumed));
+
+    const out = orient847(fx).out;
+    equal(out.reason, 'replan_transaction_invalid',
+      '#847-H precondition: orient lands on the validation arm: ' + JSON.stringify(out));
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-H: the route `abort` sends this operator to must not answer "nothing". The loop closes '
+      + 'here — `abort` says escalate and points at `orient`, `orient` says nothing and points '
+      + 'nowhere — and a closed loop is the permanent stuck state stated as a route: ' + JSON.stringify(out));
+    ok(out.legal_mutation !== 'replan resume' && out.legal_mutation !== 'replan abort',
+      '#847-H: ...and it must not name either replan verb: both were run against this exact state '
+      + 'above and both refused: ' + JSON.stringify(out.legal_mutation));
+    const command = namedReplanCommand847(out);
+    const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
+    ok(ranOk === null || ranOk.result !== 'refuse',
+      '#847-H: ...and any command it prints must survive being pasted: '
+      + JSON.stringify({ command, ran: ranOk }));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-I — THE FIFTH PROJECTION, AND THE ONLY ONE THAT INVENTS A DEFAULT. `orient`, the handoff
+// and the validator all project a fence they cannot answer as `legal_mutation: 'none'` — silent,
+// but honest. `kaola-workflow-claim.js` finalize instead defaults:
+//
+//     legal_mutation: fence.legal_mutation || 'replan resume'
+//
+// The `||` fires on precisely the arms that carry no exit, and for the validation arm `resume` is
+// the one verb the state REJECTS. Silence sends an operator looking; a wrong verb sends them
+// somewhere, and they arrive at a second refusal carrying the same code they started with. This
+// pin runs whatever finalize names.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const corrupt = corruptTransactionParseable847(fx);
+    equal(fence847(fx).legal_mutation, undefined,
+      '#847-I control: the fence this finalize reads carries no legal_mutation — the exact input '
+      + 'the `||` default was written for');
+
+    // spawn-class: cli-contract
+    const child = spawnSync(process.execPath,
+      [path.join(__dirname, 'kaola-workflow-claim.js'), 'finalize', '--project', fx.project, '--json'],
+      { cwd: fx.root, encoding: 'utf8', env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    let out = {};
+    try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
+    catch (_) { out = { result: 'unparseable', stdout: String(child.stdout).slice(0, 400) }; }
+    equal(out.reason, 'replan_transaction_budget_invalid',
+      '#847-I precondition: finalize is fenced by the validation arm: ' + JSON.stringify(out));
+    equal(child.status, 1, '#847-I precondition: ...and refuses, exit 1');
+
+    // THE PIN — run what it names. A verb phrase is only an exit if the id needed to complete it
+    // travels with it, so this executes `legal_mutation` + `transaction_id` exactly as reported.
+    const ran = runNamedLegalMutation847(fx, out);
+    ok(ran === null || ran.result !== 'refuse',
+      '#847-I: the verb finalize names must be one this state ACCEPTS. It named `'
+      + out.legal_mutation + '` with transaction_id ' + JSON.stringify(out.transaction_id)
+      + '; run against the state that produced it, that is: ' + JSON.stringify(ran)
+      + '. A default that fires on every arm carrying no exit will name the wrong verb every time, '
+      + 'and a printed command that refuses is worse than none');
+
+    // The working exit did exist the whole time — proven last, because it clears the fence.
+    const worked = replanVerb847(fx, ['abort', '--transaction', corrupt.id]);
+    equal(worked.result, 'ok',
+      '#847-I: ...and an exit was available: `abort` on the id the file records discards it '
+      + 'cleanly, which is what finalize could have named: ' + JSON.stringify(worked));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
