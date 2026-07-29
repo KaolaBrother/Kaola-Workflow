@@ -1111,67 +1111,123 @@ runs before the merge loop so the loosened non-owned exemption cannot change con
 
 See `docs/conventions.md` § Co-Tenant Lane Convention and `docs/decisions/D-579-01.md`.
 
-## Refusal Admission — Rule, Instrument, Ratchet
 
-A refusal is a **cost**: it spends the operator's attention and, when it names no
-exit, it can strand a run. Admission is therefore a governed subsystem, not a
-per-site judgement call. It has three parts, and the failure mode of each is what
-justifies the other two.
+## The Target Architecture — Four Records, Two Gates, Everything Else a Tool
 
-**Rule — where a refusal may live.** A refusal must sit at one of exactly three
-loci — kernel-write integrity (L1), the sink (L2), or the consent valve (A3) —
-**and** be crucial there. A condition recoverable in place ships as an advisory
-even at those loci, and a mid-run refusal proposal other than the consent valve
-ships as an advisory or a tool. Specificity rides in the refusal *payload*, never
-in a newly minted code. Two bounds keep the rule honest in both directions: if
-the agent's next step after a refusal is a deterministic transformation, the
-script performs it and the refusal retires (a refusal whose remedy is mechanical
-is a missing tool wearing a uniform); but auto-remedy applies only to
-non-canonical *form* of correct content — a deviation that is itself evidence
-(hash mismatch, unattributed diff, chain break) is never auto-repaired, because
-repairing it launders the signal. The second bound always overrides the first.
-Canonical wording: `docs/conventions.md` § Refusal admission.
+The workflow is not *"execute by rule, refuse what does not comply."* It is:
 
-**Instrument — what orders the work.** Refusal telemetry records one event per
-CLI emission (code, triage wall-clock, re-dispatch, phase), and
-`kaola-workflow-telemetry-report.js` folds it into a frequency × interruption-cost
-ranking. Its purpose is to make corpus reduction *data-driven rather than
-audit-driven* — without it, whatever an audit last surfaced sets the agenda,
-which reliably grows the corpus while feeling like progress. The reporter is an
-**answer verb**: it always exits 0, never refuses, writes nothing, and reports a
-well-formed empty result for an absent or empty log. Two honesty properties are
-load-bearing: an unmeasured median reports `null` rather than a fabricated `0`,
-and a reason that fired but never caused a re-dispatch is distinguishable from
-one that never fired at all — those mean opposite things when deciding what to
-remove. **The ranking is empty until instrumented runs exist**; until then the
-corpus census (`test-route-reachability.js`, `kaola-workflow-prose-census.js`) is
-the honest ordering, and which ordering is in force must be stated rather than
-implied.
+> **Preserve four hand-off-able records. Gate at exactly two doors. Everything else is a tool the agent uses.**
 
-**Ratchet — what holds the line.** `test-spawn-classification.js` is
-**forward-only**: red when a new unclassified site appears, silent when sites are
-removed. The direction is the whole design. Its predecessor was bidirectional and
-reddened on any deletion of test code, which taxed the cleanup it existed to
-protect and was removed for that reason — taking the forward guard with it, and
-leaving hundreds of classification annotations with no reader at all. Enforcement
-defaults on via an exempt list rather than an opt-in allowlist, so a forgotten
-token is guarded rather than silently unguarded, and slack is *reported* rather
-than enforced so a shrinking corpus never reddens.
+Rule-following is not the product; a correctly finished issue is. Everything below follows from
+refusing to confuse the two.
 
-### Retiring a code is one diff
+### Three axioms
 
-A demoted code deletes its recovery choreography from **all six prompt surfaces**
-(the three commands and three SKILL packs generated from `templates/routing/`) and
-its needle pins from the four contract validators **in the same change**. The
-surface set is part of the diff. A demotion that leaves choreography behind has
-subtracted a token and nothing else: the operator-facing text still describes a
-stop that no longer occurs.
+1. **Interrupt at any moment, and a zero-context successor continues.** Not "state is saved" —
+   *a new agent that has read nothing can pick up the run.* Anything a successor cannot reconstruct
+   from durable records is a liability, however well-intentioned the artifact holding it.
+2. **Correct means the issue is genuinely done, at a sound time/token balance. Formal compliance is
+   not correctness.** A run that satisfied every gate and shipped the wrong thing failed. A run that
+   skipped ceremony and shipped the right thing did not. This axiom is what licenses deleting
+   machinery: ceremony that does not change whether the issue is right is cost without product.
+3. **Irreversible and value-laden calls belong to a human.** Facts are the machine's to settle;
+   standing, taste, and one-way doors are not.
 
-Removing a refusal also costs a **green arc** — a pinned traversal of the legal
-path, not only the refusing path — symmetrically with adding one. This is a real
-tax on subtraction and the reason removals get deferred; budget for it rather than
-discovering it. Two related disciplines follow. Pin **behaviour, never token
-spelling**: an assertion naming a refusal code is a vote against ever removing
-that code, and is how a corpus freezes. And a guard is evidence only once
-**mutation-proven** — plant the defect, see red, revert, see green — because a
-green suite is not evidence that a guard is armed.
+### The four kernel records — the only things that must be durable
+
+| record | what it answers for a successor |
+|---|---|
+| **Plan** | what are we doing, and in what shape |
+| **Progress** | how far did it get |
+| **Per-step evidence** | why is each finished step believed correct |
+| **Forge operation chain** | what actually happened in the world — commit, merge, push, issue |
+
+**The derivability test.** Every other durable artifact must be either (a) *derivable* from these
+four, or (b) a **preference a successor may simply re-decide**. An artifact that is neither is not
+state — it is a liability that can go stale, contradict the kernel, and silently outlive its truth.
+
+This test is a deletion instrument, not a description. Applied honestly it retires whole classes of
+stored state: a compliance table derivable from ledger plus evidence, a stored count that a command
+answers, a marker recording a decision the successor is entitled to make again.
+
+The forge chain earns its place precisely because it is *not* derivable: what happened in a remote
+repository cannot be recomputed from local files, and a successor that guesses at it will re-push,
+re-merge, or re-close.
+
+### Two gates — the only places that may refuse
+
+**L1 — kernel-write integrity. Did the write land?**
+Atomic-write failure, forge-operation failure, lost CAS, broken integrity. This gate exists because
+axiom 1 is only true if the four records are actually on disk and actually consistent. A half-written
+kernel record is worse than a missing one: it reads as authoritative.
+
+**L2 — the sink. Nothing enters mainline unverified.**
+Tests red, diff not attributable to a declared write set, review not settled, consent missing. This is
+the one irreversible boundary the workflow owns end to end, so it fails closed and reports
+*everything* wrong at once rather than one rung at a time.
+
+**Missing is a routing problem, never a stop.** The workflow runs end to end under an agent. When
+something needed is absent, the answer is to **reroute and obtain it** — not to refuse, and not to
+park the run waiting for a human to decide something the agent could go and get. In practice
+"blocked on a prerequisite" is almost always a task nobody has dispatched yet, and naming it a
+blocker converts work into a stall. A genuine block is only ever a value call (axiom 3) or a
+kernel/sink integrity failure (L1/L2).
+
+**Bookkeeping never blocks.** Caching a subagent's or a procedure's result, mirroring a folder,
+syncing an edition, regenerating a derived artifact — all bookkeeping. It may report, retry, or
+normalize; it may not stop the run. These are the clearest possible instances of a missing tool
+wearing a uniform, because the remedy is always mechanical and the record they guard is derivable
+by definition — if it were not, it would be one of the four kernel records.
+
+**Between them, nothing refuses hard.** Every former mid-run gate is a tool, and the vocabulary is:
+
+> **answer · advise · normalize · remedy · report-all**
+
+A mid-run stop that is not the consent escalation is a missing tool wearing a uniform. The consent
+valve is not a third gate — it does not *refuse*, it *asks*, routing a value call to a human per axiom
+3, and its absence at the boundary is an L2 condition. (Note for reconciliation: the admission rule as
+currently written in `docs/decisions/` enumerates three loci, counting the valve alongside the two
+gates. The distinction that matters is refusing versus escalating; anyone editing that wording should
+resolve it deliberately rather than by drift.)
+
+### Three hard rules
+
+**Only the crucial survive.** A refusal earns its place only if proceeding would irreversibly destroy
+a record, let unverified content reach mainline, or override a human's value call. Everything else —
+however sincerely defensive — is advice.
+
+**By family, not by event.** Roughly a dozen codes, ceiling included. Specificity rides in the
+*payload*, not in a new token, and the sink reports all findings at once instead of a ladder that
+surfaces one rung per run. Minting a code means amending the decision record — deliberately heavy,
+because a code is a permanent vocabulary item and every pin that names one is a vote against ever
+removing it.
+
+**Every refusal carries a route, and the route is tested.** A machine-readable exit — a verb, a
+consent escalation, or an environment fact — plus a test that walks **refusal → route → green**. An
+exit that does not actually work is a **build-time red**, not a runtime surprise. This is the rule
+with the most teeth: a route naming a verb that refuses in the same state is a dead link, and one
+whose own next-hop points back at the verb that just refused is circular. Both are indistinguishable
+from a working route to any check that only asks whether a route *exists*.
+
+### Two consequences
+
+**Parallel-by-default is a theorem, not a convention.** A mid-run hard refusal *is* a serializer: it
+converts an independent frontier into a stop-and-resolve. Removing those refusals does not merely
+permit more concurrency, it produces it. Serial then requires present-tense named evidence, because
+the workflow-created serializers are gone.
+
+**Most test subprocesses are unnecessary.** Real child processes are needed only for genuine boundary
+properties — the ones where in-process execution would not exercise the thing under test. The rest is
+habit, and it is a large fraction of the corpus. Classifying spawn sites is therefore not bookkeeping;
+it is the measurement that makes the reduction possible.
+
+### Sequencing — measure before cutting
+
+The instrument comes first: refusal telemetry (what each interruption costs), the spawn census and its
+forward-only ratchet (what growth is happening), and the admission rules written into
+`docs/conventions.md` (what may refuse at all). Only then the census walk, batch by batch, each code
+resolving to a gate, an advisory, a tool, or deletion.
+
+The failure mode this ordering exists to prevent has already occurred once: a campaign that never
+re-measured its own headline number added refusals for hours while believing it was subtracting.
+Measurement is not preparation for the work — it is the thing that makes the work honest.
