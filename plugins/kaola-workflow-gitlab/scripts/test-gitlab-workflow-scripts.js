@@ -3747,9 +3747,15 @@ function testGitlabDispatchPosture598() {
       { cwd: gitlabPluginRoot, encoding: 'utf8', env: freshEnv });
     assert.strictEqual(reinstalled.status, 0, '#598 gl AC1: re-install with [agents] enabled + effort=ultra must still exit 0: ' + reinstalled.stderr);
     assert.ok(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
-      '#775 gl AC1: [agents] enabled=true + effort=ultra must report proactive posture: ' + reinstalled.stdout);
-    assert.ok(/Kaola-Workflow Codex multi_agent_v2: enabled \(\[agents\] enabled = true\)/.test(reinstalled.stdout),
+      '#775 gl AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    // #842: the label reports STATE and must not credit the RETIRED key for it — the detector reads
+    // features.multi_agent_v2, and `[agents] enabled = true` is not what enabled V2 here or
+    // anywhere. Same predicates as AC1 in scripts/test-install-model-rendering.js: one claim, one
+    // wording, across all four chains that pinned the old label.
+    assert.ok(/Kaola-Workflow Codex multi_agent_v2: enabled/.test(reinstalled.stdout),
       '#775 gl AC1: enabled config must report multi_agent_v2 enabled: ' + reinstalled.stdout);
+    assert.ok(!/multi_agent_v2: enabled \([^)]*\[agents\]/.test(reinstalled.stdout),
+      '#842 gl AC1: ...and must NOT attribute it to [agents]: ' + reinstalled.stdout);
     assert.ok(!/refuse sub-agent spawns/.test(reinstalled.stdout),
       '#598 gl AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
     // #601: the remediation (still printed while posture is non-proactive, i.e. the FIRST fresh
