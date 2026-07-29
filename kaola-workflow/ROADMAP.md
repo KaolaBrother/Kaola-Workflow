@@ -15,6 +15,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #865 | The run can lower its own consent fence — clear-halt requires no attestation, so the valve is enforced by convention rather than mechanism | open | — | — |
 | #866 | Nothing measures whether a path stops the run: build the driven-envelope recorder, with a completeness assertion | open | — | — |
 | #867 | Two vocabularies for one diagnosis: collapse the certifier-resolution twin in plan-validator | open | — | — |
+| #868 | Both forge editions crash writing run-gaps.json — gap-sweep requires a renamed kernel module that does not exist, and no chain executes it | open | — | — |
 
 ## Rules
 
