@@ -1707,9 +1707,14 @@ for (const cond of emitted) {
     'RESOLVER control: the orphaned-fence arm resolves its exit from state and answers `replan abort`: '
     + JSON.stringify({ reason: fence && fence.reason, legal_mutation: fence && fence.legal_mutation }));
 
-  const env = schema.projectMutationGuard(orphanedState, null, 'adaptive-node open-next');
+  // THE LIVE SEAM. This block was written against `schema.projectMutationGuard`, which #847-J
+  // DELETED — the call threw a TypeError that killed every assertion after it in this file rather
+  // than failing one. The surviving path is the one production actually emits through:
+  // `replanOrientation` builds the fenced envelope from the resolver, and the stamp decorates it.
+  const nodeMod = require('./kaola-workflow-adaptive-node');
+  const env = schema.stampRefusalEnvelope(nodeMod.replanOrientation(fence, 'p'));
   assert(env && env.result === 'refuse' && env.reason === 'replan_integrity_mismatch',
-    'RESOLVER control: ...and the mutation guard refuses on that arm: ' + JSON.stringify(env && env.reason));
+    'RESOLVER control: ...and the emitted envelope refuses on that arm: ' + JSON.stringify(env && env.reason));
 
   // THE PIN. Whatever carries the exit, it may not name a verb the resolver has just ruled out.
   const routed = env && env.refusal_route;
@@ -1720,9 +1725,8 @@ for (const cond of emitted) {
     + 'this token needs, so it answers with the wrong one — and `replan resume` on an orphaned fence '
     + 'refuses `replan_transaction_missing` and the wedge survives');
   assert(env && env.legal_mutation === 'replan abort',
-    'RESOLVER: ...and the resolved exit must REACH the envelope. It is computed and then dropped '
-    + 'today, which is why the registry default is all that is left to stamp: '
-    + JSON.stringify(env && env.legal_mutation));
+    'RESOLVER: ...and the resolved exit must REACH the envelope, or the registry default is all '
+    + 'there is left to stamp: ' + JSON.stringify(env && env.legal_mutation));
   assert(!routed || routedKey === 'replan abort',
     'RESOLVER: ...so any structured route the envelope does carry must be the resolved one: '
     + JSON.stringify(routed));
@@ -1740,6 +1744,44 @@ for (const cond of emitted) {
     assert(bare.refusal_route && bare.refusal_route.verb,
       'RESOLVER precedence: ...while an envelope that supplies none still gets a default, so this '
       + 'is a precedence rule and not a deletion of the registry');
+
+    // THE SAME TOKEN, THE SAME STAMP, THE OTHER ARM — this is the precedence stated as a
+    // difference rather than as a single case. An envelope carrying the resolver's answer gets no
+    // static route; the bare one above still does. Both assertions read the same field on the same
+    // token, so neither can be satisfied by a stamp that simply stopped working.
+    const resolved = schema.stampRefusalEnvelope({ result: 'refuse',
+      reason: 'replan_integrity_mismatch', legal_mutation: 'replan abort' });
+    assert(resolved.refusal_route == null,
+      'RESOLVER precedence: ...and an envelope whose resolver ALREADY answered gets no competing '
+      + 'default — the registry may not supply a second exit beside a computed one: '
+      + JSON.stringify(resolved.refusal_route));
+
+    // AND ON THE BARE PATH, A RESOLVER-OWNED CONDITION CARRIES NO STATIC EXIT AT ALL.
+    //
+    // The weaker rule — "no REPLAN verb" — is what this block asserted first, on the reasoning that
+    // `adaptive-node orient` is read-only, is not fence-guarded, and so contradicts nothing. The
+    // executed pin in test-replan (#850-B) refuted it by RUNNING the verb: `orient` is projected
+    // through the re-plan fence, the fence re-runs the same validator, and the operator is handed
+    // the code that sent them there. A route can be reachable, dispatchable, and still not an exit.
+    // That is the whole thesis of this issue, and it applies to the benign-looking verb too.
+    //
+    // Derived, never listed — the scan below is the same one the self-loop block runs over the same
+    // function, so a code added to the validator is covered the day it appears.
+    const validatorSrc = /function validateReplanTransaction\(([\s\S]*?)\n}\n/.exec(
+      read('scripts/kaola-workflow-adaptive-schema.js'));
+    const resolverOwned = [...new Set([...(validatorSrc ? validatorSrc[1] : '')
+      .matchAll(/refuse\(\s*'([a-z][a-z0-9_]+)'/g)].map(m => m[1]))].sort();
+    assert(resolverOwned.length >= 10,
+      'RESOLVER silence: the resolver-owned set must be non-vacuous, or every assertion below it '
+      + 'passes over an empty loop — got ' + resolverOwned.length);
+    for (const cond of resolverOwned) {
+      const r = schema.refuse(cond, {}).refusal_route;
+      assert(r == null,
+        'RESOLVER silence: `' + cond + '` is answered by `readReplanFence` from the state in front '
+        + 'of it, and every static candidate leads back to the same wall — `replan resume` '
+        + 're-validates, `adaptive-node orient` projects through the fence and re-validates. The '
+        + 'registry names none of them: ' + JSON.stringify(r));
+    }
   }
 }
 

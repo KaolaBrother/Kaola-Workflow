@@ -8282,8 +8282,6 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
-shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
-console.log(`test-replan: PASSED (${passed} assertions)`);
 //
 // #847 asked whether a fenced envelope NAMES an exit. This asks the next question, and it is the
 // one that decides whether the answer was worth anything: RUN what is named, in the state the

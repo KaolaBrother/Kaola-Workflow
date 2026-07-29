@@ -1281,6 +1281,33 @@ function validateReplanTransaction(value) {
   }
 }
 
+// THE EXITS A RUNTIME RESOLVER OWNS — and therefore the exits the registry must not also supply.
+//
+// Every code `validateReplanTransaction` can return surfaces through `readReplanFence`'s validation
+// arm below, which computes the legal exit FROM STATE: `replan abort` while the epoch is still
+// pre-activation with a nameable id, `consent` past the irreversibility wall or where the phase
+// cannot be read. That is ONE token with TWO correct exits, decided by state the token cannot see.
+// A token-keyed cell holds one answer, so it is wrong on the other arm — and it was: the whole band
+// recorded `replan resume`, which for exactly these codes re-validates and hands back the identical
+// refusal. The operator ran the named verb and got the same wall.
+//
+// So the registry supplies NOTHING here and the resolver's answer stands alone. This is a
+// precedence rule the stamp already documents ("a caller knows its concrete situation; the registry
+// only supplies the default") — what is removed is the competing default, not the mechanism.
+//
+// DERIVED FROM THE FUNCTION'S OWN SOURCE, by the same scan the route sweep runs over the same
+// function, so the producer and the checker cannot disagree about what the set is and a code added
+// to the validator is covered the day it appears. Fails SAFE in the direction that is loud: a scan
+// that goes blind yields an EMPTY set, nothing is suppressed, and the self-loop pin reds naming
+// every restored loop rather than quietly passing.
+const RESOLVER_OWNED_CONDITIONS = new Set(
+  [...String(validateReplanTransaction).matchAll(/refuse\(\s*'([a-z][a-z0-9_]+)'/g)].map(m => m[1])
+);
+
+// The conditions minted from inside the re-plan engine — the ones for which the fence is standing at
+// the moment they fire. Used only to withhold a static exit that the fence would refuse on arrival.
+const REPLAN_BAND_PREFIX_RE = /^(?:replan|snapshot|cleanup)_/;
+
 function readReplanFence(stateContent, transaction) {
   const state = parseStateFields(stateContent);
   const stateStatus = state.replan_status || 'none';
@@ -5210,6 +5237,14 @@ function resolveAutoRemediable(code, payload) {
 function resolveRoute(code, payload) {
   const row = KERNEL_REFUSAL_REGISTRY[code];
   if (!row) return null;
+  // THE ONE PLACE THE WITHHELD EXIT IS HONOURED, so every reader of a route sees the same absence.
+  // It sits here rather than in the family bodies because there are two readers, not one: the stamp
+  // that builds the envelope, and `buildOutcomeRecord`, which RE-RESOLVES from the classifier patch
+  // when the envelope carries no route. Putting the check in a family body would leave the second
+  // reader re-manufacturing the very verb the first withheld — the outcome log would keep naming a
+  // dead exit and `routeless_count` would stay at zero for the whole band, which is a deletion that
+  // deleted nothing.
+  if (isPlainObject(payload) && payload.no_static_exit) return null;
   try {
     const route = row.route(isPlainObject(payload) ? payload : {});
     return route || null;
@@ -5425,7 +5460,17 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     match: ['candidate_delta_unattributed', 'rebind_base_rewrite_unsafe'] },
   { family: 'kernel_integrity_broken', patch: { kind: 'hash_mismatch' },
     match: [/_hash_mismatch$/, 'plan_integrity_failed', 'mirror_verify_failed'] },
-  { family: 'kernel_integrity_broken', patch: { kind: 'chain_break' },
+  // The band members here carry NO static exit, and the rule for that is written down nine lines
+  // into the sealed-archive block below: `chain_break`'s route is `adaptive-node write-halt`, which
+  // IS replan-guarded, so a condition that fires while the fence stands sends the operator to a verb
+  // that refuses `replan_in_progress` on arrival. That block states the constraint and then chooses
+  // its kinds to obey it; this rule was matching nine `replan_*` tokens straight into the kind the
+  // constraint excludes. The ledger and review members are unaffected — they do not fire under a
+  // fence, and `write-halt` is a real exit for them.
+  { family: 'kernel_integrity_broken',
+    patch: (c) => (REPLAN_BAND_PREFIX_RE.test(c)
+      ? { kind: 'chain_break', no_static_exit: true }
+      : { kind: 'chain_break' }),
     match: [/^ledger_(chain_journal_missing|missing|unparseable)$/, /^replan_transaction_history_/,
       /^replan_source_history_/, 'expansion_records_malformed', 'review_journal_missing',
       'replan_committed_predecessor_unresolved', 'replan_history_receipt_collision',
@@ -5581,6 +5626,10 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
   // idempotent by construction — it re-reads the transaction, re-verifies its seams and rolls the
   // same phase forward or reports the same reason again — which is precisely what the retry arm of
   // this family promises.
+  // The band members whose exit nothing else computes keep `replan resume` — for them it is a real
+  // exit that runs a phase forward and is the one mutation the fence itself declares legal. The
+  // ones `readReplanFence` answers for are stripped of it downstream of every rule; see the
+  // resolver-owned carve-out in `classifyRefusalCondition`.
   { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', step: c,
     retry_verb: 'resume', retry_script: 'replan', retry_args: '--project <P> --json' }),
     match: [/^replan_/, /^snapshot_/, /^cleanup_/] },
@@ -5616,6 +5665,19 @@ function classifyRefusalCondition(condition) {
     let patch = {};
     try { patch = typeof rule.patch === 'function' ? rule.patch(condition) : Object.assign({}, rule.patch); }
     catch (_) { patch = {}; }
+    // THE RESOLVER-OWNED CARVE-OUT, applied AFTER whichever rule matched and therefore exactly once.
+    // It sits here rather than inside the rules because these conditions are claimed by three
+    // different rules on three different families — the write-path band rule, and two
+    // `kernel_integrity_broken` rules that catch `replan_transaction_invalid` and friends by suffix
+    // — and a per-rule version would have to be written three times and would silently miss the
+    // fourth rule someone adds. One condition, one decision, wherever it was classified.
+    //
+    // AND THE STRIPPING IS TOTAL, not "no replan verb". `adaptive-node orient` looks harmless — it
+    // is read-only and not fence-guarded — but it is PROJECTED THROUGH THE FENCE, so it re-runs the
+    // same validator and hands back the identical code. Measured, not reasoned: following it
+    // returns the code that named it. A door that leads to the door is not an exit, whichever verb
+    // is written on it.
+    if (RESOLVER_OWNED_CONDITIONS.has(condition)) patch.no_static_exit = true;
     return { family: rule.family, explicit: true, patch: patch };
   }
   return null;
@@ -5693,7 +5755,23 @@ function stampRefusalEnvelope(envelope) {
   if (envelope.auto_remediable == null && resolveAutoRemediable(classified.family, payload) === false) {
     envelope.auto_remediable = false;
   }
-  if (envelope.refusal_route == null) {
+  // A RESOLVER'S ANSWER IS A CALLER'S ANSWER. The stamp has always stepped aside for a caller who
+  // set `refusal_route`, on the stated ground that the caller knows its concrete situation; an
+  // envelope carrying `legal_mutation` / `legal_next` is that same caller, having computed the exit
+  // FROM STATE one function earlier. Reading only the structured field missed it, so a fenced
+  // envelope went out saying `legal_mutation: "replan abort"` beside `refusal_route: {verb:
+  // "resume"}` — two exits, contradicting, in one envelope, with the wrong one machine-readable.
+  // The precedence is unchanged; what widened is what counts as the caller having answered.
+  // WHAT COUNTS IS A NAMED VERB, NOT ANY ANSWER — and the difference is measured, not stipulated.
+  // `consent` is an ESCALATION, not a command: it rules no verb in or out, so a static
+  // `adaptive-node orient` beside it is a second door rather than a contradicting one, and #847
+  // ships exactly that pair deliberately ("the door they came through"). `none` is the resolver
+  // saying it could not decide, which is the case where the registry default is all there is.
+  // Withholding on either would delete a real exit to fix an imagined conflict.
+  const resolverExit = envelope.legal_mutation != null ? envelope.legal_mutation : envelope.legal_next;
+  const resolverNamedAVerb = typeof resolverExit === 'string'
+    && resolverExit !== '' && resolverExit !== 'none' && resolverExit !== 'consent';
+  if (envelope.refusal_route == null && !resolverNamedAVerb) {
     const route = resolveRoute(classified.family, payload);
     if (route) envelope.refusal_route = route;
   }
