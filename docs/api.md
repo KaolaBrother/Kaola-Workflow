@@ -2964,7 +2964,8 @@ into the user's `config.toml` itself (a fresh install therefore always needs thi
 step) — the `repair` string carries the exact minimal paste-able diff. Three shapes are read: a
 `[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled = true, ... }` under
 `[features]`, and a bare `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does NOT
-enable MultiAgentV2 — `[agents]` has no `enabled` key — and `agents.max_threads` must not be set
+enable MultiAgentV2 — Codex 0.145.0 loads such a config clean with the feature still off, and the
+switch must be set under `[features]` in one of the three shapes above — and `agents.max_threads` must not be set
 alongside it: it is a separate `[agents]` key, **not an alias**, and it does not raise the
 MultiAgentV2 cap, which comes from `features.multi_agent_v2.max_concurrent_threads_per_session`
 alone. Codex 0.145.0 accepts the key rather than complaining, so a stray one leaves the cap where it

@@ -771,8 +771,14 @@ function parseMultiAgentV2Value(value) {
 //
 // It lives under `[features]`, NOT in the top-level `[agents]` table. `[agents]` is a
 // different surface (documented keys: agents.<name>.*, job_max_runtime_seconds, max_depth,
-// max_threads) and carries no `enabled` key at all, so a top-level `[agents] enabled = true`
-// parses cleanly and configures NOTHING — Codex reports 0 overrides for it.
+// max_threads), and a top-level `[agents] enabled = true` does NOT enable MultiAgentV2.
+// Measured on codex-cli 0.145.0, isolated CODEX_HOME: that config loads clean (`codex doctor`
+// reports "config loaded") while `multi_agent_v2` stays off. Do NOT explain this by saying
+// `[agents]` has no `enabled` key — it has one. An UNRECOGNIZED name there is refused
+// (`bogus_key = 6` -> "invalid type: integer 6, expected struct AgentRoleToml"), and so is an
+// unrecognized name holding a BOOLEAN (`bogus_key = true`), which is the control that rules out
+// "booleans are tolerated": `enabled` survives on its NAME, so it is a recognized field that
+// simply does not gate V2. What it positively does was never measured; do not guess it here.
 //
 // Three legal shapes are accepted, mirroring what Codex itself parses:
 //   [features]                 multi_agent_v2 = { enabled = true, ... }   (inline table)
@@ -2466,8 +2472,8 @@ const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Kaola-Workflow requires Multi
   + 'separate [agents] key, NOT an alias, and it does not raise the MultiAgentV2 cap; Codex 0.145.0 '
   + 'accepts it rather than complaining, so a stray one leaves the cap where it was instead of '
   + 'erroring. The concurrency budget comes from features.multi_agent_v2.max_concurrent_threads_per_session alone '
-  + '(PR #19792). A top-level [agents] enabled = true does NOT enable MultiAgentV2: [agents] has no '
-  + '"enabled" key, so Codex parses it and applies nothing. Kaola never writes or overrides '
+  + '(PR #19792). A top-level [agents] enabled = true does NOT enable MultiAgentV2 — set the switch '
+  + 'above instead, in any of the three accepted shapes. Kaola never writes or overrides '
   + 'agents.default_subagent_model / agents.default_subagent_reasoning_effort; Codex resolves the '
   + 'sub-agent model/reasoning independently.';
 

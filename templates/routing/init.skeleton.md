@@ -214,9 +214,10 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > so it has to be written into `config.toml` for Codex to expose the V2 task-name spawn tools at
 > all. Three shapes are accepted: `[features.multi_agent_v2]` with `enabled = true`, the inline
 > `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
-> `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not** enable it: `[agents]`
-> configures roles and limits (`agents.<name>.*`, `max_depth`, `max_threads`) and has no `enabled`
-> key, so Codex parses it and applies nothing. Put the concurrency budget at
+> `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not** enable it — `[agents]`
+> configures roles and limits (`agents.<name>.*`, `max_depth`, `max_threads`), and Codex 0.145.0
+> loads such a config clean with the feature still off, so set the switch in one of the three shapes
+> above instead. Put the concurrency budget at
 > `features.multi_agent_v2.max_concurrent_threads_per_session` and do **not** also set
 > `agents.max_threads` — it is a separate `[agents]` key, **not an alias**, and it does not raise
 > the MultiAgentV2 cap; Codex 0.145.0 accepts the key rather than complaining, so a stray one
@@ -318,8 +319,9 @@ The switch is `features.multi_agent_v2.enabled`, accepted in three shapes: a
 `[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled =
 true, ... }` under `[features]`, and a bare `multi_agent_v2 = true`. A
 top-level `[agents] enabled = true` does NOT enable it — `[agents]` configures
-roles and limits and has no `enabled` key, so Codex parses it and applies
-nothing. `features.multi_agent_v2.max_concurrent_threads_per_session` governs
+roles and limits, and Codex 0.145.0 loads such a config clean with the feature
+still off, so set the switch in one of the three shapes above instead.
+`features.multi_agent_v2.max_concurrent_threads_per_session` governs
 sub-agent concurrency: the cap is inclusive of the root session, so sub-agent
 width is the configured cap minus one. Do NOT also set `agents.max_threads` —
 it is a separate `[agents]` key, not an alias, and it does not raise the
