@@ -92,8 +92,8 @@ Record a typed outcome in the node's evidence for every delegation — column-0 
 | Token | Meaning |
 |---|---|
 | `completed` (default) | The delegate finished and returned its deliverable normally. |
-| `returned_partial` | Step 2 produced partial evidence/changed-file list before reclaim. |
-| `interrupted_unresponsive` | The ladder ran to step 3 with no response at any rung. |
+| `returned_partial` | The interrupt produced partial evidence / a changed-file list before reclaim. |
+| `interrupted_unresponsive` | Escalation ran all the way to reclaim with no response at any point. |
 | `interrupted_obsolete` | The delegate was interrupted because its task became moot (e.g. a superseding plan-repair), not because it stalled. |
 
 Never write a free-text "it stalled so I did it myself" in place of this token. An unrecognized value
@@ -189,15 +189,15 @@ spawn_agent(s) for the frontier, back-to-back in ONE turn
   wake -> list_agents (once) -> drain EVERY completed member:
   |         integrate -> record-evidence -> close-node -> close_agent (best-effort)
   |
-  still outstanding? -> re-wait (same long timeout) -- NO status-probe send_message
+  still outstanding? -> re-wait (same long timeout); a status-probe send_message buys nothing
   |
   wait budget (dispatch.wait_budget_minutes) expires on a still-running member?
   |
-  +-- followup_task (demand deliverable) -> grace window (~5 min)
+  +-- ask: followup_task (request the bounded deliverable)
   |     |
-  |     no response -> interrupt_agent -> followup_task (ask for partial evidence)
+  |     unanswered -> interrupt_agent -> followup_task (ask for partial evidence)
   |           |
-  |           nothing usable -> reclaim node (LAST resort) -> record delegation_outcome
+  |           nothing usable -> reclaim node (expensive; last) -> record delegation_outcome
   |
   reclaimed an in-place WRITER? -> reconcile-running-set -> verdict per writer
         |
