@@ -3634,7 +3634,9 @@ try {
       assert(/opt-?in/i.test(noV2Json.repair) && /off by default/i.test(noV2Json.repair),
         'refusal repair states the load-bearing fact: multi_agent_v2 is opt-in and off by default, so it must be written: ' + noV2Json.repair);
       assert(!/\[agents\]\nenabled = true/.test(noV2Json.repair),
-        'refusal repair must NOT prescribe [agents] enabled = true — [agents] has no enabled key and does not turn MultiAgentV2 on: ' + noV2Json.repair);
+        'refusal repair must NOT prescribe [agents] enabled = true — measured on Codex 0.145.0, that '
+        + 'config loads clean and leaves multi_agent_v2 OFF, so prescribing it sends the operator to a '
+        + 'setting that does not turn MultiAgentV2 on: ' + noV2Json.repair);
       assert(noV2Json.repair.includes('default_subagent_model') && noV2Json.repair.includes('default_subagent_reasoning_effort'),
         '#775: refusal repair states Kaola never writes/overrides the sub-agent model/effort defaults');
 
@@ -4104,6 +4106,44 @@ try {
     assert(/not an alias/i.test(v2Required),
       '#842: ...and states the accurate relationship, the same one the bounds note states — one '
       + 'claim, one wording, across both strings: ' + v2Required);
+
+    // #842 — THE SAME DEFECT, THIRD INSTANCE: a true observation welded to an unmeasured mechanism.
+    // The OBSERVATION is measured and stays: `[agents] enabled = true` does not enable MultiAgentV2
+    // (isolated CODEX_HOME, that config alone -> `codex features list` exit 0, multi_agent_v2 stable
+    // FALSE). The MECHANISM offered for it — "[agents] has no `enabled` key", "Codex parses it and
+    // applies nothing" — is false and unmeasured respectively:
+    //   * `[agents]` is a strictly typed role map plus recognized scalars. An unrecognized name is
+    //     refused there, and it is refused for a BOOLEAN exactly as for an integer (`bogus_key = true`
+    //     and `bogus_key = 6` both fail config load; the second control is impl842's, and it is what
+    //     rules out "the boolean survived because of its TYPE" as an alternative reading). So
+    //     `enabled` is a RECOGNIZED name that simply does not gate V2.
+    //   * "applies nothing" is broader than anything measured: what was observed is that V2 stays
+    //     off, not that the value has no effect anywhere.
+    // Pinned NARROWLY on purpose — the positive keeps the advice, the negatives forbid only the two
+    // unmeasured explanations, and nothing here pins what `enabled` positively does, because nobody
+    // measured that either.
+    assert(/\[agents\]/.test(v2Required) && /does\s+not\s+enable/i.test(v2Required),
+      '#842: the remediation must keep the MEASURED claim — a top-level [agents] enabled = true does '
+      + 'NOT enable MultiAgentV2: ' + v2Required);
+    assert(!/\[?agents\]?[^.]{0,40}\b(has no|no such|lacks)\b[^.]{0,25}enabled/i.test(v2Required),
+      '#842: ...and must NOT explain it with "[agents] has no enabled key". It has one: an '
+      + 'unrecognized [agents] name is refused for a boolean just as for an integer, while '
+      + 'enabled = true loads clean. Right conclusion, invented mechanism: ' + v2Required);
+    assert(!/applies nothing/i.test(v2Required),
+      '#842: ...and must not claim Codex "applies nothing" either — what was measured is that V2 '
+      + 'stays OFF, not that the value has no effect anywhere: ' + v2Required);
+    // ...and the correction must not NARROW what ships. Naming one literal key as "the flag Kaola
+    // reads" would be a fresh inaccuracy of the same family, pointed at our own product this time:
+    // the detector accepts THREE shapes (the [features.multi_agent_v2] sub-table, the inline
+    // multi_agent_v2 = { enabled = ... } under [features], and a bare multi_agent_v2 = true) plus
+    // the dotted-root equivalents. An operator who wrote a legal shape and is then told the flag is
+    // something else goes looking for a bug that is not there. GREEN today — the shipped text
+    // already enumerates them — so this is a preservation pin against a rewrite that trims.
+    assert(/inline form|multi_agent_v2 = \{/.test(v2Required) && /bare .?multi_agent_v2/.test(v2Required),
+      '#842: the remediation must keep naming the OTHER accepted shapes (inline under [features], '
+      + 'and the bare form) — the detector reads three plus dotted-root equivalents, so a correction '
+      + 'that collapses them to one literal key trades a vendor overclaim for a product one: '
+      + v2Required);
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by
