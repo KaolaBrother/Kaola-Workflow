@@ -99,7 +99,7 @@ The workflow is not "execute by rule and refuse what does not comply." It **pres
 - **L1 — kernel-write integrity:** did the write land. Atomic-write failure, forge-operation failure, lost CAS, broken integrity.
 - **L2 — the sink:** before anything reaches mainline. Tests red, diff not attributable, review not settled, consent missing.
 
-**Mid-run, nothing refuses hard.** Former gates are tools; the verbs are **answer / advise / normalize / remedy / report-all**. A mid-run stop that is not the consent escalation is a missing tool wearing a uniform.
+**Mid-run, nothing refuses hard.** Former gates are tools; the verbs are **answer / advise / normalize / remedy / report-all**. A mid-run stop that is not the consent escalation is a missing tool wearing a uniform. **Missing is a routing problem, never a stop** — the workflow runs end to end under an agent, so when something needed is absent, reroute and obtain it rather than parking the run for a human to decide what the agent could go get; "blocked on a prerequisite" is nearly always a task nobody dispatched. **Bookkeeping never blocks**: caching a subagent's or a procedure's result, mirroring, syncing, regenerating a derived artifact — it may report, retry or normalize, but it may not stop the run.
 
 - **Only the crucial survive.** A refusal earns its place only if proceeding would irreversibly destroy a record, let unverified content reach mainline, or override a human's value call.
 - **By family, not by event.** Roughly a dozen codes, ceiling included; detail rides the payload, and the sink reports everything at once. Minting a code means amending the decision record.

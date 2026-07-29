@@ -1166,6 +1166,19 @@ Tests red, diff not attributable to a declared write set, review not settled, co
 the one irreversible boundary the workflow owns end to end, so it fails closed and reports
 *everything* wrong at once rather than one rung at a time.
 
+**Missing is a routing problem, never a stop.** The workflow runs end to end under an agent. When
+something needed is absent, the answer is to **reroute and obtain it** — not to refuse, and not to
+park the run waiting for a human to decide something the agent could go and get. In practice
+"blocked on a prerequisite" is almost always a task nobody has dispatched yet, and naming it a
+blocker converts work into a stall. A genuine block is only ever a value call (axiom 3) or a
+kernel/sink integrity failure (L1/L2).
+
+**Bookkeeping never blocks.** Caching a subagent's or a procedure's result, mirroring a folder,
+syncing an edition, regenerating a derived artifact — all bookkeeping. It may report, retry, or
+normalize; it may not stop the run. These are the clearest possible instances of a missing tool
+wearing a uniform, because the remedy is always mechanical and the record they guard is derivable
+by definition — if it were not, it would be one of the four kernel records.
+
 **Between them, nothing refuses hard.** Every former mid-run gate is a tool, and the vocabulary is:
 
 > **answer · advise · normalize · remedy · report-all**
