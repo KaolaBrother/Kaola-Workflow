@@ -665,8 +665,10 @@ The audit must keep these facts separate:
   applies nothing.
 - Put the concurrency budget at
   `features.multi_agent_v2.max_concurrent_threads_per_session`, and do **not**
-  also set `agents.max_threads` — Codex rejects that key once MultiAgentV2 is
-  enabled.
+  also set `agents.max_threads` — it is a separate `[agents]` key, **not an
+  alias**, and it does not set the V2 budget. Codex 0.145.0 accepts it rather
+  than complaining, so a stray one is silently ineffective here instead of an
+  error.
 - `features.multi_agent_v2.enabled` is what Kaola's gate reads.
   Kaola-Workflow does **not** write it for you (owner decision D2) — a
   fresh Kaola install refuses at preflight (`codex_multi_agent_v2_required`)
@@ -678,7 +680,8 @@ The audit must keep these facts separate:
   must be high enough for Kaola fan-out plus the root session — the cap is
   INCLUSIVE of the root thread, so sub-agent width is the configured cap minus
   one. `agents.max_threads` is NOT an alias for it and must not be set
-  alongside: Codex rejects that key once MultiAgentV2 is enabled.
+  alongside: Codex 0.145.0 accepts the key rather than complaining, but it does
+  not raise the V2 budget, so a stray one is silently ineffective here.
 - The installed plugin cache, generated role profiles, and global hooks must be
   fresh relative to the plugin source Codex is actually loading.
 - Runtime profile integrity comes from omission plus preflight: every generated
