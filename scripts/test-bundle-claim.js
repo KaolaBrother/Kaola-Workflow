@@ -808,6 +808,109 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
+// Test (#370-B1): THE DIRTY-TREE CONSENT ASK ON THE BUNDLE PATH.
+//
+// `claimBundle` asks before creating an in-place branch over uncommitted work, exactly as
+// `claimProject` does — and until now nothing pinned it on this path. Every consent pin was
+// scalar-only, and the in-place bundle test directly above deliberately commits its fixture so
+// the gate never fires, which is correct for what THAT test measures and is precisely why the
+// gate could be deleted with this file green.
+//
+// It is the one claim-time stop that survives the Gate-1 demotion, and it is a stop about the
+// USER'S OWN uncommitted work: an in-place branch would carry those changes onto it. Losing it
+// silently is the shape that matters — no refusal disappears, no envelope changes, the claim just
+// starts succeeding over work nobody agreed to move.
+//
+// The CLEAN control is what makes this a measurement rather than a restatement: the identical
+// fixture, committed, claims normally. So the difference between the two arms is the dirt and
+// nothing else — a fixture that had broken for some unrelated reason would fail the control too.
+// ---------------------------------------------------------------------------
+(function testBundleDirtyTreeConsentAsk() {
+  console.log('Test (#370-B1): the bundle path asks before branching over uncommitted work');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47);
+    writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 47] });
+    // Commit the fixture, so the ONLY uncommitted thing in the tree is the file below. Without
+    // this the roadmap files and the gh mock are themselves untracked and the arm would pass for
+    // a reason it did not choose.
+    G.git(tmpRoot, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmpRoot, ['commit', '-m', 'fixture'], { encoding: 'utf8' });
+
+    const headBefore = G.git(tmpRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const branchBefore = G.git(tmpRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const branchesBefore = G.git(tmpRoot, ['branch', '--list'], { encoding: 'utf8' }).stdout.trim();
+
+    // The user's uncommitted work. A tracked modification, not an untracked file: an in-place
+    // `checkout -b` carries it onto the new branch, which is the thing being consented to.
+    fs.writeFileSync(path.join(tmpRoot, 'README.md'), 'fixture\nuncommitted work the user has not agreed to move\n');
+
+    const result = runClaim(
+      ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive'],
+      tmpRoot, binDir, { KAOLA_WORKTREE_NATIVE: '0' }
+    );
+    const out = parseClaim(result);
+
+    assert(result.status === 1,
+      '#370-B1: the dirty-tree ask exits non-zero — a caller reading exit 0 would take the claim '
+      + 'as acquired, got ' + result.status);
+    assert(out && out.result === 'consent' && out.consent_kind === 'disambiguation',
+      '#370-B1: ...as a consent ASK, not a refusal — this is a value call about the user\'s own '
+      + 'work, got ' + JSON.stringify(out && { result: out.result, consent_kind: out.consent_kind }));
+    assert(out && out.claim === 'none',
+      '#370-B1: ...and nothing was claimed, got ' + JSON.stringify(out && out.claim));
+    assert(out && Array.isArray(out.options) && out.options.join(',') === 'commit,stash,worktree',
+      '#370-B1: ...and the ask offers the three ways out, so the human is not left to invent one: '
+      + JSON.stringify(out && out.options));
+    assert(out && Array.isArray(out.issue_numbers) && out.issue_numbers.join(',') === '42,47',
+      '#370-B1: ...naming the bundle it was about to claim, got ' + JSON.stringify(out && out.issue_numbers));
+
+    // ZERO WRITES — the durable half, and the half a successor can check. The envelope promises
+    // "no project folder, no branch, HEAD unmoved"; these are those three facts on disk.
+    assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47')),
+      '#370-B1: ...no project folder was created');
+    assert(G.git(tmpRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim() === headBefore
+      && G.git(tmpRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim() === branchBefore,
+      '#370-B1: ...and HEAD is unmoved, still on ' + branchBefore);
+    // Compared against the branch list CAPTURED BEFORE, not against a guessed name pattern. The
+    // first version of this line asserted `!/wf\//` and survived deleting the very gate it was
+    // meant to pin, because a bundle branch is not named `wf/...` — a negative match on a string
+    // the artifact never contains is green by construction and pins nothing.
+    const branchesAfter = G.git(tmpRoot, ['branch', '--list'], { encoding: 'utf8' }).stdout.trim();
+    assert(branchesAfter === branchesBefore,
+      '#370-B1: ...and no branch was created: expected ' + JSON.stringify(branchesBefore)
+      + ', got ' + JSON.stringify(branchesAfter));
+
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+
+  // THE CONTROL, ON ITS OWN FIXTURE. Identical setup and identical command with the tree CLEAN:
+  // the same claim acquires, so the arm above measured the dirt and not a broken fixture.
+  //
+  // A separate tmpRoot deliberately. Running it as a second claim in the same repo couples it to
+  // the arm above: if the ask is ever lost, that arm ACQUIRES, and the control then hits an
+  // already-owned bundle and fails for a reason that has nothing to do with what it checks. A
+  // control that only works while the thing it controls for is working is not a control.
+  const ctlRoot = makeTmpRoot();
+  const ctlBin = path.join(ctlRoot, 'bin');
+  try {
+    initGitRepo(ctlRoot);
+    writeRoadmapFile(ctlRoot, 42); writeRoadmapFile(ctlRoot, 47);
+    writeGhMockScript(ctlBin, { logFile: path.join(ctlRoot, 'gh.log'), openIssues: [42, 47] });
+    G.git(ctlRoot, ['add', '-A'], { encoding: 'utf8' });
+    G.git(ctlRoot, ['commit', '-m', 'fixture'], { encoding: 'utf8' });
+    const clean = parseClaim(runClaim(
+      ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive'],
+      ctlRoot, ctlBin, { KAOLA_WORKTREE_NATIVE: '0' }
+    ));
+    assert(clean && clean.claim === 'acquired',
+      '#370-B1 control: with a CLEAN tree the identical bundle claim acquires — so the ask above '
+      + 'is what the dirty arm measured, got ' + JSON.stringify(clean && clean.claim));
+  } finally { fs.rmSync(ctlRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
 // Test (9): the selection record on the BUNDLE lane.
 //
 // The bundle claim is the second entry into claimProject-shaped provisioning, and it is exactly
