@@ -860,10 +860,6 @@ for (const planRunSurface of [
 // "Writer kill-safety" heading on this edition's plan-run COMMAND, are asserted on THESE SAME
 // EDITION PATHS by the root validator's three-SKILL and three-command join-protocol loops.
 for (const planRunSurface of [pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/commands/kaola-workflow-plan-run.md']) {
-  assertIncludes(planRunSurface, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
-  assertIncludes(planRunSurface, '`planner_override` may extend but never shorten');
-  assertIncludes(planRunSurface, 'must not interrupt or re-nudge before that floor expires');
-  assertIncludes(planRunSurface, 'complete governed deliverable');
 }
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'planner_override');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'difficulty alone is not evidence');
