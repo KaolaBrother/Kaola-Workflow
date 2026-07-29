@@ -467,7 +467,12 @@ counts per locus — L1: kernel write failed / CAS lost / integrity broken / loc
 missing; L2: ONE composite sink verdict whose payload enumerates ALL its findings in one pass (the
 report-all shape); A3: ONE consent-required family. Specificity is carried in the refusal payload,
 **never by minting a new code**; adding a code means amending the decision record, which is
-deliberately heavy — it is the anti-growth ratchet. The enumerated vocabulary itself is the ADR's
+deliberately heavy — it is the anti-growth ratchet. **Know its limit before you rely on it:** the
+ratchet fences the *enumerated* vocabulary only. A code minted in the legacy shape never touches that
+block and so never trips it — during the campaign that authored the rule, 35 codes were added and not
+one was enumerated. An anti-growth mechanism covering the target vocabulary but not the source corpus
+cannot prevent growth; measure the corpus with `node scripts/kaola-workflow-prose-census.js
+--summary` instead of trusting the ratchet. The enumerated vocabulary itself is the ADR's
 fenced `kernel-refusal-vocabulary` block — that block, the registry's key set and the vocabulary
 constant must be equal, and the sweep's cells are derived from those codes and their payload-schema
 discriminators — so the list above is a reader's summary, never the source.
@@ -494,8 +499,10 @@ direction; the file prints its own size), never an opt-in allowlist. It splits i
   in the exempt ledger covers all 64 cells (`exempt_cells=64`), so no cell yet has a mechanically
   executed green arc; the ledger fails the moment any cell gains a provoker while keeping its
   exemption. Emission is still `REFUSAL_EMISSION_MODE: 'compat'` (the legacy `condition` rides in the
-  payload), and 5 `retained_legacy` conditions are deliberately not demoted. **Until a family
-  registers its provoker, its green arc binds at review.**
+  payload), and a small set of `retained_legacy` conditions is deliberately not demoted — read the
+  current count and membership from `node scripts/test-refusal-route-sweep.js` and
+  `scripts/refusal-sweep-exempt.json` rather than from this sentence, which has already gone stale
+  once. **Until a family registers its provoker, its green arc binds at review.**
 
 Rationale and full derivation: `docs/decisions/0013-successor-test-two-gate-target-architecture.md`.
 

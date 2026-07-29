@@ -887,8 +887,20 @@ Five findings were defects **in this text**, not in the plan, and are fixed abov
     already corrupted a durable record once when a SIGTERM left a row deleted. A check that damages
     a durable document in order to verify a drawing inverts the priority the ADR exists to set.
     The one runtime property underneath it — every live ledger status has an outgoing splice — is a
-    four-element check and is retained. **The drawing in this document is now unverified prose and
-    should be read as such.**
+    four-element check. **Corrected 2026-07-29: this amendment originally claimed that check "is
+    retained." It was not. It went with the suite, and re-homing it was later declined deliberately**
+    (recorded on the spawn-guard issue): `LEDGER_STATUSES` is `[pending, in_progress, complete,
+    n/a]`; `pending→{in_progress,n/a}`, `in_progress→{complete,pending,n/a}` and `complete→pending`
+    all have exits and `n/a` is correctly terminal, so no wedge exists today, and the three live
+    statuses are incidentally exercised by behavioural scenarios. Triggering the check would require
+    adding a live-but-exitless status to a schema constant nothing consumes. The property is
+    therefore unguarded but unviolated — a successor adding a ledger status must check it by hand.
+    **The drawing in this document is now unverified prose and should be read as such.**
+
+    The original error is worth more than the correction: an amendment asserted a check was retained,
+    a later decision declined to retain it, and nothing connected the two. That is the same shape as
+    the deliverable this campaign found deleted by a later commit in the same campaign — a durable
+    record outliving what it describes. Durable records do not notice when they stop being true.
 
 16. **The refusal ratchet was not armed against this campaign's own additions, and the census went
     the wrong way.** Layer 2 states that specificity is carried "in the payload, never by minting a
