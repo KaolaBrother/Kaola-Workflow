@@ -1127,7 +1127,6 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_PARALLEL_WRITES` | `1` (ON) | Default-ON master switch for default-on disjoint write parallelism (D-542-01). When ON, write frontiers the planner proves **disjoint** (`parallel_safe`) co-open as isolated parallel legs — per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net. Set to `0` (also `false`/`no`) to force every write frontier serial. Overlapping (non-disjoint) writes stay serial/consent-gated regardless, and a host without worktree support degrades to serial regardless |
 | `--write-overlap-consent` / `write_overlap_policy` | (overlap only) | The overlap-only consent gate. `--write-overlap-consent` plus a plan `write_overlap_policy: coarse` (anything other than `off`) is what permits a **genuinely-overlapping** (non-disjoint) write frontier to co-open under a coarse shared lane; it does NOT gate disjoint co-open (that is default-on, above). With the policy `off` or consent absent, an overlapping frontier stays serial |
 | `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` usage at exit 0, writing nothing). Adaptive path only |
-| `KAOLA_BUNDLE_MAX_ISSUES` | `8` | Maximum number of issues allowed in a single bundle. Bundles larger than this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and planner-selected auto-bundles |
 | `KAOLA_GOAL` | (unset) | Operator-side goal text for goal-conditioned bundles (#441). When set, the orchestrator places the goal in the `workflow-planner` dispatch prompt so it is transcribed as `goal: <text>` into `## Meta` of `workflow-plan.md`, hash-covered by `computePlanHash`. In no-target mode, `workflow-planner` reads `KAOLA_GOAL` as clustering context and surfaces a `goal_alignment` note in its selection. Finalization emits `goal_check: satisfied|unsatisfied|absent` in the closure receipt (advisory in v1; does not block) |
 
 **Active-folder subcommands:**
@@ -1387,13 +1386,12 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 
 ### Bundle claim semantics
 
-`claimExplicitBundle` validates every issue in the set before mutating anything. If any single target fails validation the entire bundle is refused and no active folder is created. Typed refusal codes:
+`claimExplicitBundle` validates every issue in the set before mutating anything. If any single target fails validation the entire bundle is refused and no active folder is created. Bundle SIZE is not one of those validations — how many issues a claim takes is the orchestrator's call, so a wide set acquires and the envelope carries `bundle_size_note` (the count plus a recommended 8) as advice. Claim outcome codes (`target_ambiguity` exits 0; the rest exit non-zero):
 
 | Code | Meaning |
 |------|---------|
 | `target_ambiguity` | Both scalar and multi-target provided simultaneously (usage answer, exit 0) |
 | `target_set_empty` | Resolved issue list is empty after dedup |
-| `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | One or more targets are already closed on the forge |
 | `target_set_red` | One or more targets are red (conflict) per the classifier |

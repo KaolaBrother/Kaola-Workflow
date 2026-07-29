@@ -319,8 +319,8 @@ dispatch below. Resolve the shape FIRST, before the authoring guard.
 Selection is orchestrator-owned, so the orchestrator authors the record: an orchestrator-originated
 claim carries `--target-source orchestrator_selected --selection-record <path>`. The claim does not
 grade it and never refuses over it — a record that parses is persisted byte-for-byte as authored,
-and a claim that arrives without a usable one gets the canonical "none recorded" record written in
-its place plus a `selection_record_note` on the emitted envelope saying so. On an acquiring claim
+and a claim that arrives without a usable one gets the canonical "none recorded" record in its
+place (persisted only if the claim acquires) plus a `selection_record_note` on the emitted envelope saying so. On an acquiring claim
 the record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
 stamped into `workflow-state.md` as `selection_record_digest:`, and any pre-claim reconnaissance
 staged under `kaola-workflow/.origin/<target-key>/` is folded into the same `.cache/origin/`
@@ -512,7 +512,6 @@ A bundle run ends at ONE finalization. The finalization step:
 |------|---------|
 | `target_ambiguity` | both `--target-issue` and `--target-issues` set (usage answer, exit 0) |
 | `target_set_empty` | issue list empty or missing |
-| `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | any member is already claimed |
 | `target_set_has_closed_issue` | any member is already closed |
 | `target_set_red` | classifier returns `red` for any member |

@@ -490,8 +490,9 @@ structured object, no extra prose:
   `{handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict}` verbatim; the
   orchestrator drives repair.
 - **Claim not acquired** — no state written. Return `claim_verdict` + `claim_reasoning` verbatim,
-  including any `selection_record_note`: that note says the claim proceeded on the canonical record
-  because the brief carried no usable one, and re-authoring it is the orchestrator's call.
+  including any `selection_record_note`: that note names what the claim found in place of a usable
+  record, NOT that the claim proceeded — on this return nothing was written at all. Re-authoring
+  the record is the orchestrator's call.
 - **`clarification_required`** — the brief is under-determined. Return
   `{handoff_status:'clarification_required', result:'escalate', question, context_refs, round}`
   verbatim (see § Origin inputs); nothing authored beyond what was already claimed. Bounded at three
