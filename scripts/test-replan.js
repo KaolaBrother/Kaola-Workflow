@@ -7951,6 +7951,160 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// ===========================================================================
+// #852 — THE SENTINEL IS NOT A KEY. `abort`'s CAS target collapses to `'none'`.
+//
+//     const transactionId = String(raw.transaction_id || 'none');   // replan.js:4886
+//     if (transactionId !== requested) -> replan_abort_transaction_mismatch
+//
+// `'none'` is not a neutral placeholder in this file. The branch DIRECTLY ABOVE uses it to mean
+// *no transaction exists* (`phase: 'orphaned_fence'`), and the state block writes
+// `replan_transaction_id: none` for an unfenced project. So on any transaction whose id is absent
+// or empty, that `||` turns the identity check into a **guessable universal key** — and it does so
+// on exactly the rows where an operator can reason least, because the record is already corrupt.
+//
+// Measured against production, transaction file PRESENT, `transaction_id` deleted:
+//
+//   abort --transaction none  -> { result: 'ok', aborted: true, transaction_id: 'none',
+//                                  removed: ['.cache/replan-transaction.json'],
+//                                  record: '.cache/aborted-transactions/none.json' }
+//
+// Three harms in one call. The live record is DESTROYED by a caller who passed the sentinel
+// meaning "there is nothing here". The audit record is keyed `none.json`, so two id-less aborts
+// collide on one filename — a kernel record overwriting a kernel record. And an empty-string id
+// (`''`) collapses identically, so this is a class, not one typo.
+//
+// The payload narrates the wrong situation too. Requesting the STATE's id against an id-less file
+// says *"the live transaction is none, not the one this call targets"* — which is what the
+// ORPHANED arm should say, and is false here: there is a live transaction, it just carries no id.
+//
+// THIS DOES NOT REOPEN #847-K; the two compose. #847-K says do not WIDEN the CAS to manufacture a
+// route for the id-less row. This says the CAS is ALREADY widened there, silently. Tightening it
+// removes an exit nobody should have been using, and `consent` remains that row's answer.
+//
+// Pinned with NO new refusal code: `replan_abort_transaction_mismatch` already covers "the id you
+// named is not the id on disk", and absence rides the payload.
+// ===========================================================================
+scenario(() => {
+  const fx = initFixture();
+  try {
+    liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const row = corruptTransactionParseable847(fx, tx => { delete tx.transaction_id; });
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    const beforeBytes = fs.readFileSync(txPath);
+
+    equal(Object.prototype.hasOwnProperty.call(JSON.parse(beforeBytes.toString('utf8')), 'transaction_id'), false,
+      '#852 control: the live transaction file is present and records NO id');
+    ok(fence847(fx).fenced === true, '#852 control: ...and the project is fenced by it');
+
+    // THE PIN. `none` is the project's word for "no transaction"; it must never be the key that
+    // opens one.
+    const sentinel = replanVerb847(fx, ['abort', '--transaction', 'none']);
+    equal(sentinel.result, 'refuse',
+      '#852: `abort --transaction none` must NOT satisfy the identity check against a transaction '
+      + 'file that EXISTS. `none` is this file\'s own sentinel for absence — the branch above returns '
+      + 'it as `phase: orphaned_fence` — so accepting it here makes the CAS target guessable on '
+      + 'exactly the corrupt rows that need it most: ' + JSON.stringify(sentinel));
+    equal(sentinel.reason, 'replan_abort_transaction_mismatch',
+      '#852: ...refusing under the code that ALREADY means "the id you named is not the id on disk". '
+      + 'No new code: the absent-vs-different distinction belongs in the payload: ' + JSON.stringify(sentinel.reason));
+
+    // ZERO MUTATION — the harm is not the refusal that did not happen, it is the record that was
+    // destroyed by a caller who meant "there is nothing here".
+    ok(fs.existsSync(txPath) && fs.readFileSync(txPath).equals(beforeBytes),
+      '#852: ...leaving the live transaction BYTE-IDENTICAL. A defensive `none` currently discards it');
+    ok(fence847(fx).fenced === true,
+      '#852: ...and the fence still standing — the project was not silently unfenced');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'aborted-transactions', 'none.json')),
+      '#852: ...and NO abort record keyed by the sentinel. `none.json` is one filename for every '
+      + 'id-less abort that ever happens, so a kernel record would overwrite a kernel record');
+
+    // THE PAYLOAD MUST NOT NARRATE THE ORPHANED SITUATION. Requesting a real id here is a genuine
+    // mismatch and must stay refused — but "the live transaction is none" is the sentence the
+    // arm ABOVE owns, and it is false while a file is sitting on disk.
+    const byStateId = replanVerb847(fx, ['abort', '--transaction', row.stateId]);
+    equal(byStateId.reason, 'replan_abort_transaction_mismatch',
+      '#852 control: naming the state id against an id-less file is still a mismatch: ' + JSON.stringify(byStateId.reason));
+    ok(byStateId.recorded_transaction !== 'none',
+      '#852: ...but the payload must not report the recorded transaction AS the sentinel. `none` '
+      + 'here is indistinguishable from "no transaction exists", which is a different state with a '
+      + 'different repair, and the operator cannot tell which one they are in: '
+      + JSON.stringify(byStateId.recorded_transaction));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #852 — PRESERVATION, AND THE NON-VACUITY PROOF FOR THE PIN ABOVE.
+//
+// The orphaned-fence branch is a DIFFERENT branch and it is correct: with no file on disk it
+// compares against the STATE's id, so the state id opens it and the sentinel does not. That makes
+// this scenario do double duty — it fences the behavior the tightening must not catch, AND it
+// proves the property above is satisfiable on today's code, so the red over there is specific to
+// the file-present branch rather than a pin nothing could pass.
+//
+// The reverse mutation arm — restore `|| 'none'` and watch the pin above go red — cannot be run
+// from here: production is not this role's to edit, and on this baseline the defect is already
+// present, so the forward arm IS the current red. The reverse arm belongs to the implementation.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  // (a) ORPHANED: no file. The sentinel is ALREADY rejected here — the property the pin above
+  //     demands is one this codebase already satisfies one branch over.
+  {
+    const fx = initFixture();
+    try {
+      const stateId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+        sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+      fs.unlinkSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME));
+      const sentinel = replanVerb847(fx, ['abort', '--transaction', 'none']);
+      equal(sentinel.reason, 'replan_abort_transaction_mismatch',
+        '#852 non-vacuity: the ORPHANED branch already refuses the sentinel, so "reject `none`" is '
+        + 'not an impossible ask — it is a property one branch keeps and the other does not: '
+        + JSON.stringify(sentinel));
+      // ...and the arm's real exit still works, unchanged.
+      const real = replanVerb847(fx, ['abort', '--transaction', stateId]);
+      equal(real.result, 'ok',
+        '#852 preservation: the orphaned fence still drops on its own recorded id: ' + JSON.stringify(real));
+      equal(real.phase, 'orphaned_fence',
+        '#852 preservation: ...through the orphaned branch specifically, which the tightening must not catch');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // (b) A DIFFERENT id on disk is an ordinary mismatch and must keep reporting the real id.
+  {
+    const fx = initFixture();
+    try {
+      liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+        sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+      const row = corruptTransactionParseable847(fx, tx => { tx.transaction_id = 'c'.repeat(64); });
+      const mismatch = replanVerb847(fx, ['abort', '--transaction', row.stateId]);
+      equal(mismatch.reason, 'replan_abort_transaction_mismatch',
+        '#852 preservation: a different id on disk is still a mismatch');
+      equal(mismatch.recorded_transaction, 'c'.repeat(64),
+        '#852 preservation: ...and still reports the id actually on disk, so the absent case is '
+        + 'distinguishable from the different case by this field alone: ' + JSON.stringify(mismatch.recorded_transaction));
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // (c) An EMPTY-STRING id collapses through the same `||`, so the pin covers a class.
+  {
+    const fx = initFixture();
+    try {
+      liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+        sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+      corruptTransactionParseable847(fx, tx => { tx.transaction_id = ''; });
+      const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+      const before = fs.readFileSync(txPath);
+      const sentinel = replanVerb847(fx, ['abort', '--transaction', 'none']);
+      equal(sentinel.result, 'refuse',
+        '#852: an EMPTY id collapses through the same `||` — this is a class, not one typo: '
+        + JSON.stringify(sentinel));
+      ok(fs.existsSync(txPath) && fs.readFileSync(txPath).equals(before),
+        '#852: ...and that record survives too');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+});
+
 // ---------------------------------------------------------------------------
 // #847-I — THE FIFTH PROJECTION, AND THE ONLY ONE THAT INVENTS A DEFAULT. `orient`, the handoff
 // and the validator all project a fence they cannot answer as `legal_mutation: 'none'` — silent,
