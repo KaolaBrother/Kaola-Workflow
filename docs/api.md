@@ -2965,7 +2965,10 @@ step) — the `repair` string carries the exact minimal paste-able diff. Three s
 `[features.multi_agent_v2]` table, the inline `multi_agent_v2 = { enabled = true, ... }` under
 `[features]`, and a bare `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does NOT
 enable MultiAgentV2 — `[agents]` has no `enabled` key — and `agents.max_threads` must not be set
-alongside it, because Codex rejects that key once MultiAgentV2 is enabled. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
+alongside it: it is a separate `[agents]` key, **not an alias**, and it does not raise the
+MultiAgentV2 cap, which comes from `features.multi_agent_v2.max_concurrent_threads_per_session`
+alone. Codex 0.145.0 accepts the key rather than complaining, so a stray one leaves the cap where it
+was instead of erroring. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
 V2 transport-safety gate (`codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe`),
 which Codex >=0.145.0's stabilized MultiAgentV2 no longer needs.
 

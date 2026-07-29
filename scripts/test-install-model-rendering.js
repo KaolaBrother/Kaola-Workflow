@@ -3781,12 +3781,14 @@ try {
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
       }, '#775 configured threads=6 -> config source, width = threads-1');
-      // max_threads is NOT an alias for max_concurrent_threads_per_session. It is a separate
-      // top-level [agents] key, and Codex REJECTS it once multi_agent_v2 is enabled
-      // ("agents.max_threads cannot be set when multi_agent_v2 is enabled"), so the V2 budget
-      // must come from features.multi_agent_v2.max_concurrent_threads_per_session alone. A
-      // stray max_threads therefore leaves the cap at the observed default rather than
-      // silently setting it.
+      // max_threads is NOT an alias for max_concurrent_threads_per_session, so the V2 budget must
+      // come from max_concurrent_threads_per_session alone and a stray max_threads leaves the cap
+      // at the observed default rather than silently setting it. That is what the assertion below
+      // pins, and #842 does not disturb it: the old comment here also claimed Codex REJECTS
+      // agents.max_threads once multi_agent_v2 is enabled, which is false (measured on 0.145.0 —
+      // see the AC1 bounds-note assertions), but the key being INERT for this parser's cap math is
+      // true either way. Note the fixture puts max_threads inside [features.multi_agent_v2], not
+      // under [agents] at all: this pins THIS parser, never any Codex behaviour.
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled('max_threads = 6'), {
         max_concurrent_threads_per_session: 4,
         max_concurrent_threads_per_session_source: 'observed_default',
@@ -3839,10 +3841,30 @@ try {
           'AC1: fresh install must document the recommended [features.multi_agent_v2] config: ' + freshInstall.stdout);
         assert(/max_concurrent_threads_per_session/.test(freshInstall.stdout) && /max_wait_timeout_ms/.test(freshInstall.stdout),
           '#775 AC1: recommended config note must name both knobs: ' + freshInstall.stdout);
-        assert(/agents\.max_threads/.test(freshInstall.stdout) && /reject/i.test(freshInstall.stdout),
-          'AC1: note must warn that Codex rejects agents.max_threads once multi_agent_v2 is enabled: ' + freshInstall.stdout);
-        assert(/cannot be set when multi_agent_v2 is enabled/.test(freshInstall.stdout),
-          'AC1: note must quote the real Codex constraint verbatim ("agents.max_threads cannot be set when multi_agent_v2 is enabled"): ' + freshInstall.stdout);
+        // #842: the note keeps its ADVICE about agents.max_threads and loses its false MECHANISM.
+        // Measured on the installed codex-cli 0.145.0, isolated CODEX_HOME, read-only probes:
+        //   * `[features.multi_agent_v2] enabled = true` + `[agents] max_threads = 6` loads clean —
+        //     `codex doctor --summary` reports "config loaded", `codex features list` exits 0 with
+        //     multi_agent_v2 stable true. The key is ACCEPTED, not rejected.
+        //   * Non-vacuity: an UNRECOGNISED [agents] scalar in the same position IS refused —
+        //     `invalid type: integer 6, expected struct AgentRoleToml`, exit 1 — so the acceptance
+        //     above is a real acceptance and not an unchecked path.
+        //   * The quoted vendor error is absent from the shipped binary: neither "cannot be set
+        //     when" nor "multi_agent_v2 is enabled" occurs anywhere in the 271MB Mach-O, so no
+        //     Codex code path can print it at config load, session start, or spawn.
+        // Shipping a fabricated vendor error to consumers is worse than shipping no note, so the
+        // verbatim quote is pinned ABSENT rather than merely un-pinned.
+        assert(/agents\.max_threads/.test(freshInstall.stdout),
+          'AC1: the note must still NAME agents.max_threads — the advice to leave it out is correct '
+          + 'and a reader who has already set it deserves to learn it does nothing: ' + freshInstall.stdout);
+        assert(!/cannot be set when multi_agent_v2 is enabled/.test(freshInstall.stdout),
+          'AC1 (#842): the note must NOT quote "agents.max_threads cannot be set when multi_agent_v2 '
+          + 'is enabled". That string exists in no Codex 0.145.0 binary; printing it tells the operator '
+          + 'their config will be refused when it loads clean: ' + freshInstall.stdout);
+        assert(/not an alias/i.test(freshInstall.stdout),
+          'AC1 (#842): the note must state the ACCURATE relationship — agents.max_threads is a separate '
+          + 'key and NOT an alias for the V2 budget, which comes from '
+          + 'features.multi_agent_v2.max_concurrent_threads_per_session alone: ' + freshInstall.stdout);
 
         // Enable [agents] with effort=ultra ahead of the managed block, then re-run (idempotent
         // update) — the posture must flip to 'proactive' and multi_agent_v2 must report enabled.
@@ -3996,7 +4018,7 @@ try {
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled, threads configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 6\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 5, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'v2 enabled, stray max_threads is NOT an alias (Codex rejects agents.max_threads under v2)', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', v2Enabled: true,
+      { label: 'v2 enabled, stray max_threads is NOT an alias for max_concurrent_threads_per_session', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled, all four numeric fields configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 2, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 1, min_wait_timeout_ms: 1000, max_wait_timeout_ms: 1800000, default_wait_timeout_ms: 60000 } },
@@ -4024,7 +4046,31 @@ try {
     assert(/0\.145\.0/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
       '#775: multi_agent_v2 bounds note must name the verified Codex CLI version');
     assert(/agents\.max_threads/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
-      'bounds note must warn against setting agents.max_threads alongside multi_agent_v2 (Codex rejects it)');
+      'bounds note must name agents.max_threads — the advice to leave it out is correct');
+    // #842, on the note CONSTANT rather than on installer stdout, so the negatives are scoped to
+    // the exact string both surfaces print. The guidance stays; only the mechanism was false.
+    assert(/(do not|don't|leave it out|omit)/i.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#842: the note must KEEP telling the operator not to set agents.max_threads — the advice was '
+      + 'never the defect. Deleting the sentence would leave a reader who has already set it with '
+      + 'nothing: ' + installerMod.MULTI_AGENT_V2_BOUNDS_NOTE);
+    assert(!/\breject(s|ed|ion)?\b/i.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#842: the note must NOT claim Codex rejects agents.max_threads. Measured on codex-cli 0.145.0 '
+      + '(isolated CODEX_HOME): v2-enabled + [agents] max_threads = 6 loads clean under both '
+      + '`codex doctor` and `codex features list`, while an unrecognised [agents] scalar in the same '
+      + 'position is refused — so the key is a RECOGNISED, ACCEPTED field, not a rejected one: '
+      + installerMod.MULTI_AGENT_V2_BOUNDS_NOTE);
+    assert(/(no effect|ineffective|does not (raise|set|change)|is ignored|silently)/i
+      .test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#842: the note must say what setting agents.max_threads ACTUALLY does — nothing. It does not '
+      + 'raise the V2 budget, so a stray one is silently ineffective rather than an error. That is '
+      + 'the reason to leave it out, and it is the reason the note is allowed to keep the advice: '
+      + installerMod.MULTI_AGENT_V2_BOUNDS_NOTE);
+    assert(/not an alias/i.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#842: the note must state that agents.max_threads is NOT an alias for the V2 budget; the '
+      + 'budget comes from features.multi_agent_v2.max_concurrent_threads_per_session alone: '
+      + installerMod.MULTI_AGENT_V2_BOUNDS_NOTE);
+    assert(/max_concurrent_threads_per_session/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#842: the note must name the key that DOES set the budget');
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by
