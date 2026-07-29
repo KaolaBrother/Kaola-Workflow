@@ -485,8 +485,9 @@ MultiAgentV2 is **opt-in and off by default** — only V1 `multi_agent` is on by
 default — so this has to be written for Codex to expose the V2 task-name spawn
 tools at all. The inline `multi_agent_v2 = { enabled = true, ... }` under
 `[features]` and a bare `multi_agent_v2 = true` are equally accepted. A
-top-level `[agents] enabled = true` does **not** enable it: `[agents]`
-configures roles and limits and has no `enabled` key.
+top-level `[agents] enabled = true` does **not** enable it — `[agents]`
+configures roles and limits, and Codex 0.145.0 loads such a config clean with
+`multi_agent_v2` still off.
 
 `multi_agent_v2` is not carried in the public Codex configuration reference,
 which documents `[features] multi_agent` for enabling subagents and `[agents]`
@@ -661,8 +662,9 @@ The audit must keep these facts separate:
   `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
   `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not**
   enable it — `[agents]` configures roles and limits (`agents.<name>.*`,
-  `max_depth`, `max_threads`) and has no `enabled` key, so Codex parses it and
-  applies nothing.
+  `max_depth`, `max_threads`), and Codex 0.145.0 loads such a config clean with
+  `multi_agent_v2` still off. Set the switch under `[features]` instead, in any
+  of the three shapes above.
 - Put the concurrency budget at
   `features.multi_agent_v2.max_concurrent_threads_per_session`, and do **not**
   also set `agents.max_threads` — it is a separate `[agents]` key, **not an
