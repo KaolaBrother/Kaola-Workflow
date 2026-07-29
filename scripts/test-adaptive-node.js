@@ -30473,8 +30473,10 @@ scenario(() => {
   const APPARATUS_FILE_826 = { path: 'scripts/test-final-fix-826.js', body: '// stale-test correction\n' };
 
   // -------------------------------------------------------------------------
-  // #826-A — THE REFUSAL LADDER. Four typed refusals, precedence-ordered, every one ZERO-WRITE.
-  //   A1-A5 + A8 pin the lane's structural walls and are unaffected by the scope question.
+  // #826-A — THE REFUSAL LADDER. THREE typed refusals, precedence-ordered, every one ZERO-WRITE.
+  //   RUNG 1 is no longer one of them: `final_fix_sink_not_live` is converted to an advise under
+  //     ADR 0013 R1/R3 and lives in the #826-ADV block below. A1 is deleted with it — see there.
+  //   A2-A5 + A8 pin the lane's structural walls and are unaffected by the scope question.
   //   A6-A7 pin the SCOPE wall, and are RED against the shipped widened form: today a production
   //     surface refuses with a `recertification:` state that says which receipt would open it, and
   //     the two submissions (with / without a receipt) produce DIFFERENT refusals — which is the
@@ -30483,18 +30485,13 @@ scenario(() => {
   //     wall is unconditional — a receipt is not consulted, so it cannot change the verdict.
   // -------------------------------------------------------------------------
 
-  // A1 — SINK NOT LIVE. The lane is sink-OWNED: with no `in_progress` finalize row there is no sink
-  // to own the register, and the run is not in finalization at all.
-  scenario(() => {
-    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
-    const before = witness826(fx);
-    const r = finalFix826(fx, fixEntry826(fx));
-    assert(r.exitCode === 1 && r.result === 'refuse' && r.reason === 'final_fix_sink_not_live',
-      '#826-A1: a final-fix-commit with no live sink refuses final_fix_sink_not_live, got '
-      + JSON.stringify({ result: r.result, reason: r.reason, errors: r.errors }));
-    assertZeroWrite826(fx, before, '#826-A1');
-    cleanup826(fx.repoRoot);
-  });
+  // A1 — DELETED, not moved. It ran this exact fixture and this exact call and asserted
+  // `exitCode === 1 && result === 'refuse' && reason === 'final_fix_sink_not_live'` plus
+  // assertZeroWrite826. Every one of those properties is now pinned by #826-ADV1 (the shape, and the
+  // non-zero exit kept at its exact value) and #826-ADV2 (register absent + the same zero-write
+  // witness) — on the same fixture, from the same call — except the two clauses the conversion
+  // reverses. Nothing survived that was not already asserted twice, so keeping a trimmed A1 would be
+  // a second name for ADV1 rather than a second proof.
 
   // A2 — AFTER THE SINK STARTED (the pristine boundary, the lane's HARD CLOSE). `origin/<branch>`
   // exists ⇒ the sink has pushed ⇒ the record is immutable history. Recovery after this point is a
@@ -30646,18 +30643,263 @@ scenario(() => {
     cleanup826(fx.repoRoot);
   });
 
-  // A8 — PRECEDENCE. The ladder is precedence-ordered so an operator is told the OUTERMOST fault
-  // first: with BOTH a dead sink and a red rerun, the emitted reason is the structural wall, not the
-  // receipt fault. A ladder that reported the inner fault would send the operator to fix a receipt
-  // for a lane that is not open at all.
+  // A8 — PRECEDENCE, over the REFUSING walls. The ladder is precedence-ordered so an operator is
+  // told the OUTERMOST fault first. With RUNG 1 converted to an advise (see #826-ADV below) the
+  // outermost REFUSING wall for a dead sink + a red rerun is the receipt, not the sink: an advise
+  // does not lead a refusal. The ordering claim itself is unchanged —
+  // after_sink_started > unverified > production_surface.
   scenario(() => {
     const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
     const entry = fixEntry826(fx, { files: ['src/app.js'] });
     entry.rerun.exit_code = 1;
     const r = finalFix826(fx, entry);
-    assert(r.reason === 'final_fix_sink_not_live',
-      '#826-A8: sink_not_live > after_sink_started > unverified > production_surface — the '
-      + 'outermost wall is the emitted reason, got ' + JSON.stringify(r.reason));
+    assert(r.reason === 'final_fix_unverified',
+      '#826-A8: the outermost REFUSING wall is the emitted reason. A non-live sink is an advise and '
+      + 'cannot lead a refusal, so a dead sink + a red rerun leads with the receipt fault, got '
+      + JSON.stringify(r.reason));
+    cleanup826(fx.repoRoot);
+  });
+
+  // -------------------------------------------------------------------------
+  // #826-ADV — RUNG 1 IS CONVERTED: `final_fix_sink_not_live` becomes an ADVISE carrying a route.
+  //
+  // WHY THE SHAPE IS DETERMINED, not discretionary. ADR 0013 R1 admits a typed refusal at exactly
+  // three loci — L1 kernel-write integrity (a write that factually did not take), L2 the sink (content
+  // reaching mainline), A3 the consent valve. "the terminal finalize row is not in_progress" is none
+  // of them: nothing was written, nothing is reaching mainline, no human values call is pending. It is
+  // a WRONG-VERB-FOR-STATE condition, which R1 says ships as an advisory or a tool. R3 then fixes the
+  // shape: the remedy is mechanical and the refusal already spells it out in prose, which is the
+  // definition of a missing tool wearing a uniform. R4 does not bound it — an unopened sink is a
+  // STATE, not evidence of tampering, and nothing here is auto-repaired. #826's own first comment
+  // asked for exactly this ("it ships as an advise answer carrying a route:, which also keeps this
+  // issue's own 'deviation routes, never traps' promise symmetric"); neither D-826-01 nor the
+  // route-contract commit answered the proposal, so this is unaddressed silence, not an override.
+  //
+  // THE TWO LOAD-BEARING PINS are ADV2 and ADV6, and neither is about the advise's own wording:
+  //   ADV2 — the advise MUST NOT ADMIT. The lane is sink-OWNED; with no live sink there is no sink to
+  //     own the register. The lazy conversion is to delete the `fail(...)` call, which drops the token
+  //     AND drops the guard: with every other precondition met, `reasons` is then empty and the pass
+  //     falls straight through to the APPEND. That would write a register entry for a run that is not
+  //     in finalization — strictly worse than the refusal it replaced.
+  //   ADV6 — the conversion must not reach the other three walls. `final_fix_production_surface` in
+  //     particular is the hard scope wall DIR-2 deliberately re-pinned; #826 §3 requires a
+  //     production-behavior fix to refuse FLATLY, with no receipt and no admission.
+  // -------------------------------------------------------------------------
+
+  // ADV1 — THE SHAPE. Not a refusal, and the retired token is gone from the arm entirely: absent from
+  // the lead `reason` AND from the report-all `reasons` list, so it cannot survive as a demoted
+  // refusal riding in the payload.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.result !== 'refuse',
+      '#826-ADV1: a sink that is not live is an ADVISE, not a refusal — R1 admits a refusal only at '
+      + 'L1/L2/A3 and a wrong-verb-for-state condition is none of them, got '
+      + JSON.stringify({ result: r.result, exitCode: r.exitCode, reason: r.reason }));
+    // THE EXIT CODE STAYS NON-ZERO, and is pinned to its exact current value so a later
+    // "simplification" to 0 has to fail here first. The work did NOT happen: nothing was recorded.
+    // A caller reading exit 0 would be entitled to believe the fix was committed to the register,
+    // and every existing caller of `final-fix-commit` was written against a non-zero exit for this
+    // arm. What R1/R3 require is that we stop MINTING A REFUSAL CODE where a named exit suffices —
+    // not that the arm start reporting success. The subtraction is one code out of the census.
+    assert(r.exitCode === 1,
+      '#826-ADV1: ...and the advise keeps its NON-ZERO exit — the fix was not recorded, so exit 0 '
+      + 'would tell every caller the opposite of what happened, got ' + JSON.stringify(r.exitCode));
+    assert(r.reason !== 'final_fix_sink_not_live'
+      && !(Array.isArray(r.reasons) && r.reasons.indexOf('final_fix_sink_not_live') !== -1),
+      '#826-ADV1: ...and the retired code is gone from the arm — not the lead reason, and not riding '
+      + 'in the reasons list either, got ' + JSON.stringify({ reason: r.reason, reasons: r.reasons }));
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV2 — THE ADVISE STILL DOES NOT ADMIT. The one thing the refusal was actually protecting: no
+  // register, no plan mutation, no commit. GREEN today (a refusal is zero-write by construction) and
+  // deliberately kept, because after the conversion it is the ONLY thing standing between a
+  // deleted `fail(...)` and a register entry appended for a run with no sink to own it.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    finalFix826(fx, fixEntry826(fx));
+    assert(readRegister826(fx) === null,
+      '#826-ADV2: the advise must NOT create the register — the lane is sink-owned, and with no live '
+      + 'sink there is no sink to own it. An advise that admits is worse than the refusal it replaced.');
+    assertZeroWrite826(fx, before, '#826-ADV2');
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV3 — THE DIAGNOSTICS SURVIVE THE CONVERSION. `sink_node` / `sink_status` still reach the caller,
+  // and `checks.sink` still reports the observed status rather than the optimistic 'live' default.
+  // An advise that drops the facts the refusal carried is a downgrade wearing an upgrade's name.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.sink_node === 'finalize' && r.sink_status === 'pending',
+      '#826-ADV3: the answer still names the sink row and its observed status, got '
+      + JSON.stringify({ sink_node: r.sink_node, sink_status: r.sink_status }));
+    assert(r.checks && r.checks.sink === 'pending',
+      '#826-ADV3: ...and `checks.sink` reports the observed status, not the `live` default, got '
+      + JSON.stringify(r.checks));
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV4 — THE TYPED ROUTE, on the branch where the remedy is REACHABLE. The route is conditional,
+  // and this fixture is the keepable half: the sink is `pending` with every dependency `complete`, so
+  // it is the next serially-openable node and `open-next` opens it. MEASURED rather than assumed —
+  // `computeNextAction` on this exact ledger returns nextNode `finalize` (and returns `impl` once the
+  // dependencies are pending, which is the OTHER branch, pinned by ADV9).
+  // Shape follows the sibling idiom `inGrammar(script, verb, args)` -> { verb, script, args }; prose
+  // is commentary and the route is the machine-readable exit (R5). Pinned structurally, not by verb
+  // name, so the implementer still chooses — but a route object that names no verb is not a route.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const { computeNextAction } = require('./kaola-workflow-next-action');
+    const na = computeNextAction(fs.readFileSync(fx.planPath, 'utf8'));
+    assert(na.nextNode && na.nextNode.id === 'finalize',
+      '#826-ADV4 precondition: this fixture is the KEEPABLE branch — the sink is the next '
+      + 'serially-openable node, so a route at the open verb is a promise that can be kept, got '
+      + JSON.stringify(na.nextNode && na.nextNode.id));
+    const r = finalFix826(fx, fixEntry826(fx));
+    const route = r.route || r.refusal_route || null;
+    assert(route && typeof route === 'object' && typeof route.verb === 'string' && route.verb.trim(),
+      '#826-ADV4: on the reachable branch the advise carries a TYPED route naming its exit, shaped '
+      + 'like every sibling route ({ verb, script, args } — see SINK_FINDING_ROUTE_BY_KIND), got '
+      + JSON.stringify(route));
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV9 — THE UNREACHABLE BRANCH, and the honest dead end (D3/D6, RULING 2). Same non-live sink,
+  // but its dependencies are NOT complete, so the sink is not openable from here: `computeNextAction`
+  // hands back `impl`, and an `open-next` route would open some other node while the operator was
+  // told it opens the sink. That is #847 in friendlier words — a refusal, or an advise, pointing at a
+  // verb that cannot accept the work. The project already answered this class by WITHDRAWING the
+  // offer rather than printing one the verb would refuse, so the answer here is NO ROUTE plus prose
+  // that names the state which closed it, and the two branches must be distinguishable so a caller
+  // can tell "you can open the sink now" from "you cannot".
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    setLedger826(fx.planPath, 'impl', 'pending');
+    setLedger826(fx.planPath, 'review', 'pending');
+    const { computeNextAction } = require('./kaola-workflow-next-action');
+    const na = computeNextAction(fs.readFileSync(fx.planPath, 'utf8'));
+    assert(na.nextNode && na.nextNode.id !== 'finalize',
+      '#826-ADV9 precondition: with dependencies pending the sink is NOT the next openable node, so '
+      + 'no open verb can keep a promise about it, got ' + JSON.stringify(na.nextNode && na.nextNode.id));
+    const before = witness826(fx);
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.result !== 'refuse' && r.exitCode === 1,
+      '#826-ADV9: still an ADVISE with a non-zero exit — the branch changes the ROUTE, never the '
+      + 'shape, got ' + JSON.stringify({ result: r.result, exitCode: r.exitCode, reason: r.reason }));
+    const route9 = r.route || r.refusal_route || null;
+    assert(route9 === null || (route9 && typeof route9.verb === 'string'
+      && !/open-next|open-ready|expand-open/.test(route9.verb)),
+      '#826-ADV9: with the sink unopenable the advise must NOT promise an open verb. Silence is the '
+      + 'floor when no verb can accept the work — an honest dead end that explains itself beats a '
+      + 'route that could only refuse, got ' + JSON.stringify(route9));
+    assert(typeof r.detail === 'string' && /pending|not in_progress|dependenc/i.test(r.detail),
+      '#826-ADV9: ...and the prose names the state that closed the exit, so the dead end explains '
+      + 'itself rather than merely stopping, got ' + JSON.stringify(r.detail));
+    assertZeroWrite826(fx, before, '#826-ADV9');
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV5 — THE DEAD-END SEAM (D3/D6). "A route is a promise the verb will accept the work; offering
+  // one that cannot be cleared is worse than silence." Two sink states reach this arm and they are NOT
+  // interchangeable: a `pending` sink can be opened, and a run whose plan carries no unique terminal
+  // finalize node has no sink to open AT ALL — `finalizeSinkStatus` returns `{ id: null }` for it
+  // (adaptive-schema: `list.length !== 1` -> id null). Telling that operator to "open the sink first"
+  // is the unkeepable promise the doctrine forbids, so the two cases must not collapse into one
+  // answer. Driven in-process through the exported `runFinalFixCommit`, because a plan with no
+  // finalize row cannot be frozen and so cannot be built as a CLI fixture.
+  scenario(() => {
+    const { runFinalFixCommit } = require('./kaola-workflow-adaptive-node');
+    const sinkless = [
+      '# Workflow Plan — issue-826-adv5', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| impl | tdd-guide | — | src/app.js | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |', '| impl | complete |', '',
+    ].join('\n') + '\n';
+    let wrote = false;
+    const r = runFinalFixCommit({
+      planPath: '/nonexistent/kaola-workflow/issue-826-adv5/workflow-plan.md',
+      project: 'issue-826-adv5',
+      entry: { failed_command: 'x', fix_commit: 'HEAD', files: ['scripts/test-x.js'],
+        rerun: { command: 'x', exit_code: 0, candidate_hash: 'f'.repeat(64) } },
+      readFile: (p) => (String(p).endsWith('workflow-plan.md') ? sinkless : null),
+      writeFile: () => { wrote = true; },
+    });
+    assert(wrote === false,
+      '#826-ADV5: a plan with no unique terminal finalize node must write NOTHING — there is no sink '
+      + 'to own a register entry, so this is the same admit-guard ADV2 pins from the CLI side.');
+    assert(r && r.sink_node == null,
+      '#826-ADV5: ...and the answer reports that there is no sink row at all (sink_node null), rather '
+      + 'than naming one, got ' + JSON.stringify({ sink_node: r && r.sink_node, sink_status: r && r.sink_status }));
+    const route5 = (r && (r.route || r.refusal_route)) || null;
+    assert(route5 === null || (route5 && typeof route5.verb === 'string' && !/open-next|expand-open/.test(route5.verb)),
+      '#826-ADV5: with NO sink node the answer must not route at an open-the-sink verb — that promise '
+      + 'cannot be kept, and D3/D6 makes silence the floor. Either a null route with the reason stated, '
+      + 'or a verb that genuinely accepts the work; never a verb that could only refuse, got '
+      + JSON.stringify(route5));
+    assert(typeof (r && r.detail) === 'string' && /finalize node|no unique|no sink/i.test(r.detail),
+      '#826-ADV5: ...and the two prose cases stay distinguishable — "the plan has no unique terminal '
+      + 'finalize node" must not collapse into "the sink is not in_progress", got '
+      + JSON.stringify(r && r.detail));
+  });
+
+  // ADV6 — NO DRIFT INTO THE OTHER THREE WALLS. A non-live sink AND a production-surface fix: the
+  // answer is still a REFUSAL, led by the scope wall. DIR-2 re-pinned that wall deliberately and #826
+  // §3 requires a production-behavior fix to refuse flatly, so demoting RUNG 1 must not soften it, and
+  // an advise must not out-rank a refusal in the composite.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const before = witness826(fx);
+    const r = finalFix826(fx, fixEntry826(fx, { files: ['src/app.js'] }));
+    assert(r.result === 'refuse' && r.exitCode === 1 && r.reason === 'final_fix_production_surface',
+      '#826-ADV6: a production surface still REFUSES, and now leads the composite because the sink '
+      + 'advise cannot lead a refusal, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assertZeroWrite826(fx, before, '#826-ADV6');
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV7 — REPORT-ALL SURVIVES. The composite still reports every unmet wall in one pass, and the
+  // demoted arm does not vanish from the answer: the retired token leaves `reasons`, while the sink
+  // FACT stays observable in `checks`. Losing the fact would trade one round-trip for a blind spot.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const r = finalFix826(fx, fixEntry826(fx, { files: ['src/app.js'] }));
+    assert(Array.isArray(r.reasons) && r.reasons.indexOf('final_fix_production_surface') !== -1,
+      '#826-ADV7: the composite still lists every unmet REFUSING wall, got ' + JSON.stringify(r.reasons));
+    assert(Array.isArray(r.reasons) && r.reasons.indexOf('final_fix_sink_not_live') === -1,
+      '#826-ADV7: ...and the retired token is not among them — an advise is not a refusal, got '
+      + JSON.stringify(r.reasons));
+    assert(r.checks && r.checks.sink === 'pending',
+      '#826-ADV7: ...while the sink FACT survives in checks, so demoting the token costs no '
+      + 'information, got ' + JSON.stringify(r.checks));
+    cleanup826(fx.repoRoot);
+  });
+
+  // ADV8 — THE R2 GREEN ARC, walked from the advised state. Every M3 conversion ships one: a pin that
+  // the now-legal path COMPLETES, not merely that the refusal is gone. Advise on a pending sink, take
+  // the mechanical remedy the advise names, re-run: the lane admits and records. This is what makes
+  // the route a promise rather than a label.
+  scenario(() => {
+    const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
+    const advised = finalFix826(fx, fixEntry826(fx));
+    assert(advised.result !== 'refuse',
+      '#826-ADV8 precondition: the pending-sink call advises rather than refuses, got '
+      + JSON.stringify({ result: advised.result, reason: advised.reason }));
+    assert(readRegister826(fx) === null, '#826-ADV8 precondition: nothing was recorded by the advise');
+    setLedger826(fx.planPath, 'finalize', 'in_progress');
+    const r = finalFix826(fx, fixEntry826(fx));
+    assert(r.exitCode === 0 && r.result === 'ok',
+      '#826-ADV8: once the sink IS live the same submission is ADMITTED — the advise pointed at a '
+      + 'remedy that actually clears it, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    const reg = readRegister826(fx) || {};
+    assert(Array.isArray(reg.entries) && reg.entries.length === 1,
+      '#826-ADV8: ...and exactly one entry is recorded on the far side of the arc, got '
+      + JSON.stringify(reg.entries));
     cleanup826(fx.repoRoot);
   });
 

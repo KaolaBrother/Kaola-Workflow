@@ -473,12 +473,14 @@ const OPERATOR_HINT_REGISTRY = {
         + ' dispatched to whichever role fits — no mandated mode), then record it with'
         + ' final-fix-commit while the sink is still pristine.'
       : ''),
-  // #826 — THE FINALIZE DEVIATION ROUTE'S OWN LADDER. Four precedence-ordered walls around the ONE
-  // commitment point where a finalize-time fix enters the candidate.
-  final_fix_sink_not_live: (ctx) =>
-    'The final-fix lane is SINK-OWNED and the terminal finalize row is "' + ((ctx && ctx.sink_status) || 'not in_progress')
-    + '" — this run is not in finalization, so there is no sink to own the register. Land the fix through the'
-    + ' ordinary in-plan path (the node that declares the surface), or open the sink first.',
+  // #826 — THE FINALIZE DEVIATION ROUTE'S OWN LADDER. Three precedence-ordered REFUSING walls around
+  // the ONE commitment point where a finalize-time fix enters the candidate.
+  //
+  // `final_fix_sink_not_live` used to be a fourth template here. It is retired: a sink that is not
+  // live is a wrong-verb-for-state condition, which R1 ships as an advisory and R3 says was a missing
+  // tool all along, so the arm now emits an ADVISE whose prose and route are decided together in the
+  // kernel (`finalFixSinkAdvice`) rather than a code looked up in this table. Nothing was lost — the
+  // advise carries the same sink facts and adds the exit the prose only described.
   final_fix_after_sink_started: (ctx) =>
     'The final-fix lane closes at the sink\'s first irreversible step, and the sink reads "'
     + ((ctx && ctx.sink_progress) || 'unknown') + '"'
@@ -699,7 +701,7 @@ const OPERATOR_HINT_REGISTRY = {
 // This is a STATIC property of committed source checked dynamically — it cannot fire in the field
 // unless the committed table itself disagrees with the committed number.
 // ---------------------------------------------------------------------------
-const OPERATOR_HINT_RUNG_CENSUS = 90;
+const OPERATOR_HINT_RUNG_CENSUS = 89;
 {
   const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
   if (live !== OPERATOR_HINT_RUNG_CENSUS) {
@@ -16051,6 +16053,27 @@ function finalFixEntryShapeFault(entry) {
   return null;
 }
 
+// sinkIsNextOpenable — is the terminal sink the node `open-next` would actually open RIGHT NOW?
+//
+// This is the discriminator for the not-in-finalization advise's route, and it is deliberately NOT
+// the ledger status: a `pending` sink whose dependencies are still running reads EXACTLY the same as
+// one whose dependencies are all complete, while `open-next --node-id <sink>` accepts the second and
+// refuses `node_not_ready` on the first. Routing off the status alone would therefore hand an
+// operator a verb that opens some OTHER node while telling them it opens the sink — a route that
+// cannot be kept, which is the class of defect this project has already had to file as a bug.
+//
+// Read-only and in-process: `computeNextAction` is a pure function of the plan content, and the
+// require goes through the SAME rename-normalized constant the shell path uses, so every edition
+// resolves its own file. FAILS CLOSED — an unparseable or stalled DAG measures as NOT openable,
+// because silence is the floor and a wrongly-emitted route is the failure being prevented.
+function sinkIsNextOpenable(sink, content) {
+  if (!sink || !sink.id) return false;
+  try {
+    const next = require(nextActionPath).computeNextAction(content);
+    return !!(next && next.nextNode && next.nextNode.id === sink.id);
+  } catch (_) { return false; }
+}
+
 // evaluateFinalFixPreconditions — ONE PASS over EVERY precondition of the final-fix lane (ADR 0013,
 // the #837 report-all shape applied to the second ladder in the codebase).
 //
@@ -16097,14 +16120,26 @@ function evaluateFinalFixPreconditions(opts, content) {
   };
 
   // ---- RUNG 1: the lane is SINK-OWNED. No live sink ⇒ this run is not in finalization at all. ----
+  // NOT A REFUSAL — an ADVISE. R1 admits a typed refusal only at L1 (a kernel write that factually
+  // did not take), L2 (the sink gate) or A3 (consent), and this is none of them: nothing was written,
+  // nothing is reaching mainline, no values call is pending. R3 finishes the argument — the remedy is
+  // mechanical and the prose already spelled it out, which is the definition of a missing tool wearing
+  // a uniform. So the arm keeps every FACT it carried (`checks.sink`, `sink_node`, `sink_status`) and
+  // gains a route, but mints no code: it never enters `reasons`, and an advise can therefore never
+  // out-rank one of the three REFUSING walls below in the composite.
   const statuses = readLedgerStatuses(content);
   const sink = reviewSchema.finalizeSinkStatus(parseNodesFromContent(content), id => statuses[id]);
-  if (!sink.live) {
+  const advice = sink.live
+    ? null
+    : reviewSchema.finalFixSinkAdvice(sink, project, sinkIsNextOpenable(sink, content));
+  if (advice) {
     checks.sink = sink.status || 'none';
-    fail('final_fix_sink_not_live', { sink_node: sink.id, sink_status: sink.status || 'none' },
-      sink.id
-        ? 'the terminal sink "' + sink.id + '" is "' + (sink.status || 'unknown') + '", not in_progress'
-        : 'the plan has no unique terminal finalize node');
+    // The facts ride on EVERY path, so a composite refusal below still names the sink row and still
+    // says WHICH not-live state this is — demoting the token costs no information. Only the CODE was
+    // retired: the prose keeps its precedence-first position in `detail`, and `reasons` is the one
+    // place it must not appear, because an advise may never out-rank a refusal.
+    Object.assign(payload, { sink_node: sink.id, sink_status: sink.status || 'none' });
+    details.push(advice.detail);
   }
 
   // ---- RUNG 2: the PRISTINE boundary — the lane's HARD CLOSE. Three-valued, fail-closed: only ----
@@ -16205,30 +16240,64 @@ function evaluateFinalFixPreconditions(opts, content) {
   // ladder emitted for the same submission; the rest ride in `reasons` instead of in a future
   // round-trip. `detail` concatenates in the same precedence order — an operator reading only the
   // prose still reads the outermost fault first.
+  //
+  // ONE THREE-VALUED VERDICT, decided HERE and nowhere else. `admit` is a POSITIVE predicate that
+  // REQUIRES a live sink — it is not "no refusal fired". That is the whole safety of demoting RUNG 1:
+  // the lane is sink-OWNED, and a conversion that merely deleted the old refusal would leave `reasons`
+  // empty for a run with no sink to own the register and fall straight through to the append. Because
+  // the sole caller appends only under `admit`, deleting the advise arm below cannot open that path —
+  // it makes the append UNREACHABLE for a dead sink, which is the fail-closed direction.
   return {
     checks, reasons, payload, register, planHash, sink, fixCommit, registerPath,
-    surface,
+    surface, advice,
+    verdict: reasons.length ? 'refuse' : (sink.live ? 'admit' : 'advise'),
     detail: details.join('; '),
   };
 }
 
-// runFinalFixCommit — the ONE commitment point. It reads the ONE-PASS report above and, when
-// anything is unmet, emits ONE refusal carrying EVERY unmet precondition. EVERY refusal is
-// ZERO-WRITE — no register created or modified, the frozen plan byte-identical, git untouched — so a
-// refused call is a pure no-op.
+// runFinalFixCommit — the ONE commitment point. It reads the ONE-PASS report above and dispatches on
+// that report's single three-valued verdict. When a REFUSING wall is unmet it emits ONE refusal
+// carrying EVERY unmet precondition; when the only thing missing is a live sink it emits an ADVISE
+// carrying the conditional route. Refusal and advise alike are ZERO-WRITE — no register created or
+// modified, the frozen plan byte-identical, git untouched — so neither call is anything but a no-op.
+//
+// The advise keeps a NON-ZERO exit (see main): the fix was NOT committed to the register, and a
+// caller reading exit 0 would be entitled to believe it was. R1/R3 retire the refusal CODE where a
+// route suffices; they do not make this arm succeed.
 function runFinalFixCommit(opts) {
   const { planPath, project, entry, readFile, writeFile } = opts;
   let content;
   try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
 
   const report = evaluateFinalFixPreconditions(opts, content);
-  if (report.reasons.length) {
-    return refuse(report.reasons[0], {
-      ...report.payload,
-      checks: report.checks,
-      reasons: report.reasons,
-      detail: report.detail,
-    });
+  // THE ADMIT GATE, and it is POSITIVE. Everything past this statement runs only for `admit`, which
+  // the pass above grants only to a submission with a LIVE SINK and no unmet refusing wall. The gate
+  // is written as ONE total branch over a ONE ternary because the alternative shape — two independent
+  // early returns above an unguarded append — is exactly the hole a lazy conversion of RUNG 1 opens:
+  // drop the advise arm there and a dead-sink submission falls through and WRITES. Here, dropping the
+  // advise arm does not parse, and dropping the branch leaves the append unreachable rather than open.
+  if (report.verdict !== 'admit') {
+    return report.verdict === 'refuse'
+      ? refuse(report.reasons[0], {
+        ...report.payload,
+        checks: report.checks,
+        reasons: report.reasons,
+        detail: report.detail,
+      })
+      // ADVISE. Every fact the retired refusal carried, plus the route it never had. `reasons` stays
+      // an empty list rather than vanishing, so the composite shape a caller reads is unchanged.
+      : {
+        result: 'advise',
+        mode: 'final-fix-commit',
+        project,
+        ...report.payload,
+        checks: report.checks,
+        reasons: [],
+        route: report.advice.route,
+        detail: report.advice.detail,
+        operator_hint: 'The final-fix lane is SINK-OWNED and ' + report.advice.detail
+          + '. NOTHING was recorded — the register is untouched and this call is a pure no-op.',
+      };
   }
 
   // ---- ADMIT. Append one entry. NO per-run cap: each entry's own receipt is the natural bound. ----
@@ -17945,7 +18014,11 @@ function main() {
   } else {
     process.stdout.write(JSON.stringify(result) + '\n');
   }
-  if (result.result === 'refuse') {
+  // A REFUSE and an ADVISE both exit non-zero, and for the same reason: neither did the thing that
+  // was asked. Retiring a refusal CODE in favour of a route (R1/R3) does not make the arm succeed —
+  // a caller reading exit 0 from `final-fix-commit` would be entitled to believe the fix was
+  // recorded, and every caller written against this arm was written against non-zero.
+  if (result.result === 'refuse' || result.result === 'advise') {
     process.exitCode = 1;
   }
 

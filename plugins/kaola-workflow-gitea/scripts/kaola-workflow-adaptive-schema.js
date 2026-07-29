@@ -4427,6 +4427,81 @@ const SINK_FINDING_ROUTE_BY_KIND = Object.freeze({
   final_fix_register_unverified: Object.freeze({ route: inGrammar('adaptive-node', 'final-fix-commit', '--project <P> --json --stdin'), legacy_token: null }),
 });
 
+// --- NOT A FAMILY: the final-fix lane's not-in-finalization ADVISE -----------
+// R1 admits a typed refusal at exactly three loci — L1 kernel-write integrity, L2 the sink,
+// A3 consent. "the terminal finalize row is not in_progress" is none of them: nothing was
+// written, nothing is reaching mainline, no values call is pending. It is a wrong-verb-for-
+// state condition, which R1 ships as an advisory or a tool, and R3 says the same thing from
+// the other side — the remedy is mechanical, so what was missing was a tool, not a wall.
+// R4 does not bound it either: an unopened sink is a STATE, not evidence of tampering.
+//
+// So this carries no family, no registry row and no sweep obligation (see the vocabulary
+// header above). What it DOES carry is a route, and deciding that route is this function's
+// whole content.
+//
+// THE ROUTE IS CONDITIONAL, and the condition is OPENABILITY — a MEASURED fact, never the
+// ledger status alone. A route is a promise the verb will accept the work, so it may only be
+// named where the verb can genuinely keep it:
+//   * a pending sink row that is the NEXT SERIALLY-OPENABLE NODE is openable, and
+//     `open-next --node-id <sink>` is the ONE verb that flips a pending row to in_progress
+//     and records its baseline — exactly and only what `live` requires. This answer fires
+//     precisely when the run is NOT in finalization, which is when that ordinary mid-run
+//     open path is still available. It is also the codebase's own standing answer for the
+//     same fact elsewhere ("Node X is not in_progress ... Open it (open-next) first").
+//   * a pending sink whose DEPENDENCIES are not complete is NOT openable, even though its
+//     own row reads exactly the same. `open-next` would open some OTHER node while the
+//     operator was told it opens the sink — a verb pointed at work it cannot accept, which
+//     is the dead-end wedge this project has already had to file as a bug.
+//   * NO unique terminal finalize row means there is no node to open AT ALL, and a
+//     complete / n/a / unrecorded row is not re-opened by this verb either.
+// The unopenable cases carry NO route and say WHICH state closed the exit — the same
+// deliberate silence recorded for `foreign_archive` above, and an honest dead end that
+// explains itself beats a route that could only refuse.
+//
+// `openable` is passed IN rather than derived here: it is a fact about the ledger frontier,
+// which the caller already holds the plan content to compute, and this file stays free of
+// plan-parsing dependencies. Callers MUST fail closed — an unmeasurable frontier is `false`,
+// because a wrongly-emitted route is the failure this branch exists to prevent.
+//
+// The prose and the route are decided TOGETHER, in one place, so they cannot disagree about
+// whether an exit exists.
+function finalFixSinkAdvice(sink, project, openable) {
+  const id = (sink && sink.id) || null;
+  const status = (sink && sink.status) || null;
+  if (!id) {
+    return Object.freeze({
+      route: null,
+      detail: 'the plan has no unique terminal finalize node — there is no sink row to open, and no '
+        + 'verb can conjure one, so this answer names no route: silence is the floor when nothing '
+        + 'could keep the promise',
+    });
+  }
+  if (status === 'pending' && openable === true) {
+    return Object.freeze({
+      route: inGrammar('adaptive-node', 'open-next',
+        '--project ' + (project || '<P>') + ' --node-id ' + id + ' --json'),
+      detail: 'the terminal sink "' + id + '" is "pending", not in_progress — this run has not entered '
+        + 'finalization yet, but the sink IS the next openable node, so open it and re-submit, or '
+        + 'land the fix through the ordinary in-plan path at the node that declares the surface',
+    });
+  }
+  if (status === 'pending') {
+    return Object.freeze({
+      route: null,
+      detail: 'the terminal sink "' + id + '" is "pending", not in_progress, and its dependencies are '
+        + 'not all complete — it is not the next openable node, so no open verb can accept this work '
+        + 'yet and naming one would point you at some other node. Run the plan forward to the sink, '
+        + 'or land the fix through the ordinary in-plan path at the node that declares the surface',
+    });
+  }
+  return Object.freeze({
+    route: null,
+    detail: 'the terminal sink "' + id + '" is "' + (status || 'unrecorded') + '", not in_progress, and no verb re-opens '
+      + 'it into finalization from here — land the fix through the ordinary in-plan path, at the node '
+      + 'that declares the surface',
+  });
+}
+
 // --- family 7: consent_required (A3) ---------------------------------------
 // An irreversible or value-laden call that no script may make. The resolution verb rides
 // in the PAYLOAD, never in the route — `consent` is a closed-vocabulary terminal.
@@ -6504,6 +6579,7 @@ module.exports = {
   routeKey,
   resolveRoute,
   resolveSinkFindingRoute,
+  finalFixSinkAdvice,
   R4_NON_REMEDIABLE_CELLS,
   resolveAutoRemediable,
   // The cell-keyed WHY slot: hint = FACT(payload) + WHY(cell) + ROUTE(payload). REFUSAL_WHY is the
