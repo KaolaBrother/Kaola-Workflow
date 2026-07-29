@@ -1092,6 +1092,10 @@ function claimProject(root, args) {
 
   const projectInfo = discoverProjectSafe();
   try {
+    // The record is written BEFORE the stamp that attests to it, inside this transaction, so a
+    // failed write can never leave state asserting a digest for bytes that were never persisted.
+    // A throw lands in the rollback below. Mirrors the canonical claim script.
+    if (args.selectionRecordBytes) persistSelectionRecord(root, project, args.selectionRecordBytes);
     writeState(root, {
       project,
       issue_iid: issueIid,
@@ -1264,6 +1268,10 @@ function claimBundle(root, opts) {
         }
       }
     }
+
+    // Step 3b: the selection record, BEFORE the stamp that attests to it — same ordering and
+    // same reason as the scalar claim. A throw lands in this function's rollback.
+    if (opts.selectionRecordBytes) persistSelectionRecord(root, project, opts.selectionRecordBytes);
 
     // Step 4: writeState with primary + bundle fields (base_branch added per #370; writeState
     // derives run_posture from worktree_path).
@@ -1485,7 +1493,8 @@ function claimExplicitBundle(root, args) {
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     runtime: args.runtime || 'claude',
     attestPlannerSpawn: args.attestPlannerSpawn, // #370: honor the planner attest back-fill on the bundle path
-    selectionRecordDigest: args.selectionRecordDigest // the selection record's durable anchor
+    selectionRecordDigest: args.selectionRecordDigest, // the selection record's durable anchor
+    selectionRecordBytes: args.selectionRecordBytes    // ...and the bytes it is a digest OF
   });
   // Advice rides the envelope the claim actually emits; it never changes the outcome.
   return sizeAdvice ? Object.assign(claimed, sizeAdvice) : claimed;
@@ -1635,7 +1644,6 @@ function foldOriginStaging(root, project) {
 function completeSelectionOrigin(root, result, gate) {
   if (!result || result.status !== 'acquired' || !result.project || !gate || !gate.bytes) return result;
   try { foldOriginStaging(root, result.project); } catch (_) {}
-  try { persistSelectionRecord(root, result.project, gate.bytes); } catch (_) {}
   result.selection_record_digest = gate.digest;
   return result;
 }
@@ -1753,6 +1761,7 @@ function cmdStartup() {
   const selectionRecord = resolveSelectionRecord(args, selectionLabel);
   const recordNote = selectionRecord.note ? { selection_record_note: selectionRecord.note } : {};
   args.selectionRecordDigest = selectionRecord.digest;
+  args.selectionRecordBytes = selectionRecord.bytes;
   // The emitted `target_source` is a RECORD of how this claim originated, so it echoes the
   // discriminator the record resolver just read rather than the historical constant. It mirrors
   // that resolver's strict reading: anything that is not the exact 'user_directed' literal is
