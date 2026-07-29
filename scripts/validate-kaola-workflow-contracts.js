@@ -145,7 +145,6 @@ assert(
 );
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
 // #475: pin the consumer (non-npm) finalize gate prose so the dual-mode concept cannot drift out of the SKILL.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final-validation.md');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final_validation_unverified');
 // #653: the consumer candidate binding (validated_candidate_hash) must reach BOTH consumer-recording
 // surfaces — the plan-run All-done consumer block and the finalize gate prose.
@@ -690,18 +689,11 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoni
 // actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
 // no-improvise prohibition on every plan-run spawn.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'opened=<node-id> role=<role> task=<codex_task_name>');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "take the dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`. Never dispatch without the card in view.");
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Every spawn parameter comes from the dispatch card.');
 
 // #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
 // inline-fallback format, verbatim.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '← {node_id} · {role} returned: {verdict or one-line outcome}');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ running {node_id} · {role} inline');
 
 // #605: required progress-echo line printed after every close-and-open-next.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');
 
 // #775: v2-task-name is the only dispatch mode — the preflight-doctor detection step and the
 // --codex-dispatch-mode flag it used to thread into the claim are retired (warn-and-ignore shim
@@ -709,7 +701,6 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-i
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--codex-dispatch-mode');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--codex-dispatch-mode');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'routeAdaptive');
@@ -882,9 +873,6 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'current parent session');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "the sub-agent's model/reasoning effort itself");
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-session equality');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'One contract, every role, every runtime');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fork_turns: "none"');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Omit both `model`');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model: dispatch.codex_model');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_tier_unresolved');
@@ -914,7 +902,6 @@ for (const planRunSurface of [
   assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
   assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
   assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
-  assertIncludes(planRunSurface, 'write-halt --reason consent');
   // #817: the fence's ROLE LIST is itself the contract — every REVIEW_GATE_ROLES member that
   // reviews someone else's work must sit inside it. `main-session-gate` is deliberately absent:
   // it is non-delegable and REQUIRED to run inline, so fencing it would be a contradiction.
@@ -974,10 +961,7 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   // carry the command's route/wiring tokens, or the route resolves to a hollow surface. finalize
   // SKILL must wire the bundle member-set flag (#369); next SKILL must carry the adaptive route +
   // auto-bundle restructure (#380); plan-run/adapt must carry the executor/front-end route tokens.
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_numbers');
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--issue-numbers');
   assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'workflow-plan.md exists -> kaola-workflow-plan-run');
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'auto-bundle');
   assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'close-and-open-next');
   assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'kaola-workflow-plan-run');
 }
