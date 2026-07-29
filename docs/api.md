@@ -3028,12 +3028,23 @@ is off. When v2 IS active: `max_concurrent_threads_per_session` reports the conf
 is a positive integer. `max_threads` is NOT an alias — it is a separate top-level `[agents]` key
 that this parser does not read, so a stray one does not change the reported budget; when the field is
 absent or non-positive/non-integer, it falls back to the
-OBSERVED default of **4** (`source: 'observed_default'`) — this number comes from the issue's own
-controlled probe ("4 available concurrency slots, including you"), NOT from published Codex
-documentation, so it is labeled observed rather than a guaranteed default. This arithmetic is
-UNCHANGED by #775 — confirmed against rust-v0.145.0 source (`effective_agent_max_threads` uses
-`saturating_sub(1)`) and upstream PR #19792: the cap is **inclusive of the root/orchestrator
-thread**, so `effective_subagent_width` is `max(threads - 1, 0)`. `min_wait_timeout_ms` /
+default of **4** (`source: 'observed_default'`). **Provenance — upstream SOURCE, not published
+documentation.** At tag `rust-v0.145.0`, `codex-rs/core/src/config/mod.rs` defines
+`DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4` and its
+`effective_agent_max_threads` returns `saturating_sub(1)` for V2 — so the cap is **inclusive of the
+root/orchestrator thread** and `effective_subagent_width` is `max(threads - 1, 0)`. Both were
+introduced by upstream PR #19792 and re-verified at the released tag rather than at the PR, because
+the constant moved file between the two. Re-check both in one command:
+
+```bash
+gh api "repos/openai/codex/contents/codex-rs/core/src/config/mod.rs?ref=rust-v0.145.0" \
+  --jq .content | base64 -d | grep -nE 'DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT|saturating_sub'
+```
+
+The public Codex configuration reference does not document `multi_agent_v2` at all, so this is
+source-verified, never documentation-verified. The emitted `source: 'observed_default'` tag keeps
+its name for output-shape back-compat only — the VALUE is source-verified, the LABEL is legacy.
+This arithmetic is UNCHANGED by #775. `min_wait_timeout_ms` /
 `max_wait_timeout_ms` / `default_wait_timeout_ms` are read ONLY when explicitly present in
 `[features.multi_agent_v2]` (either the inline-object or dotted-table TOML syntax); there is
 deliberately NO fabricated numeric fallback for these three, so they report `null` when absent. On

@@ -498,8 +498,11 @@ configures roles and limits, and Codex 0.145.0 loads such a config clean with
 `multi_agent_v2` is not carried in the public Codex configuration reference,
 which documents `[features] multi_agent` for enabling subagents and `[agents]`
 only for role/limit settings (`max_threads`, `max_depth`). The V2 flag and its
-bounds are verified behavior on Codex >=0.145.0 rather than published defaults,
-and may change in a future release. See the official
+bounds are verified against upstream SOURCE at tag `rust-v0.145.0` —
+`codex-rs/core/src/config/mod.rs` defines
+`DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4` and
+`effective_agent_max_threads` uses `saturating_sub(1)`, both from PR #19792 —
+never against published documentation, and may change in a future release. See the official
 [Subagents guide](https://learn.chatgpt.com/docs/agent-configuration/subagents#global-settings)
 for Codex's defaults.
 
