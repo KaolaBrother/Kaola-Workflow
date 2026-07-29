@@ -97,9 +97,7 @@ The workflow is not "execute by rule and refuse what does not comply." It **pres
 
 **The four kernel records — only these must be durable:** plan → progress → per-step evidence → the forge operation chain (commit / merge / push / issue). Every other durable artifact must be **derivable** from these four, or it is a preference a successor may simply re-decide. If it is neither, it does not deserve to persist.
 
-**Only two gates may refuse — and there is no third door.** Claiming is bookkeeping: if a claim should not stand, the agent re-states its reason and claims another issue or batch. Whether or not a gate exists there, an agent resolves it — so the commitment point answers, and never refuses.
-- **L1 — kernel-write integrity:** did the write land. Atomic-write failure, forge-operation failure, lost CAS, broken integrity.
-- **L2 — the sink:** before anything reaches mainline. Tests red, diff not attributable, review not settled, consent missing.
+**Very few doors may refuse, and there is no door at the commitment point.** Claiming is bookkeeping: if a claim should not stand, the agent re-states its reason and claims another issue or batch — the commitment point answers, and never refuses. **For the refusal set itself and the three tests that admit one, see ADR 0016**; it supersedes the L1/L2 enumeration that stood here.
 
 **Mid-run, nothing refuses hard.** Former gates are tools; the verbs are **answer / advise / normalize / remedy / report-all**. A mid-run stop that is not the consent escalation is a missing tool wearing a uniform. **Missing is a routing problem, never a stop** — the workflow runs end to end under an agent, so when something needed is absent, reroute and obtain it rather than parking the run for a human to decide what the agent could go get; "blocked on a prerequisite" is nearly always a task nobody dispatched. **Bookkeeping never blocks**: caching a subagent's or a procedure's result, mirroring, syncing, regenerating a derived artifact — it may report, retry or normalize, but it may not stop the run.
 
