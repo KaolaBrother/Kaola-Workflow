@@ -13,7 +13,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #857 | Four surfaces disagree on where the MultiAgentV2 default of 4 comes from: three say documented upstream, one says our own probe and explicitly not documentation | open | — | — |
 | #858 | A failed consent-revocation write is swallowed, and the grant lookup that follows honours the stale grant | open | — | — |
 | #859 | 26 more validator assertions where the manifest token is a strict superset — a containment argument, proven per pair | open | — | — |
-| #861 | A mandated regression floor is wired into no chain: test-mega-mutation-spotcheck can be red with all four chains green | open | — | — |
 | #862 | A failed selection-record write is swallowed while its digest is stamped — the #858 pattern, one function away | open | — | — |
 | #863 | result is not total on the claim surface, and two status tokens classify differently depending on which internal arm emitted them | open | — | — |
 
