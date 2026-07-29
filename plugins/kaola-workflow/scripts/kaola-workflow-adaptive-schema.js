@@ -1287,13 +1287,34 @@ function readReplanFence(stateContent, transaction) {
   const stateTx = state.replan_transaction_id || 'none';
   if (!transaction) {
     if (stateStatus === 'none' && stateTx === 'none') return { ok: true, fenced: false, state };
-    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch', state };
+    // THE ORPHANED FENCE: the state carries a fence whose transaction file is gone. The remedy
+    // already exists and is mechanical — `replan abort` writes an abort record under
+    // `phase: 'orphaned_fence'` and drops the fence — so the only thing this arm owes an operator
+    // is NAMING it. `abort` is CAS-targeted, and on this arm the id it accepts is the one the
+    // STATE records (the only id that still exists anywhere), so the id is carried out with the
+    // verb: without it the command cannot even be reconstructed by hand. `replan resume` is NOT
+    // the exit here — it refuses `replan_transaction_missing` and the wedge survives.
+    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch',
+      phase: 'orphaned_fence', transaction_id: stateTx,
+      legal_mutation: 'replan abort', state };
   }
   const checked = validateReplanTransaction(transaction);
   if (!checked.ok) return { ok: false, fenced: true, reason: checked.reason, state };
   const preFenceCrash = transaction.phase === 'prepared' && stateStatus === 'none' && stateTx === 'none';
   if (!preFenceCrash && stateTx !== transaction.transaction_id) {
-    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch', state, transaction };
+    // The fence names one transaction and the file on disk names another. Both exits exist; WHICH
+    // one is legal is decided by the same irreversibility wall `abortReplan` enforces, read off
+    // this transaction: through `child_frozen` the parent epoch has not been snapshotted, so the
+    // discard exit is open — and a transaction that validated above can only carry ZERO entered
+    // activation steps in those phases, so the phase alone decides it. Past that line the epoch is
+    // rotating and the only exit is rolling forward. The id named is the one the FILE records,
+    // because that is the id `abort` CAS-matches when the file is present; naming the fence's
+    // stranded id would print a command that refuses `replan_abort_transaction_mismatch` on
+    // arrival, which is worse than printing none.
+    const abortable = REPLAN_ABORTABLE_PHASES.includes(transaction.phase);
+    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch',
+      phase: transaction.phase, transaction_id: transaction.transaction_id,
+      legal_mutation: abortable ? 'replan abort' : 'replan resume', state, transaction };
   }
   const committed = transaction.phase === 'committed'
     && transaction.activation.transaction_committed.status === 'complete'
@@ -5346,16 +5367,29 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
   // there and disagrees) are different conditions with different cures and are deliberately not
   // swept in beside it.
   //
-  // Every kind here is `absent_anchor`, whose route is `adaptive-node orient` — read-only, in
-  // INVESTIGATION_OR_DISCARD, and NOT in REPLAN_GUARDED_SUBCOMMANDS, so it stays reachable under the
-  // re-plan fence. The `anchor` field is deliberately left unset: no rule in this list has ever
-  // derived one, and inventing a per-condition anchor is how a kind-keyed route becomes a
+  // Every kind here routes to `adaptive-node orient` — read-only, in INVESTIGATION_OR_DISCARD, and
+  // NOT in REPLAN_GUARDED_SUBCOMMANDS, so it stays reachable under the re-plan fence. The `anchor`
+  // field is deliberately left unset: no rule in this list has ever derived one, and inventing a
+  // per-condition anchor is how a kind-keyed route becomes a per-incident table again.
+  //
+  // THE PRESENT-AND-WRONG HALF OF THE SAME BAND. These four report a value that WAS produced and
+  // then failed a shape check — the object-format probe answered with an unrecognized value and the
+  // explicit `tree entry malformed` / `blob length malformed` throws land here; the candidate
+  // partition was computed and failed its canonical blob-map / residue-digest check; a digest was
+  // produced and is not 64-hex; the presence probe answered in a shape that is not an array.
+  // Telling an operator "the anchor is not there" sends the investigation after a missing record
+  // while the record is sitting in front of it in the wrong shape, and those have opposite cures.
+  // `schema_mismatch` is the cell that already says the true thing, and it already carries the SAME
+  // route and the SAME `auto_remediable: false` — so this moves the sentence and nothing else. No
+  // new kind: minting an eleventh for four conditions is how a kind-keyed route becomes a
   // per-incident table again.
+  { family: 'kernel_integrity_broken', patch: { kind: 'schema_mismatch' },
+    match: ['baseline_partition_unavailable', 'candidate_digest_unavailable',
+      'candidate_partition_unavailable', 'finding_anchor_index_unavailable'] },
   { family: 'kernel_integrity_broken', patch: { kind: 'absent_anchor' },
-    match: ['barrier_unavailable', 'baseline_partition_unavailable',
-      'candidate_digest_unavailable', 'candidate_partition_unavailable', 'candidate_hash_unavailable',
+    match: ['barrier_unavailable', 'candidate_hash_unavailable',
       'writer_identity_unavailable', 'current_epoch_authority_unavailable', 'plan_contract_unavailable',
-      'finding_anchor_index_unavailable', 'finding_uid_unavailable', 'review_repair_delta_unavailable',
+      'finding_uid_unavailable', 'review_repair_delta_unavailable',
       'review_profile_unavailable', 'review_profile_identity_unavailable',
       'snapshot_verifier_unavailable', 'validation_vector_read_failed', 'leg_dirty_probe_failed'] },
 
