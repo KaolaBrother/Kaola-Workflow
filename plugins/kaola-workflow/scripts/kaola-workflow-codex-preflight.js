@@ -987,8 +987,7 @@ const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config
   + 'max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from '
   + 'features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key '
   + 'rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the '
-  + 'cap where it was instead of erroring, which is why it is easy to leave in place believing it '
-  + 'widened the budget.';
+  + 'cap where it was instead of erroring.';
 
 const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'max_concurrent_threads_per_session',

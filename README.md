@@ -615,7 +615,8 @@ prose from stochastic models.
 Codex custom-agent TOMLs keep only `name`, `description`, `nickname_candidates`, and
 `developer_instructions` at top level. Reviewer behavior identity and the complete-profile self-hash
 are embedded in `developer_instructions`, where the adaptive runtime can verify them without adding
-unsupported role-schema fields that Codex would reject at startup.
+unsupported role-schema fields — Codex logs a role file carrying one as a malformed agent role
+definition and ignores it.
 
 Every dispatch-capable Codex workflow skill runs the same fail-closed profile preflight on entry and
 resume. The skill resolves exactly one enabled installed Kaola edition from
@@ -760,7 +761,7 @@ Every install/upgrade also prints the effective dispatch **posture** automatical
 (no separate command needed). Profile installation always succeeds — the installer
 never refuses on `features.multi_agent_v2.enabled` (that gate lives at the later, dispatch-time
 preflight, per D2) — but it re-reads the config it just wrote and reports the
-effort-gated MultiAgentMode the Codex runtime will actually enforce, plus whether
+effort-gated dispatch posture it derives from the local config, plus whether
 `features.multi_agent_v2.enabled` is set at all:
 
 ```text
