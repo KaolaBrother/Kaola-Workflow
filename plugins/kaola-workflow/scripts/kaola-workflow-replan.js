@@ -4883,13 +4883,33 @@ function abortReplanUnlocked(paths, opts) {
       detail: 'the fence named a transaction with no file on disk — the orphaned fence was dropped' };
   }
 
-  const transactionId = String(raw.transaction_id || 'none');
-  if (transactionId !== requested) {
+  // #852: `none` is this project's word for "there is no transaction" — the branch above returns it
+  // as `phase: 'orphaned_fence'`, and an unfenced state block literally records
+  // `replan_transaction_id: none`. Collapsing an ABSENT id onto that sentinel with `|| 'none'` made
+  // the CAS target GUESSABLE on exactly the corrupt rows that need the check most: a caller passing
+  // the word meaning "nothing is here" matched a file that was very much here, and the identity
+  // check opened it. Absence is therefore kept distinct from any value a caller could name, and it
+  // can never satisfy the comparison — `null` is not a string any `--transaction` argument produces.
+  const rawId = typeof raw.transaction_id === 'string' ? raw.transaction_id.trim() : '';
+  const recordedId = rawId || null;
+  if (recordedId === null || recordedId !== requested) {
     return schema.refuse('replan_abort_transaction_mismatch', {
-      requested_transaction: requested, recorded_transaction: transactionId,
+      requested_transaction: requested,
+      // NEVER the sentinel while a file is on disk: "the live transaction is none" is the sentence
+      // the orphaned arm owns, and it is false here. Absent and different are different operator
+      // situations with different repairs, so the distinction rides the payload — no new code.
+      recorded_transaction: recordedId,
+      transaction_id_absent: recordedId === null,
       phase: raw.phase || 'unknown',
-      detail: 'the live transaction is ' + transactionId + ', not the one this call targets — re-read `replan status` before aborting' });
+      detail: recordedId === null
+        ? 'the live transaction file records no transaction_id at all, so no id can target it — '
+          + 'this is a broken kernel record, not a routine discard, and it needs escalation rather '
+          + 'than a guessed id'
+        : 'the live transaction is ' + recordedId + ', not the one this call targets — re-read `replan status` before aborting' });
   }
+  // Past the identity check the id is CONFIRMED — non-null and equal to what the caller named — so
+  // everything downstream keeps reading one verified value under its original name.
+  const transactionId = recordedId;
 
   // The irreversibility wall, checked in both directions.
   const enteredActivation = schema.REPLAN_ACTIVATION_STEPS.filter(step => {
