@@ -7360,6 +7360,7 @@ function runNamedReplanCommand847(root, command) {
   const parts = String(command).trim().split(/\s+/);
   const at = parts.findIndex(part => /workflow-replan\.js$/.test(part));
   const argv = [path.join(__dirname, path.basename(parts[at])), ...parts.slice(at + 1)];
+  // spawn-class: cli-contract
   const child = spawnSync(process.execPath, argv, { cwd: root, encoding: 'utf8', env: gitEnv });
   let out = {};
   try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
@@ -7367,8 +7368,8 @@ function runNamedReplanCommand847(root, command) {
   return { out, status: child.status };
 }
 
-// spawn-class: cli-contract
 function orient847(fx) {
+  // spawn-class: cli-contract
   const child = spawnSync(process.execPath,
     [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'orient', '--project', fx.project, '--json'],
     { cwd: fx.root, encoding: 'utf8', env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '1' } });
