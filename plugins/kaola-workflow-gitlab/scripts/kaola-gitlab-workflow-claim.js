@@ -1493,7 +1493,8 @@ function claimExplicitBundle(root, args) {
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     runtime: args.runtime || 'claude',
     attestPlannerSpawn: args.attestPlannerSpawn, // #370: honor the planner attest back-fill on the bundle path
-    selectionRecordDigest: args.selectionRecordDigest // the selection record's durable anchor
+    selectionRecordDigest: args.selectionRecordDigest, // the selection record's durable anchor
+    selectionRecordBytes: args.selectionRecordBytes    // ...and the bytes it is a digest OF
   });
   // Advice rides the envelope the claim actually emits; it never changes the outcome.
   return sizeAdvice ? Object.assign(claimed, sizeAdvice) : claimed;
