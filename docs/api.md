@@ -1673,12 +1673,14 @@ requires an EXPLICIT clean result; every other shape halts):
 | resultless (e.g. `{exitCode:N}` from a crashed/killed/non-JSON subprocess) or an unrecognized `result` token | `halt` | `barrier_unverifiable` | `[]` |
 
 `verdict: adopt` needs no further action. `verdict: halt` means the writer's changes could not be
-confirmed clean — do **not** re-open the node directly; resolve the named `outOfWriteSet` paths
-first (`revert-overflow` to discard them, attempt-bound `repair-node` when the frozen DAG still has
+confirmed clean, and the envelope names the paths in `outOfWriteSet`. Resolve them before re-opening
+(`revert-overflow` to discard them, attempt-bound `repair-node` when the frozen DAG still has
 one admissible owner, planner-owned `kaola-workflow-replan.js` when repair returns
-`repair_requires_replan`, or a consent halt if the resolution is a judgment call), THEN re-open.
-Skipping straight to `open-next`/`open-ready`
-on a `halt` verdict is the halt-then-reopen laundering hole this mechanism closes.
+`repair_requires_replan`, or a consent halt if the resolution is a judgment call).
+Skipping straight to `open-next`/`open-ready` re-anchors the node's baseline, which drops those paths
+underneath it so the per-node barrier no longer reports them. The whole-plan barrier at the sink is
+unaffected — it diffs the entire claim against the union of every declared write set — so an
+unresolved path surfaces there instead, after the work is done.
 
 Reconcile itself is **non-destructive** — it never auto-deletes a file. The design issue's own AC3
 asked for a typed `adopt | revert | halt` output; the shipped classifier emits only `adopt|halt`

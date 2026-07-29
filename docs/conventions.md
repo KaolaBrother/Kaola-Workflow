@@ -75,13 +75,15 @@ timeout/nudge/reclaim decision is never left to model improvisation:
 - **Typed delegation outcomes.** Every delegation records a closed-vocabulary `delegation_outcome`
   in the node's evidence (`completed | returned_partial | interrupted_unresponsive |
   interrupted_obsolete`, absent ⇒ `completed`) — never a free-text "it stalled so I did it myself".
-- **Writer kill-safety.** An in-place writer (sharing the parent worktree) is non-interruptible
-  before the wait budget and the full escalation ladder — a writer that must be interruptible
-  belongs in an isolated `parallel_safe` leg instead. After reclaiming any in-place writer,
-  `reconcile-running-set` MUST run and its per-writer verdict (`adopt`/`halt`) MUST be honored
-  BEFORE the node is re-opened: a `halt` verdict means the writer's changes could not be confirmed
-  clean, and re-opening straight past it is the halt-then-reopen laundering hole this protocol
-  closes.
+- **Writer kill-safety.** An in-place writer (sharing the parent worktree) writes into the tree
+  everything else is reading, so interrupting one leaves half-written work in place with no owner; a
+  writer that must be interruptible belongs in an isolated `parallel_safe` leg instead, where an
+  interrupt discards the leg atomically. After reclaiming any in-place writer,
+  `reconcile-running-set` returns a per-writer verdict (`adopt`/`halt`); a `halt` names the paths
+  that could not be confirmed inside the declared write set. Re-opening straight past it re-anchors
+  the node's baseline so its own barrier no longer sees them — the sink still does, because the
+  whole-plan barrier diffs the entire claim against every declared write set. Resolving a halt is
+  therefore cheaper before the re-open than after the sink.
 
 See `docs/plan-run-cards/join-protocol.md` for the full mechanics (long-poll join loop, the exact
 `reconcile-running-set` JSON verdict shape, frontier dispatch discipline, and slot awareness) and

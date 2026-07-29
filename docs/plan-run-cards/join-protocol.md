@@ -104,13 +104,14 @@ value is a typed evidence-shape refusal.
 
 ## 4. Writer kill-safety — `reconcile-running-set`'s adopt/halt verdicts
 
-An in-place writer (a node sharing the parent worktree) is **never** interrupted before the wait
-budget and the full escalation ladder above — no exception, no "it looked idle" shortcut. A writer
-that genuinely needs to be interruptible belongs in an isolated `parallel_safe` leg instead (see
+An in-place writer (a node sharing the parent worktree) writes into the tree everything else is
+reading, so interrupting one leaves whatever it had half-written in place with no owner — "it looked
+idle" is the shortcut that produces exactly that. A writer that genuinely needs to be interruptible
+belongs in an isolated `parallel_safe` leg instead (see
 `docs/plan-run-cards/frontier-batch.md` §3): interrupting a leg writer discards that leg atomically
 (worktree, branch, and leg-base ref torn down) — never a partial keep.
 
-After reclaiming ANY in-place writer (ladder step 2's interrupt, or the step-3 reclaim), run:
+After reclaiming ANY in-place writer, run:
 
 ```bash
 node kaola-workflow-adaptive-node.js reconcile-running-set --project {project} --json
@@ -138,12 +139,15 @@ set on this call:
   unrecognized result token). An unverifiable result is treated exactly like a confirmed overflow
   — never silently adopted.
 
-**`writerHalt: true` means at least one writer needs resolution before you re-open its node.** Do
-NOT re-open a halted node directly — resolve the named `outOfWriteSet` paths first
-(`revert-overflow` to discard them, `repair-node` to fold them into a re-freeze, or a consent halt
-if the resolution itself is a judgment call), THEN re-open. Skipping straight to `open-next` /
-`open-ready` on a `halt` verdict is the exact halt-then-reopen laundering hole this protocol closes
-— it would silently re-dispatch a node whose worktree still carries an unresolved stray edit.
+**`writerHalt: true` NAMES the paths, in `outOfWriteSet`, that nothing accounted for.** Resolve them
+here — `revert-overflow` to discard them, `repair-node` to fold them into a re-freeze, or a consent
+halt if the resolution itself is a judgment call — and the halt is spent. Skipping straight to
+`open-next` / `open-ready` re-anchors the node's baseline, which drops the stray paths underneath it
+and stops that node's own barrier from seeing them; the node then re-dispatches over a worktree that
+still carries the edit. What it does not do is make the edit disappear. The whole-plan barrier at the
+sink diffs the entire claim against the union of every declared write set, so an unaccounted path
+surfaces there — after the work is finished, named on a diff you then have to explain, rather than
+here, where `outOfWriteSet` has already listed it for you.
 
 `verdict: adopt` needs no further action — proceed with the normal `orient` → open flow.
 

@@ -245,16 +245,17 @@ Record a typed `delegation_outcome` in the node's evidence for every delegation:
 returned_partial | interrupted_unresponsive | interrupted_obsolete` — never a free-text "it
 stalled so I did it myself".
 
-**Writer kill-safety.** An in-place writer (shared worktree) is non-interruptible before the wait
-budget and the full escalation ladder above — no exception. A writer that must be interruptible
-belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism); interrupting an
-isolated-leg writer discards the leg atomically, never partially. After reclaiming ANY writer
-(ladder step 2 or the reclaim itself), run `reconcile-running-set` and HONOR its verdict before
-re-opening the node: a `writerHalt: true` result means at least one departing writer's changes
-could not be positively confirmed inside its declared write set — do NOT re-open that node until the
-out-of-set paths are resolved (`revert-overflow`, `repair-node`, or a consent halt). Re-opening on a
-`halt` verdict without resolving it first is the exact halt-then-reopen laundering hole this
-protocol closes.
+**Writer kill-safety.** An in-place writer shares the parent worktree, so interrupting one leaves
+whatever it had half-written sitting in the tree with no owner. A writer that must be interruptible
+belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism), where an
+interrupt discards the leg atomically rather than partially. After reclaiming ANY writer, run
+`reconcile-running-set`: a `writerHalt: true` result means at least one departing writer's changes
+could not be positively confirmed inside its declared write set, and it NAMES the out-of-set paths.
+Resolving them first (`revert-overflow`, `repair-node`, or a consent halt) is cheaper than not:
+re-opening the node re-anchors its baseline, so the stray paths drop underneath it and that node's
+own barrier stops seeing them — but they do not go away. The sink diffs the WHOLE claim against the
+union of every declared write set, so they resurface there as writes nothing declared, on a diff you
+will be explaining after the work is done instead of here, where they are already named for you.
 
 **F. Frontier dispatch discipline + slot awareness.** On `enterBatch: true`, issue every
 `spawn_agent` call for the frontier back-to-back in ONE turn, then run exactly ONE join loop (B) for
@@ -810,8 +811,12 @@ authored. On `enterBatch: true`: run `open-ready` (it marks the whole frontier `
 dispatch the returned nodes' role agents **in ONE assistant message** — multiple `Agent` calls in a
 single turn. The single-message dispatch is the *only* thing that yields real concurrency; dispatching
 one agent per turn is itself a serial barrier and silently serializes a frontier the planner authored as
-parallel. Do NOT `open-next`-then-single-dispatch a ≥2 frontier (the script now refuses to single-open
-it). **Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
+parallel. Left to auto-pick, `open-next` will not choose one node out of a ≥2 frontier — it hands the
+frontier back instead (`opened: null`, zero ledger mutation), so the batch path is what you get by
+default. An explicit `--node-id` is still honoured at any width, and that choice is one-way: once one
+node is `in_progress` the scheduler refuses `serial_node_live` and the rest of the frontier waits
+behind it, so opening 1 of N serializes all N with no route back inside the run.
+**Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
 NO `enterBatch` and runs serially (the normal single-dispatch path) — never force a minimum width, a
 "default to ≥2," or a "prefer wide" posture.
 

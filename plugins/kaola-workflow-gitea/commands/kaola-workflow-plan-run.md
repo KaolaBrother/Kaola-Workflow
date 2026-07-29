@@ -283,8 +283,12 @@ authored. On `enterBatch: true`: run `open-ready` (it marks the whole frontier `
 dispatch the returned nodes' role agents **in ONE assistant message** — multiple `Agent` calls in a
 single turn. The single-message dispatch is the *only* thing that yields real concurrency; dispatching
 one agent per turn is itself a serial barrier and silently serializes a frontier the planner authored as
-parallel. Do NOT `open-next`-then-single-dispatch a ≥2 frontier (the script now refuses to single-open
-it). **Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
+parallel. Left to auto-pick, `open-next` will not choose one node out of a ≥2 frontier — it hands the
+frontier back instead (`opened: null`, zero ledger mutation), so the batch path is what you get by
+default. An explicit `--node-id` is still honoured at any width, and that choice is one-way: once one
+node is `in_progress` the scheduler refuses `serial_node_live` and the rest of the frontier waits
+behind it, so opening 1 of N serializes all N with no route back inside the run.
+**Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
 NO `enterBatch` and runs serially (the normal single-dispatch path) — never force a minimum width, a
 "default to ≥2," or a "prefer wide" posture.
 
@@ -400,9 +404,11 @@ duplicate deliveries.
 `dispatch.wait_budget_minutes`; a still-working teammate is never interrupted or re-nudged before it
 expires, then the bounded escalation ladder runs — one `SendMessage` for the deliverable, a ~5-minute
 grace window, reclaim as the LAST resort — recording a typed `delegation_outcome`. **Writer
-kill-safety:** after reclaiming ANY writer, run `reconcile-running-set` and HONOR its verdict — a
-`writerHalt: true` means a departing writer's out-of-set paths must be resolved (`revert-overflow`,
-`repair-node`, or a consent halt) before you re-open the node. Full mechanics in the card below.
+kill-safety:** after reclaiming ANY writer, run `reconcile-running-set` — a `writerHalt: true` NAMES
+out-of-set paths a departing writer left behind. Re-opening the node re-anchors its baseline and
+hides them from that node's barrier, but not from the sink, which diffs the whole claim against every
+declared write set: resolve them now (`revert-overflow`, `repair-node`, or a consent halt) or explain
+them there. Full mechanics in the card below.
 
 <!-- CARD: join-protocol -->
 The Codex-runtime version of this same protocol (`spawn_agent`/`wait_agent`/`close_agent`
