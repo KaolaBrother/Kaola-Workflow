@@ -8619,7 +8619,14 @@ function consentGrantsView(cacheDir, readFile) {
 // The revocation seam. Called once per invocation, BEFORE the re-plan fence emits — a new candidate
 // digest is observable only while that fence stands, and a revocation deferred until the fence lifts
 // would be a revocation that never happened. Monotone (it only ever revokes), idempotent, and a
-// no-op with zero writes when there is no journal, so it can never change any other outcome.
+// no-op with zero writes when there is no journal — so a project that never used the valve is
+// untouched by it.
+//
+// THE STORE WRITE IS THE REVOCATION, so this function THROWS rather than reporting a failed one.
+// The journal entries below exist in memory until they persist; a write that does not land leaves
+// every live class still folding to `live` for the lookup that runs moments later in the same
+// invocation. The caller must not carry on past that, so the failure is not returned as a value it
+// could ignore.
 function syncConsentScope(cacheDir, statePath, readFile, writeFile) {
   const store = readConsentStore(cacheDir, readFile);
   if (!store) return null;
@@ -17495,7 +17502,18 @@ function main() {
       // grant silently. The fence's enumerated zero-write posture is about worktree mirroring,
       // scheduler locks, stdin and envelope caches; this is none of those, it is monotone (it can
       // only ever revoke), and it is a no-op with zero writes for any project that has no journal.
-      try { syncConsentScope(cacheDir, statePath, readFile, writeFile); } catch (_) { /* never alters an outcome */ }
+      //
+      // THERE IS NO CATCH HERE, AND ITS ABSENCE IS THE POINT. The store write IS the revocation:
+      // journalling `revoked` in memory and failing to persist it leaves the class folding to
+      // `live`, and the very next thing this invocation does on `write-halt --reason consent` is
+      // consult that fold and ride the grant — `standing_grant: true`, `halt: not_raised`, nobody
+      // asked. A swallowed write failure there applies a human's yes under the plan, epoch and
+      // claim the moved stamp existed to end. "Did the write land" is L1's whole question, and
+      // every other durable write in this file answers it; the one write that bounds a value call
+      // may not be the exception. The only throw this call has is the store write (the read half
+      // fails to null and returns early, so a project that never used the valve reaches no write
+      // at all), so letting it propagate stops exactly the invocation that must not proceed.
+      syncConsentScope(cacheDir, statePath, readFile, writeFile);
       if (!projectReplanFence.ok || projectReplanFence.fenced) {
         const out = replanOrientation(projectReplanFence, project);
         // The fence's zero-write posture is ENUMERATED (no worktree mirror, no scheduler lock, no

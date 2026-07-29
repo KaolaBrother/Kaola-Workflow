@@ -31547,16 +31547,25 @@ scenario(() => {
     return { repoRoot, project, projDir, planPath, statePath, hash, head, tree };
   }
 
-  // ONE process per call. Nothing is carried between calls but bytes on disk.
-  function run846(fx, args) {
-    const r = spawn846(process.execPath, [NODE_CLI_846, ...args], { cwd: fx.repoRoot, encoding: 'utf8' });
+  // ONE process per call. Nothing is carried between calls but bytes on disk. The RAW form is the
+  // primitive because #858 asks what the process DID, not only what it printed: a run that dies
+  // before emitting anything has an empty envelope, and an empty envelope is indistinguishable
+  // from a quiet success unless the exit status is read alongside it.
+  // spawn-class: durable-handoff
+  function run846Raw(fx, args, opts) {
+    const o = opts || {};
+    const argv = (o.preload ? ['--require', o.preload] : []).concat([NODE_CLI_846], args);
+    const env = o.env ? Object.assign({}, process.env, o.env) : process.env;
+    const r = spawn846(process.execPath, argv, { cwd: fx.repoRoot, encoding: 'utf8', env });
     let out = {};
     try { out = JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    return out;
+    return { envelope: out, status: r.status, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
   }
-  const ask846 = (fx, cls, reason) => run846(fx, ['write-halt', '--project', fx.project,
+  const run846 = (fx, args, opts) => run846Raw(fx, args, opts).envelope;
+  const askArgs846 = (fx, cls, reason) => ['write-halt', '--project', fx.project,
     '--node-id', 'impl-core', '--reason', reason || 'consent',
-    ...(cls ? ['--consent-class', cls] : []), '--json']);
+    ...(cls ? ['--consent-class', cls] : []), '--json'];
+  const ask846 = (fx, cls, reason) => run846(fx, askArgs846(fx, cls, reason));
   const clear846 = (fx) => run846(fx, ['clear-halt', '--project', fx.project, '--reason', 'consent', '--json']);
   const orient846 = (fx) => run846(fx, ['orient', '--project', fx.project, '--json']);
   const patchState846 = (fx, values) => fs.writeFileSync(fx.statePath,
@@ -31569,6 +31578,55 @@ scenario(() => {
   // Grant CLASS_846 the way a real run does: ask, then have the human clear. Returns the
   // clear-halt envelope so a scenario can assert on the grant record itself.
   const grant846 = (fx, cls) => { ask846(fx, cls || CLASS_846); return clear846(fx); };
+
+  const store846 = (fx) => path.join(fx.projDir, '.cache', schema846.CONSENT_GRANTS_NAME);
+  // The journal AS EVENTS, in order — the durable record the fold is computed from. Null when
+  // there is no store at all, which is a different fact from an empty journal.
+  const journal846 = (fx) => {
+    try { return (JSON.parse(fs.readFileSync(store846(fx), 'utf8')).journal || []).map(e => e.event); }
+    catch (_) { return null; }
+  };
+
+  // #858 — THE STORE-WRITE FAULT INJECTOR. The consent store persists through
+  // writeFileAtomicReplace, whose last step renames a temp file onto .cache/consent-grants.json;
+  // failing THAT rename is the read-only mount / full disk / permissions change / interrupted
+  // mount the defect names, and it is surgical — the scheduler lock, the plan write and the state
+  // write all rename normally in the same process, so nothing but the consent store is disturbed.
+  //
+  // `failFirst: 1` is a TRANSIENT fault: the revocation write fails and a later write in the same
+  // process succeeds. That distinction is load-bearing rather than incidental — under a PERSISTENT
+  // fault the second write fails too and the process dies either way, so the swallowed revocation
+  // is invisible; it is exactly the recoverable fault that let a stale grant be honoured quietly.
+  //
+  // Every attempt is logged, so a scenario can assert a write was never even ATTEMPTED. That is
+  // what "zero-write no-op" has to mean here: "the write did not happen" is also true of a write
+  // that was attempted and thrown out of, and those are opposite facts.
+  function armStoreFault846(fx, failFirst) {
+    const preload = path.join(fx.repoRoot, 'consent-store-fault.js');
+    const attempts = path.join(fx.repoRoot, 'consent-store-attempts.log');
+    fs.writeFileSync(preload, [
+      'const fs = require("fs"); const p = require("path");',
+      'const real = fs.renameSync; let seen = 0;',
+      'fs.renameSync = function (from, to) {',
+      '  if (p.basename(String(to)) === "consent-grants.json") {',
+      '    seen += 1;',
+      '    const n = parseInt(process.env.KW858_FAIL_FIRST, 10);',
+      '    const willFail = (n === 0) || (seen <= n);',
+      '    try { fs.appendFileSync(process.env.KW858_ATTEMPTS, seen + " " + willFail + "\\n"); } catch (e) {}',
+      '    if (willFail) { const e = new Error("EACCES rename onto the consent store"); e.code = "EACCES"; throw e; }',
+      '  }',
+      '  return real.apply(fs, arguments);',
+      '};',
+    ].join('\n') + '\n');
+    return {
+      preload,
+      env: { KW858_FAIL_FIRST: String(failFirst), KW858_ATTEMPTS: attempts },
+      attempts: () => {
+        try { return fs.readFileSync(attempts, 'utf8').trim().split('\n').filter(Boolean).length; }
+        catch (_) { return 0; }
+      },
+    };
+  }
 
   // -------------------------------------------------------------------------
   // #846-A — THE SUBTRACTION ITSELF, end to end, across four separate processes.
@@ -32167,6 +32225,152 @@ scenario(() => {
       '#846-O: ...so the class asks again under the new scope, got '
       + JSON.stringify({ standing_grant: o3.standing_grant, halt: o3.halt }));
     cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-P (#858) — A REVOCATION THAT DID NOT PERSIST IS NOT A REVOCATION. The scope-move sync
+  // journals `revoked` for every live class and WRITES the store; that write is the revocation and
+  // nothing else is. If it fails, the journal on disk still ends at `granted`, the fold still
+  // returns `live`, and the grant lookup that runs moments later in the SAME invocation rides it —
+  // so a yes given under one plan, epoch and claim is spent under the ones the moved stamp existed
+  // to end. Nobody is asked, and the only trace is an application entry that looks exactly like a
+  // legitimate one.
+  //
+  // The two controls are what make this a measurement rather than a restatement: with the store
+  // write LANDING the same scope move revokes and the valve asks (so the revocation itself works),
+  // and with no move at all the grant is ridden (so the grant really is live and really would be
+  // spent). Between them, the only variable left in the third arm is whether the write landed.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    // Control 1 — the grant is live, and a live grant IS spent without asking.
+    const fx = makeConsentRepo846();
+    grant846(fx);
+    const p0 = ask846(fx, CLASS_846);
+    assert(p0.standing_grant === true && p0.halt === 'not_raised' && p0.applications === 1,
+      '#846-P control 1: an unmoved scope rides the grant — this is the outcome the failed '
+      + 'revocation must not be able to produce, got '
+      + JSON.stringify({ standing_grant: p0.standing_grant, halt: p0.halt, applications: p0.applications }));
+
+    // Control 2 — the same scope move with the store write LANDING: revoked, and the valve asks.
+    const ctl = makeConsentRepo846();
+    grant846(ctl);
+    patchState846(ctl, { plan_epoch: 2 });
+    const c1 = ask846(ctl, CLASS_846);
+    assert(c1.standing_grant === false && c1.halt === 'written',
+      '#846-P control 2: with the write landing, the moved scope revokes and the human is asked, '
+      + 'got ' + JSON.stringify({ standing_grant: c1.standing_grant, halt: c1.halt }));
+    assert(String(journal846(ctl)) === 'granted,revoked',
+      '#846-P control 2: ...and the DURABLE record says so — the journal ends at revoked, got '
+      + JSON.stringify(journal846(ctl)));
+    cleanup846(ctl);
+
+    // The case — the identical scope move, with the revocation write forced to fail.
+    patchState846(fx, { plan_epoch: 2 });
+    const beforeBytes = fs.readFileSync(store846(fx), 'utf8');
+    const beforeEvents = journal846(fx);
+    const fault = armStoreFault846(fx, 1);
+    const p1 = run846Raw(fx, askArgs846(fx, CLASS_846), fault);
+
+    assert(fault.attempts() >= 1,
+      '#846-P vacuity guard: the injected fault must actually have been reached — a scenario whose '
+      + 'injector never fired proves nothing, got ' + fault.attempts() + ' attempts');
+    assert(p1.envelope.standing_grant !== true,
+      '#846-P: the invocation must NOT speak on a grant whose revocation did not persist. This is '
+      + 'the whole defect: pre-fix this arm answered standing_grant: true, halt: not_raised, and a '
+      + 'human\'s yes was spent under a plan they never saw, got '
+      + JSON.stringify({ result: p1.envelope.result, halt: p1.envelope.halt,
+        standing_grant: p1.envelope.standing_grant, applications: p1.envelope.applications }));
+    assert(p1.status !== 0,
+      '#846-P: ...and it does not report success. A failed kernel-adjacent write that exits 0 is '
+      + 'indistinguishable to every caller from one that landed, got exit ' + p1.status);
+    assert(String(journal846(fx)) === String(beforeEvents),
+      '#846-P: ...and the journal gains NOTHING — no application is recorded against a grant this '
+      + 'run could not revoke, got ' + JSON.stringify(journal846(fx))
+      + ' from ' + JSON.stringify(beforeEvents));
+    assert(fs.readFileSync(store846(fx), 'utf8') === beforeBytes,
+      '#846-P: ...and the store on disk is byte-unchanged: the failed write left no half-applied '
+      + 'residue behind it');
+
+    // Nothing was consumed. Once the fault clears, the SAME pending revocation still happens —
+    // the failure deferred the revocation, it did not spend it.
+    const p2 = ask846(fx, CLASS_846);
+    assert(p2.standing_grant === false && p2.halt === 'written',
+      '#846-P: the next invocation without the fault revokes and asks — a swallowed failure that '
+      + 'ALSO consumed the revocation would leave the grant live forever, got '
+      + JSON.stringify({ standing_grant: p2.standing_grant, halt: p2.halt }));
+    assert((journal846(fx) || []).includes('revoked'),
+      '#846-P: ...and the durable journal finally carries the revocation, got '
+      + JSON.stringify(journal846(fx)));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-Q (#858) — AND A PROJECT THAT NEVER USED THE VALVE IS UNTOUCHED BY ANY OF IT. The
+  // revocation sync runs in the guard prologue of `orient` and every replan-guarded mutation, so
+  // the cost of it existing is paid by every run there is. With no journal it reads null and
+  // returns before any write — which is why the store-write fault, armed to fail EVERY write, is
+  // never even reached. Zero attempts, not zero successful writes: a write attempted and thrown
+  // out of would satisfy "the file did not change" while being the exact opposite fact.
+  //
+  // The final arm is the vacuity guard, and it is not decoration: the three assertions above are
+  // all satisfiable by an injector that failed to install, and this scenario cannot borrow #846-P's
+  // proof because the two do not run together under a sharded suite.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    const fault = armStoreFault846(fx, 0);
+    assert(fs.existsSync(store846(fx)) === false,
+      '#846-Q precondition: a fresh project has no consent journal at all');
+
+    // The read-only successor surface, a guarded mutation, and its inverse — all under a fault
+    // that fails every consent-store write there is.
+    const q1 = run846Raw(fx, ['orient', '--project', fx.project, '--json'], fault);
+    const q2 = run846Raw(fx, askArgs846(fx, null, 'security'), fault);
+    const q3 = run846Raw(fx, ['clear-halt', '--project', fx.project, '--reason', 'security', '--json'], fault);
+
+    assert(q1.status === 0 && q2.status === 0 && q3.status === 0,
+      '#846-Q: every one of them completes normally, got exits '
+      + JSON.stringify([q1.status, q2.status, q3.status]));
+    assert(q1.envelope.result === 'ok' && Array.isArray(q1.envelope.consentGrants)
+      && q1.envelope.consentGrants.length === 0 && q2.envelope.halt === 'written',
+      '#846-Q: ...with their ordinary outcomes — orient reports an empty grant list and the halt '
+      + 'lands, got ' + JSON.stringify({ orient: q1.envelope.consentGrants, halt: q2.envelope.halt }));
+    assert(fault.attempts() === 0,
+      '#846-Q: ...and not one write onto the consent store was ATTEMPTED across all three, got '
+      + fault.attempts());
+    assert(fs.existsSync(store846(fx)) === false,
+      '#846-Q: ...so the store is still not there. The valve costs nothing until a human says yes');
+
+    // Vacuity guard — the injector IS live in this process shape. Raising an ungranted class
+    // records the pending request, which is a real consent-store write, and it must be caught.
+    const q4 = run846Raw(fx, askArgs846(fx, CLASS_846), fault);
+    assert(fault.attempts() >= 1 && q4.status !== 0,
+      '#846-Q vacuity guard: the same armed fault DOES bite the moment the valve actually writes — '
+      + 'the zero above is the code\'s early return, not a dead injector, got '
+      + JSON.stringify({ attempts: fault.attempts(), exit: q4.status }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-R (#858) — THE READ HALF IS UNCHANGED. An absent, empty or unparseable store still reads
+  // as null and still returns before any write, so none of the above tightens what happens to a
+  // corrupt journal: it is not repaired, not rewritten, and not treated as an integrity event.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    for (const bytes of ['{ not json', '{"scope":"x"}', '', '[]']) {
+      const fx = makeConsentRepo846();
+      fs.writeFileSync(store846(fx), bytes);
+      patchState846(fx, { plan_epoch: 2 });          // the scope HAS moved
+      const fault = armStoreFault846(fx, 0);
+      const r1 = run846Raw(fx, ['orient', '--project', fx.project, '--json'], fault);
+      assert(r1.status === 0 && r1.envelope.result === 'ok',
+        '#846-R: an unreadable store is not an integrity event — orient still answers, got '
+        + JSON.stringify({ exit: r1.status, result: r1.envelope.result, bytes: bytes }));
+      assert(fault.attempts() === 0 && fs.readFileSync(store846(fx), 'utf8') === bytes,
+        '#846-R: ...and nothing is written over it, not even under a moved scope stamp, got '
+        + JSON.stringify({ attempts: fault.attempts(), bytes: bytes }));
+      cleanup846(fx);
+    }
   });
 }
 
