@@ -2220,7 +2220,7 @@ function seedKaolaConfig(homeDir) {
 // x7 files total, this installer being the reference copy per validate-script-sync.js's
 // "codex agent-profile installer copies" group); keep the two copies in lock-step.
 // ---------------------------------------------------------------------------
-const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.';
+const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior observed on codex-tui 0.142.5 and not re-verified on Codex >=0.145.0; it may change in a future Codex release.';
 
 function stripTomlComment(line) {
   let inSingle = false;
@@ -2700,7 +2700,7 @@ function dispatchPostureRemediation(posture) {
       + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
       + 'model_reasoning_effort=ultra) for proactive delegation.';
   }
-  return 'Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). '
+  return 'Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). '
     + 'To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes '
     + 'an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), '
     + 'set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '

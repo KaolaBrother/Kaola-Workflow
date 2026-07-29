@@ -3002,9 +3002,9 @@ spawn: `features.multi_agent_v2.enabled` absent-or-false → `"none"`; otherwise
 never change `status` or the exit code, on either the normal gate or `--doctor`. On the normal
 gate's plain-text (non-`--json`) success output, a `warn: <dispatch_posture_warning>` line follows
 the `ok: N roles verified` line whenever the posture is non-`proactive`; the exit code stays `0`.
-**Version-guarded:** the effort→mode coupling is Codex CLI runtime behavior verified on
-Codex >=0.145.0 (rust-v0.145.0) and may change in a future release; the installer prints this
-caveat verbatim as its final dispatch-posture line.
+**Version-guarded:** the effort→mode coupling is Codex CLI runtime behavior observed on
+codex-tui 0.142.5, not re-verified on Codex >=0.145.0, and may change in a future release; the
+installer prints this caveat verbatim as its final dispatch-posture line.
 
 **MultiAgentV2 bounds report (additive, non-fatal — issue #611, D-611-01):** the same readable
 live-scope success/refusal branches that carry `dispatch_posture*` additionally carry six
@@ -3058,7 +3058,7 @@ and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
 
 Success:
 ```json
-{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": true, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.", "max_concurrent_threads_per_session": 4, "max_concurrent_threads_per_session_source": "observed_default", "effective_subagent_width": 3, "min_wait_timeout_ms": null, "max_wait_timeout_ms": null, "default_wait_timeout_ms": null }
+{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": true, "dispatch_posture_warning": "Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.", "max_concurrent_threads_per_session": 4, "max_concurrent_threads_per_session_source": "observed_default", "effective_subagent_width": 3, "min_wait_timeout_ms": null, "max_wait_timeout_ms": null, "default_wait_timeout_ms": null }
 ```
 
 The `scope` field is `"global"` when global profiles satisfy the gate without a project Kaola
