@@ -3025,18 +3025,17 @@ detection already derives, #332/#571/#775): when v2 is not active, every field r
 is off. When v2 IS active: `max_concurrent_threads_per_session` reports the configured
 `features.multi_agent_v2.max_concurrent_threads_per_session` verbatim (`source: 'config'`) when it
 is a positive integer. `max_threads` is NOT an alias — it is a separate top-level `[agents]` key
-that Codex rejects once MultiAgentV2 is enabled — so a stray one is ignored here; when the field is
+that this parser does not read, so a stray one does not change the reported budget; when the field is
 absent or non-positive/non-integer, it falls back to the
 OBSERVED default of **4** (`source: 'observed_default'`) — this number comes from the issue's own
 controlled probe ("4 available concurrency slots, including you"), NOT from published Codex
 documentation, so it is labeled observed rather than a guaranteed default. This arithmetic is
-UNCHANGED by #775 (only the config table it reads moved from `[features.multi_agent_v2]` to
-`[agents]`) — confirmed against rust-v0.145.0 source (`effective_agent_max_threads` uses
+UNCHANGED by #775 — confirmed against rust-v0.145.0 source (`effective_agent_max_threads` uses
 `saturating_sub(1)`) and upstream PR #19792: the cap is **inclusive of the root/orchestrator
 thread**, so `effective_subagent_width` is `max(threads - 1, 0)`. `min_wait_timeout_ms` /
 `max_wait_timeout_ms` / `default_wait_timeout_ms` are read ONLY when explicitly present in
-`[agents]` (either the inline-object or dotted-table TOML syntax); there is deliberately NO
-fabricated numeric fallback for these three, so they report `null` when absent. On
+`[features.multi_agent_v2]` (either the inline-object or dotted-table TOML syntax); there is
+deliberately NO fabricated numeric fallback for these three, so they report `null` when absent. On
 the `--doctor` `plugin_cache` scope (a cached source tree, no live runtime config to derive bounds
 from) all six fields mirror the `dispatch_posture: 'n/a'` convention: every numeric field is `null`
 and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
