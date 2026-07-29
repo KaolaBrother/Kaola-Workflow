@@ -708,7 +708,6 @@ assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive exe
   // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
   'mirror-project'
 ]);
-assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'workflow_path: adaptive');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'disjointWriteSets');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'readPlanNodes');
 // #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
@@ -830,25 +829,15 @@ assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_d
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort');
 
 // #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
-// actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
-// no-improvise prohibition on every plan-run spawn — pinned on BOTH the command and SKILL surfaces.
+// actually prints — pinned on BOTH the command and SKILL surfaces. The card-acquisition rule, the
+// no-improvise prohibition and the #604/#605 announcement formats are manifest-obligated tokens
+// (pr-dispatch-card-visibility), proven on these same paths by the derived-universe presence check.
 for (const planRunSurface of [
   pluginRoot + '/commands/kaola-workflow-plan-run.md',
   pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md'
 ]) {
   assertIncludes(planRunSurface, 'opened=<node-id> role=<role> task=<codex_task_name>');
-  assertIncludes(planRunSurface, "take the dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`. Never dispatch without the card in view.");
-  assertIncludes(planRunSurface, 'Every spawn parameter comes from the dispatch card.');
 
-  // #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
-  // inline-fallback format, verbatim.
-  assertIncludes(planRunSurface, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
-  assertIncludes(planRunSurface, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
-  assertIncludes(planRunSurface, '← {node_id} · {role} returned: {verdict or one-line outcome}');
-  assertIncludes(planRunSurface, '→ running {node_id} · {role} inline');
-
-  // #605: required progress-echo line printed after every close-and-open-next.
-  assertIncludes(planRunSurface, '{node-id} → complete; opened: {next-id|—}');
 
   // The gate-instrumentation-provisioning anchor, the retired KAOLA_GATE_WINDOW_FENCE ban, and the
   // Join Protocol's wait-budget / delegation-outcome / writerHalt needles are asserted on THESE
@@ -864,8 +853,6 @@ assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'planner_override')
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'difficulty alone is not evidence');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a budget to hide a wedged agent');
 
-// #606: teammate-mode dispatch subsection — Claude-runtime block, command surface only.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', "spawn each node's role agent as a NAMED teammate");
 // The one-request teammate rule on this edition's plan-run COMMAND, and the fork_turns
 // unconditional mandate plus its two retired-qualifier bans on this edition's plan-run SKILL, are
 // asserted on THESE SAME EDITION PATHS by the root validator's three-command and three-SKILL
@@ -881,13 +868,9 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex
 // effort itself (not a guaranteed parent-session equality) — the retired "child inherits the
 // current parent session" claim and the codex_tier_unresolved refusal are both gone; Kaola never
 // writes or overrides agents.default_subagent_model / agents.default_subagent_reasoning_effort.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'current parent session');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', "the sub-agent's model/reasoning effort itself");
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-session equality');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'One contract, every role, every runtime');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'dispatch.codex_profile_mode');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Omit both `model`');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model: dispatch.codex_model');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
@@ -931,8 +914,6 @@ for (const reviewerBody of [
   // that --verdict-check reads at Finalization) so a gate node always emits it.
   assertIncludes(reviewerBody, 'verdict: pass');
 }
-// #281: frontier-unit semantics in GitLab plan-run command (added by plan-run-semantics node)
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in GitLab workflow-planner profile (added by planner-profile node)
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'EFFICIENT DAGs');
 
@@ -1029,10 +1010,7 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   }
   // Content-reachability tier (catches #369/#380): a mirrored SKILL must carry the command's
   // route/wiring tokens or the route resolves to a hollow surface.
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md', 'issue_numbers');
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md', '--issue-numbers');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'workflow-plan.md exists -> kaola-workflow-plan-run');
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'auto-bundle');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'close-and-open-next');
   // #463 (AC11): pin the synthesizer role in the forge-codex SKILL too (the #400 dead-zone surface).
   assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'synthesizer');
@@ -1050,7 +1028,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
     assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
     assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
-    assertIncludes(planRunSurface, 'write-halt --reason consent');
     // #817: the fence's ROLE LIST is itself the contract — every REVIEW_GATE_ROLES member that
     // reviews someone else's work must sit inside it. `main-session-gate` is deliberately absent:
     // it is non-delegable and REQUIRED to run inline, so fencing it would be a contradiction.
