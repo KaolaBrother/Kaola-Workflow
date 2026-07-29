@@ -77,11 +77,12 @@ The exact active cache root is
 The base invocation is `--project-root "$PWD" --no-autofix --json`; the gate
 merges persisted config from HOME through the repository root to `"$PWD"`. When this
 skill owns a frozen adaptive plan, set `KAOLA_CODEX_PREFLIGHT_PLAN` to that
-exact plan before running the block so `--plan` is also enforced. Continue only
-after exit 0 and parsed `status: "ok"`. Exact-byte drift such as
-`profile_bytes_mismatch` is `profile_preflight_refused`: STOP before any
-`agents.spawn_agent` call, never record `subagent-invoked`, and do not relabel
-profile/config drift as tool unavailability or local fallback. Re-run the gate if the installed profile set changes.
+exact plan before running the block so `--plan` is also enforced. Read
+the exit code and parsed `status`. On drift such as `profile_bytes_mismatch` the
+gate reports `profile_preflight_refused` with the offending profile and its
+remediation: weigh that against what you are about to dispatch and decide. Drift
+is a profile/config fact, not tool unavailability, so record it as what it is.
+Re-run the gate if the installed profile set changes.
 <!-- /PIN -->
 
 # Skill: kaola-workflow-plan-run (GitLab)
@@ -279,10 +280,9 @@ source described by the metric-optimizer card.
 ## Gate-Role Degradation Notice
 
 The Codex Profile Freshness Gate above is authoritative for profile/config availability. Missing,
-stale, malformed, or shadowed project profiles are `profile_preflight_refused`: STOP before opening
-the first node; never route that drift through this degradation path. After a successful gate,
-determine runtime dispatch-tool availability before opening the first node and re-check if it
-changes mid-run.
+stale, malformed, or shadowed project profiles report `profile_preflight_refused` — that is profile
+drift, not the degradation this path is for, so do not route it through here. Determine runtime
+dispatch-tool availability before opening the first node and re-check if it changes mid-run.
 Unavailable means the agent tool is genuinely absent or the runtime mode-refuses the spawn. When that
 dispatch capability is unavailable, post a PROMINENT run-start notice — before dispatching any node —
 naming every gate role the plan would otherwise have dispatched: `adversarial-verifier`,
