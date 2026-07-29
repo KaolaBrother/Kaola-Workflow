@@ -4427,6 +4427,61 @@ const SINK_FINDING_ROUTE_BY_KIND = Object.freeze({
   final_fix_register_unverified: Object.freeze({ route: inGrammar('adaptive-node', 'final-fix-commit', '--project <P> --json --stdin'), legacy_token: null }),
 });
 
+// --- NOT A FAMILY: the final-fix lane's not-in-finalization ADVISE -----------
+// R1 admits a typed refusal at exactly three loci — L1 kernel-write integrity, L2 the sink,
+// A3 consent. "the terminal finalize row is not in_progress" is none of them: nothing was
+// written, nothing is reaching mainline, no values call is pending. It is a wrong-verb-for-
+// state condition, which R1 ships as an advisory or a tool, and R3 says the same thing from
+// the other side — the remedy is mechanical, so what was missing was a tool, not a wall.
+// R4 does not bound it either: an unopened sink is a STATE, not evidence of tampering.
+//
+// So this carries no family, no registry row and no sweep obligation (see the vocabulary
+// header above). What it DOES carry is a route, and deciding that route is this function's
+// whole content.
+//
+// THE ROUTE IS CONDITIONAL. A route is a promise the verb will accept the work, so it may
+// only be named where the verb can genuinely keep it:
+//   * a PENDING sink row is openable. `open-next --node-id <sink>` is the ONE verb that
+//     flips a pending ledger row to in_progress and records its baseline, which is exactly
+//     and only what `live` requires — and this answer fires precisely when the run is NOT
+//     in finalization, which is when that ordinary mid-run open path is still available.
+//     It is also the codebase's own standing answer for the same fact elsewhere ("Node X is
+//     not in_progress ... Open it (open-next) first").
+//   * NO unique terminal finalize row means there is no node to open AT ALL, and a
+//     complete / n/a / unrecorded row is not re-opened by this verb either. Naming a verb
+//     that could only refuse reproduces the dead-end wedge the doctrine forbids, so those
+//     answers carry NO route and say why instead — the same deliberate silence recorded for
+//     `foreign_archive` above.
+// The prose and the route are decided TOGETHER, in one place, so they cannot disagree about
+// whether an exit exists.
+function finalFixSinkAdvice(sink, project) {
+  const id = (sink && sink.id) || null;
+  const status = (sink && sink.status) || null;
+  if (!id) {
+    return Object.freeze({
+      route: null,
+      detail: 'the plan has no unique terminal finalize node — there is no sink row to open, and no '
+        + 'verb can conjure one, so this answer names no route: silence is the floor when nothing '
+        + 'could keep the promise',
+    });
+  }
+  if (status === 'pending') {
+    return Object.freeze({
+      route: inGrammar('adaptive-node', 'open-next',
+        '--project ' + (project || '<P>') + ' --node-id ' + id + ' --json'),
+      detail: 'the terminal sink "' + id + '" is "pending", not in_progress — this run has not entered '
+        + 'finalization yet, so open the sink and re-submit, or land the fix through the ordinary '
+        + 'in-plan path at the node that declares the surface',
+    });
+  }
+  return Object.freeze({
+    route: null,
+    detail: 'the terminal sink "' + id + '" is "' + (status || 'unrecorded') + '", not in_progress, and no verb re-opens '
+      + 'it into finalization from here — land the fix through the ordinary in-plan path, at the node '
+      + 'that declares the surface',
+  });
+}
+
 // --- family 7: consent_required (A3) ---------------------------------------
 // An irreversible or value-laden call that no script may make. The resolution verb rides
 // in the PAYLOAD, never in the route — `consent` is a closed-vocabulary terminal.
@@ -6504,6 +6559,7 @@ module.exports = {
   routeKey,
   resolveRoute,
   resolveSinkFindingRoute,
+  finalFixSinkAdvice,
   R4_NON_REMEDIABLE_CELLS,
   resolveAutoRemediable,
   // The cell-keyed WHY slot: hint = FACT(payload) + WHY(cell) + ROUTE(payload). REFUSAL_WHY is the

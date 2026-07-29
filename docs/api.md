@@ -1268,11 +1268,22 @@ There is **no field that admits a production surface** (see **The scope wall** b
 
 | reason | fires when | extra envelope fields |
 | --- | --- | --- |
-| `final_fix_sink_not_live` | the plan's unique terminal `finalize` row is not `in_progress` — this run is not in finalization | `sink_node`, `sink_status` |
 | `final_fix_after_sink_started` | the derived sink progress is not `pristine`. **The lane's hard close.** Three-valued and fail-closed: `started` AND `unknown` both refuse, because a false `pristine` after a push would rewrite a shipped run. After the push, recovery is a follow-up issue, never a history rewrite | `sink_progress: "started" \| "unknown"` |
 | `final_fix_unverified` | `rerun` absent/malformed; `rerun.command !== failed_command` (a receipt for another command is a rubber stamp); `rerun.exit_code !== 0`; `rerun.candidate_hash` ≠ the recomputed current candidate; `fix_commit` unresolvable | `recorded_candidate_hash`, `current_candidate_hash` |
 | `final_fix_production_surface` | the entry touches production behavior. **Unconditional** — no receipt, entry field or verifier admits it | `production_paths[]`, `route: "shape_refutation"`, `refusal_route: { script: "replan", verb: "shape-refutation" }`, `auto_remediable: false` |
 | `final_fix_register_unverified` | an EXISTING register does not verify — appending to it would launder the out-of-band edit | `register_reason` |
+
+**A sink that is not live is an ADVISE, not a refusal.** A submission arriving while the plan's unique terminal `finalize` row is not `in_progress` answers `result: "advise"` — no `reason`, nothing in `reasons`, and no entry in the census. ADR 0013 R1 admits a typed refusal only at L1 (a kernel write that did not take), L2 (the sink gate) and A3 (consent), and this is none of them: nothing was written, nothing is reaching mainline, no values call is pending. R3 supplies the rest — the remedy is mechanical, which makes a refusal here a missing tool wearing a uniform.
+
+The advise is **zero-write** and keeps **exit code 1**: the fix was not recorded, so a caller reading exit 0 would be entitled to believe it was. It carries `sink_node`, `sink_status`, `checks`, `reasons: []`, `detail`, `operator_hint`, and a **conditional** `route`:
+
+| sink state | `route` |
+| --- | --- |
+| the row is `pending` | `{ script: "adaptive-node", verb: "open-next", args: "--project <P> --node-id <sink> --json" }` — the one verb that flips a pending row to `in_progress` and records its baseline, which is exactly what `live` requires |
+| the plan has no unique terminal `finalize` row | `null` — there is no node to open at all, and `detail` says so |
+| the row is `complete` / `n/a` / unrecorded | `null` — no verb re-opens it into finalization from here |
+
+The nulls are deliberate, not gaps: a route is a promise the verb will accept the work, so naming one that could only refuse is worse than silence — the same rule `SINK_FINDING_ROUTE_BY_SUBTYPE.foreign_archive` records. Prose and route are decided together by `finalFixSinkAdvice(sink, project)` in `kaola-workflow-adaptive-schema.js`, so they cannot disagree about whether an exit exists. When a REFUSING wall is *also* unmet the answer is the refusal, led by that wall — an advise never out-ranks a refusal — while the sink facts stay in `checks.sink`, `sink_node`/`sink_status` and the precedence-first segment of `detail`.
 
 **The scope wall is HARD (D-826-01, as reversed by DIR-2).** A finalize-time fix touching PRODUCTION behavior is refused, full stop — there is no receipt, entry field or verifier that admits it, and `verifyFinalFixRecertification` and its four-state receipt logic are **deleted**, not dormant. Under ADR 0013's R4, a behavior change arriving after every reviewer is discharged is not a non-canonical FORM of correct content; it is a deviation that is ITSELF EVIDENCE — evidence that the certification standing over this candidate no longer describes it — so it is reported, never repaired. The verdict does not consult the submission for a receipt at all: a verdict that varied with one would be a verdict that reads it, which is the first half of laundering the deviation into an admission. The register records **validation apparatus only**, behind the bound green rerun receipt it always required.
 
