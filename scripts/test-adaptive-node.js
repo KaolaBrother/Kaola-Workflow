@@ -24151,6 +24151,72 @@ scenario(() => {
     '#699 committed orient authority refusal occurs before validator/next-action/task-mirror shells');
 });
 
+// ---------------------------------------------------------------------------
+// #847 RESIDUAL — THE DETAIL THE PURE CORE DROPS ON THE FLOOR.
+//
+// The committed-fence authority refusal above calls:
+//
+//     replanOrientation(fence, project, { detail })
+//
+// with a THIRD argument. This file's `replanOrientation(fence, project)` takes TWO. The detail is
+// silently discarded — and `detail` is the only field in that envelope that says WHY the kernel
+// record could not be read (`EACCES`, a parse error, a missing snapshot). Everything else is
+// structure the operator already had.
+//
+// Nothing catches it today because both neighbours quietly cover for it: the handoff twin's
+// `replanOrientation(fence, project, extra)` folds the third argument, and the adaptive-node CLI
+// re-attaches the field by hand one line after its own call (`if (authority && authority.detail)
+// out.detail = authority.detail;`), never reaching this branch at all — it resolves the authority
+// upstream and hands `runOrient` a fence with `current_authority` already set. So the drop is
+// live only for the pure-core seam, which is exactly the seam every scenario in this file uses,
+// and it is invisible from the CLI. The two hand-written copies of one answer agreeing except
+// here is what makes it a drift rather than a decision.
+//
+// Pinned as an OUTCOME — the detail reaches the caller — not as a signature. Deleting the third
+// argument would also make the call self-consistent, and would throw away the only thing in the
+// envelope worth reading; the CLI's own hand re-attachment is the evidence that the field is
+// wanted, not tolerated.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const committedFence = { ok: true, fenced: false, committed: true, transaction: {
+    child: { plan_hash: 'a'.repeat(64), first_node_id: 'child-first', first_node_role: 'code-explorer' },
+  } };
+  const orientWith = verifyEpochAuthority => runOrient({
+    planPath: '/fake/kaola-workflow/issue-847/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-847/workflow-state.md', project: 'issue-847',
+    replanFence: committedFence, verifyEpochAuthority,
+    shell: () => ({ exitCode: 0 }), readFile: () => { throw new Error('ENOENT'); },
+    writeFile: () => { throw new Error('an authority refusal must not write'); },
+    cacheExists: () => false,
+  });
+
+  // The twin, as the control: the same helper in the handoff script folds its third argument, so
+  // "carry the detail out" is an established contract here, not a new demand.
+  const twin = require('./kaola-workflow-adaptive-handoff').replanOrientation(
+    { ok: false, fenced: true, reason: 'current_epoch_authority_unavailable' }, 'issue-847',
+    { detail: 'kernel record unreadable: EACCES' });
+  assert(twin.detail === 'kernel record unreadable: EACCES',
+    '#847 control: the handoff twin of this helper folds the third argument into its envelope, got '
+      + JSON.stringify(twin));
+
+  const thrown = orientWith(() => { throw new Error('kernel record unreadable: EACCES'); });
+  assert(thrown.result === 'refuse' && thrown.reason === 'current_epoch_authority_unavailable',
+    '#847 precondition: a throwing epoch-authority verifier refuses as unavailable, got ' + JSON.stringify(thrown));
+  assert(thrown.detail === 'kernel record unreadable: EACCES',
+    '#847: ...carrying the thrown message OUT. `current_epoch_authority_unavailable` is an '
+      + 'anchor-read refusal whose whole diagnostic content is that message; an envelope that '
+      + 'drops it tells the operator the anchor is unreadable and refuses to say why, got '
+      + JSON.stringify(thrown));
+
+  const returned = orientWith(() => ({ ok: false, reason: 'current_epoch_authority_invalid',
+    detail: 'snapshot manifest digest does not match .cache/epochs/1' }));
+  assert(returned.result === 'refuse' && returned.reason === 'current_epoch_authority_invalid',
+    '#847 precondition: a verifier that RETURNS a refusal is projected too, got ' + JSON.stringify(returned));
+  assert(returned.detail === 'snapshot manifest digest does not match .cache/epochs/1',
+    '#847: ...and its detail survives the same projection — the drop is one call site, so both '
+      + 'shapes that reach it lose the same field, got ' + JSON.stringify(returned));
+});
+
 // #699: a distinct review outcome may replace a live source only after the
 // committed predecessor source is proven by the epoch authority and archived
 // byte-for-byte. Every crash boundary converges without overwriting history.
