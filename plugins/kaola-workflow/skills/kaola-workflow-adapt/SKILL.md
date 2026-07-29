@@ -77,11 +77,12 @@ The exact active cache root is
 The base invocation is `--project-root "$PWD" --no-autofix --json`; the gate
 merges persisted config from HOME through the repository root to `"$PWD"`. When this
 skill owns a frozen adaptive plan, set `KAOLA_CODEX_PREFLIGHT_PLAN` to that
-exact plan before running the block so `--plan` is also enforced. Continue only
-after exit 0 and parsed `status: "ok"`. Exact-byte drift such as
-`profile_bytes_mismatch` is `profile_preflight_refused`: STOP before any
-`agents.spawn_agent` call, never record `subagent-invoked`, and do not relabel
-profile/config drift as tool unavailability or local fallback. Re-run the gate if the installed profile set changes.
+exact plan before running the block so `--plan` is also enforced. Read
+the exit code and parsed `status`. On drift such as `profile_bytes_mismatch` the
+gate reports `profile_preflight_refused` with the offending profile and its
+remediation: weigh that against what you are about to dispatch and decide. Drift
+is a profile/config fact, not tool unavailability, so record it as what it is.
+Re-run the gate if the installed profile set changes.
 <!-- /PIN -->
 
 # Skill: kaola-workflow-adapt
@@ -343,14 +344,12 @@ posture — stop and take the design question to the user rather than looping.
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 
-The adaptive path opens by delegating to ONE subagent. **You MUST delegate the starting contract
-and the DAG authoring to the `workflow-planner` agent role** — do NOT run the claim or author
-the `## Nodes` table inline in this session. The Codex Profile Freshness Gate above is authoritative:
-missing, stale, malformed, or shadowed project/global profiles are `profile_preflight_refused` and
-STOP before delegation. Only after that gate succeeds, if the runtime agent tool itself is genuinely
-unavailable or model-refuses the spawn, may this session run the claim + author inline; record that
-runtime evidence as `local-fallback-tool-unavailable` in the compliance ledger. The planner never
-freezes, judges risk, asks the user, or dispatches further — it returns control here.
+The adaptive path opens with the starting contract and the DAG authoring. What the front end
+PRODUCES is fixed: the claim writes its record and stamps `selection_record_digest:`, and the
+`## Nodes` table is the `workflow-planner` role's product. WHERE that role runs is not — dispatch it
+or run it here, whichever fits the work. The Codex Profile Freshness Gate above is authoritative for
+profile/config drift; weigh a reported `profile_preflight_refused` before dispatching. The planner
+never freezes, judges risk, asks the user, or dispatches further — it returns control here.
 
 The persisted detection paths are `.codex/agents/kaola-workflow/` for a trusted project override
 and `~/.codex/agents/kaola-workflow/` for the global default; the preflight alone resolves precedence.
@@ -430,7 +429,7 @@ Render both target slots from the entry shape; never leave a placeholder literal
 | No target | the issue the orchestrator-owned no-target survey selected, plus `Selection record: <path>` | `none` |
 
 Sanitize the stable task suffix to lowercase letters, digits, and underscores. With no target, use
-the literal suffix `no_target`. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
+the literal suffix `no_target`. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once.
 
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
@@ -444,7 +443,7 @@ and freeze). The claim (at repo-root — the adaptive claim provisions a worktre
 - **`handoff_status: plan_invalid`** (validator refused; the plan never froze and `workflow-state.md` is untouched — the one write is the `.cache/acceptance-anchor.json` audit record) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to reach in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) or `## Acceptance` (the human-values statement of what done means, which is hard-fenced) — if in-grammar is unreachable without changing either, that is not repair. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. This fallback applies only to normal startup while the draft is unfrozen; it is forbidden under `replan_in_progress`. The only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
 - **`reason: acceptance_repair_fenced`** (a repair iteration changed `## Acceptance` — usually a fresh planner re-wording the same criteria, not tampering) → the refusal RETURNS the anchored surface in `anchored_acceptance_surface`, and still carries the outstanding grammar errors in `validator_verdict`. Re-dispatch with BOTH: restore those bytes VERBATIM under the `## Acceptance` heading, and fix the grammar errors on the restored surface — a digest cannot be inverted, so the returned bytes are the only copy the next iteration has. Changing what done means is a values decision, not repair: NO flag on the handoff authorizes it — a genuine restatement lands as a re-plan child epoch citing a consent entry bound to the new surface, or as a discard+restart. Never re-anchor on your own judgement, and never edit or delete the anchor by hand.
 
-After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
+After `handoff_status: ready_to_run`, re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. The planner owns the design and the task list is a mechanical reflection of the frozen result, so building it before the freeze just means rebuilding it.
 
 **Establish the task list = the workflow nodes** (use the runtime task surface) — one task per row of the frozen `## Nodes` table,
 labeled `id · role`, in `depends_on` order; a live mirror of the `## Node Ledger` (the durable
