@@ -4606,6 +4606,51 @@ function finalFixSinkAdvice(sink, project, openable) {
   });
 }
 
+// --- ADVISE, not a refusal: a select-group selector naming a non-arm --------
+// `--selector-check` reads the completing node's own `.cache/<id>.md` for its `selector:` line
+// and computes which sibling arms go `n/a`. A line naming an id that is not an arm of the group
+// was a typed refusal. It is not one under R1: nothing was written, nothing is reaching mainline,
+// and no values call is pending — the node simply has not produced usable evidence yet. R3
+// finishes it, because the remedy was already spelled out inside the refusal's own error text
+// (the arms are right there), which is the definition of a tool wearing a uniform.
+//
+// What does NOT change: the node does not close. `commit-node` gates the close on
+// `selectorCheck.exitCode === 0 && selectorCheck.ok === true` and never reads `result`, so the
+// arm keeps its non-zero exit and its falsy `ok`, and demoting the VERB cannot let an unusable
+// selector through. Retiring a code in favour of a route does not make the arm succeed.
+//
+// THE ROUTE IS CONDITIONAL, and the condition is the node's OWN generation. The correction is a
+// rewrite of that node's evidence, and `record-evidence --stdin` accepts a write only while the
+// node is `in_progress` (it refuses `evidence_generation_stale` otherwise). At node-end — the
+// only place `commit-node` invokes this — the node IS in_progress, so the route holds exactly
+// where the arm actually fires. Run standalone against a pending or complete node the same verb
+// would refuse on arrival, so that case carries NO route and says which state closed the exit:
+// a route to a verb that will refuse you is a dead exit wearing an exit's clothes.
+//
+// `status` is passed IN rather than derived: it is a fact about the ledger, which the caller
+// already holds the plan content to read, and this file stays free of plan-parsing dependencies.
+// Callers MUST fail closed — an unreadable ledger is not `in_progress`.
+function foreignSelectorAdvice(nodeId, selected, group, armIds, status, project) {
+  const arms = Array.isArray(armIds) ? armIds : [];
+  const named = arms.length ? arms.join(', ') : '(the group declares no arms)';
+  const head = 'the selector line in "' + nodeId + '" evidence names "' + selected
+    + '", which is not an arm of select group "' + group + '" — the arms are ' + named;
+  if (status === 'in_progress') {
+    return Object.freeze({
+      route: inGrammar('adaptive-node', 'record-evidence',
+        '--project ' + (project || '<P>') + ' --node-id ' + nodeId + ' --stdin'),
+      detail: head + '. Re-record this node\'s evidence with a selector: line naming one of them, '
+        + 'then re-run the node end. Nothing was written and no arm was marked n/a',
+    });
+  }
+  return Object.freeze({
+    route: null,
+    detail: head + '. The node is "' + (status || 'unrecorded') + '", not in_progress, so '
+      + 'record-evidence would refuse this correction as a stale generation — no verb can accept '
+      + 'it from here. Re-open the node first, or fix the selector where the generation is live',
+  });
+}
+
 // --- family 7: consent_required (A3) ---------------------------------------
 // An irreversible or value-laden call that no script may make. The resolution verb rides
 // in the PAYLOAD, never in the route — `consent` is a closed-vocabulary terminal.
@@ -6732,6 +6777,7 @@ module.exports = {
   resolveRoute,
   resolveSinkFindingRoute,
   finalFixSinkAdvice,
+  foreignSelectorAdvice,
   R4_NON_REMEDIABLE_CELLS,
   resolveAutoRemediable,
   // The cell-keyed WHY slot: hint = FACT(payload) + WHY(cell) + ROUTE(payload). REFUSAL_WHY is the

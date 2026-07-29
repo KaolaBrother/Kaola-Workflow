@@ -1244,6 +1244,30 @@ with any individual refusal, test, pin or paragraph, a careful reader will alway
 keep it — the reason is usually true, and the aggregate is still unaffordable. Measured here: the
 condition census rose 712 → 733 across a wave explicitly chartered to reduce it.
 
+**What the census number is, and what it is not.** The census counts *source literals shaped like a
+refusal token*, not refusals — and the two differ in both directions, so a census number bounds the
+work without describing it. Measured against `kaola-workflow-plan-validator.js`, whose census is
+112: only **33** were ever observed as an emitted top-level `reason`/`reasonCode` across a recorded
+full-chain sweep of 2,819 envelopes, and **13** observed `reason` values were free prose rather than
+tokens — the resume wall emits a whole sentence there and carries its token in `reasonCode`, and
+`verifyVerdictBlock` returns sentences — so a real refusal can be invisible to the count. In the
+other direction, an internal helper's return discriminant is counted as a condition:
+`resolveNamedCertifierDetailed` returns `{ ok: false, reason: … }` in the same vocabulary as its
+`'missing'` and `'ambiguous'` siblings, which go uncounted only because they carry no underscore.
+Driving its four underscore-bearing arms live shows the emitted reason is `plan_invalid` every time,
+with the counted literal appearing solely as a word inside an `errors[]` sentence — beside a second
+counted literal naming the identical diagnosis, so one defect scores two. The census remains a sound
+ratchet and a sound index of emission sites. It cannot answer *how many refusals exist here* or *is
+this one demotable*; only driving the code and reading the emitted envelope answers those.
+Derivation asks what must exist — and a literal that never reaches an envelope was never a candidate
+for the question in the first place.
+
+One consequence constrains how this can be written down: the consumer corpora are substring scans
+over the suites, validators, routing surfaces and docs, so **naming a token in prose registers as a
+consumer for it**. Measured — quoting seven of them in a comment and a paragraph moved seven entries
+off the zero-consumer ratchet and reddened the chain. The instrument cannot be described inside its
+own reach, which is why the account above names mechanisms and functions rather than tokens.
+
 **Derivation** starts from nothing. From the axioms, derive what MUST exist; whatever is not derived
 is not there. Nothing is deleted, because nothing unjustified was ever admitted. The burden of proof
 moves from removal to existence, which is the only place it can sit if a corpus is to get smaller.

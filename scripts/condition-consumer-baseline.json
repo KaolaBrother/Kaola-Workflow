@@ -115,7 +115,6 @@
     "finding_trigger_malformed",
     "finding_uid_mismatch",
     "finding_uid_unavailable",
-    "foreign_selector",
     "g4_certifier_aggregation_mismatch",
     "g4_certifier_missing",
     "g4_certifier_role_mismatch",

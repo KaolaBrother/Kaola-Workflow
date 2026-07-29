@@ -1631,6 +1631,47 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   // instead — the restatement is pinned TEXTUALLY to the sweep's own block below, so a
   // shape edited there (or an anchor renamed) reds here instead of silently forking the
   // census into two disagreeing measurements of the same K.
+  //
+  // ---------------------------------------------------------------------------------
+  // WHAT K IS, AND WHAT IT IS NOT. Read this before quoting a census number.
+  //
+  // K counts SOURCE LITERALS SHAPED LIKE A REFUSAL TOKEN. It does not count refusals, and
+  // the two differ in BOTH directions. Measured against the plan validator, whose K is 112:
+  //
+  //   OVER-COUNT — a literal that is not a refusal. Shape 1 below matches the key/quoted-
+  //   value pair ANYWHERE, including an internal helper's return discriminant. The named-
+  //   certifier resolver returns its failure discriminant on that key, in the same
+  //   vocabulary as its `'missing'` / `'ambiguous'` siblings — which K does NOT count, only
+  //   because they carry no underscore. One caller discards the field; the other
+  //   interpolates it as a WORD inside a free-prose `errors[]` sentence. Driven live, four
+  //   fixtures for four, every one emits the plan-grammar reason and the counted literal
+  //   appears solely inside `errors[]`. Those are diagnoses, not conditions: deleting one
+  //   deletes a word from an error message and changes no routing.
+  //
+  //   DOUBLE-COUNT — one diagnosis, two counted literals. The same refusal's `errors[]`
+  //   carries both the resolver's discriminant and the G4 caller's own prefixed spelling of
+  //   the identical condition, so K scores 2 where a reader would count 1.
+  //
+  //   UNDER-COUNT — a refusal whose reason is not a literal. The resume wall emits a whole
+  //   sentence on the reason key and carries its token on `reasonCode`; the verdict-block
+  //   verifier returns sentences. A computed string matches no shape here, so a genuinely
+  //   emitted reason can be invisible to K entirely.
+  //
+  // Scale, measured by recording stdout across a full `claude:full` sweep (2,819 emitted
+  // envelopes): only 33 of the 112 were ever observed as a top-level `reason`/`reasonCode`,
+  // and 13 observed `reason` values were prose rather than tokens.
+  //
+  // CONSEQUENCE: K is a sound RATCHET (it may only shrink) and a sound index of emission
+  // SITES. It is not a population of refusals, so it cannot answer "how many refusals does
+  // this script have" or "is this one demotable". Answer those by driving the code and
+  // reading the emitted envelope — the rule that governs every other measurement here.
+  //
+  // AND NOTE WHY THIS BLOCK NAMES NO TOKENS: the consumer corpora below are substring scans
+  // that include the suites and the docs, so writing a token into prose ANYWHERE in reach
+  // registers as a consumer for it. Measured — quoting seven of them here and in
+  // docs/architecture.md moved seven entries off the zero-consumer ratchet and reddened this
+  // very suite. Describe the instrument by mechanism and function, never by token.
+  // ---------------------------------------------------------------------------------
   const CONDITION_EMISSION_SHAPES = [
     /(?:reason|reasonCode|status|verdict|handoff_status|inner_reason|condition)\s*:\s*'([a-z][a-z0-9_:]{3,})'/g,
     /\b(?:refuse|bad|fail)\(\s*'([a-z][a-z0-9_:]{3,})'/g,
