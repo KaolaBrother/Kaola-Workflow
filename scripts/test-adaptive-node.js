@@ -20940,6 +20940,118 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
+// T611-AC5-CLOSE: the same advisory on the path EVERY RUN ACTUALLY TAKES.
+//
+// T611-AC5-PROD above pins `record-evidence --verify`, which is an OPTIONAL preflight. The close
+// paths are what a run executes at every single node close, and they were the half left unwitnessed:
+// un-wiring the collector at BOTH close sites left the whole suite green. A pin can exercise a real
+// production entry point and still miss the entry point that matters.
+//
+// The SUCCESS arm is the load-bearing one. On close the advisory is folded into `verdictWarn`, which
+// every post-close success return spreads — and which three later `Object.assign` merges rewrite. The
+// fold is correct only if it SURVIVES those merges, and nothing observed that.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const PLAN_PATH = '/fake/kaola-workflow/test-project/workflow-plan.md';
+  const CACHE = '/fake/kaola-workflow/test-project/.cache/impl-core.md';
+
+  // Mirrors T14's fused-advance stub: barrier passes, next node opens.
+  const closeStub = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true,
+        selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+    }
+    if (base === 'kaola-workflow-commit-node.js' && argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-other', overallOk: true };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok',
+        readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }],
+        nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' },
+        allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse', errors: ['stub: unexpected ' + base] };
+  };
+
+  const closeWith = (evidence) => {
+    let planContent = makePlan([
+      '| impl-core | in_progress | |', '| impl-other | pending | |',
+      '| review | pending | |', '| finalize | pending | |',
+    ]);
+    return runCloseAndOpenNext({
+      planPath: PLAN_PATH,
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      nodeId: 'impl-core',
+      shell: closeStub,
+      readFile: (f) => {
+        if (f.endsWith('workflow-plan.md')) return planContent;
+        if (f.endsWith('workflow-state.md')) return makeState();
+        if (f === CACHE) return evidence;
+        throw new Error('ENOENT: ' + f);
+      },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: (f) => f === CACHE,
+      // NO `advisories` key — the collector must come from runCloseAndOpenNext itself.
+    });
+  };
+
+  // (1) SUCCESS ARM — the fold. A node CLOSES on an unknown token and the raw string still reaches
+  // the emitted envelope, having survived the verdictWarn merges.
+  {
+    const r = closeWith('delegation_outcome: exploded\nRED: test failed as expected\n'
+      + 'GREEN: test passed after implementation\n5 assertions');
+    assert(r.result === 'ok' && r.closed === 'impl-core',
+      'T611-AC5-CLOSE: an unknown delegation_outcome still CLOSES the node, got '
+      + JSON.stringify({ result: r.result, reason: r.reason, closed: r.closed }));
+    const adv = (r.advisories || []).find(a => a && a.warning === 'delegation_outcome_normalized');
+    assert(adv !== undefined,
+      'T611-AC5-CLOSE: close-and-open-next EMITS the normalize advisory on its SUCCESS envelope — '
+      + 'the close path is what every run takes, so a silent normalize here is the whole trade lost, '
+      + 'got ' + JSON.stringify(r.advisories));
+    // Asserted on the fields the selector did NOT choose on.
+    assert(adv.raw === 'exploded' && adv.normalized === 'completed',
+      'T611-AC5-CLOSE: ...carrying the RAW token beside the value it reads as, got ' + JSON.stringify(adv));
+    // The fused advance still happened — the advisory rides the envelope, it does not replace it.
+    assert(r.opened && r.opened.id === 'impl-other',
+      'T611-AC5-CLOSE: ...and the fused advance is untouched by the fold, got ' + JSON.stringify(r.opened));
+  }
+
+  // (2) A token INSIDE the vocabulary emits no advisory key on the close path either — without this,
+  // (1) would pass against code that advises unconditionally.
+  {
+    const r = closeWith('delegation_outcome: returned_partial\nRED: test failed as expected\n'
+      + 'GREEN: test passed after implementation\n5 assertions');
+    assert(r.result === 'ok' && r.advisories === undefined,
+      'T611-AC5-CLOSE: a known token emits NO advisories key on close, got ' + JSON.stringify(r.advisories));
+  }
+
+  // (3) REFUSAL ARM — the advisory travels even when the shape fails for some OTHER reason. The
+  // normalize is evaluated before the role branches, so the raw token must not be dropped on the way
+  // out of a refusal that is about something else entirely.
+  {
+    const r = closeWith('delegation_outcome: exploded\nnothing else here');
+    assert(r.result === 'refuse',
+      'T611-AC5-CLOSE: evidence missing its role tokens still refuses, got ' + JSON.stringify(r.result));
+    const adv = (r.advisories || []).find(a => a && a.warning === 'delegation_outcome_normalized');
+    assert(adv !== undefined && adv.raw === 'exploded',
+      'T611-AC5-CLOSE: ...and the raw token rides the REFUSAL envelope too, got ' + JSON.stringify(r.advisories));
+  }
+
+  // (4) capability_gap may not close a node on the close path either — the R4 exclusion is not
+  // specific to the verify preflight.
+  {
+    const r = closeWith('delegation_outcome: capability_gap\nRED: test failed as expected\n'
+      + 'GREEN: test passed after implementation\n5 assertions');
+    assert(r.result === 'refuse' && r.missingTokenClass === 'delegation_outcome',
+      'T611-AC5-CLOSE: a capability_gap refuses at CLOSE — the node whose deliverable was withheld '
+      + 'must not reach complete, got ' + JSON.stringify({ result: r.result, mtc: r.missingTokenClass }));
+  }
+});
+
+// ---------------------------------------------------------------------------
 // T611-AC3: reconcile writer kill-safety. A departing (rolled-back / capped-out) WRITER member is a
 // potentially-interrupted in-place writer whose worktree may hold PARTIAL edits. reconcile-running-set
 // diffs its actual changes vs its declared write set (via --barrier-check) and emits a typed, FAIL-CLOSED
