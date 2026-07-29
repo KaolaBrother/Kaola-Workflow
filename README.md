@@ -36,6 +36,12 @@ A few beliefs follow from that order.
 
 **Humans decide what only humans should.** The system investigates and resolves questions of **fact** on its own. It escalates genuine matters of **judgment, value, and taste** to you.
 
+**A refusal is a cost, and stopping you is the expensive kind.** Every place the workflow refuses spends your attention, so refusing is held to a standard rather than reached for. A refusal must sit at one of three loci — kernel-write integrity, the sink, or the consent valve — *and* be crucial there; anything recoverable in place ships as an advisory that tells you what to do next. If the agent's own next step after a refusal would be a deterministic transformation, the script performs that transformation and the refusal retires: **a refusal whose remedy is mechanical is a missing tool wearing a uniform.** The one thing never auto-repaired is a deviation that is itself evidence — a hash mismatch, an unattributed diff, a broken chain — because repairing those launders the signal they exist to raise.
+
+Keeping that standard true over time takes three parts, and they only work together: a **rule** for deciding what may refuse, an **instrument** that measures what each interruption actually costs, and a **ratchet** that is forward-only — red on new unclassified growth, silent on removal. A rule with no measurement subtracts by anecdote; measurement with no ratchet lets what you removed grow back; a ratchet with no rule just freezes whatever happens to exist. The ratchet is deliberately one-directional because a guard that reddens when you *delete* code taxes the cleanup it was built to protect.
+
+Removing a refusal is not free either: it requires a pinned traversal of the **legal** path, not only the refusing one, and retiring a code takes its recovery instructions off every prompt surface in the same change. Otherwise a "removed" refusal survives as instructions describing a stop that no longer happens.
+
 ### The loop vocabulary, mapped to mechanisms
 
 Every loop-engineering concept here is backed by a concrete mechanism — nothing is framing without a script or gate behind it:

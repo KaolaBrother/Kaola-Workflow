@@ -1110,3 +1110,68 @@ state all remain strict — fail-closed posture is preserved (unverifiable → d
 runs before the merge loop so the loosened non-owned exemption cannot change conflict handling.
 
 See `docs/conventions.md` § Co-Tenant Lane Convention and `docs/decisions/D-579-01.md`.
+
+## Refusal Admission — Rule, Instrument, Ratchet
+
+A refusal is a **cost**: it spends the operator's attention and, when it names no
+exit, it can strand a run. Admission is therefore a governed subsystem, not a
+per-site judgement call. It has three parts, and the failure mode of each is what
+justifies the other two.
+
+**Rule — where a refusal may live.** A refusal must sit at one of exactly three
+loci — kernel-write integrity (L1), the sink (L2), or the consent valve (A3) —
+**and** be crucial there. A condition recoverable in place ships as an advisory
+even at those loci, and a mid-run refusal proposal other than the consent valve
+ships as an advisory or a tool. Specificity rides in the refusal *payload*, never
+in a newly minted code. Two bounds keep the rule honest in both directions: if
+the agent's next step after a refusal is a deterministic transformation, the
+script performs it and the refusal retires (a refusal whose remedy is mechanical
+is a missing tool wearing a uniform); but auto-remedy applies only to
+non-canonical *form* of correct content — a deviation that is itself evidence
+(hash mismatch, unattributed diff, chain break) is never auto-repaired, because
+repairing it launders the signal. The second bound always overrides the first.
+Canonical wording: `docs/conventions.md` § Refusal admission.
+
+**Instrument — what orders the work.** Refusal telemetry records one event per
+CLI emission (code, triage wall-clock, re-dispatch, phase), and
+`kaola-workflow-telemetry-report.js` folds it into a frequency × interruption-cost
+ranking. Its purpose is to make corpus reduction *data-driven rather than
+audit-driven* — without it, whatever an audit last surfaced sets the agenda,
+which reliably grows the corpus while feeling like progress. The reporter is an
+**answer verb**: it always exits 0, never refuses, writes nothing, and reports a
+well-formed empty result for an absent or empty log. Two honesty properties are
+load-bearing: an unmeasured median reports `null` rather than a fabricated `0`,
+and a reason that fired but never caused a re-dispatch is distinguishable from
+one that never fired at all — those mean opposite things when deciding what to
+remove. **The ranking is empty until instrumented runs exist**; until then the
+corpus census (`test-route-reachability.js`, `kaola-workflow-prose-census.js`) is
+the honest ordering, and which ordering is in force must be stated rather than
+implied.
+
+**Ratchet — what holds the line.** `test-spawn-classification.js` is
+**forward-only**: red when a new unclassified site appears, silent when sites are
+removed. The direction is the whole design. Its predecessor was bidirectional and
+reddened on any deletion of test code, which taxed the cleanup it existed to
+protect and was removed for that reason — taking the forward guard with it, and
+leaving hundreds of classification annotations with no reader at all. Enforcement
+defaults on via an exempt list rather than an opt-in allowlist, so a forgotten
+token is guarded rather than silently unguarded, and slack is *reported* rather
+than enforced so a shrinking corpus never reddens.
+
+### Retiring a code is one diff
+
+A demoted code deletes its recovery choreography from **all six prompt surfaces**
+(the three commands and three SKILL packs generated from `templates/routing/`) and
+its needle pins from the four contract validators **in the same change**. The
+surface set is part of the diff. A demotion that leaves choreography behind has
+subtracted a token and nothing else: the operator-facing text still describes a
+stop that no longer occurs.
+
+Removing a refusal also costs a **green arc** — a pinned traversal of the legal
+path, not only the refusing path — symmetrically with adding one. This is a real
+tax on subtraction and the reason removals get deferred; budget for it rather than
+discovering it. Two related disciplines follow. Pin **behaviour, never token
+spelling**: an assertion naming a refusal code is a vote against ever removing
+that code, and is how a corpus freezes. And a guard is evidence only once
+**mutation-proven** — plant the defect, see red, revert, see green — because a
+green suite is not evidence that a guard is armed.

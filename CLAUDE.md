@@ -87,6 +87,17 @@ The workflow runs one path; the orchestrator does not spend tokens or wall-clock
 - **There is no path to select or refuse, and no residue of one.** A stale `KAOLA_PATH` / `--workflow-path` request runs adaptive (the flag is a warn-and-ignore shim; the env var is ignored), rather than refusing — and the request leaves no trace: the persisted `workflow_path` field is the constant `adaptive`, never an echo, so a retired selector can never be misread as a live switch (a legacy folder's stale value is still tolerated on read). This deliberately supersedes the former "never silently substitute adaptive for a named path" stance and retires the `fast`/`full` vocabulary and the `path_not_installed` refusal — a values call (First Principle 4) that became moot once exactly one path remained.
 - **When adaptive can't proceed, it recovers inside adaptive**: bounded planner repair → discard+restart → stop+ask. Repair and the in-place posture are the only fallbacks.
 
+### A Refusal Is a Cost; Admission Is Ruled, Measured, and Ratcheted
+
+Every refusal spends a human's attention. Admission is therefore governed by three parts that only work together — a **rule** for deciding, an **instrument** for ordering, and a **ratchet** for holding. A rule without measurement subtracts by anecdote; measurement without a ratchet regrows; a ratchet without a rule freezes whatever happens to exist.
+
+- **Rule.** A refusal must sit at kernel-write integrity, the sink, or the consent valve — **and** be crucial there. A condition recoverable in place ships as an advisory even at those loci. A refusal whose remedy is mechanical is a missing tool wearing a uniform: perform the transformation and retire the refusal. The bound: a deviation that is itself evidence (hash mismatch, unattributed diff, chain break) is never auto-repaired — that would launder the signal. Full rules and their wording live in `docs/conventions.md` § Refusal admission.
+- **Instrument.** Refusal telemetry records what each interruption costs, so the corpus is walked by measurement rather than by whatever an audit last surfaced. Until instrumented runs exist the corpus census is the honest ordering — **say which ordering is in force, and never present one as the other.**
+- **Ratchet.** Enforcement is forward-only: red on new unclassified growth, silent on removal. A guard that reddens on deletion taxes the subtraction it exists to protect.
+- **Removal costs a green arc, and that is the point.** Adding *or* removing a refusal requires a pinned traversal of the legal path, not only the refusing one. Budget for it; it is why subtraction gets deferred.
+- **Retiring a code is one diff, not two.** A demoted code takes its recovery choreography off every prompt surface and its needle pins off the contract validators in the same change. A demotion that leaves choreography behind subtracted a token and nothing else.
+- **Pin behaviour, never token spelling.** An assertion that names a refusal code is a vote against ever removing it.
+
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, authoring-allowed, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize, sink-fallback, verify-sink, stale-worktree-check/-cleanup, legacy-worktree-cleanup, audit-labels, repair-labels, barrier-ref-sweep subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
