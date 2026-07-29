@@ -7282,5 +7282,330 @@ scenario(() => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
+// ===========================================================================
+// #847 — A FENCED `orient` ALWAYS NAMES AN EXIT.
+//
+// THE DEFECT, measured against production before these pins were written. `readReplanFence`
+// returns `replan_integrity_mismatch` from THREE sites and only ONE of them carries a
+// `legal_mutation`:
+//
+//   site   shape                                        legal_mutation
+//   :1290  state carries a fence, transaction file GONE  (absent)
+//   :1296  stateTx !== transaction.transaction_id        (absent)
+//   :1311  committed-but-inconsistent                    'replan resume'
+//
+// `replanOrientation` names a recovery command only under `legal_mutation === 'replan resume'`,
+// so for the first two arms it falls back to `legal_mutation: 'none'` and emits no command at
+// all. Executed against a real fenced fixture, the whole operator-facing answer is:
+//
+//   {"result":"refuse","reason":"replan_integrity_mismatch","replan_phase":"unknown",
+//    "transaction_id":"none",...,"legal_mutation":"none"}                      exit 1
+//
+// — not even the transaction id the repair needs. That is a permanent mid-run stuck state, and
+// `orient` is not an incidental destination for it: the CLI projects `orient` through the fence
+// EXPLICITLY so "the operator sees the exact one-command recovery path", and `orient` is the
+// declared route for the whole `kernel_integrity_broken/absent_anchor` band — which fires on the
+// same corruption class that produces `replan_integrity_mismatch`. The fenced arm is the
+// EXPECTED one for that band, not a corner of it.
+//
+// THE REMEDY ALREADY EXISTS AND IS MECHANICAL — this is why the fix adds no refusal code, no
+// gate and no halt. `replan abort` already handles the orphaned fence and says so in its own
+// source ("whose only correct repair is exactly this: drop the orphaned fence"); `replan resume`
+// already rolls a past-the-wall transaction forward. Nothing new has to work. The exits have to
+// be NAMED.
+//
+// WHAT EACH ARM ADMITS — measured, not assumed, because the pins below rest on it:
+//   :1290 orphaned     `abort --transaction <the id RECORDED IN STATE>` -> ok, fence dropped.
+//                      `resume` REFUSES `replan_transaction_missing` and the wedge survives, so
+//                      the orphaned arm admits exactly one exit.
+//   :1296 pre-activation  `abort --transaction <the id in the FILE>` -> ok, fence dropped.
+//                      `abort --transaction <the id in STATE>` REFUSES
+//                      `replan_abort_transaction_mismatch` — the printed command would itself
+//                      dead-end, which is worse than printing none.
+//   :1296 past the wall   `abort` REFUSES `replan_abort_irreversible`; `resume` -> committed and
+//                      the fence drops. So a uniform "always name abort" at :1296 prints a dead
+//                      link for exactly the transactions that are furthest along.
+//
+// The pins are therefore written against the OUTCOME (run what is printed; it must not refuse,
+// and the wedge must be gone) rather than against a field name that does not exist yet: a pin
+// that guessed `abort_command` would go red for the wrong reason and would forbid a better
+// shape. `legal_mutation` IS pinned by name, because it already exists and the acceptance is
+// stated in its terms.
+// ===========================================================================
+
+// The operator-facing exit, WITHOUT guessing which field carries it. Every string in the
+// envelope is scanned for one that invokes the re-plan script; that string is what an operator
+// would paste, so that string is what gets executed.
+function namedReplanCommand847(envelope) {
+  const found = [];
+  const walk = (value) => {
+    if (typeof value === 'string') {
+      if (/workflow-replan\.js\b/.test(value)) found.push(value);
+      return;
+    }
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (value && typeof value === 'object') {
+      for (const key of Object.keys(value).sort()) walk(value[key]);
+    }
+  };
+  walk(envelope);
+  return found.length ? found[0] : null;
+}
+
+// Run the printed command VERBATIM. Only the script PATH is rebased onto this checkout — the
+// fixture repo is not an install of the workflow, and the emitted string is relative to one that
+// is. The verb and every argument (the transaction id above all) are executed exactly as printed,
+// because those are the half of the string that can be wrong.
+function runNamedReplanCommand847(root, command) {
+  const parts = String(command).trim().split(/\s+/);
+  const at = parts.findIndex(part => /workflow-replan\.js$/.test(part));
+  const argv = [path.join(__dirname, path.basename(parts[at])), ...parts.slice(at + 1)];
+  const child = spawnSync(process.execPath, argv, { cwd: root, encoding: 'utf8', env: gitEnv });
+  let out = {};
+  try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
+  catch (_) { out = { result: 'unparseable', stdout: String(child.stdout).slice(0, 400) }; }
+  return { out, status: child.status };
+}
+
+// spawn-class: cli-contract
+function orient847(fx) {
+  const child = spawnSync(process.execPath,
+    [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'orient', '--project', fx.project, '--json'],
+    { cwd: fx.root, encoding: 'utf8', env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  let out = {};
+  try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
+  catch (_) { out = { result: 'unparseable', stdout: String(child.stdout).slice(0, 400) }; }
+  return { out, status: child.status };
+}
+
+const fence847 = (fx) => {
+  const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+  let tx = null;
+  if (fs.existsSync(txPath)) { try { tx = JSON.parse(fs.readFileSync(txPath, 'utf8')); } catch (_) { tx = {}; } }
+  return schema.readReplanFence(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), tx);
+};
+
+// ---------------------------------------------------------------------------
+// #847-A — THE ORPHANED FENCE (`:1290`). The state says a re-plan is in flight and the
+// transaction it names is gone. This is the arm with exactly one exit, and the id that exit
+// needs survives ONLY in the state block — the envelope drops it today, reporting
+// `transaction_id: "none"`, so an operator cannot even reconstruct the command by hand.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const preparedId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    fs.unlinkSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME));
+
+    // Control: the wedge is real, and it is the `:1290` arm specifically.
+    const wedge = fence847(fx);
+    equal(wedge.reason, 'replan_integrity_mismatch',
+      '#847-A control: a fence whose transaction file is gone IS the integrity-mismatch wedge: ' + JSON.stringify(wedge.reason));
+    equal(replan.parseStateFields(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8')).replan_transaction_id,
+      preparedId, '#847-A control: ...and the id the repair needs survives only in the state block');
+
+    const first = orient847(fx);
+    equal(first.out.reason, 'replan_integrity_mismatch',
+      '#847-A precondition: orient is projected through the fence and reports the wedge: ' + JSON.stringify(first.out));
+
+    // THE PIN. `orient` is the prescribed route for this corruption class; arriving there and
+    // being told nothing is the permanent stuck state.
+    notEqualReason({ reason: first.out.legal_mutation }, 'none',
+      '#847-A: a fenced orient must NAME a legal exit — `legal_mutation: "none"` with no command is '
+      + 'the operator arriving at the prescribed route and being handed nothing');
+    const command = namedReplanCommand847(first.out);
+    ok(command !== null,
+      '#847-A: ...and must PRINT that exit as a runnable command. The remedy already exists and is '
+      + 'mechanical; a refusal whose remedy is mechanical and unnamed is a missing tool wearing a '
+      + 'uniform: ' + JSON.stringify(first.out));
+
+    // The command must carry the RECORDED transaction id. `abort` is CAS-targeted, so a command
+    // that omits it — or invents one — refuses `replan_abort_transaction_mismatch` when pasted.
+    ok(String(command).includes(preparedId),
+      '#847-A: ...carrying the transaction id RECORDED IN STATE (' + preparedId.slice(0, 12) + '), which '
+      + 'is the only id this exit accepts and the one the envelope currently drops: ' + command);
+
+    // END TO END: a printed command that fails is worse than none.
+    const ran = runNamedReplanCommand847(fx.root, command);
+    notEqualReason(ran.out, 'replan_abort_transaction_mismatch',
+      '#847-A: ...and the printed command must not itself refuse');
+    equal(ran.out.result, 'ok',
+      '#847-A: ...the exit an operator is sent to must actually work: ' + JSON.stringify(ran.out));
+    const cleared = fence847(fx);
+    ok(cleared.ok === true && cleared.fenced === false,
+      '#847-A: ...and following it genuinely drops the wedge: ' + JSON.stringify({ ok: cleared.ok, fenced: cleared.fenced, reason: cleared.reason }));
+    notEqualReason(orient847(fx).out, 'replan_integrity_mismatch',
+      '#847-A: ...so the successor that re-orients is no longer wedged');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-B — THE TRANSACTION-MISMATCH ARM (`:1296`), pre-activation. The fence names one
+// transaction and the file on disk is another. The dangerous shape here is a command that
+// targets the id the FENCE names: `abort` is CAS-targeted against the id in the FILE, so that
+// command refuses `replan_abort_transaction_mismatch` the moment it is pasted, and the operator
+// is refused a THIRD time. Pinned by running whatever is printed.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const fileId = liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    const strandedId = 'b'.repeat(64);
+    fs.writeFileSync(statePath, schema.writeEpochStateBlock(fs.readFileSync(statePath, 'utf8'),
+      { replan_transaction_id: strandedId }));
+
+    const wedge = fence847(fx);
+    equal(wedge.reason, 'replan_integrity_mismatch',
+      '#847-B control: a fence naming a different transaction than the file IS the wedge: ' + JSON.stringify(wedge.reason));
+    ok(fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      '#847-B control: ...and this is NOT the orphaned arm — the transaction file is present and valid');
+    ok(schema.REPLAN_ABORTABLE_PHASES.includes(
+      JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8')).phase),
+      '#847-B control: ...at a phase the discard exit still admits');
+
+    const out = orient847(fx).out;
+    equal(out.reason, 'replan_integrity_mismatch',
+      '#847-B precondition: orient reports the wedge: ' + JSON.stringify(out));
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-B: the mismatch arm must NAME a legal exit too — two of the three integrity-mismatch '
+      + 'arms answering with nothing is the whole defect');
+    const command = namedReplanCommand847(out);
+    ok(command !== null,
+      '#847-B: ...and print it as a runnable command: ' + JSON.stringify(out));
+
+    const ran = runNamedReplanCommand847(fx.root, command);
+    notEqualReason(ran.out, 'replan_abort_transaction_mismatch',
+      '#847-B: ...targeting the transaction the exit actually accepts (' + fileId.slice(0, 12) + '), never '
+      + 'the stranded id the fence names (' + strandedId.slice(0, 12) + '). Printing the fence\'s id sends '
+      + 'the operator to a command that refuses on arrival: ' + command);
+    ok(ran.out.result !== 'refuse',
+      '#847-B: ...and the printed command must not refuse at all: ' + JSON.stringify(ran.out));
+    notEqualReason(fence847(fx), 'replan_integrity_mismatch',
+      '#847-B: ...so the wedge is genuinely gone afterwards, not merely re-described');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-C — THE SAME ARM PAST THE IRREVERSIBILITY WALL. `:1296` is reached at ANY phase, and
+// abort is legal only while the parent epoch has not been snapshotted. So the arm cannot be
+// answered with one fixed verb: naming `abort` for a committed transaction prints a command
+// that refuses `replan_abort_irreversible`, which is the same dead end one level down. This is
+// the pin that separates "named an exit" from "named the RIGHT exit", and it is the one a
+// minimal fix is most likely to miss.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    advanceToAttestedChild(fx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      '#847-C control: the fixture drives the transaction past the abort wall');
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+    ok(!schema.REPLAN_ABORTABLE_PHASES.includes(tx.phase),
+      '#847-C control: ...so the discard exit is closed at phase ' + tx.phase);
+
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    fs.writeFileSync(statePath, schema.writeEpochStateBlock(fs.readFileSync(statePath, 'utf8'),
+      { replan_transaction_id: 'd'.repeat(64) }));
+    const wedge = fence847(fx);
+    equal(wedge.reason, 'replan_integrity_mismatch',
+      '#847-C control: the mismatch arm is reached with a past-the-wall transaction: ' + JSON.stringify(wedge.reason));
+
+    const out = orient847(fx).out;
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-C: this arm must name an exit as well');
+    const command = namedReplanCommand847(out);
+    ok(command !== null, '#847-C: ...printed as a runnable command: ' + JSON.stringify(out));
+
+    const ran = runNamedReplanCommand847(fx.root, command);
+    notEqualReason(ran.out, 'replan_abort_irreversible',
+      '#847-C: ...and the exit named must be the one this phase ADMITS. A blanket `abort` here is a '
+      + 'printed command that refuses on arrival — the operator is turned away a third time, by a '
+      + 'third code, still with nowhere to go: ' + command);
+    ok(ran.out.result !== 'refuse',
+      '#847-C: ...the printed command must not refuse: ' + JSON.stringify(ran.out));
+    notEqualReason(fence847(fx), 'replan_integrity_mismatch',
+      '#847-C: ...and following it clears the wedge');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-D — THE ARM THAT ALREADY WORKS MUST KEEP WORKING. `:1311` (committed-but-inconsistent)
+// is the one site that already carries `legal_mutation` and already emits `resume_command`.
+// It is pinned here so a change that teaches the other two arms to speak cannot quietly
+// re-route, rename or drop the one answer that was never broken.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    advanceToAttestedChild(fx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      '#847-D control: the fixture reaches a committed transaction');
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    // Break the committed/state agreement WITHOUT touching the transaction id, which is what
+    // separates `:1311` from `:1296`.
+    fs.writeFileSync(statePath, schema.writeEpochStateBlock(fs.readFileSync(statePath, 'utf8'),
+      { active_snapshot_manifest_digest: 'c'.repeat(64) }));
+    const wedge = fence847(fx);
+    equal(wedge.reason, 'replan_integrity_mismatch',
+      '#847-D control: the committed-but-inconsistent arm is reached: ' + JSON.stringify(wedge.reason));
+    equal(wedge.legal_mutation, 'replan resume',
+      '#847-D: the arm that already names an exit keeps naming `replan resume`: ' + JSON.stringify(wedge.legal_mutation));
+
+    const out = orient847(fx).out;
+    equal(out.legal_mutation, 'replan resume',
+      '#847-D: ...and orient projects it unchanged: ' + JSON.stringify(out.legal_mutation));
+    equal(out.resume_command,
+      'node scripts/kaola-workflow-replan.js resume --project ' + fx.project + ' --json',
+      '#847-D: ...emitting the same one-command recovery path it always did: ' + JSON.stringify(out.resume_command));
+    equal(namedReplanCommand847(out),
+      'node scripts/kaola-workflow-replan.js resume --project ' + fx.project + ' --json',
+      '#847-D: ...and it is the ONLY replan command in the envelope — a second, contradicting exit '
+      + 'is one answer too many: ' + JSON.stringify(out));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #847-E — THE BAND'S ROUTE, FOLLOWED UNDER THE FENCE ITS OWN CORRUPTION CLASS PRODUCES.
+//
+// The existing sweep proves a route is reachable by asking whether its VERB is replan-guarded,
+// and `orient` is not, so `kernel_integrity_broken/absent_anchor` passed that check while
+// arriving at `orient` under this fence answered nothing. Reachable and ANSWERING are different
+// claims, and only the second one is worth anything to an operator. The conditions sampled here
+// are the ones whose absent/present separation is independently verified, so this pin does not
+// move if that band is re-partitioned.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const band = ['barrier_unavailable', 'writer_identity_unavailable', 'plan_contract_unavailable',
+    'review_profile_identity_unavailable', 'snapshot_verifier_unavailable',
+    'current_epoch_authority_unavailable'];
+  for (const condition of band) {
+    const classified = schema.classifyRefusalCondition(condition);
+    equal(classified && classified.patch && classified.patch.kind, 'absent_anchor',
+      '#847-E control: `' + condition + '` is in the anchor-read band: ' + JSON.stringify(classified));
+    const route = schema.refuse(condition, {}).refusal_route;
+    ok(route && route.script === 'adaptive-node' && route.verb === 'orient',
+      '#847-E control: ...and its declared exit is `adaptive-node orient`: ' + JSON.stringify(route));
+  }
+
+  const fx = initFixture();
+  try {
+    liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    fs.unlinkSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME));
+    const out = orient847(fx).out;
+    equal(out.reason, 'replan_integrity_mismatch',
+      '#847-E: the band\'s own route lands on the integrity-mismatch fence — the corruption class '
+      + 'that fires these conditions is the same one that produces this fence, so this is the '
+      + 'EXPECTED arrival, not a corner: ' + JSON.stringify(out.reason));
+    notEqualReason({ reason: out.legal_mutation }, 'none',
+      '#847-E: ...and a route that answers "nothing you can do" is a route that dead-ends. '
+      + 'Reachability is not an answer');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
 console.log(`test-replan: PASSED (${passed} assertions)`);

@@ -152,8 +152,15 @@ function replanOrientation(fence, project) {
     out.first_node_id = tx.child.first_node_id || 'none';
     out.first_node_role = tx.child.first_node_role || 'none';
   }
+  // The fence names ONE legal exit; this prints it as a command that can be pasted. Exactly one is
+  // emitted, because a second, contradicting exit is one answer too many. `abort` is CAS-targeted,
+  // so the transaction id the fence resolved travels with it — that id is the half of the string
+  // that can be wrong, and a printed command that refuses on arrival is worse than none.
   if (fence && fence.legal_mutation === 'replan resume') {
     out.resume_command = 'node scripts/kaola-gitlab-workflow-replan.js resume --project ' + project + ' --json';
+  } else if (fence && fence.legal_mutation === 'replan abort') {
+    out.abort_command = 'node scripts/kaola-gitlab-workflow-replan.js abort --project ' + project
+      + ' --transaction ' + out.transaction_id + ' --json';
   }
   return out;
 }
@@ -8484,16 +8491,49 @@ function consentGrantsPath(cacheDir) {
 
 // The scope a grant is bound to. Six fields, all from the position record: any of them moving means
 // the plan/claim the human consented under is no longer the one in front of us.
+//
+// NULL WHEN THE CLAIM CANNOT BE IDENTIFIED. `claim_identity_digest` and `epoch_lineage_id` are what
+// make this digest specific to ONE claim; the schema records the literal token `none` for a field it
+// does not have, so a state missing them would not fail to bind — it would bind to a shared constant
+// identical for every identity-less state, which no discard, restart or epoch can move. A grant
+// stamped with that is a grant nothing can revoke. Returning null instead is FAIL SAFE, not fail
+// closed: with nothing to bind to, no grant is live and none is recorded, and the valve simply asks
+// exactly as it did before standing grants existed — no refusal, no halt of its own.
+//
+// Only these two fields are read this way. `replan_status: none` and `replan_transaction_id: none`
+// are the REAL values on every healthy run; treating the token as "unavailable" wherever it appears
+// would make the whole subtraction inert on every run there is.
 function consentScopeDigest(stateContent) {
   const f = reviewSchema.parseStateFields(stateContent || '');
+  const claim = f.claim_identity_digest;
+  const lineage = f.epoch_lineage_id;
+  if (!claim || claim === 'none' || !lineage || lineage === 'none') return null;
   return sha256Hex(canonicalJson({
-    claim: f.claim_identity_digest || 'none',
-    lineage: f.epoch_lineage_id || 'none',
+    claim: claim,
+    lineage: lineage,
     epoch: f.plan_epoch || 'none',
     plan_hash: f.active_plan_hash || 'none',
     replan_status: f.replan_status || 'none',
     replan_tx: f.replan_transaction_id || 'none',
   }));
+}
+
+// The class IDENTITY. A class is an ACTION and a TARGET, and the target routinely carries colons of
+// its own (`host:port`, `C:\...`, a URL), so the parse is the FIRST colon and everything after it is
+// the target. Keying on that pair — rather than on the raw string — gives the key one meaning
+// instead of two: `deploy` + `db.prod:5432` and any other way of describing the same class land on
+// the same key. No colon at all is an action with an EMPTY target, which is a distinct key that can
+// never ride an `action:target` grant, nor be ridden by one.
+//
+// NOT a normalizer. Two spellings of one path (a trailing slash, a dot-segment) stay two classes and
+// both ask again — that is proven-correct behavior, because asking twice about one directory costs
+// one question whereas collapsing the spellings hands a grant to a path the human never read.
+function consentClassKey(consentClass) {
+  const s = String(consentClass || '');
+  const cut = s.indexOf(':');
+  const action = cut < 0 ? s : s.slice(0, cut);
+  const target = cut < 0 ? '' : s.slice(cut + 1);
+  return action + ':' + target;
 }
 
 // Read the journal, or null when there is none. ABSENCE is the normal state: a run that never uses
@@ -8518,16 +8558,44 @@ function foldConsentGrants(store) {
   const byClass = new Map();
   for (const entry of (store && store.journal) || []) {
     if (!entry || typeof entry.class !== 'string' || !entry.class) continue;
-    const row = byClass.get(entry.class) || { class: entry.class, state: 'none', applications: 0 };
+    // Keyed on the (action, target) IDENTITY; `class` keeps the spelling the operator typed, so what
+    // `orient` shows them is what they would pass back to `--consent-class`.
+    const key = consentClassKey(entry.class);
+    const row = byClass.get(key) || { class: entry.class, state: 'none', applications: 0 };
     // A `granted` entry always makes the class live and RESTARTS the count at zero — including one
     // that follows a `revoked`. Zero, not the prior tally: an application count that outlived the
     // thing that revoked it would report applications of a grant that no longer exists.
     if (entry.event === 'granted') { row.state = 'live'; row.applications = 0; }
     else if (entry.event === 'revoked') { row.state = 'revoked'; }
     else if (entry.event === 'applied' && row.state === 'live') { row.applications += 1; }
-    byClass.set(entry.class, row);
+    byClass.set(key, row);
   }
   return byClass;
+}
+
+// The PENDING SET — the questions that are outstanding, not the last one asked. `write-halt` is the
+// valve and is deliberately not fenced by the halt it writes, so two DIFFERENT classes can be raised
+// before anyone answers, while the durable `consent_halt: pending` marker is CLASSLESS and written
+// once. One marker then stands for two questions and nothing on disk says which one the human saw,
+// so the LAST raise is emphatically not the answer.
+//
+// A SET, not a tally: repeat raises of ONE class are ONE question — the measured case is the same
+// question asked three times, and counting raises would call that discharge ambiguous and make the
+// mechanism inert exactly where it was measured. Tolerates the single-object shape an older runtime
+// wrote, so a halt already standing across an upgrade still discharges normally.
+function pendingConsentRows(store) {
+  const raw = store && store.pending;
+  const rows = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  const out = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (!row || typeof row.class !== 'string' || !row.class) continue;
+    const key = consentClassKey(row.class);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
 }
 
 // The successor-facing view: live grants only, always an array. A revoked class is absent, not
@@ -8558,7 +8626,7 @@ function syncConsentScope(cacheDir, statePath, readFile, writeFile) {
   for (const row of foldConsentGrants(store).values()) {
     if (row.state === 'live') store.journal.push({ ts, event: 'revoked', class: row.class });
   }
-  store.pending = null;
+  store.pending = [];
   store.scope = scope;
   writeConsentStore(cacheDir, writeFile, store);
   return store;
@@ -8592,12 +8660,22 @@ function runWriteHalt(opts) {
 
   const consentCacheDir = path.join(path.dirname(planPath), '.cache');
 
+  // #846 — the scope a grant would be bound to, read ONCE for both consent seams below. Null means
+  // this run cannot identify the claim a grant would belong to, so there is nothing for one to be
+  // bound to: none is honoured and none is recorded, and the valve just asks.
+  let consentScope = null;
+  if (reason === 'consent' && consentClass && typeof writeFile === 'function') {
+    let stateForScope = '';
+    try { stateForScope = readFile(statePath); } catch (_) {}
+    consentScope = consentScopeDigest(stateForScope);
+  }
+
   // #846 — THE LOOKUP BEFORE THE VALVE RAISES. Only `consent` consults it: a standing consent grant
   // changes how often ONE question is put, never which questions may be skipped, so `security` and
   // the R4 `integrity` halt are untouched here even when the caller names a granted class.
-  if (reason === 'consent' && consentClass && typeof writeFile === 'function') {
+  if (consentScope) {
     const store = readConsentStore(consentCacheDir, readFile);
-    const row = store ? foldConsentGrants(store).get(consentClass) : null;
+    const row = store ? foldConsentGrants(store).get(consentClassKey(consentClass)) : null;
     if (row && row.state === 'live') {
       // Design answer 3: EVERY application is journaled, not just the grant. A standing grant applied
       // invisibly is indistinguishable from no valve at all.
@@ -8662,15 +8740,20 @@ function runWriteHalt(opts) {
   const cacheDir = consentCacheDir;
   const triage = computeTriage(barrierOut || null, cacheDir, nodeId, readFile);
 
-  // #846: the class rides the PENDING request. This is the only thing clear-halt can later grant —
-  // a grant assembled from anything else would be a grant the human never saw the question for.
-  // Recorded for `consent` alone, so clearing a security halt can never mint a consent grant.
-  if (reason === 'consent' && consentClass && typeof writeFile === 'function') {
-    let stateForScope = '';
-    try { stateForScope = readFile(statePath); } catch (_) {}
+  // #846: the class JOINS the PENDING SET. The set is the only thing clear-halt can later grant —
+  // a grant assembled from anything else would be a grant the human never saw the question for, and
+  // the LAST raise is not the answer when a classless marker stands for more than one question.
+  // Recorded for `consent` alone, so clearing a security halt can never mint a consent grant; and
+  // not recorded at all without a bindable scope, so nothing is minted that no boundary could end.
+  if (consentScope) {
     const store = readConsentStore(cacheDir, readFile)
-      || { schema_version: CONSENT_GRANT_SCHEMA_VERSION, scope: consentScopeDigest(stateForScope), pending: null, journal: [] };
-    store.pending = { class: consentClass, node: nodeId || null, at: new Date().toISOString() };
+      || { schema_version: CONSENT_GRANT_SCHEMA_VERSION, scope: consentScope, pending: [], journal: [] };
+    const rows = pendingConsentRows(store);
+    const key = consentClassKey(consentClass);
+    if (!rows.some(r => consentClassKey(r.class) === key)) {
+      rows.push({ class: consentClass, node: nodeId || null, at: new Date().toISOString() });
+    }
+    store.pending = rows;
     writeConsentStore(cacheDir, writeFile, store);
   }
 
@@ -8773,6 +8856,16 @@ function runClearHalt(opts) {
   // question that was actually put, so it is structurally impossible to widen it at clear time, and
   // a halt raised without a class grants nothing at all (nothing is granted by omission).
   //
+  // AND ONLY WHEN THE DISCHARGE IS UNAMBIGUOUS. One classless marker can stand for two DIFFERENT
+  // pending classes (write-halt is the valve and stays raisable while a halt stands), and nothing on
+  // disk says which of them the human was shown or which they answered. Granting the last-raised one
+  // there turns "yes to X, no to Y" into a standing yes to Y — the machine deciding a value call in
+  // the one subsystem built to prevent that. So with more than one class pending, NOTHING is granted;
+  // the pending set is cleared either way, so the question can simply be put again and answered on
+  // its own. That degrade is exactly the valve as it behaved before standing grants existed, which is
+  // why it needs no refusal code and no second flag: the clear still succeeds, and stranding the run
+  // behind a halt it cannot lift is never the price of the ambiguity.
+  //
   // A class REVOKED earlier in this claim is granted here like any other: revocation ends the ANSWER
   // given under the vanished plan, not the human's standing to answer the question the new plan puts.
   // The pending request is the whole guard, and it is enough — the revoking sync clears `pending`, so
@@ -8783,12 +8876,13 @@ function runClearHalt(opts) {
   if (reason === 'consent' && typeof writeFile === 'function') {
     const consentCacheDir = path.join(path.dirname(planPath), '.cache');
     const store = readConsentStore(consentCacheDir, readFile);
-    const pendingClass = store && store.pending && typeof store.pending.class === 'string'
-      ? store.pending.class : null;
-    if (pendingClass) {
-      store.journal.push({ ts: new Date().toISOString(), event: 'granted', class: pendingClass });
-      standingGrantRecorded = pendingClass;
-      store.pending = null;
+    const pendingRows = pendingConsentRows(store);
+    if (pendingRows.length > 0) {
+      if (pendingRows.length === 1) {
+        standingGrantRecorded = pendingRows[0].class;
+        store.journal.push({ ts: new Date().toISOString(), event: 'granted', class: standingGrantRecorded });
+      }
+      store.pending = [];
       writeConsentStore(consentCacheDir, writeFile, store);
     }
   }
@@ -17178,8 +17272,9 @@ function main() {
       '                      [--consent-class <action>:<target>]  (consent only: names the CLASS. A class already granted\n' +
       '                      inside this claim proceeds on the standing grant — nothing halts, the application is journaled.\n' +
       '                      An ungranted class, a different TARGET, or a classless raise halts exactly as before.)\n' +
-      '  clear-halt          --project P --reason consent|security  (grants the class the PENDING consent halt recorded;\n' +
-      '                      no class flag, so a grant can never be widened past the question the human saw)\n' +
+      '  clear-halt          --project P --reason consent|security  (grants the class the PENDING consent halt recorded,\n' +
+      '                      and only when exactly ONE class is pending — two at once grant neither, so raise and answer\n' +
+      '                      them one at a time. No class flag, so a grant can never be widened past the question asked.)\n' +
       '  unlock              --project P --holder <pid|none>  (remove a scheduler.lock left by a DEAD holder; refuses while the holder is live)\n' +
       '  reopen-node         --project P --node-id N\n' +
       '  repair-node         --project P --attempt-id A --node-id N\n' +
@@ -17928,6 +18023,12 @@ module.exports = {
   // lifecycle verb alone cannot distinguish "the write failed and was absorbed" from "the write
   // was never attempted".
   appendOutcomeRecord,
+  // ADR 0013 M2: the recorder's BUILD half, re-exported beside its write half so the other
+  // instrumented CLIs reach ONE recorder through ONE require. It is the kernel's function
+  // unchanged (see the import at the top of this file) — re-exported rather than re-implemented
+  // because the alternative for a forge port is a `kaola-{forge}-workflow-adaptive-schema`
+  // require the rename-normalizer would point at a module that does not exist.
+  buildOutcomeRecord,
   // #727: the single role-kind selector for the reviewer-contract domain_outcome vocabulary.
   allowedDomainOutcomes,
   // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.

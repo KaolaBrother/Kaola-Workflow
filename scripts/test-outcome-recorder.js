@@ -24,10 +24,19 @@
 //
 //   PART E — THE WIRING. The recorder hook lives in `main()` and is unreachable in-process.
 //
+//   PART F — THE REPORT. The other half of M2: the interruption-cost RANKING the recorder
+//            exists to feed. A recorder nobody reads measures nothing, so the ranking contract
+//            is pinned here BYTE-EXACTLY — key order included — against synthetic logs. The
+//            properties that make the number honest (a total order with a defined tie-break, an
+//            empty log that is not a special case, report-all over malformed lines, unmeasured
+//            distinguishable from free, and a reporter that does not write) are pinned as
+//            scenarios, not as prose. See THE RANKING CONTRACT below.
+//
 // Run: node scripts/test-outcome-recorder.js
 // ---------------------------------------------------------------------------
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -39,6 +48,7 @@ const node = require('./kaola-workflow-adaptive-node');
 
 const SCRIPTS = __dirname;
 const ADAPTIVE_NODE = path.join(SCRIPTS, 'kaola-workflow-adaptive-node.js');
+const TELEMETRY_REPORT = path.join(SCRIPTS, 'kaola-workflow-telemetry-report.js');
 const VALIDATOR = path.join(SCRIPTS, 'kaola-workflow-plan-validator.js');
 const PROJECT = 'issue-843';
 const OUTCOME_REL = '.cache/' + schema.OUTCOME_LOG_NAME;
@@ -470,6 +480,544 @@ function partD() {
 }
 
 // ===========================================================================
+// PART F — THE REPORT.
+//
+// ---------------------------------------------------------------------------
+// THE RANKING CONTRACT (pinned here; `kaola-workflow-telemetry-report.js` implements it).
+//
+// VERB. `node scripts/kaola-workflow-telemetry-report.js --project <name> --json`, run from the
+// repository root. An ANSWER verb: exit 0 always, `result: 'ok'` always, no refusal token, no
+// new mid-run halt. It is an instrument, so it also WRITES NOTHING — a reporter that appended
+// its own outcome record would corrupt the very log it reads (partFPurity).
+//
+// INPUTS. `kaola-workflow/{project}/.cache/` — `outcome-log.jsonl` (the ranked population),
+// plus `node-timings.jsonl` and `dispatch-log.jsonl` (re-dispatch evidence only). Each of the
+// three is INDEPENDENTLY optional: all three writers are error-swallowing best-effort sidecars,
+// so an absent one is the ordinary case and never an error (partFResults runs with neither
+// re-dispatch source present). The reporter PROJECTS what the recorder wrote and re-derives
+// nothing: `route` is read off the record, never re-resolved, so the report and the record can
+// never disagree.
+//
+// ENVELOPE. `{result, v, project, totals, ranking}` in that key order. `v` is the REPORT schema
+// version (1), independent of the record's own `v`.
+//   totals = {events, malformed_lines, refusals, unattributed_refusals} — the denominators, so
+//   a partial report says so instead of reading complete. `events` counts well-formed
+//   outcome-log records ONLY. `refusals` counts `result: 'refuse'` records including the ones
+//   with no reason token; `unattributed_refusals` counts that subset, which is the gap between
+//   `refusals` and the sum of `count` over the ranking. Dropping them silently would let the
+//   ranking understate itself.
+//
+// POPULATION. A row exists for each DISTINCT non-null `reason` on a `result: 'refuse'` record.
+//   * `halt` is NOT ranked: the consent valve is a legitimate interrupt by design, and ranking
+//     it would put a thing that must never be subtracted at the top of a subtraction list.
+//   * `warn` / `ok` / `other` are NOT ranked either — but they ARE read, because the natural
+//     resume after a refusal is an `ok`, and that is what closes the triage window.
+//   * A reason that FIRED but never caused a re-dispatch has a ROW with `redispatch_count: 0`.
+//     A reason that never fired has NO ROW. Those mean opposite things for subtraction, so
+//     conflating them (a zero-filled row for every known token) is a defect, not a nicety.
+//
+// ROW, in this key order, every key on every row:
+//   reason              the token, verbatim off the record.
+//   count               refusals carrying it.
+//   redispatch_count    how many of those refusals were followed by a re-dispatch inside their
+//                       triage window — at most one per refusal, however many signals fire.
+//                       This is the signal that the refusal cost REAL WORK rather than being
+//                       self-clearing.
+//   median_triage_ms    median of the MEASURED windows; even n = mean of the two middles,
+//                       Math.round. `null` when nothing was measurable — never 0, because 0 is
+//                       a real observation (a refusal cleared in the same millisecond) and
+//                       "we could not see it" must not be reported as "it was free".
+//   total_triage_ms     SUM of the measured windows. THE RANK KEY: measured aggregate
+//                       interruption time is the interruption cost M3 subtracts by.
+//   measured_count      how many of `count` yielded a window — the denominator that keeps the
+//                       two numbers above honest.
+//   routeless_count     refusals whose record carries `route: null` — an exit-less refusal, the
+//                       ADR 0013 route-contract gap.
+//
+// TRIAGE WINDOW. For a refusal at t0 on `(script, op, node)`, the window ends at the NEXT
+// outcome-log record with the same triple in APPEND order (the recorder's order is emit order).
+// A window is MEASURED only when both instants parse and the delta is >= 0; a missing successor,
+// an unparseable instant, and a negative delta are all UNMEASURED — never a fabricated 0.
+//
+// RE-DISPATCH. A `dispatch-log.jsonl` entry or a `node-timings.jsonl` `opened` event whose `ts`
+// falls in (t0, t_end]. Strictly after the refusal (a spawn at the refusal instant cannot have
+// been caused by it) and at-or-before the resume (a spawn at the resume instant IS the resume).
+// An UNMEASURED refusal has no window and therefore contributes 0 — the instrument never
+// inflates by treating "end of log" as a window.
+//
+// ORDER — a TOTAL order, because "the exact JSON" is flaky by construction without one:
+//   1. `total_triage_ms` DESC   — cost, not frequency. A cheap refusal that fires often ranks
+//                                 BELOW one expensive refusal (partFOrder).
+//   2. `reason` ASC             — lexicographic, and `reason` is unique per row, so the order is
+//                                 total. Deliberately only two tiers: when two reasons cost the
+//                                 same measured time we have no further evidence, and inventing
+//                                 a weighting over the remaining columns would be a number the
+//                                 instrument cannot support.
+//
+// REPORT-ALL (ADR 0013 Layer 1). One malformed line degrades to one `malformed_lines` tick; it
+// never takes the report down and never breaks the window pairing across it. A line is
+// well-formed iff it parses as JSON to a plain object; blank lines are neither (the writer
+// appends '\n', so a trailing newline must not read as damage).
+//
+// EMPTY IS NOT A SPECIAL CASE. An empty log, a log of blank lines, and NO LOG AT ALL produce the
+// SAME well-formed empty report, byte for byte.
+// ---------------------------------------------------------------------------
+
+const EMPTY_REPORT = {
+  result: 'ok', v: 1, project: PROJECT,
+  totals: { events: 0, malformed_lines: 0, refusals: 0, unattributed_refusals: 0 },
+  ranking: [],
+};
+
+// exactJson — BYTE equality on the canonical serialization: values, key ORDER, and no extra
+// keys. `deepStrictEqual` alone would let a reshuffled or pretty-printed-by-another-name report
+// through, and a "contains" assertion would pin nothing at all.
+function exactJson(actual, expected, label) {
+  assert.deepStrictEqual(actual, expected, label + ' (structure)');
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) {
+    throw new assert.AssertionError({
+      message: label + ' (key ORDER / bytes)\n  expected: ' + e + '\n  actual:   ' + a,
+      actual: a, expected: e, operator: 'exactJson', stackStartFn: exactJson,
+    });
+  }
+  passed += 2;
+}
+
+function at(base, seconds) {
+  return new Date(Date.parse(base) + Math.round(seconds * 1000)).toISOString();
+}
+
+// outcomeLine — a fixture line built by the PRODUCTION builder, not by hand. The synthetic log is
+// therefore the log the runtime actually writes; a hand-rolled shape would let the reporter be
+// pinned against a record the recorder never emits.
+function outcomeLine(o) {
+  const rec = schema.buildOutcomeRecord({
+    script: o.script || 'adaptive-node',
+    op: o.op,
+    project: PROJECT,
+    node: o.node || null,
+    ts: o.ts,
+    duration_ms: o.ms == null ? 7 : o.ms,
+    envelope: o.envelope || { result: o.result || 'ok', reason: o.reason || null },
+  });
+  assert.ok(rec && rec.op === o.op, 'fixture: buildOutcomeRecord produced a record for op ' + o.op);
+  return JSON.stringify(rec);
+}
+
+function timingLine(node_, event, ts) { return JSON.stringify({ node: node_, event: event, ts: ts }); }
+
+function dispatchLine(ts, agentType, agentId, cwd) {
+  return JSON.stringify({ ts: ts, agent_type: agentType, agent_id: agentId, cwd: cwd,
+    model: 'standard', model_planned: 'standard' });
+}
+
+// makeReportFixture — a real repository root carrying only the three `.cache/` sidecars. A log
+// value of `null` means the file is DELIBERATELY ABSENT; a string is written verbatim (so a
+// blank-line-only file can be expressed); an array is joined and newline-terminated the way the
+// append-only writers leave it.
+function makeReportFixture(logs) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-m2-report-')));
+  G.init(root, { branch: 'main', email: GIT_ENV.GIT_AUTHOR_EMAIL, name: GIT_ENV.GIT_AUTHOR_NAME });
+  G.git(root, ['config', 'commit.gpgsign', 'false'], STDIO_Q);
+  const cacheDir = path.join(root, 'kaola-workflow', PROJECT, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const write = (name, value) => {
+    if (value == null) return;
+    const content = typeof value === 'string' ? value : (value.length ? value.join('\n') + '\n' : '');
+    fs.writeFileSync(path.join(cacheDir, name), content);
+  };
+  write(schema.OUTCOME_LOG_NAME, logs.outcome);
+  write(schema.NODE_TIMINGS_LOG_NAME, logs.timings);
+  write(schema.DISPATCH_LOG_NAME, logs.dispatch);
+  return { root, cacheDir };
+}
+
+function runReport(root, args) {
+  // The reporter's whole contract lives at the process boundary: argv -> logs on disk -> ONE
+  // JSON document -> exit code. An in-process call could not observe the exit code, which is
+  // half of "this verb never refuses".
+  // spawn-class: cli-contract
+  const r = spawnSync(process.execPath, [TELEMETRY_REPORT].concat(args), {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    env: Object.assign({}, process.env, GIT_ENV),
+  });
+  return { status: r.status, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
+}
+
+function reportOf(root, label) {
+  const r = runReport(root, ['--project', PROJECT, '--json']);
+  equal(r.status, 0, label + ': the reporter is an ANSWER verb — exit 0, always, for every input\n'
+    + r.stdout + r.stderr);
+  let parsed;
+  try {
+    parsed = JSON.parse(r.stdout);
+  } catch (e) {
+    throw new assert.AssertionError({
+      message: label + ': --json stdout must be ONE JSON document; got ' + JSON.stringify(r.stdout)
+        + (r.stderr ? '\n  stderr: ' + r.stderr : ''),
+      actual: r.stdout, expected: '<one JSON document>', operator: 'JSON.parse', stackStartFn: reportOf,
+    });
+  }
+  return { parsed: parsed, raw: r.stdout };
+}
+
+// snapshotTree — content-addressed listing of everything under `dir` except `.git`. Timestamps
+// and inode noise are deliberately excluded: the claim is about BYTES, so that a "no writes"
+// verdict is about the artifact rather than about the filesystem's bookkeeping.
+function snapshotTree(dir) {
+  const out = [];
+  const walk = (d, rel) => {
+    const entries = fs.readdirSync(d, { withFileTypes: true })
+      .filter(e => !(rel === '' && e.name === '.git'))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      const r = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) { out.push('d ' + r); walk(p, r); continue; }
+      out.push('f ' + r + ' ' + crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'));
+    }
+  };
+  walk(dir, '');
+  return out.join('\n');
+}
+
+// --- F0: the artifact itself. ---------------------------------------------------------------
+function partFExists() {
+  ok(fs.existsSync(TELEMETRY_REPORT),
+    'ADR 0013 M2 acceptance: the ranking reporter must exist at ' + TELEMETRY_REPORT
+    + ' — a recorder nobody reads measures nothing');
+}
+
+// --- F1: THE HEADLINE — two reasons and one re-dispatch, exact ranking JSON. ------------------
+//
+// The acceptance bullet, literally. Everything in this fixture is load-bearing:
+//   * A MALFORMED line sits BETWEEN the first refusal and its resume, so an implementation that
+//     aborts on it — or that loses window pairing across it — produces a different report.
+//   * The first refusal's window carries BOTH re-dispatch signals (a dispatch-log entry AND a
+//     node-timings `opened`). `redispatch_count` is per-REFUSAL, so a signal-counting
+//     implementation reports 2 where the contract says 1.
+//   * A node-timings `closed` sits inside the second refusal's window: only `opened` counts.
+//   * A dispatch entry sits AFTER every window: out-of-window signals count nowhere.
+//   * `record-evidence` sits between the first refusal and its resume on the SAME node — a
+//     different `op`, so it does NOT close the window. The window is the whole stop-to-resume
+//     interval, recovery work included, which is the interruption cost being measured.
+//   * `no_ready_node` FIRED and was never re-dispatched: it has a row reading 0, which is a
+//     different fact from `halt_pending`, which never fired and has no row at all.
+function partFHeadline() {
+  const B = '2026-07-28T10:00:00.000Z';
+  const fx = makeReportFixture({
+    outcome: [
+      outcomeLine({ op: 'orient', ts: at(B, 0), result: 'ok' }),
+      outcomeLine({ op: 'close-and-open-next', node: 'n2', ts: at(B, 10), result: 'refuse', reason: 'evidence_absent' }),
+      '{"v":1,"op":"close-and-open-next"',                       // truncated: report-all, not report-none
+      outcomeLine({ op: 'record-evidence', node: 'n2', ts: at(B, 25), result: 'ok' }),
+      outcomeLine({ op: 'close-and-open-next', node: 'n2', ts: at(B, 40), result: 'ok' }),
+      outcomeLine({ op: 'close-and-open-next', node: 'n5', ts: at(B, 55), result: 'refuse', reason: 'evidence_absent' }),
+      outcomeLine({ op: 'close-and-open-next', node: 'n5', ts: at(B, 60), result: 'ok' }),
+      outcomeLine({ op: 'open-next', ts: at(B, 70), result: 'refuse', reason: 'no_ready_node' }),
+      outcomeLine({ op: 'open-next', ts: at(B, 80), result: 'ok' }),
+    ],
+    timings: [
+      timingLine('n2', 'opened', at(B, 30)),   // in window 1 — the SECOND signal for the same refusal
+      timingLine('n5', 'closed', at(B, 57)),   // in window 2, but `closed` is not a re-dispatch
+      timingLine('n9', 'opened', at(B, 95)),   // after every window
+    ],
+    dispatch: [
+      dispatchLine(at(B, 20), 'tdd-guide', 'd1', '/tmp/leg'),    // in window 1
+      dispatchLine(at(B, 90), 'implementer', 'd2', '/tmp/leg'),  // after every window
+    ],
+  });
+  try {
+    const { parsed } = reportOf(fx.root, 'headline');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 8, malformed_lines: 1, refusals: 3, unattributed_refusals: 0 },
+      ranking: [
+        { reason: 'evidence_absent', count: 2, redispatch_count: 1, median_triage_ms: 17500,
+          total_triage_ms: 35000, measured_count: 2, routeless_count: 0 },
+        { reason: 'no_ready_node', count: 1, redispatch_count: 0, median_triage_ms: 10000,
+          total_triage_ms: 10000, measured_count: 1, routeless_count: 1 },
+      ],
+    }, 'THE HEADLINE: two reasons and one re-dispatch yield the EXACT ranking JSON');
+
+    // Said again as a claim rather than as a shape, because this is the distinction the whole
+    // subtraction campaign turns on and an exact-JSON assertion states it only implicitly.
+    const fired = parsed.ranking.filter(r => r.reason === 'no_ready_node');
+    equal(fired.length, 1, 'a reason that FIRED has a row even with redispatch_count 0');
+    equal(fired[0].redispatch_count, 0, 'and that row reads 0 — self-clearing, not free');
+    equal(parsed.ranking.filter(r => r.reason === 'halt_pending').length, 0,
+      'a reason that NEVER FIRED has NO row — the opposite fact, and it must not be zero-filled');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F2: empty is not a special case. --------------------------------------------------------
+function partFEmpty() {
+  const cases = [
+    ['an EMPTY log file', { outcome: '' }],
+    ['NO log file at all', { outcome: null }],
+    ['a log of BLANK LINES (the writer appends \\n; a trailing newline is not damage)', { outcome: '\n\n\n' }],
+  ];
+  const seen = [];
+  for (const [label, logs] of cases) {
+    const fx = makeReportFixture(logs);
+    try {
+      const { parsed } = reportOf(fx.root, label);
+      exactJson(parsed, EMPTY_REPORT, label + ' produces the WELL-FORMED empty report');
+      seen.push(JSON.stringify(parsed));
+    } finally { cleanup(fx.root); }
+  }
+  equal(new Set(seen).size, 1,
+    'absent, empty and blank-only are the SAME report byte for byte — no special case for any of them');
+
+  // ...and "empty ranking" is not the same as "empty log": a run with successes and no refusals
+  // reports a real denominator. A reporter that returned EMPTY_REPORT here would be measuring
+  // nothing while reading correct.
+  const B = '2026-07-28T14:00:00.000Z';
+  const fx = makeReportFixture({ outcome: [
+    outcomeLine({ op: 'orient', ts: at(B, 0), result: 'ok' }),
+    outcomeLine({ op: 'open-next', node: 'n1', ts: at(B, 1), result: 'ok' }),
+    outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 2), result: 'ok' }),
+  ] });
+  try {
+    const { parsed } = reportOf(fx.root, 'successes only');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 3, malformed_lines: 0, refusals: 0, unattributed_refusals: 0 },
+      ranking: [],
+    }, 'a log of pure successes ranks nothing but still reports its denominator');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F3: report-all — a wholly damaged log still answers. -------------------------------------
+function partFReportAll() {
+  const fx = makeReportFixture({ outcome:
+    ['not json at all', '[1,2,3]', '"a string"', 'null', '', '{"unterminated": '].join('\n') + '\n' });
+  try {
+    const { parsed } = reportOf(fx.root, 'wholly damaged log');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 0, malformed_lines: 5, refusals: 0, unattributed_refusals: 0 },
+      ranking: [],
+    }, 'REPORT-ALL: five damaged lines are five ticks, not a crash — and the blank line is not damage');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F4: the order is TOTAL, and it ranks cost rather than frequency. -------------------------
+//
+// Two arms, both non-vacuous by construction:
+//   COST > FREQUENCY. `mm_cheap` fires THREE times and is written FIRST; it ranks LAST, because
+//   the three stops cost 1.5s between them where `xx_costly` cost 9s in one. A count-ordered or
+//   insertion-ordered implementation is red here.
+//   TIE-BREAK. `zz_tied` and `aa_tied` cost exactly the same, and `zz_tied` is written FIRST. The
+//   contract says lexicographic, so `aa_tied` must come first; a stable sort over input order is
+//   red here. Without this arm the "exact JSON" assertion would be flaky by construction.
+// `mm_cheap` also fires under TWO different scripts: the ranking is per REASON, aggregated across
+// every instrumented CLI, which is the whole point of a cross-CLI recorder.
+function partFOrder() {
+  const B = '2026-07-28T11:00:00.000Z';
+  const fx = makeReportFixture({ outcome: [
+    outcomeLine({ script: 'claim', op: 'startup', ts: at(B, 0), result: 'refuse', reason: 'mm_cheap' }),
+    outcomeLine({ script: 'claim', op: 'startup', ts: at(B, 0.5), result: 'ok' }),
+    outcomeLine({ op: 'open-next', ts: at(B, 2), result: 'refuse', reason: 'zz_tied' }),
+    outcomeLine({ op: 'open-next', ts: at(B, 4), result: 'ok' }),
+    outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 6), result: 'refuse', reason: 'aa_tied' }),
+    outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 8), result: 'ok' }),
+    outcomeLine({ op: 'open-ready', ts: at(B, 10), result: 'refuse', reason: 'mm_cheap' }),
+    outcomeLine({ op: 'open-ready', ts: at(B, 10.5), result: 'ok' }),
+    outcomeLine({ op: 'record-evidence', node: 'n2', ts: at(B, 12), result: 'refuse', reason: 'mm_cheap' }),
+    outcomeLine({ op: 'record-evidence', node: 'n2', ts: at(B, 12.5), result: 'ok' }),
+    outcomeLine({ op: 'expand-close', node: 'n3', ts: at(B, 14), result: 'refuse', reason: 'xx_costly' }),
+    outcomeLine({ op: 'expand-close', node: 'n3', ts: at(B, 23), result: 'ok' }),
+  ] });
+  try {
+    const { parsed } = reportOf(fx.root, 'ordering');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 12, malformed_lines: 0, refusals: 6, unattributed_refusals: 0 },
+      ranking: [
+        { reason: 'xx_costly', count: 1, redispatch_count: 0, median_triage_ms: 9000,
+          total_triage_ms: 9000, measured_count: 1, routeless_count: 1 },
+        { reason: 'aa_tied', count: 1, redispatch_count: 0, median_triage_ms: 2000,
+          total_triage_ms: 2000, measured_count: 1, routeless_count: 1 },
+        { reason: 'zz_tied', count: 1, redispatch_count: 0, median_triage_ms: 2000,
+          total_triage_ms: 2000, measured_count: 1, routeless_count: 1 },
+        { reason: 'mm_cheap', count: 3, redispatch_count: 0, median_triage_ms: 500,
+          total_triage_ms: 1500, measured_count: 3, routeless_count: 3 },
+      ],
+    }, 'THE ORDER: cost outranks frequency, and equal cost breaks lexicographically');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F5: unmeasured is not free, and a measurement is never fabricated. -----------------------
+//
+// Four refusals, none of which yields a positive window, and the four outcomes are deliberately
+// NOT the same number:
+//   tail_unmeasured  no successor at all               -> median null, measured 0
+//   clock_skew       successor stamped EARLIER          -> a negative delta is not a measurement
+//   bad_clock        its own instant does not parse     -> unmeasurable
+//   instant_clear    successor in the SAME millisecond  -> median 0, measured 1 (a real zero)
+// `median_triage_ms: null` beside `median_triage_ms: 0` is the honesty pin: an unseen cost
+// reported as zero would rank a wedge at the bottom of the subtraction list.
+// A dispatch entry and a node-timings `opened` sit just after the unmeasured tail refusal: with
+// no window they belong to nothing, so an implementation that runs an open window to end-of-log
+// reports a re-dispatch the run never made.
+function partFUnmeasured() {
+  const B = '2026-07-28T12:00:00.000Z';
+  const fx = makeReportFixture({
+    outcome: [
+      outcomeLine({ op: 'orient', ts: at(B, 0), result: 'ok' }),
+      outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 1), result: 'refuse', reason: 'tail_unmeasured' }),
+      outcomeLine({ op: 'open-next', ts: at(B, 2), result: 'refuse', reason: 'clock_skew' }),
+      outcomeLine({ op: 'open-next', ts: at(B, 1), result: 'ok' }),               // EARLIER than the refusal
+      outcomeLine({ op: 'unlock', ts: 'not-a-timestamp', result: 'refuse', reason: 'bad_clock' }),
+      outcomeLine({ op: 'unlock', ts: at(B, 6), result: 'ok' }),
+      outcomeLine({ op: 'repair-node', node: 'n4', ts: at(B, 7), result: 'refuse', reason: 'instant_clear' }),
+      outcomeLine({ op: 'repair-node', node: 'n4', ts: at(B, 7), result: 'ok' }), // same instant
+    ],
+    timings: [timingLine('n1', 'opened', at(B, 4))],
+    dispatch: [dispatchLine(at(B, 3), 'tdd-guide', 'd1', '/tmp/leg')],
+  });
+  try {
+    const { parsed } = reportOf(fx.root, 'unmeasured');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 8, malformed_lines: 0, refusals: 4, unattributed_refusals: 0 },
+      ranking: [
+        { reason: 'bad_clock', count: 1, redispatch_count: 0, median_triage_ms: null,
+          total_triage_ms: 0, measured_count: 0, routeless_count: 1 },
+        { reason: 'clock_skew', count: 1, redispatch_count: 0, median_triage_ms: null,
+          total_triage_ms: 0, measured_count: 0, routeless_count: 1 },
+        { reason: 'instant_clear', count: 1, redispatch_count: 0, median_triage_ms: 0,
+          total_triage_ms: 0, measured_count: 1, routeless_count: 1 },
+        { reason: 'tail_unmeasured', count: 1, redispatch_count: 0, median_triage_ms: null,
+          total_triage_ms: 0, measured_count: 0, routeless_count: 1 },
+      ],
+    }, 'UNMEASURED is null, not 0 — and a real 0 is still a measurement');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F5b: the two window boundaries, which are the whole difference between `>` and `>=`. -----
+//
+// Both instants are pinned because both are decidable and neither is obvious. A spawn stamped at
+// the REFUSAL instant cannot have been caused by the refusal, so the window opens strictly after
+// it; a spawn stamped at the RESUME instant IS the resume, so the window closes inclusively. Left
+// unpinned this is prose, and an off-by-one here silently inflates the one number the whole
+// subtraction campaign is ranked by. The two signal SOURCES are split across the two boundaries
+// so neither source is pinned at only one edge.
+// The pair also ties on cost, so the lexicographic tie-break decides — and it decides AGAINST the
+// order the log was written in.
+function partFWindowBoundary() {
+  const B = '2026-07-28T15:00:00.000Z';
+  const fx = makeReportFixture({
+    outcome: [
+      outcomeLine({ op: 'orient', ts: at(B, 0), result: 'ok' }),
+      outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 10), result: 'refuse', reason: 'boundary_open' }),
+      outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 20), result: 'ok' }),
+      outcomeLine({ op: 'open-next', ts: at(B, 30), result: 'refuse', reason: 'boundary_close' }),
+      outcomeLine({ op: 'open-next', ts: at(B, 40), result: 'ok' }),
+    ],
+    timings: [timingLine('n1', 'opened', at(B, 10))],                        // AT the refusal instant
+    dispatch: [dispatchLine(at(B, 40), 'tdd-guide', 'd1', '/tmp/leg')],      // AT the resume instant
+  });
+  try {
+    const { parsed } = reportOf(fx.root, 'window boundary');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 5, malformed_lines: 0, refusals: 2, unattributed_refusals: 0 },
+      ranking: [
+        { reason: 'boundary_close', count: 1, redispatch_count: 1, median_triage_ms: 10000,
+          total_triage_ms: 10000, measured_count: 1, routeless_count: 1 },
+        { reason: 'boundary_open', count: 1, redispatch_count: 0, median_triage_ms: 10000,
+          total_triage_ms: 10000, measured_count: 1, routeless_count: 1 },
+      ],
+    }, 'THE WINDOW IS (t0, t_end]: a signal at the refusal instant is not caused by it; one at the resume instant IS the resume');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F6: what is NOT ranked, and what is not silently dropped. --------------------------------
+//
+// A `halt` is the consent valve — a legitimate interrupt by design, and the one thing on this
+// list that must never be subtracted, so it is never ranked. A `warn` carrying the SAME token as
+// a real refusal must not inflate that refusal's row. An unrecognised result is neither. And a
+// refusal with NO reason token cannot be ranked but must not vanish: it is counted twice over, in
+// `refusals` and in `unattributed_refusals`, so the gap between the ranking and the population is
+// visible instead of silent.
+function partFResults() {
+  const B = '2026-07-28T13:00:00.000Z';
+  const fx = makeReportFixture({ outcome: [
+    outcomeLine({ op: 'orient', ts: at(B, 0), result: 'ok' }),
+    outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 1), result: 'refuse', reason: 'evidence_absent' }),
+    outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 3), result: 'ok' }),
+    outcomeLine({ op: 'open-next', ts: at(B, 5), envelope: { result: 'halt', reason: 'halt_pending' } }),
+    outcomeLine({ op: 'open-next', ts: at(B, 6), result: 'ok' }),
+    outcomeLine({ op: 'record-evidence', node: 'n2', ts: at(B, 7), envelope: { result: 'warn', reason: 'evidence_absent' } }),
+    outcomeLine({ op: 'record-evidence', node: 'n2', ts: at(B, 8), result: 'ok' }),
+    outcomeLine({ op: 'unlock', ts: at(B, 9), envelope: { result: 'refuse' } }),   // no reason token
+    outcomeLine({ op: 'unlock', ts: at(B, 10), result: 'ok' }),
+    outcomeLine({ op: 'mirror-project', ts: at(B, 11), envelope: { result: 'weird' } }),
+  ] });
+  try {
+    const { parsed } = reportOf(fx.root, 'result vocabulary');
+    exactJson(parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 10, malformed_lines: 0, refusals: 2, unattributed_refusals: 1 },
+      ranking: [
+        { reason: 'evidence_absent', count: 1, redispatch_count: 0, median_triage_ms: 2000,
+          total_triage_ms: 2000, measured_count: 1, routeless_count: 0 },
+      ],
+    }, 'only `refuse` is ranked; a halt/warn/other is read but never counted, and a reason-less refusal is never dropped');
+
+    // routeless_count is read OFF the record, not re-derived: `evidence_absent` ships a route, so
+    // its row reads 0 while every fabricated token in F4/F5 reads its full count.
+    equal(parsed.ranking[0].routeless_count, 0,
+      'a refusal whose record carries a route is NOT routeless — the reporter projects, it does not re-classify');
+  } finally { cleanup(fx.root); }
+}
+
+// --- F7: the instrument does not change what it measures. -------------------------------------
+//
+// The reporter reads the very log the recorder appends to. If it recorded its own invocation —
+// or created a `.cache/`, or rewrote a sidecar — every later report would be measuring the
+// reporter. It is a read-only ANSWER verb, and that is checked on BYTES, not on intent.
+function partFPurity() {
+  const B = '2026-07-28T10:00:00.000Z';
+  const fx = makeReportFixture({
+    outcome: [
+      outcomeLine({ op: 'orient', ts: at(B, 0), result: 'ok' }),
+      outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 1), result: 'refuse', reason: 'evidence_absent' }),
+      outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 4), result: 'ok' }),
+    ],
+    timings: [timingLine('n1', 'opened', at(B, 2))],
+    dispatch: [dispatchLine(at(B, 3), 'tdd-guide', 'd1', '/tmp/leg')],
+  });
+  try {
+    const before = snapshotTree(fx.root);
+    const first = reportOf(fx.root, 'purity/1');
+    const after = snapshotTree(fx.root);
+    equal(after, before,
+      'THE INSTRUMENT DOES NOT MOVE THE NEEDLE: the reporter left the project tree byte-identical — '
+      + 'no self-recorded outcome line, no created directory, no rewritten sidecar');
+
+    // Two re-dispatch signals, one refusal: the row reads 1.
+    exactJson(first.parsed, {
+      result: 'ok', v: 1, project: PROJECT,
+      totals: { events: 3, malformed_lines: 0, refusals: 1, unattributed_refusals: 0 },
+      ranking: [
+        { reason: 'evidence_absent', count: 1, redispatch_count: 1, median_triage_ms: 3000,
+          total_triage_ms: 3000, measured_count: 1, routeless_count: 0 },
+      ],
+    }, 'purity fixture ranks as specified');
+
+    const second = reportOf(fx.root, 'purity/2');
+    equal(second.raw, first.raw,
+      'the report is a PURE FUNCTION of the logs — a second run is byte-identical, so no wall-clock, '
+      + 'path or iteration-order value leaked into it');
+  } finally { cleanup(fx.root); }
+}
+
+// ===========================================================================
 
 function main() {
   partA();
@@ -478,9 +1026,26 @@ function main() {
   partCMutation();
   partE();
   partD();
+  partFExists();
+  partFHeadline();
+  partFEmpty();
+  partFReportAll();
+  partFOrder();
+  partFUnmeasured();
+  partFWindowBoundary();
+  partFResults();
+  partFPurity();
   process.stdout.write('outcome recorder tests passed (' + passed + ' assertions)\n');
 }
 
 if (require.main === module) main();
 
-module.exports = { makeLegFixture, makeCliRepo, withSidecarRemoved, RECORD_KEYS };
+// The PART F scenarios are exported individually so the reporter can be driven one property at a
+// time while it is being built — the suite itself aborts on the first failure, which is the wrong
+// granularity for that loop.
+module.exports = {
+  makeLegFixture, makeCliRepo, withSidecarRemoved, RECORD_KEYS,
+  EMPTY_REPORT, makeReportFixture, runReport,
+  partFExists, partFHeadline, partFEmpty, partFReportAll, partFOrder, partFUnmeasured,
+  partFWindowBoundary, partFResults, partFPurity,
+};

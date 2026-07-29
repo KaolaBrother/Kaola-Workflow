@@ -90,6 +90,13 @@ const COMMON_SCRIPTS = [
   // #435: run-gap capture gate. Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-gap-sweep.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-gap-sweep.js',
+  // #843: the outcome-telemetry ranking reporter. Byte-identical claude↔codex; the gitlab/gitea
+  // copies keep the CANONICAL base name (see the 'telemetry-report forge copies' byte group
+  // below) rather than joining RENAME_NORMALIZED_FAMILIES — the script require()s the base-named
+  // Oracle Kernel, and the rename-normalizer rewrites EVERY kaola-workflow-<name> token, which
+  // would point the forge ports at a `kaola-{forge}-workflow-adaptive-schema` that does not exist
+  // (the same trap run-chains documents at its own kernel-free line).
+  'kaola-workflow-telemetry-report.js',
 ];
 
 // The four committed copies of the Oracle Kernel, canonical FIRST. Single-sourced here because two
@@ -225,6 +232,18 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow/scripts/kaola-workflow-codex-preflight.js',
       'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js',
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js',
+    ],
+  },
+  {
+    // #843: the telemetry reporter's FORGE copies. The claude↔codex pair is already enforced by
+    // its COMMON_SCRIPTS entry, so this group deliberately omits the codex path and covers only
+    // the two forge trees — no double enforcement, and the copies keep the canonical base name
+    // (they must: the script require()s the base-named kernel).
+    label: 'telemetry-report forge copies',
+    files: [
+      'scripts/kaola-workflow-telemetry-report.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-telemetry-report.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-telemetry-report.js',
     ],
   },
   {
