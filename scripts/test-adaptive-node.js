@@ -20792,7 +20792,9 @@ scenario(() => {
 // T611-AC5: typed delegation outcomes in the node evidence contract. An OPTIONAL column-0
 // `delegation_outcome: <token>` line, closed vocabulary {completed, returned_partial,
 // interrupted_unresponsive, interrupted_obsolete}. ABSENT ⇒ completed (back-compat: existing
-// evidence has no such line and must not red). A PRESENT unknown value is a typed refusal.
+// evidence has no such line and must not red). A PRESENT unknown value NORMALIZES to the default and
+// is reported as an advisory carrying the raw string — `capability_gap` excepted, which refuses
+// because a withheld deliverable may not close a node (see T611-AC5-PROD below).
 // ---------------------------------------------------------------------------
 scenario(() => {
   const schema = require('./kaola-workflow-adaptive-schema');
@@ -20840,6 +20842,101 @@ scenario(() => {
     { advisories: keptAdv }).ok === true && keptAdv.length === 0,
     'T611-AC5: a token INSIDE the vocabulary normalizes nothing and advises nothing, got '
     + JSON.stringify(keptAdv));
+});
+
+// ---------------------------------------------------------------------------
+// T611-AC5-PROD: the normalize advisory must reach the envelope THE SHIPPED PATH EMITS.
+//
+// Every assertion above hands checkEvidenceShape an `advisories` array of its own. That is a
+// perfectly falsifiable unit test which nonetheless proved nothing about production: no production
+// caller supplied the collector, so `if (Array.isArray(opts.advisories))` was never true on any
+// shipped path and the demotion's whole trade — "you lose the refusal but gain the raw string" —
+// silently delivered neither. A pin can be sound and still test a channel only the test provides.
+//
+// So this scenario drives runVerifyEvidence, the production `record-evidence --verify` entry, over
+// real on-disk evidence and DELIBERATELY passes no `advisories`. If the collector does not come from
+// the function under test, nothing appears and these assertions fail.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const mkEvidenceFixture = (nodeId, role, body) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac5-prod-'));
+    const cache = path.join(dir, '.cache');
+    fs.mkdirSync(cache, { recursive: true });
+    const nonce = 'abcdef123456';
+    fs.writeFileSync(path.join(cache, 'barrier-base-' + nodeId), nonce + 'extra');
+    fs.writeFileSync(path.join(cache, nodeId + '.md'),
+      'evidence-binding: ' + nodeId + ' ' + nonce + '\n' + body);
+    const planPath = path.join(dir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '## Nodes',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| ' + nodeId + ' | ' + role + ' | — | scripts/foo.js | 1 | sequence |',
+      '## Node Ledger',
+      '| id | status |', '| --- | --- |', '| ' + nodeId + ' | in_progress |',
+    ].join('\n'));
+    return { dir, planPath };
+  };
+  const verifyProd = (fixture, nodeId) => runVerifyEvidence({
+    planPath: fixture.planPath, project: 'issue-611', nodeId,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+    // NO `advisories` key. That absence is the point of this scenario.
+  });
+
+  // (1) An unknown token: the run continues AND the operator is told, on the emitted envelope.
+  {
+    const fx = mkEvidenceFixture('n1-prod', 'implementer',
+      'delegation_outcome: exploded\nregression-green: npm test passed\n');
+    try {
+      const out = verifyProd(fx, 'n1-prod');
+      assert(out.result === 'ok',
+        'T611-AC5-PROD: an unknown delegation_outcome still does not stop the shipped path, got '
+        + JSON.stringify(out));
+      const adv = (out.advisories || []).find(a => a && a.warning === 'delegation_outcome_normalized');
+      assert(adv !== undefined,
+        'T611-AC5-PROD: record-evidence --verify EMITS the normalize advisory — without this the '
+        + 'demotion trades a refusal for silence, got ' + JSON.stringify(out.advisories));
+      // Assert the fields the selector did NOT choose on: `raw` is the author's string, which the
+      // code could have dropped or overwritten with the normalized value and still matched above.
+      assert(adv.raw === 'exploded' && adv.normalized === 'completed',
+        'T611-AC5-PROD: the envelope carries the RAW token beside the value it reads as, got '
+        + JSON.stringify(adv));
+    } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
+  }
+
+  // (2) A token INSIDE the vocabulary is not advised about on the shipped path either — otherwise
+  // (1) would pass against code that advises unconditionally.
+  {
+    const fx = mkEvidenceFixture('n2-prod', 'implementer',
+      'delegation_outcome: returned_partial\nregression-green: npm test passed\n');
+    try {
+      const out = verifyProd(fx, 'n2-prod');
+      assert(out.result === 'ok' && out.advisories === undefined,
+        'T611-AC5-PROD: a known token emits NO advisory key at all, got ' + JSON.stringify(out));
+    } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
+  }
+
+  // (3) R4 — `capability_gap` is the one out-of-vocabulary token that must NOT normalize. It is the
+  // role reporting it could not cover the brief, so reading it as `completed` would mark the node
+  // done with its deliverable withheld. Nothing pinned this before, which is why it was deleted as a
+  // side effect of the demotion and nothing went red.
+  {
+    const fx = mkEvidenceFixture('n3-prod', 'implementer',
+      'delegation_outcome: capability_gap\nregression-green: npm test passed\n');
+    try {
+      const out = verifyProd(fx, 'n3-prod');
+      assert(out.result === 'refuse',
+        'T611-AC5-PROD: a capability_gap may not close a node — it must refuse, not read as '
+        + '"completed", got ' + JSON.stringify(out));
+      assert(out.missingTokenClass === 'delegation_outcome',
+        'T611-AC5-PROD: ...classified on the delegation_outcome token, reusing the existing family '
+        + 'rather than minting a code, got ' + JSON.stringify(out));
+      assert(!(out.advisories || []).some(a => a && a.warning === 'delegation_outcome_normalized'),
+        'T611-AC5-PROD: ...and it is NOT also normalized — the exclusion precedes the normalize, got '
+        + JSON.stringify(out.advisories));
+    } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
+  }
 });
 
 // ---------------------------------------------------------------------------
