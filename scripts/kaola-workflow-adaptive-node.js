@@ -45,7 +45,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, DELEGATION_OUTCOME_DEFAULT, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -3009,18 +3009,25 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     }
   }
 
-  // Codex join protocol: the OPTIONAL typed delegation outcome. When the evidence carries a column-0
-  // `delegation_outcome: <token>` line, the token MUST be in the closed vocabulary (completed |
-  // returned_partial | interrupted_unresponsive | interrupted_obsolete); an unknown value is a typed
-  // refusal. ABSENT ⇒ `completed` (back-compat: existing evidence has no such line and stays green).
-  // Placed BEFORE the role branches AND the universal n/a carve-out so the vocabulary governs every role
-  // uniformly — a malformed token fails closed regardless of how the node otherwise resolves.
+  // Codex join protocol: the OPTIONAL typed delegation outcome. An unknown token NORMALIZES to the
+  // generic value and carries the raw string on the payload rather than refusing. Recording how a
+  // delegation ended is bookkeeping — it may report, retry or normalize, but it may not stop a run
+  // whose work is already done and whose evidence is already written. The vocabulary still means
+  // what it means: a reader gets a known token plus the exact string the author wrote, which is
+  // strictly more than a refusal left them. ABSENT ⇒ `completed` (existing evidence stays green).
   {
     const dm = content.match(/^delegation_outcome:[ \t]*(\S+)[ \t]*$/m);
     if (dm && !DELEGATION_OUTCOME_VOCABULARY.includes(dm[1].toLowerCase())) {
-      return { ok: false, kind: 'shape', missingTokenClass: 'delegation_outcome',
-        reason: role + ' ' + nodeId + ' evidence has unknown delegation_outcome "' + dm[1] + '" (allowed: ' + DELEGATION_OUTCOME_VOCABULARY.join(' | ') + ')',
-        expected: ['delegation_outcome: ' + DELEGATION_OUTCOME_VOCABULARY.join('|')] };
+      if (Array.isArray(opts.advisories)) {
+        opts.advisories.push({
+          warning: 'delegation_outcome_normalized',
+          detail: role + ' ' + nodeId + ' recorded delegation_outcome "' + dm[1]
+            + '", which is outside the vocabulary (' + DELEGATION_OUTCOME_VOCABULARY.join(' | ')
+            + '). Read as "' + DELEGATION_OUTCOME_DEFAULT + '"; the raw string is preserved here.',
+          raw: dm[1],
+          normalized: DELEGATION_OUTCOME_DEFAULT,
+        });
+      }
     }
   }
 

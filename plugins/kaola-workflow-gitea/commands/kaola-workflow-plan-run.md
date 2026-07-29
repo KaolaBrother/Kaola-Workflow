@@ -119,13 +119,8 @@ and `record-evidence --verify` are read-only and exempt; `mirror-project` is the
 and must run from the main root, above.)
 
 
-<!-- PIN: planner-wait-budget -->
-The dispatch card's frozen `wait_budget_minutes` value and source are authoritative. A
-`planner_override` may extend but never shorten the existing no-interrupt floor. The join loop must
-not interrupt or re-nudge before that floor expires; after it expires, the bounded escalation still
-requires a complete governed deliverable. This planner-authored floor is distinct from
-`optimize_budget`: only a metric-optimizer contract supplies the specialized optimization wall-clock
-source described by the metric-optimizer card.
+The dispatch card's `wait_budget_minutes` is data the planner froze; a `planner_override` may
+extend it. It is distinct from `optimize_budget`, which only a metric-optimizer contract supplies.
 
 ## Gate-Role Degradation Notice
 

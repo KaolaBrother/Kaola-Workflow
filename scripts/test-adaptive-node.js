@@ -20816,10 +20816,30 @@ scenario(() => {
   // an interrupted-path token passes when the role tokens are present.
   assert(checkEvidenceShape('implementer', 'n2', 'delegation_outcome: returned_partial\nnon_tdd_reason: x\nregression-green: pass').ok === true,
     'T611-AC5: an interrupted-path token (returned_partial) passes with the role tokens present');
-  // an unknown token is a typed refusal, independent of role (checked before the role branches).
-  const bad = checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: exploded\nRED\nGREEN');
-  assert(bad.ok === false && bad.missingTokenClass === 'delegation_outcome',
-    'T611-AC5: unknown delegation_outcome → typed refusal (delegation_outcome), got ' + JSON.stringify(bad));
+  // An unknown token NORMALIZES rather than refusing: recording how a delegation ended is
+  // bookkeeping, and the work it describes is already done and already evidenced. The run
+  // continues and the operator is told, with the raw string preserved — strictly more than a
+  // refusal left them.
+  const advisories = [];
+  const odd = checkEvidenceShape('tdd-guide', 'n1',
+    'delegation_outcome: exploded\nRED: t_x — AssertionError\nred_baseline: 0123456789ab',
+    { advisories });
+  assert(odd.ok === true,
+    'T611-AC5: an unknown delegation_outcome does not stop the run, got ' + JSON.stringify(odd));
+  const norm611 = advisories.find(a => a && a.warning === 'delegation_outcome_normalized');
+  assert(norm611 !== undefined,
+    'T611-AC5: ...and it is reported, not swallowed — a silent normalize is the half of this trade '
+    + 'that must not happen, got ' + JSON.stringify(advisories));
+  assert(norm611.raw === 'exploded' && norm611.normalized === 'completed',
+    'T611-AC5: ...carrying the RAW string the author wrote alongside the value it reads as, so the '
+    + 'normalize is reversible by a human, got ' + JSON.stringify(norm611));
+  // The vocabulary still means what it means: a known token is never rewritten.
+  const keptAdv = [];
+  assert(checkEvidenceShape('tdd-guide', 'n1',
+    'delegation_outcome: returned_partial\nRED: t_x — AssertionError\nred_baseline: 0123456789ab',
+    { advisories: keptAdv }).ok === true && keptAdv.length === 0,
+    'T611-AC5: a token INSIDE the vocabulary normalizes nothing and advises nothing, got '
+    + JSON.stringify(keptAdv));
 });
 
 // ---------------------------------------------------------------------------
