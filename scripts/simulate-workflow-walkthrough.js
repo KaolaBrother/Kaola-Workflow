@@ -13638,6 +13638,46 @@ function testAdaptiveVerdictCheck() {
     scJson = JSON.parse(cr.stdout);
     assert(scJson.route && scJson.route.verb === 'record-evidence' && scJson.route.script === 'adaptive-node',
       '--selector-check foreign selector on an in_progress node routes to record-evidence, got ' + cr.stdout);
+
+    // Everything above drives the STANDALONE --selector-check, which commit-node reaches only as a
+    // fallback: its live call is the fused --node-end, and it reads the advice off the selectorCheck
+    // sub-envelope. Wiring the same kernel advice into two arms is two wirings, so the arm that
+    // actually ships gets its own witness on both ledger states — un-wiring it there must go red
+    // here, and nothing above would notice. Note --node-end exits 0 on both (it emits data; the
+    // consumer computes the verdict), so the exit code is not the discriminator — the payload is.
+    fs.writeFileSync(scPlanPath, scPlanContent);
+    cr = runNode(planValidatorScript, [scPlanPath, '--node-end', '--node-id', 'classify', '--json'], scDir);
+    let neSel = JSON.parse(cr.stdout).selectorCheck;
+    assert(neSel && neSel.isSelector === true && neSel.ok === false,
+      '--node-end foreign selector must stay un-closeable on the fused arm (ok:false), got ' + cr.stdout);
+    assert(neSel.route === null && typeof neSel.detail === 'string' && neSel.detail.indexOf('arm-csv') >= 0,
+      '--node-end foreign selector: no ledger row => no route on the fused arm, and the detail names '
+        + 'the real arms, got ' + cr.stdout);
+    const neDetailNoLedger = neSel.detail;
+
+    fs.writeFileSync(scPlanPath, scPlanContent
+      + ['## Node Ledger', '', '| id | status |', '| --- | --- |', '| classify | in_progress |', ''].join('\n'));
+    cr = runNode(planValidatorScript, [scPlanPath, '--node-end', '--node-id', 'classify', '--json'], scDir);
+    neSel = JSON.parse(cr.stdout).selectorCheck;
+    assert(neSel.route && neSel.route.verb === 'record-evidence' && neSel.route.script === 'adaptive-node'
+      && /--node-id classify\b/.test(neSel.route.args) && /--project sc-cli\b/.test(neSel.route.args),
+      '--node-end foreign selector on an in_progress node routes to record-evidence, with the project '
+        + 'resolved from the plan path rather than supplied by the caller, got ' + cr.stdout);
+    // The detail is conditional too, not just the route: the same fixture under a different
+    // generation must not hand back the same sentence.
+    assert(typeof neSel.detail === 'string' && neSel.detail !== neDetailNoLedger
+      && neSel.detail.indexOf('arm-csv') >= 0,
+      '--node-end foreign selector: the detail must differ by generation and still name the real '
+        + 'arms, got ' + cr.stdout);
+
+    // Control that SURVIVES the un-wire mutation: a valid selector carries no route at all on the
+    // fused arm, so the two pins above are reading a conditional field, not one always present.
+    fs.writeFileSync(path.join(scCacheDir, 'classify.md'), 'selector: arm-csv\n');
+    cr = runNode(planValidatorScript, [scPlanPath, '--node-end', '--node-id', 'classify', '--json'], scDir);
+    neSel = JSON.parse(cr.stdout).selectorCheck;
+    assert(neSel.ok === true && neSel.selected === 'arm-csv' && neSel.route === undefined
+      && neSel.detail === undefined,
+      '--node-end valid selector: no advice fields on the fused arm, got ' + cr.stdout);
     fs.writeFileSync(scPlanPath, scPlanContent);
 
   } finally {
