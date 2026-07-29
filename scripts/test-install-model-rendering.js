@@ -4132,6 +4132,18 @@ try {
     assert(!/applies nothing/i.test(v2Required),
       '#842: ...and must not claim Codex "applies nothing" either — what was measured is that V2 '
       + 'stays OFF, not that the value has no effect anywhere: ' + v2Required);
+    // ...and the correction must not NARROW what ships. Naming one literal key as "the flag Kaola
+    // reads" would be a fresh inaccuracy of the same family, pointed at our own product this time:
+    // the detector accepts THREE shapes (the [features.multi_agent_v2] sub-table, the inline
+    // multi_agent_v2 = { enabled = ... } under [features], and a bare multi_agent_v2 = true) plus
+    // the dotted-root equivalents. An operator who wrote a legal shape and is then told the flag is
+    // something else goes looking for a bug that is not there. GREEN today — the shipped text
+    // already enumerates them — so this is a preservation pin against a rewrite that trims.
+    assert(/inline form|multi_agent_v2 = \{/.test(v2Required) && /bare .?multi_agent_v2/.test(v2Required),
+      '#842: the remediation must keep naming the OTHER accepted shapes (inline under [features], '
+      + 'and the bare form) — the detector reads three plus dotted-root equivalents, so a correction '
+      + 'that collapses them to one literal key trades a vendor overclaim for a product one: '
+      + v2Required);
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by
