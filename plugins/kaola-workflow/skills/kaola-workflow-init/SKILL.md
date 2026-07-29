@@ -167,8 +167,8 @@ profile/config check runs. Once the version floor is met, read the
 per-scope `dispatch_posture` field alongside the existing checks — it is the
 effort-gated Kaola dispatch posture, distinct from Codex's general default:
 `none` (Kaola's explicit V2 attestation is absent-or-false), `explicitRequestOnly`
-(tools exposed, but the runtime model-refuses a spawn unless the session
-explicitly asks), or `proactive` (`model_reasoning_effort = "ultra"` — the
+(tools exposed, but the runtime model-refuses a spawn unless explicitly
+asked), or `proactive` (`model_reasoning_effort = "ultra"` — the
 runtime accepts a spawn with no per-session ask). Classify the result:
 
 - `ok`: `multi_agent_v2_enabled` reads `true` (`features.multi_agent_v2.enabled

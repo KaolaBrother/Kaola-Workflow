@@ -231,8 +231,8 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone
 > is NOT the same as dispatch-ready: read the doctor JSON's additive `dispatch_posture` field too
 > — `proactive` (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
-> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless this session
-> explicitly asks for sub-agents/delegation/parallel work — always available and always documented
+> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless explicitly asked
+> for sub-agents/delegation/parallel work — always available and always documented
 > — or, only if your Codex exposes an `ultra` reasoning effort for your model/plan (undocumented as
 > of Codex >=0.145.0; check the `/model` picker), the operator sets
 > `model_reasoning_effort = "ultra"`. Report the doctor's `dispatch_posture_warning` remediation
@@ -290,8 +290,8 @@ profile/config check runs. Once the version floor is met, read the
 per-scope `dispatch_posture` field alongside the existing checks — it is the
 effort-gated Kaola dispatch posture, distinct from Codex's general default:
 `none` (Kaola's explicit V2 attestation is absent-or-false), `explicitRequestOnly`
-(tools exposed, but the runtime model-refuses a spawn unless the session
-explicitly asks), or `proactive` (`model_reasoning_effort = "ultra"` — the
+(tools exposed, but the runtime model-refuses a spawn unless explicitly
+asked), or `proactive` (`model_reasoning_effort = "ultra"` — the
 runtime accepts a spawn with no per-session ask). Classify the result:
 
 - `ok`: `multi_agent_v2_enabled` reads `true` (`features.multi_agent_v2.enabled
