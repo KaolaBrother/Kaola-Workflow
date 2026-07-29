@@ -1281,6 +1281,9 @@ const CLI_FLAGS = Object.freeze([
 
 function main() {
   const args = process.argv.slice(2);
+  // ADR 0013 M2: the invocation's own wall-clock, started before any branch so the recorded
+  // duration is the whole run rather than the tail of it.
+  const handoffStartedAt = Date.now();
 
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(
@@ -1437,6 +1440,37 @@ function main() {
     verifyEpochAuthority: projectDir =>
       require('./kaola-gitea-workflow-replan').verifyCurrentEpochAuthority(projectDir),
   });
+
+  // -------------------------------------------------------------------------
+  // ADR 0013 M2 — the outcome recorder, at this CLI's terminating envelope emission.
+  //
+  // It REUSES the recorder that already ships — the kernel's canonical record builder plus
+  // adaptive-node's append helper, reached through ONE lazy require — rather than re-typing an
+  // append-only sidecar writer here: a second implementation is a second thing to drift. The
+  // require is lazy so a run that records nothing has the same module graph and startup cost as
+  // before, and so this file's module-scope import graph is untouched.
+  //
+  // ONLY THIS BRANCH RECORDS. The two pre-claim verbs above (--survey-verdict,
+  // --clarification-required) and the arity refusal read and write NO filesystem path at all —
+  // that is their fail-closed-no-state guarantee, and a measurement must not be the thing that
+  // breaks it. They also have no project folder to attribute an event to.
+  //
+  // FAIL-OPEN is the whole contract, and the catch wraps the BUILDER as well as the write: the
+  // helper creates no directory and never creates the log on a refusal, and the return value is
+  // discarded. Telemetry can never alter, delay or refuse the outcome it observes.
+  // -------------------------------------------------------------------------
+  try {
+    const recorder = require('./kaola-gitea-workflow-adaptive-node');
+    recorder.appendOutcomeRecord(path.join(path.dirname(planPath), '.cache'),
+      recorder.buildOutcomeRecord({
+        script: 'adaptive-handoff',
+        op: 'handoff',
+        project: project,
+        node: result && result.first_node ? result.first_node.id : null,
+        envelope: result,
+        duration_ms: Date.now() - handoffStartedAt,
+      }));
+  } catch (_) { /* fail-open: telemetry never refuses, wedges or alters an outcome */ }
 
   process.stdout.write(JSON.stringify(result) + '\n');
   if (result.handoff_status !== 'ready_to_run') {

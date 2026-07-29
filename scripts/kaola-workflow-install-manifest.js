@@ -83,6 +83,7 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-ledger-compare.js',
   'kaola-workflow-gap-sweep.js',
   'kaola-workflow-run-chains.js',
+  'kaola-workflow-telemetry-report.js',
 ]);
 
 // Hooks are forge-neutral (byte-identical across all four trees), so the same list serves
