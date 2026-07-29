@@ -19731,7 +19731,7 @@ function buildRegistry() {
   add('testFinalizeClosesIssueBundleMembers',             testFinalizeClosesIssueBundleMembers);
   add('testFinalizeRoadmapResidueDetection',              testFinalizeRoadmapResidueDetection);
   add('testFinalizeBaseFlagScopesAttributionSweep',       testFinalizeBaseFlagScopesAttributionSweep);
-  add('testStartupRefusesTargetSetMismatch',              testStartupRefusesTargetSetMismatch);
+  add('testOrientRefusesBundleStateIncoherent',              testOrientRefusesBundleStateIncoherent);
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
   // #429 sink transaction tests
   add('testSinkTransactionBlockedByForeignDirt',          testSinkTransactionBlockedByForeignDirt);
@@ -21647,7 +21647,7 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
 // Test (a): bundle_id present + issue_numbers absent → incoherent.
 // Test (b): bundle_id present + mismatched (bundle_id says 42-47 but issue_numbers is 42,53) → incoherent.
 // ---------------------------------------------------------------------------
-function testStartupRefusesTargetSetMismatch() {
+function testOrientRefusesBundleStateIncoherent() {
   const tmp = adaptiveTmp('430-incoherent');
   try {
     const project = 'bundle-42-47';
@@ -21719,7 +21719,7 @@ function testStartupRefusesTargetSetMismatch() {
       '#430 incoherent (b): orient reason must be bundle_state_incoherent, got: ' + JSON.stringify(o2.reason));
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  console.log('testStartupRefusesTargetSetMismatch: PASSED');
+  console.log('testOrientRefusesBundleStateIncoherent: PASSED');
 }
 
 // ---------------------------------------------------------------------------

@@ -302,12 +302,12 @@ record is the evidence, not the door. On an acquiring claim startup copies the r
 `workflow-state.md` as `selection_record_digest:`, and folds any pre-claim reconnaissance staged under
 `kaola-workflow/.origin/<target-key>/` into that same `.cache/origin/` directory (`<target-key>` is the
 project name the claim resolves to). A user-named claim passes neither flag and startup writes the
-degenerate record (`selection_mode: explicit-target`) itself, so the durable field is never optional.
+canonical record (`selection_mode: explicit-target`) itself, so the durable field is never optional.
 
 Everything BEFORE that claim is free: dispatch read-only agents, read what you need, and ask the user
 when the pick is genuinely ambiguous — just land the findings in files under
-`kaola-workflow/.origin/<target-key>/`, never only in run context. Nothing else is regulated until
-the commitment point, and the commitment point is a script refusal rather than a convention. The
+`kaola-workflow/.origin/<target-key>/`, never only in run context. Nothing is regulated at the
+commitment point either — it records what it was handed and reports what it found. The
 router may also dock a human-readable `kaola-workflow/{project}/.cache/selection-evidence.md` with a
 leading `selection_mode: auto-bundle|single-issue` line; the orchestrator is that sidecar's only
 writer, so it exists only on this no-target branch — a user-named claim legitimately has none.
@@ -393,7 +393,7 @@ Run `node "$CLAIM_JS" startup --runtime claude` with the agent-selected
 folder). Print the diagnostics:
 
 ```text
-Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
+Startup outcome: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
 ```
 
 <!-- PIN: claim-escalate -->
@@ -516,11 +516,11 @@ Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverifie
 Next command: {next_command}
 ```
 
-When `claim: "none"` or a typed refusal occurred during startup, also print the
-refusal diagnostics on the next line:
+When `claim: "none"` or any non-acquiring outcome occurred during startup, also
+print the diagnostics on the next line:
 
 ```text
-Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
+Startup outcome: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
 ```
 
 If nested slash-command execution is supported in the current Claude Code

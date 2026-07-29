@@ -478,7 +478,7 @@ assertNotIncludes(gitlabNextSkill, 'PICK_NEXT_PROJECT');
 assertIncludes(gitlabNextSkill, 'KAOLA_VERDICT=');
 assertIncludes(gitlabNextSkill, 'KAOLA_REASONING=');
 assertIncludes(gitlabNextSkill, 'target_unverified');
-assertIncludes(gitlabNextSkill, 'Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
+assertIncludes(gitlabNextSkill, 'Startup outcome: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
 assertIncludes(gitlabNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md');
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(gitlabNextSkill, 'Startup Step 0a-1');
