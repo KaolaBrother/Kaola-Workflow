@@ -31387,10 +31387,18 @@ scenario(() => {
   });
 
   // -------------------------------------------------------------------------
-  // #846-D — A RE-PLAN EPOCH REVOKES. Design answer 2: the grant lives for the CLAIM and dies on
-  // re-plan, because the plan the human consented under no longer exists. Driven the way an
-  // activation actually moves the position record: new plan bytes (new plan_hash), plan_epoch
-  // advanced, active_plan_hash re-pointed.
+  // #846-D — A RE-PLAN EPOCH REVOKES, AND THE HUMAN CAN ANSWER AGAIN. Design answer 2: the grant
+  // lives for the CLAIM and dies on re-plan, because the plan the human consented under no longer
+  // exists. Driven the way an activation actually moves the position record: new plan bytes (new
+  // plan_hash), plan_epoch advanced, active_plan_hash re-pointed.
+  //
+  // WHAT REVOCATION IS, AND WHAT IT IS NOT. It ends the GRANT — the answer given under the vanished
+  // plan — not the CLASS. The issue's scope answer is "the next request asks again"; a rule that
+  // also refused to honour the answer to that fresh question would be a second, undecided rule, and
+  // it would make the whole subtraction inert after the first re-plan (re-plans are routine here),
+  // handing back the 33 minutes of dead wall-clock the issue exists to remove. So the pin runs the
+  // full round trip: revoke, ask, ANSWER, and the answer stands exactly as A2's does — with its
+  // application tally restarted, so no pre-re-plan count is silently carried across the epoch.
   // -------------------------------------------------------------------------
   scenario(() => {
     const fx = makeConsentRepo846();
@@ -31412,10 +31420,25 @@ scenario(() => {
       + 'got ' + JSON.stringify(d.standing_grant));
     assert(d.halt === 'written' && readDurableConsentHalt(fs.readFileSync(fx.planPath, 'utf8')) === true,
       '#846-D: ...and the valve really halts, got ' + JSON.stringify(d.halt));
-    const after = clear846(fx) && orient846(fx);
-    assert(liveGrant846(after, CLASS_846) === null,
-      '#846-D: ...and the parent-epoch grant is no longer live for the successor to read, got '
-      + JSON.stringify(after.consentGrants));
+
+    // ...and the human ANSWERS that question, under the plan actually in front of them. This is a
+    // grant made afresh under the CHILD epoch, not the parent's grant surviving: it is the same
+    // ask -> yes the run has always done, and clear-halt records exactly the class that was asked.
+    const yes = clear846(fx);
+    assert(yes.standing_grant_recorded === CLASS_846,
+      '#846-D: ...and clearing that halt records a grant for the class asked under the CHILD epoch — '
+      + 'revocation ends the answer given under the vanished plan, not the human\'s standing to '
+      + 'answer the question the new plan puts, got ' + JSON.stringify(yes.standing_grant_recorded));
+    const d2 = ask846(fx, CLASS_846);
+    assert(d2.standing_grant === true,
+      '#846-D: ...so the NEXT instance rides the fresh grant. A grant that is refused for the rest '
+      + 'of the claim makes the subtraction inert after the first re-plan and hands the 33 minutes '
+      + 'straight back, got ' + JSON.stringify({ standing_grant: d2.standing_grant, halt: d2.halt }));
+    const g = liveGrant846(orient846(fx), CLASS_846);
+    assert(g && g.applications === 1,
+      '#846-D: ...counted from ZERO — one application (d2) rode the child-epoch grant. Carrying the '
+      + 'parent epoch\'s tally forward would let the journal report applications of a grant that no '
+      + 'longer exists, got ' + JSON.stringify(g));
     cleanup846(fx);
   });
 
