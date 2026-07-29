@@ -586,7 +586,7 @@ function fetchIssueWithRetry(issueIid, forgeViewFn) {
     }
   }
   if (!lastFetchTransient) {
-    return { error: 'target_unavailable', payload: { verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' } };
+    return { error: 'target_unavailable', payload: { verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; not claiming outside KAOLA_WORKFLOW_OFFLINE=1' } };
   }
   const errCode = (lastFetchErr && lastFetchErr.code) || '';
   const signal = (lastFetchErr && lastFetchErr.signal) || '';

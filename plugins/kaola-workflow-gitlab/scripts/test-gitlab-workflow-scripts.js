@@ -1511,7 +1511,7 @@ withForge({
       cwd: root, encoding: 'utf8',
       env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
     });
-    assert.strictEqual(result.status, 1, 'offline unverified startup must exit 1');
+    assert.strictEqual(result.status, 0, 'offline unverified startup ANSWERS at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'target_unverified');
     assert.strictEqual(out.claim, 'none');
@@ -1535,7 +1535,7 @@ withForge({
       cwd: root, encoding: 'utf8',
       env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
     });
-    assert.strictEqual(result.status, 1, 'offline blocked startup must exit 1');
+    assert.strictEqual(result.status, 0, 'offline blocked startup ANSWERS at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'user_target_blocked');
     assert.strictEqual(out.claim, 'none');
@@ -1676,7 +1676,7 @@ withForge({
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test'], {
       cwd: root, encoding: 'utf8', env: process.env
     });
-    assert.strictEqual(result.status, 1, 'startup without --target-issue must exit 1');
+    assert.strictEqual(result.status, 0, 'startup without --target-issue answers usage at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'no_target', 'startup without --target-issue must return no_target');
     assert.strictEqual(out.claim, 'none');
@@ -1693,7 +1693,7 @@ withForge({
     const result = spawnSync(process.execPath, [claimScript, 'pick-next'], {
       cwd: root, encoding: 'utf8', env: process.env
     });
-    assert.strictEqual(result.status, 1, 'pick-next without --target-issue must exit 1');
+    assert.strictEqual(result.status, 0, 'pick-next without --target-issue answers usage at exit 0');
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.verdict, 'no_target', 'pick-next without --target-issue must return no_target');
     assert.strictEqual(out.claim, 'none');
@@ -2257,7 +2257,7 @@ withClassifierForge({
 });
 
 // testGitLabStartupFailClosed: claimExplicitTarget with transient error → target_indeterminate/escalate
-// #507: new behavior — transient forge error → indeterminate → routes to result:escalate, not refuse.
+// #507: a transient forge error → indeterminate → reported as result:answer, never a refusal.
 withForge({
   viewIssue() { throw new Error('network error'); } // no status/signal → transient → indeterminate
 }, () => {
@@ -2267,8 +2267,8 @@ withForge({
     const result = claim.claimExplicitTarget(root, { targetIssue: 201 });
     assert.strictEqual(result.status, 'target_indeterminate',
       '#507: claimExplicitTarget transient forge error → target_indeterminate (got: ' + result.status + ')');
-    assert.strictEqual(result.result, 'escalate',
-      '#507: claimExplicitTarget transient forge error → result:escalate (got: ' + result.result + ')');
+    assert.strictEqual(result.result, 'answer',
+      '#507: claimExplicitTarget transient forge error → result:answer (got: ' + result.result + ')');
     assert.strictEqual(result.claim, 'none',
       'claimExplicitTarget must return claim:none on forge failure, got: ' + result.claim);
     assert(!fs.existsSync(path.join(root, 'kaola-workflow', 'issue-201')),
@@ -4761,7 +4761,7 @@ function testGitlabBoundary2FetchRetry507() {
     }
   }
 
-  // (c) forge claimExplicitTarget with transient classifyIssue → target_indeterminate result:escalate
+  // (c) forge claimExplicitTarget with transient classifyIssue → target_indeterminate result:answer
   // Exercises the #495 forward-compat handler in the gitlab claim.js.
   {
     const root = tempRoot('kw-gl-b2c-root-');
@@ -4786,18 +4786,20 @@ function testGitlabBoundary2FetchRetry507() {
       });
       assert.strictEqual(result && result.status, 'target_indeterminate',
         '#507(gl-b2c): forge claimExplicitTarget persistent transient → target_indeterminate (got ' + JSON.stringify(result) + ')');
-      assert.strictEqual(result && result.result, 'escalate',
-        '#507(gl-b2c): result must be escalate (got ' + JSON.stringify(result) + ')');
+      assert.strictEqual(result && result.result, 'answer',
+        '#507(gl-b2c): result must be answer (got ' + JSON.stringify(result) + ')');
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }
   }
 
-  // (#511) END-TO-END determinate-refuse: a GENUINE-negative forge fault (a real 404 "Could not
-  // resolve to an Issue" stderr) routes the FULL claim flow (claimExplicitTarget) to result:refuse /
-  // target_unavailable — NEVER escalate. This is the #511 pin: it MUST use a genuine-negative stderr,
-  // never a generic "glab exits 1" / bare network error (which now ESCALATES and would enshrine #519's
-  // bug). Proves the genuine arm survives the axis replacement at the claim-flow boundary.
+  // (#511) END-TO-END DETERMINATE: a GENUINE-negative forge fault (a real 404 "Could not
+  // resolve to an Issue" stderr) routes the FULL claim flow (claimExplicitTarget) to
+  // target_unavailable — NEVER the indeterminate status. This is the #511 pin: it MUST use a
+  // genuine-negative stderr, never a generic "glab exits 1" / bare network error (which is
+  // transient and would enshrine #519's bug). The DETERMINATE/INDETERMINATE split is the whole
+  // content of this pin, and it lives in `status`; both arms answer, so `result` discriminates
+  // nothing here and asserting it would pin a constant.
   {
     const root = tempRoot('kw-gl-511-root-');
     try {
@@ -4814,8 +4816,8 @@ function testGitlabBoundary2FetchRetry507() {
       });
       assert.strictEqual(result && result.status, 'target_unavailable',
         '#511(gl): genuine-negative 404 → claimExplicitTarget target_unavailable (got ' + JSON.stringify(result) + ')');
-      assert.strictEqual(result && result.result, 'refuse',
-        '#511(gl): genuine-negative 404 → result:refuse, NEVER escalate (got ' + JSON.stringify(result) + ')');
+      assert.notStrictEqual(result && result.status, 'target_indeterminate',
+        '#511(gl): a genuine-negative 404 is DETERMINATE — never the transient status (got ' + JSON.stringify(result) + ')');
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }

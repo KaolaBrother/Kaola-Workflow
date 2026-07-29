@@ -354,7 +354,8 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (3): target_ambiguity — both --target-issue and --target-issues set
+// Test (3): target_ambiguity — both --target-issue and --target-issues set. An argv usage
+// ANSWER: nothing is written either way, so it exits 0 and the caller re-runs with one of the two.
 // ---------------------------------------------------------------------------
 
 (function testTargetAmbiguity() {
@@ -371,10 +372,14 @@ function readState(tmpRoot, project) {
     );
 
     const out = parseClaim(result);
-    assert(result.status === 1, 'target_ambiguity exits 1, got ' + result.status);
-    assert(out !== null, 'target_ambiguity emits JSON');
-    assert(out.status === 'target_ambiguity' || out.verdict === 'target_ambiguity',
-      'status/verdict is target_ambiguity, got: ' + JSON.stringify(out));
+    assert(result.status === 0, 'both targets set is a usage answer at exit 0, got ' + result.status);
+    assert(out !== null, 'the usage answer emits JSON');
+    assert(out.claim === 'none', 'the usage answer claims nothing, got: ' + JSON.stringify(out.claim));
+    assert(out.result === 'answer', 'the usage answer is typed as an answer, got: ' + JSON.stringify(out.result));
+    assert(typeof out.reasoning === 'string' && out.reasoning.indexOf('usage:') === 0,
+      'the usage answer leads with usage text, got: ' + JSON.stringify(out.reasoning));
+    assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'issue-42')),
+      'the usage answer writes nothing');
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -502,11 +507,11 @@ function readState(tmpRoot, project) {
     );
 
     const out = parseClaim(result);
-    assert(result.status === 1, 'no-target startup exits 1, got ' + result.status);
-    // Either no_target or target_set_empty is acceptable
+    assert(result.status === 0, 'a no-target startup is a usage answer at exit 0, got ' + result.status);
     assert(out !== null, 'no-target emits JSON');
-    assert(out.status === 'no_target' || out.verdict === 'no_target' || out.status === 'target_set_empty',
-      'status is no_target or target_set_empty, got: ' + JSON.stringify(out));
+    assert(out.claim === 'none', 'the no-target answer claims nothing, got: ' + JSON.stringify(out.claim));
+    assert(typeof out.reasoning === 'string' && out.reasoning.indexOf('--target-issue') >= 0,
+      'the no-target answer names the flag it wanted, got: ' + JSON.stringify(out.reasoning));
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -798,22 +803,22 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (9): #825 Gate 1 on the BUNDLE lane.
+// Test (9): the selection record on the BUNDLE lane.
 //
 // The bundle claim is the second entry into claimProject-shaped provisioning, and it is exactly
 // the lane a no-target orchestrator survey produces (a same-scope bundle is the guarded exception
-// the ranking rules allow). If Gate 1 is only wired into the scalar path, the bundle lane becomes
-// the hole the whole gate leaks through. Three properties, mirroring the scalar coverage in
+// the ranking rules allow). If the record is only wired into the scalar path, a bundle run loses
+// its whole account of why it exists. Three properties, mirroring the scalar coverage in
 // test-claim-hardening.js:
-//   (a) an orchestrator-selected bundle claim with no --selection-record refuses zero-write;
-//   (b) a plain (user-directed) bundle claim writes the DEGENERATE record + digest under the
+//   (a) an orchestrator-selected bundle claim with no --selection-record still CLAIMS, on the
+//       canonical self-describing record, and reports that on the envelope;
+//   (b) a plain (user-directed) bundle claim writes the canonical record + digest under the
 //       bundle project name;
 //   (c) kaola-workflow/.origin/<bundle-id>/ folds into <bundle-id>/.cache/origin/ and is removed.
-// RED (pre-impl): --target-source/--selection-record are unknown flags and nothing is persisted.
 // ---------------------------------------------------------------------------
 
 (function testBundleSelectionRecordGate() {
-  console.log('Test (9): #825 Gate 1 — the bundle lane carries the selection record + .origin fold');
+  console.log('Test (9): the bundle lane carries the selection record + .origin fold');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   try {
@@ -822,21 +827,29 @@ function readState(tmpRoot, project) {
     writeRoadmapFile(tmpRoot, 47);
     writeGhMockScript(binDir, { openIssues: [42, 47] });
 
-    // (a) orchestrator-selected, no record → typed refusal, zero-write.
-    const refused = runClaim(
+    // (a) orchestrator-selected, no record → claims anyway, on the canonical record, and says so.
+    const noRecord = runClaim(
       ['startup', '--target-issues', '42,47', '--target-source', 'orchestrator_selected'],
       tmpRoot, binDir
     );
-    const refusedOut = parseClaim(refused);
-    assert(refused.status === 1, '#825 bundle: the gated bundle claim exits 1, got ' + refused.status);
-    assert(refusedOut && (refusedOut.status === 'selection_record_missing' || refusedOut.verdict === 'selection_record_missing'),
-      '#825 bundle: an orchestrator-selected bundle claim without --selection-record must refuse '
-        + 'selection_record_missing, got ' + JSON.stringify(refusedOut)
-        + '\nstdout: ' + refused.stdout + '\nstderr: ' + refused.stderr);
-    assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47')),
-      '#825 bundle: the refusal must create NO bundle folder (zero-write gate)');
+    const noRecordOut = parseClaim(noRecord);
+    assert(noRecord.status === 0, 'bundle: a claim with no selection record answers at exit 0, got ' + noRecord.status);
+    assert(noRecordOut && noRecordOut.claim === 'acquired',
+      'bundle: an orchestrator-selected bundle claim without --selection-record still acquires, got '
+        + JSON.stringify(noRecordOut)
+        + '\nstdout: ' + noRecord.stdout + '\nstderr: ' + noRecord.stderr);
+    const synthesized = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'origin', 'selection-record.json');
+    let synthRec = null; try { synthRec = JSON.parse(fs.readFileSync(synthesized, 'utf8')); } catch (_) {}
+    assert(synthRec && synthRec.selection_mode === 'none-recorded',
+      'bundle: the record written in place of the missing one must SAY it recorded nothing, got '
+        + JSON.stringify(synthRec && synthRec.selection_mode));
+    assert(noRecordOut && typeof noRecordOut.selection_record_note === 'string'
+      && noRecordOut.selection_record_note.indexOf('orchestrator_selected') >= 0,
+      'bundle: the envelope must REPORT that no record came with the claim, got '
+        + JSON.stringify(noRecordOut && noRecordOut.selection_record_note));
+    fs.rmSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47'), { recursive: true, force: true });
 
-    // (b)+(c) a user-directed bundle claim: degenerate record + digest, and the staging fold.
+    // (b)+(c) a user-directed bundle claim: canonical record + digest, and the staging fold.
     const staging = path.join(tmpRoot, 'kaola-workflow', '.origin', 'bundle-42-47');
     fs.mkdirSync(staging, { recursive: true });
     fs.writeFileSync(path.join(staging, 'survey.md'), '# pre-claim recon\n');
@@ -847,24 +860,24 @@ function readState(tmpRoot, project) {
     );
     const out = parseClaim(result);
     assert(out && out.claim === 'acquired',
-      '#825 bundle: a user-directed bundle claim still acquires, got ' + JSON.stringify(out)
+      'bundle: a user-directed bundle claim still acquires, got ' + JSON.stringify(out)
         + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
 
     const recPath = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'origin', 'selection-record.json');
     assert(fs.existsSync(recPath),
-      '#825 bundle: the bundle claim must write the degenerate record at ' + recPath);
+      'bundle: the bundle claim must write the canonical record at ' + recPath);
     let rec = null; try { rec = JSON.parse(fs.readFileSync(recPath, 'utf8')); } catch (_) {}
     assert(rec && rec.selection_mode === 'explicit-target',
-      '#825 bundle: the degenerate bundle record carries selection_mode: explicit-target, got '
+      'bundle: the canonical bundle record carries selection_mode: explicit-target, got '
         + JSON.stringify(rec && rec.selection_mode));
     const state = readState(tmpRoot, 'bundle-42-47') || '';
     assert(/^selection_record_digest:\s*[0-9a-f]{64}\s*$/m.test(state),
-      '#825 bundle: the bundle state must stamp selection_record_digest, got:\n' + state);
+      'bundle: the bundle state must stamp selection_record_digest, got:\n' + state);
 
     assert(fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'origin', 'survey.md')),
-      '#825 bundle: kaola-workflow/.origin/<bundle-id>/ must fold into <bundle-id>/.cache/origin/');
+      'bundle: kaola-workflow/.origin/<bundle-id>/ must fold into <bundle-id>/.cache/origin/');
     assert(!fs.existsSync(staging),
-      '#825 bundle: the staging dir must be REMOVED after the fold, still at ' + staging);
+      'bundle: the staging dir must be REMOVED after the fold, still at ' + staging);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

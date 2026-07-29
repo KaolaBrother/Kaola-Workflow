@@ -4436,10 +4436,9 @@ const LOCK_KINDS = Object.freeze(['scheduler', 'replan_fence', 'project_claim'])
 // fields are normalized on write (R3) and reported as `normalized[]` on the OK envelope.
 // A replayed or copied binding is R4 evidence and lives in `kernel_integrity_broken`
 // with `kind: 'replay_binding'`, never here.
-const EVIDENCE_RECORD_KINDS = Object.freeze(['node_evidence', 'selection_record', 'final_fix_register']);
+const EVIDENCE_RECORD_KINDS = Object.freeze(['node_evidence', 'final_fix_register']);
 const EVIDENCE_ROUTE_BY_RECORD_KIND = Object.freeze({
   node_evidence: inGrammar('adaptive-node', 'record-evidence', '--project <P> --node-id <N> --stdin --json'),
-  selection_record: inGrammar('claim', 'startup', '--target-issue <N> --target-source <S> --selection-record <path> --json'),
   // The census design named a `record-final-fix` verb that does not exist. The shipped
   // verb is `final-fix-commit`; the scanned in-grammar assertion is precisely what turns
   // that class of mistake (#840: a route naming a dead verb) into a build failure.
@@ -4927,9 +4926,6 @@ const REFUSAL_WHY = Object.freeze({
     + 'nothing for the close gate to read and the work cannot be attributed to any writer. Record it from the run '
     + 'that produced it — a file authored after the fact restates the self-description the record exists to '
     + 'replace.',
-  'kernel_evidence_missing/selection_record': 'An orchestrator-originated claim is auditable only through its '
-    + 'selection record. Without one there is no durable account of WHY this target was chosen, so the claim is '
-    + 'refused with zero side effects rather than made unaccountably.',
   'kernel_evidence_missing/final_fix_register': 'The register is the only record that a finalize-time fix entered '
     + 'the candidate deliberately, and it is written by the commit verb alone. A missing entry means the change has '
     + 'no owner at the one boundary past which nothing can attribute it — do not delete the changed files, that '
@@ -5330,9 +5326,9 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     //     strictly worse for an operator than no claim at all.
     'release_tag_list_unavailable', 'release_history_unavailable', 'worktree_status_unavailable',
     'candidate_baseline_unavailable', 'candidate_history_unavailable', 'candidate_diff_unavailable',
-    // Pre-claim, at Gate 1: the forge would not answer, or the issue is not claimable. Nothing is
-    // written (an explicit-target claim refuses with zero side effects), and `target_unavailable` is
-    // literally a `verdict:` VALUE on the classifier's envelope — an outcome, like the block above.
+    // Pre-claim: the forge would not answer, or the issue is not claimable. Nothing is written, the
+    // scalar arm ANSWERS at exit 0, and `target_unavailable` is literally a `verdict:` VALUE on the
+    // classifier's envelope — an outcome, like the block above.
     'target_unavailable', 'target_set_unavailable',
     // No leg branches exist to merge. The exact shape of `no_barrier_base` / `no_group_base` /
     // `no_leg_base` three lines up, which are already advisories; it reached a write-failed cell
@@ -5357,8 +5353,12 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     match: ['acceptance_repair_fenced', 'replan_child_acceptance_changed'] },
   { family: 'consent_required', patch: { kind: 'budget_exhausted' }, match: ['replan_consent_required'] },
   { family: 'consent_required', patch: { kind: 'turn_reference_conflict' }, match: ['replan_consent_reference_reused'] },
+  // `dirty_tree_refused` is here because its SUBJECT is the user's own uncommitted work. What
+  // happens to somebody's unstaged edits — carried onto a feature branch, stashed, or left where
+  // they are — is a value call with several defensible answers, which is exactly what
+  // `disambiguation` names. The claim asks and writes nothing rather than deciding for them.
   { family: 'consent_required', patch: { kind: 'disambiguation' },
-    match: [/^clarification_/, 'target_ambiguity', 'resume_ambiguous', 'selection_indeterminate'] },
+    match: [/^clarification_/, 'dirty_tree_refused', 'resume_ambiguous', 'selection_indeterminate'] },
   { family: 'consent_required', patch: { kind: 'schema_upgrade' }, match: ['review_journal_schema_upgrade_required'] },
   { family: 'consent_required', patch: { kind: 'halt_fence', halt_reason: 'merge_conflict' }, match: ['merge_conflict'] },
 
@@ -5372,8 +5372,6 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
   // --- L1: evidence missing (ABSENCE only) --------------------------------
   { family: 'kernel_evidence_missing', patch: { record_kind: 'node_evidence', defect: 'absent' },
     match: ['evidence_absent'] },
-  { family: 'kernel_evidence_missing', patch: { record_kind: 'selection_record', defect: 'absent' },
-    match: [/^selection_record_/] },
   { family: 'kernel_evidence_missing', patch: { record_kind: 'final_fix_register', defect: 'absent' },
     match: ['final_fix_register_unverified'] },
 
@@ -5590,8 +5588,7 @@ const REFUSAL_COMPATIBILITY_RULES = Object.freeze([
     match: [/^evidence_/, /^review_(context|receipt)_persist_failed$/, 'review_evidence_validation_failed',
       'substitute_evidence_reset_failed'] },
   { family: 'kernel_write_failed', patch: (c) => ({ record: 'forge_chain', target: c }),
-    match: ['finalize_commit_failed', 'archive_exception', 'target_set_label_rollback_failed',
-      'target_set_mismatch'] },
+    match: ['finalize_commit_failed', 'archive_exception', 'target_set_label_rollback_failed'] },
   { family: 'kernel_write_failed', patch: (c) => ({ record: 'position', target: c }),
     match: [/_persist_failed$/, /_write_failed$/, /_read_failed$/, /_rollback_failed$/,
       /_cleanup_failed$/, /_probe_failed$/, /^baseline_/, /^group_baseline_/, /^mirror_(failed|sync_failed)$/,
@@ -5649,9 +5646,8 @@ function classifyRefusalCondition(condition) {
 // envelopes as object literals or through their OWN local `refuse` closures, so a refusal from
 // one of them carries no `refusal_family`, `refusal_locus`, `refusal_route` or `condition` even
 // when its token IS classifiable. A consumer that matches on `refusal_family` therefore misses
-// every refusal from those surfaces — including the Gate-1 commitment point
-// (`selection_record_missing`, which classifies to `kernel_evidence_missing` and has a real
-// route). Do not read "dual emission" as a whole-workflow guarantee; it is a per-call-site one.
+// every refusal from those surfaces. Do not read "dual emission" as a whole-workflow guarantee;
+// it is a per-call-site one.
 //
 // SO FLIPPING THE CONSTANT IS NOT THE WHOLE CHANGE. The flip rewrites `reason` on stamped
 // envelopes only, and it cannot be extended to the rest by wiring the stamp in at those call

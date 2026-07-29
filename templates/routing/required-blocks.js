@@ -459,7 +459,7 @@ const REQUIRED_BLOCKS = [
       'active folders',
       '--target-issue',
       'This step never runs; it is retained only for the shared',
-      'typed-refusal classification below',
+      'claim-outcome classification below',
     ],
   },
   {

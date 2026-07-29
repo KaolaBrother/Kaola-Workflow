@@ -119,10 +119,12 @@ dispatch below. Resolve the shape FIRST, before the authoring guard.
 
 ## Origin evidence and the selection record
 
-Selection is orchestrator-owned, and the claim script is the commitment point: an
-orchestrator-originated claim carries `--target-source orchestrator_selected --selection-record
-<path>` or refuses `selection_record_missing` with zero side effects. On an acquiring claim the
-record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
+Selection is orchestrator-owned, so the orchestrator authors the record: an orchestrator-originated
+claim carries `--target-source orchestrator_selected --selection-record <path>`. The claim does not
+grade it and never refuses over it — a record that parses is persisted byte-for-byte as authored,
+and a claim that arrives without a usable one gets the canonical "none recorded" record written in
+its place plus a `selection_record_note` on the emitted envelope saying so. On an acquiring claim
+the record lands at `kaola-workflow/{project}/.cache/origin/selection-record.json`, its sha256 is
 stamped into `workflow-state.md` as `selection_record_digest:`, and any pre-claim reconnaissance
 staged under `kaola-workflow/.origin/<target-key>/` is folded into the same `.cache/origin/`
 directory.
@@ -196,13 +198,15 @@ role/identity/brief exactly once; never author inline.
 ## Read the durable state, not the planner's prose
 
 <!-- PIN: claim-escalate -->
-- **Refusal — any `claim_verdict` NOT `acquired` or `owned`**: NO `workflow-state.md` was written.
-  Surface `claim_reasoning` and classify by `result`: `result: refuse` (e.g.
-  `target_occupied`, `target_unverified`, `claim: none`) → **HARD STOP**, fail closed (do not retry a
-  different issue, do not blind-read a missing state file); `result: escalate`
-  (`target_indeterminate` / `target_set_indeterminate`) → **PAUSE and ASK THE USER** (retry, pick
-  another target, go offline, or abort — this is not an adaptive-node write-halt; no plan/ledger exists
-  yet).
+- **Any `claim_verdict` NOT `acquired` or `owned`**: NO `workflow-state.md` was written.
+  Surface `claim_reasoning` and classify by `result`: `result: answer` (e.g. `no_target`,
+  `target_unverified`, `target_indeterminate`) → act on the fact (fix the argv, retry, go offline,
+  or claim a different target), but do not blind-read a missing state file; `result: consent`
+  (`dirty_tree_refused`) → ask the user the envelope's `ask` verbatim and act on the answer;
+  `result: refuse` (e.g. `target_occupied`, `claim: none` with no other reading) → **HARD STOP**,
+  fail closed; `result: escalate` (`target_set_indeterminate`) → **PAUSE and ASK THE USER** (retry,
+  pick another target, go offline, or abort — this is not an adaptive-node write-halt; no
+  plan/ledger exists yet).
 - **Plan already existed** (`plan_path: null` on an `owned` claim) → route to
   `/kaola-workflow-plan-run {project}`; never re-author over a frozen plan.
 - **Success** (`acquired` | `owned`, plan authored) → take `{project}`, re-read `workflow-state.md`
@@ -276,7 +280,7 @@ node "$CLAIM_JS" startup --runtime claude --target-issues 42,47,53
 ```
 
 `--target-issue` / `KAOLA_TARGET_ISSUE` keep one-issue behavior; `--target-issues` /
-`KAOLA_TARGET_ISSUES` are the only multi-issue path — setting both refuses with `target_ambiguity`.
+`KAOLA_TARGET_ISSUES` are the only multi-issue path — setting both answers `target_ambiguity` usage.
 Shape: active folder + branch `bundle-42-47-53` (sorted, deduplicated); `workflow-state.md` records
 `issue_number: 42` + `issue_numbers: 42,47,53`, `bundle_id`, `closure_policy: all_or_nothing`. The
 bundle lane always runs `workflow_path: adaptive` (the set may exceed
@@ -284,6 +288,6 @@ bundle lane always runs `workflow_path: adaptive` (the set may exceed
 one-node-per-issue); `## Meta` carries a conservative union of labels. A bundle run ends at ONE
 finalization that closes every issue in `issue_numbers` (all-or-nothing), removes each
 `.roadmap/issue-N.md`, regenerates `ROADMAP.md` once, archives one bundle folder, and writes one
-closure receipt. On any typed bundle claim refusal (the `target_set_*` / `target_ambiguity`
-codes claim.js emits), surface the code and STOP; do not retry with a
+closure receipt. On any typed bundle claim outcome that is not `acquired`/`owned` (the
+`target_set_*` codes claim.js emits), surface the code and STOP; do not retry with a
 different set.

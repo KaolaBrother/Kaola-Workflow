@@ -290,7 +290,7 @@ function node(id, role, dependsOn, writeSet, shape) {
 //   (A) The planner is narrowed to a synthesist/shaper — the no-target survey mode is GONE from
 //       every planner profile, and the frontmatter/description no longer advertises it.
 //   (B) The ranking rules land VERBATIM on the SIX `next` routing surfaces (one wording, re-homed
-//       — not paraphrased), together with the Gate 1 vocabulary the orchestrator must now speak.
+//       — not paraphrased), together with the selection-record vocabulary the orchestrator speaks.
 //   (C) The SIX `adapt` surfaces hand the planner EVIDENCE PATHS (.cache/origin/) and know the
 //       clarification return.
 //   (D) The planner gains the shape-around-cited-evidence obligation. Per the issue this is
@@ -302,7 +302,7 @@ function node(id, role, dependsOn, writeSet, shape) {
 //       cannot silently drop one edition's copy.
 //
 // RED (pre-impl): the survey block is still in the 4 planner profiles and in the `next` surfaces
-// only as a pointer AT the planner; none of the relocated ranking rules, the Gate 1 flags, the
+// only as a pointer AT the planner; none of the relocated ranking rules, the selection-record flags, the
 // obligation prose, or the clarification token exist anywhere yet.
 // ---------------------------------------------------------------------------
 {
@@ -349,7 +349,8 @@ function node(id, role, dependsOn, writeSet, shape) {
         + '(agents/workflow-planner.md still says "surveys the backlog itself")');
   }
 
-  // --- (B) the ranking rules land VERBATIM on the six `next` surfaces, with the Gate 1 vocabulary.
+  // --- (B) the ranking rules land VERBATIM on the six `next` surfaces, with the selection-record
+  // vocabulary.
   // These are the exact tokens the planner survey block owned; "one wording, re-homed" means they
   // must appear on the orchestrator surface, not be reworded there.
   const RELOCATED_RANKING_TOKENS_825 = [
@@ -359,9 +360,9 @@ function node(id, role, dependsOn, writeSet, shape) {
     'frontier blocked because',   // Frontier-Blocked explicit fall-through
     'closest actionable proxy',   // the anti-proxy precedence rule (polarity is load-bearing)
   ];
-  const GATE1_TOKENS_825 = [
+  const SELECTION_RECORD_TOKENS_825 = [
     '--selection-record',
-    'selection_record_missing',
+    'selection_record_note',
     'selection_mode',
   ];
   for (const p of NEXT_SURFACES_825) {
@@ -372,9 +373,9 @@ function node(id, role, dependsOn, writeSet, shape) {
         '#825(B): the relocated ranking rule token ' + JSON.stringify(token)
           + ' must appear VERBATIM on ' + p + ' (one wording, re-homed — not paraphrased)');
     }
-    for (const token of GATE1_TOKENS_825) {
+    for (const token of SELECTION_RECORD_TOKENS_825) {
       assert(body !== null && body.includes(token),
-        '#825(B): the Gate 1 token ' + JSON.stringify(token) + ' must reach ' + p
+        '#825(B): the selection-record token ' + JSON.stringify(token) + ' must reach ' + p
           + ' — the orchestrator authors the record and must be told what refuses without it');
     }
   }
@@ -416,13 +417,13 @@ function node(id, role, dependsOn, writeSet, shape) {
         + ' — B3 narrows the planner, it does not open it to prescriptions');
   }
 
-  // --- (F) the new typed tokens are pinned in ALL FIVE contract validators ---
+  // --- (F) the typed tokens are pinned in ALL FIVE contract validators ---
   for (const v of CONTRACT_VALIDATORS_825) {
     const body = read825(v);
     assert(body !== null, '#825(F) fixture: ' + v + ' must exist');
-    assert(body !== null && body.includes('selection_record_missing'),
-      '#825(F): ' + v + ' must pin selection_record_missing (Gate 1 is the script refusal that '
-        + "replaces ADR 0006's prose-only planner-first lock)");
+    assert(body !== null && body.includes('selection_record_note'),
+      '#825(F): ' + v + ' must pin selection_record_note so no edition loses the report the claim '
+        + 'gives back when it had to synthesize the record');
     assert(body !== null && body.includes('clarification_required'),
       '#825(F): ' + v + ' must pin clarification_required so no edition silently loses the channel');
   }

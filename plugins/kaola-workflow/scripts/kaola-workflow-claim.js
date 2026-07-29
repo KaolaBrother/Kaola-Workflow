@@ -119,7 +119,7 @@ const KNOWN_VALUE_FLAGS = new Set([
   'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers', 'base',
   // #603: the Codex dispatch mode the startup surface passes from preflight detection.
   'codexDispatchMode',
-  // #825 (Gate 1): the free-origin commitment point. `--target-source` declares whether the claim
+  // The free-origin selection record. `--target-source` declares whether the claim
   // was ORIGINATED by an orchestrator survey (`orchestrator_selected`) or named by the user
   // (`user_directed`, the default); `--selection-record` carries the typed selection record the
   // orchestrator authored during the free sensing phase.
@@ -959,7 +959,7 @@ function writeState(root, data) {
     'claim_ts: ' + claimTs
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
-  // #825 (Gate 1): the durable anchor for the typed selection record — sha256 of the bytes
+  // The durable anchor for the typed selection record — sha256 of the bytes
   // persisted at `<project>/.cache/origin/selection-record.json`. Written ONLY when the claim
   // carried one (every startup/pick-next-originated claim does, explicit-target included, via the
   // degenerate record); direct crash-reclaim callers stay byte-identical.
@@ -1201,6 +1201,24 @@ function activeByProject(root, project) {
   return readActiveFolders(root).find(folder => folder.project === project) || null;
 }
 
+// The consent ask raised when in-place branch creation would run over uncommitted work.
+// Machines decide facts; humans decide values — and what happens to somebody's unstaged edits is
+// theirs to decide, so this is a QUESTION with named options, not a verdict. Shared verbatim by
+// the scalar and bundle claim paths so both editions of the ask say one thing.
+function dirtyTreeConsentAsk(what) {
+  return {
+    result: 'consent',
+    consent_kind: 'disambiguation',
+    ask: 'The working tree has uncommitted changes and creating the ' + what
+      + ' (KAOLA_WORKTREE_NATIVE=0) would carry them onto it. Commit them, stash them, or run in a '
+      + 'worktree instead? Run `git status --porcelain` to see what is uncommitted. Nothing was '
+      + 'written — no project folder, no branch, HEAD unmoved.',
+    options: ['commit', 'stash', 'worktree'],
+    reasoning: 'working tree has uncommitted changes; asking before creating the ' + what
+      + ' (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.',
+  };
+}
+
 function claimProject(root, args) {
   const issueNumber = args.issue || args.targetIssue || null;
   const project = args.project || projectNameForIssue(root, issueNumber);
@@ -1216,15 +1234,16 @@ function claimProject(root, args) {
     if (probe.state === 'closed') {
       return { status: 'user_target_closed', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
     }
-    // #519: a TRANSIENT-infra probe fault escalates (the operator/orchestrator can retry) instead of
-    // refusing — a TLS timeout / rate-limit / DNS blip must not be read as "target unavailable".
+    // #519: a TRANSIENT-infra probe fault is reported as such — a TLS timeout / rate-limit / DNS
+    // blip must not be read as "target unavailable". Both arms ANSWER: nothing was written, and
+    // the caller retries, goes offline, or picks another target on the strength of the reason.
     if (!OFFLINE && probe.state === 'unavailable' && probe.transient === true) {
-      return { status: 'target_indeterminate', result: 'escalate', claim: 'none', issue: issueNumber, project,
+      return { status: 'target_indeterminate', result: 'answer', claim: 'none', issue: issueNumber, project,
         reasoning_class: 'classifier_error',
-        reasoning: 'gh issue #' + issueNumber + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' };
+        reasoning: 'gh issue #' + issueNumber + ' state probe transient fault (' + (probe.reason || 'transient') + '); retry when it clears' };
     }
     if (!OFFLINE && probe.state === 'unavailable') {
-      return { status: 'target_unavailable', claim: 'none', issue: issueNumber, project, reasoning: 'gh issue #' + issueNumber + ' state probe failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
+      return { status: 'target_unavailable', result: 'answer', claim: 'none', issue: issueNumber, project, reasoning: 'gh issue #' + issueNumber + ' state probe failed; not claiming outside KAOLA_WORKFLOW_OFFLINE=1' };
     }
   }
 
@@ -1236,14 +1255,18 @@ function claimProject(root, args) {
   // here with ZERO mutation, so it never reaches git or workflow-state.md.
   assertSafeBranchArg(branch, 'claimProject');
 
-  // Dirty-tree gate: refuse in-place branch creation if the working tree has uncommitted changes.
+  // Dirty tree: ASK, do not decide. The subject here is the USER'S OWN uncommitted work, and what
+  // should happen to it is a value call — carrying it onto a feature branch, stashing it, or
+  // leaving it where it is are all defensible and only its owner can pick. So this routes through
+  // the consent valve as a question and stops with ZERO side effects; an UNPROBEABLE tree reads as
+  // dirty (treeDirty fails closed), so an unverifiable tree asks rather than claiming over it.
   // Fires ONLY when NATIVE=0 (in-place mode), online, with git history, and HEAD not detached.
-  // Detached HEAD is NOT refused here — it falls to record-only below.
+  // Detached HEAD does not ask — it falls to record-only below.
   const headBranch = inPlaceHead(root);
   const wouldInPlace = !OFFLINE && hasGitHistory(root) && !WORKTREE_NATIVE;
   if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root, [project])) {
-    return { status: 'dirty_tree_refused', claim: 'none', issue: issueNumber, project,
-      reasoning: 'working tree has uncommitted changes; refusing to create in-place feature branch (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.' };
+    return Object.assign({ status: 'dirty_tree_refused', claim: 'none', issue: issueNumber, project },
+      dirtyTreeConsentAsk('in-place feature branch'));
   }
 
   const dir = projectDir(root, project);
@@ -1310,7 +1333,7 @@ function claimProject(root, args) {
       // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
       // was absent → writeState omits the field).
       codex_dispatch_mode: args.codexDispatchMode,
-      // #825 (Gate 1): the selection-record digest resolved BEFORE this claim ran (undefined for
+      // The selection-record digest resolved BEFORE this claim ran (undefined for
       // direct crash-reclaim callers → writeState omits the field).
       selection_record_digest: args.selectionRecordDigest,
       status: 'active'
@@ -1351,55 +1374,40 @@ function claimProject(root, args) {
 }
 
 // ---------------------------------------------------------------------------
-// #825 (B1 + B2) — the free-origin commitment point.
+// The selection record — evidence, not a door.
 //
-// Selection is ORCHESTRATOR-owned now: the origin phase may dispatch read-only agents and ask the
-// user before anything is claimed, and the only thing that keeps that freedom safe is a SCRIPT
-// refusal at the commitment point (ADR 0006's planner-first lock was prose + contract-pins only,
-// and prose cannot refuse). Gate 1 is that refusal: a claim ORIGINATED by an orchestrator survey
-// must arrive carrying the typed selection record, or it does not claim at all.
+// Selection is ORCHESTRATOR-owned: the origin phase may dispatch read-only agents and ask the user
+// before anything is claimed, and what it decided is worth keeping. So the record is PERSISTED and
+// DIGESTED on every claim, and that is the whole of the mechanism.
 //
-// Two typed refusals, both zero-write (resolved BEFORE any folder / branch / worktree / forge call):
-//   selection_record_missing — `--target-source orchestrator_selected` with no `--selection-record`,
-//                              or a `--selection-record` path that is absent/unreadable.
-//   selection_record_invalid — the record is present but unparseable, or any required field is
-//                              absent / empty / whitespace-only.
-// Nothing deeper is validated: the fields carry the orchestrator's REASONING, and a script that
-// graded reasoning would be re-deciding the thing the human/agent already decided.
+// It does not refuse, and there is nothing here that can. Claiming is bookkeeping — an agent that
+// should not hold this claim re-states its reason and claims something else — so a commitment point
+// that would not proceed is a stop nobody can act on. What the caller supplied is REPORTED on the
+// emitted envelope (`selection_record_note`) and the claim proceeds:
+//   * no record supplied      -> the canonical self-describing record is synthesized and persisted.
+//   * path absent/unreadable  -> same, and the note names the path that would not read.
+//   * bytes that will not parse as a JSON object -> same, and the note says so.
+// A record that DOES parse is persisted byte-for-byte and never graded: its fields carry the
+// orchestrator's REASONING, and a script that graded reasoning would be re-deciding the thing the
+// agent already decided. Byte-through is a real property of the persist, so it is the one thing
+// this code still checks for.
 // ---------------------------------------------------------------------------
-const SELECTION_RECORD_FIELDS = Object.freeze([
-  'selection_mode',
-  'selection_bundle',
-  'selection_priority_basis',
-  'selection_rejected',
-  'selection_disjointness',
-  'clarifications',
-]);
 const SELECTION_RECORD_RELPATH = path.join('.cache', 'origin', 'selection-record.json');
 const ORIGIN_STAGING_DIRNAME = '.origin';
 
-// Fields-present-and-non-empty. A whitespace-only string is EMPTY (an orchestrator that typed a
-// space into `selection_rejected` recorded nothing); an empty array/object is empty for the same
-// reason. Anything else non-null with content counts.
-function selectionRecordFieldEmpty(value) {
-  if (value == null) return true;
-  if (typeof value === 'string') return value.trim().length === 0;
-  if (Array.isArray(value)) return value.length === 0;
-  if (typeof value === 'object') return Object.keys(value).length === 0;
-  return String(value).trim().length === 0;
-}
-
-// An EXPLICIT-target claim carries no orchestrator record, so startup synthesizes the DEGENERATE
-// one itself: the durable field is never optional and never empty, which is what makes a later
-// reader able to tell "explicit target" apart from "record lost".
-function buildDegenerateSelectionRecord(label) {
+// The canonical, self-describing record. Every field says WHY it holds nothing rather than holding
+// nothing, which is what makes a later reader able to tell "no record was authored" apart from
+// "the record was lost". It is what a claim carrying no usable record persists.
+function buildDegenerateSelectionRecord(label, mode) {
   const target = String(label || 'none').trim() || 'none';
+  const why = String(mode || 'explicit-target').trim() || 'explicit-target';
   return {
-    selection_mode: 'explicit-target',
+    selection_mode: why,
     selection_bundle: target,
-    selection_priority_basis: 'n/a — explicit target; the caller named ' + target + ', no backlog ranking ran',
-    selection_rejected: 'n/a — explicit target; no alternatives were ranked',
-    selection_disjointness: 'n/a — explicit target; the claim gate itself is the disjointness check',
+    selection_priority_basis: 'none recorded (' + why + '); the caller named ' + target
+      + ', and no backlog ranking was persisted',
+    selection_rejected: 'none recorded (' + why + '); no alternatives were persisted',
+    selection_disjointness: 'none recorded (' + why + '); the claim itself is the disjointness check',
     clarifications: 'none',
   };
 }
@@ -1412,71 +1420,56 @@ function digestSelectionRecord(bytes) {
   return require('crypto').createHash('sha256').update(String(bytes), 'utf8').digest('hex');
 }
 
-function selectionRecordRefusal(status, reasoning) {
-  return {
-    status,
-    verdict: status,
-    result: 'refuse',
-    claim: 'none',
-    project: null,
-    issue: null,
-    reasoning,
-  };
-}
-
-// Resolve Gate 1 with ZERO side effects. Returns { refusal } or { bytes, digest }.
-// `label` names the resolved target(s) for the degenerate record.
-function resolveSelectionGate(args, label) {
-  // Fail CLOSED on an unrecognized value: ONLY an absent flag or the exact literal 'user_directed'
-  // skips the gate. A typo ('orchestrator-selected') must not silently claim past the commitment
-  // point — the whole purpose of Gate 1 is that a no-target-originated claim cannot slip through.
+// Resolve the record to persist, with ZERO side effects and no way to refuse.
+// Returns { bytes, digest } and, when nothing usable was supplied, a `note` naming what was found.
+// `label` names the resolved target(s) for the synthesized record.
+function resolveSelectionRecord(args, label) {
+  // Anything that is not the exact literal 'user_directed' is read as orchestrator-originated,
+  // including a typo — the reading is deliberately the strict one, but it decides only which
+  // canonical record gets synthesized, never whether the claim proceeds.
   const targetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim();
   const orchestratorSelected = targetSource !== 'user_directed';
   const recordPath = args.selectionRecord == null ? '' : String(args.selectionRecord).trim();
+  const synthesize = (mode, note) => {
+    const bytes = serializeSelectionRecord(buildDegenerateSelectionRecord(label, mode));
+    return note
+      ? { bytes, digest: digestSelectionRecord(bytes), note }
+      : { bytes, digest: digestSelectionRecord(bytes) };
+  };
 
   if (!recordPath) {
     if (orchestratorSelected) {
-      return {
-        refusal: selectionRecordRefusal('selection_record_missing',
-          '--target-source ' + targetSource + ' declares a no-target-originated claim, which must carry '
-          + '--selection-record <path>: the orchestrator owns selection now, so the typed record IS the '
-          + 'commitment-point evidence. Refusing with zero side effects.'),
-      };
+      return synthesize('none-recorded',
+        '--target-source ' + targetSource + ' declares a no-target-originated claim and no '
+        + '--selection-record <path> came with it, so the canonical "none recorded" record was '
+        + 'written in its place. Author one and re-claim if the reasoning is worth keeping.');
     }
-    const bytes = serializeSelectionRecord(buildDegenerateSelectionRecord(label));
-    return { bytes, digest: digestSelectionRecord(bytes) };
+    return synthesize('explicit-target');
   }
 
   let raw;
   try {
     raw = fs.readFileSync(recordPath, 'utf8');
   } catch (e) {
-    return {
-      refusal: selectionRecordRefusal('selection_record_missing',
-        '--selection-record ' + recordPath + ' is absent or unreadable ('
-        + ((e && e.code) || (e && e.message) || 'unreadable') + '); refusing with zero side effects.'),
-    };
+    return synthesize('none-recorded',
+      '--selection-record ' + recordPath + ' is absent or unreadable ('
+      + ((e && e.code) || (e && e.message) || 'unreadable')
+      + '); the canonical "none recorded" record was written in its place.');
   }
 
   let record = null;
   try { record = JSON.parse(raw); } catch (_) { record = null; }
   if (!record || typeof record !== 'object' || Array.isArray(record)) {
-    return {
-      refusal: selectionRecordRefusal('selection_record_invalid',
-        '--selection-record ' + recordPath + ' is not a JSON object; refusing with zero side effects.'),
-    };
-  }
-  const empty = SELECTION_RECORD_FIELDS.filter(f => selectionRecordFieldEmpty(record[f]));
-  if (empty.length) {
-    return {
-      refusal: selectionRecordRefusal('selection_record_invalid',
-        '--selection-record ' + recordPath + ' is missing or empty in required field(s): '
-        + empty.join(', ') + '. Every field of the selection record is load-bearing evidence; '
-        + 'refusing with zero side effects.'),
-    };
+    // The one property this still checks, because it is a real property of the byte-through
+    // persist rather than a judgement about content: bytes that will not parse cannot be a
+    // record a later reader can use.
+    return synthesize('none-recorded',
+      '--selection-record ' + recordPath + ' is not a JSON object; the canonical "none recorded" '
+      + 'record was written in its place.');
   }
   // Byte-through: the orchestrator's OWN wording is the record. Re-serializing it here would turn
-  // an authored rationale into a normalized stub.
+  // an authored rationale into a normalized stub, and grading its fields would re-decide the
+  // selection the agent already made.
   return { bytes: raw, digest: digestSelectionRecord(raw) };
 }
 
@@ -1523,35 +1516,40 @@ function completeSelectionOrigin(root, result, gate) {
   return result;
 }
 
+// Every arm below ANSWERS. The classifier's verdict rides on the envelope with `claim: 'none'` so
+// the caller knows exactly what was found and can act — re-state the reason and claim another
+// issue, go offline, retry, or ask the user. None of it is a fact about a kernel write, and a
+// classifier that would not answer is not the target failing a test.
 function claimExplicitTarget(root, args) {
   const targetIssue = args.targetIssue || args.issue;
   if (!Number.isFinite(targetIssue) || targetIssue <= 0) {
-    return { status: 'no_target', claim: 'none', project: null, issue: null, reasoning: '--target-issue <N> required' };
+    return { status: 'no_target', result: 'answer', claim: 'none', project: null, issue: null, reasoning: '--target-issue <N> required' };
   }
   const classified = classifyIssue(root, targetIssue);
   if (classified.verdict === 'blocked') {
-    return { status: 'user_target_blocked', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+    return { status: 'user_target_blocked', result: 'answer', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'red') {
-    return { status: 'user_target_red', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+    return { status: 'user_target_red', result: 'answer', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'target_unavailable') {
-    return { status: 'target_unavailable', result: 'refuse', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+    return { status: 'target_unavailable', result: 'answer', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'target_unverified') {
     return {
       status: 'target_unverified',
+      result: 'answer',
       claim: 'none',
       issue: targetIssue,
       project: projectNameForIssue(root, targetIssue),
       reasoning: classified.reasoning
     };
   }
-  // #495: indeterminate verdict — transient classifier fault after retry exhausted → escalate.
+  // #495: indeterminate verdict — transient classifier fault after bounded retry is exhausted.
   if (classified.verdict === 'indeterminate') {
     return {
       status: 'target_indeterminate',
-      result: 'escalate',
+      result: 'answer',
       claim: 'none',
       issue: targetIssue,
       project: projectNameForIssue(root, targetIssue),
@@ -1612,14 +1610,14 @@ function claimBundle(root, opts) {
   const applied = { dir: false, worktree: false, worktreeAttempted: false, worktreePath: '', worktreeBranchExisted: false,
     labeled: [], inPlaceBranch: false, baseBranch: '' };
 
-  // #370: bundle runs now get the SAME provisioning hardening as single-issue claimProject.
-  // Dirty-tree gate (NATIVE=0 in-place mode): refuse BEFORE any mutation so a dirty tree never
-  // orphans a created folder. Mirrors claimProject's gate.
+  // #370: bundle runs get the SAME provisioning hardening as single-issue claimProject, including
+  // the consent ask about the user's uncommitted work — raised BEFORE any mutation so a dirty tree
+  // never orphans a created folder. Mirrors claimProject.
   const headBranch = inPlaceHead(root);
   const wouldInPlace = !OFFLINE && hasGitHistory(root) && !WORKTREE_NATIVE;
   if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root, [project])) {
-    return { status: 'dirty_tree_refused', claim: 'none', issue: targets[0], issue_numbers: targets, project,
-      reasoning: 'working tree has uncommitted changes; refusing to create the in-place bundle feature branch (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.' };
+    return Object.assign({ status: 'dirty_tree_refused', claim: 'none', issue: targets[0], issue_numbers: targets, project },
+      dirtyTreeConsentAsk('in-place bundle feature branch'));
   }
 
   let claimErr = null;
@@ -1695,7 +1693,7 @@ function claimBundle(root, opts) {
       runtime: resolveRuntime(opts, process.env),
       // #603: thread the pre-validated Codex dispatch mode (bundle path mirrors the scalar claim).
       codex_dispatch_mode: opts.codexDispatchMode,
-      // #825 (Gate 1): the bundle lane is exactly the shape a no-target survey produces, so it
+      // The bundle lane is exactly the shape a no-target survey produces, so it
       // carries the same selection-record anchor as the scalar claim.
       selection_record_digest: opts.selectionRecordDigest,
       status: 'active'
@@ -1895,13 +1893,32 @@ function claimExplicitBundle(root, args) {
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     runtime: resolveRuntime(args, process.env),
     attestPlannerSpawn: args.attestPlannerSpawn, // #370: honor the planner attest back-fill on the bundle path
-    selectionRecordDigest: args.selectionRecordDigest // #825: Gate 1's durable anchor
+    selectionRecordDigest: args.selectionRecordDigest // the selection record's durable anchor
   });
 }
 
 function output(obj, code) {
   process.stdout.write(JSON.stringify(obj) + '\n');
   if (code) process.exitCode = code;
+}
+
+// The claim-time statuses that ANSWER. None of them is a fact about a kernel write: they report an
+// argv usage error, a classifier that would not answer, or a target the caller now knows something
+// about. Nothing was written in any of them, so the caller reads the envelope, re-states its reason
+// and claims something else — and an exit code that said "refused" only invited a caller to stop
+// where an agent can resolve. `claim: 'none'` is what says the claim did not happen; the exit code
+// no longer carries that meaning at this surface.
+// One wording for the no-target usage answer, shared by startup and pick-next.
+const NO_TARGET_USAGE = 'usage: --target-issue <N> (or --target-issues A,B,C) required; '
+  + 'the workflow never auto-picks an issue.';
+const CLAIM_ANSWER_STATUSES = Object.freeze([
+  'no_target', 'target_ambiguity',
+  'user_target_red', 'user_target_blocked',
+  'target_unavailable', 'target_unverified', 'target_indeterminate',
+]);
+function claimExitCode(status) {
+  if (status === 'acquired' || status === 'owned') return 0;
+  return CLAIM_ANSWER_STATUSES.indexOf(status) >= 0 ? 0 : 1;
 }
 
 function cmdClaim() {
@@ -1928,11 +1945,13 @@ function cmdStartup() {
   const scalarTarget = args.targetIssue || args.issue;
   const bundleTargets = Array.isArray(args.targetIssues) && args.targetIssues.length ? args.targetIssues : null;
 
-  // #328: target_ambiguity — both scalar and bundle set
+  // #328: both scalar and bundle set — an argv usage answer, never a gate. Nothing is written
+  // either way, and the caller re-runs with one of the two.
   if (scalarTarget && bundleTargets) {
     output({ verdict: 'target_ambiguity', claim: 'none', project: null, issue: null,
-      status: 'target_ambiguity',
-      reasoning: 'both --target-issue and --target-issues set; choose one' }, 1);
+      status: 'target_ambiguity', result: 'answer',
+      reasoning: 'usage: both --target-issue and --target-issues are set; pass exactly one.' },
+      claimExitCode('target_ambiguity'));
     return;
   }
 
@@ -1944,65 +1963,28 @@ function cmdStartup() {
     delete args.codexDispatchMode;
   }
 
-  // #825 (Gate 1): the commitment point. Resolved BEFORE any claim mutation — an orchestrator-
-  // originated claim without a valid typed selection record refuses zero-write; an explicit-target
-  // claim gets the degenerate record synthesized here so the durable field is never optional.
+  // The selection record, resolved BEFORE any claim mutation so the digest is available to
+  // writeState. It cannot refuse: whatever the caller supplied (or did not) is reported on the
+  // emitted envelope as `selection_record_note` and the claim proceeds.
   const selectionLabel = bundleTargets
     ? bundleTargets.map(n => '#' + n).join(', ')
     : (scalarTarget ? '#' + scalarTarget : 'none');
-  const selectionGate = resolveSelectionGate(args, selectionLabel);
-  if (selectionGate.refusal) {
-    output(selectionGate.refusal, 1);
-    return;
-  }
-  args.selectionRecordDigest = selectionGate.digest;
+  const selectionRecord = resolveSelectionRecord(args, selectionLabel);
+  const recordNote = selectionRecord.note ? { selection_record_note: selectionRecord.note } : {};
+  args.selectionRecordDigest = selectionRecord.digest;
   // The emitted `target_source` is a RECORD of how this claim originated, so it echoes the
-  // discriminator the gate just resolved rather than the historical constant.
-  // Mirrors the gate's own fail-closed reading: anything that is not the exact 'user_directed'
-  // literal was gated as orchestrator-originated, so it is recorded as such.
+  // discriminator the record resolver just read rather than the historical constant. It mirrors
+  // that resolver's strict reading: anything that is not the exact 'user_directed' literal is
+  // recorded as orchestrator-originated.
   const resolvedTargetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim()
     === 'user_directed' ? 'user_directed' : 'orchestrator_selected';
 
   // #328: bundle path
   if (bundleTargets) {
     const result = claimExplicitBundle(root, args);
-    // #430: post-claim assertion — verify persisted issue_numbers matches declared set.
-    // A writeState that silently drops/coerces a member (e.g. single-element "bundle" → no
-    // issue_numbers line) would pass result.status === 'acquired' while the durable state holds a
-    // different set. Belt-and-suspenders: re-read workflow-state.md so a stale in-memory array
-    // cannot mask the collapse. The #393a gate in writeState emits issue_numbers ONLY when
-    // length > 1 — a single-element "bundle" has no issue_numbers line, so parseStateFile reads
-    // it back as a scalar project; declared=[42], claimed=[] → mismatch → typed refusal.
-    if (result.status === 'acquired') {
-      const declared = (args.targetIssues || []).slice().sort((a, b) => a - b);
-      let claimed = Array.isArray(result.issue_numbers)
-        ? result.issue_numbers.slice().sort((a, b) => a - b)
-        : [];
-      try {
-        const sf = stateFile(root, result.project);
-        const persisted = (field(fs.readFileSync(sf, 'utf8'), 'issue_numbers') || '')
-          .split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0)
-          .sort((a, b) => a - b);
-        if (persisted.length > 0) claimed = persisted;
-      } catch (_) {}
-      const same = declared.length === claimed.length
-        && declared.every((n, i) => n === claimed[i]);
-      if (!same) {
-        output({
-          verdict: 'target_set_mismatch', status: 'target_set_mismatch', claim: 'none',
-          selected_project: result.project || null, selected_issue: null,
-          target_source: resolvedTargetSource,
-          declared_set: declared, claimed_set: claimed,
-          reasoning: 'bundle claim persisted issue set ' + JSON.stringify(claimed) +
-            ' does not match the declared --target-issues ' + JSON.stringify(declared) +
-            '; refusing to proceed on a silently-collapsed bundle (#430).'
-        }, 1);
-        return;
-      }
-    }
-    // #825: fold the staged origin evidence + persist the gate-validated record under the claimed
-    // bundle project, then surface its digest on the emitted claim JSON.
-    completeSelectionOrigin(root, result, selectionGate);
+    // Fold the staged origin evidence + persist the resolved record under the claimed bundle
+    // project, then surface its digest on the emitted claim JSON.
+    completeSelectionOrigin(root, result, selectionRecord);
     output(Object.assign({
       verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
       claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
@@ -2010,22 +1992,19 @@ function cmdStartup() {
       selected_issue: result.issue || null,
       target_source: resolvedTargetSource,
       worktree_path: result.worktree_path || ''
-    }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
+    }, result, recordNote), claimExitCode(result.status));
     return;
   }
 
   if (!scalarTarget) {
-    // #403.2: every sibling refusal carries a `reasoning` field; the bare no_target one didn't. The
-    // helper text already exists in claimExplicitTarget — mirror it so a caller logging refusals sees
-    // a uniform shape.
-    output({ verdict: 'no_target', claim: 'none', project: null, issue: null,
-      reasoning: '--target-issue <N> (or --target-issues A,B,C) required; the workflow never auto-picks an issue (#44).' }, 1);
+    output({ verdict: 'no_target', claim: 'none', project: null, issue: null, result: 'answer',
+      reasoning: NO_TARGET_USAGE }, claimExitCode('no_target'));
     return;
   }
   const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: scalarTarget }));
-  // #825: fold the staged origin evidence + persist the gate-validated record under the claimed
-  // project, then surface its digest on the emitted claim JSON.
-  completeSelectionOrigin(root, result, selectionGate);
+  // Fold the staged origin evidence + persist the resolved record under the claimed project, then
+  // surface its digest on the emitted claim JSON.
+  completeSelectionOrigin(root, result, selectionRecord);
   output(Object.assign({
     verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
     claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
@@ -2033,7 +2012,7 @@ function cmdStartup() {
     selected_issue: result.issue || null,
     target_source: resolvedTargetSource,
     worktree_path: result.folder ? (result.folder.worktree_path || '') : (result.worktree_path || '')
-  }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
+  }, result, recordNote), claimExitCode(result.status));
 }
 
 function cmdPickNext() {
@@ -2042,9 +2021,8 @@ function cmdPickNext() {
   const target = args.targetIssue || args.issue;
   // #328: bundle path — delegate to cmdStartup which handles both scalar and bundle
   if (target || (Array.isArray(args.targetIssues) && args.targetIssues.length)) return cmdStartup();
-  // #403.2: carry a reasoning field (sibling-refusal uniformity).
-  output({ verdict: 'no_target', claim: 'none', project: null, issue: null,
-    reasoning: '--target-issue <N> (or --target-issues A,B,C) required; the workflow never auto-picks an issue (#44).' }, 1);
+  output({ verdict: 'no_target', claim: 'none', project: null, issue: null, result: 'answer',
+    reasoning: NO_TARGET_USAGE }, claimExitCode('no_target'));
 }
 
 function resumeFallbackCommand(root, folder) {

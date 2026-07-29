@@ -816,7 +816,7 @@ function cmdClassify(argv) {
     }
     if (!fetchSucceeded) {
       if (!lastFetchTransient) {
-        process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'gh issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
+        process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'gh issue fetch failed; not claiming outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
         return;
       }
       // Persistent transient fault — emit indeterminate so callers can escalate (#507/#519)

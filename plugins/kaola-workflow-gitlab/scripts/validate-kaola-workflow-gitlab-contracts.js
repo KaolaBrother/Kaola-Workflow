@@ -350,16 +350,16 @@ assert(
 );
 // #825 (B2/B3/B4): selection is orchestrator-owned and the commitment point is a SCRIPT refusal.
 // Freedom is sized for the weakest harness, so this edition gets IDENTICAL enforcement: the router
-// surfaces must name the Gate 1 flag and its typed refusal, the adapt surfaces must carry the
+// surfaces must name the selection-record flag and its report, the adapt surfaces must carry the
 // evidence PATH + the typed clarification return, and the forge claim port must actually emit the
 // refusals. The re-pin is bidirectional in the SAME diff — the retired planner-first lock is
 // asserted ABSENT from the edition planner profile beside every positive pin.
 for (const f of ['/commands/workflow-next.md', '/skills/kaola-workflow-next/SKILL.md']) {
   assert(
-    read(pluginRoot + f).includes('selection_record_missing') &&
+    read(pluginRoot + f).includes('selection_record_note') &&
     read(pluginRoot + f).includes('--selection-record') &&
     read(pluginRoot + f).includes('selection_mode'),
-    'GitLab next surface ' + f + ' must document the Gate 1 selection record (#825)'
+    'GitLab next surface ' + f + ' must document the orchestrator-authored selection record'
   );
 }
 for (const f of ['/commands/kaola-workflow-adapt.md', '/skills/kaola-workflow-adapt/SKILL.md']) {
@@ -371,10 +371,9 @@ for (const f of ['/commands/kaola-workflow-adapt.md', '/skills/kaola-workflow-ad
   );
 }
 assert(
-  read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_missing') &&
-  read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_invalid') &&
+  read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_note') &&
   read(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js').includes('selection_record_digest'),
-  'GitLab claim port must carry the Gate 1 refusals + the record digest (#825)'
+  'GitLab claim port must report the selection record and stamp its digest'
 );
 assert(
   read('agents/workflow-planner.md').includes('clarification_required') &&

@@ -1118,7 +1118,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_GH_REMOTE_TIMEOUT_MS` | `30000` | Timeout in milliseconds for GitHub/GitLab/Gitea API calls during closure audit, active-folder checks, remote validation, and sink-merge/sink-pr gh calls. Set lower in tests to simulate API hangs. Values above 600000ms (10 minutes) are clamped to 600000ms to prevent hang protection bypass (issue #185) |
 | `KAOLA_RUN_CHAINS_TIMEOUT_MS` | `1800000` | Per-chain `spawnSync` kill ceiling in milliseconds for `kaola-workflow-run-chains.js`. Default 1800000 (30 min), raised from a prior 900000 (15 min, issue #512) after a live run on a constrained host outgrew that budget. Invalid/zero/negative values fall back to the default. No upper clamp (local test suite, not a remote-hang risk). A killed chain's receipt entry now records `timed_out: true` (issue #608), and the failure summary labels a timed-out chain inline so it reads distinctly from a genuine test regression |
 | `KAOLA_FINALIZE_BASE` | (unset) | Override the integration-branch base for `cmdFinalize`'s `--finalize-check` attribution sweep (`scripts/kaola-workflow-claim.js` ×4 editions). Defaults to unset → the validator's `main` default (byte-equivalent for branch-per-issue runs). Set to a project merge-base (or `HEAD` for an in-place run whose own changes are already verified by the chain receipt) so the sweep attributes only the project's own diff on a shared/multi-issue branch. Also settable via the `--base <ref>` flag (flag wins). The per-node `--barrier-check` anti-laundering guard still rejects `--base` (issue #539) |
-| `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub/GitLab/Gitea calls for local tests or air-gapped usage. When unset and remote validation fails, startup returns `target_unavailable` refusal instead of silently proceeding |
+| `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub/GitLab/Gitea calls for local tests or air-gapped usage. When unset and remote validation fails, startup answers `target_unavailable` (exit 0, `claim: 'none'`) instead of silently proceeding |
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
@@ -1126,7 +1126,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
 | `KAOLA_PARALLEL_WRITES` | `1` (ON) | Default-ON master switch for default-on disjoint write parallelism (D-542-01). When ON, write frontiers the planner proves **disjoint** (`parallel_safe`) co-open as isolated parallel legs — per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net. Set to `0` (also `false`/`no`) to force every write frontier serial. Overlapping (non-disjoint) writes stay serial/consent-gated regardless, and a host without worktree support degrades to serial regardless |
 | `--write-overlap-consent` / `write_overlap_policy` | (overlap only) | The overlap-only consent gate. `--write-overlap-consent` plus a plan `write_overlap_policy: coarse` (anything other than `off`) is what permits a **genuinely-overlapping** (non-disjoint) write frontier to co-open under a coarse shared lane; it does NOT gate disjoint co-open (that is default-on, above). With the policy `off` or consent absent, an overlapping frontier stays serial |
-| `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (sets off the `target_ambiguity` refusal). Adaptive path only |
+| `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` usage at exit 0, writing nothing). Adaptive path only |
 | `KAOLA_BUNDLE_MAX_ISSUES` | `8` | Maximum number of issues allowed in a single bundle. Bundles larger than this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and planner-selected auto-bundles |
 | `KAOLA_GOAL` | (unset) | Operator-side goal text for goal-conditioned bundles (#441). When set, the orchestrator places the goal in the `workflow-planner` dispatch prompt so it is transcribed as `goal: <text>` into `## Meta` of `workflow-plan.md`, hash-covered by `computePlanHash`. In no-target mode, `workflow-planner` reads `KAOLA_GOAL` as clustering context and surfaces a `goal_alignment` note in its selection. Finalization emits `goal_check: satisfied|unsatisfied|absent` in the closure receipt (advisory in v1; does not block) |
 
@@ -1207,7 +1207,7 @@ The startup script validates the agent's choice:
 - Issue must be green or yellow (not blocked or red)
 - No duplicate active folder for the same issue
 
-If the agent does not provide an explicit target issue, startup refuses with `verdict: no_target` — even when exactly one active folder is present. When resuming a sole active folder, the agent must:
+If the agent does not provide an explicit target issue, startup answers `verdict: no_target` at exit 0 and claims nothing — even when exactly one active folder is present. When resuming a sole active folder, the agent must:
 
 ```bash
 STATUS_OUT="$(node "$CLAIM_JS" status 2>/dev/null)"
@@ -1383,7 +1383,7 @@ Issue #328 adds an additive bundle lane that lets N same-scope issues share one 
 
 3. **Auto-bundle via `workflow-planner`** — when the user names no issue, `workflow-planner` runs its own no-target backlog survey and selects a same-scope issue set jointly with how it decomposes the work, then claims + authors + freezes in ONE dispatch. There is no separate pre-claim recommendation step to adopt.
 
-Setting both `--target-issue` and `--target-issues` (or both env-var equivalents) is refused with a `target_ambiguity` typed error before any state is written.
+Setting both `--target-issue` and `--target-issues` (or both env-var equivalents) answers `target_ambiguity` usage at exit 0; no state is written either way.
 
 ### Bundle claim semantics
 
@@ -1391,7 +1391,7 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 
 | Code | Meaning |
 |------|---------|
-| `target_ambiguity` | Both scalar and multi-target provided simultaneously |
+| `target_ambiguity` | Both scalar and multi-target provided simultaneously (usage answer, exit 0) |
 | `target_set_empty` | Resolved issue list is empty after dedup |
 | `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |

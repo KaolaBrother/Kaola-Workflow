@@ -315,7 +315,7 @@ final at freeze.
 You do not survey the backlog and you do not pick the work. By the time you are dispatched the
 orchestrator has already run the origin phase — read-only reconnaissance, any question it needed to
 ask the user, and the ranking — and has bound its answer into a typed **selection record** the claim
-script refuses without (`selection_record_missing` / `selection_record_invalid`, both zero-write).
+script persists byte-for-byte as authored and never grades.
 Your work starts one step later: turn a settled target plus its evidence into the right DAG.
 
 The brief carries two things beyond the target:
@@ -379,9 +379,9 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
    another. Run
    `node <claim.js> startup --runtime claude [--sink <sink>] (--target-issue <N> | --target-issues <A,B,…>) --attest-planner-spawn`.
    When the brief supplies them, pass `--target-source orchestrator_selected --selection-record <path>`
-   through VERBATIM — that pair is Gate 1, and startup refuses `selection_record_missing` without it
-   on an orchestrator-originated claim. A brief with no such pair is an explicit-target claim and
-   startup writes the degenerate record itself.
+   through VERBATIM — that pair is the orchestrator's own reasoning, and dropping it loses the only
+   durable account of why this target was chosen. A brief with no such pair is an explicit-target
+   claim and startup writes the canonical record itself.
    `--attest-planner-spawn` back-fills the planner's own dispatch marker. Writes `workflow-state.md`
    at repo-root and provisions the worktree; you author/freeze at repo-root and never cd into it.
    - **`Binding scope:` — the dispatch brief's scope field.** It carries the user's own task
@@ -397,11 +397,12 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
    - **Overwrite guard:** a `workflow-plan.md` carrying a `<!-- plan_hash: <64-hex> -->` marker is
      FROZEN — STOP and return (never destroy it); one without the marker is unfrozen+invalid and may
      be overwritten ONLY in the validator-repair loop.
-   - **Refusal:** any `claim_verdict` NOT `acquired`/`owned` writes no state — STOP and return the
-     verdict verbatim; do not retry a different issue. Classify by `result`: `refuse`
-     (`target_occupied`, `user_target_blocked`, `target_set_mismatch`, …) is
-     a determinate fail-closed fact; `escalate` (`target_indeterminate`/`target_set_indeterminate`)
-     is an indeterminate verdict the orchestrator pauses on.
+   - **Not acquired:** any `claim_verdict` NOT `acquired`/`owned` writes no state — STOP and return
+     the verdict verbatim; do not retry a different issue. Classify by `result`: `answer`
+     (`user_target_blocked`, `target_unverified`, `target_indeterminate`, …) is a fact the
+     orchestrator acts on; `consent` (`dirty_tree_refused`) is a question for the user; `refuse`
+     (`target_occupied`, `target_set_*`, …) is a determinate fail-closed fact; `escalate`
+     (`target_set_indeterminate`) is one the orchestrator pauses on.
 2a. **Fetch the role-capability table (before authoring `## Nodes`).**
    `node <plan-validator.js> --roles-manifest --json` — read-only, no plan required. It returns every
    role's `tools` / `bash_capable` / `write_capable` / `kind`. Choose each node's role against THAT
@@ -488,9 +489,9 @@ structured object, no extra prose:
 - **`plan_invalid`** — the validator refused; nothing froze/wrote. Return
   `{handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict}` verbatim; the
   orchestrator drives repair.
-- **Claim refusal** — no state written. Return `claim_verdict` + `claim_reasoning` verbatim. Gate 1's
-  `selection_record_missing` / `selection_record_invalid` are ordinary members of this family: the
-  brief lost its selection record, so the orchestrator re-authors it — never work around the gate.
+- **Claim not acquired** — no state written. Return `claim_verdict` + `claim_reasoning` verbatim,
+  including any `selection_record_note`: that note says the claim proceeded on the canonical record
+  because the brief carried no usable one, and re-authoring it is the orchestrator's call.
 - **`clarification_required`** — the brief is under-determined. Return
   `{handoff_status:'clarification_required', result:'escalate', question, context_refs, round}`
   verbatim (see § Origin inputs); nothing authored beyond what was already claimed. Bounded at three
