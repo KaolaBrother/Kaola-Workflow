@@ -31574,6 +31574,292 @@ scenario(() => {
       + JSON.stringify({ halt: h4.halt, marker: haltMarker846(fx) }));
     cleanup846(fx);
   });
+
+  // -------------------------------------------------------------------------
+  // #846-I — TWO CLASSES PENDING AT ONCE: A CLASSLESS CLEAR GRANTS NEITHER.
+  //
+  // `write-halt` is deliberately NOT halt-fenced — it IS the valve, so it has to stay raisable while
+  // a halt already stands. Two DIFFERENT classes can therefore be outstanding at the same moment (any
+  // fan-out whose legs gate different classes reaches this, and so does a crash-resume that re-derives
+  // a different class), while the durable `consent_halt: pending` marker is CLASSLESS and is written
+  // once. One marker then stands for TWO questions, and nothing on disk says which of them the human
+  // was shown or which they answered.
+  //
+  // THE DANGEROUS DIRECTION, exactly: the human approves X and REFUSES Y; the orchestrator clears the
+  // one halt after handling X; a grant minted for Y suppresses every future Y question for the rest of
+  // the claim. A human's "no" has been recorded as a standing "yes" — a machine deciding a value call,
+  // inside the one subsystem whose entire purpose is routing value calls to a human.
+  //
+  // A discharge that is not unambiguous is not a discharge: with more than one class pending, NOTHING
+  // is granted. That degrade is SAFE by construction — it is precisely the behavior of the valve
+  // before standing grants existed (ask every time) — and it needs no refusal code and no new flag.
+  // Two shapes that are NOT the repair: a `--consent-class` flag on `clear-halt` would let the answer
+  // be re-stated at clear time, which is the one thing a classless clear makes structurally
+  // impossible; and REFUSING the second raise would fence the valve against itself.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    const i1 = ask846(fx, CLASS_846);
+    assert(i1.halt === 'written' && i1.standing_grant === false,
+      '#846-I precondition: the first class raises the valve, got '
+      + JSON.stringify({ halt: i1.halt, standing_grant: i1.standing_grant }));
+
+    const i2 = ask846(fx, OTHER_ACTION_846);
+    assert(i2.result === 'ok' && i2.halt === 'written',
+      '#846-I precondition: a SECOND, different class raises while the first is still pending. The '
+      + 'valve does not fence itself — write-halt must stay raisable while a halt stands — so this '
+      + 'state is reachable in a real run rather than hypothetical, and refusing the second raise is '
+      + 'not the repair, got ' + JSON.stringify({ result: i2.result, reason: i2.reason, halt: i2.halt }));
+
+    // The human answers ONE of the two. `clear-halt` carries no class, by design.
+    const i3 = clear846(fx);
+    assert(i3.result === 'ok' && i3.halt === 'cleared',
+      '#846-I: the clear itself still succeeds — ambiguity is answered by granting nothing, never by '
+      + 'refusing to clear, which would strand the run behind a halt it cannot lift, got '
+      + JSON.stringify({ result: i3.result, reason: i3.reason, halt: i3.halt }));
+    assert(i3.standing_grant_recorded == null,
+      '#846-I: ...and with TWO classes pending it records NO standing grant. One classless marker '
+      + 'stood for two questions, so nothing on disk says which one the human saw; minting a grant '
+      + 'for the LAST-RAISED class turns "yes to X, no to Y" into a standing yes to Y, got '
+      + JSON.stringify(i3.standing_grant_recorded));
+
+    const i4 = orient846(fx);
+    assert(Array.isArray(i4.consentGrants) && i4.consentGrants.length === 0,
+      '#846-I: ...and the zero-context successor is shown no live grant at all, got '
+      + JSON.stringify(i4.consentGrants));
+
+    const i5 = ask846(fx, OTHER_ACTION_846);
+    assert(i5.standing_grant === false && i5.halt === 'written' && haltMarker846(fx) === true,
+      '#846-I: ...so the LAST-RAISED class — the one an operator who approved only the first never '
+      + 'consented to — still puts its question, got '
+      + JSON.stringify({ standing_grant: i5.standing_grant, halt: i5.halt, marker: haltMarker846(fx) }));
+
+    const i6 = ask846(fx, CLASS_846);
+    assert(i6.standing_grant === false,
+      '#846-I: ...and so does the FIRST. Resolving the ambiguity by granting the EARLIEST pending '
+      + 'class instead is the same defect with the arrow reversed, got '
+      + JSON.stringify(i6.standing_grant));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-J — AMBIGUITY IS NOT A DEAD END. Granting nothing when two classes are pending withholds an
+  // answer the human never gave; it must not withhold their ability to give one. The question is put
+  // again, and the next answer — to a single, unambiguous pending question — is recorded exactly as
+  // #846-A2's is. A run that could never obtain a grant again once two classes had overlapped would
+  // be a permanent stuck state manufactured by the repair itself.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    ask846(fx, CLASS_846);
+    ask846(fx, OTHER_ACTION_846);
+    const amb = clear846(fx);
+    assert(amb.result === 'ok',
+      '#846-J precondition: the ambiguous discharge clears, got '
+      + JSON.stringify({ result: amb.result, reason: amb.reason }));
+
+    const j1 = ask846(fx, CLASS_846);
+    assert(j1.result === 'ok' && j1.halt === 'written' && j1.standing_grant === false,
+      '#846-J: the class puts its question again, got '
+      + JSON.stringify({ result: j1.result, halt: j1.halt, standing_grant: j1.standing_grant }));
+    const j2 = clear846(fx);
+    assert(j2.standing_grant_recorded === CLASS_846,
+      '#846-J: ...and THIS discharge is unambiguous — exactly one class pending — so the human\'s '
+      + 'answer is recorded normally. Nothing about an earlier overlap disqualifies a later, clean '
+      + 'question, got ' + JSON.stringify(j2.standing_grant_recorded));
+    const j3 = ask846(fx, CLASS_846);
+    assert(j3.standing_grant === true && j3.halt !== 'written',
+      '#846-J: ...so the next instance rides it, got '
+      + JSON.stringify({ standing_grant: j3.standing_grant, halt: j3.halt }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-K — THE SAME CLASS RAISED TWICE IS STILL ONE QUESTION. What makes a discharge ambiguous is
+  // two DIFFERENT classes outstanding, never two raises. The issue's own measured case is the
+  // IDENTICAL question raised three times; if a repeat raise counted as a second pending request, the
+  // discharge would be "ambiguous" exactly where the subtraction was measured and the whole mechanism
+  // would be inert. What is pending is a SET of classes, not a tally of raises.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    const k1 = ask846(fx, CLASS_846);
+    const k2 = ask846(fx, CLASS_846);
+    assert(k1.halt === 'written' && k2.result === 'ok' && k2.standing_grant === false,
+      '#846-K precondition: the same class is raised twice before anyone answers, got '
+      + JSON.stringify({ first: k1.halt, second: k2.result, standing_grant: k2.standing_grant }));
+    const k3 = clear846(fx);
+    assert(k3.standing_grant_recorded === CLASS_846,
+      '#846-K: one class pending — however many times it was raised — is ONE question, and the '
+      + 'human\'s yes answers it, got ' + JSON.stringify(k3.standing_grant_recorded));
+    const k4 = ask846(fx, CLASS_846);
+    assert(k4.standing_grant === true && k4.halt !== 'written',
+      '#846-K: ...so the grant is live and the next instance rides it — the issue\'s measured case, '
+      + 'end to end, got ' + JSON.stringify({ standing_grant: k4.standing_grant, halt: k4.halt }));
+    cleanup846(fx);
+  });
+
+  // Targets are paths, hosts and URLs, so a colon INSIDE the target is ordinary: this is the action
+  // `deploy` on the host:port `db.prod:5432`, not a three-part class.
+  const HOSTPORT_846 = 'deploy:db.prod:5432';
+
+  // -------------------------------------------------------------------------
+  // #846-L — THE CLASS KEY DOES NOT LEAK ACROSS A COLON. A class is an ACTION and a TARGET, and the
+  // separator is not private to the separator: `db.prod:5432`, `C:\...` and `https://...` all carry
+  // colons of their own. Whatever the key is made of, four things hold — a multi-colon target matches
+  // only itself; the action plus a PREFIX of the target is a different class; a bare action with no
+  // target is a different class again, which can neither ride an action:target grant nor be ridden by
+  // one; and the class an operator reads back is the one they typed, so what `orient` shows them
+  // matches what they would pass to `--consent-class`.
+  //
+  // Two SPELLINGS of one path stay distinct too. That is not an oversight to be normalized away:
+  // asking twice about one directory costs one question, whereas collapsing two spellings hands a
+  // grant to a path the human never read.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    grant846(fx, HOSTPORT_846);
+    assert(ask846(fx, HOSTPORT_846).standing_grant === true,
+      '#846-L control: the grant for ' + HOSTPORT_846 + ' is live, and a target that itself contains '
+      + 'a colon matches itself');
+    assert(ask846(fx, 'deploy:db.prod').standing_grant === false,
+      '#846-L: the action plus a PREFIX of the granted target is a DIFFERENT class — splitting at the '
+      + 'wrong colon would widen a grant for one host:port into a grant for the whole host');
+    assert(ask846(fx, 'deploy:db.prod:5433').standing_grant === false,
+      '#846-L: ...and a different port is a different target');
+    assert(ask846(fx, 'deploy').standing_grant === false,
+      '#846-L: ...and the bare action rides nothing: a grant for one target is never authority over '
+      + 'the action itself');
+
+    const fx2 = makeConsentRepo846();
+    grant846(fx2, 'deploy');
+    assert(ask846(fx2, 'deploy').standing_grant === true,
+      '#846-L control: a targetless class can be granted and rides itself');
+    assert(ask846(fx2, 'deploy:db.prod').standing_grant === false,
+      '#846-L: ...and answers for no target — the same leak, inverted');
+    const o2 = orient846(fx2);
+    assert(liveGrant846(o2, 'deploy') !== null,
+      '#846-L: ...and the successor reads the class back EXACTLY as the operator named it, not '
+      + 're-serialized from its parts, got ' + JSON.stringify(o2.consentGrants));
+
+    const fx3 = makeConsentRepo846();
+    grant846(fx3, CLASS_846);
+    assert(ask846(fx3, CLASS_846 + '/').standing_grant === false
+      && ask846(fx3, 'patch-installed-tooling:~/.claude/./agents').standing_grant === false,
+      '#846-L: two spellings of one path are two classes and both ask again');
+    cleanup846(fx); cleanup846(fx2); cleanup846(fx3);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-M — NO CLAIM IDENTITY, NO STANDING GRANT. A grant's lifetime is THE CLAIM, and that binding
+  // is a digest over the position record. Every field in the digest falls back to the literal token
+  // `none` when it is absent — and `none` is ALSO exactly what the schema writes for an identity
+  // field it does not have. So a state that cannot identify its claim does not fail to bind: it binds
+  // to a shared constant that no boundary can move, and the grant then outlives the very boundaries
+  // (#846-D/E/F) that exist to end it, silently and with no reader able to tell.
+  //
+  // Fail SAFE, not fail closed. Where the scope cannot be identified there is simply nothing for a
+  // grant to be bound to, so none is recorded and none is live: the valve just asks, exactly as it
+  // did before standing grants existed. No refusal, no halt of its own, nothing for an operator to
+  // clear — the run is never worse off than the day before this feature landed.
+  //
+  // AND NOTE WHICH `none` IS WHICH. `replan_status: none` and `replan_transaction_id: none` are the
+  // REAL values on every healthy run — see the control. Reading the token as "unavailable" wherever
+  // it appears would make the subtraction inert on every run there is.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const ctl = makeConsentRepo846();
+    grant846(ctl, CLASS_846);
+    assert(ask846(ctl, CLASS_846).standing_grant === true,
+      '#846-M control: an ordinary claim — whose replan_status and replan_transaction_id ARE the '
+      + 'literal token "none" — grants and rides normally. Scope identity being unavailable means the '
+      + 'CLAIM cannot be identified, never "the token none appears in the position record"');
+    cleanup846(ctl);
+
+    const fx = makeConsentRepo846();
+    // The claim-identifying fields are gone. An absent field is recorded as `none`, which is the same
+    // thing the digest would have substituted for it anyway — that is the whole failure.
+    patchState846(fx, { claim_identity_digest: '', epoch_lineage_id: '' });
+    const m1 = ask846(fx, CLASS_846);
+    assert(m1.result === 'ok' && m1.halt === 'written' && m1.standing_grant === false,
+      '#846-M: with no claim identity the valve still ASKS — it does not refuse, and it raises no '
+      + 'halt of its own. Fail safe, not fail closed, got '
+      + JSON.stringify({ result: m1.result, reason: m1.reason, halt: m1.halt, standing_grant: m1.standing_grant }));
+    const m2 = clear846(fx);
+    assert(m2.result === 'ok' && m2.standing_grant_recorded == null,
+      '#846-M: ...and the answer discharges THAT question and nothing further: with nothing to bind '
+      + 'it to, no standing grant is recorded. A grant bound to a shared constant is a grant that no '
+      + 'discard, restart or epoch can revoke, got '
+      + JSON.stringify({ result: m2.result, recorded: m2.standing_grant_recorded }));
+    const m3 = ask846(fx, CLASS_846);
+    assert(m3.standing_grant === false && m3.halt === 'written' && haltMarker846(fx) === true,
+      '#846-M: ...so the next instance asks again, got '
+      + JSON.stringify({ standing_grant: m3.standing_grant, halt: m3.halt, marker: haltMarker846(fx) }));
+    const m4 = orient846(fx);
+    assert(Array.isArray(m4.consentGrants) && m4.consentGrants.length === 0,
+      '#846-M: ...and the successor is never shown a grant the valve will not honour, got '
+      + JSON.stringify(m4.consentGrants));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-N — ...AND THE SAME WHERE THERE IS NO POSITION RECORD AT ALL. #846-M blanks the two
+  // claim-identity fields; here the epoch block is absent entirely, the shape that collapses EVERY
+  // field to its fallback at once. That is one digest shared by every state in that condition, so the
+  // stamp recorded alongside a grant is evidence of nothing. Same verdict, same reason: nothing to
+  // bind to, so nothing is granted and the valve asks.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    fs.writeFileSync(fx.statePath,
+      'name: issue-846\nstatus: in_progress\nbranch: wf/846\nissue_number: 846\n');
+    const n1 = ask846(fx, CLASS_846);
+    assert(n1.result === 'ok' && n1.halt === 'written',
+      '#846-N: the valve asks, got '
+      + JSON.stringify({ result: n1.result, reason: n1.reason, halt: n1.halt }));
+    const n2 = clear846(fx);
+    assert(n2.result === 'ok' && n2.standing_grant_recorded == null,
+      '#846-N: ...and records no standing grant, got '
+      + JSON.stringify({ result: n2.result, recorded: n2.standing_grant_recorded }));
+    const n3 = ask846(fx, CLASS_846);
+    assert(n3.standing_grant === false && n3.halt === 'written',
+      '#846-N: ...so it asks again, got '
+      + JSON.stringify({ standing_grant: n3.standing_grant, halt: n3.halt }));
+    cleanup846(fx);
+  });
+
+  // -------------------------------------------------------------------------
+  // #846-O — A PENDING QUESTION DOES NOT SURVIVE A SCOPE MOVE. What keeps a grant narrow is the
+  // PENDING request and nothing else: `clear-halt` can only ever mint the class a raise recorded, and
+  // the revoking sync drops that record when the scope moves. So the only thing clearable after a
+  // boundary is a question raised AFTER it — under the plan actually in front of the human.
+  //
+  // This is pinned here because it is the property most easily lost while REWRITING what `pending`
+  // holds (#846-I). A pending record that outlived the boundary would let a discharge mint a grant
+  // for a question put under a plan that no longer exists — the human answering one thing and the
+  // machine recording consent under another, which is #846-I's defect arriving by a second road.
+  // -------------------------------------------------------------------------
+  scenario(() => {
+    const fx = makeConsentRepo846();
+    const o1 = ask846(fx, CLASS_846);
+    assert(o1.halt === 'written' && o1.standing_grant === false,
+      '#846-O precondition: the question is raised under the CURRENT scope, got '
+      + JSON.stringify({ halt: o1.halt, standing_grant: o1.standing_grant }));
+
+    // The scope moves while the question is still outstanding.
+    patchState846(fx, { plan_epoch: 2 });
+
+    const o2 = clear846(fx);
+    assert(o2.result === 'ok' && o2.standing_grant_recorded == null,
+      '#846-O: a discharge arriving after the move grants NOTHING — the pending request went with the '
+      + 'scope it was raised under, got '
+      + JSON.stringify({ result: o2.result, recorded: o2.standing_grant_recorded }));
+    const o3 = ask846(fx, CLASS_846);
+    assert(o3.standing_grant === false && o3.halt === 'written',
+      '#846-O: ...so the class asks again under the new scope, got '
+      + JSON.stringify({ standing_grant: o3.standing_grant, halt: o3.halt }));
+    cleanup846(fx);
+  });
 }
 
 shardLib.reportCoverage('test-adaptive-node', SHARD, scenarioCount, scenariosRun, passed, failed);
