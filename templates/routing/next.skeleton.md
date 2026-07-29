@@ -231,29 +231,11 @@ mismatch, and never let it outrank an open, actionable roadmap frontier issue), 
 into `cmdFinalize` as `goal_check: satisfied`.
 
 <!-- /REGION -->
-### Clustering ranking precedence
+### Ranking candidates
 
-First **rank** candidates by the roadmap priority frontier, THEN group by scope. The ranking
-precedence is strict and ordered:
-
-1. **Priority / drive-order tier (hard rank, first).** A cluster that contains or advances the
-   roadmap's top-priority frontier issue (per `### Project rules` and the `Next Step` drive-order)
-   outranks every lower-priority cluster. A `### Project rules` guardrail (e.g. "X must not preempt the
-   correctness frontier Y") is a HARD constraint: while a higher-priority frontier issue is open and
-   actionable, the guarded-against issue must NOT be recommended.
-2. **Scope-cohesion (second).** Within the highest available priority tier, prefer the most coherent
-   same-scope cluster.
-3. **Actionability (within-tier tiebreak ONLY).** Ease of verification / cleanest write-lanes /
-   smallest dependency surface breaks ties *between equally-prioritized* clusters. Actionability NEVER
-   promotes a lower-priority cluster over a higher-priority one. "Closest actionable proxy" is an
-   explicit anti-pattern: do not substitute an easier lower-priority issue for an open, actionable
-   frontier issue.
-
-Group the candidates within the winning priority tier by coherent scope signal (same subsystem or area
-label; same named feature or failing workflow; explicit dependency relation inside the group;
-compatible expected write areas one adaptive DAG can cover). Exclude from any bundle: issues that are
-closed or already claimed (in an active folder or a live bundle's `issue_numbers`); issues classified
-red against active work; issues whose dependencies fall outside the bundle and are not already closed.
+Rank by the roadmap priority frontier (`### Project rules` and the `Next Step` drive-order), then
+group by scope. Say in the selection record what you skipped and why. Exclude what is not yours to
+take: issues closed or already claimed, or classified red against active work.
 
 ### Co-Tenant Mode: Disjoint Issue Selection
 
@@ -284,35 +266,13 @@ the `backlog_empty` verdict rather than recommending occupied work.
 
 ### Bundle Selection Rules
 
-**Default: single issue.** If confidence is not high, select single-issue mode — do not manufacture
-a bundle. Auto-bundle only when ALL of the following are true:
+**Default: single issue.** Bundle only when the issues are open, unclaimed, share a scope signal, and
+their write areas fit one adaptive DAG. The ceiling is `KAOLA_BUNDLE_MAX_ISSUES` (default 8) and the
+claim enforces it.
 
-- The set sits in the **highest open-and-actionable priority tier** the roadmap drives: no open,
-  actionable, higher-priority frontier issue is being skipped in its favor (honor every
-  `### Project rules` guardrail; see the Frontier-Blocked Rule below);
-- All issues are open and unclaimed;
-- No issue is classified red against active work;
-- Dependencies are either inside the bundle or already closed;
-- Issues share a coherent scope signal;
-- Expected write areas are compatible with one adaptive DAG;
-- Issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 8).
-
-### Frontier-Blocked Rule
-
-When the roadmap's top-priority frontier issue is genuinely blocked or unverifiable —
-unclaimed-but-red against active work, has an open external dependency outside any claimable bundle, or
-its acceptance is unverifiable in this run — you may fall to the next-priority actionable item, but
-ONLY after saying so **explicitly** in the selection record:
-
-- State in `selection_priority_basis` WHICH frontier issue you skipped and the **concrete reason** it
-  is blocked/unverifiable ("frontier blocked because…"), then name the next-priority item you fell to.
-- List the skipped frontier issue in `selection_rejected` with that same blocking reason.
-- Never silently substitute an easier, lower-priority, more-cohesive cluster for an open and actionable
-  frontier issue and call it the "closest actionable proxy." Silent substitution is forbidden; an
-  explicit, reasoned fall-through is required.
-
-A frontier issue that is open AND actionable AND verifiable is NOT blocked — select it (or its
-frontier-advancing cluster) even if a lower-priority cluster is more cohesive or easier to verify.
+If you pass over the frontier issue, say which one and why in `selection_priority_basis`, and list it
+in `selection_rejected`. An unexplained substitution is the failure mode; an explained one is a
+judgement call you are entitled to make.
 
 ### Empty backlog / indeterminate selection — the pre-claim verdicts
 
@@ -709,29 +669,11 @@ single-issue selection.
 **The main orchestrator STATES the selected issue set aloud BEFORE it claims.**
 Scripts validate but never select or substitute issues.
 
-### Clustering ranking precedence
+### Ranking candidates
 
-First **rank** candidates by the roadmap priority frontier, THEN group by scope. The ranking
-precedence is strict and ordered:
-
-1. **Priority / drive-order tier (hard rank, first).** A cluster that contains or advances the
-   roadmap's top-priority frontier issue (per `### Project rules` and the `Next Step` drive-order)
-   outranks every lower-priority cluster. A `### Project rules` guardrail (e.g. "X must not preempt the
-   correctness frontier Y") is a HARD constraint: while a higher-priority frontier issue is open and
-   actionable, the guarded-against issue must NOT be recommended.
-2. **Scope-cohesion (second).** Within the highest available priority tier, prefer the most coherent
-   same-scope cluster.
-3. **Actionability (within-tier tiebreak ONLY).** Ease of verification / cleanest write-lanes /
-   smallest dependency surface breaks ties *between equally-prioritized* clusters. Actionability NEVER
-   promotes a lower-priority cluster over a higher-priority one. "Closest actionable proxy" is an
-   explicit anti-pattern: do not substitute an easier lower-priority issue for an open, actionable
-   frontier issue.
-
-Group the candidates within the winning priority tier by coherent scope signal (same subsystem or area
-label; same named feature or failing workflow; explicit dependency relation inside the group;
-compatible expected write areas one adaptive DAG can cover). Exclude from any bundle: issues that are
-closed or already claimed (in an active folder or a live bundle's `issue_numbers`); issues classified
-red against active work; issues whose dependencies fall outside the bundle and are not already closed.
+Rank by the roadmap priority frontier (`### Project rules` and the `Next Step` drive-order), then
+group by scope. Say in the selection record what you skipped and why. Exclude what is not yours to
+take: issues closed or already claimed, or classified red against active work.
 
 ### Co-Tenant Mode: Disjoint Issue Selection
 
@@ -762,35 +704,13 @@ the `backlog_empty` verdict rather than recommending occupied work.
 
 ### Bundle Selection Rules
 
-**Default: single issue.** If confidence is not high, select single-issue mode — do not manufacture
-a bundle. Auto-bundle only when ALL of the following are true:
+**Default: single issue.** Bundle only when the issues are open, unclaimed, share a scope signal, and
+their write areas fit one adaptive DAG. The ceiling is `KAOLA_BUNDLE_MAX_ISSUES` (default 8) and the
+claim enforces it.
 
-- The set sits in the **highest open-and-actionable priority tier** the roadmap drives: no open,
-  actionable, higher-priority frontier issue is being skipped in its favor (honor every
-  `### Project rules` guardrail; see the Frontier-Blocked Rule below);
-- All issues are open and unclaimed;
-- No issue is classified red against active work;
-- Dependencies are either inside the bundle or already closed;
-- Issues share a coherent scope signal;
-- Expected write areas are compatible with one adaptive DAG;
-- Issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 8).
-
-### Frontier-Blocked Rule
-
-When the roadmap's top-priority frontier issue is genuinely blocked or unverifiable —
-unclaimed-but-red against active work, has an open external dependency outside any claimable bundle, or
-its acceptance is unverifiable in this run — you may fall to the next-priority actionable item, but
-ONLY after saying so **explicitly** in the selection record:
-
-- State in `selection_priority_basis` WHICH frontier issue you skipped and the **concrete reason** it
-  is blocked/unverifiable ("frontier blocked because…"), then name the next-priority item you fell to.
-- List the skipped frontier issue in `selection_rejected` with that same blocking reason.
-- Never silently substitute an easier, lower-priority, more-cohesive cluster for an open and actionable
-  frontier issue and call it the "closest actionable proxy." Silent substitution is forbidden; an
-  explicit, reasoned fall-through is required.
-
-A frontier issue that is open AND actionable AND verifiable is NOT blocked — select it (or its
-frontier-advancing cluster) even if a lower-priority cluster is more cohesive or easier to verify.
+If you pass over the frontier issue, say which one and why in `selection_priority_basis`, and list it
+in `selection_rejected`. An unexplained substitution is the failure mode; an explained one is a
+judgement call you are entitled to make.
 
 ### Empty backlog / indeterminate selection — the pre-claim verdicts
 

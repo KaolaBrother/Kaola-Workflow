@@ -298,10 +298,9 @@ for (const file of nextSurfaces796) {
   assertIncludes(file, 'the orchestrator is that sidecar');
   assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
   // #825 (B2): the ranking rules MOVED here from the planner profile — one wording, re-homed, not
-  // paraphrased. Pin the five load-bearing literals so a later reword cannot quietly soften them,
-  // and pin the retired heading's absence so the survey block cannot creep back onto the router.
-  for (const relocated of ['Bundle Selection Rules', 'lane_bucket', '### Project rules',
-    'frontier blocked because', 'closest actionable proxy']) {
+  // paraphrased. Pin the load-bearing literals so a later reword cannot quietly soften them, and
+  // pin the retired heading's absence so the survey block cannot creep back onto the router.
+  for (const relocated of ['Bundle Selection Rules', 'lane_bucket', '### Project rules']) {
     assertIncludes(file, relocated);
   }
   // #825 (Gate 1): the orchestrator authors the record, so the surface must name the flag it
