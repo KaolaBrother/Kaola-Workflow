@@ -3293,7 +3293,12 @@ const FWW_WARNING = {
 //       and must still carry the marker out the other side, or the fix strips a consent the user
 //       is still owed. This is the pin the never-frozen discriminator exists for.
 //   (4) the two entries AGREE. Same draft bytes in, same stripped ledger out, whichever door was
-//       used, and the same advisory token names it.
+//       used, and the same advisory WORDING names it. The token cannot be the subject of that
+//       comparison: it is what the advisory is selected by, so comparing it can only ever be true.
+//   (5) the window the restructuring opened. The handoff DECIDES the strip at Step 0.85 and APPLIES
+//       it at Step 1.7; everything between is a refuse-gate, and the safety property that makes the
+//       split legal is that those gates still mutate nothing when they fire. Pins (1)-(4) all run
+//       the success path, so none of them can see it.
 //
 // The fixture is a real freezable schema-2 spine driven through the REAL validator subprocess in a
 // real temp dir (the #641 block's shape) — the CLI is what the finding is about, so stubbing it
@@ -3317,6 +3322,14 @@ const FWW_WARNING = {
 
   // `halt` places the marker inside `## Node Ledger` (the only place it fences); `statuses` moves
   // rows off `pending`; `hash` stamps the frozen marker (outside every hash-covered section).
+  //
+  // `strayHalt` places a marker-SHAPED line on either side of the ledger — one in `## Design`
+  // (before it) and one in a trailing `## Plan Notes` (after it). Neither is a consent valve:
+  // `readDurableConsentHalt` is section-scoped, so only the ledger line fences anything, and the
+  // production strip claims in a comment that "a same-looking line anywhere else in the plan stays
+  // exactly where its author put it". These two lines are what turns that comment into a test — a
+  // strip that scanned the whole document, or ran from the ledger heading to EOF, eats one of them
+  // and is otherwise indistinguishable from a correct one.
   function cliPlanBody(opts, hash) {
     const st = (opts && opts.statuses) || {};
     return [
@@ -3337,10 +3350,12 @@ const FWW_WARNING = {
       ...CLI_NODES.map(cliRow), '',
       '## Design', '',
       'Decompose: a child epoch over the inherited frontier; the sequence edges are gate/data '
-        + 'dependencies (S1). Done: the named certifier clears the inherited frontier.', '',
+        + 'dependencies (S1). Done: the named certifier clears the inherited frontier.',
+      ...((opts && opts.strayHalt) ? ['', schemaCli.CONSENT_HALT_MARKER] : []), '',
       '## Node Ledger', '', '| id | status |', '| --- | --- |',
       ...CLI_NODES.map(n => '| ' + n.id + ' | ' + (st[n.id] || 'pending') + ' |'),
       ...((opts && opts.halt) ? [schemaCli.CONSENT_HALT_MARKER] : []), '',
+      ...((opts && opts.strayHalt) ? ['## Plan Notes', '', schemaCli.CONSENT_HALT_MARKER, ''] : []),
     ].join('\n') + '\n';
   }
   const cliPlan = opts => ((opts && opts.frozen)
@@ -3358,13 +3373,30 @@ const FWW_WARNING = {
     finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
   }
 
-  const DRAFT_DECOY = cliPlan({ halt: true });
+  // The `## Node Ledger` slice, by the SAME section boundaries `readDurableConsentHalt` and the
+  // strip use — so "inside the ledger" and "outside it" mean one thing in this block.
+  const ledgerSlice = (text) => {
+    const { start, next } = schemaCli.locateSection(String(text), 'Node Ledger');
+    return start < 0 ? null : (next < 0 ? String(text).slice(start) : String(text).slice(start, next));
+  };
+  const outsideLedger = (text) => {
+    const { start, next } = schemaCli.locateSection(String(text), 'Node Ledger');
+    return start < 0 ? null
+      : String(text).slice(0, start) + (next < 0 ? '' : String(text).slice(next));
+  };
+
+  const DRAFT_DECOY = cliPlan({ halt: true, strayHalt: true });
   assert(schemaCli.readDurableConsentHalt(DRAFT_DECOY) === true,
     'T-DECOY-HALT-CLI FIXTURE: the marker is ledger-scoped — the same read every mutating '
     + 'subcommand fences on');
   assert(!/<!--\s*plan_hash:/.test(DRAFT_DECOY) && !/in_progress|complete/.test(DRAFT_DECOY),
     'T-DECOY-HALT-CLI FIXTURE: the draft is UNFROZEN and has never run — there is no halt to '
     + 'consent to');
+  assert(outsideLedger(DRAFT_DECOY).split('\n')
+    .filter(l => l === schemaCli.CONSENT_HALT_MARKER).length === 2,
+    'T-DECOY-HALT-CLI FIXTURE: exactly TWO marker-shaped lines sit OUTSIDE the ledger (one before '
+    + 'it in ## Design, one after it in ## Plan Notes) — and neither is a halt: the fixture assert '
+    + 'above already read the plan as halted through the section-scoped reader');
   // The ack is computed locally, never read back from --freeze-checked: the ack arm must stay
   // exercisable even if the fix also fences the read-only check.
   const DRAFT_ACK = realComputePlanHash(DRAFT_DECOY);
@@ -3378,7 +3410,10 @@ const FWW_WARNING = {
     ['--freeze --repair', p => [p, '--freeze', '--repair', '--json']],
   ];
 
-  const cliAdvisories = {};
+  // Keyed by arm, carrying the advisory's DETAIL — the free value. The token cannot go in here:
+  // `find` below selects on that exact literal, so a map of tokens is a map of one constant and
+  // comparing it downstream is a comparison that cannot fail.
+  const cliAdvisoryDetails = {};
   for (const [label, argv] of FREEZE_ARMS) {
     inTempProject(DRAFT_DECOY, (planPath, proj) => {
       const beforeBytes = fs.readFileSync(planPath, 'utf8');
@@ -3386,7 +3421,7 @@ const FWW_WARNING = {
       const v = shellHandoff(VALIDATOR_CLI, argv(planPath));
       const afterBytes = fs.readFileSync(planPath, 'utf8');
       const advisory = (v.warnings || []).find(w => w && w.warning === 'decoy_consent_halt_stripped');
-      cliAdvisories[label] = advisory ? advisory.warning : undefined;
+      cliAdvisoryDetails[label] = advisory ? advisory.detail : undefined;
 
       // (1) The freeze SUCCEEDS, and says what it repaired.
       assert(v.result === 'in-grammar' && v.frozen === true && v.exitCode === 0,
@@ -3413,10 +3448,29 @@ const FWW_WARNING = {
         + 'the whole point is that the first open-next does not wedge on halt_pending');
       assert(/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(afterBytes),
         'T-DECOY-HALT-CLI (2) ' + label + ': ...and it IS frozen — plan_hash is stamped');
-      assert(beforeBytes.split('\n').filter(l => l !== schemaCli.CONSENT_HALT_MARKER)
-        .every(l => afterBytes.includes(l)),
-        'T-DECOY-HALT-CLI (2) ' + label + ': the strip removes the marker LINE and disturbs nothing '
-        + 'else — a strip that also ate a ledger row would pass a marker-only check');
+      // Survival-only ("every before-line still appears after") is half a check and a weak half:
+      // `includes` is a substring test over the whole document, so it is satisfied by any line that
+      // occurs inside a longer one, and by `''` unconditionally. Measured against this fixture, a
+      // strip that ate the ledger separator, ate every blank line, or appended junk all passed it.
+      // State the edit exactly instead, in two halves: what changed inside the ledger, and what did
+      // not change outside it.
+      const afterLines = afterBytes.split('\n');
+      const stampAt = afterLines.findIndex(l => /^<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->$/.test(l));
+      assert(stampAt >= 0 && afterLines[stampAt + 1] === '',
+        'T-DECOY-HALT-CLI (2) ' + label + ': the freeze adds the stamp as a comment line plus its '
+        + 'blank, and that is the only thing it adds — the two halves below subtract exactly those '
+        + 'two lines before comparing, so a third added line has nowhere to hide');
+      const afterUnstamped = afterLines.slice(0, stampAt).concat(afterLines.slice(stampAt + 2)).join('\n');
+      assert(ledgerSlice(afterUnstamped) === ledgerSlice(beforeBytes).split('\n')
+        .filter(l => l !== schemaCli.CONSENT_HALT_MARKER).join('\n'),
+        'T-DECOY-HALT-CLI (2) ' + label + ': inside `## Node Ledger` the edit is EXACTLY the marker '
+        + 'line removed — byte-for-byte otherwise. A strip that also ate the `| --- | --- |` '
+        + 'separator, a blank line, or a node row lands here');
+      assert(outsideLedger(afterUnstamped) === outsideLedger(beforeBytes),
+        'T-DECOY-HALT-CLI (2) ' + label + ': and OUTSIDE the ledger nothing moved at all — which is '
+        + 'the section-scoping the strip claims in its own comment. Both marker-shaped stray lines '
+        + '(## Design before the ledger, ## Plan Notes after it) are still exactly where their '
+        + 'author put them; a whole-document scan, or a strip running to EOF, eats one');
       assert(fs.readdirSync(proj).sort().join(',') === beforeLs,
         'T-DECOY-HALT-CLI (2) ' + label + ': the freeze creates no files in the project dir, '
         + 'got ' + fs.readdirSync(proj).sort().join(','));
@@ -3545,20 +3599,131 @@ const FWW_WARNING = {
       + 'one wording, and the shared kernel function is what makes that true rather than two copies '
       + 'agreeing by luck. handoff=' + JSON.stringify(handoffAdvisory)
       + ' plan-validator=' + JSON.stringify(cliAdvisory));
-    const ledgerSlice = (text) => {
-      const { start, next } = schemaCli.locateSection(String(text), 'Node Ledger');
-      return start < 0 ? null : (next < 0 ? String(text).slice(start) : String(text).slice(start, next));
-    };
     assert(ledgerSlice(written4[PLAN4]) !== null
       && ledgerSlice(written4[PLAN4]) === ledgerSlice(viaCli.after),
       'T-DECOY-HALT-CLI (4): ...and both doors leave the SAME `## Node Ledger` bytes — the strip is '
       + 'the same edit whichever entry performed it (the stamped plan_hash lives outside the ledger, '
       + 'so the sections are directly comparable)');
-    for (const [label, token] of Object.entries(cliAdvisories)) {
-      assert(token === handoffAdvisory.warning,
-        'T-DECOY-HALT-CLI (4): every --freeze arm agrees with the handoff advisory — ' + label
-        + ' gave ' + JSON.stringify(token) + ', handoff gave '
-        + JSON.stringify(handoffAdvisory.warning));
+    for (const [label, detail] of Object.entries(cliAdvisoryDetails)) {
+      assert(detail === handoffAdvisory.detail,
+        'T-DECOY-HALT-CLI (4): every --freeze arm agrees with the handoff advisory WORDING, not '
+        + 'merely its token — one rule, one wording, across three writing arms and two doors. '
+        + label + ' gave ' + JSON.stringify(detail) + ', handoff gave '
+        + JSON.stringify(handoffAdvisory.detail));
+    }
+  }
+
+  // (5) THE WINDOW. The handoff DECIDES the strip at Step 0.85 — where the draft is read before any
+  // spawn, so the bytes are the operator's own — and APPLIES it at Step 1.7. That split is what lets
+  // a hash-neutral repair sit after the governance verdict, and it is legal only because every
+  // refuse-gate in between still mutates nothing when it fires. Pins (1)-(4) run the success path
+  // exclusively: `written4` is asserted only where the handoff succeeded, so the whole window is
+  // unobserved, and moving the write back up to the decision point breaks nothing they can see.
+  //
+  // Three gates live in that window and are exercised below on the same armed draft. A fourth —
+  // Step 0.85's own `plan_hash_mismatch` — cannot co-occur and is deliberately absent: it needs a
+  // stored plan_hash, and a stored plan_hash is exactly what makes stripDecoyConsentHalt return
+  // null. Real fs throughout, because the acceptance fence is inert without a cacheExists seam.
+  {
+    const tmpW = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-decoy-window-'));
+    const projW = path.join(tmpW, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(projW, { recursive: true });
+    const planW = path.join(projW, 'workflow-plan.md');
+    const stateW = path.join(projW, 'workflow-state.md');
+    // issue_number absent → the roadmap stage is skipped, so the positive control stays hermetic.
+    fs.writeFileSync(stateW, makeStateContent({ issueNumber: null }));
+
+    // The decoy draft, plus the two surfaces the later gates key on: an `## Acceptance` section for
+    // the repair fence and a hardcoded decision id for the preflight.
+    const windowDraft = acceptance => DRAFT_DECOY
+      .replace('## Node Ledger', '## Acceptance\n\n' + acceptance + '\n\n## Node Ledger')
+      + '\n- the docs follow-up node writes decision record D-831-01.\n';
+    const ACCEPT_A = 'A1: the strip is decided at Step 0.85 and applied at Step 1.7.';
+    const ACCEPT_B = 'A1: actually, freezing is enough.';
+
+    const windowSeams = extra => Object.assign({
+      planPath: planW, statePath: stateW, project: 'test-project', json: true,
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: fpath => fs.readFileSync(fpath, 'utf8'),
+      cacheExists: fpath => fs.existsSync(fpath),
+      writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+      mkdirp: dir => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+      stateMtime: undefined,
+    }, extra || {});
+
+    const refusingShell5 = makeShellStub({
+      'kaola-workflow-plan-validator.js:--freeze-checked': {
+        exitCode: 1, result: 'refuse', errors: ['G1: gate missing'],
+      },
+    });
+    const grammarOkShell5 = makeShellStub({
+      'kaola-workflow-plan-validator.js:--freeze-checked': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64,
+        frozen: false, governance: { decision: 'auto-run', risk: {} }, risk: {},
+      },
+      'kaola-workflow-plan-validator.js:--freeze': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64,
+        frozen: true, resumeOk: true, risk: {},
+      },
+      'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64,
+        dest: '/wt/kaola-workflow/test-project' },
+    });
+
+    function windowGate(label, bytes, seams, firedTheRightGate) {
+      fs.writeFileSync(planW, bytes);
+      assert(schemaCli.stripDecoyConsentHalt(bytes) !== null,
+        'T-DECOY-HALT-CLI (5) ' + label + ' FIXTURE: the strip is ARMED on these exact bytes. '
+        + 'Without this, "the marker survived the refusal" is satisfied by a draft that was never '
+        + 'eligible for stripping, and the pin below proves nothing');
+      const r = runHandoff(seams);
+      assert(r.result === 'refuse' && firedTheRightGate(r),
+        'T-DECOY-HALT-CLI (5) ' + label + ': the gate under test is the one that actually fired '
+        + '(a different refusal would move the window boundary being tested), got '
+        + JSON.stringify({ handoff_status: r.handoff_status, reason: r.reason, errors: r.errors }));
+      assert(fs.readFileSync(planW, 'utf8') === bytes,
+        'T-DECOY-HALT-CLI (5) ' + label + ': workflow-plan.md is BYTE-IDENTICAL after the refusal. '
+        + 'The strip is decided before this gate and applied after it, so a refusal in the window '
+        + 'must leave the operator the draft they submitted — not a half-repaired one whose next '
+        + 'submission then reads as a post-freeze edit');
+      assert(schemaCli.readDurableConsentHalt(fs.readFileSync(planW, 'utf8')) === true,
+        'T-DECOY-HALT-CLI (5) ' + label + ': ...marker included, read back through the same '
+        + 'section-scoped reader the run fences on');
+      return r;
+    }
+
+    try {
+      // Step 1 — the validator refuses. This submission is also the one that anchors ACCEPT_A.
+      windowGate('Step 1 validator refuse', windowDraft(ACCEPT_A),
+        windowSeams({ shell: refusingShell5 }),
+        r => r.handoff_status === 'plan_invalid' && r.reason !== 'acceptance_repair_fenced');
+
+      // Step 0.9 — the `## Acceptance` repair fence, over the anchor the run above recorded.
+      windowGate('Step 0.9 acceptance_repair_fenced', windowDraft(ACCEPT_B),
+        windowSeams({ shell: refusingShell5 }),
+        r => r.reason === 'acceptance_repair_fenced');
+
+      // Step 1.5 — the decision-id preflight. Grammar is fine here; the refusal is the handoff's.
+      windowGate('Step 1.5 decision_id_conflict', windowDraft(ACCEPT_A),
+        windowSeams({
+          shell: grammarOkShell5,
+          findDecisionIdHits: () => ({ 'D-831-01': ['docs/decisions/D-831-01-prior.md'] }),
+        }),
+        r => /decision_id_conflict/.test((r.errors || []).join(' ')));
+
+      // POSITIVE CONTROL — the same draft, the same seams, no gate firing: the strip DOES land on
+      // disk. Delete the Step 1.7 write entirely and the three pins above all still pass; this is
+      // the one that fails, so the pair says "applied late" rather than merely "not applied".
+      fs.writeFileSync(planW, windowDraft(ACCEPT_A));
+      const green5 = runHandoff(windowSeams({ shell: grammarOkShell5 }));
+      assert(schemaCli.readDurableConsentHalt(fs.readFileSync(planW, 'utf8')) === false,
+        'T-DECOY-HALT-CLI (5) POSITIVE CONTROL: with no refuse-gate in the way the SAME draft is '
+        + 'stripped on disk, got ' + JSON.stringify({ handoff_status: green5.handoff_status,
+          reason: green5.reason, errors: green5.errors }));
+      assert((green5.warnings || []).some(w => w && w.warning === 'decoy_consent_halt_stripped'),
+        'T-DECOY-HALT-CLI (5) POSITIVE CONTROL: ...and the advisory rides out with it');
+    } finally {
+      fs.rmSync(tmpW, { recursive: true, force: true });
     }
   }
 }
