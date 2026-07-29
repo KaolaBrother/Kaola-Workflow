@@ -4071,6 +4071,39 @@ try {
       + installerMod.MULTI_AGENT_V2_BOUNDS_NOTE);
     assert(/max_concurrent_threads_per_session/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
       '#842: the note must name the key that DOES set the budget');
+    // #842 OVERCLAIM FENCE — the boundary of what was actually measured. Two facts are established:
+    // the key is ACCEPTED at config load (codex doctor / codex features list, isolated CODEX_HOME,
+    // against an unrecognised-[agents]-scalar control that IS refused), and it does not raise the V2
+    // cap (this parser's own math, pinned above). What Codex does with the value INTERNALLY —
+    // ignores it, discards it, drops it — was NOT measured and cannot be from outside: no read-only
+    // surface dumps the resolved config, and settling it would need a real multi-agent spawn.
+    // Replacing a fabricated claim with a differently-fabricated one is the same defect wearing a
+    // correction's clothes, so the stronger sentence is pinned OUT rather than left to a reader.
+    // Both constants, because the note is duplicated in the installer and the preflight and the
+    // equality assert above only proves they AGREE — two copies of an overclaim agree perfectly.
+    for (const [label, note] of [['installer', installerMod.MULTI_AGENT_V2_BOUNDS_NOTE],
+      ['preflight', preflightMod.MULTI_AGENT_V2_BOUNDS_NOTE]]) {
+      assert(!/codex[^.]{0,40}\b(ignor\w*|discard\w*|drop\w*)\b/i.test(note),
+        '#842 (' + label + '): the note must not claim Codex IGNORES / DISCARDS / DROPS '
+        + 'agents.max_threads. Measured: the key is accepted at config load and does not raise the '
+        + 'V2 cap; what the runtime does with the value internally is unmeasured, so budget-frame it '
+        + '("does not raise the cap") and stop there: ' + note);
+    }
+
+    // #842 — CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION carries the SAME claim and, until now, was
+    // pinned by nothing at all. It is a live operator-facing string: it is the `repair` field of the
+    // codex_multi_agent_v2_required refusal, which fires whenever features.multi_agent_v2.enabled is
+    // absent or false — the single most likely refusal a new Codex user meets.
+    const v2Required = preflightMod.CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION;
+    assert(typeof v2Required === 'string' && /agents\.max_threads/.test(v2Required),
+      '#842: the multi_agent_v2-required remediation names agents.max_threads (the advice stays)');
+    assert(!/\breject(s|ed|ion)?\b/i.test(v2Required),
+      '#842: ...and must not claim Codex rejects it — measured accepted on 0.145.0: ' + v2Required);
+    assert(!/codex[^.]{0,40}\b(ignor\w*|discard\w*|drop\w*)\b/i.test(v2Required),
+      '#842: ...and must not overclaim the discard either: ' + v2Required);
+    assert(/not an alias/i.test(v2Required),
+      '#842: ...and states the accurate relationship, the same one the bounds note states — one '
+      + 'claim, one wording, across both strings: ' + v2Required);
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by
