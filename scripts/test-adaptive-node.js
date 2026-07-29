@@ -20959,6 +20959,11 @@ scenario(() => {
   const closeStub = (scriptPath, args) => {
     const base = path.basename(scriptPath);
     const argsArr = args || [];
+    // close-node carries the Layer-1 integrity gate, which falls back to the validator's --resume-check
+    // whenever the in-process plan_hash recompute does not match a frozen marker (this fixture's plan
+    // has none). The fused path never asks for it. Answering ok keeps the integrity layer out of the
+    // way of what these cases are actually about — the advisory.
+    if (argsArr.includes('--resume-check')) return { exitCode: 0, ok: true, result: 'ok' };
     if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
       return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true,
         selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
@@ -21048,6 +21053,58 @@ scenario(() => {
     assert(r.result === 'refuse' && r.missingTokenClass === 'delegation_outcome',
       'T611-AC5-CLOSE: a capability_gap refuses at CLOSE — the node whose deliverable was withheld '
       + 'must not reach complete, got ' + JSON.stringify({ result: r.result, mtc: r.missingTokenClass }));
+  }
+
+  // (5) THE SECOND CLOSE PATH. `close-node` carries its own copy of the collector and the fold, and
+  // cases (1)-(4) above red only on the FUSED copy: measured, un-wiring close-node's two lines alone
+  // leaves the suite green. Covering one of two sibling call sites is the same defect F-1 named, one
+  // door over — so both sites are driven, not just the one that was easier to reach.
+  const closeNodeWith = (evidence) => {
+    let planContent = makePlan([
+      '| impl-core | in_progress | |', '| impl-other | pending | |',
+      '| review | pending | |', '| finalize | pending | |',
+    ]);
+    return runCloseNode({
+      planPath: PLAN_PATH,
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      nodeId: 'impl-core',
+      shell: closeStub,
+      readFile: (f) => {
+        if (f.endsWith('workflow-plan.md')) return planContent;
+        if (f.endsWith('workflow-state.md')) return makeState();
+        if (f === CACHE) return evidence;
+        throw new Error('ENOENT: ' + f);
+      },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: (f) => f === CACHE,
+      // Again NO `advisories` key — close-node must supply its own collector.
+    });
+  };
+  {
+    const r = closeNodeWith('delegation_outcome: exploded\nRED: test failed as expected\n'
+      + 'GREEN: test passed after implementation\n5 assertions');
+    assert(r.result === 'ok' && r.closed === 'impl-core',
+      'T611-AC5-CLOSE: close-node also closes on an unknown token, got '
+      + JSON.stringify({ result: r.result, reason: r.reason, closed: r.closed }));
+    const adv = (r.advisories || []).find(a => a && a.warning === 'delegation_outcome_normalized');
+    assert(adv !== undefined && adv.raw === 'exploded' && adv.normalized === 'completed',
+      'T611-AC5-CLOSE: close-node EMITS the normalize advisory on its own success envelope — its '
+      + 'collector and fold are a separate copy from the fused path and need their own witness, got '
+      + JSON.stringify(r.advisories));
+  }
+  {
+    const r = closeNodeWith('delegation_outcome: returned_partial\nRED: test failed as expected\n'
+      + 'GREEN: test passed after implementation\n5 assertions');
+    assert(r.result === 'ok' && r.advisories === undefined,
+      'T611-AC5-CLOSE: close-node emits NO advisories key for a known token, got ' + JSON.stringify(r.advisories));
+  }
+  {
+    const r = closeNodeWith('delegation_outcome: capability_gap\nRED: test failed as expected\n'
+      + 'GREEN: test passed after implementation\n5 assertions');
+    assert(r.result === 'refuse' && r.missingTokenClass === 'delegation_outcome',
+      'T611-AC5-CLOSE: close-node refuses a capability_gap too, got '
+      + JSON.stringify({ result: r.result, mtc: r.missingTokenClass }));
   }
 });
 
