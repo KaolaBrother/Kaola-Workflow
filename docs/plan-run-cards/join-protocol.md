@@ -38,15 +38,14 @@ declare an override. A `metric-optimizer` may use this general floor or its spec
 `optimize(<id>).budget_wallclock_minutes`, but declaring both is an ambiguous contract and is
 refused.
 
-**Rule: a `running` agent is never interrupted before its wait budget expires.** This replaces an
-improvised patience ceiling (single-digit minutes) that sat below the natural runtime of a
-substantive role node — the budget is derived from the plan, not guessed, and every dispatch card
-carries one.
+The budget is the planner's ESTIMATE of how long the work takes, derived from the plan rather than
+guessed, and every dispatch card carries one. It replaced an improvised patience ceiling (single-digit
+minutes) that sat below the natural runtime of a substantive role node. A `running` agent interrupted
+well inside its budget is usually just being interrupted.
 
-The value is only a no-interrupt/no-re-nudge floor for the join loop. It is not a subprocess
-timeout, a success verdict, or permission to accept partial or missing evidence. Once it expires,
-the existing bounded escalation ladder in §3 still applies, and completion still requires the
-role's governed deliverable and evidence contract.
+It is an estimate, not a verdict: it is not a subprocess timeout, not a success signal, and never
+permission to accept partial or missing evidence. Completion still requires the role's governed
+deliverable and evidence contract however long it took.
 
 ---
 
@@ -65,10 +64,10 @@ After dispatching a frontier (one member, or several under `enterBatch: true`):
    error.
 3. Re-enter step 1 with whatever agents remain outstanding.
 
-**Prohibited:** a `send_message` "are you still there / status check" probe to a still-`running`
-agent, used as a liveness signal. A busy agent answers at its own turn boundary, at message
-boundaries, or after its current tool call completes — never on demand — so a probe proves
-nothing and reliably precedes a bad kill decision.
+A `send_message` "are you still there / status check" probe to a still-`running` agent buys nothing
+as a liveness signal. A busy agent answers at its own turn boundary, at message boundaries, or after
+its current tool call completes — never on demand — so silence and work look identical from outside,
+and a probe that proves nothing reliably precedes a bad kill decision.
 
 **Capacity is a reactive concern, not a proactive one.** Do not close a finished agent early "to
 free a slot" — closure is hygiene, not the capacity remedy (see §5). Only react to an actual spawn
@@ -76,16 +75,16 @@ refusal.
 
 ---
 
-## 3. Escalation ladder — replaces impatience-kill
+## 3. Escalation — the order, not a gate
 
-Gated strictly on the wait budget (§1) having already expired; each rung requires the previous one
-to have run first:
+After the budget expires, escalation keeps its ORDER; the rungs are no longer gated on each other and
+no fixed grace window is prescribed. Ask first, interrupt second, reclaim last:
 
-| Step | Trigger | Action |
-|---|---|---|
-| 1 | Wait budget expired | `followup_task` demanding the bounded deliverable now: "return your evidence and changed-file list." Reaches a running agent at its next message boundary or after its current tool call. |
-| 2 | ~5-minute grace window passes with no response to step 1 | `interrupt_agent` (recoverable, not a kill — the agent remains available for messages/follow-ups), then a further `followup_task` asking the still-available agent for partial evidence and its changed-file list. |
-| 3 | Step 2 produces nothing usable | Reclaim the node. Inline redo by the orchestrator is the documented LAST resort, never the first move. |
+| Move | Action |
+|---|---|
+| Ask | `followup_task` for the bounded deliverable now: "return your evidence and changed-file list." Reaches a running agent at its next message boundary or after its current tool call. |
+| Interrupt | `interrupt_agent` (recoverable, not a kill — the agent remains available for messages/follow-ups), then a further `followup_task` asking the still-available agent for partial evidence and its changed-file list. |
+| Reclaim | Reclaim the node. Reclaiming, and inline redo, are the expensive options — reach for them last. |
 
 Record a typed outcome in the node's evidence for every delegation — column-0 `delegation_outcome:
 <token>`, closed vocabulary, absent defaults to `completed`:
@@ -97,8 +96,16 @@ Record a typed outcome in the node's evidence for every delegation — column-0 
 | `interrupted_unresponsive` | The ladder ran to step 3 with no response at any rung. |
 | `interrupted_obsolete` | The delegate was interrupted because its task became moot (e.g. a superseding plan-repair), not because it stalled. |
 
-Never write a free-text "it stalled so I did it myself" in place of this token — an unrecognized
-value is a typed evidence-shape refusal.
+Never write a free-text "it stalled so I did it myself" in place of this token. An unrecognized value
+does not stop the run: it is READ as `completed` and reported as a `delegation_outcome_normalized`
+advisory on the emitted envelope, carrying the raw string you wrote so a reader still sees it.
+Recording how a delegation ended is bookkeeping, and bookkeeping may report or normalize but may not
+halt work that is already done and already evidenced.
+
+`capability_gap` is the ONE exception, and it is excluded rather than normalized: it is not an outcome
+of a delegation that ran, it is the role reporting it could not cover the brief at all. Reading it as
+`completed` would write `complete` into the ledger for a node whose deliverable was withheld, so it
+refuses at close and routes to `substitute-role` (see the role-capability coverage card).
 
 ---
 

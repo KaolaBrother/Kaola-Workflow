@@ -915,7 +915,7 @@ for (const planRunSurface of [
 
 // The fork_turns unconditional mandate and its two retired-qualifier bans on the Codex plan-run
 // SKILL, the Join Protocol anchor and its wait-budget / delegation-outcome / writerHalt needles on
-// BOTH the Codex SKILL and the root Claude command, and the whole wait-budget-floor band, are all
+// BOTH the Codex SKILL and the root Claude command, are all
 // asserted on THESE SAME PATHS by the root validator's three-SKILL and three-command plan-run
 // loops, in the always-selected claude chain.
 for (const file of ['agents/workflow-planner.md', `${pluginRoot}/agents/workflow-planner.toml`]) {

@@ -857,11 +857,10 @@ for (const planRunSurface of [
   // three-SKILL join-protocol loops, in the always-selected claude chain.
 }
 
-// The Join Protocol anchor and its wait-budget floor rule on this edition's plan-run SKILL, and the
-// "Writer kill-safety" heading on this edition's plan-run COMMAND, are asserted on THESE SAME
-// EDITION PATHS by the root validator's three-SKILL and three-command join-protocol loops.
-for (const planRunSurface of [pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/commands/kaola-workflow-plan-run.md']) {
-}
+// The Join Protocol anchor, the `writerHalt` / `delegation_outcome` needles on this edition's plan-run
+// SKILL and the "Writer kill-safety" heading on its COMMAND are asserted on THESE SAME EDITION PATHS
+// by the root validator's three-SKILL and three-command join-protocol loops. (There is no wait-budget
+// FLOOR rule to pin: the budget is data on the dispatch card, not a no-interrupt wall.)
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'planner_override');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'difficulty alone is not evidence');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a budget to hide a wedged agent');

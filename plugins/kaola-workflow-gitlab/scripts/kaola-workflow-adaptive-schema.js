@@ -3623,9 +3623,18 @@ function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions
 // line and must not red). Same PURE regex discipline as parseNodeVerdict/parseNodeFindings (native multiline,
 // no classifier — cross-edition byte-identity; FENCE-BLIND BY ANCHOR at column 0; last-match-wins; value
 // lowercased). Returns { found, outcome, valid } — `outcome` is the parsed token or the `completed` default;
-// `valid` is true when absent OR the present token is in the vocabulary (a caller enforces on false).
+// `valid` is true when absent OR the present token is in the vocabulary. A caller does NOT refuse on
+// false: `checkEvidenceShape` normalizes an unknown token to the default and reports it as an
+// advisory carrying the raw string. The single exception is CAPABILITY_GAP_OUTCOME below.
 const DELEGATION_OUTCOME_DEFAULT = 'completed';
 const DELEGATION_OUTCOME_VOCABULARY = Object.freeze(['completed', 'returned_partial', 'interrupted_unresponsive', 'interrupted_obsolete']);
+// Deliberately OUTSIDE the vocabulary above, and deliberately named here rather than spelled inline
+// at its consumer. `delegation_outcome: capability_gap` is not an outcome of a delegation that ran —
+// it is the role reporting it could not cover the brief at all, one of the two CAPABILITY_GAP_MARKERS
+// that route a node to `substitute-role`. An unknown outcome token normalizes to the default because
+// reading it as `completed` loses only bookkeeping; reading THIS as `completed` asserts the work was
+// done when the deliverable was withheld, so the close-time check excludes it instead.
+const CAPABILITY_GAP_OUTCOME = 'capability_gap';
 function parseDelegationOutcome(cacheText) {
   const text = String(cacheText || '');
   const re = /^delegation_outcome:[ \t]*([A-Za-z_]+)[ \t]*$/gm;
@@ -6601,6 +6610,7 @@ module.exports = {
   effectiveProducerBinding,
   DELEGATION_OUTCOME_DEFAULT,
   DELEGATION_OUTCOME_VOCABULARY,
+  CAPABILITY_GAP_OUTCOME,
   parseDelegationOutcome,
   WRITE_SET_OVERFLOW_SUBTYPES,
   CURATED_ROOT_PATHS,
