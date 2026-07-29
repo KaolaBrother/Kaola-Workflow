@@ -263,7 +263,8 @@ own writer-context is no gate: do NOT dispatch the gate node inline and silently
 (`write-halt --reason consent --consent-class <action>:<target>`) and await operator resolution
 before the gate node is considered satisfied. A class already granted in this claim proceeds on the
 standing grant — journaled, not re-asked. A different target is a different class and asks again, and
-every grant dies at the next re-plan epoch or restart. Omitting `--consent-class` always asks.
+every grant dies at the next re-plan epoch or restart. Omitting `--consent-class` always asks. Two
+different classes pending at once grant neither — raise and answer them one at a time.
 
 Everywhere else execution mode is your judgment, per unit — dispatch production, keep decisions.
 Delegating discretionary production is the default; mechanical execution, a fully-specified small
