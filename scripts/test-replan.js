@@ -8284,3 +8284,216 @@ scenario(() => {
 
 shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
 console.log(`test-replan: PASSED (${passed} assertions)`);
+//
+// #847 asked whether a fenced envelope NAMES an exit. This asks the next question, and it is the
+// one that decides whether the answer was worth anything: RUN what is named, in the state the
+// condition describes, and see what comes back. A refusal that hands the operator a verb which
+// answers with the identical code has not routed anywhere — it has restated itself with extra
+// steps.
+//
+// Three classes are executed below, each against a real transaction on disk and a real CLI. None
+// of them is reasoned about; the verb the registry records is dispatched verbatim and its answer is
+// read off stdout.
+//
+//   A  SELF-LOOP     `replan resume` opens by calling `validateReplanTransaction` and refusing
+//                    `checked.reason`. Every code that validator returns therefore comes straight
+//                    back out of the verb that ten of them name as their exit.
+//   B  CIRCULAR      three of the same validator's codes route to `adaptive-node orient`, which is
+//                    projected through the fence and prints `fence.reason` — the same code again,
+//                    with `legal_mutation: "none"` beside it. The door routes back to the door.
+//   C  FENCE-DEAD    nine conditions that fire from inside the re-plan engine route to
+//                    `adaptive-node write-halt`, which is replan-guarded. The fence is standing
+//                    BECAUSE the condition fired, so arriving there is refused `replan_in_progress`.
+//
+// THE FIXTURES ARE DERIVED, NOT GUESSED. Each scenario reads the validator's own returned code out
+// of the corrupted transaction before it follows anything, so a fixture can never pin a route for a
+// condition the run did not actually produce.
+// ===========================================================================
+
+// Dispatch a recorded route VERBATIM. Only the script path is rebased onto this checkout (the
+// fixture repo is not an install); the verb and every argument are exactly what the registry
+// recorded, with the placeholders it ships filled in — those are the half of the route an operator
+// would have to complete by hand, and completing them wrongly is not the route's fault.
+const ROUTE_SCRIPT_850 = {
+  replan: 'kaola-workflow-replan.js',
+  'adaptive-node': 'kaola-workflow-adaptive-node.js',
+};
+function runRoute850(fx, route) {
+  const script = ROUTE_SCRIPT_850[route.script];
+  if (!script) return { out: { result: 'undispatchable', route }, status: null };
+  const args = String(route.args || '')
+    .replace(/<P>/g, fx.project)
+    .replace(/<detail>/g, 'route-850')
+    .split(/\s+/).filter(Boolean);
+  // spawn-class: cli-contract
+  const child = spawnSync(process.execPath, [path.join(__dirname, script), route.verb, ...args],
+    { cwd: fx.root, encoding: 'utf8', env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  let out = {};
+  try { out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop()); }
+  catch (_) { out = { result: 'unparseable', stdout: String(child.stdout).slice(0, 400) }; }
+  return { out, status: child.status };
+}
+
+// Follow whatever exit a condition records, in the state that condition describes, and assert the
+// operator is not handed the identical refusal back.
+//
+// THE ROUTE ITSELF IS NEVER PINNED, and that is deliberate. This issue's fix is a SUBTRACTION —
+// one route source deleted — so the shapes that satisfy it are "names a different verb" and "names
+// no verb at all", and a scenario that asserted the current verb by name would go red on the fix it
+// exists to demand. Both shapes are accepted here; only "run the named verb, get the same code" is
+// refused. A terminal route is out of scope by construction: whether a refusal may ship with no
+// exit at all is a separate policy question, and this scenario does not answer it.
+// Returns the executed result, or null when there was no verb to execute.
+function followRoute850(fx, condition, route, tag, why) {
+  // A terminal exit (`consent` / `environment`) carries no script and is honourable by
+  // construction — it hands the situation to a human or to the environment rather than naming a
+  // command that could refuse. It is out of this scenario's reach, not a pass it has to launder.
+  if (!route || !route.verb || !route.script) {
+    ok(true, tag + ': `' + condition + '` records no dispatchable verb as its exit, so there is no '
+      + 'dead route to follow. A terminal is honourable by construction, and whether a refusal may '
+      + 'ship with no exit at all is a separate question: ' + JSON.stringify(route));
+    return null;
+  }
+  const ran = runRoute850(fx, route);
+  // A route this harness cannot dispatch is a GAP, not a pass. `runRoute850` maps the two scripts
+  // these conditions can route to today; a fix that moves them onto a third must extend the map in
+  // the same change rather than let the scenario go quietly green on a verb it never ran.
+  ok(ran.out.result !== 'undispatchable',
+    tag + ': the recorded exit names `' + route.script + '`, which this scenario cannot dispatch. '
+    + 'Extend ROUTE_SCRIPT_850 — an unfollowed route is an unmeasured one: ' + JSON.stringify(route));
+  notEqualReason(ran.out, condition,
+    tag + ': following `' + route.script + ' ' + route.verb + '` returns the IDENTICAL code that '
+    + 'sent the operator there. ' + why);
+  return ran;
+}
+
+// Stand a real transaction up, corrupt it, and hand back what the validator says about it.
+function corruptedTransaction850(fx, mutate) {
+  liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+    sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+  const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+  const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+  mutate(tx);
+  fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
+  return schema.validateReplanTransaction(tx);
+}
+
+// ---------------------------------------------------------------------------
+// #850-A — THE SELF-LOOP, RUN. A transaction whose budget block no longer validates. The
+// condition's recorded exit is `replan resume`; `replan resume` re-reads the same transaction
+// through the same validator and answers with the same code. The operator is not stuck because
+// nothing was named — they are stuck because what was named is the thing that refused them.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const checked = corruptedTransaction850(fx, tx => { tx.budget.ceiling = 0; });
+    equal(checked.ok, false, '#850-A control: the corrupted transaction fails validation');
+    equal(checked.reason, 'replan_transaction_budget_invalid',
+      '#850-A control: ...with the code this scenario follows: ' + JSON.stringify(checked.reason));
+
+    // WHICH verb it names is NOT pinned. This scenario is about what happens when the recorded
+    // exit is followed, and a fix that removes the route entirely satisfies that outright — pinning
+    // `replan resume` here would be a pin against the subtraction the acceptance asks for.
+    const route = schema.refuse(checked.reason, {}).refusal_route;
+    followRoute850(fx, checked.reason, route, '#850-A',
+      '`resume` opens by re-running the same validator and refusing its verdict verbatim, so this '
+      + 'is not a corner — it is what this exit does every time');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #850-B — THE CIRCLE, RUN. The three codes the same validator returns that classify to
+// `kernel_integrity_broken` route to `adaptive-node orient` instead. `orient` is read-only and is
+// not replan-guarded, so the existing fence check calls it reachable — and reaching it re-runs the
+// same validator through `readReplanFence` and prints the same code back, with no legal mutation
+// beside it. Reachable and ANSWERING are different claims.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const fx = initFixture();
+  try {
+    const checked = corruptedTransaction850(fx, tx => { tx.planner_attempt = 0; });
+    equal(checked.reason, 'replan_transaction_invalid',
+      '#850-B control: the corrupted transaction fails the shape check: ' + JSON.stringify(checked.reason));
+    const route = schema.refuse(checked.reason, {}).refusal_route;
+    const ran = followRoute850(fx, checked.reason, route, '#850-B',
+      'the door routes back to the door — `orient` is projected through the fence, the fence re-runs '
+      + 'the same validator, and the operator is handed the code they arrived with');
+    if (ran) {
+      notEqualReason({ reason: ran.out.legal_mutation }, 'none',
+        '#850-B: ...and is told nothing to do about it. This arm of `readReplanFence` returns the '
+        + 'validator verdict with no `legal_mutation` at all, so the projection has none to print');
+    }
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// #850-C — THE FENCED EXIT, RUN. These conditions are minted inside the re-plan engine, so the
+// fence is standing whenever one of them fires — that is not an assumption, it is what the prefix
+// means. Their recorded exit is `adaptive-node write-halt`, which is in
+// `REPLAN_GUARDED_SUBCOMMANDS`. The band is DERIVED from the registry rather than listed, so a
+// condition that acquires this route tomorrow is covered without anyone extending a fixture.
+//
+// The schema says this in its own words twenty lines above the classification that does it:
+// `chain_break` is deliberately not used for the snapshot band because its route "IS
+// replan-guarded … a route that dead-ends is the defect this contract exists to prevent" — and
+// nine `replan_*` conditions are classified into `chain_break` regardless.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const nodeSrc = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
+  const guardBlock = /const REPLAN_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\)/.exec(nodeSrc);
+  ok(!!guardBlock, '#850-C control: the fence set must be scannable from adaptive-node');
+  const guarded = new Set((guardBlock[1].match(/'([a-z-]+)'/g) || []).map(s => s.slice(1, -1)));
+  ok(guarded.size > 10 && guarded.has('write-halt'),
+    '#850-C control: ...and non-vacuous, containing the verb this band names: ' + guarded.size);
+
+  // The derived band: the conditions THE RE-PLAN ENGINE ITSELF mints, scanned from its own
+  // source, filtered to those whose recorded exit is a fence-guarded verb. Scanning the engine is
+  // what makes "the fence is standing when this fires" a fact about the emitter rather than an
+  // assumption about the token: a code minted anywhere inside this file is minted mid-transaction.
+  const engineSrc = fs.readFileSync(path.join(__dirname, 'kaola-workflow-replan.js'), 'utf8');
+  const engineCodes = new Set();
+  for (const re of [/\brefuse\(\s*'([a-z][a-z0-9_]{3,})'/g,
+    /(?:reason|inner_reason)\s*:\s*'([a-z][a-z0-9_]{3,})'/g]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(engineSrc)) !== null) engineCodes.add(m[1]);
+  }
+  ok(engineCodes.size > 50,
+    '#850-C control: the engine emission scan must be non-vacuous — a blind scan would make this '
+    + 'band empty and the pin vacuous. Got ' + engineCodes.size);
+  const fenced = [...engineCodes].filter(c => {
+    const r = schema.refuse(c, {}).refusal_route;
+    return r && r.script === 'adaptive-node' && guarded.has(r.verb);
+  }).sort();
+
+  const fx = initFixture();
+  try {
+    // A VALID, standing fence — nothing is corrupted here. This is the ordinary state every
+    // condition in the band fires under.
+    liveTransactionId(fx, replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }));
+    ok(fence847(fx).fenced === true,
+      '#850-C control: the fence is standing, which is the state these conditions describe');
+
+    // Execute the arrival ONCE, so the claim below is a measurement rather than a deduction.
+    const arrival = runRoute850(fx, { script: 'adaptive-node', verb: 'write-halt',
+      args: '--project <P> --reason integrity --detail <detail> --json' });
+    equal(arrival.out.reason, 'replan_in_progress',
+      '#850-C control: arriving at `adaptive-node write-halt` under that fence is refused: '
+      + JSON.stringify(arrival.out.reason));
+
+    // THE PIN. Every one of them records an exit that has just been shown to refuse on arrival.
+    // The non-vacuity this pin needs is the SCAN's (asserted above), never the violation count's:
+    // an empty `fenced` is the state this issue is trying to reach, so asserting it non-empty
+    // would be a vote against ever fixing it.
+    deepEqual(fenced, [],
+      '#850-C: ' + fenced.length + ' re-plan condition(s) record `adaptive-node write-halt` as their '
+      + 'exit, and that verb is replan-guarded. The fence stands because the condition fired, so the '
+      + 'recorded route refuses `replan_in_progress` the moment it is followed — measured above, not '
+      + 'inferred: ' + fenced.join(', '));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+shardLib.reportCoverage('test-replan', SHARD, scenarioCount, scenariosRun, passed, 0);
+console.log(`test-replan: PASSED (${passed} assertions)`);
