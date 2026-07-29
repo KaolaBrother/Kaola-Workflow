@@ -1496,6 +1496,293 @@ for (const cond of emitted) {
     'MUTATION: the fence check must ACCEPT a read-only verb the fence does not guard');
   assert(reachableUnderFence({ verb: 'resume', script: 'replan', args: '' }),
     'MUTATION: the fence check must ACCEPT the fence\'s own declared legal mutation');
+
+}
+
+// ===========================================================================
+// (8b-i) THE FENCE CHECK'S DOMAIN IS DERIVED, NOT SAMPLED.
+//
+// The band block above applies the right rule to TWELVE NAMED TOKENS. A sample says nothing about
+// the conditions nobody remembered to add to it, and the band is not twelve tokens — it is every
+// condition whose prefix says it fires from inside the re-plan engine. That set is already computed
+// one screen up (`emitted`, the census the banner prints), so the rule is re-applied here over the
+// DERIVED set: a `replan_*` / `snapshot_*` / `cleanup_*` condition minted tomorrow is checked the
+// day it appears, without anyone coming back to extend a list.
+//
+// This block re-derives the fence set from adaptive-node's own source rather than reading the one
+// above, so it stands on its own: whatever shape the sampled block takes after this issue lands —
+// widened, folded into this one, or deleted — the property stays asserted here.
+//
+// EVERY COUNT BELOW IS A FLOOR, never the current value. A literal count is a vote against ever
+// deleting a condition, and deleting conditions is the direction this census exists to push.
+// ===========================================================================
+{
+  const nodeSrc = read('scripts/kaola-workflow-adaptive-node.js');
+  const guardBlock = /const REPLAN_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\)/.exec(nodeSrc);
+  assert(!!guardBlock, 'BAND-DOMAIN: the fence set must be scannable from adaptive-node');
+  const guarded = new Set(guardBlock ? (guardBlock[1].match(/'([a-z-]+)'/g) || []).map(s => s.slice(1, -1)) : []);
+  assert(guarded.size > 10 && guarded.has('write-halt'),
+    'BAND-DOMAIN: ...and non-vacuous, containing the verb this band names — got ' + guarded.size);
+
+  const BAND_PREFIX = /^(?:replan|snapshot|cleanup)_/;
+  const derivedBand = [...emitted].filter(c => BAND_PREFIX.test(c)).sort();
+  assert(derivedBand.length >= 50,
+    'BAND-DOMAIN: the derived re-plan band must be non-vacuous — a scan that went blind would '
+    + 'make every route below vacuously honourable. Got ' + derivedBand.length);
+
+  // THE PIN. A condition that fires while the fence stands and names a fence-guarded verb sends the
+  // operator to a command that refuses `replan_in_progress` on arrival: recorded, dispatchable, and
+  // impossible to honour HERE — which is the only place it is ever offered.
+  for (const cond of derivedBand) {
+    const route = schema.refuse(cond, {}).refusal_route;
+    // A condition with no route, or a terminal (`consent` / `environment`, which carry no script),
+    // is out of this checker's domain. Whether a refusal may ship with no exit at all is a separate
+    // policy question this block does not answer.
+    if (!route || !route.verb || !route.script) continue;
+    assert(!(route.script === 'adaptive-node' && guarded.has(route.verb)),
+      'BAND-DOMAIN: `' + cond + '` fires from inside the re-plan engine, so the fence stands when it '
+      + 'does — and it names a replan-guarded verb. Following the recorded route refuses '
+      + '`replan_in_progress`: ' + JSON.stringify(route));
+  }
+}
+
+// ===========================================================================
+// (8b-ii) A ROUTE MAY NOT NAME THE VERB THAT EMITS IT.
+//
+// `reachableUnderFence` asks whether a route's VERB is fence-guarded. That is one way for a route
+// to be undispatchable and it is not the only one — a verb can dispatch, run, and answer with the
+// IDENTICAL code that named it. `resumeReplanUnlocked` opens by calling `validateReplanTransaction`
+// and refusing `checked.reason` verbatim; every condition that validator can return therefore comes
+// straight back out of `replan resume`, and ten of them record `replan resume` as their exit. The
+// operator runs the named verb and is handed the same refusal. Always, by construction, not in a
+// corner.
+//
+// TWO THINGS ARE DERIVED HERE AND NEITHER IS A LIST.
+//
+//   * the DOMAIN — every emitted condition that names a verb, taken from the same `emitted` census
+//     the banner prints. Its SIZE is asserted as a floor and never as a literal: a literal count is
+//     a vote against ever changing the corpus, and this census changes every wave.
+//   * the EMITTER RELATION — the codes a verb answers with at its own front door, SCANNED from the
+//     shared validator each verb calls before it does anything else. Add a `refuse('replan_..._invalid')`
+//     inside that validator tomorrow and it is covered here the same day.
+//
+// The checker is a pure function so the mutation battery below can feed it a planted self-loop and
+// watch it red — a checker that cannot fail is not a checker, and the acceptance for this class is
+// stated in exactly those terms.
+// ===========================================================================
+{
+  const schemaSrc = read('scripts/kaola-workflow-adaptive-schema.js');
+  const replanSrc = read('scripts/kaola-workflow-replan.js');
+  const nodeSrc = read('scripts/kaola-workflow-adaptive-node.js');
+
+  // The codes the shared transaction validator returns. Scanned from ITS OWN BODY, so the set
+  // tracks the validator rather than a transcription of it.
+  function scanValidatorCodes(src) {
+    const body = /\nfunction validateReplanTransaction\(value\) \{\n([\s\S]*?)\n\}\n/.exec(src);
+    if (!body) return null;
+    const out = new Set();
+    const re = /\brefuse\(\s*'([a-z][a-z0-9_]{3,})'/g;
+    let m;
+    while ((m = re.exec(body[1])) !== null) out.add(m[1]);
+    return out.size ? out : null;
+  }
+  const validatorCodes = scanValidatorCodes(schemaSrc);
+  assert(validatorCodes !== null,
+    'SELF-LOOP: `validateReplanTransaction` must stay scannable — if it was renamed or reshaped, '
+    + 're-point this extractor rather than letting the emitter relation silently empty out');
+
+  // Which verbs hand those codes back out. Each entry is a TEXTUAL anchor on the pass-through
+  // itself, so a verb that stops passing the validator's verdict through drops out of the relation
+  // instead of being asserted about forever.
+  const passThrough = [
+    { key: 'replan resume', present: replanSrc.includes('const checked = schema.validateReplanTransaction(transaction);')
+        && replanSrc.includes('if (!checked.ok) return schema.refuse(checked.reason);') },
+    // orient is projected through the fence, and the fence returns the validator's verdict verbatim
+    // (`reason: checked.reason`) which `replanOrientation` then prints as the envelope's `reason`.
+    { key: 'adaptive-node orient', present: schemaSrc.includes('if (!checked.ok) return { ok: false, fenced: true, reason: checked.reason, state };')
+        && nodeSrc.includes("reason: (fence && fence.reason) || 'replan_in_progress'") },
+  ];
+  const emitsByRoute = new Map();
+  for (const entry of passThrough) {
+    if (entry.present && validatorCodes) emitsByRoute.set(entry.key, new Set(validatorCodes));
+  }
+  assert(emitsByRoute.size > 0,
+    'SELF-LOOP: the emitter relation must be non-vacuous — with no verb mapped, every route below '
+    + 'passes for the wrong reason. If a pass-through was genuinely removed, delete its entry here '
+    + 'in the same change');
+
+  // --- the checker, PURE (the battery below feeds it planted inputs) --------
+  // `routes`: Map<condition, {script,verb}>. `emits`: Map<'script verb', Set<condition>>.
+  function selfLoopingRoutes({ routes, emits }) {
+    const found = [];
+    for (const [condition, route] of routes) {
+      if (!route || !route.verb) continue;
+      const key = (route.script ? route.script + ' ' : '') + route.verb;
+      const set = emits.get(key);
+      if (set && set.has(condition)) found.push(condition + ' -> ' + key);
+    }
+    return found.sort();
+  }
+
+  // --- the DERIVED domain ---------------------------------------------------
+  const routeCarrying = new Map();
+  for (const cond of [...emitted].sort()) {
+    const route = schema.refuse(cond, {}).refusal_route;
+    // Terminals (`consent` / `environment`) carry no script and name no command, so there is no
+    // verb to run and nothing to loop back. They are honourable by construction and out of domain.
+    if (route && route.verb && route.script) routeCarrying.set(cond, route);
+  }
+  assert(routeCarrying.size >= 100,
+    'SELF-LOOP domain: the route-carrying census must be non-vacuous — got ' + routeCarrying.size
+    + ' of ' + emitted.size + ' emitted conditions. This is a FLOOR, never the current count: '
+    + 'pinning the exact number would forbid the subtraction this census exists to drive');
+
+  // THE PIN.
+  const loops = selfLoopingRoutes({ routes: routeCarrying, emits: emitsByRoute });
+  assert(loops.length === 0,
+    'SELF-LOOP: a condition may not name the verb that answers with that same condition. Running the '
+    + 'recorded exit returns the identical refusal, so the exit is not an exit: ' + loops.join(', '));
+
+  // --- MUTATION: the checker must bite, in both directions ------------------
+  // The acceptance for this class is stated as a mutation, so it is executed as one: plant a
+  // self-looping route into the SAME pure checker and watch it red; remove it and watch it green.
+  {
+    const PLANTED = 'zzz_planted_self_loop';
+    const withLoop = new Map([[PLANTED, { script: 'replan', verb: 'resume', args: '' }]]);
+    const emits = new Map([['replan resume', new Set([PLANTED])]]);
+    assert(selfLoopingRoutes({ routes: withLoop, emits }).length === 1,
+      'MUTATION: the self-loop checker must REJECT a route naming the verb that emits it');
+    assert(selfLoopingRoutes({ routes: withLoop, emits: new Map() }).length === 0,
+      'MUTATION: ...and ACCEPT the same route once that verb no longer emits it — the direction '
+      + 'that proves the red came from the loop and not from the token');
+    const rerouted = new Map([[PLANTED, { script: 'adaptive-node', verb: 'orient', args: '' }]]);
+    assert(selfLoopingRoutes({ routes: rerouted, emits }).length === 0,
+      'MUTATION: ...and ACCEPT the same emitter once the route names a DIFFERENT verb — the other '
+      + 'half of the subtraction, and the one a route-table fix actually performs');
+    assert(selfLoopingRoutes({ routes: withLoop, emits: new Map([['replan abort', new Set([PLANTED])]]) }).length === 0,
+      'MUTATION: ...and must key on the WHOLE route, never the verb alone — a same-named verb on a '
+      + 'different script is a different exit');
+    assert(selfLoopingRoutes({ routes: new Map([[PLANTED, null]]), emits }).length === 0,
+      'MUTATION: a condition with no route is out of this checker\'s domain, not a silent pass '
+      + 'through a crash');
+  }
+
+  // --- MUTATION: the emitter SCANNER must bite ------------------------------
+  // A scanner that quietly returns nothing makes every route above honourable by construction.
+  {
+    assert(scanValidatorCodes('function somethingElse(value) {\n  return refuse(\'x_invalid\');\n}\n') === null,
+      'MUTATION: the validator scanner must report ABSENCE rather than an empty set when its '
+      + 'anchor is gone');
+    const synthetic = '\nfunction validateReplanTransaction(value) {\n'
+      + "  if (!value) return refuse('zzz_synthetic_invalid');\n"
+      + "  return refuse('zzz_second_invalid', 'step');\n}\n";
+    const scanned = scanValidatorCodes(synthetic);
+    assert(scanned && scanned.size === 2 && scanned.has('zzz_synthetic_invalid') && scanned.has('zzz_second_invalid'),
+      'MUTATION: ...and must find every code the validator returns, including the arms that carry a '
+      + 'step argument: ' + JSON.stringify(scanned && [...scanned]));
+  }
+}
+
+// ===========================================================================
+// (8b-iii) WHERE A RUNTIME RESOLVER COMPUTES THE EXIT, THE STATIC ROUTE MAY NOT CONTRADICT IT.
+//
+// There are two sources of exit truth and only one of them can see the state. `readReplanFence`
+// resolves `legal_mutation` from the transaction in front of it and is right BECAUSE it can: the
+// orphaned arm admits only `replan abort`, the pre-activation mismatch arm admits `replan abort`,
+// and past the irreversibility wall only `replan resume` is left. The registry's `refusal_route` is
+// a pure function of the TOKEN — one cell, one answer — and `replan_integrity_mismatch` is one
+// token with three correct exits. No static cell holds three answers, so the two disagree, and the
+// static one wins today because the resolver's answer is dropped before the envelope is built.
+//
+// The precedence that fixes this ALREADY EXISTS and is already documented: the stamp is additive
+// and idempotent, and never overwrites a field a caller already set. So the pin is not "add a
+// mechanism" — it is that the resolver's answer must reach the envelope, and that the stamp must
+// keep honouring a caller who supplies one.
+// ===========================================================================
+{
+  const orphanedState = 'project: p\nreplan_status: fenced\nreplan_transaction_id: ' + 'a'.repeat(64)
+    + '\nreplan_phase: prepared\n';
+  const fence = schema.readReplanFence(orphanedState, null);
+  assert(fence && fence.reason === 'replan_integrity_mismatch' && fence.legal_mutation === 'replan abort',
+    'RESOLVER control: the orphaned-fence arm resolves its exit from state and answers `replan abort`: '
+    + JSON.stringify({ reason: fence && fence.reason, legal_mutation: fence && fence.legal_mutation }));
+
+  // THE LIVE SEAM. This block was written against `schema.projectMutationGuard`, which #847-J
+  // DELETED — the call threw a TypeError that killed every assertion after it in this file rather
+  // than failing one. The surviving path is the one production actually emits through:
+  // `replanOrientation` builds the fenced envelope from the resolver, and the stamp decorates it.
+  const nodeMod = require('./kaola-workflow-adaptive-node');
+  const env = schema.stampRefusalEnvelope(nodeMod.replanOrientation(fence, 'p'));
+  assert(env && env.result === 'refuse' && env.reason === 'replan_integrity_mismatch',
+    'RESOLVER control: ...and the emitted envelope refuses on that arm: ' + JSON.stringify(env && env.reason));
+
+  // THE PIN. Whatever carries the exit, it may not name a verb the resolver has just ruled out.
+  const routed = env && env.refusal_route;
+  const routedKey = routed && ((routed.script ? routed.script + ' ' : '') + routed.verb);
+  assert(routedKey !== 'replan resume',
+    'RESOLVER: the resolver computed `replan abort` for this state and the envelope carries '
+    + JSON.stringify(routedKey) + '. A static cell keyed on the TOKEN cannot hold the three answers '
+    + 'this token needs, so it answers with the wrong one — and `replan resume` on an orphaned fence '
+    + 'refuses `replan_transaction_missing` and the wedge survives');
+  assert(env && env.legal_mutation === 'replan abort',
+    'RESOLVER: ...and the resolved exit must REACH the envelope, or the registry default is all '
+    + 'there is left to stamp: ' + JSON.stringify(env && env.legal_mutation));
+  assert(!routed || routedKey === 'replan abort',
+    'RESOLVER: ...so any structured route the envelope does carry must be the resolved one: '
+    + JSON.stringify(routed));
+
+  // The precedence this fix stands on, pinned at the seam rather than assumed from the comment.
+  {
+    const callerRoute = { script: 'replan', verb: 'abort', args: '--project <P> --transaction <T> --json' };
+    const stamped = schema.stampRefusalEnvelope({ result: 'refuse',
+      reason: 'replan_integrity_mismatch', refusal_route: callerRoute });
+    assert(stamped.refusal_route === callerRoute,
+      'RESOLVER precedence: the stamp must leave a caller-set `refusal_route` untouched — a caller '
+      + 'knows its concrete situation and the registry only supplies the default: '
+      + JSON.stringify(stamped.refusal_route));
+    const bare = schema.stampRefusalEnvelope({ result: 'refuse', reason: 'replan_integrity_mismatch' });
+    assert(bare.refusal_route && bare.refusal_route.verb,
+      'RESOLVER precedence: ...while an envelope that supplies none still gets a default, so this '
+      + 'is a precedence rule and not a deletion of the registry');
+
+    // THE SAME TOKEN, THE SAME STAMP, THE OTHER ARM — this is the precedence stated as a
+    // difference rather than as a single case. An envelope carrying the resolver's answer gets no
+    // static route; the bare one above still does. Both assertions read the same field on the same
+    // token, so neither can be satisfied by a stamp that simply stopped working.
+    const resolved = schema.stampRefusalEnvelope({ result: 'refuse',
+      reason: 'replan_integrity_mismatch', legal_mutation: 'replan abort' });
+    assert(resolved.refusal_route == null,
+      'RESOLVER precedence: ...and an envelope whose resolver ALREADY answered gets no competing '
+      + 'default — the registry may not supply a second exit beside a computed one: '
+      + JSON.stringify(resolved.refusal_route));
+
+    // AND ON THE BARE PATH, A RESOLVER-OWNED CONDITION CARRIES NO STATIC EXIT AT ALL.
+    //
+    // The weaker rule — "no REPLAN verb" — is what this block asserted first, on the reasoning that
+    // `adaptive-node orient` is read-only, is not fence-guarded, and so contradicts nothing. The
+    // executed pin in test-replan (#850-B) refuted it by RUNNING the verb: `orient` is projected
+    // through the re-plan fence, the fence re-runs the same validator, and the operator is handed
+    // the code that sent them there. A route can be reachable, dispatchable, and still not an exit.
+    // That is the whole thesis of this issue, and it applies to the benign-looking verb too.
+    //
+    // Derived, never listed — the scan below is the same one the self-loop block runs over the same
+    // function, so a code added to the validator is covered the day it appears.
+    const validatorSrc = /function validateReplanTransaction\(([\s\S]*?)\n}\n/.exec(
+      read('scripts/kaola-workflow-adaptive-schema.js'));
+    const resolverOwned = [...new Set([...(validatorSrc ? validatorSrc[1] : '')
+      .matchAll(/refuse\(\s*'([a-z][a-z0-9_]+)'/g)].map(m => m[1]))].sort();
+    assert(resolverOwned.length >= 10,
+      'RESOLVER silence: the resolver-owned set must be non-vacuous, or every assertion below it '
+      + 'passes over an empty loop — got ' + resolverOwned.length);
+    for (const cond of resolverOwned) {
+      const r = schema.refuse(cond, {}).refusal_route;
+      assert(r == null,
+        'RESOLVER silence: `' + cond + '` is answered by `readReplanFence` from the state in front '
+        + 'of it, and every static candidate leads back to the same wall — `replan resume` '
+        + 're-validates, `adaptive-node orient` projects through the fence and re-validates. The '
+        + 'registry names none of them: ' + JSON.stringify(r));
+    }
+  }
 }
 
 // ===========================================================================
