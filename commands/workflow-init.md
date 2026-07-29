@@ -208,8 +208,8 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone
 > is NOT the same as dispatch-ready: read the doctor JSON's additive `dispatch_posture` field too
 > — `proactive` (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
-> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless this session
-> explicitly asks for sub-agents/delegation/parallel work — always available and always documented
+> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless explicitly asked
+> for sub-agents/delegation/parallel work — always available and always documented
 > — or, only if your Codex exposes an `ultra` reasoning effort for your model/plan (undocumented as
 > of Codex >=0.145.0; check the `/model` picker), the operator sets
 > `model_reasoning_effort = "ultra"`. Report the doctor's `dispatch_posture_warning` remediation

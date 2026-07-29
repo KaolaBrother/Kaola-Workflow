@@ -2220,7 +2220,7 @@ function seedKaolaConfig(homeDir) {
 // x7 files total, this installer being the reference copy per validate-script-sync.js's
 // "codex agent-profile installer copies" group); keep the two copies in lock-step.
 // ---------------------------------------------------------------------------
-const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.';
+const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior observed on codex-tui 0.142.5 and not re-verified on Codex >=0.145.0; it may change in a future Codex release.';
 
 function stripTomlComment(line) {
   let inSingle = false;
@@ -2700,7 +2700,7 @@ function dispatchPostureRemediation(posture) {
       + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
       + 'model_reasoning_effort=ultra) for proactive delegation.';
   }
-  return 'Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). '
+  return 'Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). '
     + 'To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes '
     + 'an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), '
     + 'set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
@@ -2735,6 +2735,19 @@ function deriveDispatchPosture(configContent) {
 // and the 'observed_default' source tag are kept for output-shape back-compat. The three
 // *_wait_timeout_ms bounds have no independently verified default — read ONLY when explicitly
 // present in config; null when absent (no fabricated fallback for those three).
+//
+// EXEMPTION — MULTI_AGENT_V2_BOUNDS_NOTE below says a stray `agents.max_threads` "does not
+// raise the MultiAgentV2 cap". That is a claim about someone else's software, so here is the
+// command that measured its boundary (codex-cli 0.145.0, isolated CODEX_HOME):
+//
+//   $ printf '[features.multi_agent_v2]\nenabled = true\n' > "$CODEX_HOME/config.toml"
+//   $ CODEX_HOME=... codex doctor --json   # then again with `[agents] max_threads = 6` added
+//
+// The two reports are identical apart from the timestamp and the home paths, and NEITHER
+// exposes max_concurrent_threads_per_session or any other resolved thread cap. That is the
+// boundary: our own reported budget is checkable, Codex's internal handling of the value is
+// not observable from outside, so the note must not be strengthened past "does not raise the
+// cap" — test-install-model-rendering.js pins the stronger wordings OUT of both copies.
 //
 // Bounds are only meaningful when v2 dispatch is actually active (dispatch_mode ===
 // 'v2-task-name'); when v2 is not enabled, every field reports not_applicable/null —

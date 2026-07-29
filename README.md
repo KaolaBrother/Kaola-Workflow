@@ -767,7 +767,7 @@ effort-gated MultiAgentMode the Codex runtime will actually enforce, plus whethe
 Kaola-Workflow Codex multi_agent_v2: NOT enabled (see codex_multi_agent_v2_required at preflight)
 Kaola-Workflow Codex dispatch posture: none (model_reasoning_effort unset)
 Kaola-Workflow Codex dispatch posture: Kaola-Workflow cannot attest its required V2 task-name dispatch path because features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
-Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.
+Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior observed on codex-tui 0.142.5 and not re-verified on Codex >=0.145.0; it may change in a future Codex release.
 status: ok
 ```
 

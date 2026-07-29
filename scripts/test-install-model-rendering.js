@@ -4011,7 +4011,7 @@ try {
     assert.strictEqual(installerMod.DISPATCH_POSTURE_VERSION_NOTE, preflightMod.DISPATCH_POSTURE_VERSION_NOTE,
       '#598: installer and preflight version-guard notes must match verbatim');
     assert(/0\.145\.0/.test(installerMod.DISPATCH_POSTURE_VERSION_NOTE),
-      '#775: version-guard note must name the verified Codex CLI version');
+      '#775: version-guard note must name the Codex CLI version the coupling is guarded against');
 
     // #611 AC6 (#775: bounds are read from [features.multi_agent_v2]; arithmetic UNCHANGED)
     // — MultiAgentV2 concurrency + wait-timeout bounds — pure-function unit coverage (no
