@@ -466,9 +466,8 @@ ask the user what to implement. New work starts with:
 ## Co-active Folders
 
 Distinct active folders run independently, each with its own `workflow-state.md` and branch/worktree
-metadata. Do NOT merge, interleave, or batch commits across folders; the pre-commit guard blocks
-staging multiple project folders together. If the same file appears in multiple active write sets,
-stop and resolve the conflict.
+metadata. Keep their commits separate — a commit spanning two folders makes neither one's diff
+attributable. If the same file appears in multiple active write sets, stop and resolve the conflict.
 
 ## Resume Detection
 
