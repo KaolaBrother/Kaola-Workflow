@@ -21,8 +21,22 @@
 //     nothing and reporting a false catch.
 //   - No network. Every $TMPDIR copy is removed in a finally block, including on failure.
 //
-// NOT wired into package.json / the default claude chain (that would undo the Phase B receipt
-// diet) — invoked on demand via the recorded validation_command.
+// WIRED INTO THE CLAUDE CHAIN (both tiers), and it was not for a long time. It shipped as an
+// on-demand gate whose enforcement was a sentence in `docs/conventions.md` telling a human to
+// re-run it after any prune. That is not a floor — a branch carried it RED under four green
+// chains, because nothing runs it, and it went unnoticed during exactly the subtraction wave it
+// exists to police. A regression floor that depends on somebody remembering is decorative during
+// the campaign that most needs it.
+//
+// This suite is the ONLY thing that fails when a prune removes real coverage. Deleting an
+// assertion does not red the suite it was deleted from — the remaining assertions still pass on
+// an unmutated tree — so the loss is invisible to every other gate in the repo. That asymmetry is
+// why this one runs.
+//
+// Claude chain only, and deliberately: the mutations are over root `scripts/`, and the codex
+// mirrors under `plugins/kaola-workflow/scripts/` are byte-synced (policed by
+// `validate-script-sync.js`), so running it per forge would re-measure the same bytes three more
+// times for nothing. ~32s measured, against a ~6.5 min fast gate.
 
 const fs = require('fs');
 const os = require('os');

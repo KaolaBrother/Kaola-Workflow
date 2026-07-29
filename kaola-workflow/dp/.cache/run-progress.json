@@ -1,0 +1,56 @@
+{
+  "plan_hash": "ef3c23fdae2135702f2fe272edb08865e8d70bfa1be8fb7a97c496574ea51915",
+  "updated_at": "2026-07-29T11:48:04.015Z",
+  "op": "open-next",
+  "node_ledger": [
+    {
+      "id": "n1-surface",
+      "role": "investigator",
+      "status": "complete"
+    },
+    {
+      "id": "n2-mechanism",
+      "role": "code-architect",
+      "status": "complete"
+    },
+    {
+      "id": "n3-tests",
+      "role": "tdd-guide",
+      "status": "complete"
+    },
+    {
+      "id": "n4-scripts",
+      "role": "implementer",
+      "status": "complete"
+    },
+    {
+      "id": "n5-prose",
+      "role": "implementer",
+      "status": "complete"
+    },
+    {
+      "id": "n6-docs",
+      "role": "doc-updater",
+      "status": "complete"
+    },
+    {
+      "id": "n7-falsify",
+      "role": "adversarial-verifier",
+      "status": "complete"
+    },
+    {
+      "id": "n8-code-certify",
+      "role": "code-reviewer",
+      "status": "complete"
+    },
+    {
+      "id": "n9-finalize",
+      "role": "finalize",
+      "status": "in_progress"
+    }
+  ],
+  "in_progress": [
+    "n9-finalize"
+  ],
+  "all_done": false
+}

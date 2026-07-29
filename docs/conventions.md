@@ -99,6 +99,9 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
 - A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
 - **Edition behavioral coverage (issue #342).** A green forge chain certifies *structure* (registries, forbidden tokens, file existence) — it is **insufficient evidence of forge behavioral parity** unless an edition-level test exercises the feature. A cross-edition feature that adds or changes behavior in a HAND-PORTED edition script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`) MUST add behavioral scenarios to that edition's walkthrough (`simulate-{gitlab,gitea}-workflow-walkthrough.js`) driving the real edition CLI, mirroring the root coverage modulo forge nouns. Byte-synced scripts (the codex mirrors under `plugins/kaola-workflow/scripts/`, enforced by `validate-script-sync.js`) inherit root behavioral coverage and need no duplicate scenarios. A throwaway `$TMPDIR` smoke proves a repair but is not coverage — commit the scenarios (the #328 CR1/CR2 lesson: the gitlab/gitea bundle-finalization half shipped under four green chains because the chains certified structure only).
 
+- **What `edition-sync` OWNS, and what it does not (#862).** The tool maintains exactly two things: `kaola-workflow-adaptive-schema.js`, materialized byte-identically into all three plugin trees (`MATERIALIZED_SHARED`, `scripts/edition-sync.js:79-81` — **one entry**), and the codex byte-mirrors under `plugins/kaola-workflow/scripts/`. **Everything in `plugins/kaola-workflow-{gitlab,gitea}/scripts/kaola-{forge}-workflow-*.js` is a divergent hand-port the tool never writes**, and `renderForgePort` renames FILENAMES only — it translates no forge nouns, no API shapes, no id schemes. So `0 file(s) updated — tree already in sync` means **"nothing I own drifted"**, never **"the editions agree"**. Read it as the second thing and a hand-port that was never made looks finished. This paragraph exists because the ownership boundary was nowhere in the docs, and its absence let a *fabricated* cause ("the sync tool ported the call sites and dropped the threading") get committed to `main` as the explanation for a real defect — worse than the defect, because `git log -S` is exactly where the next porter would find it.
+  - **The oracle for a hand-port is a cross-edition count that has to RECONCILE, never a search for what you removed.** #862 verified a four-edition port by grepping that the old string was gone — `0` in all four files — and shipped two dead bundle lanes: **absence-of-the-old is not presence-of-the-new**, and only the second is what a port is for. The count that caught it was one command over the NEW identifier: `root 4 · codex 4 · gitlab 3 · gitea 3`, where the missing site was the `opts` object that feeds the lane. Same instrument principle as the #858 attempt counter and the #860 self-verifying recorder — **a number that must match something else beats reading the hunks**, because reading confirms what you already believe you wrote. All four chains were green over those dead lanes.
+
 - **Two-altitude division of labor between the mega-test files.** `scripts/test-adaptive-node.js`
   owns refusal seams, envelope shapes, and fault injection for `kaola-workflow-adaptive-node.js`
   and its aggregator composition (schema conformance, fixture-driven corpus loops, "real
@@ -111,9 +114,15 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
   not added to. `scripts/test-mega-mutation-spotcheck.js` is the standing regression floor proving
   this division loses no real coverage: it reintroduces historical bug shapes into isolated
   `$TMPDIR` copies of `scripts/` (never the working tree) and must stay red on each reintroduced
-  shape — re-run it (`node scripts/test-mega-mutation-spotcheck.js`, exit 0 = all caught) after any
-  further prune at either altitude. It is a persistent, on-demand gate, not wired into `npm test`
-  or any `test:kaola-workflow:*` chain.
+  shape (exit 0 = all caught). **It runs in the claude chain, both tiers** — `~32s` measured
+  against a `~6.5 min` fast gate — so a prune that drops real coverage reds a gate rather than
+  waiting for someone to remember. Claude only: the mutations are over root `scripts/`, and the
+  codex mirrors are byte-synced, so per-forge runs would re-measure the same bytes.
+  **This is the only gate that can see a lost assertion.** Deleting an assertion never reds the
+  suite it was deleted from — the survivors still pass on an unmutated tree — so coverage loss is
+  invisible everywhere else. When it reds, the answer is to restore the coverage or to argue on the
+  record that the shape no longer needs catching; re-pointing the probe at whatever the code now
+  does is how the floor gets quietly lowered to the floor.
 
 - **Lifecycle and boundary coverage for frozen dispatch fields.** A field added to `## Nodes` must
   be tested through the real validator and every descriptor/opener that consumes it, durable

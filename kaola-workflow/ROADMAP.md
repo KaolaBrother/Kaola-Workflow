@@ -7,18 +7,14 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #850 | Routes that cannot be honoured: ~25 certain dead exits across 297 route-carrying conditions — fix is subtractive (delete a route source) | open | — | — |
-| #851 | The mid-run demotion IS the campaign: the mid-run refusal set (measured band ~278-607 of 778) refuses at a locus the two-gate architecture forbids | open | — | — |
+| #851 | The mid-run demotion premise is refuted — the census cannot answer the question it was asked | open | — | — |
 | #854 | Prompt-surface subtraction: delete the orchestrator-regulation prose block | open | — | — |
-| #855 | Gate 1 demotion wave: the claim-time refusals become answers | open | — | — |
-| #856 | Demote the planner control-boundary refusal to a divergence answer | open | — | — |
 | #857 | Four surfaces disagree on where the MultiAgentV2 default of 4 comes from: three say documented upstream, one says our own probe and explicitly not documentation | open | — | — |
-| #858 | A failed consent-revocation write is swallowed, and the grant lookup that follows honours the stale grant | open | — | — |
-| #859 | 26 more validator assertions where the manifest token is a strict superset — a containment argument, proven per pair | open | — | — |
-| #860 | Re-measure gitlab/gitea validator duplications: #853 zero came from a truncated capture with a swallowed failure | open | — | — |
-| #861 | A mandated regression floor is wired into no chain: test-mega-mutation-spotcheck can be red with all four chains green | open | — | — |
-| #862 | A failed selection-record write is swallowed while its digest is stamped — the #858 pattern, one function away | open | — | — |
 | #863 | result is not total on the claim surface, and two status tokens classify differently depending on which internal arm emitted them | open | — | — |
+| #864 | The sink's diff attribution is one-directional: 8 nodes marked COMPLETE against an empty diff returns result: pass | open | — | — |
+| #865 | The run can lower its own consent fence — clear-halt requires no attestation, so the valve is enforced by convention rather than mechanism | open | — | — |
+| #866 | Nothing measures whether a path stops the run: build the driven-envelope recorder, with a completeness assertion | open | — | — |
+| #867 | Two vocabularies for one diagnosis: collapse the certifier-resolution twin in plan-validator | open | — | — |
 
 ## Rules
 
@@ -27,3 +23,38 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 - After each workflow cycle, refresh this file from issue state.
 - Move completed workflow project folders to `kaola-workflow/archive/`.
 - Close linked GitHub issues only after acceptance criteria pass.
+
+### Project rules
+## Campaign goal — derive the gates from zero
+
+The goal is to establish which gates are **crucial** by DERIVING them from zero, and to
+construct upward from that skeleton. It is not to reduce the set that already exists.
+
+- **Start from nothing, then look.** Write the derived set down *before* reading the
+  current one; whatever is not derived is not there. The gap between derivation and
+  reality is the finding, and looking first destroys it.
+  Reduction does not shrink this system — measured: a subtraction charter moved the
+  census 712 → 733.
+
+- **The unit of progress is a MECHANISM removed. Never a test removed.**
+  Tests are downstream: cut the mechanism and its tests fall out with it. An issue whose
+  deliverable is an assertion count, a pin count, or a duplication count is not campaign
+  work — it is doing by hand what a real cut does for free.
+
+- **A gate earns its place only by naming the concrete irreversible harm** that follows
+  if it does not refuse — what is destroyed, what escapes recall, what value call is
+  made without the human. No nameable harm ⇒ it is a **tool**: report, retry, normalize,
+  reroute or ask, and the run continues. "There is nowhere to report it" is almost never
+  true; the emitted envelope is always a surface.
+
+- **Agreement across unrelated starting points is the evidence of necessity.** Converge
+  independent derivations; do not average a disagreement — a genuine one is a design
+  question for a human.
+
+- **Correctness is never traded for the count.** A defect found while cutting gets fixed
+  even when the fix adds code. Rework is the most expensive outcome, and a subtraction
+  that ships a defect has not subtracted anything.
+
+- **Premises get measured before they get built on.** A campaign issue states its
+  premise as a number and re-measures it before work starts. A premise that collapses is
+  the result, not a setback.

@@ -44,8 +44,6 @@ const EXEMPT = Object.freeze({
     + 'npm test, edition-sync, install.sh, or the six routing surfaces. Run it directly.',
   'test-kimi-edition.js':
     'ADDITIVE RUNTIME EDITION. Same rule as opencode — run it directly, not via a chain.',
-  'test-mega-mutation-spotcheck.js':
-    'ONE-SHOT mutation spot-check written for a specific historical prune; not a standing gate.',
 });
 
 // Suites the FAST gate deliberately defers to the full tier. CLAUDE.md documents the fast gate
