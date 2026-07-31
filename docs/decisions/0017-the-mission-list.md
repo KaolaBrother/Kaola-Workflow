@@ -132,6 +132,16 @@ is a lookup rather than a campaign.
 | an unrecoverable merge | a sink outcome the orchestrator could not repair after the fact | a rescue ref per merge, recording pre-merge state |
 | a value call taken by the agent | an irreversible choice a human should have made | the consent valve |
 | a typed envelope code documented asymmetrically across runtimes | any typed `reason:` code appearing on a runtime surface **at all** — the enforcement domain becoming non-zero. Today it is 0 of 62 | `scripts/test-runtime-lexicon-parity.js`, deleted 2026-08-01, recoverable from git history at `b3bc7acf` |
+| retired vocabulary entering an additive edition through its own transform | a retired token on an `.opencode/` or `.kimi/` surface that is **not** present in the canonical source it renders from — i.e. one introduced by the sync transform itself | the scan already applied to the other two render families: import `RETIRED_VOCABULARY_BAN` and run it over the rendered edition tree, as `test-generate-routing-surfaces.js` does |
+
+The additive-edition row was derived by symmetry, and symmetry is exactly the argument this list
+exists to refuse. Both other render families now carry the scan — the twelve reviewer surfaces since
+the retired-vocabulary cleanup, the eighteen routing surfaces since #887 — and each was armed by an
+observed failure: `node-id` reaching twelve surfaces through a generator's own render, and retired
+node/DAG wording reaching the plugin manifests a user reads before installing. **No token has ever
+entered through an opencode or kimi transform.** Their surfaces render from canonical, which is now
+scanned on both sides, so the only uncovered path is a token the transform *introduces* — which is
+the observation named in the row, and until it happens the row is a lookup, not a task.
 
 The lexicon row is the only one whose mechanism was **built first and removed after**, so it carries
 the measurement that retired it. The guard compared two vocabularies that live in different families
