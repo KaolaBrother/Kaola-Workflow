@@ -1390,12 +1390,143 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fx); }
   }
 
-  // DELETED: #816(T2) — "a staler MAIN ledger is repaired by the transaction, not refused".
-  // It staled main's copy by rewriting `| complete |` to `| pending |` in a `## Node Ledger` and
-  // asserted `finalize_transaction.ledger_compare === 'synced_from_worktree'`. There is no ledger
-  // to regress. The SYNC ITSELF survives and is still pinned by #837(P4/P5/P6) below; what is
-  // uncovered until compareLedgers is re-pointed at a node-free record is the narrower property
-  // that the mirror must never let a staler main copy overwrite a more advanced worktree one.
+  // --- T2 (restored, #877): the worktree→main anti-clobber fence, end-to-end over the MISSION
+  // LIST. The #399 property outlived the node executor whose `## Node Ledger` it used to count:
+  // the mirror must never let a staler main copy overwrite a worktree record that knows about
+  // more finished work. compareLedgers now counts `status: done` items of
+  // kaola-workflow/<project>/mission-list.md (the one durable coordination record —
+  // scripts/test-ledger-compare.js pins the counting itself). Three arms:
+  //   (a) main staler + writable   -> `--check` classifies `sync_required` as STATE (never a
+  //       reason) and mutates neither record; the transaction then repairs worktree→main
+  //       (worktree wins, `ledger_compare: synced_from_worktree`) and the record that survives
+  //       is the more-complete one.
+  //   (b) main staler + UNwritable -> `--check` classifies `sync_failed`; the transaction
+  //       refuses fail-closed (`finalize_mirror_refused` / `mirror_sync_failed`) and the
+  //       worktree record is byte-untouched.
+  //   (c) no worktree record       -> the legitimate first sync passes (fail-open).
+  {
+    // An independent tiny oracle: counting via the mechanism under test would be circular.
+    const countDone816 = text => (String(text).match(/^[ \t]*status:[ \t]*done[ \t]*$/gim) || []).length;
+    const missionList816 = statuses => {
+      const lines = ['# close issue #816 — fence fixture', ''];
+      statuses.forEach((s, i) => {
+        lines.push('- item: mission ' + (i + 1));
+        lines.push('  status: ' + s);
+        if (s !== 'todo') lines.push('  dispatched: agent-' + (i + 1) + ', output to out/' + (i + 1) + '.md');
+        if (s === 'done') lines.push('  result: out/' + (i + 1) + '.md');
+        lines.push('');
+      });
+      return lines.join('\n');
+    };
+
+    // (a) staler main + writable: --check is read-only; the transaction repairs, worktree wins.
+    {
+      const fx = mk816('issue-816b');
+      try {
+        const wtRecord = missionList816(['done', 'done', 'done']);
+        const mainRecord = missionList816(['done', 'in-flight', 'todo']);
+        fs.writeFileSync(path.join(fx.wtProjDir, 'mission-list.md'), wtRecord);
+        fs.writeFileSync(path.join(fx.mainProjDir, 'mission-list.md'), mainRecord);
+        // A main-only Finalization artifact — the worktree-wins repair must not drop it.
+        fs.writeFileSync(path.join(fx.mainProjDir, 'finalization-summary.md'), '# Finalization\n');
+
+        const chk = runFinalize816(fx, ['--check', '--json']);
+        assert(chk.status === 0 && chk.json && chk.json.ok === true,
+          '#816(T2a): a machinery-repairable pending sync must NOT unmeet the preconditions, got '
+          + 'status=' + chk.status + ' json=' + JSON.stringify(chk.json));
+        assert(chk.json && chk.json.checks && chk.json.checks.mirror === 'sync_required',
+          '#816(T2a): --check must classify the pending worktree→main sync as sync_required, got '
+          + JSON.stringify(chk.json && chk.json.checks));
+        assert(fs.readFileSync(path.join(fx.wtProjDir, 'mission-list.md'), 'utf8') === wtRecord
+          && fs.readFileSync(path.join(fx.mainProjDir, 'mission-list.md'), 'utf8') === mainRecord,
+          '#816(T2a): --check must leave BOTH mission-list records byte-unchanged');
+
+        const r = runFinalize816(fx);
+        assert(r.status === 0,
+          '#816(T2a): the transaction must repair the staler main copy and proceed, got status='
+          + r.status + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+        const tx = r.json && r.json.finalize_transaction;
+        assert(tx && tx.ledger_compare === 'synced_from_worktree',
+          '#816(T2a): the receipt must record the worktree→main repair, got ' + JSON.stringify(tx));
+        const archivedDir = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project);
+        const archivedRecord = path.join(archivedDir, 'mission-list.md');
+        assert(fs.existsSync(archivedRecord)
+          && countDone816(fs.readFileSync(archivedRecord, 'utf8')) === 3,
+          '#816(T2a): the surviving (archived) record must keep the worktree\'s 3 done items — '
+          + 'never regressed to main\'s 1');
+        assert(fs.existsSync(path.join(archivedDir, 'finalization-summary.md')),
+          '#816(T2a): the main-only Finalization artifact must survive the worktree-wins repair');
+      } finally { cleanup816(fx); }
+    }
+
+    // (b) staler main + UNwritable: fail-closed refusal, zero-write on the worktree side.
+    {
+      const fx = mk816('issue-816d');
+      const mainRecordPath = path.join(fx.mainProjDir, 'mission-list.md');
+      const mainCacheDir = path.join(fx.mainProjDir, '.cache');
+      try {
+        const wtRecord = missionList816(['done', 'done', 'done']);
+        const mainRecord = missionList816(['done', 'todo', 'todo']);
+        fs.writeFileSync(path.join(fx.wtProjDir, 'mission-list.md'), wtRecord);
+        fs.writeFileSync(mainRecordPath, mainRecord);
+        fs.chmodSync(mainRecordPath, 0o444);
+        fs.chmodSync(mainCacheDir, 0o555);
+        fs.chmodSync(fx.mainProjDir, 0o555);
+
+        const chk = runFinalize816(fx, ['--check', '--json']);
+        assert(chk.status !== 0 && chk.json && chk.json.ok === false,
+          '#816(T2b): an unperformable sync IS an unmet precondition, got status=' + chk.status
+          + ' json=' + JSON.stringify(chk.json));
+        assert(chk.json && chk.json.checks && chk.json.checks.mirror === 'sync_failed',
+          '#816(T2b): --check must classify the unwritable main copy as sync_failed, got '
+          + JSON.stringify(chk.json && chk.json.checks));
+        assert(chk.json && Array.isArray(chk.json.reasons) && chk.json.reasons.includes('mirror_sync_failed'),
+          '#816(T2b): the reason must carry the typed mirror_sync_failed token, got '
+          + JSON.stringify(chk.json && chk.json.reasons));
+
+        const r = runFinalize816(fx);
+        assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused',
+          '#816(T2b): the transaction must refuse under the pinned top-level reason, got status='
+          + r.status + ' json=' + JSON.stringify(r.json));
+        assert(r.json && r.json.inner_reason === 'mirror_sync_failed',
+          '#816(T2b): the refusal must be re-typed mirror_sync_failed, got ' + JSON.stringify(r.json));
+        assert(fs.readFileSync(path.join(fx.wtProjDir, 'mission-list.md'), 'utf8') === wtRecord,
+          '#816(T2b): the refusal must be zero-write on the worktree side — the complete record survives');
+        assert(fs.readFileSync(mainRecordPath, 'utf8') === mainRecord,
+          '#816(T2b): the staler main record must not be half-advanced by a failed sync');
+        assert(!fs.existsSync(path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project))
+          && !fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
+          '#816(T2b): the refusing transaction must archive nothing');
+        assert(!/^chore: (finalize|archive) /m.test(gOut816(fx.wtRoot, ['log', '--format=%s', '-5'])),
+          '#816(T2b): the refusing transaction must author no bookkeeping commit');
+      } finally {
+        try { fs.chmodSync(fx.mainProjDir, 0o755); } catch (_) {}
+        try { fs.chmodSync(mainCacheDir, 0o755); } catch (_) {}
+        try { fs.chmodSync(mainRecordPath, 0o644); } catch (_) {}
+        cleanup816(fx);
+      }
+    }
+
+    // (c) no worktree record: the legitimate first sync fails open and carries the record in.
+    {
+      const fx = mk816('issue-816e');
+      try {
+        fs.writeFileSync(path.join(fx.mainProjDir, 'mission-list.md'), missionList816(['done', 'done']));
+        const r = runFinalize816(fx);
+        assert(r.status === 0,
+          '#816(T2c): the first sync (no worktree record) must pass, got status=' + r.status
+          + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+        const tx = r.json && r.json.finalize_transaction;
+        assert(tx && tx.mirror === 'mirrored' && tx.ledger_compare === 'pass',
+          '#816(T2c): the fail-open first sync must be recorded as a plain pass, got ' + JSON.stringify(tx));
+        const archivedRecord = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, 'mission-list.md');
+        assert(fs.existsSync(archivedRecord)
+          && countDone816(fs.readFileSync(archivedRecord, 'utf8')) === 2,
+          '#816(T2c): the first sync must carry the main record into the archived run folder');
+      } finally { cleanup816(fx); }
+    }
+  }
+
   // --- T3: Step 7 roadmap staging + the `chore: finalize` commit gate are inside the transaction -
   {
     const fx = mk816('issue-816c');
@@ -3354,21 +3485,14 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     } finally { cleanup837(fx); }
   }
 
-  // DELETED: #837 P3, P4 and P5 — the three mirror-sync scenarios.
-  //
-  // The SUBJECT survives: the worktree→main project-folder sync is a step inside the transaction
-  // rather than an operator `rsync -a`, `--check` reports a pending sync without performing it,
-  // and an unperformable sync refuses fail-closed under `finalize_mirror_refused` /
-  // `inner_reason: mirror_sync_failed`. What is gone is the only way to OBSERVE any of it:
-  // probeFinalizeMirror reaches `sync_required` exclusively through compareLedgers over a plan
-  // file's `## Node Ledger` rows, and returns `ready` the moment no plan file exists. Staling the
-  // main copy is what these three did, and there is nothing left to stale.
-  //
-  // UNCOVERED until kaola-workflow-ledger-compare.js is re-pointed at a node-free record (or
-  // deleted with the branch it feeds): the sync-required classification, the read-only guarantee
-  // over it, and the mirror_sync_failed fail-closed anchor. P1/P2 below still pin the one-pass
-  // `--check` report and its read-only-ness on a run with nothing to sync; P6-P9 still pin the
-  // usage surface and the four contract-validator literals, so the tokens themselves stay guarded.
+  // DELETED: #837 P3, P4 and P5 — the three mirror-sync scenarios, which staled a plan file's
+  // `## Node Ledger` rows that no longer exist. Their PROPERTIES did not die with them: #877
+  // re-pointed compareLedgers at the mission list's `status: done` items, and the restored
+  // #816(T2) block above pins all three again over mission-list fixtures — the sync-required
+  // classification and its read-only guarantee (T2a), the mirror_sync_failed fail-closed anchor
+  // (T2b), and the fail-open first sync (T2c). scripts/test-ledger-compare.js pins the counting.
+  // P1/P2 above pin the one-pass `--check` report on a run with nothing to sync; P6-P9 below pin
+  // the usage surface and the four contract-validator literals.
 
   // --- P6: `--check` is documented on the usage surface -----------------------------------------
   {

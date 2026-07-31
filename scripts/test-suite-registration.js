@@ -47,8 +47,8 @@ const EXEMPT = Object.freeze({
 });
 
 // Suites the FAST gate deliberately defers to the full tier. CLAUDE.md documents the fast gate
-// as "every cheap step at full coverage, but the three heavyweight suites run a rotating 1/12
-// slice and six non-samplable suites are deferred" — this is that six, named, so that a suite
+// as "every cheap step at full coverage, but it samples the walkthrough at a rotating 1/12 shard
+// and defers a few heavyweight suites" — this is that deferral list, named, so that a suite
 // silently vanishing from the fast gate is distinguishable from one deliberately held back.
 const FULL_ONLY = Object.freeze([
   'test-claim-hardening.js',
