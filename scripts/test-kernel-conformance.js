@@ -357,11 +357,11 @@ const ATOMIC_SCOPE_EXEMPT = [];
 const NON_ATOMIC_EXEMPT = [
   {
     file: 'kaola-workflow-adaptive-schema.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
-    why: 'the two writes are the atomic replace filling its own temp file through an fd, and the O_EXCL scheduler lock — the first IS the atomic path and the second targets a preference artifact',
+    why: 'the atomic replace filling its own temp file through an fd — this IS the atomic path, not a bypass of it',
   },
   {
     file: 'kaola-workflow-adaptive-schema.js', api: 'openSync', klass: 'atomic-helper-internal',
-    why: 'the atomic replace creating its temp file, and the scheduler lock taking O_EXCL — neither opens a record path for in-place writing',
+    why: 'the atomic replace creating its temp file — it does not open a record path for in-place writing',
   },
   {
     file: 'kaola-workflow-adaptive-schema.js', api: 'renameSync', klass: 'atomic-helper-internal',
@@ -378,10 +378,6 @@ const NON_ATOMIC_EXEMPT = [
   {
     file: 'kaola-workflow-claim.js', api: 'writeFileSync', klass: 'outside-project-space',
     why: 'the worktree-diff salvage patch under kaola-workflow/archive/exports/ (not project state), and the capability fallback in writeFile taken only if the schema module fails to expose the atomic helper at all',
-  },
-  {
-    file: 'kaola-workflow-claim.js', api: 'appendFileSync', klass: 'append-only',
-    why: 'the dispatch-log.jsonl attestation backfill — a preference artifact whose consumer is warn-first',
   },
   {
     file: 'kaola-workflow-claim.js', api: 'renameSync', klass: 'atomic-helper-internal',

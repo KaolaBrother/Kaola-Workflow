@@ -58,7 +58,6 @@ at the end exist to catch what the named rows do not.
 | `.cache/sink-fallback.json` | record | forge | script | the sink fallback journal, same lifetime rule as sink-receipt.json |
 | `/^\.cache\/[a-z-]+-envelope\.json$/` | derivable | — | script | the cached stdout of a --summary subcommand invocation; re-run the subcommand (the read-only emitters are idempotent). No script reads it back |
 | `.cache/node-timings.jsonl` | preference | — | script | best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict |
-| `.cache/provenance-log.jsonl` | preference | — | script | best-effort audit trail, writer swallows every error; no gate reads it |
 | `.cache/dispatch-log.jsonl` | preference | — | script | hook-written spawn log; the attestation check is WARN-FIRST, so absence degrades to a warning, never a wrong outcome |
 | `.cache/outcome-log.jsonl` | preference | — | script | the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label |
 | `.cache/wedged-attestation.json` | preference | — | script | historical residue; no producer and no consumer remains in the tree |
