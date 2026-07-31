@@ -25,7 +25,7 @@ const { resolveSessionMarker, classifyLane } = require('./kaola-workflow-classif
 // parseGoal reads the run's goal (the mission list's H1); the two expansion readers feed the
 // archive rollup line below. All three come from the kernel, so nothing in the finalize/archive
 // path loads a plan reader.
-const { parseGoal, parseExpansionRecords, expansionRecordEfficiency } = adaptiveSchema;
+const { parseGoal } = adaptiveSchema;
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 // #356: bound every gh round-trip so a hung remote can never wedge a claim indefinitely (the
@@ -61,53 +61,6 @@ function resolveRuntime(args, env) {
   return args.runtime
     || env.KAOLA_RUNTIME
     || ((env.KAOLA_OPENCODE_INHERIT_MODEL || env.KAOLA_OPENCODE_STANDARD_MODEL) ? 'opencode' : 'claude');
-}
-
-// M2 (#277 Phase 2): WARN-FIRST dispatch-log attestation checker.
-// logDirCandidates: ordered array of directory paths that may contain
-// dispatch-log.jsonl; the first existing file wins. Mutates receipt
-// fields + receipt.warnings in-place; never throws; never modifies
-// closure_invariants.violations (warn-first contract).
-//
-// #816: the CLAIM/AUTHOR seam is the only attested seam. The finalize seam is orchestrator-owned
-// by design — inline execution there is the design, not a bypass — so no finalize-side field,
-// back-fill, or warning is produced. A LEGACY archive that already carries the retired field is
-// read and left verbatim; nothing here rewrites it.
-function checkDispatchAttestations(logDirCandidates, receipt) {
-  let logPath = null;
-  for (const dir of (logDirCandidates || [])) {
-    if (!dir) continue;
-    const candidate = path.join(dir, 'dispatch-log.jsonl');
-    try {
-      if (fs.existsSync(candidate)) { logPath = candidate; break; }
-    } catch (_) {}
-  }
-  if (!logPath) {
-    // Detector inactive: Codex, pre-hook installs, and this repo's own runs all hit here.
-    receipt.claim_planner_attested = 'missing';
-    receipt.warnings.push('attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive');
-    return;
-  }
-  // Log found — parse and check the claim/author seam.
-  let lines = [];
-  try {
-    lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
-  } catch (e) {
-    receipt.claim_planner_attested = 'failed';
-    receipt.warnings.push('attestation: failed to read dispatch-log (' + String(e && e.message) + ')');
-    return;
-  }
-  let sawPlanner = false;
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry && entry.agent_type === 'workflow-planner') sawPlanner = true;
-    } catch (_) {}
-  }
-  receipt.claim_planner_attested = sawPlanner ? 'attested' : 'missing';
-  if (!sawPlanner) {
-    receipt.warnings.push('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log — claim/author seam may have been run inline by main session');
-  }
 }
 
 // #476: the closed allowlist of VALUE-taking flags (camelCase, as the generic branch stores them).
@@ -185,8 +138,6 @@ function parseArgs(argv) {
     if (key === '--archive') { args.archive = true; continue; }
     if (key === '--export')  { args.export = true; continue; }
     if (key === '--keep-branch') { args.keepBranch = true; continue; }
-    // M1 (#280): planner self-attest flag; a boolean flag like --json/--force.
-    if (key === '--attest-planner-spawn') { args.attestPlannerSpawn = true; continue; }
     // #816: the finalize-seam self-attest flag is RETIRED — the finalize seam is orchestrator-owned
     // by design, so inline execution is no longer suspect and there is nothing to back-fill. Kept as
     // a warn-and-ignore shim (the --workflow-path precedent): a stale caller still passing it is
@@ -841,13 +792,13 @@ function writeState(root, data) {
   // belongs exclusively to the verified legacy re-plan import path.
   const claimAnchors = buildClaimAnchors(root, data);
   // issue #227/#770: adaptive is the ONLY workflow path — a fresh claim always scaffolds an
-  // adaptive run that resumes via the kaola-workflow-plan-run executor (the fast/full
-  // paths and the phaseN ladder were retired, and the path selector itself was retired by
-  // #770). A stale non-adaptive workflow_path is tolerated on read but never scaffolded here
-  // — this field is now a constant record, not a selection.
+  // adaptive run that resumes through the next-work command (the fast/full paths and the phaseN
+  // ladder were retired, and the path selector itself was retired by #770). A stale non-adaptive
+  // workflow_path is tolerated on read but never scaffolded here — this field is now a constant
+  // record, not a selection.
   const workflowPath = data.workflow_path || adaptiveSchema.ADAPTIVE_PATH;
-  const adaptiveCommand = adaptiveSchema.PLAN_RUN_COMMAND + ' ' + data.project;
-  const adaptiveSkill = adaptiveSchema.PLAN_RUN_SKILL + ' ' + data.project;
+  const adaptiveCommand = adaptiveSchema.NEXT_COMMAND + ' ' + data.project;
+  const adaptiveSkill = adaptiveSchema.NEXT_SKILL + ' ' + data.project;
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -1305,23 +1256,6 @@ function claimProject(root, args) {
     throw error;
   }
   const remoteClaim = postAdvisoryClaim(issueNumber, project); // #356: surface the real footprint status
-  // M1 (#280): planner self-attest back-fill.
-  // The SubagentStart hook logs dispatched agents to .cache/dispatch-log.jsonl but cannot
-  // log the planner's OWN spawn (no project state file exists at that moment — this claim
-  // creates it). When --attest-planner-spawn is supplied by the planner's own startup
-  // invocation, back-fill a workflow-planner entry so checkDispatchAttestations sees it.
-  // Gated strictly on the flag: a main-session inline bypass (no flag) writes nothing →
-  // claim_planner_attested stays missing/failed (inline-bypass detector still fires).
-  // Wrapped in try/catch: attestation is warn-first and must NEVER block the claim.
-  if (args.attestPlannerSpawn) {
-    try {
-      const cacheDir = path.join(root, 'kaola-workflow', project, '.cache');
-      fs.mkdirSync(cacheDir, { recursive: true });
-      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-      const entry = JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'claim-backfill', cwd: root });
-      fs.appendFileSync(path.join(cacheDir, 'dispatch-log.jsonl'), entry + '\n');
-    } catch (_) { /* fail-open: attestation is warn-first */ }
-  }
   return Object.assign(
     { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueNumber, project, branch, worktree_path: worktreePath, remote_claim: remoteClaim },
     // #403.8: surface the classified worktree-error token alongside the raw message so a caller has a
@@ -1685,19 +1619,6 @@ function claimBundle(root, opts) {
       status: 'active'
     });
 
-    // #370: planner self-attest back-fill on the bundle path (mirror of claimProject's #280 block).
-    // The dispatch-log hook cannot log the planner's own claim (it CREATES the .cache). Gated on the
-    // flag; warn-first (never blocks the claim).
-    if (opts.attestPlannerSpawn) {
-      try {
-        const cacheDir = path.join(root, 'kaola-workflow', project, '.cache');
-        fs.mkdirSync(cacheDir, { recursive: true });
-        const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-        const entry = JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'claim-backfill', cwd: root });
-        fs.appendFileSync(path.join(cacheDir, 'dispatch-log.jsonl'), entry + '\n');
-      } catch (_) { /* fail-open: attestation is warn-first */ }
-    }
-
     // Step 5: per-member hard add-label (addBundleLabel throws on add-label failure,
     // enabling the catch block to drive all-or-nothing rollback).
     // Track labeled members AFTER the hard label succeeds so rollback reverses exactly
@@ -1878,7 +1799,6 @@ function claimExplicitBundle(root, args) {
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     runtime: resolveRuntime(args, process.env),
-    attestPlannerSpawn: args.attestPlannerSpawn, // #370: honor the planner attest back-fill on the bundle path
     selectionRecordDigest: args.selectionRecordDigest, // the selection record's durable anchor
     selectionRecordBytes: args.selectionRecordBytes    // ...and the bytes it is a digest OF
   });
@@ -1983,12 +1903,12 @@ function cmdClaim() {
   output(claimProject(root, args));
 }
 
-// issue #235 (audit D8): the /kaola-workflow-adapt AUTHORING entry. The adapt command calls this
-// BEFORE authoring/freezing a workflow-plan.md to keep the mechanical gate's shape. #538: adaptive
-// is the unconditional default — there is no switch to be OFF — so authoring is ALWAYS allowed; the
-// subcommand stays registered and returns the allow envelope, it simply never refuses. Forge-neutral
-// + stateless (no gh/glab, no issue field, no folder requirement) so the body is byte-identical
-// across all four editions. The VALIDATOR stays toggle-agnostic.
+// The AUTHORING entry. It was a gate a command asked before authoring a plan; adaptive is the
+// unconditional default and there is no switch to be OFF, so authoring is ALWAYS allowed. No
+// command surface calls it any more — the subcommand stays registered and returns the allow
+// envelope so a caller that still asks gets an answer rather than an unknown-subcommand error, and
+// it never refuses. Forge-neutral + stateless (no gh/glab, no issue field, no folder requirement)
+// so the body is byte-identical across all four editions.
 function cmdAuthoringAllowed() {
   const args = parseArgs(process.argv.slice(3));
   output({ status: 'authoring_allowed', allowed: true, project: args.project || null });
@@ -2090,22 +2010,24 @@ function cmdPickNext() {
 }
 
 function resumeFallbackCommand(root, folder) {
-  // issue #227: adaptive is the only workflow path — resume routes to the plan-run
-  // executor (the fast/full paths and the phaseN ladder were retired). reconcileNextCommand
-  // trusts a legacy project's persisted next_command first, so this fallback only fires
-  // when no command was persisted.
-  return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
+  // issue #227: adaptive is the only workflow path — resume routes to the next-work command
+  // (the fast/full paths and the phaseN ladder were retired). reconcileNextCommand trusts a
+  // legacy project's persisted next_command first, so this fallback only fires when no command
+  // was persisted.
+  return adaptiveSchema.NEXT_COMMAND + ' ' + folder.project;
 }
 
 // #234 E1: reconcile the PERSISTED next_command against the project's true path before trusting it.
-// A present-but-stale value (e.g. a residual retired phaseN command on a project that is actually
-// adaptive) must NOT bypass the fallback: when the project is adaptive (workflow_path/phase says so,
-// or a workflow-plan.md exists) FORCE plan-run and ignore the stale phaseN, matching routeAdaptive's
-// artifact-first stance (#44: never silently ride a retired phaseN command). Adaptive is the only
-// path now, but a legacy non-adaptive folder is still tolerated on read: it keeps its pre-existing
-// contract (trust the persisted command, else fall back to plan-run via resumeFallbackCommand).
-// Path-agnostic: never reads path config (resume keys on the persisted workflow_path / a frozen
-// workflow-plan.md — #538).
+// A present-but-stale value (e.g. a residual retired phaseN command, or a retired plan-run command
+// left by an older run) must NOT bypass the fallback: when the project is adaptive (workflow_path/
+// phase says so, or the run's record exists on disk) FORCE the next-work command and ignore the
+// stale one, matching the artifact-first stance (#44: never silently ride a retired command).
+// Adaptive is the only path now, but a legacy non-adaptive folder is still tolerated on read: it
+// keeps its pre-existing contract (trust the persisted command, else fall back via
+// resumeFallbackCommand). Path-agnostic: never reads path config — resume keys on the persisted
+// workflow_path and on the run's own record, which is the mission list; a legacy folder's frozen
+// workflow-plan.md still counts as that record, so an older run resumes rather than reading as
+// non-adaptive (#538).
 function reconcileNextCommand(root, folder) {
   let content = '';
   try {
@@ -2114,7 +2036,7 @@ function reconcileNextCommand(root, folder) {
   const recordExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.MISSION_LIST_FILE))
     || fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
   const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || recordExists;
-  if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
+  if (isAdaptive) return adaptiveSchema.NEXT_COMMAND + ' ' + folder.project;
   return folder.next_command || resumeFallbackCommand(root, folder);
 }
 
@@ -2314,78 +2236,9 @@ function appendClosureBlock(destDir, fields) {
       'issue_disposition: ' + fields.issueDisposition + '\n' +
       'claim_label_removed: ' + fields.claimLabelRemoved + '\n' +
       'worktree_removed: ' + fields.worktreeRemoved + '\n' +
-      'closure_invariants: ' + fields.closureInvariants + '\n' +
-      'claim_planner_attested: ' + fields.claimPlannerAttested + '\n';
+      'closure_invariants: ' + fields.closureInvariants + '\n';
     // Atomic: this is the same workflow-state.md whose torn form readActiveFolders silently skips.
     writeFile(p, s);
-    return true;
-  } catch (_) { return false; }
-}
-
-// n2 (#653 finding A): durably persist a non-empty attestation warning into the archived
-// finalization-summary.md. checkDispatchAttestations only surfaced the warning on stdout JSON —
-// an archive-only audit could never see it. Presence-guarded on /^## Attestation$/m (idempotent
-// across crash-resume re-runs, and the reason a LEGACY section — including one carrying the
-// retired finalize-seam field — is left VERBATIM, never rewritten); creates the file when absent;
-// swallow-on-error. Always writes the column-0 status field, even when attested — a clean result
-// is a positive statement, not an absence.
-function persistAttestationToSummary(destDir, receipt) {
-  try {
-    const p = path.join(destDir, 'finalization-summary.md');
-    let s = '';
-    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
-    if (/^## Attestation$/m.test(s)) return false;
-    const attestationWarnings = (receipt.warnings || []).filter(w =>
-      typeof w === 'string' && (w.indexOf('ATTESTATION WARNING') === 0 || w.indexOf('attestation:') === 0));
-    let block = '## Attestation\n' +
-      'claim_planner_attested: ' + receipt.claim_planner_attested + '\n';
-    for (const w of attestationWarnings) block += w + '\n';
-    writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
-    return true;
-  } catch (_) { return false; }
-}
-
-// #763: EFFICIENCY EVIDENCE — one ROLLUP line per run, appended to the archived
-// finalization-summary.md, aggregating every expansion point THIS run discharged. Reads the
-// ARCHIVED workflow-plan.md's `## Expansion Records` (already-parsed data — no new parser) and
-// reduces it with the SAME expansionRecordEfficiency the per-expansion evidence line uses (adaptive-
-// node's expand-close), so a run's per-point lines and its one rollup line can never disagree in
-// shape or derivation. A plan with no discharged expansion point (a plain DAG plan, or a spine plan
-// that composed none) writes nothing — presence-guarded like the writers above, never a hollow
-// zero-width line. Idempotent across crash-resume (checks for the heading first) / swallow-on-error.
-function persistExpansionRollupToSummary(destDir) {
-  try {
-    let planContent = '';
-    try { planContent = fs.readFileSync(path.join(destDir, 'workflow-plan.md'), 'utf8'); } catch (_) { return false; }
-    const parsed = parseExpansionRecords(planContent);
-    if (!parsed.discharges || !parsed.discharges.size) return false;
-    const byPoint = new Map();
-    for (const r of parsed.records) {
-      if (!parsed.discharges.has(r.point)) continue;
-      if (!byPoint.has(r.point)) byPoint.set(r.point, []);
-      byPoint.get(r.point).push(r);
-    }
-    if (!byPoint.size) return false;
-    let points = 0;
-    let width = 0;
-    let rework = 0;
-    for (const [, recs] of byPoint) {
-      const eff = expansionRecordEfficiency(recs);
-      points += 1;
-      width += eff.width;
-      rework += eff.rework;
-    }
-    const p = path.join(destDir, 'finalization-summary.md');
-    let s = '';
-    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
-    if (/^## Expansion Rollup$/m.test(s)) return false;
-    // Deliberately a DIFFERENT shape from renderExpansionEfficiencyLine (points/width/rework, no
-    // mode/serializer — those are per-point attributes that do not reduce meaningfully across many
-    // points in one summary line); the per-point lines already live in each point's own evidence
-    // file (.cache/<point>.md) for anyone who needs the mode/serializer breakdown.
-    const block = '## Expansion Rollup\n'
-      + 'expansion rollup: points=' + points + ' width=' + width + ' rework=' + rework + '\n';
-    writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
     return true;
   } catch (_) { return false; }
 }
@@ -4240,20 +4093,12 @@ function cmdFinalize() {
   if (keepOpenWarnings.length > 0) {
     closureReceipt.warnings = (closureReceipt.warnings || []).concat(keepOpenWarnings);
   }
-  // M2 (#277 Phase 2): WARN-FIRST attestation check.
-  // archiveProjectDir runs first (line ~863) and renames the live folder to result.dest,
-  // so the live cache is gone; check the archive candidate first, then live as fallback.
+  // archiveProjectDir runs first and renames the live folder to result.dest, so the live cache is
+  // gone by now; every .cache probe below checks the archive candidate first, then live as fallback.
   const liveCacheDir = path.join(root, 'kaola-workflow', args.project, '.cache');
   const archiveCacheDir = result.dest ? path.join(result.dest, '.cache') : null;
-  checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
-  // n2 (#653 finding A): a non-empty ATTESTATION WARNING must not live only in stdout JSON —
-  // transcribe it (and the status field) into the archived finalization-summary.md.
-  if (result.dest) persistAttestationToSummary(result.dest, closureReceipt);
-  // #763: the per-run expansion-efficiency rollup line (absent on a plan with no discharged
-  // expansion point — presence-guarded inside the writer).
-  if (result.dest) persistExpansionRollupToSummary(result.dest);
-  // n5 (#653 finding D3): advisory selection-evidence probe, computed beside the attestation
-  // probe using the same archive-then-live candidate order (archiveProjectDir already ran).
+  // n5 (#653 finding D3): advisory selection-evidence probe, using the archive-then-live candidate
+  // order (archiveProjectDir already ran).
   closureReceipt.selection_evidence = probeSelectionEvidence([archiveCacheDir, liveCacheDir]);
   // Advisory goal DECLARATION (presence, never satisfaction — see computeGoalDeclaration). Probe
   // archive-dest first (the plan was already renamed there), then the live location as a fallback
@@ -4277,8 +4122,7 @@ function cmdFinalize() {
       issueDisposition: issueDisposition,
       claimLabelRemoved: claimLabelRemoved,
       worktreeRemoved: worktreeRemoved,
-      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length),
-      claimPlannerAttested: closureReceipt.claim_planner_attested
+      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length)
     });
   }
   // #333: keep-worktree commit block MOVED here (commit-last) — after the ## Closure append so the
@@ -5058,23 +4902,21 @@ function copyDir(src, dest) {
   }
 }
 
-// #676: the evidence files whose silent loss during archiving would drop finalization / per-node
-// gate evidence. Enumerate the ones that ACTUALLY EXIST in the live SOURCE folder — this is the
-// SOURCE-RELATIVE completeness set. A minimal project (only workflow-state.md) yields just that; a
-// full adaptive run yields the frozen workflow-plan.md + workflow-state.md + finalization-summary.md
-// + EVERY per-node .cache/*.md gate-evidence file.
+// #676: the evidence files whose silent loss during archiving would drop the run's own record.
+// Enumerate the ones that ACTUALLY EXIST in the live SOURCE folder — this is the SOURCE-RELATIVE
+// completeness set. A minimal project (only workflow-state.md) yields just that; a full run yields
+// the mission list + workflow-state.md + finalization-summary.md + EVERY per-step .cache/*.md
+// evidence file. `workflow-plan.md` is listed for the LEGACY folder that still carries a frozen
+// plan; nothing authors one any more, and its absence is never demanded.
 // Nothing the source never had is ever demanded, so the gate can never break a minimal fixture — it
 // only fires when a copy genuinely dropped a file the source held.
 //
-// A node id is free-form [A-Za-z0-9_-]+ (sanitizeNodeId), NOT an n<digits>-<slug> grammar, so real
-// gate evidence is named design.md / review.md / finalize.md / t414.md / parity-anchor.md /
-// planner.md / code-reviewer.md / tdd-guide.md / security-reviewer.md / n1.md / … — a name-shape glob
-// silently misses ALL of these. Enumerate EVERY .cache/*.md and subtract only the fixed-name finalize
-// / machinery sub-step sidecars below (which are NOT per-node gate evidence). Over-inclusion is
-// fail-closed-safe because copyDir is fully recursive — a faithful archive already carries every
-// .cache/*.md the source held, so requiring extra can never false-refuse a genuine copy. Non-.md
-// artifacts (run-gaps.json, chain-receipt.json, barrier-*/dispatch/provenance/running-set) are not
-// gate evidence and are excluded by the .md filter.
+// Evidence file names are free-form, so a name-shape glob silently misses most of them. Enumerate
+// EVERY .cache/*.md and subtract only the fixed-name finalize / machinery sub-step sidecars below
+// (which are NOT per-step evidence). Over-inclusion is fail-closed-safe because copyDir is fully
+// recursive — a faithful archive already carries every .cache/*.md the source held, so requiring
+// extra can never false-refuse a genuine copy. Non-.md artifacts (run-gaps.json, chain-receipt.json,
+// the dispatch/outcome/timing sidecars) are not evidence and are excluded by the .md filter.
 const ARCHIVE_CACHE_SIDECAR_MD = new Set([
   'final-validation.md',   // finalize validation-gate evidence (column-0 verdict: pass); archiveProjectDir normalizes it by name
   'run-gaps-manual.md',    // manual gap-sweep annotations sidecar
@@ -5084,7 +4926,8 @@ const ARCHIVE_CACHE_SIDECAR_MD = new Set([
 ]);
 function listSourceEvidenceFiles(srcDir) {
   const rels = [];
-  for (const f of ['workflow-plan.md', 'workflow-state.md', 'finalization-summary.md']) {
+  for (const f of [adaptiveSchema.MISSION_LIST_FILE, adaptiveSchema.PLAN_FILE,
+                   'workflow-state.md', 'finalization-summary.md']) {
     if (fs.existsSync(path.join(srcDir, f))) rels.push(f);
   }
   let cacheEntries = [];
@@ -5432,9 +5275,6 @@ function cmdWatchPr() {
         folderReceipt.open_issues = mOpen.sort(function(a, b){ return a - b; });
         folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
       }
-      const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');
-      const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
-      checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       // #333: append the terminal receipt to the archived state. watch-pr archives into the MAIN
       // working tree without committing (today's behavior); the append lands inside the untracked
@@ -5444,8 +5284,7 @@ function cmdWatchPr() {
           issueDisposition: issueDisposition,
           claimLabelRemoved: claimLabelStatus,
           worktreeRemoved: worktreeRemoved,
-          closureInvariants: folderInvariants.ok ? 'ok' : ('violations:' + folderInvariants.violations.length),
-          claimPlannerAttested: folderReceipt.claim_planner_attested
+          closureInvariants: folderInvariants.ok ? 'ok' : ('violations:' + folderInvariants.violations.length)
         });
       }
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
@@ -5509,9 +5348,6 @@ function cmdWatchPr() {
         folderReceipt.issue_numbers = folder.issue_numbers;
         folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
       }
-      const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');
-      const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
-      checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       const cleanupEntry2 = { folder: folder.project, claim_label_removed: claimLabelStatus2,
         discard_archive_committed: discardCommit2.committed,
@@ -5716,7 +5552,6 @@ const USAGE = 'usage: kaola-workflow-claim.js <claim|authoring-allowed|release|s
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--pr-number N]\n'
   + '         [--branch B] [--reason R] [--runtime claude|codex|opencode] [--sink merge|mr|pr] [--workflow-path VALUE (retired, ignored)]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
-  + '         [--attest-planner-spawn]\n'
   + '  finalize --project P --check [--json]\n'
   + '               ONE read-only pass over EVERY finalize precondition (mirror, workflow_state,\n'
   + '               implementation_commit, staging_guard, validation, dirty_paths). Emits\n'
@@ -5774,7 +5609,6 @@ module.exports = {
   buildBranchName,
   buildClosureReceipt,
   checkClosureInvariants,
-  checkDispatchAttestations,
   claimBundle,
   claimExplicitBundle,
   claimExplicitTarget,
@@ -5826,12 +5660,8 @@ module.exports = {
   mirrorFinalizationArtifacts,
   probeImplementationCommit,
   checkFinalizeStagingGuard,
-  // #700: terminal archive-metadata writers reused by sink-merge's SOLE-archiver finalize path.
+  // #700: the terminal archive-metadata writer reused by sink-merge's SOLE-archiver finalize path.
   appendClosureBlock,
-  persistAttestationToSummary,
-  // #763: the per-run expansion-efficiency archive rollup writer — exported for direct unit
-  // coverage AND reuse by sink-merge's SOLE-archiver finalize path (same reason the two above are).
-  persistExpansionRollupToSummary,
   // #715 F1: exported for direct unit coverage (restore-gate dest exemption + base-branch guard).
   treeDirty,
   commitDiscardArchive

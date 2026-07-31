@@ -67,9 +67,8 @@ built-in type for the role's kind:
 
 The role-kind map is **computed from canonical frontmatter, never hand-listed**, so a
 canonical role that gains or loses write tools flips kind automatically. `workflow-next`
-dispatches no agent of its own (the retired issue-scout survey folded into
-`workflow-planner`'s no-target mode, dispatched by the separate adapt surface), so it
-carries no `Agent()` cards or prose dispatch to rewrite. Every `kaola-role-*` reference
+dispatches no agent of its own, so it carries no `Agent()` cards or prose dispatch to
+rewrite. Every `kaola-role-*` reference
 inside a generated command skill is checked to resolve to a generated role skill, so a
 renamed canonical role cannot leave a dangling Skill reference.
 
@@ -147,14 +146,13 @@ path-selection step at the router. The canonical `commands/workflow-next.md` is 
 generation time by `sync-kimi-edition.js`'s `transformCommandBody` — a section-drop keyed to the
 stable **"Path Intent" title**, not the volatile step number — so the generated
 `.kimi/skills/workflow-next/` matches the kimi router shape, and **canonical `commands/*.md` is
-never touched**. `commands/kaola-workflow-adapt.md` needs no kimi-specific transform: the kimi
-surface inherits the canonical repair loop verbatim.
+never touched**.
 
 ## Installer command set
 
 `install-kimi.sh` is a standalone installer — it has its own `--forge` flag and does not run
-through `install.sh --forge`. It deploys the workflow command skills — adapt, finalize, plan-run,
-workflow-init, workflow-next — plus all 15 `kaola-role-*` skills. `copy_skills` is
+through `install.sh --forge`. It deploys the workflow command skills — finalize, workflow-init,
+workflow-next — plus all 15 `kaola-role-*` skills. `copy_skills` is
 **self-healing**: before re-copying it prunes every kaola-owned skill dir not in that set, so a
 reinstall converges to exactly the workflow skill set on disk. Support scripts come from the
 selected forge's script tree, and the installer fails closed if an allowlisted script is missing

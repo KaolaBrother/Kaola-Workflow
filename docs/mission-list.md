@@ -90,16 +90,21 @@ that locator is what makes the check possible at all.
 
 ## What is not here
 
-There is no plan grammar, no freeze, no gate, no disjointness check, no fan-out cap, no serializer
-evidence, and no refusal. Concurrency is the orchestrator's call, uninspected — the frontier is
-visible and the agent decides how much of it to open.
+There is no plan grammar, no freeze, no gate, no disjointness check, no fan-out cap and no
+serializer evidence, and nothing refuses a piece of work for being unsatisfactory. Concurrency is the
+orchestrator's call, uninspected — the frontier is visible and the agent decides how much of it to
+open.
 
 Tools stay tools: subagents and worktrees are offered and declinable. A tool the agent cannot decline
 and still finish is a gate wearing a tool's name.
 
 ## The sink
 
-When work merges, the sink **reports** what it found — content on the branch that no record
-describes, a merge that did not fast-forward — and the orchestrator resolves it: get the merge
-correct, resynchronize, or file a PR, then clean up after. The sink does not refuse; the orchestrator
-is accountable for the branch ending up right.
+When work merges, the sink **reports** what it found — chains that came back red, content on the
+branch that no record describes, a merge that did not fast-forward — and the orchestrator resolves
+it: get the merge correct, resynchronize, or file a PR, then clean up after. The sink does not judge
+the work; the orchestrator is accountable for the branch ending up right.
+
+It still fails loudly for one class, and that is not a verdict: an operation that would destroy
+something — a dirty tree carrying uncommitted work, a probe it could not run, an archive that would
+lose a file.

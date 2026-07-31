@@ -408,9 +408,15 @@ never part of the deliverable.
 <!-- PIN: sink-reports-orchestrator-owns -->
 ### The sink reports; you own the outcome
 
-The sink does not refuse and it does not decide. It tells you what it found — content on the branch
-that no record describes, a witness bound to different bytes than the ones being published, a merge
-that did not fast-forward — and then **you** are accountable for the branch ending up right.
+The sink does not judge your work and it does not decide whether it should land. It tells you what
+it found — chains that came back red over the rebased tree, content on the branch that no record
+describes, a witness bound to different bytes than the ones being published, a merge that did not
+fast-forward — and then **you** are accountable for the branch ending up right.
+
+It still stops for one class of thing, and that is not a verdict: an operation that would destroy
+something. A dirty main root or a linked worktree with uncommitted changes, a probe it could not
+run, an archive that would lose a file. Those protect work nobody agreed to lose, so they fail
+loudly rather than reporting and continuing.
 
 This is not "merge anyway and report." Resolution is your responsibility and you own the whole
 outcome. Three resolutions are available and all three are legitimate:

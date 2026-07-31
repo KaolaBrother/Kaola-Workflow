@@ -24,12 +24,13 @@
 // and never written.
 const ADAPTIVE_PATH = 'adaptive';
 
-// The adaptive executor command + skill the two resume surfaces emit (never
-// /kaola-workflow-phase{N}). Toggle-agnostic: resume of a frozen plan ignores the switch.
-const PLAN_RUN_COMMAND = '/kaola-workflow-plan-run';
-const PLAN_RUN_SKILL = 'kaola-workflow-plan-run';
-const ADAPT_COMMAND = '/kaola-workflow-adapt';
-const ADAPT_SKILL = 'kaola-workflow-adapt';
+// The command + skill the two resume surfaces emit. `/workflow-next` is the ONE surface that both
+// creates a mission list and works it, so a fresh claim and a resume name the same door — there is
+// no separate authoring command to route to any more. The two basenames are ASYMMETRIC by design
+// (the command is `workflow-next`, the skill is `kaola-workflow-next`), which is why both spellings
+// are named here instead of derived from one another.
+const NEXT_COMMAND = '/workflow-next';
+const NEXT_SKILL = 'kaola-workflow-next';
 
 // The one durable coordination record: `kaola-workflow/<run>/mission-list.md`. Named here rather
 // than spelled at each reader so the file's name lives in the same byte-identical module every
@@ -771,78 +772,6 @@ function resolveMainRoot(root) {
   try { return mainRootFromCoord(getCoordRoot(r)); } catch (_) { return r; }
 }
 
-// #354: the SINGLE fence-aware locator for a `## {heading}` markdown section — the one home for
-// ALL `## Node Ledger` / `## Required Agent Compliance` section access across readers/writers.
-// Returns char offsets matching the legacy `content.indexOf('\n## ' + heading)` /
-// `content.indexOf('\n## ', start + 1)` pair, but with FENCE TRACKING in the heading-locator loop so
-// (a) an UPSTREAM FENCED `## {heading}` decoy is skipped and (b) a fenced `## ` line INSIDE the
-// section does not prematurely end it. `start` = offset of the '\n' before the real heading line
-// (-1 when the section is absent, appears only fenced, or sits at file start with no leading '\n');
-// `next` = offset of the '\n' before the next fence-depth-0 `## ` heading after it (-1 → EOF).
-// PURE String ops only — NO classifier import, preserving the ×4 byte-identity contract (see the
-// readDurableConsentHalt note above). Prefix match mirrors the legacy indexOf semantics.
-// #665: the closer check is RUN-LENGTH-aware (mirrors the classifier's markdownFenceTransition
-// semantics locally): a closer must be the SAME family AND have a run-length >= the OPENER's AND
-// an empty/whitespace-only suffix. The prior family-only check let a SHORTER same-family fence
-// nested inside a longer one close it early, exposing a fenced decoy heading as "unfenced". FIRST-
-// HIT selection among unfenced heading candidates is unchanged; a genuine duplicate unfenced
-// heading (vanishingly rare malformed input) still resolves to the first-hit — a deliberate
-// documented fallback, since this {start,next} offset-pair contract has no ambiguous-status
-// channel the way classifier.sectionBodyState does, and every existing caller already tolerates
-// first-hit-wins here.
-function locateSection(content, heading) {
-  const lines = String(content).split('\n');
-  // #673: ANCHORED heading match — byte-parity with the classifier's oracle
-  // (classifier.sectionBodyState's headRe: `^##\s+<escaped heading>\s*$`), replacing the loose
-  // `startsWith('## ' + heading)` PREFIX test that false-positived on a longer decoy heading
-  // (`## Node Ledger Extra`) and false-negatived on legal extra intra-heading whitespace
-  // (`##  Node Ledger` two-space, `##\tNode Ledger` tab). Same escape as the classifier so a
-  // heading containing regex metacharacters behaves identically in both.
-  const escapedHeading = String(heading).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const headRe = new RegExp('^##\\s+' + escapedHeading + '\\s*$');
-  // #673: the next-heading TERMINATOR is likewise anchored to `^##\s` (matches the classifier's
-  // `/^##\s/` collecting-loop terminator) instead of the loose `startsWith('## ')`, which missed a
-  // tab-headed (`##\tAppendix`) following section and let its body bleed into the prior slice.
-  const nextHeadRe = /^##\s/;
-  const fenceRe = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
-  let inFence = false, fam = '', fenceLen = 0;
-  let off = 0, start = -1, headingLine = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i];
-    const fm = ln.match(fenceRe);
-    if (fm) {
-      const f = fm[1][0], len = fm[1].length;
-      if (!inFence) { inFence = true; fam = f; fenceLen = len; }
-      else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { inFence = false; fam = ''; fenceLen = 0; }
-    // #673: `i > 0` is KEPT — NOT a stylistic no-op. A heading at absolute line 0 has no leading
-    // '\n', so `start = off - 1` would collapse to -1 regardless of match style, colliding with the
-    // "-1 = absent" sentinel; without this guard a line-0 false "match" would `break` the scan
-    // immediately and hide a genuine heading later in the same content (a WORSE divergence than the
-    // documented, structurally-unreachable line-0 gap — see T6e-d in test-adaptive-node.js).
-    } else if (!inFence && i > 0 && headRe.test(ln)) {
-      start = off - 1; headingLine = i; break;
-    }
-    off += ln.length + 1; // +1 for the consumed '\n'
-  }
-  if (start < 0) return { start: -1, next: -1 };
-  let off2 = off + lines[headingLine].length + 1;
-  inFence = false; fam = ''; fenceLen = 0;
-  let next = -1;
-  for (let i = headingLine + 1; i < lines.length; i++) {
-    const ln = lines[i];
-    const fm = ln.match(fenceRe);
-    if (fm) {
-      const f = fm[1][0], len = fm[1].length;
-      if (!inFence) { inFence = true; fam = f; fenceLen = len; }
-      else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { inFence = false; fam = ''; fenceLen = 0; }
-    } else if (!inFence && nextHeadRe.test(ln)) {
-      next = off2 - 1; break;
-    }
-    off2 += ln.length + 1;
-  }
-  return { start, next };
-}
-
 // ---------------------------------------------------------------------------
 // The emit / refuse / answer protocol — the shared envelope + framed-output constructor.
 //
@@ -954,7 +883,6 @@ function deriveSinkProgressFromState(io) {
 // `scripts/test-outcome-recorder.js` asserts that over the whole set.
 // ===========================================================================
 const NODE_TIMINGS_LOG_NAME = 'node-timings.jsonl';
-const PROVENANCE_LOG_NAME = 'provenance-log.jsonl';
 const DISPATCH_LOG_NAME = 'dispatch-log.jsonl';
 const OUTCOME_LOG_NAME = 'outcome-log.jsonl';
 
@@ -962,7 +890,6 @@ const OUTCOME_LOG_NAME = 'outcome-log.jsonl';
 // SIGNIFICANT — this is a membership set, not a precedence list.
 const PARENT_OWNED_SIDECARS = Object.freeze([
   '.cache/' + NODE_TIMINGS_LOG_NAME,
-  '.cache/' + PROVENANCE_LOG_NAME,
   '.cache/' + DISPATCH_LOG_NAME,
   '.cache/' + OUTCOME_LOG_NAME,
 ]);
@@ -1174,10 +1101,8 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
   // ---- Preference -------------------------------------------------------------------------
   ['.cache/' + NODE_TIMINGS_LOG_NAME, 'preference', null, 'script',
     'best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict'],
-  ['.cache/' + PROVENANCE_LOG_NAME, 'preference', null, 'script',
-    'best-effort audit trail, writer swallows every error; no gate reads it'],
   ['.cache/' + DISPATCH_LOG_NAME, 'preference', null, 'script',
-    'hook-written spawn log; the attestation check is WARN-FIRST, so absence degrades to a warning, never a wrong outcome'],
+    'hook-written spawn log; a diagnostic record of who was dispatched, read by no gate and by no successor decision'],
   ['.cache/' + OUTCOME_LOG_NAME, 'preference', null, 'script',
     'the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label'],
   ['.cache/wedged-attestation.json', 'preference', null, 'script',
@@ -1896,154 +1821,6 @@ function changedPathsSinceBase(root, base, project) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// The expansion-record readers. RELOCATED, NOT DESIGNED — they arrive here unchanged, and they are
-// here only because the archive rollup that reads them outlives the module they used to live in.
-// They are retiring machinery: nothing new should call them.
-// ---------------------------------------------------------------------------
-
-// A fence-aware, ambiguity-refusing section body reader — byte-parity with the classifier's oracle,
-// reimplemented here because this module is the cross-edition byte anchor and is base-named in all
-// four trees, so it cannot require the per-forge-renamed classifier. DUPLICATE heading or unclosed
-// fence yields '' (ambiguous is not "absent" and must never read as a body).
-function sectionBodyStrict(content, heading) {
-  const lines = String(content || '').split('\n');
-  const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
-  const fenceRe = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
-  let fam = '', fenceLen = 0;
-  let found = 0, collecting = false, done = false;
-  const out = [];
-  for (const line of lines) {
-    const m = line.match(fenceRe);
-    if (m) {
-      const run = m[1];
-      if (!fam) { fam = run[0]; fenceLen = run.length; }
-      else if (run[0] === fam && run.length >= fenceLen && /^\s*$/.test(m[2])) { fam = ''; fenceLen = 0; }
-    }
-    if (!fam && headRe.test(line)) {
-      found++;
-      if (found > 1) return '';
-      collecting = true;
-      continue;
-    }
-    if (collecting && !fam && /^##\s/.test(line)) { collecting = false; done = true; }
-    if (collecting) out.push(line);
-  }
-  if (fam) return '';
-  if (found !== 1) return '';
-  return (done || collecting) ? out.join('\n') : '';
-}
-
-const EXPANSION_RECORDS_HEADING = 'Expansion Records';
-const EXPANSION_DERIVATION_KEYS = Object.freeze(['grain', 'path', 'join', 'probe', 'serializer']);
-
-// The composed unit id — one derivation, so the writer, the reader and the reconciler can never
-// disagree about which ledger row belongs to which unit.
-function expansionUnitId(point, ordinal, name) {
-  return String(point) + '-r' + String(ordinal) + '-' + String(name);
-}
-
-// Parse `## Expansion Records` into an ordered list of blocks. Total and non-throwing: a malformed
-// block is REPORTED (`malformed`), never silently dropped.
-// Returns { records: [...], opens: Set<recordId>, discharges: Set<pointId>, blocks: [...] }.
-function parseExpansionRecords(content) {
-  const body = sectionBodyStrict(content, EXPANSION_RECORDS_HEADING);
-  const headerRe = /^(record|open|discharge)\(([^)]*)\)[ \t]*:[ \t]*$/;   // column 0
-  const fieldRe = /^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)[ \t]*$/;         // indented key: value
-  const blocks = [];
-  let cur = null;
-  const flush = () => { if (cur) blocks.push(cur); cur = null; };
-  for (const raw of String(body || '').split('\n')) {
-    const h = raw.match(headerRe);
-    if (h) { flush(); cur = { kind: h[1], key: h[2].trim(), fields: {}, units: [] }; continue; }
-    if (cur) {
-      const fm = raw.match(fieldRe);
-      if (fm) {
-        if (fm[1] === 'unit') cur.units.push(fm[2]);
-        else cur.fields[fm[1]] = fm[2];
-        continue;
-      }
-      if (raw.trim() !== '' && !/^[ \t]/.test(raw)) flush();
-    }
-  }
-  flush();
-
-  const records = [];
-  const opens = new Set();
-  const discharges = new Set();
-  for (const b of blocks) {
-    if (b.kind === 'open') { opens.add(b.key); continue; }
-    if (b.kind === 'discharge') { discharges.add(b.key); continue; }
-    const malformed = [];
-    const m = b.key.match(/^(.+)#([1-9][0-9]*)$/);
-    const point = m ? m[1] : (String(b.fields.point || '').trim() || '');
-    const ordinal = m ? Number(m[2]) : NaN;
-    if (!m) malformed.push('record id "' + b.key + '" is not <point>#<ordinal>');
-    const declaredPoint = String(b.fields.point || '').trim();
-    if (m && declaredPoint && declaredPoint !== point) {
-      malformed.push('record ' + b.key + ' declares point "' + declaredPoint + '" which disagrees with its id');
-    }
-    const units = [];
-    const seenNames = new Set();
-    for (const line of b.units) {
-      const cells = String(line).split('|').map(c => c.trim());
-      const name = cells[0] || '';
-      if (!/^[A-Za-z0-9_-]+$/.test(name)) { malformed.push('record ' + b.key + ' unit name "' + name + '" is not [A-Za-z0-9_-]+'); continue; }
-      if (seenNames.has(name)) { malformed.push('record ' + b.key + ' repeats unit name "' + name + '"'); continue; }
-      seenNames.add(name);
-      const dash = v => (v && v !== '—' && v !== '-') ? v : '';
-      units.push({
-        name,
-        id: expansionUnitId(point, ordinal, name),
-        role: cells[1] || '',
-        model: dash(cells[2] || '').toLowerCase(),
-        writeSetRaw: cells[3] || '—',
-        mode: (cells[4] || '').toLowerCase(),
-        dependsOnNames: dash(cells[5] || '').split(',').map(s => s.trim()).filter(Boolean),
-      });
-    }
-    if (!units.length) malformed.push('record ' + b.key + ' declares no unit lines');
-    records.push({
-      id: b.key,
-      point,
-      ordinal,
-      plan_hash: String(b.fields.plan_hash || '').trim().toLowerCase(),
-      derivation: EXPANSION_DERIVATION_KEYS.reduce((acc, k) => {
-        acc[k] = String(b.fields[k] == null ? '' : b.fields[k]).trim();
-        return acc;
-      }, {}),
-      units,
-      malformed,
-    });
-  }
-  records.sort((a, b2) => (a.point < b2.point ? -1 : a.point > b2.point ? 1 : (a.ordinal - b2.ordinal)));
-  return { records, opens, discharges, blocks };
-}
-
-// expansionRecordEfficiency — pure aggregate over EVERY record composed for ONE expansion point
-// (including superseded re-expansions). Answers, from data already in hand at archive time — no new
-// durable file, no metering, no timing:
-//   width      total units across every record on the point (the actual fan-out spent to finish it)
-//   mode       'serial' when ANY unit anywhere on the point declared mode serial, else 'co_open'
-//   serializer the first S1/S2/S3 token named in any record's recorded `serializer` derivation line,
-//              else 'none' — AUDIT-ONLY: it reads free text for a token, never re-derives anything
-//   rework     re-expansions beyond the first (records.length - 1)
-// Never throws: an empty/malformed `recs` answers the all-zero/'none' shape.
-function expansionRecordEfficiency(recs) {
-  const list = Array.isArray(recs) ? recs : [];
-  const width = list.reduce((sum, r) => sum + ((r && Array.isArray(r.units)) ? r.units.length : 0), 0);
-  const anySerial = list.some(r => (r && Array.isArray(r.units) ? r.units : []).some(u => u.mode === 'serial'));
-  const serializerText = list.map(r => (r && r.derivation && r.derivation.serializer) || '').join(' ');
-  const tagMatch = /\bS[123]\b/.exec(serializerText);
-  return {
-    width,
-    mode: anySerial ? 'serial' : 'co_open',
-    serializer: tagMatch ? tagMatch[0].toUpperCase() : 'none',
-    rework: Math.max(0, list.length - 1),
-  };
-}
-
 // parseGoal — the run's goal, read from the mission list's H1 (`# <goal>`). One line, at the top of
 // the one file, because the same usage limit that kills a subagent applies to the session holding
 // the goal in context.
@@ -2069,10 +1846,8 @@ module.exports = {
   mainRootFromCoord,
   resolveMainRoot,
   ADAPTIVE_PATH,
-  PLAN_RUN_COMMAND,
-  PLAN_RUN_SKILL,
-  ADAPT_COMMAND,
-  ADAPT_SKILL,
+  NEXT_COMMAND,
+  NEXT_SKILL,
   PLAN_FILE,
   NODE_MODEL_TIERS,
   TIER_ALIASES,
@@ -2118,7 +1893,6 @@ module.exports = {
   isCuratedRoot,
   canonicalCuratedRoot,
   writeFileAtomicReplace,
-  locateSection,
   emit,
   refuse,
   answer,
@@ -2140,7 +1914,6 @@ module.exports = {
   // the ONE list both the sidecar writers and the leg capture sweep read; the builder is the one
   // record shape every edition emits.
   NODE_TIMINGS_LOG_NAME,
-  PROVENANCE_LOG_NAME,
   DISPATCH_LOG_NAME,
   OUTCOME_LOG_NAME,
   PARENT_OWNED_SIDECARS,
@@ -2175,10 +1948,6 @@ module.exports = {
   evaluateChainReceipt,
   evaluateReleaseReceipt,
   changedPathsSinceBase,
-  // Relocated expansion-record readers — retiring machinery kept alive only for the archive rollup.
-  sectionBodyStrict,
-  parseExpansionRecords,
-  expansionRecordEfficiency,
   MISSION_LIST_FILE,
   parseGoal,
 };

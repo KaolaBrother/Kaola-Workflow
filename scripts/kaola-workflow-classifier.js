@@ -203,20 +203,15 @@ function normalizeRepoPath(raw) {
     .replace(/^[`'"]+/, '')
     .replace(/[`'",.;:)\]}]+$/, '')
     .trim()
-    // v3.21.0: canonicalize so the SAME physical file compares equal everywhere — strip leading
-    // `./` segments and collapse repeated slashes. Without this, a declared `./lib/foo.js` vs
-    // `lib/foo.js` (or `lib//foo.js`) are distinct strings, which defeated the exact-file
-    // clobber refusal + disjointness check and skewed areaForPath (`.` vs `lib`). (Adversarial
-    // finding against the v3.20.1 #232/#233 exact-file fix.) `../` is left untouched on purpose
-    // (resolving it changes meaning and is out of scope).
+    // Canonicalize so the SAME physical file compares equal everywhere: strip leading `./`
+    // segments, collapse repeated slashes, and collapse inner `/./` segments. Without this a
+    // mentioned `./lib/foo.js`, `lib//foo.js` and `lib/./foo.js` are three distinct strings, so a
+    // set of extracted paths double-counts one file and areaForPath reads the area as `.` instead
+    // of `lib`. `../` is left untouched on purpose (resolving it changes meaning and is out of
+    // scope), and the trailing-`/` directory shape is preserved — callers distinguish a directory
+    // mention from a file one by that slash. NOT exported: a pure canonicalization, no refusal.
     .replace(/^(?:\.\/)+/, '')
     .replace(/\/{2,}/g, '/')
-    // #388: collapse INNER `/./` segments so the SAME physical file compares equal everywhere.
-    // Without this, `src/./app.js` vs `src/app.js` are distinct strings — which froze in-grammar
-    // as independent antichain siblings yet die at the exact-path barrier, AND defeated the
-    // guaranteed-clobber refusal (~plan-validator disjointness compares normalized strings). NO
-    // refusal here and NOT exported — this is a pure canonicalization that closes the evasion for
-    // free; the trailing-`/` directory-shape semantics (the #381 refusal key) are preserved intact.
     .replace(/\/\.\//g, '/')
     .replace(/\/\.$/, '/');
 }

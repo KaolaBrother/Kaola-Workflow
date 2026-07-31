@@ -70,13 +70,13 @@ The refusal count in the run design is **zero**. Measurements survive; verdicts 
 chain-receipt check reports a typed finding on its envelope and durably in `finalization-summary.md`,
 and the orchestrator decides what to do about it.
 
-Two things are deliberately not conversions, and neither is a gate on the agent's work: the pre-tag
-release gate (`kaola-workflow-run-chains.js --release-check`) still refuses, because a release tag
-demands an unwaived four-chain receipt; and an archive move that would **lose a file** fails loudly,
-because that is an operation refusing to destroy data.
+What is deliberately not converted is never a gate on the work. The pre-tag release gate
+(`run-chains.js --release-check`) still refuses — a release tag demands an unwaived four-chain
+receipt. And an operation that would **destroy** something still fails loudly: an archive that would
+lose a file, a sink over a tree carrying uncommitted work. Those protect work nobody agreed to lose.
 
-**Missing is a routing problem, never a stop.** When something needed is absent, go get it. "Blocked
-on a prerequisite" is nearly always a task nobody dispatched.
+**Missing is a routing problem, never a stop** — "blocked on a prerequisite" is nearly always a task
+nobody dispatched.
 
 ### Derive additively
 

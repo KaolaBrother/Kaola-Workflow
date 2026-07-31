@@ -218,56 +218,25 @@ function kimiKaolaScript(forge) {
   return KIMI_KAOLA_SCRIPT.split('"./scripts/$_n"').join(`"${selfDev}/$_n"`);
 }
 
-// reEsc — escape a derived token for literal use inside a RegExp.
-const reEsc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 // Rewrite the Claude script-path surface to kimi-native (kimi twin of the opencode
 // rewriteClaudeScriptPaths). Applied to BOTH command bodies (via transformCommandBody)
 // and agent bodies (via renderAgent) so the committed .kimi/ tree has ZERO
 // `$CLAUDE_PLUGIN_ROOT` / `$HOME/.claude/kaola-workflow` tokens. Canonical sources are
-// NEVER touched (additive D-530-02) — only the generated outputs. Replacement-for-
-// replacement mirror of the opencode version:
-//   (a) whole `kaola_script(){ ... }` definition lines → KIMI_KAOLA_SCRIPT;
-//   (b) the "Re-derive your own script path(s)" prose parenthetical → the kimi list;
-//   (c) the standalone REPLAN_SCRIPT resolver (two-line fallback pair + the for-loop
-//       candidate pair) → the single kimi-native candidate.
+// NEVER touched (additive D-530-02) — only the generated outputs. ONE replacement remains,
+// and it mirrors the opencode version replacement-for-replacement: whole `kaola_script(){
+// ... }` definition lines → KIMI_KAOLA_SCRIPT.
+//
+// Each rewrite rule is a site where two runtimes can silently diverge, so the count of
+// rules is itself the reliability metric. The prose-parenthetical rule and the two
+// REPLAN_SCRIPT resolver rules are gone with the surfaces that carried them (the planner
+// agent and the re-plan machinery); they matched nothing left in the tree, and a rule that
+// can no longer fire cannot be verified.
 function rewriteClaudeScriptPaths(text, forge) {
   forge = forge || DEFAULT_FORGE;
-  // The forge's replan basename + Claude support-dir name. Both are DERIVED (the
-  // install manifest's rename transform and the plugin dir name), so the (c)
-  // rewrites below match the forge surface they are actually rendering rather
-  // than the github one — without them a gitlab render leaks $CLAUDE_PLUGIN_ROOT.
-  const replanJs = forgeLayout.scriptName('kaola-workflow-replan.js', forge);
-  const claudeDir = forgeLayout.pluginDirName(forge);
-  // (a) Whole resolver definition line (indent-preserving). The resolver is always a
-  // single line; `.*` does not cross newlines (no `s` flag), so each definition is
-  // replaced independently.
-  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
-  // (b) The path-list parenthetical in agent prose (whitespace-flexible across the two
-  // agents' line breaks). Scoped to the literal "(prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
-  // then … then `./scripts`)" shape — only workflow-planner carries it.
-  text = text.replace(
-    /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
-    '(prefer `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, then `./scripts`)'
-  );
-  // (c1) The two-line REPLAN_SCRIPT fallback pair (adapt + finalize): a
-  // $CLAUDE_PLUGIN_ROOT line followed by a $HOME/.claude line → ONE kimi-native line.
-  text = text.replace(
-    new RegExp(
-      '^([ \\t]*)\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/'
-      + reEsc(replanJs) + '\\}"\\n[ \\t]*\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$HOME/\\.claude/'
-      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"$', 'gm'),
-    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/' + replanJs + '"'
-  );
-  // (c2) The for-loop path list (plan-run + workflow-next): the Claude pair inside the
-  // candidate list → the single kimi-native candidate.
-  text = text.replace(
-    new RegExp(
-      '"\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/' + reEsc(replanJs) + '\\}" "\\$HOME/\\.claude/'
-      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"', 'g'),
-    '"${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/' + replanJs + '"'
-  );
-  return text;
+  // Whole resolver definition line (indent-preserving). The resolver is always a single
+  // line; `.*` does not cross newlines (no `s` flag), so each definition is replaced
+  // independently.
+  return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
 }
 
 function transformCommandBody(body, forge) {

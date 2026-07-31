@@ -286,56 +286,23 @@ function opencodeKaolaScript(forge) {
   return OPENCODE_KAOLA_SCRIPT.split('"./scripts/$_n"').join(`"${selfDev}/$_n"`);
 }
 
-// reEsc — escape a derived token for literal use inside a RegExp.
-const reEsc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 // #544 (folded into #543): rewrite the Claude script-path surface to opencode-native. Applied to
 // BOTH command bodies (via transformCommandBody) and agent bodies (via renderAgent) so the committed
 // .opencode/ tree has ZERO `$CLAUDE_PLUGIN_ROOT` / `$HOME/.claude/kaola-workflow` tokens. Canonical
-// sources are NEVER touched (additive D-530-02) — only the generated outputs. Two leak shapes:
-//   (a) a whole `kaola_script(){ ... return 1; }` definition line (commands: 3-path form ×N;
-//       plugin-resident: 5-path form with gitlab/gitea forge dirs) → wholesale replaced by
-//       OPENCODE_KAOLA_SCRIPT (whitespace/indent preserved).
-//   (b) the "Re-derive your own script path(s)" prose parenthetical in workflow-planner
-//       ("prefer `$CLAUDE_PLUGIN_ROOT/scripts`, then `$HOME/.claude/kaola-workflow/scripts`,
-//        then `./scripts`)") → collapsed to the 2-path opencode list.
+// sources are NEVER touched (additive D-530-02) — only the generated outputs. ONE leak shape
+// remains: a whole `kaola_script(){ ... return 1; }` definition line (commands: 3-path form ×N;
+// plugin-resident: 5-path form with gitlab/gitea forge dirs) → wholesale replaced by
+// OPENCODE_KAOLA_SCRIPT (whitespace/indent preserved).
+//
+// Each rewrite rule here is a site where two runtimes can silently diverge, so the count of rules
+// is itself the reliability metric. The prose-parenthetical rule and the two REPLAN_SCRIPT resolver
+// rules are gone with the surfaces that carried them (the planner agent and the re-plan machinery);
+// they matched nothing left in the tree, and a rule that can no longer fire cannot be verified.
 function rewriteClaudeScriptPaths(text, forge) {
   forge = forge || DEFAULT_FORGE;
-  // The forge's replan basename + Claude support-dir name. Both are DERIVED (the
-  // install manifest's rename transform and the plugin dir name), so the (c)
-  // rewrites below match the forge surface they are actually rendering rather
-  // than the github one — without them a gitlab render leaks $CLAUDE_PLUGIN_ROOT.
-  const replanJs = forgeLayout.scriptName('kaola-workflow-replan.js', forge);
-  const claudeDir = forgeLayout.pluginDirName(forge);
-  // (a) Whole resolver definition line (indent-preserving). The resolver is always a single line;
+  // Whole resolver definition line (indent-preserving). The resolver is always a single line;
   // `.*` does not cross newlines (no `s` flag), so each definition is replaced independently.
-  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
-  // (b) The path-list parenthetical in agent prose (whitespace-flexible across the two agents' line
-  // breaks). Scoped to the literal "(prefer `$CLAUDE_PLUGIN_ROOT/scripts`, then … then `./scripts`)"
-  // shape — only workflow-planner carries it, so no over-strip risk.
-  text = text.replace(
-    /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
-    '(prefer `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts`, then `./scripts`)'
-  );
-  // (c) The standalone REPLAN_SCRIPT resolver added by the re-plan machinery — two shapes:
-  //   (c1) the two-line fallback pair (adapt + finalize): a $CLAUDE_PLUGIN_ROOT line followed by a
-  //        $HOME/.claude line → collapsed to ONE opencode-native fallback line.
-  text = text.replace(
-    new RegExp(
-      '^([ \\t]*)\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/'
-      + reEsc(replanJs) + '\\}"\\n[ \\t]*\\[ -f "\\$REPLAN_SCRIPT" \\] \\|\\| REPLAN_SCRIPT="\\$HOME/\\.claude/'
-      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"$', 'gm'),
-    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/' + replanJs + '"'
-  );
-  //   (c2) the for-loop path list (plan-run + workflow-next): the Claude pair inside the candidate
-  //        list → the single opencode-native candidate.
-  text = text.replace(
-    new RegExp(
-      '"\\$\\{CLAUDE_PLUGIN_ROOT:\\+\\$CLAUDE_PLUGIN_ROOT/scripts/' + reEsc(replanJs) + '\\}" "\\$HOME/\\.claude/'
-      + reEsc(claudeDir) + '/scripts/' + reEsc(replanJs) + '"', 'g'),
-    '"${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/' + replanJs + '"'
-  );
-  return text;
+  return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
 }
 
 function transformCommandBody(body, forge) {

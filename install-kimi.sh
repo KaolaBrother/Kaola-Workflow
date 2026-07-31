@@ -20,10 +20,9 @@
 #   ./install-kimi.sh --global                # deploy skills to ${KIMI_CODE_HOME:-~/.kimi-code}/skills
 #   ./install-kimi.sh --regenerate            # refresh the generated tree from canonical here
 #
-# COMMAND SKILLS: the install deploys the workflow command skills (kaola-workflow-adapt,
-# kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next) plus all 15
-# kaola-role-* skills into the skills/ dir. The generated .kimi/ tree is produced by
-# sync-kimi-edition.js from the canonical sources.
+# COMMAND SKILLS: the install deploys the workflow command skills (kaola-workflow-finalize,
+# workflow-init, workflow-next) plus all 15 kaola-role-* skills into the skills/ dir. The
+# generated .kimi/ tree is produced by sync-kimi-edition.js from the canonical sources.
 #
 # DEPLOY LAYOUT (scope-dependent):
 #   - PROJECT (--target/$PWD): skills land under <project>/.kimi-code/skills/<name>/SKILL.md.
@@ -144,8 +143,7 @@ RETIRED_ROLE_SKILLS=("kaola-role-contractor")
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
 # Single source of truth for the deploy set (used by copy_skills).
 WORKFLOW_COMMANDS=(
-  kaola-workflow-adapt kaola-workflow-finalize
-  kaola-workflow-plan-run workflow-init workflow-next
+  kaola-workflow-finalize workflow-init workflow-next
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 

@@ -124,8 +124,8 @@ translator.
 ### Tier membership
 
 - **Reasoning / top tier** — exactly the canonical reasoning-tier roles
-  (**`planner`, `synthesizer`, `workflow-planner`, `code-architect`,
-  `code-reviewer`, `security-reviewer`, `adversarial-verifier`**) → the model's
+  (**`planner`, `synthesizer`, `code-architect`, `code-reviewer`,
+  `security-reviewer`, `adversarial-verifier`**) → the model's
   TOP effort variant. The membership is derived from the canonical agent
   frontmatter alone; there is no install-time model axis to mirror.
 - **Standard / second tier** — every other role → the model's SECOND effort variant.
@@ -152,7 +152,6 @@ inherit the model you already use; only the effort differs. Example (GLM-5.2):
     "planner":           { "variant": "max"  },   // reasoning tier → top effort
     "code-reviewer":     { "variant": "max"  },   // reasoning tier → top effort
     "synthesizer":       { "variant": "max"  },
-    "workflow-planner":  { "variant": "max"  },
     "code-architect":    { "variant": "max"  },
     "security-reviewer": { "variant": "max"  },
     "implementer":       { "variant": "high" }    // standard tier → second effort
@@ -276,8 +275,7 @@ Because opencode applies
 the variant **per role** (the `task` tool has no per-call variant override), the
 planner realizes its tier choice through **role choice** — a reasoning-heavy node
 uses a top-tier role (→ top effort), an execution node a standard role (→ second).
-The opencode `workflow-planner` agent carries this `mapTier` guidance; the
-`buildDispatch` packet carries the per-node `model` (the tier intent).
+The `buildDispatch` packet carries the per-step `model` (the tier intent).
 
 ### Opt-out: pin tiers to different models
 
@@ -301,8 +299,8 @@ touched**.
 ### Installer command set
 
 `install-opencode.sh` is a standalone installer — it has its own `--forge` flag and does not run
-through `install.sh --forge`. It deploys the workflow command set — adapt, finalize, plan-run,
-workflow-init, workflow-next. `copy_tree` is **self-healing**: before re-copying it prunes every
+through `install.sh --forge`. It deploys the workflow command set — finalize, workflow-init,
+workflow-next. `copy_tree` is **self-healing**: before re-copying it prunes every
 kaola-owned command file not in that set, so a reinstall converges to exactly the workflow command
 set on disk. Support scripts come from the selected forge's script tree, and the installer fails
 closed if an allowlisted script is missing from source.
@@ -386,8 +384,8 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 ./install-opencode.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-The install deploys the workflow command set — adapt, finalize, plan-run, workflow-init,
-workflow-next — and seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode`.
+The install deploys the workflow command set — finalize, workflow-init, workflow-next —
+and seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode`.
 
 ### Deploy layout — project vs global (scope-dependent)
 
@@ -469,7 +467,6 @@ frontmatter, model-agnostic invariant (no `model:` in
 generated agents), byte-for-byte canonical parity including generated reviewer behavior identity,
 `opencode.json` JSONC validity
 + exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the
-canonical reasoning-tier membership), the **workflow-planner `mapTier` guidance**,
 **model-prose consistency** (no contradictory "pass `model=`" instructions),
 **path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
 surface), route-reachability (every receipt-emitted command target resolves

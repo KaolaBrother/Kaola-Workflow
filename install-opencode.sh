@@ -28,8 +28,8 @@
 # Override the inherited model via KAOLA_OPENCODE_INHERIT_MODEL, or pin a tier to a
 # different model via KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL.
 #
-# COMMAND SET: the install deploys the workflow command set (adapt, finalize, plan-run,
-# workflow-init, workflow-next) into .opencode/command/. The generated .opencode/command/*
+# COMMAND SET: the install deploys the workflow command set (finalize, workflow-init,
+# workflow-next) into .opencode/command/. The generated .opencode/command/*
 # are produced by sync-opencode-edition.js from the canonical sources.
 #
 # The generated commands + agents resolve support scripts via an
@@ -152,8 +152,7 @@ fi
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
 # Single source of truth for the deploy set (used by copy_tree).
 WORKFLOW_COMMANDS=(
-  kaola-workflow-adapt.md kaola-workflow-finalize.md
-  kaola-workflow-plan-run.md workflow-init.md workflow-next.md
+  kaola-workflow-finalize.md workflow-init.md workflow-next.md
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 

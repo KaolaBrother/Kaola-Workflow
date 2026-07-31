@@ -674,17 +674,15 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-finalize.md', 'KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"');
 assertIncludes('commands/workflow-next.md', 'kaola_script(){');
 assertIncludes('commands/workflow-next.md', 'KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"');
-// #816: the finalize seam records no attestation — the field, the back-fill, and the inline-suspect
-// warning are retired. Pinned as an ABSENCE so a revival reds the chain, alongside the POSITIVE pin
-// on the folded transaction below (the two directions of the same invariant).
+// Dispatch-log attestation is retired on BOTH seams. It asked whether a `workflow-planner` subagent
+// had been spawned before the plan was frozen; there is no planner agent and no plan to freeze, and
+// inline authoring is the design rather than the bypass the detector watched for. Pinned as an
+// ABSENCE so a revival reds the chain.
 assertNotIncludes('scripts/kaola-workflow-claim.js', 'finalize_contractor_attested');
 assertNotIncludes('scripts/kaola-workflow-claim.js', 'attestContractorSpawn');
-// #347: pin the planner self-attest back-fill flag (the #280 producer) so the forge-port asymmetry
-// it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
-assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
-// the planner startup surface itself must instruct the flag, not just the producer script.
-// persistence lock: a non-empty attestation warning must be transcribed into the durable summary.
-assertIncludes('scripts/kaola-workflow-claim.js', '## Attestation');
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'claim_planner_attested');
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'attestPlannerSpawn');
+assertNotIncludes('scripts/kaola-workflow-claim.js', '## Attestation');
 // #816: the retired bookkeeping role must not come back as a file on any runtime.
 assert(!exists('agents/contractor.md'), 'agents/contractor.md must be retired');
 for (const forge of ['', '-gitlab', '-gitea']) {
@@ -729,9 +727,9 @@ assertManifestScript('kaola-workflow-codex-preflight.js');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 // #725/#770: adaptive is the ONLY installed path — the `installed_paths` union /
 // `resolveInstalledPaths` resolver are retired, and (#770) so is the path SELECTOR itself: the
-// claim no longer gates on a requested path at all, and both resume surfaces emit the adaptive
-// executor unconditionally.
-assertIncludes('scripts/kaola-workflow-claim.js', 'PLAN_RUN_COMMAND');
+// claim no longer gates on a requested path at all, and both resume surfaces emit the next-work
+// command unconditionally, from the ONE shared constant rather than a hardcoded string.
+assertIncludes('scripts/kaola-workflow-claim.js', 'NEXT_COMMAND');
 // finalize adaptive prerequisite (#283: phase6 renamed to finalize)
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all

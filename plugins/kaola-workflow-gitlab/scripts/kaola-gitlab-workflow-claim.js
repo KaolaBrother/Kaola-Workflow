@@ -734,13 +734,13 @@ function writeState(root, data) {
   // belongs exclusively to the verified legacy re-plan import path.
   const claimAnchors = buildClaimAnchors(root, data);
   // issue #227/#770: adaptive is the ONLY workflow path — a fresh claim always scaffolds an
-  // adaptive run that resumes via the plan-run executor (the fast/full paths and the phaseN
-  // ladder were retired, and the path selector itself was retired by #770). A stale
+  // adaptive run that resumes through the next-work command (the fast/full paths and the
+  // phaseN ladder were retired, and the path selector itself was retired by #770). A stale
   // non-adaptive workflow_path is tolerated on read but never scaffolded here — this field
   // is now a constant record, not a selection.
   const workflowPath = data.workflow_path || adaptiveSchema.ADAPTIVE_PATH;
-  const adaptiveCommand = adaptiveSchema.PLAN_RUN_COMMAND + ' ' + data.project;
-  const adaptiveSkill = adaptiveSchema.PLAN_RUN_SKILL + ' ' + data.project;
+  const adaptiveCommand = adaptiveSchema.NEXT_COMMAND + ' ' + data.project;
+  const adaptiveSkill = adaptiveSchema.NEXT_SKILL + ' ' + data.project;
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -1839,11 +1839,11 @@ function cmdPickNext() {
 }
 
 function resumeFallbackCommand(root, folder) {
-  // issue #227: adaptive is the only workflow path — resume routes to the plan-run
-  // executor (the fast/full paths and the phaseN ladder were retired). reconcileNextCommand
-  // trusts a legacy project's persisted next_command first, so this fallback only fires
-  // when no command was persisted.
-  return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
+  // issue #227: adaptive is the only workflow path — resume routes to the next-work command
+  // (the fast/full paths and the phaseN ladder were retired). reconcileNextCommand trusts a
+  // legacy project's persisted next_command first, so this fallback only fires when no
+  // command was persisted.
+  return adaptiveSchema.NEXT_COMMAND + ' ' + folder.project;
 }
 
 // #234 E1: reconcile the persisted next_command against the project's true path before trusting it.
@@ -1859,7 +1859,7 @@ function reconcileNextCommand(root, folder) {
   const recordExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.MISSION_LIST_FILE))
     || fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
   const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || recordExists;
-  if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
+  if (isAdaptive) return adaptiveSchema.NEXT_COMMAND + ' ' + folder.project;
   return folder.next_command || resumeFallbackCommand(root, folder);
 }
 

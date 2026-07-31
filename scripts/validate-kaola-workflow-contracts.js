@@ -377,9 +377,10 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_sc
 // warning are retired. Pinned as an ABSENCE so a revival reds the chain.
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'finalize_contractor_attested');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'attestContractorSpawn');
-// #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
-// claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-planner-spawn');
+// Dispatch-log attestation is retired on BOTH seams — codex ships the canonical claim byte-for-byte,
+// so pin the absence here too and a revival reds this edition's chain as well.
+assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'claim_planner_attested');
+assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'attestPlannerSpawn');
 
 
 
