@@ -65,10 +65,7 @@ const shardLib = require('./test-shard-lib');
 // DEFAULT shard width; KAOLA_TEST_POOL_SHARDS scales it. A suite is only listed here
 // once its scenarios are proven independent (each owns its fixtures) — the shard
 // coverage audit then keeps that true on every run.
-const SHARDED_SUITES = {
-  'node scripts/test-adaptive-node.js': 12,
-  'node scripts/test-replan.js': 4,
-};
+const SHARDED_SUITES = {};
 
 // simulate-workflow-walkthrough.js accepts --shard (see its registry) but is DELIBERATELY not
 // expanded here: its scenarios were observed to go red when several of its shards run
@@ -80,15 +77,11 @@ const SHARDED_SUITES = {
 // A missing entry defaults to DEFAULT_COST. Scheduling only — never a verdict.
 const DEFAULT_COST = 3;
 const COST_HINT = {
-  'node scripts/test-adaptive-node.js': 660,
   'node scripts/simulate-workflow-walkthrough.js': 360,
   'node scripts/test-claim-hardening.js': 52,
-  'node scripts/test-barrier-base-integrity.js': 47,
   'node scripts/test-install-upgrade-rewrite.js': 28,
   'node scripts/test-install-model-rendering.js': 25,
-  'node scripts/test-commit-node.js': 24,
   'node scripts/test-sink-merge.js': 20,
-  'node scripts/test-replan.js': 18,
   'node scripts/test-install-adaptive-config.js': 11,
   'node scripts/test-validation-runner.js': 8,
   'node scripts/test-run-chains.js': 8,
@@ -96,7 +89,6 @@ const COST_HINT = {
   'node scripts/test-bundle-state.js': 5,
   'node scripts/test-route-reachability.js': 4,
   'node scripts/test-install-upgrade.js': 4,
-  'node scripts/test-interior-gate-freshness.js': 4,
   'node scripts/test-bundle-finalize.js': 4,
   'node scripts/test-bundle-claim.js': 4,
   'node scripts/test-release.js': 4,

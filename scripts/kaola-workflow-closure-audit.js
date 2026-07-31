@@ -118,37 +118,21 @@ function archiveClosedIssues(root) {
 // skeleton) passes every existing check and drops silently out of archiveClosedIssues, which
 // `continue`s on any read error.
 //
-// The required set is derived from the archive's OWN record, never a blanket demand:
-//   - workflow-state.md is ALWAYS required (the #676 unconditional identity anchor);
-//   - workflow-plan.md is required only when the state names a real plan hash;
-//   - each `.cache/<id>.md` is required only when the plan's `## Node Ledger` proves it was
-//     recorded (listRecordedNodeEvidence — `complete` rows only; `n/a`/pending carry no obligation).
-// A blanket "plan + summary + evidence" rule would flag two thirds of a mature archive corpus, so
-// it would be noise rather than drift. LOCAL and report-only: an incomplete archive is not
-// repairable, so --execute reports it and never touches it.
+// The required set is derived from the archive's OWN record, never a blanket demand: only
+// workflow-state.md is unconditionally required (the #676 identity anchor).
+//
+// The second and third rules are GONE with the mechanism that made them derivable. They asked the
+// state for a plan hash and then asked the plan's `## Node Ledger` which `.cache/<id>.md` files a
+// `complete` row obliged; there is no ledger to ask, and a mission-list `result` is free text, not
+// a file list. That is the same vanished-declaration this campaign meets everywhere, and inventing
+// a replacement demand here would be a blanket rule wearing a derivation's clothes — it would flag
+// two thirds of a mature archive corpus as drift. LOCAL and report-only either way: an incomplete
+// archive is not repairable, so --execute reports it and never touches it.
 function archiveRequiredContent(dir) {
-  const missing = [];
   let state;
   try { state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'); } catch (_) { state = null; }
   if (state === null) return ['workflow-state.md'];
-  const namesPlan = ['plan_hash', 'active_plan_hash'].some(key => {
-    const v = (field(state, key) || '').trim();
-    return v && v !== 'none' && v !== 'n/a' && v !== '—' && v !== '-';
-  });
-  const planPresent = fs.existsSync(path.join(dir, 'workflow-plan.md'));
-  if (namesPlan && !planPresent) missing.push('workflow-plan.md');
-  if (planPresent) {
-    // Lazy require: claim.js owns the ledger grammar (`complete` vs `n/a`/pending + the node-id
-    // validation) and re-deriving it here would be a second, divergable copy of that rule.
-    let listRecordedNodeEvidence;
-    try { ({ listRecordedNodeEvidence } = require('./kaola-workflow-claim.js')); } catch (_) { listRecordedNodeEvidence = null; }
-    if (typeof listRecordedNodeEvidence === 'function') {
-      for (const rel of listRecordedNodeEvidence(dir)) {
-        if (!fs.existsSync(path.join(dir, ...String(rel).split('/')))) missing.push(rel);
-      }
-    }
-  }
-  return missing;
+  return [];
 }
 
 function detectArchiveContentIncomplete(root) {

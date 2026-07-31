@@ -246,7 +246,7 @@ for (const md of mdFiles) {
 // in the schema/planner; a named role profile must not override the current parent session pair.
 for (const tree of TOML_TREES) {
   const profiles = fs.readdirSync(path.join(root, tree)).filter(f => f.endsWith('.toml')).sort();
-  assert(profiles.length === 15, `${tree} must contain exactly 15 role profiles, got ${profiles.length}`);
+  assert(profiles.length === 14, `${tree} must contain exactly 14 role profiles, got ${profiles.length}`);
   for (const profile of profiles) {
     const content = read(`${tree}/${profile}`) || '';
     const schema = codexRoleSchema(content);
@@ -534,77 +534,8 @@ if (reviewerGenerator) {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
-// Dispatch assertions must describe inherited parent runtime strength plus declarative role metadata.
-// These retired phrases contradict the behavior they sit beside and must not return.
-const adaptiveNodeAssertions = read('scripts/test-adaptive-node.js') || '';
-for (const phrase of ['standalone pinned profile pair', 'profile-pinned Sol/medium',
-  'pinned role profile', 'conflicts with the role profile is surfaced fail-closed']) {
-  assert(!adaptiveNodeAssertions.includes(phrase),
-    `scripts/test-adaptive-node.js must not retain retired static-profile wording ${JSON.stringify(phrase)}`);
-}
 
-for (const file of ['agents/workflow-planner.md', ...TOML_TREES.map(t => t + '/workflow-planner.toml')]) {
-  const content = read(file) || '';
-  const normalizedContent = content.replace(/\s+/g, ' ');
-  for (const token of ['wait_budget_minutes', 'planner_override', 'through 720 minutes',
-    'nondelegable', 'optimizer conflict', 'difficulty alone is not evidence',
-    'never inflate a budget to hide a wedged agent']) {
-    assert(content.includes(token), `${file} must carry planner wait-budget contract token ${JSON.stringify(token)}`);
-  }
-  for (const token of ['high-risk filesystem, concurrency, persistence, and provenance work',
-    'semantic dependency and verification boundaries', 'independently testable',
-    'large coherent nodes remain legal', 'file-count, line-count, complexity, or diff-size threshold']) {
-    assert(normalizedContent.includes(token), `${file} must carry semantic-boundary planner guidance token ${JSON.stringify(token)}`);
-  }
-}
 
-// #810: render↔define pin for the planner dispatch brief's `Binding scope:` field. The six
-// kaola-workflow-adapt surfaces RENDER the field, but nothing required any workflow-planner profile
-// to DEFINE it — so it shipped decorative: a surface asserting a behavior no other surface defines
-// (the same defect family #796 exists to close). This pin closes the asymmetry from the receiving
-// end. It is conditional by construction: retiring the field from every adapt surface retires the
-// obligation, but rendering it while no profile defines it is RED.
-{
-  const ADAPT_SURFACES = [
-    'commands/kaola-workflow-adapt.md',
-    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
-    'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
-    'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
-    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
-    'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
-  ];
-  const PLANNER_PROFILES = [
-    'agents/workflow-planner.md',
-    ...TOML_TREES.map(t => t + '/workflow-planner.toml'),
-  ];
-  // A definition is not the field name alone: the field exists to settle a precedence question, so
-  // the profile must also carry the rule — the resolved target stays the unit of completion, and a
-  // binding scope only steers what is authored inside it.
-  const BINDING_SCOPE_DEFINITION_TOKENS = [
-    'Binding scope:',
-    'the unit of completion',
-    // Negation included deliberately — see FEATURE_TOKENS above. Without it an inverted
-    // precedence rule still satisfies the define-side obligation.
-    'never widens, narrows, or substitutes',
-  ];
-  const rendering = ADAPT_SURFACES.filter(s => (read(s) || '').includes('Binding scope:'));
-  assert(rendering.length === 0 || rendering.length === ADAPT_SURFACES.length,
-    '#810: `Binding scope:` must render on ALL six kaola-workflow-adapt surfaces or on none — ' +
-    'rendered by ' + rendering.length + '/' + ADAPT_SURFACES.length +
-    ' (propagation gap: ' + ADAPT_SURFACES.filter(s => !rendering.includes(s)).join(', ') + ')');
-  if (rendering.length > 0) {
-    for (const profile of PLANNER_PROFILES) {
-      const content = read(profile) || '';
-      for (const token of BINDING_SCOPE_DEFINITION_TOKENS) {
-        assert(content.includes(token),
-          '#810: ' + rendering.length + ' kaola-workflow-adapt surface(s) RENDER `Binding scope:` ' +
-          'but ' + profile + ' does not DEFINE it — missing token ' + JSON.stringify(token) +
-          ' (a rendered dispatch field that no planner profile defines is decorative; define the ' +
-          'field and its precedence against the resolved target)');
-      }
-    }
-  }
-}
 
 if (failed > 0) {
   console.error('agent-profile parity tests FAILED (' + failed + ' failures, ' + passed + ' passed)');

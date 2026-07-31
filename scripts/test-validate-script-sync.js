@@ -5,7 +5,7 @@
 //
 // #550 was a forge classifier omitting a cross-required export → TypeError on a failing path no green chain
 // hit. #553 generalized that single-classifier guard into a FAMILY over every divergent forge hand-port
-// (claim/sink-merge/roadmap/repair-state/active-folders/closure-audit) with a `canonicalOnly` exclude for
+// (claim/sink-merge/roadmap/active-folders/closure-audit) with a `canonicalOnly` exclude for
 // genuinely-edition-specific canonical exports. This test proves the mechanism: the family covers the right
 // modules, a real missing cross-required export is CAUGHT, and a canonicalOnly name is correctly EXCLUDED.
 // Wired into the claude chain. The live forge ports are validated by validate-script-sync.js itself in
@@ -25,8 +25,8 @@ function assert(cond, msg) { if (cond) { passed++; return; } failed++; process.s
 
 // Issue #699 registration guard: replan is canonical<->Codex byte-identical, and closure-contract
 // stays byte-identical across all four editions.
-assert((sync.COMMON_SCRIPTS || []).includes('kaola-workflow-replan.js'),
-  '#699: COMMON_SCRIPTS enrolls kaola-workflow-replan.js');
+assert((sync.COMMON_SCRIPTS || []).includes('kaola-workflow-run-chains.js'),
+  'COMMON_SCRIPTS enrolls kaola-workflow-run-chains.js');
 for (const base of ['kaola-workflow-closure-contract.js']) {
   const group = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => (g.files || []).some(f => f === 'scripts/' + base));
   assert(group && group.files.length === 4,
@@ -119,9 +119,11 @@ assert(typeof sync.checkCommittedKernelParity === 'function',
 
 // 1) The family generalizes beyond the classifier to the divergent cross-required hand-ports.
 const fam = sync.FORGE_EXPORT_SUPERSET_FAMILY;
-assert(Array.isArray(fam) && fam.length >= 7, '#553: FORGE_EXPORT_SUPERSET_FAMILY has >=7 entries, got ' + (fam && fam.length));
+// The floor was 7 while repair-state was a cross-required hand-port; it is deleted, so the
+// family is the six that remain. What the floor is for — proving the guard is not empty — holds.
+assert(Array.isArray(fam) && fam.length >= 6, '#553: FORGE_EXPORT_SUPERSET_FAMILY has >=6 entries, got ' + (fam && fam.length));
 const bases = fam.map(e => path.basename(e.canonical));
-for (const need of ['kaola-workflow-classifier.js', 'kaola-workflow-claim.js', 'kaola-workflow-sink-merge.js', 'kaola-workflow-roadmap.js', 'kaola-workflow-repair-state.js', 'kaola-workflow-active-folders.js', 'kaola-workflow-closure-audit.js']) {
+for (const need of ['kaola-workflow-classifier.js', 'kaola-workflow-claim.js', 'kaola-workflow-sink-merge.js', 'kaola-workflow-roadmap.js', 'kaola-workflow-active-folders.js', 'kaola-workflow-closure-audit.js']) {
   assert(bases.includes(need), '#553: family covers ' + need);
 }
 // Backward-compat: the original classifier entry + symbol are still exported.
@@ -130,9 +132,6 @@ assert(typeof sync.forgeClassifierExportDrift === 'function', '#553: forgeClassi
 
 // 2) The canonicalOnly excludes are present + scoped to the edition-specific names we verified.
 const claimEntry = fam.find(e => path.basename(e.canonical) === 'kaola-workflow-claim.js');
-const repairEntry = fam.find(e => path.basename(e.canonical) === 'kaola-workflow-repair-state.js');
-assert(claimEntry.canonicalOnly && claimEntry.canonicalOnly.includes('ghExec'), '#553: claim canonicalOnly excludes ghExec (GitHub-specific exec helper)');
-assert(repairEntry.canonicalOnly && repairEntry.canonicalOnly.includes('projectHasAdaptivePlan'), '#553: repair-state canonicalOnly excludes projectHasAdaptivePlan (canonical-only consumer-detection)');
 
 // 3) Every live family entry is currently a superset (no drift) — the guard is GREEN at HEAD.
 for (const entry of fam) {
@@ -203,8 +202,10 @@ for (const entry of sync.FORGE_EXPORT_SUPERSET_FAMILY) {
       '(so the superset check requires the forge port to export it) or stop referencing it in the forge tree. Hits:\n  ' + hits.join('\n  '));
   }
 }
-assert(canonicalOnlyChecked >= 2,
-  '#564: expected >=2 canonicalOnly names guarded (ghExec, projectHasAdaptivePlan), got ' + canonicalOnlyChecked +
+// The floor was 2 while repair-state contributed `projectHasAdaptivePlan`; that port is deleted, so
+// `ghExec` is the one canonicalOnly name left. The guard's subject is unchanged.
+assert(canonicalOnlyChecked >= 1,
+  '#564: expected >=1 canonicalOnly name guarded (ghExec), got ' + canonicalOnlyChecked +
   ' — the family lost its canonicalOnly entries (or the scan is broken)');
 
 // ---------------------------------------------------------------------------

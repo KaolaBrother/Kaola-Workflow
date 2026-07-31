@@ -53,151 +53,6 @@ function assertIncludes(file, needle) {
   assert(read(file).includes(needle), `${file} must include: ${needle}`);
 }
 
-// ---------------------------------------------------------------------------
-// Future-agent wall (per-role evidence contract). Every node-role agent — the managed roster
-// MINUS nothing: every vendored agent is a dispatchable role (the orchestration role that authored
-// evidence producer) — must carry BOTH
-// halves of the evidence contract, so the NEXT agent added to the roster cannot silently ship
-// without it:
-//   (a) a ROLE_TOKEN_REGISTRY row naming >=2 evidence tokens, OR a PRESENCE_ONLY_RATIONALE entry
-//       (a one-line reason a single-token role is admitted). The allowlist ships EMPTY.
-//   (b) a role-kind evidence needle whose KIND is DERIVED from the agent's own front-matter tool
-//       manifest — never a hand-maintained list. A profile that can Write or Edit SELF-WRITES its
-//       .cache evidence (needle: SELF-WRITE + evidence-binding); every other profile RETURNS its
-//       deliverable for orchestrator persistence (needle: RETURN + record-evidence).
-const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
-const { ROLE_CAPABILITY_MANIFEST, ROLE_KINDS } = require('./kaola-workflow-adaptive-schema');
-
-const NON_NODE_ROLES = new Set([]);
-
-// role -> one-line reason a node-role agent may ship with fewer than two registry tokens. EMPTY:
-// every current node role reaches the >=2-token floor. A future presence-only role (whose evidence
-// is a single content token) is admitted ONLY by an explicit rationale entry here.
-const PRESENCE_ONLY_RATIONALE = {};
-
-// KIND derivation from the front-matter tool manifest (inline-array form:
-// `tools: [Read, Write]` or `tools: ["Read", "Write"]`). Write OR Edit present => write-kind,
-// else read-kind. Never a hand-list. Returns null when the front matter declares NO tools: line:
-// a tool-less agent inherits ALL tools at runtime (de-facto write-capable), so the kind CANNOT be
-// derived — the wall refuses fail-closed instead of defaulting to the weaker read-kind needle.
-function agentWritesEvidence(frontMatter) {
-  const m = /^tools:\s*(.+)$/m.exec(frontMatter);
-  return m ? /\b(Write|Edit)\b/.test(m[1]) : null;
-}
-
-// The wall. agentsDir: absolute path to an agents/ dir; registry: role -> token-class array;
-// presenceOnly: role -> reason map; readFile: (absPath) -> string. Throws a TYPED refusal on the
-// first violation. Node roles are DERIVED from the directory listing (a new *.md agent is covered
-// automatically), minus the orchestration roles.
-function checkFutureAgentWall(agentsDir, registry, presenceOnly, readFile) {
-  const roles = fs.readdirSync(agentsDir)
-    .filter(name => name.endsWith('.md'))
-    .map(name => name.slice(0, -'.md'.length))
-    .filter(role => !NON_NODE_ROLES.has(role))
-    .sort();
-  for (const role of roles) {
-    const content = readFile(path.join(agentsDir, `${role}.md`));
-    const fmEnd = content.indexOf('\n---\n', 4);
-    const frontMatter = fmEnd > 0 ? content.slice(0, fmEnd) : '';
-    // (a) registry row with >=2 tokens OR a presence-only allowlist entry.
-    const tokens = registry[role];
-    const hasTwoTokens = Array.isArray(tokens) && tokens.length >= 2;
-    if (!hasTwoTokens && !Object.prototype.hasOwnProperty.call(presenceOnly, role)) {
-      throw new Error(`agent_contract_registry_missing: node-role agent "${role}" needs a ` +
-        `ROLE_TOKEN_REGISTRY row with >=2 tokens or a PRESENCE_ONLY_RATIONALE entry`);
-    }
-    // (b) manifest-derived role-kind evidence needle. A missing tools: manifest is a typed
-    // refusal, never a silent read-kind default (a tool-less agent inherits ALL tools).
-    const writesEvidence = agentWritesEvidence(frontMatter);
-    if (writesEvidence === null) {
-      throw new Error(`agent_contract_manifest_missing: node-role agent "${role}" declares no ` +
-        `tools: front-matter line — a tool-less agent inherits ALL tools (de-facto ` +
-        `write-capable), so its evidence kind cannot be derived; declare the tool manifest`);
-    }
-    if (writesEvidence) {
-      assert(content.includes('SELF-WRITE') && content.includes('evidence-binding'),
-        `agent_contract_needle_missing: write-kind agent "${role}" must carry the ` +
-        `SELF-WRITE + evidence-binding evidence contract`);
-    } else {
-      assert(content.includes('RETURN') && content.includes('record-evidence'),
-        `agent_contract_needle_missing: read-kind agent "${role}" must carry the ` +
-        `RETURN + record-evidence evidence contract`);
-    }
-  }
-}
-
-// Parse the front-matter `tools:` inline array into an ordered list of tool names. Accepts both
-// authored forms in the roster (`tools: [Read, Grep]` and `tools: ["Read", "Grep"]`). Returns null
-// when no `tools:` line is declared — the same fail-closed signal agentWritesEvidence returns.
-function agentToolManifest(frontMatter) {
-  const m = /^tools:\s*\[(.*)\]\s*$/m.exec(frontMatter);
-  if (!m) return null;
-  return m[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-}
-
-// The role-capability manifest drift wall. agentsDir: absolute path to an agents/ dir;
-// manifest: the declared role -> capability row table; readFile: (absPath) -> string.
-// Throws a TYPED refusal on the first divergence. Bidirectional by construction: the profile
-// listing and the declared table are compared as SETS, so neither a profile without a row nor a
-// row without a profile can ship silently. Built-in role tokens (finalize / main-session-gate /
-// expansion-point) are declared rows with no profile on disk and are excluded from the set compare.
-function checkRoleCapabilityManifest(agentsDir, manifest, readFile) {
-  const profiles = fs.readdirSync(agentsDir)
-    .filter(name => name.endsWith('.md'))
-    .map(name => name.slice(0, -'.md'.length))
-    .sort();
-  const declared = Object.keys(manifest).sort();
-  const declaredProfiled = declared.filter(role => manifest[role].kind !== 'built-in').sort();
-
-  for (const role of declared) {
-    const row = manifest[role];
-    if (!ROLE_KINDS.includes(row.kind)) {
-      throw new Error(`role_capability_kind_unknown: manifest row "${role}" declares kind ` +
-        `"${row.kind}" which is not one of: ${ROLE_KINDS.join(', ')}`);
-    }
-  }
-  for (const role of profiles) {
-    if (!Object.prototype.hasOwnProperty.call(manifest, role)) {
-      throw new Error(`role_capability_row_missing: agent profile "agents/${role}.md" has no ` +
-        `ROLE_CAPABILITY_MANIFEST row — the planner is served the DECLARED table, so an ` +
-        `undeclared role is invisible at author time; add its capability row`);
-    }
-  }
-  for (const role of declaredProfiled) {
-    if (!profiles.includes(role)) {
-      throw new Error(`role_capability_profile_missing: ROLE_CAPABILITY_MANIFEST declares ` +
-        `"${role}" but there is no agents/${role}.md profile — a declared row the library ` +
-        `cannot dispatch would misinform the planner; remove the row or ship the profile`);
-    }
-  }
-  for (const role of declaredProfiled) {
-    const row = manifest[role];
-    const frontMatterSrc = readFile(path.join(agentsDir, `${role}.md`));
-    const fmEnd = frontMatterSrc.indexOf('\n---\n', 4);
-    const frontMatter = fmEnd > 0 ? frontMatterSrc.slice(0, fmEnd) : '';
-    const tools = agentToolManifest(frontMatter);
-    if (tools === null) {
-      throw new Error(`role_capability_manifest_unparsed: agents/${role}.md declares no inline ` +
-        `tools: [...] front-matter array — the declared capability row cannot be pinned to it`);
-    }
-    const declaredTools = row.tools.slice().sort();
-    const actualTools = tools.slice().sort();
-    if (JSON.stringify(declaredTools) !== JSON.stringify(actualTools)) {
-      throw new Error(`role_capability_tools_drift: role "${role}" declares tools ` +
-        `[${declaredTools.join(', ')}] but agents/${role}.md front matter has ` +
-        `[${actualTools.join(', ')}]`);
-    }
-    if (row.bash_capable !== tools.includes('Bash')) {
-      throw new Error(`role_capability_bash_drift: role "${role}" declares bash_capable=` +
-        `${row.bash_capable} but its tool manifest ${tools.includes('Bash') ? 'has' : 'lacks'} Bash`);
-    }
-    if (row.write_capable !== tools.includes('Write')) {
-      throw new Error(`role_capability_write_drift: role "${role}" declares write_capable=` +
-        `${row.write_capable} but its tool manifest ${tools.includes('Write') ? 'has' : 'lacks'} Write`);
-    }
-  }
-}
-
 assert(exists('agents'), 'agents directory is missing');
 
 const actualAgents = fs.readdirSync(path.join(root, 'agents'))
@@ -269,26 +124,6 @@ for (const relativePath of [
     relativePath + ' behavior core must carry contract version 2');
 }
 
-// Future-agent wall: every node-role agent carries both halves of its evidence contract.
-checkFutureAgentWall(
-  path.join(root, 'agents'),
-  ROLE_TOKEN_REGISTRY,
-  PRESENCE_ONLY_RATIONALE,
-  filePath => fs.readFileSync(filePath, 'utf8')
-);
-
-// Role-capability manifest drift wall. The planner is served a DECLARED capability table (the
-// Codex/opencode/Kimi profile files carry no tools field, so installed-profile parsing cannot be
-// the source of truth on those runtimes). A declared table only stays trustworthy if it is pinned
-// to the canonical profiles it describes, so this wall is BIDIRECTIONAL on the fields the constant
-// declares: every `agents/*.md` needs a row, every non-built-in row needs a profile, and the
-// declared `tools` / `bash_capable` / `write_capable` must equal the profile front matter exactly.
-checkRoleCapabilityManifest(
-  path.join(root, 'agents'),
-  ROLE_CAPABILITY_MANIFEST,
-  filePath => fs.readFileSync(filePath, 'utf8')
-);
-
 assertIncludes('docs/agents-source.md', pinnedCommit);
 for (const agentName of vendoredAgents) {
   assertIncludes('docs/agents-source.md', `agents/${agentName}.md`);
@@ -328,6 +163,4 @@ assert(!packageJson.peerDependencies || !packageJson.peerDependencies['ecc-unive
 console.log(`Vendored agent validation passed for ${expectedAgents.length} agents at ${pinnedCommit}`);
 
 module.exports = {
-  checkFutureAgentWall, agentWritesEvidence, PRESENCE_ONLY_RATIONALE, NON_NODE_ROLES,
-  checkRoleCapabilityManifest, agentToolManifest,
 };

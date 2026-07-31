@@ -32,7 +32,7 @@ fs.writeFileSync(
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
-const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag, buildClaimAnchors } = require('./kaola-workflow-claim.js');
+const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag } = require('./kaola-workflow-claim.js');
 const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
 // Git FIXTURE arrangement routes through the shared library — one process-boundary
 // decision for the repo instead of one per line. See scripts/test-git-fixture.js.
@@ -1204,304 +1204,19 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(tmpDir538, { recursive: true, force: true });
 }
 
-// --- #522: cmdFinalize gate — adaptive plans must be verified before the archive commit -------
-// TDD RED: before fix, cmdFinalize --keep-worktree commits the archive UNCONDITIONALLY even when
-// no chain-receipt.json exists. It must REFUSE (exit non-zero, typed finalize_gate_unverified)
-// and leave NO `chore: archive` commit on a self-host repo missing its chain receipt.
-//
-// Scenario A (RED): self-host repo, adaptive plan, --keep-worktree, NO chain-receipt → must refuse.
-// Scenario B (GREEN-gate): self-host repo, valid chain-receipt seeded → must pass (exit 0).
-// Scenario C (retirement): a plan-absent finalize now REFUSES adaptive_plan_missing (fast/full retired).
-{
-  const { execFileSync: execFS522, spawnSync: spawnS522 } = require('child_process');
-  const CLAIM522 = path.join(__dirname, 'kaola-workflow-claim.js');
-  const PLAN_VALIDATOR522 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
-
-  // Helper: init a minimal linked-worktree repo structure.
-  // Returns { mainRoot, wtRoot, project, planPath, cacheDir }.
-  function mkSelfHostRepo522(scenario) {
-    const mainRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522-main-')));
-    const wtRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522-wt-')));
-    const project = 'issue-522test';
-    const GIT_ENV = {
-      ...process.env,
-      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
-    };
-    const g = (cwd, args) => {
-      try { execFS522('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV }); }
-      catch (_) {}
-    };
-
-    // (1) Bootstrap main repo with a self-host package.json (so the finalize discriminator
-    //     selects chain-receipt mode). Commit on main BEFORE branching so the self-host marker
-    //     is NOT in `git diff main...HEAD`.
-    g(mainRoot, ['init', '-b', 'main']);
-    g(mainRoot, ['config', 'user.email', 't@t.com']);
-    g(mainRoot, ['config', 'user.name', 'Test']);
-    g(mainRoot, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(mainRoot, 'package.json'), JSON.stringify({
-      scripts: {
-        'test:kaola-workflow:claude': 'true',
-        'test:kaola-workflow:codex': 'true',
-        'test:kaola-workflow:gitlab': 'true',
-        'test:kaola-workflow:gitea': 'true'
-      }
-    }) + '\n');
-    g(mainRoot, ['add', 'package.json']);
-    g(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
-
-    // (2) Create the feature branch and set up the worktree to simulate it.
-    g(mainRoot, ['checkout', '-b', 'workflow/' + project]);
-    // Establish the synthetic linked-worktree identity at CLAIM time so the
-    // schema-2 claim identity binds the same absolute worktree path persisted
-    // below. The feature commit updates only this synthetic HEAD later.
-    const mainGitDir = path.join(mainRoot, '.git');
-    const wtGitLinkDir = path.join(mainGitDir, 'worktrees', 'kw-522-wt');
-    fs.mkdirSync(wtGitLinkDir, { recursive: true });
-    fs.writeFileSync(path.join(wtGitLinkDir, 'commondir'), '../..\n');
-    fs.writeFileSync(path.join(wtGitLinkDir, 'gitdir'), path.join(wtRoot, '.git') + '\n');
-    const claimHead522 = G.git(mainRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), claimHead522 + '\n');
-    fs.writeFileSync(path.join(wtRoot, '.git'), 'gitdir: ' + wtGitLinkDir + '\n');
-    // Write project folder in the worktree (simulating worktree-finalize having already run).
-    const projDir = path.join(wtRoot, 'kaola-workflow', project);
-    fs.mkdirSync(projDir, { recursive: true });
-    const cacheDir = path.join(projDir, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-
-    // (3) Write a proper adaptive workflow-state.md in main (needed for activeByProject).
-    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
-    fs.mkdirSync(mainProjDir, { recursive: true });
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), [
-      '# Kaola-Workflow State',
-      '',
-      '## Project',
-      'name: ' + project,
-      'status: active',
-      '',
-      '## Current Position',
-      'phase: adaptive',
-      'phase_name: Adaptive',
-      'workflow_path: adaptive',
-      'step: start',
-      'next_command: /kaola-workflow-plan-run ' + project,
-      'next_skill: kaola-workflow-plan-run ' + project,
-      '',
-      '## Pending Gates',
-      '- workflow-plan',
-      '',
-      '## Last Evidence',
-      'last_command: startup',
-      'last_result: folder_claimed',
-      '',
-      '## Last Updated',
-      new Date().toISOString(),
-      '',
-      '## Sink',
-      'branch: workflow/' + project,
-      'issue_number: 522',
-      'sink: merge',
-      'run_posture: worktree',
-      'worktree_path: ' + wtRoot,
-      'main_root: ' + mainRoot,
-      'session_marker: fixture-522',
-      'claim_ts: 2026-01-01T00:00:00Z'
-    ].join('\n') + '\n');
-
-    // (4) Write a minimal valid workflow-plan.md with a complete node covering impl.txt.
-    //     This plan is committed on main at branch-creation (not on the feature branch) to keep
-    //     `git diff main...HEAD` clean of the plan file itself. The plan's write-set covers
-    //     impl.txt which IS committed on the feature branch below.
-    const planContent = [
-      '# Workflow Plan — ' + project,
-      '',
-      '## Meta',
-      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
-      'labels: enhancement',
-      '',
-      '## Nodes',
-      '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |',
-      '|---|---|---|---|---|---|',
-      '| impl | implementer | — | impl.txt | 1 | sequence |',
-      '| rv | code-reviewer | impl | — | 1 | sequence |',
-      '| done | finalize | rv | — | 1 | sequence |',
-      '',
-      '## Node Ledger',
-      '',
-      '| id | status |',
-      '|---|---|',
-      '| impl | complete |',
-      '| rv | complete |',
-      '| done | complete |',
-      '',
-      '## Required Agent Compliance',
-      '',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|---|---|---|---|',
-      '| implementer (impl) | invoked | fixture | |',
-      '| code-reviewer (rv) | invoked | fixture | |',
-      '| finalize (done) | invoked | fixture | |',
-      ''
-    ].join('\n');
-
-    // Freeze the plan to stamp a plan_hash (use validator --freeze).
-    // Write plan to main first, then freeze. Schema 2 deliberately refuses a newly
-    // authored field-absent draft, so materialize the verified frozen legacy identity
-    // first (same pattern as the walkthrough's stampVerifiedLegacyPlan fixtures).
-    const planPath = path.join(mainProjDir, 'workflow-plan.md');
-    const preHash522 = require(PLAN_VALIDATOR522).computePlanHash(planContent);
-    fs.writeFileSync(planPath, '<!-- plan_hash: ' + preHash522 + ' -->\n\n' + planContent);
-
-    // Freeze via plan-validator so plan_hash is stamped (needed for --finalize-check).
-    try {
-      // --freeze stamps plan_hash into workflow-plan.md in its own process and EXITS; the finalize
-      // process below re-reads that file and re-verifies the stamp from disk with no shared heap.
-      // spawn-class: durable-handoff
-      execFS522('node', [PLAN_VALIDATOR522, planPath, '--freeze', '--json'],
-        { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-    } catch (_) { /* freeze may fail in this minimal repo; gate still needs the plan */ }
-
-    const frozenPlan522 = fs.readFileSync(planPath, 'utf8');
-    const planHash522 = (frozenPlan522.match(/<!-- plan_hash: ([0-9a-f]{64}) -->/) || [])[1];
-    assert(!!planHash522, '#522 fixture: adaptive plan freezes with a plan hash');
-    const anchors522 = buildClaimAnchors(wtRoot, {
-      issue_number: 522,
-      branch: 'workflow/' + project,
-      worktree_path: wtRoot,
-      claim_ts: '2026-01-01T00:00:00Z',
-      session_marker: 'fixture-522',
-    });
-    let authorityState522 = fs.readFileSync(path.join(mainProjDir, 'workflow-state.md'), 'utf8');
-    authorityState522 = authorityState522.replace('\n## Sink', [
-      '', '## Planning Evidence', 'plan_hash: ' + planHash522, 'decision: auto-run',
-      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
-      'first_node_id: impl', 'first_node_role: implementer', '',
-      '## Epoch Lineage', 'epoch_schema_version: ' + anchors522.epoch_schema_version,
-      'claim_repository_id: ' + anchors522.claim_repository_id,
-      'claim_identity_digest: ' + anchors522.claim_identity_digest,
-      'claim_root_object_format: ' + anchors522.claim_root_object_format,
-      'claim_root_base_commit: ' + anchors522.claim_root_base_commit,
-      'claim_root_base_tree: ' + anchors522.claim_root_base_tree,
-      'claim_root_base_digest: ' + anchors522.claim_root_base_digest,
-      'epoch_lineage_id: ' + anchors522.epoch_lineage_id, 'plan_epoch: 1',
-      'active_plan_hash: ' + planHash522, 'inherited_frontier_digest: none',
-      'inherited_frontier_classes: none', 'automatic_review_replans: 0',
-      'authorized_epoch_ceiling: 2', 'case_b_exemption_consumed: false',
-      'replan_status: none', 'replan_transaction_id: none', 'replan_phase: none',
-      'active_snapshot_manifest_digest: none', '', '## Sink',
-    ].join('\n'));
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), authorityState522);
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-tasks.json'), JSON.stringify({
-      source_plan_hash: planHash522,
-      tasks: [
-        { id: 'impl', role: 'implementer', ledger_status: 'complete', status: 'completed' },
-        { id: 'rv', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
-        { id: 'done', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-      ],
-    }) + '\n');
-
-    // (5) Write the plan into the worktree project dir too.
-    const wtPlanPath = path.join(projDir, 'workflow-plan.md');
-    fs.writeFileSync(wtPlanPath, fs.readFileSync(planPath, 'utf8'));
-
-    // (6) Write workflow-state.md into the worktree project dir.
-    fs.writeFileSync(path.join(projDir, 'workflow-state.md'),
-      fs.readFileSync(path.join(mainProjDir, 'workflow-state.md'), 'utf8'));
-    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'),
-      fs.readFileSync(path.join(mainProjDir, 'workflow-tasks.json'), 'utf8'));
-
-    // (7) Commit the plan + state + impl.txt onto the feature branch in main.
-    //     impl.txt is an attributed change (declared in `impl` node's write_set).
-    fs.writeFileSync(path.join(mainRoot, 'impl.txt'), 'implementation\n');
-    g(mainRoot, ['add', '-A']);
-    g(mainRoot, ['commit', '-m', 'feat: impl + plan for issue-522test']);
-
-    // (8) Point the worktree gitdir at main (simulate git worktree linkage).
-    //     For the gate we just need `git rev-parse HEAD` to resolve from the worktree.
-    //     We use --git-dir pointing to main's .git to simulate a linked worktree.
-    // Advance only the synthetic worktree HEAD to the feature commit. Its
-    // persisted claim-root tuple remains the real claim-time commit/tree.
-    const headSha = G.git(mainRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), headSha + '\n');
-
-    // In a real git linked worktree the working tree is a full checkout of the branch, so
-    // package.json (committed on main before branching) is present. Mirror that here so the
-    // finalize-check discriminator classifies this as a self-host (chain-receipt) repo.
-    fs.writeFileSync(path.join(wtRoot, 'package.json'), fs.readFileSync(path.join(mainRoot, 'package.json'), 'utf8'));
-    // Also write impl.txt to the worktree (the "checked-out" feature file).
-    fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
-
-    return { mainRoot, wtRoot, project, planPath: wtPlanPath, cacheDir, headSha, wtGitLinkDir };
-  }
-
-  // Helper: run claim finalize from wtRoot.
-  function runFinalize522(wtRoot, project, extraArgs, extraEnv) {
-    const e = Object.assign({}, process.env, {
-      KAOLA_WORKFLOW_OFFLINE: '1',
-      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
-      KAOLA_WORKTREE_NATIVE: '0',
-    }, extraEnv || {});
-    // A fresh finalize process re-derives its whole gate verdict from durable state alone — the plan
-    // frozen by an earlier process, the receipts on disk, and the git tree. That reconstruction from
-    // bytes is the property; in one heap the already-parsed plan would answer instead of the file.
-    // spawn-class: durable-handoff
-    const result = spawnS522(
-      process.execPath, [CLAIM522, 'finalize', '--project', project, '--keep-worktree', ...(extraArgs || [])],
-      { cwd: wtRoot, encoding: 'utf8', timeout: 30000, env: e }
-    );
-    let json = null;
-    try {
-      const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
-      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
-    } catch (_) {}
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr, json };
-  }
-
-  // DELETED: #522 Scenario A — "finalize without a chain-receipt must exit non-zero with
-  // finalize_gate_unverified, and land no archive commit". The validation arm no longer refuses: it
-  // classifies (`chains_unverified`) and reports, on the envelope and durably in
-  // finalization-summary.md's `## Validation`, and the finalize completes. The measurement is
-  // unchanged; only what the caller does with it changed.
-
-  // --- #522 Scenario B: valid chain-receipt seeded → gate passes, finalize succeeds ---
-  {
-    let fx;
-    try {
-      fx = mkSelfHostRepo522('with-receipt');
-      const headSha = fx.headSha;
-
-      // Seed a valid chain-receipt.json covering the current HEAD.
-      fs.writeFileSync(path.join(fx.cacheDir, 'chain-receipt.json'), JSON.stringify({
-        headSha,
-        chains: [
-          { name: 'claude', exitCode: 0, accepted_red: false },
-          { name: 'codex', exitCode: 0, accepted_red: false },
-          { name: 'gitlab', exitCode: 0, accepted_red: false },
-          { name: 'gitea', exitCode: 0, accepted_red: false }
-        ]
-      }));
-
-      const r = runFinalize522(fx.wtRoot, fx.project);
-
-      assert(r.status === 0,
-        '#522(B): finalize WITH valid chain-receipt must exit 0 (gate passes) (got ' + r.status + ', stderr: ' + (r.stderr || '').slice(0, 200) + ')');
-
-    } finally {
-      if (fx) {
-        try { fs.rmSync(fx.mainRoot, { recursive: true, force: true }); } catch (_) {}
-        try { fs.rmSync(fx.wtRoot, { recursive: true, force: true }); } catch (_) {}
-      }
-    }
-  }
-
-  // DELETED: #522 Scenario C — "a plan-absent finalize must refuse adaptive_plan_missing".
-  // There is no plan to be missing. The finalize door reads a chain receipt (or the agent's
-  // recorded final-validation evidence) and a git diff; it never opens a run record, so a folder
-  // without one finalizes normally. `adaptive_plan_missing` is gone with the artifact it named.
-}
+// DELETED with their mechanisms:
+//   #522 — the finalize chain-receipt gate. Only its GREEN case survived the conversion (the
+//     refusing scenarios went with the verdict), and that case is pinned in separate custody by
+//     scripts/test-finalize-door.js T2, over a PLAN-LESS fixture and a receipt from the real
+//     producer. This copy proved the same thing through a frozen plan, a plan_hash, an epoch
+//     envelope and a node ledger — every one of them gone.
+//   #686 — the archive-time reap of dangling refs/kaola-workflow/barrier/<tag>/* refs and the
+//     legacy barrier-ref-sweep subcommand, with all eight of their adversarial repair cases.
+//     Barrier refs were per-NODE gc anchors; there are no nodes and nothing mints one.
+//   #699 — a fresh claim persists an immutable claim_root / epoch_lineage_id / plan_hash identity.
+//     Epochs and the re-plan CAS machinery are retired, and a plan_hash needs a plan grammar to
+//     hash. The surviving half of "a claim writes durable identity" is the selection record and
+//     its digest, pinned at the bottom of this file.
 
 // --- #816: cmdFinalize owns the whole mechanical finalization as ONE resumable transaction ------
 // The contractor role is retired: the artifact mirror (with its ledger-regression guard), the
@@ -1514,7 +1229,6 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 {
   const { execFileSync: execFS816, spawnSync: spawnS816 } = require('child_process');
   const CLAIM816 = path.join(__dirname, 'kaola-workflow-claim.js');
-  const PLAN_VALIDATOR816 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
 
   const GIT_ENV816 = {
     ...process.env,
@@ -1560,64 +1274,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     // REAL linked worktree carrying the feature branch.
     g816(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
 
-    const anchors = buildClaimAnchors(wtRoot, {
-      issue_number: 816,
-      branch: 'workflow/' + project,
-      worktree_path: wtRoot,
-      claim_ts: '2026-01-01T00:00:00Z',
-      session_marker: 'fixture-816',
-    });
-
-    const planBody = [
-      '# Workflow Plan — ' + project,
-      '',
-      '## Meta',
-      'plan_form: spine',
-      'labels: enhancement',
-      '',
-      '## Nodes',
-      '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |',
-      '|---|---|---|---|---|---|',
-      '| impl | implementer | — | impl.txt | 1 | sequence |',
-      '| rv | code-reviewer | impl | — | 1 | sequence |',
-      '| done | finalize | rv | — | 1 | sequence |',
-      '',
-      '## Node Ledger',
-      '',
-      '| id | status |',
-      '|---|---|',
-      '| impl | complete |',
-      '| rv | complete |',
-      '| done | complete |',
-      '',
-      '## Required Agent Compliance',
-      '',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|---|---|---|---|',
-      '| implementer (impl) | invoked | fixture | |',
-      '| code-reviewer (rv) | invoked | fixture | |',
-      '| finalize (done) | invoked | fixture | |',
-      ''
-    ].join('\n');
-
+    // A run folder with NO plan. The transaction mirrors, archives, stages the roadmap and gates
+    // the `chore: finalize` commit; none of that reads a plan grammar, a plan_hash, a node ledger
+    // or an epoch envelope, so the fixture carries none. What it DOES need is the state file's
+    // `## Sink` block (branch, posture, roots) — that is what the transaction actually reads.
     const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
     const wtCacheDir = path.join(wtProjDir, '.cache');
     fs.mkdirSync(wtCacheDir, { recursive: true });
-    const wtPlanPath = path.join(wtProjDir, 'workflow-plan.md');
-    const preHash = require(PLAN_VALIDATOR816).computePlanHash(planBody);
-    fs.writeFileSync(wtPlanPath, '<!-- plan_hash: ' + preHash + ' -->\n\n' + planBody);
-    try {
-      // --freeze stamps plan_hash into workflow-plan.md in its own process and EXITS; the finalize
-      // process below re-reads that file and re-verifies the stamp from disk with no shared heap.
-      // spawn-class: durable-handoff
-      execFS816('node', [PLAN_VALIDATOR816, wtPlanPath, '--freeze', '--json'],
-        { cwd: wtRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-    } catch (_) {}
-    const planHash = (fs.readFileSync(wtPlanPath, 'utf8')
-      .match(/<!-- plan_hash: ([0-9a-f]{64}) -->/) || [])[1];
-    assert(!!planHash, '#816 fixture: adaptive plan freezes with a plan hash');
-
     const stateText = [
       '# Kaola-Workflow State',
       '',
@@ -1630,11 +1293,6 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       'phase_name: Adaptive',
       'workflow_path: adaptive',
       'step: start',
-      'next_command: /kaola-workflow-plan-run ' + project,
-      'next_skill: kaola-workflow-plan-run ' + project,
-      '',
-      '## Pending Gates',
-      '- workflow-plan',
       '',
       '## Last Evidence',
       'last_command: startup',
@@ -1642,34 +1300,6 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '',
       '## Last Updated',
       new Date().toISOString(),
-      '',
-      '## Planning Evidence',
-      'plan_hash: ' + planHash,
-      'decision: auto-run',
-      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
-      'first_node_id: impl',
-      'first_node_role: implementer',
-      '',
-      '## Epoch Lineage',
-      'epoch_schema_version: ' + anchors.epoch_schema_version,
-      'claim_repository_id: ' + anchors.claim_repository_id,
-      'claim_identity_digest: ' + anchors.claim_identity_digest,
-      'claim_root_object_format: ' + anchors.claim_root_object_format,
-      'claim_root_base_commit: ' + anchors.claim_root_base_commit,
-      'claim_root_base_tree: ' + anchors.claim_root_base_tree,
-      'claim_root_base_digest: ' + anchors.claim_root_base_digest,
-      'epoch_lineage_id: ' + anchors.epoch_lineage_id,
-      'plan_epoch: 1',
-      'active_plan_hash: ' + planHash,
-      'inherited_frontier_digest: none',
-      'inherited_frontier_classes: none',
-      'automatic_review_replans: 0',
-      'authorized_epoch_ceiling: 2',
-      'case_b_exemption_consumed: false',
-      'replan_status: none',
-      'replan_transaction_id: none',
-      'replan_phase: none',
-      'active_snapshot_manifest_digest: none',
       '',
       '## Sink',
       'branch: workflow/' + project,
@@ -1683,16 +1313,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       'claim_ts: 2026-01-01T00:00:00Z',
       ''
     ].join('\n');
-    const tasksText = JSON.stringify({
-      source_plan_hash: planHash,
-      tasks: [
-        { id: 'impl', role: 'implementer', ledger_status: 'complete', status: 'completed' },
-        { id: 'rv', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
-        { id: 'done', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-      ],
-    }) + '\n';
     fs.writeFileSync(path.join(wtProjDir, 'workflow-state.md'), stateText);
-    fs.writeFileSync(path.join(wtProjDir, 'workflow-tasks.json'), tasksText);
 
     // Implementation commit on the branch, authored INSIDE the worktree (never by the machinery).
     fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
@@ -1703,9 +1324,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     // The orchestrator's copy of the project folder lives in MAIN (its cwd during Finalization).
     const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
     fs.mkdirSync(path.join(mainProjDir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-plan.md'), fs.readFileSync(wtPlanPath, 'utf8'));
     fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), stateText);
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-tasks.json'), tasksText);
 
     // Chain receipt bound to the worktree HEAD (self-host gate).
     fs.writeFileSync(path.join(wtCacheDir, 'chain-receipt.json'), JSON.stringify({
@@ -1727,9 +1346,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
     });
-    // A fresh finalize process re-derives its whole gate verdict from durable state alone — the plan
-    // frozen by an earlier process, the receipts on disk, and the git tree. That reconstruction from
-    // bytes is the property; in one heap the already-parsed plan would answer instead of the file.
+    // A fresh finalize process re-derives its whole verdict from durable state alone — the state
+    // file, the receipts on disk and the git tree. That reconstruction from bytes is the property;
+    // in one heap an already-parsed in-memory answer would stand in for the files.
     // spawn-class: durable-handoff
     const r = spawnS816(process.execPath,
       [CLAIM816, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
@@ -1766,36 +1385,12 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fx); }
   }
 
-  // --- T2: the ledger-regression guard is REPAIRED INSIDE the transaction -----------------------
-  // SUPERSEDED BY #837. T2 used to pin `finalize_mirror_refused`/`ledger_regression` as an OPERATOR
-  // obligation ("sync worktree→main FIRST, then re-run"). #837 subtracts that obligation: the
-  // staler main copy is a blocker the workflow manufactured out of its own commit policy, so the
-  // transaction now performs the worktree→main sync itself and proceeds. The INVARIANT T2 actually
-  // guards is unchanged and re-asserted below — a staler main copy must NEVER be allowed to regress
-  // the complete worktree ledger. The refusal branch itself survives, re-typed as
-  // `inner_reason: mirror_sync_failed`, and is covered by #837(P5).
-  {
-    const fx = mk816('issue-816b');
-    try {
-      // Make MAIN's copy of the plan STALER than the worktree ledger (complete -> pending).
-      const mainPlan = path.join(fx.mainProjDir, 'workflow-plan.md');
-      fs.writeFileSync(mainPlan, fs.readFileSync(mainPlan, 'utf8').replace(/\| complete \|/g, '| pending |'));
-      const r = runFinalize816(fx);
-      assert(r.status === 0 && r.json && r.json.reason !== 'finalize_mirror_refused',
-        '#816(T2): a staler MAIN ledger is repaired by the transaction, not refused, got status='
-        + r.status + ' json=' + JSON.stringify(r.json));
-      assert(r.json && r.json.finalize_transaction
-        && r.json.finalize_transaction.ledger_compare === 'synced_from_worktree',
-        '#816(T2): the transaction ledger must record the script-performed worktree→main sync, got '
-        + JSON.stringify(r.json && r.json.finalize_transaction));
-      let wtPlan = '';
-      const archivedPlan = path.join(fx.mainRoot, 'kaola-workflow', 'archive', 'issue-816b', 'workflow-plan.md');
-      try { wtPlan = fs.readFileSync(archivedPlan, 'utf8'); } catch (_) {}
-      assert(!!wtPlan && !/\| pending \|/.test(wtPlan),
-        '#816(T2): the staler main copy must NEVER regress the complete worktree ledger');
-    } finally { cleanup816(fx); }
-  }
-
+  // DELETED: #816(T2) — "a staler MAIN ledger is repaired by the transaction, not refused".
+  // It staled main's copy by rewriting `| complete |` to `| pending |` in a `## Node Ledger` and
+  // asserted `finalize_transaction.ledger_compare === 'synced_from_worktree'`. There is no ledger
+  // to regress. The SYNC ITSELF survives and is still pinned by #837(P4/P5/P6) below; what is
+  // uncovered until compareLedgers is re-pointed at a node-free record is the narrower property
+  // that the mirror must never let a staler main copy overwrite a more advanced worktree one.
   // --- T3: Step 7 roadmap staging + the `chore: finalize` commit gate are inside the transaction -
   {
     const fx = mk816('issue-816c');
@@ -3004,1219 +2599,6 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 }
 
-// ---------------------------------------------------------------------------
-// #686: archive-time reap of dangling refs/kaola-workflow/barrier/<tag>/* refs (Behavior A).
-// archiveProjectDir is the convergence point for finalize-closed / discard-abandoned / the
-// active-folders backstop, so ONE insertion there must delete every barrier ref belonging to the
-// archived project. RED (pre-impl): the ref survives archiving. GREEN (post-impl): the ref is gone
-// AND the archive itself still succeeds; a reap failure must never throw or block the archive.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686 } = require('child_process');
-  const claim686 = require('./kaola-workflow-claim.js');
-  const GIT_ENV_686 = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686 = (cwd, args) => execFS686('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686 });
-
-  // --- (a) archive-time reap deletes the project's barrier ref; archive itself still succeeds ---
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686-reap-')));
-    const project = 'issue-686reap';
-    try {
-      g686(tmp, ['init', '-b', 'main']);
-      g686(tmp, ['config', 'user.email', 't@t.com']);
-      g686(tmp, ['config', 'user.name', 'Test']);
-      g686(tmp, ['config', 'commit.gpgsign', 'false']);
-      fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-      g686(tmp, ['add', 'README.md']);
-      g686(tmp, ['commit', '-m', 'init']);
-      const headSha = G.exec(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
-
-      const projDir = path.join(tmp, 'kaola-workflow', project);
-      fs.mkdirSync(projDir, { recursive: true });
-      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), 'status: in_progress\nissue_number: 68601\n');
-
-      const refName = 'refs/kaola-workflow/barrier/' + project + '/n1-test';
-      g686(tmp, ['update-ref', refName, headSha]);
-      const beforeReap = G.exec(tmp, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
-      assert(beforeReap === refName, '#686 fixture: the barrier ref exists before archiving, got ' + JSON.stringify(beforeReap));
-
-      const result = claim686.archiveProjectDir(tmp, project, 'closed', undefined, {});
-      assert(result && result.archived === true, '#686: archiveProjectDir must still succeed with a barrier ref present, got ' + JSON.stringify(result));
-
-      const afterReap = G.exec(tmp, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
-      assert(afterReap === '', '#686: archive-time reap must delete every refs/kaola-workflow/barrier/<project>/* ref, got ' + JSON.stringify(afterReap));
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  }
-
-  // --- (b) FAIL-SOFT: a reap failure (no git repo at all) must not throw and must not block the archive ---
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686-failsoft-')));
-    const project = 'issue-686failsoft';
-    try {
-      // Deliberately NOT a git repo — `git for-each-ref` inside the reap will fail (fatal: not a git
-      // repository). archiveProjectDir must still complete via the plain fs.renameSync in-place path
-      // (which needs no git at all).
-      const projDir = path.join(tmp, 'kaola-workflow', project);
-      fs.mkdirSync(projDir, { recursive: true });
-      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), 'status: in_progress\nissue_number: 68602\n');
-
-      let threw = false, result;
-      try { result = claim686.archiveProjectDir(tmp, project, 'closed', undefined, {}); }
-      catch (_) { threw = true; }
-      assert(threw === false, '#686: a ref-reap failure (no git repo) must NOT throw out of archiveProjectDir');
-      assert(result && result.archived === true, '#686: the archive itself must still succeed despite the reap failure, got ' + JSON.stringify(result));
-      assert(result && fs.existsSync(result.dest), '#686: the archived folder must exist despite the reap failure, dest=' + (result && result.dest));
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686: legacy `barrier-ref-sweep` subcommand (Behavior B) — reclaims refs/kaola-workflow/barrier/
-// <tag>/* refs left behind by projects archived BEFORE Behavior A shipped (or any path that bypassed
-// archiveProjectDir). KEEP = every ACTIVE kaola-workflow/<project>/ folder OR any project with a live
-// .cache/running-set.json; every other tag's refs are deleted. Mirrors the #680 orphan-baseline sweep
-// discipline: sanitizer collisions only ever ADD to KEEP (fail-safe under-reap), and the sweep is
-// scoped STRICTLY to refs/kaola-workflow/barrier/ — never leg-base/. RED (pre-impl): the subcommand
-// does not exist. GREEN (post-impl): active/running-set/collision tags survive; the orphaned
-// archived-project tag is swept; leg-base/ is untouched.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686b, spawnSync: spawnS686b } = require('child_process');
-  const CLAIM686 = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686b = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686b = (cwd, args) => execFS686b('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686b });
-
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686-sweep-')));
-  try {
-    g686b(tmp, ['init', '-b', 'main']);
-    g686b(tmp, ['config', 'user.email', 't@t.com']);
-    g686b(tmp, ['config', 'user.name', 'Test']);
-    g686b(tmp, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-    g686b(tmp, ['add', 'README.md']);
-    g686b(tmp, ['commit', '-m', 'init']);
-    const headSha = G.exec(tmp, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
-
-    // ACTIVE project — folder present, non-terminal status → KEEP.
-    const activeProj = 'issue-686active';
-    fs.mkdirSync(path.join(tmp, 'kaola-workflow', activeProj), { recursive: true });
-    fs.writeFileSync(path.join(tmp, 'kaola-workflow', activeProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68611\n');
-    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + activeProj + '/n1', headSha]);
-
-    // ARCHIVED project — NO live folder at all (already archived pre-#686, ref left dangling) → DELETE.
-    const archivedProj = 'issue-686archived';
-    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + archivedProj + '/n1', headSha]);
-
-    // Sanitizer-COLLISION — "proj.a686" (active, sanitizes to "proj_a686") shares its sanitized tag
-    // with a (nonexistent-folder) "proj_a686". The collision must KEEP (fail-safe under-reap).
-    const collisionActive = 'proj.a686';
-    const collisionTag = 'proj_a686';
-    fs.mkdirSync(path.join(tmp, 'kaola-workflow', collisionActive), { recursive: true });
-    fs.writeFileSync(path.join(tmp, 'kaola-workflow', collisionActive, 'workflow-state.md'), 'status: in_progress\nissue_number: 68612\n');
-    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + collisionTag + '/n1', headSha]);
-
-    // RUNNING-SET project — folder present with a TERMINAL local status (would NOT be "active") but a
-    // live .cache/running-set.json → must still KEEP via the running-set signal alone.
-    const runningProj = 'issue-686running';
-    fs.mkdirSync(path.join(tmp, 'kaola-workflow', runningProj, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(tmp, 'kaola-workflow', runningProj, 'workflow-state.md'), 'status: closed\nissue_number: 68613\n');
-    fs.writeFileSync(path.join(tmp, 'kaola-workflow', runningProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
-    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + runningProj + '/n1', headSha]);
-
-    // Scope guard — a leg-base ref (a SEPARATE namespace) must survive untouched (never barrier/).
-    g686b(tmp, ['update-ref', 'refs/kaola-workflow/leg-base/' + archivedProj + '/n1', headSha]);
-
-    const run = spawnS686b(process.execPath, [CLAIM686, 'barrier-ref-sweep', '--json'], {
-      cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out = {};
-    try { out = JSON.parse(String(run.stdout || '').trim().split('\n').pop()); } catch (_) {}
-
-    const listRefs = (prefix) => G.exec(tmp, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
-
-    assert(run.status === 0, '#686 sweep: barrier-ref-sweep must exit 0, got status=' + run.status + ' stdout=' + run.stdout + ' stderr=' + run.stderr);
-    assert(out && Array.isArray(out.refsDeleted) && Array.isArray(out.tagsKept), '#686 sweep: --json summary must carry refsDeleted[]/tagsKept[], got ' + JSON.stringify(out));
-
-    assert(listRefs('refs/kaola-workflow/barrier/' + activeProj + '/') === 'refs/kaola-workflow/barrier/' + activeProj + '/n1',
-      "#686 sweep: an ACTIVE project's barrier ref must be KEPT");
-    assert(listRefs('refs/kaola-workflow/barrier/' + archivedProj + '/') === '',
-      "#686 sweep: an ARCHIVED (no-folder) project's barrier ref must be DELETED");
-    assert(listRefs('refs/kaola-workflow/barrier/' + collisionTag + '/') === 'refs/kaola-workflow/barrier/' + collisionTag + '/n1',
-      '#686 sweep: a sanitizer-collision tag shared with an active folder must be KEPT (under-reap-safe)');
-    assert(listRefs('refs/kaola-workflow/barrier/' + runningProj + '/') === 'refs/kaola-workflow/barrier/' + runningProj + '/n1',
-      '#686 sweep: a project with a live .cache/running-set.json must be KEPT even with a terminal local status');
-    assert(listRefs('refs/kaola-workflow/leg-base/' + archivedProj + '/') === 'refs/kaola-workflow/leg-base/' + archivedProj + '/n1',
-      '#686 sweep: leg-base/ refs are a SEPARATE namespace and must never be touched by barrier-ref-sweep');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R1, code-reviewer gate n2-review): over-reap of a LIVE project when barrier-ref-sweep
-// is invoked from a LINKED-WORKTREE cwd — the NORMAL orchestrator cwd for a run. The KEEP set was
-// built from `root` (getRoot() of the invoking cwd) alone, but refs/kaola-workflow/barrier/* refs
-// live in the shared git COMMON dir (enumerated/deleted with cwd: mainRoot) — while a LIVE claim's
-// kaola-workflow/<project>/ folder lives in the MAIN root, invisible from a sibling worktree's own
-// kaola-workflow/ dir. A sweep run from a linked worktree therefore reaped a live sibling project's
-// barrier ref — the gc-anchor whose baseline commit git gc can then prune, making the
-// barrier_base_mismatch ref-restore repair impossible. RED (pre-fix): a live sibling project (folder
-// + workflow-state.md + running .cache/running-set.json under the MAIN root only) is reaped when the
-// sweep runs with cwd = a linked worktree. GREEN (post-fix): the KEEP set is the UNION of the
-// `root`-universe and the `mainRoot`-universe, so the live sibling survives.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686c, spawnSync: spawnS686c } = require('child_process');
-  const CLAIM686c = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686c = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686c = (cwd, args) => execFS686c('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686c });
-
-  const mainRoot686c = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686c-main-')));
-  const kwRoot686c = mainRoot686c + '.kw';
-  try {
-    g686c(mainRoot686c, ['init', '-b', 'main']);
-    g686c(mainRoot686c, ['config', 'user.email', 't@t.com']);
-    g686c(mainRoot686c, ['config', 'user.name', 'Test']);
-    g686c(mainRoot686c, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(mainRoot686c, 'README.md'), 'fixture\n');
-    g686c(mainRoot686c, ['add', 'README.md']);
-    g686c(mainRoot686c, ['commit', '-m', 'init']);
-    const headSha686c = G.exec(mainRoot686c, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
-
-    // Linked worktree — the invoking cwd for the sweep. Its OWN kaola-workflow/ dir never exists.
-    const wtPath686c = path.join(kwRoot686c, 'issue-686wtcwd');
-    fs.mkdirSync(kwRoot686c, { recursive: true });
-    g686c(mainRoot686c, ['worktree', 'add', '-b', 'workflow/issue-68621', '--', wtPath686c, 'HEAD']);
-
-    // LIVE sibling project — folder + workflow-state.md + a live running-set.json, but ONLY under the
-    // MAIN root (as a real claim's folder always is), never under the worktree's own kaola-workflow/.
-    const siblingProj = 'issue-686sibling';
-    fs.mkdirSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68621\n');
-    fs.writeFileSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
-    g686c(mainRoot686c, ['update-ref', 'refs/kaola-workflow/barrier/' + siblingProj + '/n1', headSha686c]);
-
-    const listRefs686c = (prefix) => G.exec(mainRoot686c, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
-    const beforeSweep686c = listRefs686c('refs/kaola-workflow/barrier/' + siblingProj + '/');
-    assert(beforeSweep686c === 'refs/kaola-workflow/barrier/' + siblingProj + '/n1',
-      '#686 R1 fixture: the live sibling barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686c));
-
-    // Invoke the sweep with cwd = the LINKED WORKTREE — the normal orchestrator cwd for a run.
-    const run686c = spawnS686c(process.execPath, [CLAIM686c, 'barrier-ref-sweep', '--json'], {
-      cwd: wtPath686c, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out686c = {};
-    try { out686c = JSON.parse(String(run686c.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686c.status === 0, '#686 R1: barrier-ref-sweep must exit 0, got status=' + run686c.status + ' stdout=' + run686c.stdout + ' stderr=' + run686c.stderr);
-
-    const afterSweep686c = listRefs686c('refs/kaola-workflow/barrier/' + siblingProj + '/');
-    assert(afterSweep686c === 'refs/kaola-workflow/barrier/' + siblingProj + '/n1',
-      '#686 R1: a LIVE sibling project (folder in the MAIN root, invisible from the invoking worktree cwd) must be KEPT, not over-reaped, when the sweep runs from a linked-worktree cwd. tagsKept=' +
-      JSON.stringify(out686c.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686c.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686c.refsDeleted));
-    assert(Array.isArray(out686c.tagsKept) && out686c.tagsKept.includes(siblingProj),
-      '#686 R1: tagsKept must include the live sibling project tag, got ' + JSON.stringify(out686c.tagsKept));
-  } finally {
-    fs.rmSync(mainRoot686c, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot686c, { recursive: true, force: true }); } catch (_) {}
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R4, n3-adversary attempt 1): the reachable claim-root universe is EVERY linked
-// worktree, not just {invoking root, mainRoot} (R1's fix closed only half the class). A claim from a
-// THIRD worktree w2 — neither the sweep's invoking cwd w1 nor mainRoot — writes its live folder +
-// running-set.json ONLY under w2, invisible to a sweep run from w1. RED (pre-fix): the w2-only live
-// project's barrier ref is DELETED when the sweep runs from w1. GREEN (post-fix): the keep-set scan
-// spans EVERY `git worktree list --porcelain` root (mainRoot + every linked worktree — legs included
-// for free), so the w2-only project survives. A genuinely dead (no-folder-anywhere) tag is still
-// reaped, proving the fix does not degrade into a blanket keep-everything.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686d, spawnSync: spawnS686d } = require('child_process');
-  const CLAIM686d = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686d = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686d = (cwd, args) => execFS686d('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686d });
-
-  const mainRoot686d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686d-main-')));
-  const kwRoot686d = mainRoot686d + '.kw';
-  try {
-    g686d(mainRoot686d, ['init', '-b', 'main']);
-    g686d(mainRoot686d, ['config', 'user.email', 't@t.com']);
-    g686d(mainRoot686d, ['config', 'user.name', 'Test']);
-    g686d(mainRoot686d, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(mainRoot686d, 'README.md'), 'fixture\n');
-    g686d(mainRoot686d, ['add', 'README.md']);
-    g686d(mainRoot686d, ['commit', '-m', 'init']);
-    const headSha686d = G.exec(mainRoot686d, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
-
-    fs.mkdirSync(kwRoot686d, { recursive: true });
-    // w1 — the invoking cwd for the sweep. Its own kaola-workflow/ never exists.
-    const w1Path686d = path.join(kwRoot686d, 'issue-686w1');
-    g686d(mainRoot686d, ['worktree', 'add', '-b', 'workflow/issue-68631', '--', w1Path686d, 'HEAD']);
-    // w2 — a THIRD worktree (neither w1 nor mainRoot) holding the ONLY copy of the live project.
-    const w2Path686d = path.join(kwRoot686d, 'issue-686w2');
-    g686d(mainRoot686d, ['worktree', 'add', '-b', 'workflow/issue-68632', '--', w2Path686d, 'HEAD']);
-
-    const w2LiveProj = 'issue-686w2live';
-    fs.mkdirSync(path.join(w2Path686d, 'kaola-workflow', w2LiveProj, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(w2Path686d, 'kaola-workflow', w2LiveProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68632\n');
-    fs.writeFileSync(path.join(w2Path686d, 'kaola-workflow', w2LiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
-    g686d(mainRoot686d, ['update-ref', 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1', headSha686d]);
-
-    // A genuinely DEAD project (no folder anywhere) — must still be reaped post-fix.
-    const deadProj686d = 'issue-686w2dead';
-    g686d(mainRoot686d, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686d + '/n1', headSha686d]);
-
-    const listRefs686d = (prefix) => G.exec(mainRoot686d, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
-    const beforeSweep686d = listRefs686d('refs/kaola-workflow/barrier/' + w2LiveProj + '/');
-    assert(beforeSweep686d === 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1',
-      '#686 R4 fixture: the w2-only live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686d));
-
-    // Invoke the sweep with cwd = w1 — NEITHER the live project's own root NOR mainRoot.
-    const run686d = spawnS686d(process.execPath, [CLAIM686d, 'barrier-ref-sweep', '--json'], {
-      cwd: w1Path686d, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out686d = {};
-    try { out686d = JSON.parse(String(run686d.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686d.status === 0, '#686 R4: barrier-ref-sweep must exit 0, got status=' + run686d.status + ' stdout=' + run686d.stdout + ' stderr=' + run686d.stderr);
-
-    const afterSweep686d = listRefs686d('refs/kaola-workflow/barrier/' + w2LiveProj + '/');
-    assert(afterSweep686d === 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1',
-      '#686 R4: a LIVE project claimed in a THIRD worktree (neither the invoking root nor mainRoot) must be KEPT, not over-reaped. tagsKept=' +
-      JSON.stringify(out686d.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686d.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686d.refsDeleted));
-    assert(Array.isArray(out686d.tagsKept) && out686d.tagsKept.includes(w2LiveProj),
-      '#686 R4: tagsKept must include the w2-only live project tag, got ' + JSON.stringify(out686d.tagsKept));
-    assert(listRefs686d('refs/kaola-workflow/barrier/' + deadProj686d + '/') === '',
-      '#686 R4: a genuinely dead (no-folder-anywhere) tag must still be reaped — the fix must not degrade into keep-everything');
-  } finally {
-    fs.rmSync(mainRoot686d, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot686d, { recursive: true, force: true }); } catch (_) {}
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R4 fail-closed): `git worktree list` itself failing (an unscannable worktree set)
-// must ABORT the sweep — delete NOTHING — rather than proceed on a partial keep universe. An
-// unknown worktree set means the sweep cannot prove any tag is dead. RED (pre-fix): the injection
-// hook does not exist yet, so forcing it is a no-op — the sweep proceeds normally and reaps the
-// dead tag anyway. GREEN (post-fix): the forced enumeration failure aborts before any
-// `update-ref -d` runs, so the dead tag's ref survives too (a safe over-keep, never an over-reap).
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686f, spawnSync: spawnS686f } = require('child_process');
-  const CLAIM686f = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686f = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686f = (cwd, args) => execFS686f('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686f });
-
-  const tmp686f = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686f-')));
-  try {
-    g686f(tmp686f, ['init', '-b', 'main']);
-    g686f(tmp686f, ['config', 'user.email', 't@t.com']);
-    g686f(tmp686f, ['config', 'user.name', 'Test']);
-    g686f(tmp686f, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(tmp686f, 'README.md'), 'fixture\n');
-    g686f(tmp686f, ['add', 'README.md']);
-    g686f(tmp686f, ['commit', '-m', 'init']);
-    const headSha686f = G.exec(tmp686f, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
-
-    // A genuinely dead (no-folder-anywhere) tag — deleted in normal operation, but must SURVIVE
-    // when the worktree-list enumeration itself is forced to fail.
-    const deadProj686f = 'issue-686fdead';
-    g686f(tmp686f, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686f + '/n1', headSha686f]);
-
-    const run686f = spawnS686f(process.execPath, [CLAIM686f, 'barrier-ref-sweep', '--json'], {
-      cwd: tmp686f, encoding: 'utf8',
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_BARRIER_WT_LIST_FAIL: '1' })
-    });
-    let out686f = {};
-    try { out686f = JSON.parse(String(run686f.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686f.status === 0, '#686 R4 fail-closed: barrier-ref-sweep must still exit 0 on a safe abort, got status=' + run686f.status + ' stdout=' + run686f.stdout + ' stderr=' + run686f.stderr);
-    assert(out686f && out686f.aborted === true,
-      '#686 R4 fail-closed: a forced `git worktree list` enumeration failure must set aborted:true, got ' + JSON.stringify(out686f));
-    assert(Array.isArray(out686f.refsDeleted) && out686f.refsDeleted.length === 0,
-      '#686 R4 fail-closed: an enumeration failure must delete NOTHING, got refsDeleted=' + JSON.stringify(out686f.refsDeleted));
-
-    const afterSweep686f = G.exec(tmp686f, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + deadProj686f + '/'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
-    assert(afterSweep686f === 'refs/kaola-workflow/barrier/' + deadProj686f + '/n1',
-      '#686 R4 fail-closed: even a genuinely dead tag must SURVIVE an enumeration-failure abort (delete nothing beats delete-the-wrong-thing), got ' + JSON.stringify(afterSweep686f));
-  } finally {
-    fs.rmSync(tmp686f, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R5, n3-adversary attempt 1): case-insensitive-FS tag/dirent mismatch. A wrong-case
-// --record-base anchors barrier ref tag `Issue-9` while the live folder dirent is `issue-9` — on a
-// case-insensitive filesystem the two paths are the SAME inode, but the ref tag is recorded EXACTLY
-// as given (plan-validator.js projTag = basename AS GIVEN), so `keep` (built as `issue-9` from
-// readActiveFolders) does not exact-match the enumerated ref tag `Issue-9` → over-reap. FIX: the
-// sweep's keep membership check is CASE-FOLDED (fail-safe — only ever ADDS keeps, never removes
-// one). This test constructs the tag/folder case divergence directly so it is deterministic
-// regardless of the host FS's own case-sensitivity.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686e, spawnSync: spawnS686e } = require('child_process');
-  const CLAIM686e = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686e = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686e = (cwd, args) => execFS686e('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686e });
-
-  const tmp686e = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686e-')));
-  try {
-    g686e(tmp686e, ['init', '-b', 'main']);
-    g686e(tmp686e, ['config', 'user.email', 't@t.com']);
-    g686e(tmp686e, ['config', 'user.name', 'Test']);
-    g686e(tmp686e, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(tmp686e, 'README.md'), 'fixture\n');
-    g686e(tmp686e, ['add', 'README.md']);
-    g686e(tmp686e, ['commit', '-m', 'init']);
-    const headSha686e = G.exec(tmp686e, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
-
-    // Live folder dirent: lowercase `issue-9`.
-    const liveProj686e = 'issue-9';
-    fs.mkdirSync(path.join(tmp686e, 'kaola-workflow', liveProj686e), { recursive: true });
-    fs.writeFileSync(path.join(tmp686e, 'kaola-workflow', liveProj686e, 'workflow-state.md'), 'status: in_progress\nissue_number: 6869\n');
-    // Ref tag anchored with the WRONG case, as a real --record-base from a wrong-case path would.
-    const wrongCaseTag686e = 'Issue-9';
-    g686e(tmp686e, ['update-ref', 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/n1', headSha686e]);
-
-    const run686e = spawnS686e(process.execPath, [CLAIM686e, 'barrier-ref-sweep', '--json'], {
-      cwd: tmp686e, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out686e = {};
-    try { out686e = JSON.parse(String(run686e.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686e.status === 0, '#686 R5: barrier-ref-sweep must exit 0, got status=' + run686e.status + ' stdout=' + run686e.stdout + ' stderr=' + run686e.stderr);
-
-    const afterSweep686e = G.exec(tmp686e, ['for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
-    assert(afterSweep686e === 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/n1',
-      '#686 R5: a wrong-case ref tag (`Issue-9`) whose live folder dirent differs only in case (`issue-9`) must be KEPT under case-folded comparison, got ' + JSON.stringify(afterSweep686e) +
-      ' tagsKept=' + JSON.stringify(out686e.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686e.tagsDeleted));
-    assert(Array.isArray(out686e.tagsKept) && out686e.tagsKept.includes(wrongCaseTag686e),
-      '#686 R5: tagsKept must include the wrong-case tag, got ' + JSON.stringify(out686e.tagsKept));
-  } finally {
-    fs.rmSync(tmp686e, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R6, n3-adversary attempt 2): a worktree path containing a literal EMBEDDED NEWLINE.
-// `git worktree add` accepts such a path (APFS allows it); plain `--porcelain` (no -z) uses a bare
-// LF as the field/record terminator, so the path is emitted RAW across two physical lines — the
-// old `split('\n')` + `indexOf('worktree ')` parse captures only the first physical line (a
-// nonexistent prefix), silently dropping the rest of the path. That makes the newline-worktree root
-// unscannable, so a LIVE claim rooted there is invisible to the keep-set scan and its barrier ref is
-// over-reaped. FIX: `--porcelain -z` (NUL-separated) emits the path byte-exact between NULs,
-// unambiguous regardless of embedded LFs.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686g, spawnSync: spawnS686g } = require('child_process');
-  const CLAIM686g = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686g = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686g = (cwd, args) => execFS686g('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686g });
-
-  const mainRoot686g = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686g-main-')));
-  // #690 (n2 finding, test hygiene): declared ABOVE the try (not `const` inside it) so the finally
-  // below can always reach it and clean it up, even if an assertion throws before or after this
-  // SIBLING scratch worktree dir (outside mainRoot686g) is created.
-  let nlPath686g;
-  try {
-    g686g(mainRoot686g, ['init', '-b', 'main']);
-    g686g(mainRoot686g, ['config', 'user.email', 't@t.com']);
-    g686g(mainRoot686g, ['config', 'user.name', 'Test']);
-    g686g(mainRoot686g, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(mainRoot686g, 'README.md'), 'fixture\n');
-    g686g(mainRoot686g, ['add', 'README.md']);
-    g686g(mainRoot686g, ['commit', '-m', 'init']);
-    const headSha686g = G.exec(mainRoot686g, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
-
-    // A worktree path whose final path SEGMENT contains a literal embedded newline.
-    nlPath686g = mainRoot686g + '-wt-a' + '\n' + 'wt-b';
-    g686g(mainRoot686g, ['worktree', 'add', '-b', 'workflow/issue-686nl', '--', nlPath686g, 'HEAD']);
-    assert(fs.existsSync(nlPath686g), '#686 R6 fixture: the embedded-newline worktree path must exist on disk, got path=' + JSON.stringify(nlPath686g));
-
-    // A LIVE project rooted ONLY inside the newline-path worktree.
-    const nlLiveProj = 'issue-686nllive';
-    fs.mkdirSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68641\n');
-    fs.writeFileSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
-    g686g(mainRoot686g, ['update-ref', 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1', headSha686g]);
-
-    const listRefs686g = (prefix) => G.exec(mainRoot686g, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
-    const beforeSweep686g = listRefs686g('refs/kaola-workflow/barrier/' + nlLiveProj + '/');
-    assert(beforeSweep686g === 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1',
-      '#686 R6 fixture: the embedded-newline-worktree live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686g));
-
-    const run686g = spawnS686g(process.execPath, [CLAIM686g, 'barrier-ref-sweep', '--json'], {
-      cwd: mainRoot686g, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out686g = {};
-    try { out686g = JSON.parse(String(run686g.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686g.status === 0, '#686 R6: barrier-ref-sweep must exit 0, got status=' + run686g.status + ' stdout=' + run686g.stdout + ' stderr=' + run686g.stderr);
-
-    const afterSweep686g = listRefs686g('refs/kaola-workflow/barrier/' + nlLiveProj + '/');
-    assert(afterSweep686g === 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1',
-      '#686 R6: a LIVE project rooted in a worktree whose path contains an embedded newline must be KEPT, not over-reaped by an LF-split porcelain misparse. tagsKept=' +
-      JSON.stringify(out686g.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686g.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686g.refsDeleted));
-    assert(Array.isArray(out686g.tagsKept) && out686g.tagsKept.includes(nlLiveProj),
-      '#686 R6: tagsKept must include the embedded-newline-worktree live project tag, got ' + JSON.stringify(out686g.tagsKept));
-  } finally {
-    // #690 fix: nlPath686g is a SIBLING worktree dir living OUTSIDE mainRoot686g, so deleting
-    // mainRoot686g alone leaked it (n2 finding, filed as #690) — remove it independently first.
-    if (nlPath686g) { try { fs.rmSync(nlPath686g, { recursive: true, force: true }); } catch (_) {} }
-    fs.rmSync(mainRoot686g, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R7, n3-adversary attempt 2): a worktree path with a meaningful TRAILING SPACE.
-// `git worktree add` accepts such a path; plain `--porcelain` emits it verbatim (the trailing space
-// is part of the path, not terminator padding) — but the old parse's `.trim()` on the extracted
-// field strips it, resolving to a DIFFERENT, nonexistent root. That makes the trailing-space
-// worktree unscannable, so a LIVE claim rooted there is invisible and its barrier ref is over-reaped.
-// Distinct flaw from R6 (the `.trim()`, not the LF split) but the SAME fix locus and fix.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686h, spawnSync: spawnS686h } = require('child_process');
-  const CLAIM686h = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686h = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686h = (cwd, args) => execFS686h('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686h });
-
-  const mainRoot686h = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686h-main-')));
-  try {
-    g686h(mainRoot686h, ['init', '-b', 'main']);
-    g686h(mainRoot686h, ['config', 'user.email', 't@t.com']);
-    g686h(mainRoot686h, ['config', 'user.name', 'Test']);
-    g686h(mainRoot686h, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(mainRoot686h, 'README.md'), 'fixture\n');
-    g686h(mainRoot686h, ['add', 'README.md']);
-    g686h(mainRoot686h, ['commit', '-m', 'init']);
-    const headSha686h = G.exec(mainRoot686h, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
-
-    // A worktree path with a meaningful trailing space.
-    const trailPath686h = path.join(mainRoot686h + '.kw', 'issue-686trail ');
-    fs.mkdirSync(mainRoot686h + '.kw', { recursive: true });
-    g686h(mainRoot686h, ['worktree', 'add', '-b', 'workflow/issue-686trail', '--', trailPath686h, 'HEAD']);
-    assert(fs.existsSync(trailPath686h), '#686 R7 fixture: the trailing-space worktree path must exist on disk, got path=' + JSON.stringify(trailPath686h));
-
-    // A LIVE project rooted ONLY inside the trailing-space worktree.
-    const trailLiveProj = 'issue-686traillive';
-    fs.mkdirSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68642\n');
-    fs.writeFileSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
-    g686h(mainRoot686h, ['update-ref', 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1', headSha686h]);
-
-    const listRefs686h = (prefix) => G.exec(mainRoot686h, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
-    const beforeSweep686h = listRefs686h('refs/kaola-workflow/barrier/' + trailLiveProj + '/');
-    assert(beforeSweep686h === 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1',
-      '#686 R7 fixture: the trailing-space-worktree live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686h));
-
-    const run686h = spawnS686h(process.execPath, [CLAIM686h, 'barrier-ref-sweep', '--json'], {
-      cwd: mainRoot686h, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out686h = {};
-    try { out686h = JSON.parse(String(run686h.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686h.status === 0, '#686 R7: barrier-ref-sweep must exit 0, got status=' + run686h.status + ' stdout=' + run686h.stdout + ' stderr=' + run686h.stderr);
-
-    const afterSweep686h = listRefs686h('refs/kaola-workflow/barrier/' + trailLiveProj + '/');
-    assert(afterSweep686h === 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1',
-      '#686 R7: a LIVE project rooted in a worktree whose path has a trailing space must be KEPT, not over-reaped by a `.trim()`-corrupted porcelain misparse. tagsKept=' +
-      JSON.stringify(out686h.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686h.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686h.refsDeleted));
-    assert(Array.isArray(out686h.tagsKept) && out686h.tagsKept.includes(trailLiveProj),
-      '#686 R7: tagsKept must include the trailing-space-worktree live project tag, got ' + JSON.stringify(out686h.tagsKept));
-  } finally {
-    fs.rmSync(mainRoot686h + '.kw', { recursive: true, force: true });
-    fs.rmSync(mainRoot686h, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R8a, n3-adversary attempt 3): a present-but-UNREADABLE workflow-state.md (EACCES via
-// chmod 000) silently drops its folder's ONLY keep signal. readActiveFolders (shared,
-// active-folders.js) swallows the per-folder fs.readFileSync throw with a bare `continue`
-// (active-folders.js:246), so a live SEQUENCE-run project — no .cache/running-set.json, the common
-// case, and this fixture's shape — has no OTHER keep signal and its barrier gc-anchor gets reaped
-// even though the state file's mere presence is liveness evidence the sweep cannot disprove. A
-// genuinely dead (no-folder-anywhere) tag must still be reaped alongside it — the fix must not
-// degrade into keep-everything.
-// ---------------------------------------------------------------------------
-{
-  const isRoot686i = typeof process.getuid === 'function' && process.getuid() === 0;
-  if (isRoot686i) {
-    console.error('SKIP #686 R8a: running as root — chmod 000 is not enforced, skipping the unreadable-state-file regression');
-  } else {
-    const { execFileSync: execFS686i, spawnSync: spawnS686i } = require('child_process');
-    const CLAIM686i = path.join(__dirname, 'kaola-workflow-claim.js');
-    const GIT_ENV_686i = Object.assign({}, process.env, {
-      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-    });
-    const g686i = (cwd, args) => execFS686i('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686i });
-
-    const mainRoot686i = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686i-main-')));
-    // Declared ABOVE the try (test hygiene, per #690) so the finally can always restore perms and
-    // clean up even if an assertion throws mid-test.
-    let stateFile686i;
-    try {
-      g686i(mainRoot686i, ['init', '-b', 'main']);
-      g686i(mainRoot686i, ['config', 'user.email', 't@t.com']);
-      g686i(mainRoot686i, ['config', 'user.name', 'Test']);
-      g686i(mainRoot686i, ['config', 'commit.gpgsign', 'false']);
-      fs.writeFileSync(path.join(mainRoot686i, 'README.md'), 'fixture\n');
-      g686i(mainRoot686i, ['add', 'README.md']);
-      g686i(mainRoot686i, ['commit', '-m', 'init']);
-      const headSha686i = G.exec(mainRoot686i, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
-
-      // A LIVE SEQUENCE-run project: workflow-state.md present but UNREADABLE (chmod 000), and
-      // deliberately NO .cache/running-set.json — the state file is its SOLE keep signal.
-      const liveProj686i = 'issue-686chmodlive';
-      fs.mkdirSync(path.join(mainRoot686i, 'kaola-workflow', liveProj686i), { recursive: true });
-      stateFile686i = path.join(mainRoot686i, 'kaola-workflow', liveProj686i, 'workflow-state.md');
-      fs.writeFileSync(stateFile686i, 'status: in_progress\nissue_number: 68643\n');
-      fs.chmodSync(stateFile686i, 0o000);
-      g686i(mainRoot686i, ['update-ref', 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1', headSha686i]);
-
-      // A genuinely DEAD project (no folder at all) — must still be reaped, not swept into a
-      // blanket keep-everything by this fix.
-      const deadProj686i = 'issue-686chmoddead';
-      g686i(mainRoot686i, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686i + '/n1', headSha686i]);
-
-      const listRefs686i = (prefix) => G.exec(mainRoot686i, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
-      const beforeSweep686i = listRefs686i('refs/kaola-workflow/barrier/' + liveProj686i + '/');
-      assert(beforeSweep686i === 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1',
-        '#686 R8a fixture: the chmod-000-state-file live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686i));
-
-      const run686i = spawnS686i(process.execPath, [CLAIM686i, 'barrier-ref-sweep', '--json'], {
-        cwd: mainRoot686i, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-      });
-      let out686i = {};
-      try { out686i = JSON.parse(String(run686i.stdout || '').trim().split('\n').pop()); } catch (_) {}
-      assert(run686i.status === 0, '#686 R8a: barrier-ref-sweep must exit 0, got status=' + run686i.status + ' stdout=' + run686i.stdout + ' stderr=' + run686i.stderr);
-
-      const afterSweep686i = listRefs686i('refs/kaola-workflow/barrier/' + liveProj686i + '/');
-      assert(afterSweep686i === 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1',
-        '#686 R8a: a LIVE project whose workflow-state.md exists but is UNREADABLE (chmod 000 / EACCES) must be KEPT — present-but-unreadable is unprovable-dead liveness evidence, not a reason to reap. tagsKept=' +
-        JSON.stringify(out686i.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686i.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686i.refsDeleted));
-      assert(Array.isArray(out686i.tagsKept) && out686i.tagsKept.includes(liveProj686i),
-        '#686 R8a: tagsKept must include the chmod-000-state-file live project tag, got ' + JSON.stringify(out686i.tagsKept));
-      assert(listRefs686i('refs/kaola-workflow/barrier/' + deadProj686i + '/') === '',
-        '#686 R8a: a genuinely dead (no-folder-anywhere) tag must still be reaped even with the unreadable-state-file keep pass added — must not degrade into keep-everything');
-    } finally {
-      if (stateFile686i) { try { fs.chmodSync(stateFile686i, 0o644); } catch (_) {} }
-      fs.rmSync(mainRoot686i, { recursive: true, force: true });
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #686 REPAIR (R8b, n3-adversary attempt 3): workflow-state.md is itself a DIRECTORY (EISDIR) — a
-// distinct fault shape from R8a's EACCES, but the SAME swallow-and-drop mechanism in
-// readActiveFolders (a bare `continue` on ANY fs.readFileSync throw) and the SAME sweep-local fix.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync: execFS686j, spawnSync: spawnS686j } = require('child_process');
-  const CLAIM686j = path.join(__dirname, 'kaola-workflow-claim.js');
-  const GIT_ENV_686j = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-  });
-  const g686j = (cwd, args) => execFS686j('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686j });
-
-  const mainRoot686j = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686j-main-')));
-  try {
-    g686j(mainRoot686j, ['init', '-b', 'main']);
-    g686j(mainRoot686j, ['config', 'user.email', 't@t.com']);
-    g686j(mainRoot686j, ['config', 'user.name', 'Test']);
-    g686j(mainRoot686j, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(mainRoot686j, 'README.md'), 'fixture\n');
-    g686j(mainRoot686j, ['add', 'README.md']);
-    g686j(mainRoot686j, ['commit', '-m', 'init']);
-    const headSha686j = G.exec(mainRoot686j, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
-
-    // A LIVE SEQUENCE-run project: workflow-state.md is a DIRECTORY (EISDIR), and deliberately no
-    // .cache/running-set.json — the state file is its SOLE keep signal.
-    const liveProj686j = 'issue-686eisdirlive';
-    fs.mkdirSync(path.join(mainRoot686j, 'kaola-workflow', liveProj686j, 'workflow-state.md'), { recursive: true });
-    g686j(mainRoot686j, ['update-ref', 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1', headSha686j]);
-
-    // A genuinely DEAD project (no folder at all) — must still be reaped.
-    const deadProj686j = 'issue-686eisdirdead';
-    g686j(mainRoot686j, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686j + '/n1', headSha686j]);
-
-    const listRefs686j = (prefix) => G.exec(mainRoot686j, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
-    const beforeSweep686j = listRefs686j('refs/kaola-workflow/barrier/' + liveProj686j + '/');
-    assert(beforeSweep686j === 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1',
-      '#686 R8b fixture: the EISDIR-state-file live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686j));
-
-    const run686j = spawnS686j(process.execPath, [CLAIM686j, 'barrier-ref-sweep', '--json'], {
-      cwd: mainRoot686j, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    let out686j = {};
-    try { out686j = JSON.parse(String(run686j.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert(run686j.status === 0, '#686 R8b: barrier-ref-sweep must exit 0, got status=' + run686j.status + ' stdout=' + run686j.stdout + ' stderr=' + run686j.stderr);
-
-    const afterSweep686j = listRefs686j('refs/kaola-workflow/barrier/' + liveProj686j + '/');
-    assert(afterSweep686j === 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1',
-      '#686 R8b: a LIVE project whose workflow-state.md is itself a DIRECTORY (EISDIR) must be KEPT, not over-reaped. tagsKept=' +
-      JSON.stringify(out686j.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686j.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686j.refsDeleted));
-    assert(Array.isArray(out686j.tagsKept) && out686j.tagsKept.includes(liveProj686j),
-      '#686 R8b: tagsKept must include the EISDIR-state-file live project tag, got ' + JSON.stringify(out686j.tagsKept));
-    assert(listRefs686j('refs/kaola-workflow/barrier/' + deadProj686j + '/') === '',
-      '#686 R8b: a genuinely dead (no-folder-anywhere) tag must still be reaped even with the unreadable-state-file keep pass added — must not degrade into keep-everything');
-  } finally {
-    fs.rmSync(mainRoot686j, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #691 (R10, an R8 sibling): keep-pass (c) used `fs.existsSync(stateFile)` to distinguish
-// present-vs-absent, but `existsSync` returns FALSE when the state file cannot be reached because its
-// PARENT project directory is itself chmod 000 (EACCES-through-parent) — indistinguishable from a
-// genuinely-absent file, so a LIVE project whose *directory* is chmod-000 (state file live inside,
-// just unreachable) was dropped from the keep set and its live barrier gc-anchor reaped. Fix: a single
-// fs.statSync (then readFileSync) try/catch that KEEPS on any non-ENOENT fault (EACCES/EISDIR/EPERM/…)
-// and stays reapable on a clean ENOENT. Guarded with a process.getuid() root-skip (chmod 000 is not
-// enforced running as root); perms restored + directory removed in a `finally` (vars hoisted above the
-// try, per #690 test hygiene).
-// ---------------------------------------------------------------------------
-{
-  const isRoot691 = typeof process.getuid === 'function' && process.getuid() === 0;
-  if (isRoot691) {
-    console.error('SKIP #691: running as root — chmod 000 is not enforced, skipping the chmod-000-project-directory regression');
-  } else {
-    const { execFileSync: execFS691, spawnSync: spawnS691 } = require('child_process');
-    const CLAIM691 = path.join(__dirname, 'kaola-workflow-claim.js');
-    const GIT_ENV_691 = Object.assign({}, process.env, {
-      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
-    });
-    const g691 = (cwd, args) => execFS691('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_691 });
-
-    const mainRoot691 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-691-main-')));
-    // Declared ABOVE the try (test hygiene, per #690) so the finally can always restore perms and
-    // clean up even if an assertion throws mid-test.
-    let projDirChmod691;
-    try {
-      g691(mainRoot691, ['init', '-b', 'main']);
-      g691(mainRoot691, ['config', 'user.email', 't@t.com']);
-      g691(mainRoot691, ['config', 'user.name', 'Test']);
-      g691(mainRoot691, ['config', 'commit.gpgsign', 'false']);
-      fs.writeFileSync(path.join(mainRoot691, 'README.md'), 'fixture\n');
-      g691(mainRoot691, ['add', 'README.md']);
-      g691(mainRoot691, ['commit', '-m', 'init']);
-      const headSha691 = G.exec(mainRoot691, ['rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
-
-      // A LIVE SEQUENCE-run project whose PROJECT DIRECTORY (not just the state file) is chmod 000:
-      // workflow-state.md is live INSIDE it, but traversing into the directory itself is denied
-      // (EACCES-through-parent), so pre-fix `fs.existsSync(stateFile)` reads false — indistinguishable
-      // from a genuinely-absent file. Deliberately no .cache/running-set.json — the state file is its
-      // SOLE keep signal.
-      const liveProj691 = 'issue-691chmoddirlive';
-      projDirChmod691 = path.join(mainRoot691, 'kaola-workflow', liveProj691);
-      fs.mkdirSync(projDirChmod691, { recursive: true });
-      fs.writeFileSync(path.join(projDirChmod691, 'workflow-state.md'), 'status: in_progress\nissue_number: 69143\n');
-      fs.chmodSync(projDirChmod691, 0o000);
-      g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1', headSha691]);
-
-      // A genuinely DEAD project (no folder at all) — must still be reaped, not swept into a blanket
-      // keep-everything by this fix.
-      const deadProj691 = 'issue-691dead';
-      g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj691 + '/n1', headSha691]);
-
-      // A genuinely-ABSENT state file control: the project folder EXISTS and is fully readable, but
-      // carries NO workflow-state.md at all (clean ENOENT). This must stay reapable — the fix must
-      // distinguish "cannot probe" (EACCES/EISDIR/...) from "probed clean and it is absent" (ENOENT).
-      const enoentProj691 = 'issue-691cleanenoent';
-      fs.mkdirSync(path.join(mainRoot691, 'kaola-workflow', enoentProj691), { recursive: true });
-      g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + enoentProj691 + '/n1', headSha691]);
-
-      const listRefs691 = (prefix) => G.exec(mainRoot691, ['for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
-      const beforeSweep691 = listRefs691('refs/kaola-workflow/barrier/' + liveProj691 + '/');
-      assert(beforeSweep691 === 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1',
-        '#691 fixture: the chmod-000-project-directory live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep691));
-
-      const run691 = spawnS691(process.execPath, [CLAIM691, 'barrier-ref-sweep', '--json'], {
-        cwd: mainRoot691, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-      });
-      let out691 = {};
-      try { out691 = JSON.parse(String(run691.stdout || '').trim().split('\n').pop()); } catch (_) {}
-      assert(run691.status === 0, '#691: barrier-ref-sweep must exit 0, got status=' + run691.status + ' stdout=' + run691.stdout + ' stderr=' + run691.stderr);
-
-      const afterSweep691 = listRefs691('refs/kaola-workflow/barrier/' + liveProj691 + '/');
-      assert(afterSweep691 === 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1',
-        '#691: a LIVE project whose project DIRECTORY is chmod 000 (workflow-state.md live but unreachable, '
-        + 'EACCES-through-parent) must be KEPT — existsSync-through-a-denied-parent is indistinguishable from '
-        + 'genuinely-absent and must not be treated as reapable. tagsKept=' + JSON.stringify(out691.tagsKept)
-        + ' tagsDeleted=' + JSON.stringify(out691.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out691.refsDeleted));
-      assert(Array.isArray(out691.tagsKept) && out691.tagsKept.includes(liveProj691),
-        '#691: tagsKept must include the chmod-000-project-directory live project tag, got ' + JSON.stringify(out691.tagsKept));
-      assert(listRefs691('refs/kaola-workflow/barrier/' + deadProj691 + '/') === '',
-        '#691: a genuinely dead (no-folder-anywhere) tag must still be reaped — the fix must not degrade into keep-everything');
-      assert(listRefs691('refs/kaola-workflow/barrier/' + enoentProj691 + '/') === '',
-        '#691: a genuinely-absent state file (clean ENOENT, project folder present and readable) must stay '
-        + 'reapable — the statSync/readFileSync fault must be distinguished from a clean ENOENT, not treated as keep-everything');
-    } finally {
-      if (projDirChmod691) { try { fs.chmodSync(projDirChmod691, 0o755); } catch (_) {} }
-      fs.rmSync(mainRoot691, { recursive: true, force: true });
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #699: a fresh claim persists one immutable claim/root/epoch identity. The
-// helper reads Git objects once and never derives lineage from a plan hash.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync } = require('child_process');
-  const root699 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-claim-')));
-  const noHistoryRoot699 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-no-history-')));
-  const noGitRoot699 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-no-git-')));
-  const classifier699 = path.join(root699, 'classifier-green.js');
-  const env699 = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
-    KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_PATH: 'adaptive',
-    KAOLA_CLASSIFIER_BACKOFF_MS: '0'
-  });
-  const g699 = args => execFileSync('git', ['-C', root699].concat(args), { encoding: 'utf8', env: env699, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const runFreshClaim699 = cwd => {
-    try {
-      const stdout = execFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-claim.js'),
-        'startup', '--target-issue', '699'], { cwd, encoding: 'utf8', env: Object.assign({}, env699, {
-          KAOLA_CLASSIFIER_MOCK_SCRIPT: classifier699
-        }), stdio: ['ignore', 'pipe', 'pipe'] });
-      return { code: 0, stdout };
-    } catch (error) {
-      return { code: error.status == null ? 1 : error.status, stdout: String(error.stdout || ''), stderr: String(error.stderr || '') };
-    }
-  };
-  try {
-    g699(['init', '-b', 'main']);
-    g699(['config', 'user.name', 'Test']);
-    g699(['config', 'user.email', 't@example.com']);
-    fs.writeFileSync(path.join(root699, 'README.md'), 'fixture\n');
-    fs.writeFileSync(classifier699, 'process.stdout.write(JSON.stringify({ verdict: "green", reasoning: "fixture" }) + "\\n");\n');
-    g699(['add', 'README.md']);
-    g699(['commit', '-m', 'root']);
-    g699(['checkout', '-b', 'workflow/issue-699']);
-    const anchors = buildClaimAnchors(root699, {
-      project: 'issue-699', issue_number: 699, issue_numbers: [699], branch: 'workflow/issue-699',
-      worktree_path: root699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
-      session_marker: 'claim-test'
-    });
-    assert(anchors.epoch_schema_version === 2, '#699: fresh claim anchors use epoch schema 2');
-    assert(/^[0-9a-f]{64}$/.test(anchors.claim_identity_digest), '#699: claim_identity_digest is canonical SHA-256');
-    assert(/^[0-9a-f]{40}$/.test(anchors.claim_root_base_commit) && /^[0-9a-f]{40}$/.test(anchors.claim_root_base_tree), '#699: claim root captures full immutable commit/tree object ids');
-    assert(/^[0-9a-f]{64}$/.test(anchors.claim_root_base_digest) && /^[0-9a-f]{64}$/.test(anchors.epoch_lineage_id), '#699: root and epoch lineage digests are canonical SHA-256');
-    const planNoise = Object.assign({}, anchors, { active_plan_hash: 'f'.repeat(64) });
-    assert(planNoise.epoch_lineage_id === anchors.epoch_lineage_id, '#699: active plan hash is metadata and cannot change epoch lineage');
-
-    g699(['checkout', 'main']);
-    let branchChangedAnchors699 = null;
-    try {
-      branchChangedAnchors699 = buildClaimAnchors(root699, {
-        project: 'issue-699', issue_number: 699, issue_numbers: [699], branch: 'workflow/issue-699',
-        worktree_path: root699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
-        session_marker: 'claim-test'
-      });
-    } catch (_) {}
-    assert(branchChangedAnchors699 && branchChangedAnchors699.claim_root_base_commit === anchors.claim_root_base_commit
-      && branchChangedAnchors699.claim_root_base_tree === anchors.claim_root_base_tree,
-    '#699: immutable claim-root authority survives a current-branch change; target branch identity is bound separately');
-    const acquired = runFreshClaim699(root699);
-    const persistedPath = path.join(root699, 'kaola-workflow', 'issue-699', 'workflow-state.md');
-    const persisted = fs.existsSync(persistedPath) ? fs.readFileSync(persistedPath, 'utf8') : '';
-    assert(acquired.code === 0, '#699: a fresh claim with provable Git anchors succeeds, got code=' + acquired.code + ' stderr=' + String(acquired.stderr || '').trim());
-    assert(/^## Epoch Lineage$/m.test(persisted) && /^epoch_schema_version: 2$/m.test(persisted), '#699: a successful fresh claim persists the schema-2 Epoch Lineage block');
-    assert(/^claim_identity_digest: [0-9a-f]{64}$/m.test(persisted) && /^claim_root_base_digest: [0-9a-f]{64}$/m.test(persisted) && /^epoch_lineage_id: [0-9a-f]{64}$/m.test(persisted), '#699: a successful fresh claim persists claim/root/lineage digests');
-    assert(/^active_plan_hash: none$/m.test(persisted) && /^## Planning Evidence$/m.test(persisted)
-      && /^plan_hash: none$/m.test(persisted) && /^first_node_id: none$/m.test(persisted)
-      && /^first_node_role: none$/m.test(persisted),
-    '#699: a fresh epoch-1 claim persists the complete legal planless authority tuple');
-
-    G.exec(noHistoryRoot699, ['init', '-b', 'main'], { env: env699, stdio: ['ignore', 'ignore', 'pipe'] });
-    fs.writeFileSync(path.join(noHistoryRoot699, 'untracked.txt'), 'candidate\n');
-    const noHistory = buildClaimAnchors(noHistoryRoot699, {
-      project: 'issue-700', issue_number: 700, issue_numbers: [700], branch: 'workflow/issue-700',
-      worktree_path: noHistoryRoot699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
-      session_marker: 'claim-test-no-history'
-    });
-    const emptyTree = G.exec(noHistoryRoot699, ['hash-object', '-t', 'tree', '--stdin'], {
-      input: '', encoding: 'utf8', env: env699, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-    assert(/^0{40}$/.test(noHistory.claim_root_base_commit)
-      && noHistory.claim_root_base_tree === emptyTree
-      && /^[0-9a-f]{64}$/.test(noHistory.claim_root_base_digest),
-    '#699: an initialized no-history repository gets the exact zero-commit/canonical-empty-tree claim root');
-
-    const refused = runFreshClaim699(noGitRoot699);
-    const legacyPath = path.join(noGitRoot699, 'kaola-workflow', 'issue-699', 'workflow-state.md');
-    assert(refused.code !== 0, '#699: a fresh claim whose immutable Git anchors cannot be built fails closed');
-    assert(!fs.existsSync(legacyPath), '#699: anchor failure must not downgrade a fresh claim into a legacy workflow-state.md');
-  } finally {
-    fs.rmSync(root699, { recursive: true, force: true });
-    fs.rmSync(noHistoryRoot699, { recursive: true, force: true });
-    fs.rmSync(noGitRoot699, { recursive: true, force: true });
-  }
-}
-
-// Adaptive is the only workflow path: a finalize with NO frozen workflow-plan.md present is an
-// unconditional typed adaptive_plan_missing refusal (the fast/full paths and their Phase 5 verifier
-// were retired). Invoke cmdFinalize directly (the bypass seam) across all four editions with varied
-// stale workflow_path fields and prove the refusal never mutates the live folder or its roadmap
-// closure source. state_missing / state_invalid_type refuse earlier (before the plan/path branch).
-{
-  const { spawnSync } = require('child_process');
-  const claimScripts = [
-    { edition: 'claude', file: path.join(__dirname, 'kaola-workflow-claim.js') },
-    { edition: 'codex', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js') },
-    { edition: 'gitlab', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-claim.js') },
-    { edition: 'gitea', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js') },
-  ];
-  const binding = 'evidence-binding: phase5-code-review-1 nonce-code-review-1';
-  const progress = [
-    '# Phase 4 - Progress: issue-1',
-    '',
-    '## Tasks',
-    '| # | Task | Status | Files | Notes |',
-    '|---|------|--------|-------|-------|',
-    '| 1 | implement the change | complete | a.js | done |',
-    '',
-  ].join('\n');
-
-  function runPlanAbsentFinalize(edition, claimScript, caseName, reviewContent, evidenceContent, options) {
-    const opts = options || {};
-    const workflowPath = opts.workflowPath || 'adaptive';
-    const stateMode = opts.stateMode || 'file';
-    // Every plan-absent path case collapses to adaptive_plan_missing; the state-mode cases refuse
-    // earlier (state_missing / state_invalid_type) and pass their own expectedInnerReason.
-    const expectedInnerReason = opts.expectedInnerReason || 'adaptive_plan_missing';
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-plan-absent-finalize-')));
-    const project = 'issue-720-' + caseName;
-    const projectPath = path.join(root, 'kaola-workflow', project);
-    const roadmapSource = path.join(root, 'kaola-workflow', '.roadmap', 'issue-720.md');
-    const evidencePath = path.join(projectPath, '.cache', 'code-reviewer.md');
-    fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
-    fs.mkdirSync(path.dirname(roadmapSource), { recursive: true });
-    const statePath = path.join(projectPath, 'workflow-state.md');
-    const stateContent = [
-      '# Kaola-Workflow State',
-      '## Project',
-      'name: ' + project,
-      'status: active',
-      '## Current Position',
-      'phase: 5',
-      'phase_name: Review',
-      'step: complete',
-      ...(opts.omitWorkflowPath ? [] : ['workflow_path: ' + workflowPath]),
-      'next_command: /kaola-workflow-finalize ' + project,
-      '## Sink',
-      'branch: workflow/' + project,
-      'issue_number: 720',
-      'sink: merge',
-      'run_posture: in-place',
-      '',
-    ].join('\n');
-    if (stateMode === 'file') fs.writeFileSync(statePath, stateContent);
-    else if (stateMode === 'directory') fs.mkdirSync(statePath);
-    // The review/progress fixtures are written but never consulted — under retirement a plan-absent
-    // finalize refuses BEFORE any Phase 5 evidence is read (the fast/full verifier was retired).
-    fs.writeFileSync(path.join(projectPath, 'phase4-progress.md'), progress.replace(/issue-1/g, project));
-    fs.writeFileSync(path.join(projectPath, 'phase5-review.md'), reviewContent);
-    fs.writeFileSync(evidencePath, evidenceContent);
-    fs.writeFileSync(roadmapSource, '# Issue 720\n');
-
-    const result = spawnSync(process.execPath,
-      [claimScript, 'finalize', '--project', project], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 30000,
-        env: Object.assign({}, process.env, {
-          KAOLA_WORKFLOW_OFFLINE: '1',
-          KAOLA_WORKTREE_NATIVE: '0',
-        }),
-      });
-    let json = null;
-    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-    const activeSurvived = fs.existsSync(projectPath);
-    const archiveExists = fs.existsSync(path.join(root, 'kaola-workflow', 'archive'));
-    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
-        && json.inner_reason === expectedInnerReason,
-      edition + ' plan-absent finalize (' + caseName + ') must refuse finalize_gate_unverified/'
-        + expectedInnerReason + '; got status=' + result.status + ' output=' + JSON.stringify(json));
-    assert(activeSurvived,
-      edition + ' plan-absent finalize (' + caseName + ') must leave the active project folder in place');
-    assert(!archiveExists,
-      edition + ' plan-absent finalize (' + caseName + ') must create no archive');
-    assert(fs.existsSync(roadmapSource),
-      edition + ' plan-absent finalize (' + caseName + ') must retain the roadmap closure source');
-    if (stateMode === 'file') {
-      const stateAfter = activeSurvived ? fs.readFileSync(statePath, 'utf8') : '';
-      assert(activeSurvived && /^status: active$/m.test(stateAfter) && !/^status: closed$/m.test(stateAfter),
-        edition + ' plan-absent finalize (' + caseName + ') must leave closure state active');
-    } else if (stateMode === 'missing') {
-      assert(activeSurvived && !fs.existsSync(statePath),
-        edition + ' plan-absent finalize (' + caseName + ') must not fabricate missing workflow state');
-    } else {
-      let stateIsDirectory = false;
-      try { stateIsDirectory = fs.lstatSync(statePath).isDirectory(); } catch (_) {}
-      assert(activeSurvived && stateIsDirectory,
-        edition + ' plan-absent finalize (' + caseName + ') must preserve wrong-type workflow state');
-    }
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-
-  // Plain reviewer fixture — under retirement it is never consulted (the plan-absent finalize
-  // refuses before any Phase 5 evidence is read), so it carries no reviewComplianceTable dependency.
-  const canonicalReview = [
-    '# Phase 5 - Review: issue-720-stale',
-    '',
-    '## Review Status',
-    'PASSED',
-    '',
-  ].join('\n');
-  const staleEvidence = [
-    binding,
-    'domain_outcome: approved',
-    'verdict: pass',
-    'findings_blocking: 0',
-    'review_summary: no_blocking_findings',
-    'review_attestation: full_review_completed',
-    'No admitted findings.',
-    'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
-    '',
-  ].join('\n');
-
-  const malformedReview = [
-    '# Phase 5 - Review: issue-720-malformed',
-    '## Required Agent Compliance',
-    '| Requirement | Status | Evidence | Skip Reason |',
-    '|-------------|--------|----------|-------------|',
-    '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | |',
-    '## Review Status',
-    'PASSED',
-    '',
-  ].join('\n');
-  for (const editionClaim of claimScripts) {
-    // DELETED: the seven PLAN-PATH cases (stale / malformed / absent-field / stale-adaptive /
-    // stale-full / stale-fast / stale-typo). Each asserted that a folder with no
-    // workflow-plan.md refuses `adaptive_plan_missing`, whatever its stale `workflow_path` field
-    // said. There is no plan to be missing: the finalize door reads a receipt and a git diff and
-    // never opens a run record, so all seven now finalize normally.
-    //
-    // The two STATE-MODE cases survive unchanged, and they are the reason the harness stays: an
-    // unreadable or wrong-type workflow-state.md still refuses before any side effect. That is a
-    // record-integrity refusal — the authority the transaction is about to stamp cannot be read —
-    // not a judgement about the work, and it is deliberately not converted.
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'state-missing', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { stateMode: 'missing', expectedInnerReason: 'state_missing' });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'state-wrong-type', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { stateMode: 'directory', expectedInnerReason: 'state_invalid_type' });
-  }
-
-  // A manual move is not a crash receipt. Source-missing Finalization may trust an
-  // archive only after archiveProjectDir has already terminal-stamped it closed;
-  // an active/nonterminal archive must refuse before closure or roadmap mutation.
-  for (const editionClaim of claimScripts) {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-finalize-manual-archive-')));
-    const project = 'issue-720-manual-' + editionClaim.edition;
-    const archivePath = path.join(root, 'kaola-workflow', 'archive', project);
-    const roadmapSource = path.join(root, 'kaola-workflow', '.roadmap', 'issue-720.md');
-    fs.mkdirSync(archivePath, { recursive: true });
-    fs.mkdirSync(path.dirname(roadmapSource), { recursive: true });
-    const activeState = [
-      '# Kaola-Workflow State',
-      '## Project',
-      'name: ' + project,
-      'status: active',
-      '## Current Position',
-      'phase: 5',
-      'workflow_path: full',
-      'next_command: /kaola-workflow-finalize ' + project,
-      '## Sink',
-      'issue_number: 720',
-      'sink: merge',
-      '',
-    ].join('\n');
-    const archivedStatePath = path.join(archivePath, 'workflow-state.md');
-    fs.writeFileSync(archivedStatePath, activeState);
-    fs.writeFileSync(roadmapSource, '# Issue 720\n');
-    const result = spawnSync(process.execPath,
-      [editionClaim.file, 'finalize', '--project', project], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 30000,
-        env: Object.assign({}, process.env, {
-          KAOLA_WORKFLOW_OFFLINE: '1',
-          KAOLA_WORKTREE_NATIVE: '0',
-        }),
-      });
-    let json = null;
-    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
-        && json.inner_reason === 'archive_state_not_closed',
-      editionClaim.edition + ' manually moved active archive must refuse before Finalization side effects; got status='
-        + result.status + ' output=' + JSON.stringify(json));
-    assert(fs.readFileSync(archivedStatePath, 'utf8') === activeState,
-      editionClaim.edition + ' manual-archive refusal must not terminal-stamp or append closure evidence');
-    assert(fs.existsSync(roadmapSource),
-      editionClaim.edition + ' manual-archive refusal must retain the roadmap closure source');
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-
-  // A dangling live symlink is still a live filesystem entry. It must never be
-  // reclassified as source-missing merely because existsSync follows the link
-  // and returns false, even when one terminal archive would otherwise satisfy
-  // the narrow crash-resume exemption.
-  for (const editionClaim of claimScripts) {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-dangling-live-')));
-    const project = 'issue-720-dangling-' + editionClaim.edition;
-    const workflowRoot = path.join(root, 'kaola-workflow');
-    const livePath = path.join(workflowRoot, project);
-    const archivePath = path.join(workflowRoot, 'archive', project);
-    const roadmapSource = path.join(workflowRoot, '.roadmap', 'issue-720.md');
-    fs.mkdirSync(archivePath, { recursive: true });
-    fs.mkdirSync(path.dirname(roadmapSource), { recursive: true });
-    const terminalState = [
-      '# Kaola-Workflow State',
-      '## Project',
-      'name: ' + project,
-      'status: closed',
-      '## Current Position',
-      'phase: 6',
-      'workflow_path: fast',
-      'step: complete',
-      'next_command: none (archived)',
-      '## Sink',
-      'issue_number: 720',
-      'sink: merge',
-      '',
-    ].join('\n');
-    fs.writeFileSync(path.join(archivePath, 'workflow-state.md'), terminalState);
-    fs.writeFileSync(roadmapSource, '# Issue 720\n');
-    fs.symlinkSync(path.join(root, 'missing-live-target'), livePath);
-    const result = spawnSync(process.execPath,
-      [editionClaim.file, 'finalize', '--project', project], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 30000,
-        env: Object.assign({}, process.env, {
-          KAOLA_WORKFLOW_OFFLINE: '1',
-          KAOLA_WORKTREE_NATIVE: '0',
-        }),
-      });
-    let json = null;
-    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
-        && json.inner_reason === 'archive_authority_invalid_type',
-    editionClaim.edition + ' dangling live source must refuse as invalid live authority; got status='
-        + result.status + ' output=' + JSON.stringify(json));
-    assert(fs.lstatSync(livePath).isSymbolicLink(),
-      editionClaim.edition + ' dangling live-source refusal must preserve the malformed entry');
-    assert(fs.readFileSync(path.join(archivePath, 'workflow-state.md'), 'utf8') === terminalState,
-      editionClaim.edition + ' dangling live-source refusal must not mutate archive authority');
-    assert(fs.existsSync(roadmapSource),
-      editionClaim.edition + ' dangling live-source refusal must retain roadmap closure source');
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-
-  // Reusing a project name can leave a committed exact archive while the current finalize
-  // transaction renames to <project>.archived-<timestamp>. After that rename, source is absent;
-  // selecting the stale exact archive would bind closure to the wrong run. Refuse ambiguity.
-  for (const editionClaim of claimScripts) {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-archive-ambiguity-')));
-    const project = 'issue-720-reused-' + editionClaim.edition;
-    const archiveBase = path.join(root, 'kaola-workflow', 'archive');
-    const oldExact = path.join(archiveBase, project);
-    const currentSuffixed = path.join(archiveBase, project + '.archived-2026-07-17T00-00-00-000Z');
-    fs.mkdirSync(oldExact, { recursive: true });
-    fs.mkdirSync(currentSuffixed, { recursive: true });
-    const terminalState = (name, workflowPath) => [
-      '# Kaola-Workflow State',
-      '## Project',
-      'name: ' + name,
-      'status: closed',
-      '## Current Position',
-      'phase: 6',
-      'workflow_path: ' + workflowPath,
-      'step: complete',
-      'next_command: none (archived)',
-      '## Sink',
-      'issue_number: 720',
-      'sink: merge',
-      '',
-    ].join('\n');
-    const oldState = terminalState(project, 'fast');
-    const currentState = terminalState(project, 'full');
-    fs.writeFileSync(path.join(oldExact, 'workflow-state.md'), oldState);
-    fs.writeFileSync(path.join(currentSuffixed, 'workflow-state.md'), currentState);
-    const result = spawnSync(process.execPath,
-      [editionClaim.file, 'finalize', '--project', project], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 30000,
-        env: Object.assign({}, process.env, {
-          KAOLA_WORKFLOW_OFFLINE: '1',
-          KAOLA_WORKTREE_NATIVE: '0',
-        }),
-      });
-    let json = null;
-    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
-        && json.inner_reason === 'archive_authority_ambiguous',
-      editionClaim.edition + ' source-missing finalize with exact+suffixed archives must refuse ambiguity; got status='
-        + result.status + ' output=' + JSON.stringify(json));
-    assert(fs.readFileSync(path.join(oldExact, 'workflow-state.md'), 'utf8') === oldState
-        && fs.readFileSync(path.join(currentSuffixed, 'workflow-state.md'), 'utf8') === currentState,
-      editionClaim.edition + ' ambiguous archive refusal must mutate neither stale nor current authority');
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-
-  // DELETED: "a plan-absent legacy archive crash-resume must refuse adaptive_plan_missing and
-  // leave the terminal archive untouched". A run record's absence is not a fault — the finalize
-  // door does not read one — so this archive resumes rather than refusing, and the token it named
-  // no longer exists.
-}
-
 // --- #715 F1: restore-gate dest exemption is scoped to the EXACT dest ---------
 // The release's own fresh archive dest is exempt from the treeDirty restore gate (so the
 // in-place base restore can proceed), but every OTHER dirty path must keep blocking — including
@@ -4574,68 +2956,37 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 }
 
 // ---------------------------------------------------------------------------
-// #735: a user-consented ABANDON must not demand run-state artifacts the project
-// never produced. archiveProjectDir gates EVERY archive on the composed epoch
-// authority (verifyCurrentEpochAuthority + verifyAllEpochSnapshots). For a
-// `closed` archive that gate is load-bearing (the closure receipt's
-// epoch_lineage_preserved token is derived from re-verifying the archived dest).
-// For an `abandoned` archive nothing downstream consumes the run-state progress
-// artifacts, yet a project frozen by a pre-seed runtime (no `## Required Agent
-// Compliance` section at all, or a legacy row-per-closed-node partial set) or one
-// whose best-effort freeze-time `workflow-tasks.json` never landed refused with
-// `state_compliance_authority_invalid` / `state_task_mirror_mismatch` — and the
-// refusal is total: "worktree, branch, and claim-label cleanup was not attempted".
+// #735 / #755 RE-DERIVED: a user-consented ABANDON must not demand artifacts the project never
+// produced, and must complete its cleanup.
+//
+// Both groups drove that property through the epoch-authority archive gate: a schema-2 claim
+// identity, a claim-root base tuple, an epoch lineage, a frozen plan_hash, a `## Node Ledger`, a
+// `## Required Agent Compliance` table and a derived `workflow-tasks.json` — every one of them a
+// different artifact the gate could DEMAND, and each window a different way of not having it. The
+// gate is gone with the epochs, so the windows have nothing left to distinguish.
+//
+// What survives is the user-facing half, and it re-derives without a single node: a run folder that
+// recorded nothing but its own claim still abandons cleanly. The artifact-poor shape is now the
+// NORMAL shape rather than an exceptional one, which is why this is a scenario and not a table.
+//
+// GONE with the gate, and not replaced: the `authority_downgraded` reporting axis, the
+// downgradable/non-downgradable split (#755's whole subject), and the
+// snapshot_staging_incomplete / state_ledger_authority_invalid classifications.
 // ---------------------------------------------------------------------------
 {
-  const { execFileSync, spawnSync } = require('child_process');
-  const schema735 = require('./kaola-workflow-adaptive-schema.js');
-  const validator735 = require('./kaola-workflow-plan-validator.js');
-  const { generateMirror: generateMirror735 } = require('./kaola-workflow-task-mirror.js');
-
+  const { execFileSync: execFS735, spawnSync: spawnS735 } = require('child_process');
   const gitEnv735 = Object.assign({}, process.env, {
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
     GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
   });
-  const git735 = (root, args) => execFileSync('git', ['-C', root, ...args],
+  const git735 = (root, args) => execFS735('git', ['-C', root, ...args],
     { encoding: 'utf8', env: gitEnv735, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-  // Build a frozen schema-2 adaptive plan. `complianceFor` selects which nodes get a
-  // compliance row: undefined = every node (the current pre-seeding freeze), an array =
-  // a legacy row-per-closed-node partial set, null = no section at all (a pre-seed freeze).
-  function plan735(project, nodes, ledger, opts) {
-    const options = opts || {};
-    const rows = nodes.map(n => `| ${n.id} | ${n.role} | ${n.depends_on || '—'} | ${n.write_set || '—'} | 1 | ${n.shape || 'sequence'} | ${n.model || 'standard'} | — | — | — | — |`).join('\n');
-    const ledgerRows = nodes.map(n => `| ${n.id} | ${ledger[n.id] || 'pending'} |`).join('\n');
-    const which = options.complianceFor === undefined ? nodes.map(n => n.id) : options.complianceFor;
-    let text = [
-      `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
-      'labels: enhancement', 'speculative_open_policy: auto',
-      'validation_command: node scripts/simulate-workflow-walkthrough.js',
-      'validation_timeout_minutes: 30', 'plan_schema_version: 2', 'contract_version: 2',
-      '', '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |', rows,
-      '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows, '',
-    ].join('\n');
-    if (which !== null) {
-      const complianceRows = nodes.filter(n => which.includes(n.id)).map(n =>
-        (ledger[n.id] || 'pending') === 'complete'
-          ? `| ${n.role} (${n.id}) | subagent-invoked | .cache/${n.id}.md | |`
-          : `| ${n.role} (${n.id}) | pending | | |`).join('\n');
-      text += ['## Required Agent Compliance', '',
-        '| Requirement | Status | Evidence | Skip Reason |',
-        '| --- | --- | --- | --- |', complianceRows, ''].join('\n');
-    }
-    const hash = validator735.computePlanHash(text);
-    return { text: text.replace(/^# Workflow Plan[^\n]*\n/, m => m + `\n<!-- plan_hash: ${hash} -->\n`), hash };
-  }
-
-  // A frozen, claimed, schema-2 adaptive project with a real linked worktree and a real
-  // feature branch, so the post-archive cleanup (worktree removal, branch delete, claim
-  // label clear) is observable rather than asserted in the abstract.
-  function fixture735(ledger, opts) {
-    const options = opts || {};
+  // A claimed project with a REAL linked worktree and a REAL feature branch, so the post-archive
+  // cleanup is observable rather than asserted in the abstract. `extra` writes additional run
+  // artifacts into the folder; omitting it is the artifact-poor shape under test.
+  function fixture735(project, issue, extra) {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw735-')));
     git735(root, ['init', '-b', 'main']);
     git735(root, ['config', 'user.name', 'Test']);
@@ -4644,78 +2995,30 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
     git735(root, ['add', 'product.js']);
     git735(root, ['commit', '-m', 'root']);
-    const commit = git735(root, ['rev-parse', 'HEAD']);
-    const tree = git735(root, ['rev-parse', 'HEAD^{tree}']);
-    const project = 'issue-735';
-    const branch = 'workflow/issue-735';
+    const branch = 'workflow/' + project;
     const worktreePath = path.join(root, '.kw', 'worktrees', project);
     git735(root, ['worktree', 'add', '-b', branch, worktreePath]);
     const projectDir = path.join(root, 'kaola-workflow', project);
-    const cacheDir = path.join(projectDir, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const nodes = [
-      { id: 'impl', role: 'tdd-guide', write_set: 'product.js' },
-      { id: 'review', role: 'code-reviewer', depends_on: 'impl', model: 'reasoning' },
-      { id: 'finalize', role: 'finalize', depends_on: 'review', model: '—' },
-    ];
-    const plan = plan735(project, nodes, ledger, options);
-    const identity = schema735.buildClaimIdentity({
-      schema_version: 2, repository_id: 'local:' + root, issue_numbers: [735], primary_issue: 735,
-      bundle_id: null, closure_policy: 'all_or_nothing', branch, worktree_path: worktreePath,
-      claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
-    });
-    const rootBase = schema735.buildClaimRootBase({
-      schema_version: 2, object_format: commit.length === 64 ? 'sha256' : 'sha1',
-      commit, tree, branch,
-    });
-    const lineage = schema735.buildEpochLineage(identity, rootBase);
-    const stateText = [
-      '# Kaola-Workflow State', '', '## Project', `name: ${project}`, 'status: active', '',
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
       '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
-      'step: start', `next_command: /kaola-workflow-plan-run ${project}`,
-      `next_skill: kaola-workflow-plan-run ${project}`,
-      '', '## Planning Evidence', `plan_hash: ${plan.hash}`, 'decision: auto-run',
-      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
-      'first_node_id: impl', 'first_node_role: tdd-guide', '', '## Sink',
-      `branch: ${branch}`, 'issue_number: 735', 'sink: merge', `main_root: ${root}`,
+      'step: start', '', '## Sink',
+      'branch: ' + branch, 'issue_number: ' + issue, 'sink: merge', 'main_root: ' + root,
       'session_marker: test-session', 'claim_ts: 2026-07-16T00:00:00.000Z',
-      `worktree_path: ${worktreePath}`,
-    ].join('\n') + '\n';
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
-      schema735.writeEpochStateBlock(stateText, {
-        epoch_schema_version: 2,
-        claim_repository_id: identity.repository_id,
-        claim_identity_digest: lineage.claim_identity_digest,
-        claim_root_object_format: rootBase.object_format,
-        claim_root_base_commit: rootBase.commit,
-        claim_root_base_tree: rootBase.tree,
-        claim_root_base_digest: lineage.claim_root_base_digest,
-        epoch_lineage_id: lineage.epoch_lineage_id,
-        plan_epoch: 1, active_plan_hash: plan.hash,
-        inherited_frontier_digest: 'none', inherited_frontier_classes: 'none',
-        automatic_review_replans: 0, authorized_epoch_ceiling: 2,
-        case_b_exemption_consumed: false, replan_status: 'none',
-        replan_transaction_id: 'none', replan_phase: 'none',
-        active_snapshot_manifest_digest: 'none',
-      }));
-    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'),
-      options.tamperPlan ? plan.text.replace('labels: enhancement', 'labels: tampered') : plan.text);
-    if (!options.dropMirror) {
-      fs.writeFileSync(path.join(projectDir, 'workflow-tasks.json'), JSON.stringify(
-        generateMirror735({ planContent: plan.text, now: '2026-07-16T00:00:00.000Z' }), null, 2) + '\n');
-    }
-    for (const [id, status] of Object.entries(ledger)) {
-      if (status === 'complete') fs.writeFileSync(path.join(cacheDir, id + '.md'), 'evidence-binding: ' + id + ' abc\n');
+      'worktree_path: ' + worktreePath, '',
+    ].join('\n'));
+    for (const rel of Object.keys(extra || {})) {
+      fs.writeFileSync(path.join(projectDir, rel), extra[rel]);
     }
     return { root, project, projectDir, branch, worktreePath };
   }
 
+  // The shared envelope vehicle for the claim release CLI: this site asserts the exit code and the
+  // last parseable JSON line; the domain checks live in the callers.
+  // spawn-class: cli-contract
   function runRelease735(fx) {
-    // The shared envelope vehicle for the claim release CLI in this scenario: everything this site itself
-    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
-    // domain checks live in the callers.
-    // spawn-class: cli-contract
-    const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
+    const r = spawnS735('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
       '--project', fx.project, '--json'], {
       cwd: fx.root, encoding: 'utf8',
       env: Object.assign({}, gitEnv735, { KAOLA_WORKFLOW_OFFLINE: '1' }),
@@ -4725,424 +3028,32 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     return { status: r.status, json, raw: (r.stdout || '') + (r.stderr || '') };
   }
 
+  // Each window is a different amount of recorded run state, and every one of them must abandon
+  // identically. The artifact-rich window is the negative control: if the abandon were somehow
+  // keyed on what the folder recorded, the two would not agree.
   const abandonWindows = [
-    // #833 retired the compliance-table tiers entirely (the table is derived from the ledger, so
-    // it cannot lag it). These two windows are the ORIGINAL motivating shapes for the #735
-    // downgrade — a runtime that never pre-seeded the section, and a mid-run legacy
-    // row-per-closed-node partial set — and they now abandon cleanly with NO downgrade at all,
-    // which is strictly better than downgrading them. Kept rather than deleted because they still
-    // pin the user-facing property: these projects discard and fully clean up. `null` means
-    // "no downgrade expected".
-    ['frozen-never-run, plan frozen with NO ## Required Agent Compliance section',
-      { impl: 'pending', review: 'pending', finalize: 'pending' }, { complianceFor: null },
-      null],
-    ['mid-run, compliance rows only for the CLOSED node (legacy row-by-row append)',
-      { impl: 'complete', review: 'pending', finalize: 'pending' }, { complianceFor: ['impl'] },
-      null],
-    // #733 retired the task-mirror comparison from the authority ladder entirely (the mirror
-    // is a pure projection of the ledger, so comparing it could only ever report staleness).
-    // A missing mirror therefore no longer refuses AT ALL, and this window needs NO downgrade
-    // to abandon cleanly — strictly better than downgrading it. The case is kept rather than
-    // deleted because it still pins the user-facing property: a frozen-never-run project with
-    // no task mirror abandons and fully cleans up. `null` here means "no downgrade expected".
-    ['frozen-never-run, best-effort freeze-time workflow-tasks.json never landed',
-      { impl: 'pending', review: 'pending', finalize: 'pending' }, { dropMirror: true },
-      null],
+    ['recorded nothing but its own claim', null],
+    ['recorded a finalization summary and some cache evidence',
+      { 'finalization-summary.md': '# Finalization\n', '.cache/notes.md': 'scratch\n' }],
   ];
-  for (const [label, ledger, opts, downgraded] of abandonWindows) {
-    const fx = fixture735(ledger, opts);
+  for (const win of abandonWindows) {
+    const label = win[0];
+    const fx = fixture735('issue-735', 735, win[1]);
     try {
       const r = runRelease735(fx);
       assert(r.status === 0 && r.json && r.json.released === true,
-        '#735: discard succeeds for a user-consented abandon (' + label + '), got ' + r.raw.trim());
-      if (downgraded === null) {
-        assert(r.json && !r.json.authority_downgraded,
-          '#735: this window needs NO authority downgrade (' + label + '), got '
-            + JSON.stringify(r.json && r.json.authority_downgraded));
-      } else {
-        assert(r.json && r.json.authority_downgraded === downgraded,
-          '#735: the abandon records the downgraded run-state authority reason (' + label + '), got '
-            + JSON.stringify(r.json && r.json.authority_downgraded));
-      }
+        '#735: a user-consented abandon succeeds whatever the run recorded (' + label + '), got ' + r.raw.trim());
       assert(!fs.existsSync(fx.projectDir) && r.json && r.json.dest && fs.existsSync(r.json.dest),
-        '#735: the live folder is archived, not left in place (' + label + ')');
+        '#735: the live folder is retired INTO an archive, never merely deleted (' + label + '), got dest=' + (r.json && r.json.dest));
+      assert(r.json && r.json.dest && fs.existsSync(path.join(r.json.dest, 'workflow-state.md')),
+        '#735: the archived copy carries the run state (' + label + ')');
       assert(!fs.existsSync(fx.worktreePath),
-        '#735: worktree cleanup actually ran (' + label + ')');
+        '#735: the linked worktree is removed (' + label + ')');
       assert(git735(fx.root, ['branch', '--list', fx.branch]) === '',
-        '#735: feature-branch cleanup actually ran (' + label + ')');
+        '#735: the feature branch is deleted (' + label + ')');
       assert(r.json && r.json.claim_label_removed === 'skipped_offline',
-        '#735: claim-label cleanup was attempted (' + label + '), got '
-          + JSON.stringify(r.json && r.json.claim_label_removed));
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-
-  // CONTROL 1 (#833) — the CLOSED archive path over the same never-produced compliance artifact.
-  // It used to fail closed on `state_compliance_authority_invalid`; with that tier retired the
-  // absent section is simply not an authority signal, so the closed archive SUCCEEDS. The
-  // fail-closed posture that matters is unchanged and is proven by CONTROL 2 below (a post-freeze
-  // tamper).
-  //
-  // DELETED with the render: the three assertions that the archive MATERIALIZES the derived
-  // `## Required Agent Compliance` table (its rows, its `pending` cell for an unreached node, and
-  // its plan_hash neutrality). The table was derived wholly from `## Nodes` x `## Node Ledger` x
-  // `.cache`, and re-materializing it would mean carrying that plan grammar into the module every
-  // edition shares byte-for-byte. What is asserted below is what still holds: an absent section is
-  // not an authority signal, and a stored section is left byte-for-byte alone.
-  {
-    const fx = fixture735({ impl: 'complete', review: 'pending', finalize: 'pending' },
-      { complianceFor: null });
-    try {
-      const claim735 = require('./kaola-workflow-claim.js');
-      const beforePlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
-      assert(!beforePlan.includes('## Required Agent Compliance'),
-        '#735/#833 control: the fixture really has NO stored compliance section');
-      const closed = claim735.archiveProjectDir(fx.root, fx.project, 'closed', undefined, {});
-      assert(closed && closed.archived === true && !closed.snapshot_error,
-        '#735/#833 control: a CLOSED archive no longer refuses over an absent compliance section, got '
-          + JSON.stringify(closed));
-      const archivedPlan = fs.readFileSync(path.join(closed.dest, 'workflow-plan.md'), 'utf8');
-      assert(validator735.computePlanHash(archivedPlan) === validator735.readStoredHash(archivedPlan),
-        '#833: archiving is plan_hash-NEUTRAL — the archived plan still verifies');
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-
-  // CONTROL 2 — the relaxation covers ABSENT/INCOMPLETE run-state product only, never
-  // a TAMPER signal on the frozen artifacts themselves. A plan edited after freeze
-  // (plan_hash no longer matches its bytes) still refuses the abandon: that is not an
-  // artifact the project "never produced", it is one that no longer verifies, and a
-  // discard would erase the only live copy of the evidence.
-  {
-    const fx = fixture735({ impl: 'pending', review: 'pending', finalize: 'pending' },
-      { tamperPlan: true });
-    try {
-      const r = runRelease735(fx);
-      assert(r.status === 1 && r.json && r.json.released === false
-        && r.json.reason === 'state_active_plan_invalid',
-        '#735 control: a post-freeze plan TAMPER still refuses the abandon fail-closed, got ' + r.raw.trim());
-      assert(fs.existsSync(fx.projectDir) && fs.existsSync(fx.worktreePath),
-        '#735 control: the refused abandon left the live folder and worktree untouched');
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #755: the abandon authority downgrade must never MASK a non-downgradable fault.
-// The five downgradable reasons are all run-state-progress tiers, and every one of
-// them is evaluated BEFORE the epoch-position, replan-transaction, committed-history,
-// and snapshot tiers. With a first-failure-wins ladder, an abandon whose FIRST failure
-// was downgradable proceeded with every later tier UNEVALUATED — the composed archive
-// authority even skipped the entire snapshot ladder (`current.ok ? verifyAll... : null`).
-// The stated contract is "only these five absence-of-run-product reasons are
-// downgraded"; the actual behavior downgraded whatever hid behind them.
-//
-// The control at the end is as load-bearing as the refusals: a project whose ONLY
-// faults are downgradable must still abandon cleanly AND fully clean up.
-// ---------------------------------------------------------------------------
-{
-  const { execFileSync, spawnSync } = require('child_process');
-  const schema755 = require('./kaola-workflow-adaptive-schema.js');
-  const validator755 = require('./kaola-workflow-plan-validator.js');
-  const { generateMirror: generateMirror755 } = require('./kaola-workflow-task-mirror.js');
-
-  const gitEnv755 = Object.assign({}, process.env, {
-    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
-    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
-  });
-  const git755 = (root, args) => execFileSync('git', ['-C', root, ...args],
-    { encoding: 'utf8', env: gitEnv755, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-
-  function plan755(project, nodes, ledger, opts) {
-    const options = opts || {};
-    const rows = nodes.map(n => `| ${n.id} | ${n.role} | ${n.depends_on || '—'} | ${n.write_set || '—'} | 1 | ${n.shape || 'sequence'} | ${n.model || 'standard'} | — | — | — | — |`).join('\n');
-    const ledgerRows = nodes.map(n => `| ${n.id} | ${ledger[n.id] || 'pending'} |`).join('\n');
-    const which = options.complianceFor === undefined ? nodes.map(n => n.id) : options.complianceFor;
-    let text = [
-      `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
-      'labels: enhancement', 'speculative_open_policy: auto',
-      'validation_command: node scripts/simulate-workflow-walkthrough.js',
-      'validation_timeout_minutes: 30', 'plan_schema_version: 2', 'contract_version: 2',
-      '', '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |', rows,
-      '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows, '',
-    ].join('\n');
-    if (which !== null) {
-      const complianceRows = nodes.filter(n => which.includes(n.id)).map(n =>
-        (ledger[n.id] || 'pending') === 'complete'
-          ? `| ${n.role} (${n.id}) | subagent-invoked | .cache/${n.id}.md | |`
-          : `| ${n.role} (${n.id}) | pending | | |`).join('\n');
-      text += ['## Required Agent Compliance', '',
-        '| Requirement | Status | Evidence | Skip Reason |',
-        '| --- | --- | --- | --- |', complianceRows, ''].join('\n');
-    }
-    const hash = validator755.computePlanHash(text);
-    return { text: text.replace(/^# Workflow Plan[^\n]*\n/, m => m + `\n<!-- plan_hash: ${hash} -->\n`), hash };
-  }
-
-  // A frozen, claimed, schema-2 adaptive project with a real linked worktree and feature
-  // branch. `opts.sinkPr` makes it a PR-sink folder so the watch-pr CLOSED sweep — the
-  // SECOND production caller of the relaxed archive path, and an AUTOMATIC one — picks it up.
-  function fixture755(project, ledger, opts) {
-    const options = opts || {};
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw755-')));
-    git755(root, ['init', '-b', 'main']);
-    git755(root, ['config', 'user.name', 'Test']);
-    git755(root, ['config', 'user.email', 't@example.com']);
-    git755(root, ['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
-    git755(root, ['add', 'product.js']);
-    git755(root, ['commit', '-m', 'root']);
-    const commit = git755(root, ['rev-parse', 'HEAD']);
-    const tree = git755(root, ['rev-parse', 'HEAD^{tree}']);
-    const branch = 'workflow/' + project;
-    const worktreePath = path.join(root, '.kw', 'worktrees', project);
-    git755(root, ['worktree', 'add', '-b', branch, worktreePath]);
-    const projectDir = path.join(root, 'kaola-workflow', project);
-    const cacheDir = path.join(projectDir, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const nodes = [
-      { id: 'impl', role: 'tdd-guide', write_set: 'product.js' },
-      { id: 'review', role: 'code-reviewer', depends_on: 'impl', model: 'reasoning' },
-      { id: 'finalize', role: 'finalize', depends_on: 'review', model: '—' },
-    ];
-    const plan = plan755(project, nodes, ledger, options);
-    const identity = schema755.buildClaimIdentity({
-      schema_version: 2, repository_id: 'local:' + root, issue_numbers: [755], primary_issue: 755,
-      bundle_id: null, closure_policy: 'all_or_nothing', branch, worktree_path: worktreePath,
-      claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
-    });
-    const rootBase = schema755.buildClaimRootBase({
-      schema_version: 2, object_format: commit.length === 64 ? 'sha256' : 'sha1',
-      commit, tree, branch,
-    });
-    const lineage = schema755.buildEpochLineage(identity, rootBase);
-    const stateText = [
-      '# Kaola-Workflow State', '', '## Project', `name: ${project}`, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
-      'step: start', `next_command: /kaola-workflow-plan-run ${project}`,
-      `next_skill: kaola-workflow-plan-run ${project}`,
-      '', '## Planning Evidence', `plan_hash: ${plan.hash}`, 'decision: auto-run',
-      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
-      'first_node_id: impl', 'first_node_role: tdd-guide', '', '## Sink',
-      `branch: ${branch}`, 'issue_number: 755',
-      options.sinkPr ? 'sink: pr' : 'sink: merge',
-      ...(options.sinkPr ? ['pr_url: https://github.com/test/repo/pull/9'] : []),
-      `main_root: ${root}`,
-      'session_marker: test-session', 'claim_ts: 2026-07-16T00:00:00.000Z',
-      `worktree_path: ${worktreePath}`,
-    ].join('\n') + '\n';
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
-      schema755.writeEpochStateBlock(stateText, {
-        epoch_schema_version: 2,
-        claim_repository_id: identity.repository_id,
-        claim_identity_digest: lineage.claim_identity_digest,
-        claim_root_object_format: rootBase.object_format,
-        claim_root_base_commit: rootBase.commit,
-        claim_root_base_tree: rootBase.tree,
-        claim_root_base_digest: lineage.claim_root_base_digest,
-        epoch_lineage_id: lineage.epoch_lineage_id,
-        plan_epoch: 1, active_plan_hash: plan.hash,
-        inherited_frontier_digest: 'none', inherited_frontier_classes: 'none',
-        automatic_review_replans: 0, authorized_epoch_ceiling: 2,
-        case_b_exemption_consumed: false, replan_status: 'none',
-        replan_transaction_id: 'none', replan_phase: 'none',
-        active_snapshot_manifest_digest: 'none',
-      }));
-    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), plan.text);
-    fs.writeFileSync(path.join(projectDir, 'workflow-tasks.json'), JSON.stringify(
-      generateMirror755({ planContent: plan.text, now: '2026-07-16T00:00:00.000Z' }), null, 2) + '\n');
-    for (const [id, status] of Object.entries(ledger)) {
-      if (status === 'complete') fs.writeFileSync(path.join(cacheDir, id + '.md'), 'evidence-binding: ' + id + ' abc\n');
-    }
-    return { root, project, projectDir, branch, worktreePath };
-  }
-
-  function runRelease755(fx) {
-    // The shared envelope vehicle for the claim release CLI in this scenario: everything this site itself
-    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
-    // domain checks live in the callers.
-    // spawn-class: cli-contract
-    const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
-      '--project', fx.project, '--json'], {
-      cwd: fx.root, encoding: 'utf8',
-      env: Object.assign({}, gitEnv755, { KAOLA_WORKFLOW_OFFLINE: '1' }),
-    });
-    let json = null;
-    try { json = JSON.parse((r.stdout || '').trim()); } catch (_) {}
-    return { status: r.status, json, raw: (r.stdout || '') + (r.stderr || '') };
-  }
-
-  // watch-pr is online by construction (OFFLINE early-returns), so drive it through the
-  // supported gh mock seam with a PR that reports CLOSED.
-  function runWatchPrClosed755(fx) {
-    const binDir = path.join(fx.root, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-    const shim = path.join(binDir, 'gh.js');
-    fs.writeFileSync(shim, [
-      "const a = process.argv.slice(2).join(' ');",
-      "if (a.includes('pr view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":9}\\n'); }",
-      "else if (a.includes('issue view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":755,\"labels\":[]}\\n'); }",
-      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
-      "else { process.stdout.write('[]\\n'); }",
-    ].join('\n'));
-    // The shared envelope vehicle for the claim watch-pr CLI in this scenario: everything this site itself
-    // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
-    // domain checks live in the callers.
-    // spawn-class: cli-contract
-    const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'watch-pr', '--json'], {
-      cwd: fx.root, encoding: 'utf8',
-      env: Object.assign({}, gitEnv755, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: shim }),
-    });
-    let json = null;
-    try { json = JSON.parse((r.stdout || '').trim()); } catch (_) {}
-    return { status: r.status, json, raw: (r.stdout || '') + (r.stderr || '') };
-  }
-
-  const PENDING755 = { impl: 'pending', review: 'pending', finalize: 'pending' };
-  // A ledger status outside the allowed set makes the ## Node Ledger tier unreadable
-  // (`state_ledger_authority_invalid`) — downgradable, and evaluated even earlier than
-  // the compliance tiers.
-  const BOGUS_LEDGER755 = { impl: 'bogus', review: 'pending', finalize: 'pending' };
-  // A `.staging-` epoch entry is snapshot-tier residue (`snapshot_staging_incomplete`);
-  // an unparseable replan transaction is `replan_transaction_invalid`, evaluated in the
-  // current-epoch ladder AFTER every downgradable tier; an `.cache/epochs` symlinked out
-  // of the project is `snapshot_epochs_unreadable`. None is in the downgradable set.
-  const stagingResidue755 = fx =>
-    fs.mkdirSync(path.join(fx.projectDir, '.cache', 'epochs', '.staging-abc'), { recursive: true });
-  const corruptTransaction755 = fx =>
-    fs.writeFileSync(path.join(fx.projectDir, '.cache', schema755.REPLAN_TRANSACTION_NAME), '{not json');
-  const symlinkEpochs755 = (fx) => {
-    const outside = path.join(fx.root, 'outside-epochs');
-    fs.mkdirSync(outside, { recursive: true });
-    fs.symlinkSync(outside, path.join(fx.projectDir, '.cache', 'epochs'));
-  };
-
-  // S1/S3 (alone) already refused; S2/S4/S5 are the same faults with a DOWNGRADABLE
-  // failure in front of them, and must refuse identically.
-  const maskingProbes = [
-    ['S1 snapshot staging residue, alone', {}, stagingResidue755, 'snapshot_staging_incomplete'],
-    // #833: the masking probes used a MISSING COMPLIANCE SECTION as the downgradable mask. That
-    // tier is retired — an absent section is no longer a fault of any kind — so the mask moves to
-    // the unreadable `## Node Ledger`, which is still downgradable and is checked EARLIER still,
-    // masking even more of the ladder. The property under test is unchanged: a NON-downgradable
-    // fault behind a downgradable one must refuse identically.
-    ['S2 snapshot staging residue MASKED by an unreadable ## Node Ledger',
-      { ledger: BOGUS_LEDGER755 }, stagingResidue755, 'snapshot_staging_incomplete'],
-    ['S3 corrupt replan transaction, alone', {}, corruptTransaction755, 'replan_transaction_invalid'],
-    ['S4 corrupt replan transaction MASKED by an unreadable ## Node Ledger',
-      { ledger: BOGUS_LEDGER755 }, corruptTransaction755, 'replan_transaction_invalid'],
-    ['S5 .cache/epochs symlinked out of the project MASKED by an unreadable ## Node Ledger',
-      { ledger: BOGUS_LEDGER755 }, symlinkEpochs755, 'snapshot_epochs_unreadable'],
-    // And a missing compliance section, which used to be the mask, must now mask NOTHING: the
-    // same non-downgradable fault surfaces with no downgradable tier in front of it at all.
-    ['S6 snapshot staging residue with a missing compliance section (no longer a fault)',
-      { complianceFor: null }, stagingResidue755, 'snapshot_staging_incomplete'],
-  ];
-  for (const [label, opts, mutate, expected] of maskingProbes) {
-    const fx = fixture755('issue-755', opts.ledger || PENDING755, opts);
-    try {
-      mutate(fx);
-      const r = runRelease755(fx);
-      assert(r.status === 1 && r.json && r.json.released === false && r.json.reason === expected,
-        '#755: a non-downgradable fault must refuse the abandon even behind a downgradable one ('
-          + label + '), expected ' + expected + ', got ' + r.raw.trim());
-      assert(fs.existsSync(fx.projectDir) && fs.existsSync(fx.worktreePath)
-        && git755(fx.root, ['branch', '--list', fx.branch]) !== '',
-        '#755: the refused abandon must leave the live folder, worktree, and branch untouched ('
-          + label + ')');
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-
-  // OVER-REFUSAL CONTROL — the whole point of the #735 carve-out. A project whose ONLY
-  // faults are downgradable still abandons cleanly and fully cleans up (folder archived,
-  // worktree removed, branch deleted, claim label attempted). Tightening the ladder must
-  // not re-break this. The emitted `warnings[]` entry is asserted directly: reading
-  // `authority_downgraded` off the result spread alone left the non-silence property
-  // unpinned (the warning push could be deleted with every assertion still green).
-  // #833: the ONLY-downgradable window this control was written around (a missing compliance
-  // section) is no longer downgradable because it is no longer a FAULT — so the abandon succeeds
-  // with no downgrade recorded and no warning emitted at all. Strictly better than downgrading.
-  {
-    const fx = fixture755('issue-755', PENDING755, { complianceFor: null });
-    try {
-      const r = runRelease755(fx);
-      assert(r.status === 0 && r.json && r.json.released === true && !r.json.authority_downgraded,
-        '#755/#833 control: a missing compliance section abandons with NO downgrade at all, got '
-          + r.raw.trim());
-      assert(!fs.existsSync(fx.projectDir) && r.json.dest && fs.existsSync(r.json.dest),
-        '#755 control: the abandon archives the live folder');
-      assert(!fs.existsSync(fx.worktreePath) && git755(fx.root, ['branch', '--list', fx.branch]) === '',
-        '#755 control: the abandon still removes the worktree and branch');
-      assert(r.json.claim_label_removed === 'skipped_offline',
-        '#755 control: claim-label cleanup was attempted, got ' + JSON.stringify(r.json.claim_label_removed));
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-
-  // OVER-REFUSAL CONTROL, ledger tier. Deferring the ledger tier leaves no usable status
-  // map, so the ledger-progress and compliance-progress checks that PROJECT that map must
-  // be skipped rather than run against it — and the abandon must still complete.
-  {
-    const fx = fixture755('issue-755', BOGUS_LEDGER755, {});
-    try {
-      const r = runRelease755(fx);
-      assert(r.status === 0 && r.json && r.json.released === true
-        && r.json.authority_downgraded === 'state_ledger_authority_invalid',
-        '#755 control: an ONLY-downgradable LEDGER fault must still abandon with the reason recorded, got '
-          + r.raw.trim());
-      // The non-silence property (#833 re-homed it here, from the retired compliance tier): the
-      // downgrade must reach the EMITTED warnings[], not only the result spread — otherwise the
-      // warning push could be deleted with every assertion still green.
-      assert(Array.isArray(r.json.warnings) && r.json.warnings.some(w =>
-        String(w).startsWith('run-state authority downgraded: state_ledger_authority_invalid')),
-      '#755 control: the downgrade must be surfaced in the EMITTED warnings[], got '
-        + JSON.stringify(r.json.warnings));
-      assert(!fs.existsSync(fx.projectDir) && !fs.existsSync(fx.worktreePath)
-        && git755(fx.root, ['branch', '--list', fx.branch]) === '',
-        '#755 control: the ledger-tier abandon archives the folder and cleans up worktree + branch');
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-
-  // SWEEP PATH — cmdWatchPr's PR-CLOSED branch is the second production caller of the
-  // relaxed archive, and unlike release it is AUTOMATIC (driven by remote PR state, not an
-  // operator's discard). It had no coverage at all with a downgradable window open.
-  {
-    const fx = fixture755('issue-755', PENDING755, { complianceFor: null, sinkPr: true });
-    try {
-      stagingResidue755(fx);
-      const r = runWatchPrClosed755(fx);
-      const refusals = (r.json && r.json.archive_refusals) || [];
-      assert(refusals.length === 1 && refusals[0].reason === 'snapshot_staging_incomplete',
-        '#755 sweep: the automatic PR-CLOSED sweep must refuse a masked non-downgradable fault, got '
-          + r.raw.trim());
-      assert(fs.existsSync(fx.projectDir),
-        '#755 sweep: the refused sweep must leave the live folder in place');
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-  // #833: the sweep's downgradable window moves from the retired compliance tier to the ledger
-  // tier — the property (an AUTOMATIC cleanup must not be silent about a downgrade) is unchanged.
-  {
-    const fx = fixture755('issue-755', BOGUS_LEDGER755, { sinkPr: true });
-    try {
-      const r = runWatchPrClosed755(fx);
-      const entry = ((r.json && r.json.cleanups) || [])[0] || {};
-      assert(!fs.existsSync(fx.projectDir) && entry.folder === fx.project,
-        '#755 sweep control: an ONLY-downgradable sweep still archives the folder, got ' + r.raw.trim());
-      assert(entry.authority_downgraded === 'state_ledger_authority_invalid',
-        '#755 sweep: the automatic cleanup must not be silent about the downgrade, got '
-          + JSON.stringify(entry));
-    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-  }
-  // …and a missing compliance section sweeps clean with NO downgrade recorded at all (#833).
-  {
-    const fx = fixture755('issue-755', PENDING755, { complianceFor: null, sinkPr: true });
-    try {
-      const r = runWatchPrClosed755(fx);
-      const entry = ((r.json && r.json.cleanups) || [])[0] || {};
-      assert(!fs.existsSync(fx.projectDir) && entry.folder === fx.project
-        && !entry.authority_downgraded,
-      '#755/#833 sweep: a missing compliance section is not a fault, so the sweep archives with no '
-        + 'downgrade note, got ' + JSON.stringify(entry));
+        '#735: the claim-label step is REACHED and reports its offline skip — the abandon runs the '
+        + 'whole cleanup rather than stopping early (' + label + '), got ' + JSON.stringify(r.json && r.json.claim_label_removed));
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 }
@@ -5173,7 +3084,6 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 {
   const { execFileSync: execFS837, spawnSync: spawnS837 } = require('child_process');
   const CLAIM837 = path.join(__dirname, 'kaola-workflow-claim.js');
-  const PLAN_VALIDATOR837 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
   const REPO837 = path.resolve(__dirname, '..');
 
   const GIT_ENV837 = {
@@ -5217,64 +3127,11 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     g837(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
     g837(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
 
-    const anchors = buildClaimAnchors(wtRoot, {
-      issue_number: 837,
-      branch: 'workflow/' + project,
-      worktree_path: wtRoot,
-      claim_ts: '2026-01-01T00:00:00Z',
-      session_marker: 'fixture-837',
-    });
-
-    const planBody = [
-      '# Workflow Plan — ' + project,
-      '',
-      '## Meta',
-      'plan_form: spine',
-      'labels: enhancement',
-      '',
-      '## Nodes',
-      '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |',
-      '|---|---|---|---|---|---|',
-      '| impl | implementer | — | impl.txt | 1 | sequence |',
-      '| rv | code-reviewer | impl | — | 1 | sequence |',
-      '| done | finalize | rv | — | 1 | sequence |',
-      '',
-      '## Node Ledger',
-      '',
-      '| id | status |',
-      '|---|---|',
-      '| impl | complete |',
-      '| rv | complete |',
-      '| done | complete |',
-      '',
-      '## Required Agent Compliance',
-      '',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|---|---|---|---|',
-      '| implementer (impl) | invoked | fixture | |',
-      '| code-reviewer (rv) | invoked | fixture | |',
-      '| finalize (done) | invoked | fixture | |',
-      ''
-    ].join('\n');
-
+    // A run folder with NO plan — same shape as mk816's. `--check` and the transaction read the
+    // state file's `## Sink` block, the git tree and the chain receipt; none of them opens a plan.
     const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
     const wtCacheDir = path.join(wtProjDir, '.cache');
     fs.mkdirSync(wtCacheDir, { recursive: true });
-    const wtPlanPath = path.join(wtProjDir, 'workflow-plan.md');
-    const preHash = require(PLAN_VALIDATOR837).computePlanHash(planBody);
-    fs.writeFileSync(wtPlanPath, '<!-- plan_hash: ' + preHash + ' -->\n\n' + planBody);
-    try {
-      // --freeze stamps plan_hash into workflow-plan.md in its own process and EXITS; the finalize
-      // process below re-reads that file and re-verifies the stamp from disk with no shared heap.
-      // spawn-class: durable-handoff
-      execFS837('node', [PLAN_VALIDATOR837, wtPlanPath, '--freeze', '--json'],
-        { cwd: wtRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-    } catch (_) {}
-    const planHash = (fs.readFileSync(wtPlanPath, 'utf8')
-      .match(/<!-- plan_hash: ([0-9a-f]{64}) -->/) || [])[1];
-    assert(!!planHash, '#837 fixture: adaptive plan freezes with a plan hash');
-
     const stateText = [
       '# Kaola-Workflow State',
       '',
@@ -5287,11 +3144,6 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       'phase_name: Adaptive',
       'workflow_path: adaptive',
       'step: start',
-      'next_command: /kaola-workflow-plan-run ' + project,
-      'next_skill: kaola-workflow-plan-run ' + project,
-      '',
-      '## Pending Gates',
-      '- workflow-plan',
       '',
       '## Last Evidence',
       'last_command: startup',
@@ -5299,34 +3151,6 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '',
       '## Last Updated',
       new Date().toISOString(),
-      '',
-      '## Planning Evidence',
-      'plan_hash: ' + planHash,
-      'decision: auto-run',
-      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
-      'first_node_id: impl',
-      'first_node_role: implementer',
-      '',
-      '## Epoch Lineage',
-      'epoch_schema_version: ' + anchors.epoch_schema_version,
-      'claim_repository_id: ' + anchors.claim_repository_id,
-      'claim_identity_digest: ' + anchors.claim_identity_digest,
-      'claim_root_object_format: ' + anchors.claim_root_object_format,
-      'claim_root_base_commit: ' + anchors.claim_root_base_commit,
-      'claim_root_base_tree: ' + anchors.claim_root_base_tree,
-      'claim_root_base_digest: ' + anchors.claim_root_base_digest,
-      'epoch_lineage_id: ' + anchors.epoch_lineage_id,
-      'plan_epoch: 1',
-      'active_plan_hash: ' + planHash,
-      'inherited_frontier_digest: none',
-      'inherited_frontier_classes: none',
-      'automatic_review_replans: 0',
-      'authorized_epoch_ceiling: 2',
-      'case_b_exemption_consumed: false',
-      'replan_status: none',
-      'replan_transaction_id: none',
-      'replan_phase: none',
-      'active_snapshot_manifest_digest: none',
       '',
       '## Sink',
       'branch: workflow/' + project,
@@ -5340,16 +3164,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       'claim_ts: 2026-01-01T00:00:00Z',
       ''
     ].join('\n');
-    const tasksText = JSON.stringify({
-      source_plan_hash: planHash,
-      tasks: [
-        { id: 'impl', role: 'implementer', ledger_status: 'complete', status: 'completed' },
-        { id: 'rv', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
-        { id: 'done', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-      ],
-    }) + '\n';
     fs.writeFileSync(path.join(wtProjDir, 'workflow-state.md'), stateText);
-    fs.writeFileSync(path.join(wtProjDir, 'workflow-tasks.json'), tasksText);
 
     fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
     g837(wtRoot, ['add', '-A']);
@@ -5358,9 +3173,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 
     const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
     fs.mkdirSync(path.join(mainProjDir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-plan.md'), fs.readFileSync(wtPlanPath, 'utf8'));
     fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), stateText);
-    fs.writeFileSync(path.join(mainProjDir, 'workflow-tasks.json'), tasksText);
 
     fs.writeFileSync(path.join(wtCacheDir, 'chain-receipt.json'), JSON.stringify({
       headSha,
@@ -5380,9 +3193,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
     });
-    // A fresh finalize process re-derives its whole gate verdict from durable state alone — the plan
-    // frozen by an earlier process, the receipts on disk, and the git tree. That reconstruction from
-    // bytes is the property; in one heap the already-parsed plan would answer instead of the file.
+    // A fresh finalize process re-derives its whole verdict from durable state alone — the state
+    // file, the receipts on disk and the git tree. That reconstruction from bytes is the property;
+    // in one heap an already-parsed in-memory answer would stand in for the files.
     // spawn-class: durable-handoff
     const r = spawnS837(process.execPath,
       [CLAIM837, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
@@ -5397,10 +3210,6 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   // The ONE-PASS precondition report.
   const runCheck837 = fx => runFinalize837(fx, ['--check', '--json']);
   const cleanup837 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
-  const stalePlan837 = fx => {
-    const p = path.join(fx.mainProjDir, 'workflow-plan.md');
-    fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace(/\| complete \|/g, '| pending |'));
-  };
   const REQUIRED_CHECK_KEYS_837 = [
     'mirror', 'workflow_state', 'implementation_commit', 'staging_guard', 'validation', 'dirty_paths'
   ];
@@ -5524,100 +3333,21 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     } finally { cleanup837(fx); }
   }
 
-  // --- P3: the worktree→main sync is a SCRIPT STEP — a staler main ledger no longer refuses ------
-  // Before: `finalize_mirror_refused`/`ledger_regression` and an operator hint that said "sync
-  // worktree→main FIRST". The measured run hand-rolled that `rsync -a` three times.
-  {
-    const fx = mk837('issue-837c');
-    try {
-      stalePlan837(fx);
-      const r = runFinalize837(fx);
-      assert(r.status === 0,
-        '#837(P3): a staler MAIN ledger must be REPAIRED by the transaction, not refused, got status='
-        + r.status + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
-      assert(!(r.json && r.json.reason === 'finalize_mirror_refused'),
-        '#837(P3): ledger_regression is no longer an operator obligation, got ' + JSON.stringify(r.json));
-      const tx = r.json && r.json.finalize_transaction;
-      assert(tx && tx.ledger_compare === 'synced_from_worktree',
-        '#837(P3): the transaction ledger must record that the script performed the worktree→main sync, got '
-        + JSON.stringify(tx));
-      const archivedPlan = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, 'workflow-plan.md');
-      const archivedText = fs.existsSync(archivedPlan) ? fs.readFileSync(archivedPlan, 'utf8') : '';
-      assert(archivedText && !/\| pending \|/.test(archivedText),
-        '#837(P3): the sync must never regress the worktree ledger with the staler main copy');
-      const mainPlanPath837 = path.join(fx.mainProjDir, 'workflow-plan.md');
-      const mainText = fs.existsSync(mainPlanPath837) ? fs.readFileSync(mainPlanPath837, 'utf8') : '';
-      assert(!/\| pending \|/.test(mainText),
-        '#837(P3): the MAIN project folder must be synced UP from the worktree by the script — '
-        + 'that sync is the operator rsync this issue subtracts');
-      // The two copies are NOT compared for equality here: on a successful linked finalize
-      // `archiveProjectDir` deliberately deletes main's live project folder after copy+verify, so
-      // that a surviving main copy cannot keep `readActiveFolders` claiming an archived project.
-      // The true post-condition is therefore that main's live folder is GONE and the archive under
-      // main's root is the single surviving ledger authority.
-      assert(!fs.existsSync(mainPlanPath837),
-        '#837(P3): after the script-owned sync + archive, main\'s LIVE project folder must be gone — '
-        + 'the archive is the sole surviving ledger authority');
-    } finally { cleanup837(fx); }
-  }
-
-  // --- P4: `--check` REPORTS the pending sync without performing it and without counting it ------
-  // A staler main copy is machinery-repairable, so it is reported as state, never as an unmet
-  // precondition the operator owes. And a read-only pass must not perform the repair either.
-  {
-    const fx = mk837('issue-837d');
-    try {
-      stalePlan837(fx);
-      const r = runCheck837(fx);
-      const reasons = (r.json && r.json.reasons) || [];
-      assert(r.status === 0 && r.json && r.json.ok === true,
-        '#837(P4): a staler main ledger is script-repairable and must not fail the check, got status='
-        + r.status + ' json=' + JSON.stringify(r.json));
-      assert(!reasons.includes('ledger_regression') && !reasons.includes('finalize_mirror_refused'),
-        '#837(P4): a script-owned repair is never an operator-owed precondition, got ' + JSON.stringify(reasons));
-      assert(r.json && r.json.checks && r.json.checks.mirror === 'sync_required',
-        '#837(P4): the report must still SHOW that the transaction will sync worktree→main, got '
-        + JSON.stringify(r.json && r.json.checks));
-      assert(/\| pending \|/.test(fs.readFileSync(path.join(fx.mainProjDir, 'workflow-plan.md'), 'utf8')),
-        '#837(P4): --check must REPORT the pending sync, never perform it');
-      assert(!/\| pending \|/.test(fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8')),
-        '#837(P4): --check must not touch the worktree ledger either');
-    } finally { cleanup837(fx); }
-  }
-
-  // --- P5: the RE-TYPED refusal — an UNPERFORMABLE sync still refuses, fail-closed and zero-write -
-  // Subtracting the operator obligation must not subtract the fail-closed anchor: when the script
-  // cannot perform the sync it owes, it refuses with the SAME top-level reason the four contract
-  // validators pin (`finalize_mirror_refused`) under a new inner reason, and makes no side effect.
-  if (!(process.getuid && process.getuid() === 0)) {
-    const fx = mk837('issue-837e');
-    const mainPlan = path.join(fx.mainProjDir, 'workflow-plan.md');
-    try {
-      stalePlan837(fx);
-      fs.chmodSync(mainPlan, 0o400);
-      fs.chmodSync(fx.mainProjDir, 0o500);   // no write, no create, no rename into the dest
-      const r = runFinalize837(fx);
-      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused',
-        '#837(P5): an unperformable sync must keep the pinned top-level reason, got status=' + r.status
-        + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
-      assert(r.json && r.json.inner_reason === 'mirror_sync_failed',
-        '#837(P5): the refusal is RE-TYPED — ledger_regression was an operator obligation, '
-        + 'mirror_sync_failed is a machine failure, got ' + JSON.stringify(r.json));
-      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
-        '#837(P5): the refusal must make no archive side effect');
-      assert(!fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
-        '#837(P5): the refusal must not archive');
-      assert(!/^chore: (finalize|archive) /m.test(gOut837(fx.wtRoot, ['log', '--format=%s', '-5'])),
-        '#837(P5): the refusal must land BEFORE any bookkeeping commit');
-      const wtPlan = fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8');
-      assert(!/\| pending \|/.test(wtPlan),
-        '#837(P5): a failed sync must never let the staler main copy through onto the worktree ledger');
-    } finally {
-      try { fs.chmodSync(fx.mainProjDir, 0o755); } catch (_) {}
-      try { fs.chmodSync(mainPlan, 0o644); } catch (_) {}
-      cleanup837(fx);
-    }
-  }
+  // DELETED: #837 P3, P4 and P5 — the three mirror-sync scenarios.
+  //
+  // The SUBJECT survives: the worktree→main project-folder sync is a step inside the transaction
+  // rather than an operator `rsync -a`, `--check` reports a pending sync without performing it,
+  // and an unperformable sync refuses fail-closed under `finalize_mirror_refused` /
+  // `inner_reason: mirror_sync_failed`. What is gone is the only way to OBSERVE any of it:
+  // probeFinalizeMirror reaches `sync_required` exclusively through compareLedgers over a plan
+  // file's `## Node Ledger` rows, and returns `ready` the moment no plan file exists. Staling the
+  // main copy is what these three did, and there is nothing left to stale.
+  //
+  // UNCOVERED until kaola-workflow-ledger-compare.js is re-pointed at a node-free record (or
+  // deleted with the branch it feeds): the sync-required classification, the read-only guarantee
+  // over it, and the mirror_sync_failed fail-closed anchor. P1/P2 below still pin the one-pass
+  // `--check` report and its read-only-ness on a run with nothing to sync; P6-P9 still pin the
+  // usage surface and the four contract-validator literals, so the tokens themselves stay guarded.
 
   // --- P6: `--check` is documented on the usage surface -----------------------------------------
   {
@@ -5697,17 +3427,25 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       + 'owns that sync now');
     assert(!/on a refusal, sync worktree→main/i.test(skeleton),
       '#837(P9): the refusal-recovery rsync instruction must be gone from the finalize prose');
-    // `--check` alone is NOT a valid needle here — the skeleton's run-gap scanner section already
-    // uses that token for an unrelated call. Pin the finalize invocation itself.
-    assert(skeleton.includes('finalize --check'),
-      '#837(P9): the finalize prose must surface the one-pass `finalize --check` precondition report '
-      + 'as an invocation the operator can actually copy');
+    // `--check` alone is NOT a valid needle — the skeleton's run-gap scanner section already uses
+    // that token for an unrelated call. What must be true is that the flag appears in a FINALIZE
+    // invocation the operator can copy, which is a property of the block, not of one byte sequence
+    // (the invocation is line-continued, so `finalize --check` is never contiguous in the file).
+    const finalizeCheckBlock = (skeleton.match(/```bash\n[\s\S]*?```/g) || [])
+      .some(b => /\bfinalize\b/.test(b) && /--check\b/.test(b) && /--project/.test(b));
+    assert(finalizeCheckBlock,
+      '#837(P9): the finalize prose must surface the one-pass precondition report as a copyable '
+      + 'finalize invocation carrying --check');
     assert(/precondition/i.test(skeleton),
       '#837(P9): the prose must describe the report as a PRECONDITION checklist, not a ladder rung');
-    assert(skeleton.includes('mirror_sync_failed'),
-      '#837(P9): the prose must name the re-typed inner reason it can still return');
-    assert(skeleton.includes('finalize_mirror_refused'),
-      '#837(P9): the finalize prose must keep the top-level reason the four contract validators pin');
+    // The RECOVERY ROUTE, not the code spelling. This used to pin the literals
+    // `finalize_mirror_refused` / `mirror_sync_failed`; an assertion naming a refusal code is a vote
+    // against ever removing it, and those two are still live in claim.js only because the mirror
+    // branch has not been re-derived yet. What the operator actually needs from the prose is what to
+    // DO when the script cannot perform the sync it owns — that survives whatever the code is called.
+    assert(/sync fails[\s\S]{0,120}not writable/i.test(skeleton),
+      '#837(P9): the prose must give the recovery route for a sync the script cannot perform — '
+      + 'the one branch of the mirror step the operator has to act on');
 }}
 
 // ---------------------------------------------------------------------------

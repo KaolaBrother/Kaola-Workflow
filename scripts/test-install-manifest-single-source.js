@@ -55,12 +55,12 @@ for (const forge of manifest.FORGES) {
 
 // Issue #699: the manual installer must carry the transaction engine under
 // the correct edition-local filename for every forge.
-assert.ok(manifest.supportScripts('github').includes('kaola-workflow-replan.js'),
-  '#699: GitHub support scripts include canonical replan');
-assert.ok(manifest.supportScripts('gitlab').includes('kaola-gitlab-workflow-replan.js'),
-  '#699: GitLab support scripts include renamed replan port');
-assert.ok(manifest.supportScripts('gitea').includes('kaola-gitea-workflow-replan.js'),
-  '#699: Gitea support scripts include renamed replan port');
+assert.ok(manifest.supportScripts('github').includes('kaola-workflow-gap-sweep.js'),
+  'GitHub support scripts include a canonical shared script');
+assert.ok(manifest.supportScripts('gitlab').includes('kaola-gitlab-workflow-gap-sweep.js'),
+  'GitLab support scripts include its renamed port');
+assert.ok(manifest.supportScripts('gitea').includes('kaola-gitea-workflow-gap-sweep.js'),
+  'Gitea support scripts include its renamed port');
 
 // --- 1b. NEW shared script picked up with NO install.sh edit: append a planted base to a COPY of
 //     the manifest module (a fresh require of a temp clone with one extra SUPPORT_SCRIPTS entry) and
@@ -69,15 +69,13 @@ assert.ok(manifest.supportScripts('gitea').includes('kaola-gitea-workflow-replan
 {
   const planted = 'kaola-workflow-planted-probe.js';
   const original = fs.readFileSync(manifestScript, 'utf8');
-  assert.ok(original.includes("'kaola-workflow-task-mirror.js',"),
-    '#407: manifest must contain the task-mirror anchor used by the plant');
-  // #450: anchor the plant on the stable `task-mirror` entry (asserted to exist above) and
-  // insert the probe immediately after it — position-robust. Anchoring on a specific entry
-  // being LAST (the old run-chains anchor) silently broke whenever a new SUPPORT_SCRIPTS entry
-  // was appended after it (the no-op .replace left patched === original, failing the assert).
+  // #450: anchor the plant on a stable mid-list entry and insert the probe immediately after it —
+  // position-robust. Anchoring on a specific entry being LAST (the old run-chains anchor) silently
+  // broke whenever a new SUPPORT_SCRIPTS entry was appended after it (the no-op .replace left
+  // patched === original, failing the assert). The former anchor was task-mirror, now deleted.
   const patched = original.replace(
-    "  'kaola-workflow-task-mirror.js',",
-    "  'kaola-workflow-task-mirror.js',\n  '" + planted + "',");
+    "  'kaola-workflow-classifier.js',",
+    "  'kaola-workflow-classifier.js',\n  '" + planted + "',");
   assert.notStrictEqual(patched, original, '#407: plant must modify SUPPORT_SCRIPTS');
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-407-plant-'));

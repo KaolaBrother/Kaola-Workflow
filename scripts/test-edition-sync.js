@@ -15,14 +15,14 @@ const read = rel => fs.readFileSync(path.join(REPO, rel), 'utf8');
 
 const FORGES = ['gitlab', 'gitea'];
 
-// Issue #699: replan is a generated rename-normalized aggregator, so one
-// canonical registration must produce both forge ports.
-assert(GENERATED_AGGREGATORS.includes('kaola-workflow-replan.js'),
-  '#699: GENERATED_AGGREGATORS enrolls kaola-workflow-replan.js');
-assert(forgeRel('kaola-workflow-replan.js', 'gitlab') === 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js',
-  '#699: replan maps to the GitLab edition path');
-assert(forgeRel('kaola-workflow-replan.js', 'gitea') === 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-replan.js',
-  '#699: replan maps to the Gitea edition path');
+// One canonical registration must produce both forge ports. The sample was the re-plan aggregator
+// until it was deleted with the epoch machinery; gap-sweep is the same class of member.
+assert(GENERATED_AGGREGATORS.includes('kaola-workflow-gap-sweep.js'),
+  'GENERATED_AGGREGATORS enrolls kaola-workflow-gap-sweep.js');
+assert(forgeRel('kaola-workflow-gap-sweep.js', 'gitlab') === 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-gap-sweep.js',
+  'gap-sweep maps to the GitLab edition path');
+assert(forgeRel('kaola-workflow-gap-sweep.js', 'gitea') === 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-gap-sweep.js',
+  'gap-sweep maps to the Gitea edition path');
 
 // ---------------------------------------------------------------------------
 // T1: PARITY GREEN — every generated forge aggregator port byte-equals the
@@ -42,7 +42,7 @@ for (const base of GENERATED_AGGREGATORS) {
 // #347 drift class). Mutate one line in-memory and assert the render disagrees.
 // ---------------------------------------------------------------------------
 {
-  const base = 'kaola-workflow-adaptive-node.js';
+  const base = 'kaola-workflow-run-chains.js';
   const canon = read('scripts/' + base);
   const expected = renderForgePort(canon, base, 'gitlab');
   const tampered = expected.replace("'use strict';", "'use strict'; /* sneaky hand-edit */");
@@ -57,7 +57,7 @@ for (const base of GENERATED_AGGREGATORS) {
 // are already forge-form, so a second pass over canonical is stable.
 // ---------------------------------------------------------------------------
 {
-  const base = 'kaola-workflow-next-action.js';
+  const base = 'kaola-workflow-gap-sweep.js';
   const canon = read('scripts/' + base);
   const once = renderForgePort(canon, base, 'gitlab');
   const twice = renderForgePort(canon, base, 'gitlab');
@@ -74,7 +74,7 @@ for (const base of GENERATED_AGGREGATORS) {
       'T4: adaptive-schema excluded from the ' + forge + ' rename set (byte-identical)');
   }
   const sample = "const X = require('./kaola-workflow-adaptive-schema');\n";
-  assert(renderForgePort(sample, 'kaola-workflow-next-action.js', 'gitlab').includes("require('./kaola-workflow-adaptive-schema')"),
+  assert(renderForgePort(sample, 'kaola-workflow-gap-sweep.js', 'gitlab').includes("require('./kaola-workflow-adaptive-schema')"),
     'T4: adaptive-schema require is NOT renamed in a generated port');
 }
 
@@ -87,12 +87,12 @@ for (const base of GENERATED_AGGREGATORS) {
   const sample = [
     "// run /kaola-workflow-adapt issue-1 to author the plan",
     "const dir = path.join(root, 'kaola-workflow', project);",
-    "const V = require('./kaola-workflow-plan-validator');",
+    "const V = require('./kaola-workflow-claim');",
   ].join('\n') + '\n';
-  const out = renderForgePort(sample, 'kaola-workflow-commit-node.js', 'gitlab');
-  assert(out.includes('/kaola-workflow-adapt issue-1'), 'T5: /kaola-workflow-adapt command ref NOT renamed');
+  const out = renderForgePort(sample, 'kaola-workflow-gap-sweep.js', 'gitlab');
+  assert(out.includes('/kaola-workflow-adapt issue-1'), 'T5: a slash-command ref is NOT renamed');
   assert(out.includes("'kaola-workflow', project"), "T5: kaola-workflow/ state dir NOT renamed");
-  assert(out.includes("require('./kaola-gitlab-workflow-plan-validator')"), 'T5: plan-validator require IS renamed');
+  assert(out.includes("require('./kaola-gitlab-workflow-claim')"), 'T5: a script require IS renamed');
 }
 
 // ---------------------------------------------------------------------------
@@ -100,37 +100,12 @@ for (const base of GENERATED_AGGREGATORS) {
 // the CANONICAL source path (not a forge-renamed path).
 // ---------------------------------------------------------------------------
 {
-  const base = 'kaola-workflow-commit-node.js';
+  const base = 'kaola-workflow-gap-sweep.js';
   const out = renderForgePort(read('scripts/' + base), base, 'gitlab');
   const lines = out.split('\n');
   assert(lines[0].startsWith('#!'), 'T6: shebang preserved on line 1');
-  assert(/^\/\/ @generated from scripts\/kaola-workflow-commit-node\.js/.test(lines[1]),
+  assert(/^\/\/ @generated from scripts\/kaola-workflow-gap-sweep\.js/.test(lines[1]),
     'T6: @generated header on line 2 pointing at canonical source, got ' + JSON.stringify(lines[1]));
-}
-
-// ---------------------------------------------------------------------------
-// T7 (#401 Part 2): plan-validator's promotion into GENERATED_AGGREGATORS must NOT rename its 2 self-
-// referential agentRegistrationSurface entries (the canonical + codex registry surfaces, protected by
-// the `pv` segment-join indirection) — a naive rename would list two forge entries and DROP the
-// canonical+codex surfaces, the exact drift this registry exists to catch. The header comment + usage
-// string, by contrast, MUST render to the forge name (the item-4 cosmetic-identity fix). This locks the
-// indirection so a future regression turns the gitlab/gitea chains RED.
-// ---------------------------------------------------------------------------
-{
-  const base = 'kaola-workflow-plan-validator.js';
-  const out = renderForgePort(read('scripts/' + base), base, 'gitlab');
-  assert(out.includes("['scripts', pv].join('/')"),
-    'T7: the canonical plan-validator registry entry stays canonical (pv indirection NOT renamed)');
-  assert(out.includes("[cx, 'scripts', pv].join('/')"),
-    'T7: the codex plan-validator registry entry stays canonical (pv indirection NOT renamed)');
-  assert(!out.includes("['scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/')"),
-    'T7: no over-renamed canonical-surface registry entry (the #401 over-rename hazard)');
-  assert(out.includes("[gl, 'scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/')"),
-    'T7: the gitlab edition registry entry is present (already edition-named in canonical)');
-  assert(/^\/\/ kaola-gitlab-workflow-plan-validator\.js \(issue #227/m.test(out),
-    'T7: the header comment IS rendered to the forge name (item-4 cosmetic fix)');
-  assert(out.includes('usage: kaola-gitlab-workflow-plan-validator.js <workflow-plan.md>'),
-    'T7: the usage string IS rendered to the forge name (item-4 cosmetic fix)');
 }
 
 // ---------------------------------------------------------------------------

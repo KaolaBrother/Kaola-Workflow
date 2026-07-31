@@ -242,26 +242,6 @@ function extractFilePaths(text) {
   return paths;
 }
 
-// issue #227 audit fix (A2/A2′): parse a frozen plan's declared_write_set CELL structurally.
-// The cell is an author-declared, comma/space-separated path list — NOT free prose — so it must
-// be parsed structurally, not with the prose-oriented extractFilePaths() path-finder. That
-// finder requires a "/" AND a non-dot first segment, which SILENTLY DROPS root-level files
-// (Dockerfile, .env, secrets.yaml) and dot-leading paths (.github/workflows/deploy.yml,
-// .gitlab-ci.yml). Those drops let code / secret / CI writes evade the G1/G2 gates. Here
-// every non-empty normalized token counts (fail-closed: an author who
-// declares a write is taken at their word). The empty / dash markers preserve the read-only
-// carve-out (no declared writes => trivially disjoint).
-function parseWriteSetCell(cell) {
-  const set = new Set();
-  const raw = String(cell || '').trim();
-  if (!raw || raw === '—' || raw === '-') return set;
-  for (const tok of raw.split(/[\s,]+/)) {
-    const p = normalizeRepoPath(tok);
-    if (p && p !== '—' && p !== '-') set.add(p);
-  }
-  return set;
-}
-
 function extractCoarseAreas(text) {
   const areas = new Set();
   for (const filePath of extractFilePaths(text)) {
@@ -462,86 +442,6 @@ function isProtected(filePath) {
   return false;
 }
 
-// issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
-// into node objects. Tolerant to column reorder (maps by header name). The
-// declared_write_set cell is parsed structurally with parseWriteSetCell() so root-level
-// and dot-leading paths are not silently dropped (audit A2/A2′); the empty/dash read-only
-// carve-out still applies. depends_on splits on comma.
-function readPlanNodes(planPath) {
-  let content = '';
-  try { content = fs.readFileSync(planPath, 'utf8'); } catch (_) { return []; }
-  const body = sectionBody(content, 'Nodes');
-  const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
-  if (rows.length < 2) return [];
-  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
-  const idx = name => header.indexOf(name);
-  const nodes = [];
-  for (let r = 1; r < rows.length; r++) {
-    const cells = rows[r].split('|').slice(1, -1).map(c => c.trim());
-    if (/^[-:\s]+$/.test(cells.join(''))) continue; // separator row
-    const get = n => (idx(n) >= 0 ? cells[idx(n)] : '') || '';
-    const id = get('id');
-    if (!id) continue;
-    nodes.push({
-      id,
-      role: get('role'),
-      dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
-      writeSet: parseWriteSetCell(get('declared_write_set')),
-      cardinality: get('cardinality'),
-      shape: get('shape'),
-      // #382: per-node model tier — parity with validator.parseNodes (absent/'—' => '').
-      model: (() => { const v = get('model'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
-    });
-  }
-  return nodes;
-}
-
-// issue #227 (adaptive path): N-way pairwise disjointness verdict over declared
-// node write sets, applied WITHIN one issue (the cross-folder scanClaimedOverlap
-// is candidate-vs-active only). Mirrors classify()'s direct verdict and reuses
-// areaForPath + SHARED_INFRA: exact-path RED > non-shared coarse-area RED >
-// shared-infra YELLOW > GREEN. Empty / role-namespaced sets are trivially
-// disjoint by construction (read-only fan-out carve-out → GREEN/PASS).
-// #463 (D-419 write-overlap): an ADDITIVE `kind ∈ {exact, coarse, shared-infra}` field accompanies the
-// UNCHANGED verdict/reasoning, so the caller can distinguish the overlap CLASS for the gated PREVENT→
-// DETECT relaxation WITHOUT this function's verdict ever changing. The verdict stays PURE — scanClaimed-
-// Overlap (claim-time), the #232 antichain loop, and the G-SEL-4 select-arm check all keep reading
-// `verdict` and behave identically (they ignore `kind`). The downgrade lives at the three write-decision
-// callsites in plan-validator.js, never here.
-function disjointWriteSets(nodeWriteSets) {
-  const sets = (nodeWriteSets || []).map(s => (s instanceof Set ? s : new Set(s || [])));
-  for (let i = 0; i < sets.length; i++) {
-    for (let j = i + 1; j < sets.length; j++) {
-      const a = sets[i], b = sets[j];
-      if (a.size === 0 || b.size === 0) continue; // read-only carve-out: PASS on empty
-      // #587: case-fold the CROSS-NODE exact-path + coarse-area comparison. normalizeRepoPath does
-      // NOT case-fold (a global fold would corrupt display/error strings and the case-exact per-node
-      // barrier), so the fold lives ONLY here at the cross-node compare. macOS/Windows are
-      // case-insensitive, so two parallel legs declaring `Src/x.js` vs `src/x.js` are the SAME
-      // physical file and would clobber; over-blocking on a case-sensitive Linux FS is the safe
-      // direction per the existing over-blocks hygiene philosophy. The reasoning strings keep the
-      // ORIGINAL-case path/area so the operator sees what they declared.
-      const bLower = new Map();
-      for (const p of b) bLower.set(p.toLowerCase(), p);
-      for (const p of a) {
-        if (bLower.has(p.toLowerCase())) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
-      }
-      const areasB = new Set();
-      for (const p of b) areasB.add(areaForPath(p).toLowerCase());
-      let sharedHit = '';
-      for (const p of a) {
-        const area = areaForPath(p);
-        if (areasB.has(area.toLowerCase())) {
-          if (!SHARED_INFRA.has(area)) return { verdict: 'red', kind: 'coarse', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
-          if (!sharedHit) sharedHit = area;
-        }
-      }
-      if (sharedHit) return { verdict: 'yellow', kind: 'shared-infra', reasoning: 'shared-infra area "' + sharedHit + '" overlap between nodes ' + i + ' and ' + j };
-    }
-  }
-  return { verdict: 'green', kind: null, reasoning: 'node write sets are pairwise disjoint' };
-}
-
 function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root) {
   let hasExactOverlap = false;
   let exactOverlapPath = '';
@@ -587,34 +487,12 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
         fastScope = fastState.body;
       }
     } catch (_) {}
-    // issue #227 / #238: an adaptive project declares its write set STRUCTURALLY in
-    // workflow-plan.md's `## Nodes` table. Fold those parsed paths in DIRECTLY (they
-    // natively carry root-level + dot-leading + slash paths) instead of stringifying
-    // them and re-extracting via the prose path-finder, which silently re-drops the
-    // root-level ones (the v3.20.x #237 partial-fix gap). The prose artifacts
-    // (phase1/phase3/fast Scope) still go through the prose extractors.
-    const structuredClaimed = new Set();
-    try {
-      for (const n of readPlanNodes(path.join(projectDir, 'workflow-plan.md'))) {
-        for (const p of n.writeSet) structuredClaimed.add(p);
-      }
-    } catch (_) {}
-
     const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope;
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
     const claimedAreaLabels = parseAreaLabelsFromText(combined);
-    // #238: curated root (slashless) files on the claimed side — prose artifacts via the matcher,
-    // structured plan write sets folded directly (exact membership, no lossy re-tokenize).
+    // #238: curated root (slashless) files on the claimed side, via the prose matcher.
     const claimedCuratedRoot = adaptiveSchema.extractCuratedRootPaths(combined);
-    for (const p of structuredClaimed) {
-      claimedPaths.add(p);                                   // exact-overlap (slash/dot paths) — case-sensitive (distinct files on Linux)
-      claimedAreas.add(areaForPath(p));                       // coarse-area overlap — also case-sensitive
-      // curated-root overlap: store the CANONICAL name (case-folded) so it intersects the canonical
-      // candidate/prose sets — a raw add would fail open for a non-canonical-case declaration (#238 v3.21.0).
-      const canon = adaptiveSchema.canonicalCuratedRoot(p);
-      if (canon) claimedCuratedRoot.add(canon);
-    }
 
     if (!fs.existsSync(path.join(projectDir, 'phase3-plan.md'))) anyClaimedAtPhaseLeTwo = true;
 
@@ -969,7 +847,6 @@ if (require.main === module) {
 module.exports = {
   extractFilePaths,
   extractCoarseAreas,
-  parseWriteSetCell,
   markdownFenceTransition,
   sectionBodyState,
   sectionBody,
@@ -980,8 +857,6 @@ module.exports = {
   PROTECTED_BASENAMES,
   PROTECTED_PATH_MARKERS,
   isProtected,
-  readPlanNodes,
-  disjointWriteSets,
   // #519: stderr-error-class axis — transient-infra signature detection + the combined verdict.
   classifyFetchError,
   isTransientFetchStderr,

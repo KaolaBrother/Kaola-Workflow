@@ -28,7 +28,7 @@
 // reproduces it — i.e. it carries NO forge vocabulary beyond script names. The list
 // below is the membership test; do not read a count out of this prose, which is how
 // it went stale twice. The data-layer forge ports (claim / sink-merge / sink-pr /
-// repair-state / active-folders / classifier / roadmap) stay HAND-PORTED (covered
+// active-folders / classifier / roadmap) stay HAND-PORTED (covered
 // behaviorally per #342) and are NOT touched here — measured 2026-07-29, forge
 // vocabulary is 2.5% of claim's divergence from the render, so generation could not
 // own them even with every forge call extracted behind an adapter.
@@ -50,15 +50,6 @@ const FORGES = ['gitlab', 'gitea'];
 
 // Forge aggregator ports generated from canonical (issue #365 scope).
 const GENERATED_AGGREGATORS = [
-  'kaola-workflow-adaptive-node.js',
-  'kaola-workflow-next-action.js',
-  'kaola-workflow-commit-node.js',
-  'kaola-workflow-adaptive-handoff.js',
-  // #401 Part 2: the hand-ported plan-validator joins the generated class. Its 2 self-referential
-  // agentRegistrationSurface entries are segment-joined in source (the `pv` indirection) so the
-  // rename pass keeps the canonical+codex names; the header/usage strings render to the forge name.
-  'kaola-workflow-plan-validator.js',
-  'kaola-workflow-replan.js',
   // #868: four scripts promoted out of validate-script-sync's RENAME_NORMALIZED_FAMILIES. They were
   // reproducible by the rename pass already — compact-context and release differed from the render by
   // NOTHING but the @generated header — so the normalizer was carrying files generation could own.

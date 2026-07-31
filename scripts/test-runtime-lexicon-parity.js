@@ -170,7 +170,11 @@ const SURVEY_PATTERNS = Object.freeze([
 
 // Anti-vacuity floors. If the extractor or a runtime tree silently breaks, the
 // oracle would pass green while guarding nothing. These make that fail LOUD.
-const MIN_CANDIDATES = 100;
+//
+// The candidate floor was 100 while the shared engine tree carried the node executor, the plan
+// validator and the refusal kernel — most of the typed-code corpus. Those are deleted; what the
+// floor exists to catch (a broken extractor reading nothing) is unchanged at the smaller number.
+const MIN_CANDIDATES = 40;
 const MIN_FILES_PER_RUNTIME = 5;
 const MIN_BYTES_PER_RUNTIME = 20000;
 

@@ -59,7 +59,6 @@ const repoRoot = findRepoRoot(__dirname);
 //   install-codex-agent-profiles.js (gitlab/gitea) — Codex-only agent setup, not claude runtime
 // Note: kaola-workflow-ledger-compare.js IS in this list (tracked separately; added in #412).
 const SUPPORT_SCRIPTS = Object.freeze([
-  'kaola-workflow-repair-state.js',
   'kaola-workflow-claim.js',
   'kaola-workflow-active-folders.js',
   'kaola-workflow-closure-audit.js',
@@ -70,16 +69,9 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-sink-pr.js',
   'kaola-workflow-roadmap.js',
   'kaola-workflow-classifier.js',
-  'kaola-workflow-plan-validator.js',
-  'kaola-workflow-next-action.js',
-  'kaola-workflow-commit-node.js',
-  'kaola-workflow-adaptive-handoff.js',
-  'kaola-workflow-adaptive-node.js',
-  'kaola-workflow-replan.js',
   'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-workflow-task-mirror.js',
   'kaola-workflow-ledger-compare.js',
   'kaola-workflow-gap-sweep.js',
   'kaola-workflow-run-chains.js',

@@ -2271,236 +2271,8 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// The documented repository-root normal and doctor commands read the bundled
-// plugin as their source authority while retaining exact identity gates in caches.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-root-doctor-home-'));
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-root-doctor-project-'));
-  try {
-    // spawn-class: environment
-    const install = spawnSync(process.execPath, [installerPath, '--global'], {
-      cwd: pluginRoot,
-      env: { ...process.env, HOME: homeRoot },
-      encoding: 'utf8',
-    });
-    assert.strictEqual(install.status, 0, 'root-entrypoint fixture global install: ' + install.stderr);
-    enableMultiAgentV2(homeRoot);
 
-    // spawn-class: environment
-    const normal = spawnSync(process.execPath,
-      [path.join(root, 'scripts', 'kaola-workflow-codex-preflight.js'),
-        '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: root, encoding: 'utf8' });
-    assert.strictEqual(normal.status, 0,
-      'repository-root normal command uses the canonical bundled plugin source: '
-      + normal.stderr + normal.stdout);
-    assert.strictEqual(JSON.parse(normal.stdout).status, 'ok',
-      'repository-root normal command verifies the selected installed scope');
 
-    // spawn-class: environment
-    const doctorResult = spawnSync(process.execPath,
-      [path.join(root, 'scripts', 'kaola-workflow-codex-preflight.js'),
-        '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: root, encoding: 'utf8' });
-    assert.strictEqual(doctorResult.status, 0,
-      'repository-root doctor command uses the canonical bundled plugin source: '
-      + doctorResult.stderr + doctorResult.stdout);
-    const report = JSON.parse(doctorResult.stdout);
-    assert.strictEqual(report.status, 'ok',
-      'repository-root doctor stays green when no installed scope is stale');
-    assert((report.scopes || []).some(scope => scope.scope === 'repository'),
-      'repository-root doctor reports its bundled repository source scope');
-  } finally {
-    fs.rmSync(homeRoot, { recursive: true, force: true });
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-  }
-}
-
-// #716/#800: a frozen schema-2 plan's ## Nodes table mixes DELEGATED roles with
-// the built-in, intentionally non-delegable roles (`main-session-gate`,
-// `finalize`, and a spine plan's `expansion-point`). The built-ins run in the
-// main session — or, for an expansion point, never dispatch at all — and carry no
-// Codex profile and no config/agents.toml entry BY DESIGN, so exact-plan preflight
-// must exempt them from the template/profile availability check — while staying
-// fail-closed for any unknown or genuinely missing DELEGATED role. The downstream
-// reproduction entry is the repository-root command with `--plan` appended.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const rootPreflightPath = path.join(root, 'scripts', 'kaola-workflow-codex-preflight.js');
-  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-home-'));
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-project-'));
-  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-fixture-'));
-  try {
-    // spawn-class: environment
-    const install = spawnSync(process.execPath, [installerPath, '--global'], {
-      cwd: pluginRoot,
-      env: { ...process.env, HOME: homeRoot },
-      encoding: 'utf8',
-    });
-    assert.strictEqual(install.status, 0, '#716 fixture global install: ' + install.stderr);
-    enableMultiAgentV2(homeRoot);
-
-    function writePlan(basename, roles, extraMeta = []) {
-      const planPath = path.join(fixtureRoot, basename);
-      const rows = roles.map((role, index) =>
-        `| n${index + 1} | ${role} | ${index === 0 ? '—' : 'n1'} | — | 1 | sequence | — | — | — | — | — | — | — | — |`);
-      fs.writeFileSync(planPath, [
-        '# Workflow Plan — #716 fixture',
-        '',
-        '## Meta',
-        'plan_schema_version: 2',
-        ...extraMeta,
-        '',
-        '## Nodes',
-        '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
-        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-        ...rows,
-        '',
-        '## Node Briefs',
-        '',
-      ].join('\n'));
-      return planPath;
-    }
-
-    function runPlanPreflight(planPath) {
-      // spawn-class: environment
-      return spawnSync(process.execPath,
-        [rootPreflightPath, '--project-root', projectRoot, '--home', homeRoot,
-          '--no-autofix', '--json', '--plan', planPath],
-        { cwd: root, encoding: 'utf8' });
-    }
-
-    // (a) delegated roles + both built-in non-delegable roles pass exact-plan
-    // preflight on a fresh install, with NO fabricated built-in profiles.
-    const mixedPlan = writePlan('workflow-plan-mixed.md',
-      ['implementer', 'code-reviewer', 'main-session-gate', 'finalize']);
-    const mixed = runPlanPreflight(mixedPlan);
-    assert.strictEqual(mixed.status, 0,
-      '#716(a): mixed delegated + built-in plan must pass exact-plan preflight: '
-      + mixed.stderr + mixed.stdout);
-    const mixedJson = JSON.parse(mixed.stdout);
-    assert.strictEqual(mixedJson.status, 'ok',
-      '#716(a): a fresh install keeps the ok status under --plan');
-    assert(!mixedJson.roles_checked.includes('main-session-gate')
-        && !mixedJson.roles_checked.includes('finalize'),
-      '#716(a): built-in non-delegable roles are exempt from the profile availability check');
-    assert(mixedJson.roles_checked.includes('implementer')
-        && mixedJson.roles_checked.includes('code-reviewer'),
-      '#716(a): delegated plan roles keep the required-role union behavior');
-    const globalAgentsDir = path.join(homeRoot, '.codex', 'agents', 'kaola-workflow');
-    assert(!fs.existsSync(path.join(globalAgentsDir, 'main-session-gate.toml'))
-        && !fs.existsSync(path.join(globalAgentsDir, 'finalize.toml')),
-      '#716(a): no fake profiles exist for the non-delegable roles');
-
-    // (b) an unknown DELEGATED role still refuses, naming that role.
-    const unknownPlan = writePlan('workflow-plan-unknown.md', ['implementer', 'not-a-real-role']);
-    const unknown = runPlanPreflight(unknownPlan);
-    assert.notStrictEqual(unknown.status, 0,
-      '#716(b): an unknown delegated role must still refuse exact-plan preflight');
-    const unknownJson = JSON.parse(unknown.stdout);
-    assert.strictEqual(unknownJson.status, 'role_not_in_template',
-      '#716(b): an unknown delegated role keeps the role_not_in_template refusal');
-    assert((unknownJson.missing_roles || []).includes('not-a-real-role'),
-      '#716(b): the refusal names the unknown delegated role');
-
-    // (d) #800: a spine plan carrying an `expansion-point` row passes exact-plan
-    // preflight on a fresh install. The expansion point is a BUILT-IN synthetic
-    // role — the executor's expansion transaction composes its interior at open
-    // time and the scheduler never returns it as dispatchable — so it has no
-    // agents.toml entry and no profile file, and preflight must never require one.
-    // Before the exemption landed this refused `role_not_in_template` BEFORE the
-    // first node could open, wedging every progressively-elaborated Codex run.
-    const spinePlan = writePlan('workflow-plan-spine.md',
-      ['implementer', 'expansion-point', 'code-reviewer', 'main-session-gate', 'finalize'],
-      ['plan_form: spine']);
-    const spine = runPlanPreflight(spinePlan);
-    assert.strictEqual(spine.status, 0,
-      '#800(d): a spine plan with an expansion-point row must pass exact-plan preflight: '
-      + spine.stderr + spine.stdout);
-    const spineJson = JSON.parse(spine.stdout);
-    assert.strictEqual(spineJson.status, 'ok',
-      '#800(d): a fresh install keeps the ok status for a spine plan with an expansion point');
-    assert(!spineJson.roles_checked.includes('expansion-point'),
-      '#800(d): the built-in expansion-point role is exempt from the profile availability check');
-    assert(spineJson.roles_checked.includes('implementer')
-        && spineJson.roles_checked.includes('code-reviewer'),
-      '#800(d): the delegated roles of a spine plan keep the required-role union behavior');
-    assert(!fs.existsSync(path.join(globalAgentsDir, 'expansion-point.toml')),
-      '#800(d): no fake profile is fabricated for the expansion-point role');
-
-    // (c) a genuinely missing DELEGATED profile still refuses under --plan.
-    fs.rmSync(path.join(globalAgentsDir, 'implementer.toml'));
-    const missingProfile = runPlanPreflight(mixedPlan);
-    assert.notStrictEqual(missingProfile.status, 0,
-      '#716(c): a truly missing delegated profile must still refuse under --plan');
-    const missingJson = JSON.parse(missingProfile.stdout);
-    assert.strictEqual(missingJson.status, 'profiles_missing',
-      '#716(c): the missing delegated profile keeps the profiles_missing refusal');
-    assert((missingJson.missing_roles || []).includes('implementer'),
-      '#716(c): the refusal names the missing delegated profile');
-  } finally {
-    fs.rmSync(homeRoot, { recursive: true, force: true });
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-    fs.rmSync(fixtureRoot, { recursive: true, force: true });
-  }
-}
-
-// #800 drift pin: the preflight hand-rolls its own copy of the built-in
-// non-delegable role set because the file is deliberately standalone (Node
-// builtins only, no kernel require) — that copy is what went stale when the spine
-// form added `expansion-point`. Parity therefore lives HERE: the preflight list
-// MUST equal the kernel's own built-in role set (the adaptive node script's
-// RESERVED_EXPANSION_UNIT_ROLES), read from the kernel source text so a new
-// built-in role cannot be added on one side alone. The literal is asserted in all
-// four byte-identical preflight copies as well, so a plugin-tree-only edit reds
-// here and not only in validate-script-sync.
-{
-  const builtinRoleListRe =
-    /const PLAN_BUILTIN_NON_DELEGABLE_ROLES\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/;
-  const kernelRoleSetRe =
-    /const RESERVED_EXPANSION_UNIT_ROLES\s*=\s*new Set\(\[([\s\S]*?)\]\)/;
-  const quotedTokens = (source) => [...source.matchAll(/['"]([^'"]+)['"]/g)].map(m => m[1]).sort();
-
-  const kernelSource = fs.readFileSync(
-    path.join(root, 'scripts', 'kaola-workflow-adaptive-node.js'), 'utf8');
-  const kernelMatch = kernelSource.match(kernelRoleSetRe);
-  assert(kernelMatch,
-    '#800: the kernel RESERVED_EXPANSION_UNIT_ROLES literal must stay readable — '
-    + 'the preflight parity pin reads it as the built-in-role source of truth');
-  const kernelBuiltins = quotedTokens(kernelMatch[1]);
-  assert(kernelBuiltins.length > 0, '#800: kernel built-in role set must be non-empty');
-
-  // The exported constant is what runPreflight actually filters with.
-  assert(Array.isArray(codexPreflight.PLAN_BUILTIN_NON_DELEGABLE_ROLES),
-    '#800: the preflight must export PLAN_BUILTIN_NON_DELEGABLE_ROLES for the parity pin');
-  assert.deepStrictEqual(
-    [...codexPreflight.PLAN_BUILTIN_NON_DELEGABLE_ROLES].sort(), kernelBuiltins,
-    '#800: the preflight built-in non-delegable role list must equal the kernel\'s '
-    + 'RESERVED_EXPANSION_UNIT_ROLES — a drifted copy refuses valid plans at preflight');
-
-  // The spine expansion role is the token that drifted: pin it by name from the
-  // validator that owns it, so renaming the token cannot silently pass this test.
-  const { SPINE_EXPANSION_ROLE } = require('./kaola-workflow-plan-validator');
-  assert(codexPreflight.PLAN_BUILTIN_NON_DELEGABLE_ROLES.includes(SPINE_EXPANSION_ROLE),
-    `#800: the preflight must exempt the spine expansion role "${SPINE_EXPANSION_ROLE}"`);
-  assert(kernelBuiltins.includes(SPINE_EXPANSION_ROLE),
-    `#800: the kernel built-in role set must carry "${SPINE_EXPANSION_ROLE}"`);
-
-  for (const relDir of ['scripts',
-    path.join('plugins', 'kaola-workflow', 'scripts'),
-    path.join('plugins', 'kaola-workflow-gitlab', 'scripts'),
-    path.join('plugins', 'kaola-workflow-gitea', 'scripts')]) {
-    const copyPath = path.join(root, relDir, 'kaola-workflow-codex-preflight.js');
-    const copyMatch = fs.readFileSync(copyPath, 'utf8').match(builtinRoleListRe);
-    assert(copyMatch, `#800: ${relDir} preflight must declare PLAN_BUILTIN_NON_DELEGABLE_ROLES`);
-    assert.deepStrictEqual(quotedTokens(copyMatch[1]), kernelBuiltins,
-      `#800: ${relDir} preflight built-in role literal drifted from the kernel role set`);
-  }
-}
 
 // Codex rust-v0.144.4 accepts a top-level project_root_markers array in normal
 // multiline TOML form. The preflight boundary parser must consume the complete
@@ -3266,17 +3038,14 @@ try {
   );
 
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
-  const adapt = readInstalledCommand('kaola-workflow-adapt.md');
 
-  // The always-opus workflow-planner tier (adapt command) renders opus; the finalize command
-  // carries the sonnet routed-fix (tdd-guide / build-error-resolver) and doc-updater tiers.
-  // (Runtime role resolution is proven per role against the resolver below — the surface the
-  // adaptive dispatch path actually reads.)
-  assert(adapt.includes('subagent_type="workflow-planner",\n  model="opus",'),
-    'the workflow-planner should render as opus');
+  // The finalize command carries the sonnet routed-fix (tdd-guide / build-error-resolver) and
+  // doc-updater tiers. (Runtime role resolution is proven per role against the resolver below.)
   assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
   assert(
-    finalize.includes('\n\n## Steps\n\n'),
+    // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
+    // finalize command was rewritten. The subject — blank-line preservation — is unchanged.
+    finalize.includes('\n\n## Step 1 — Final validation\n\n'),
     'installer rendering should preserve blank markdown lines'
   );
   assert(
@@ -3300,7 +3069,7 @@ try {
     'installed commands must render concrete Claude model aliases, never the neutral plan-tier tokens');
 
   const requiredAgents = ['code-explorer','knowledge-lookup','planner','code-architect','tdd-guide',
-    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','workflow-planner','synthesizer'];
+    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','synthesizer'];
   for (const agent of requiredAgents) {
     const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');
     const fmEnd = installed.indexOf('\n---', 3);
@@ -3361,7 +3130,6 @@ try {
     'security-reviewer': 'opus',
     'doc-updater': 'sonnet',
     'adversarial-verifier': 'sonnet',
-    'workflow-planner': 'opus',
     synthesizer: 'opus',
     'metric-optimizer': 'sonnet'
   };

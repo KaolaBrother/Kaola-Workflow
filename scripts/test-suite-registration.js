@@ -51,9 +51,7 @@ const EXEMPT = Object.freeze({
 // slice and six non-samplable suites are deferred" — this is that six, named, so that a suite
 // silently vanishing from the fast gate is distinguishable from one deliberately held back.
 const FULL_ONLY = Object.freeze([
-  'test-barrier-base-integrity.js',
   'test-claim-hardening.js',
-  'test-interior-gate-freshness.js',
   'test-release.js',
   'test-run-chains.js',
   'test-sink-merge.js',

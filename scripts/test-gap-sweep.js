@@ -49,14 +49,12 @@ function run(root, extraArgs) {
   return { exitCode: r.status, stdout, stderr: r.stderr || '', jsonOut };
 }
 
-// Write a provenance-log.jsonl with the given events array.
-// Each entry: { event, nodeId } — timestamp/nonce/by are also included to be realistic.
-function writeProvenance(cacheDir, events) {
-  const lines = events.map(e =>
-    JSON.stringify({ timestamp: new Date().toISOString(), event: e.event, nodeId: e.nodeId, nonce: 'x', by: 'test' })
-  );
-  fs.writeFileSync(path.join(cacheDir, 'provenance-log.jsonl'), lines.join('\n') + '\n', 'utf8');
-}
+// DELETED: writeProvenance(). It seeded a provenance-log.jsonl of open/close events keyed on
+// `nodeId`, the sole input to the `in_run_repair` reason class ("a node opened more than once").
+// There are no nodes and no node-open events, so the class has no producer. Two reason classes
+// remain and both are node-free: `deferred_red_chain` (a chain-receipt entry with
+// accepted_red:true) and `manual:<slug>` (an operator line in run-gaps-manual.md). Every scenario
+// below that merely NEEDED some swept class to react to now uses one of those two.
 
 // Write a chain-receipt.json with the given chains array (partial — only name/accepted_red/accepted_red_issue needed).
 function writeChainReceipt(cacheDir, chains) {
@@ -81,24 +79,28 @@ function writeSummary(cacheDir, projectDir, gapLines) {
 }
 
 // ---------------------------------------------------------------------------
-// T1: SCAN dedup — provenance with a nodeId opened 2x + an accepted_red chain
-//     => exactly 2 sweptClasses (in_run_repair count:1, deferred_red_chain), deduped.
+// T1: SCAN dedup — a chain receipt carrying the SAME waived chain twice plus a manual seed
+//     => exactly 2 sweptClasses (deferred_red_chain, manual:<slug>), the duplicate collapsed to
+//     one entry whose count SUMS the occurrences, and the artifact written to disk.
+//
+// Dedup is keyed on (reasonClass, sample), which is class-agnostic — it never knew what produced
+// the item. It used to be proven through a node opened twice; the two surviving producers prove
+// exactly the same rule, and the receipt one proves it over a class that can genuinely repeat
+// (the same chain waived under the same issue on a re-run).
 // ---------------------------------------------------------------------------
 const fix1 = makeFixture('proj-t1');
 try {
-  // n2 opened twice = in_run_repair; n1 opened+closed = normal
-  writeProvenance(fix1.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n2' },
-    { event: 'open',  nodeId: 'n2' },  // second open = in_run_repair
-    { event: 'close', nodeId: 'n2' },
-  ]);
-  // accepted_red chain
   writeChainReceipt(fix1.cacheDir, [
     { name: 'claude',  exitCode: 0, accepted_red: false, accepted_red_issue: null },
     { name: 'codex',   exitCode: 1, accepted_red: true,  accepted_red_issue: '99' },
+    // The SAME (name, issue) pair a second time — one swept entry, count 2.
+    { name: 'codex',   exitCode: 1, accepted_red: true,  accepted_red_issue: '99' },
   ]);
+  fs.writeFileSync(
+    path.join(fix1.cacheDir, 'run-gaps-manual.md'),
+    'gap: coresim-busy — one transient Busy event\n',
+    'utf8'
+  );
 
   const r1 = run(fix1.root, ['--project', 'proj-t1', '--json']);
 
@@ -108,22 +110,18 @@ try {
     assert(r1.jsonOut.result === 'swept', 'T1: result = swept');
     assert(r1.jsonOut.project === 'proj-t1', 'T1: project field matches');
     assert(Array.isArray(r1.jsonOut.sweptClasses), 'T1: sweptClasses is array');
-    assert(r1.jsonOut.sweptClasses.length === 2, 'T1: exactly 2 swept classes (in_run_repair + deferred_red_chain), got ' + r1.jsonOut.sweptClasses.length);
-    const irr = r1.jsonOut.sweptClasses.find(c => c.reasonClass === 'in_run_repair');
-    assert(irr !== undefined, 'T1: in_run_repair class present');
-    if (irr) {
-      assert(irr.sample === 'n2', 'T1: in_run_repair sample = n2');
-      // count = extra opens (opens - 1)
-      assert(typeof irr.count === 'number' && irr.count >= 1, 'T1: in_run_repair count >= 1');
-    }
+    assert(r1.jsonOut.sweptClasses.length === 2, 'T1: exactly 2 swept classes (deferred_red_chain + manual:coresim-busy), got ' + JSON.stringify(r1.jsonOut.sweptClasses));
     const drc = r1.jsonOut.sweptClasses.find(c => c.reasonClass === 'deferred_red_chain');
     assert(drc !== undefined, 'T1: deferred_red_chain class present');
     if (drc) {
-      assert(drc.sample === 'codex:99', 'T1: deferred_red_chain sample = codex:99');
+      assert(drc.sample === 'codex:99', 'T1: deferred_red_chain sample = codex:99, got ' + drc.sample);
+      assert(drc.count === 2, 'T1: dedup SUMS the counts of the collapsed duplicates, got ' + drc.count);
     }
-    // Dedup: n2 opened 2x = only ONE in_run_repair entry
-    const irrAll = r1.jsonOut.sweptClasses.filter(c => c.reasonClass === 'in_run_repair');
-    assert(irrAll.length === 1, 'T1: dedup: only one in_run_repair entry even with 2 extra opens');
+    const mc = r1.jsonOut.sweptClasses.find(c => c.reasonClass === 'manual:coresim-busy');
+    assert(mc !== undefined, 'T1: manual:coresim-busy class present');
+    // Dedup: the duplicated chain yields exactly ONE entry, not two.
+    const drcAll = r1.jsonOut.sweptClasses.filter(c => c.reasonClass === 'deferred_red_chain');
+    assert(drcAll.length === 1, 'T1: dedup: only one deferred_red_chain entry for a repeated (name, issue) pair, got ' + drcAll.length);
     // artifact written
     assert(typeof r1.jsonOut.artifact === 'string' && r1.jsonOut.artifact.length > 0, 'T1: artifact path returned');
     const artifactExists = fs.existsSync(r1.jsonOut.artifact);
@@ -143,13 +141,9 @@ try {
 // ---------------------------------------------------------------------------
 const fix2 = makeFixture('proj-t2');
 try {
-  writeProvenance(fix2.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n1' },  // reopened
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix2.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+    { name: 'codex',  exitCode: 1, accepted_red: true,  accepted_red_issue: '99' },
   ]);
   // Run scanner first to produce run-gaps.json
   run(fix2.root, ['--project', 'proj-t2', '--json']);
@@ -171,7 +165,7 @@ try {
     assert(r2.jsonOut.reason === 'gaps_unswept', 'T2: reason = gaps_unswept');
     assert(Array.isArray(r2.jsonOut.unmapped) && r2.jsonOut.unmapped.length > 0, 'T2: unmapped array non-empty');
     const u = r2.jsonOut.unmapped[0];
-    assert(u.reasonClass === 'in_run_repair', 'T2: unmapped[0].reasonClass = in_run_repair');
+    assert(u.reasonClass === 'deferred_red_chain', 'T2: unmapped[0].reasonClass = deferred_red_chain, got ' + u.reasonClass);
   }
 } finally {
   try { fs.rmSync(fix2.root, { recursive: true, force: true }); } catch (_) {}
@@ -183,20 +177,16 @@ try {
 // ---------------------------------------------------------------------------
 const fix3 = makeFixture('proj-t3');
 try {
-  writeProvenance(fix3.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n1' },  // reopened
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix3.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+    { name: 'codex',  exitCode: 1, accepted_red: true,  accepted_red_issue: '99' },
   ]);
   // Run scanner to produce run-gaps.json
   run(fix3.root, ['--project', 'proj-t3', '--json']);
   // Write summary WITH ## Run gaps section — filed mapping
   const projDir = path.join(fix3.root, 'kaola-workflow', 'proj-t3');
   writeSummary(fix3.cacheDir, projDir, [
-    '- in_run_repair (n1): filed: #123',
+    '- deferred_red_chain (codex:99): filed: #123',
   ]);
 
   const r3 = run(fix3.root, [
@@ -224,18 +214,14 @@ try {
 // ---------------------------------------------------------------------------
 const fix4 = makeFixture('proj-t4');
 try {
-  writeProvenance(fix4.cacheDir, [
-    { event: 'open',  nodeId: 'n2' },
-    { event: 'open',  nodeId: 'n2' },  // reopened
-    { event: 'close', nodeId: 'n2' },
-  ]);
   writeChainReceipt(fix4.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+    { name: 'codex',  exitCode: 1, accepted_red: true,  accepted_red_issue: '99' },
   ]);
   run(fix4.root, ['--project', 'proj-t4', '--json']);
   const projDir = path.join(fix4.root, 'kaola-workflow', 'proj-t4');
   writeSummary(fix4.cacheDir, projDir, [
-    '- in_run_repair (n2): noise: expected flap in test run',
+    '- deferred_red_chain (codex:99): noise: expected flap in test run',
   ]);
 
   const r4 = run(fix4.root, [
@@ -260,11 +246,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix5 = makeFixture('proj-t5');
 try {
-  // provenance with no reopens
-  writeProvenance(fix5.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   // chain receipt with no accepted_red
   writeChainReceipt(fix5.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
@@ -320,10 +301,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix8 = makeFixture('proj-t8');
 try {
-  writeProvenance(fix8.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix8.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -354,11 +331,7 @@ try {
 // ---------------------------------------------------------------------------
 const fix9 = makeFixture('proj-t9');
 try {
-  // Clean provenance/chain-receipt: sweptClasses will be empty.
-  writeProvenance(fix9.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
+  // Clean chain receipt, no manual seed: sweptClasses will be empty.
   writeChainReceipt(fix9.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -399,10 +372,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix10 = makeFixture('proj-t10');
 try {
-  writeProvenance(fix10.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix10.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -438,29 +407,25 @@ try {
 
 // ---------------------------------------------------------------------------
 // T11 (#653 finding D1): forward direction still refuses gaps_unswept. Reverse containment
-// (every ## Run gaps entry is seeded) is satisfied here, but a SECOND swept class (an
-// in_run_repair reopen) has no matching ## Run gaps entry — the pre-existing forward check must
-// still catch it, proving the new reverse check does not weaken or replace the forward one.
+// (every ## Run gaps entry is seeded) is satisfied here, but a SECOND swept class (a waived red
+// chain) has no matching ## Run gaps entry — the pre-existing forward check must still catch it,
+// proving the new reverse check does not weaken or replace the forward one.
 // ---------------------------------------------------------------------------
 const fix11 = makeFixture('proj-t11');
 try {
-  // n1 opened twice -> in_run_repair swept class, left unmapped in the summary below.
-  writeProvenance(fix11.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
+  // A waived chain -> deferred_red_chain swept class, left unmapped in the summary below.
   writeChainReceipt(fix11.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+    { name: 'codex',  exitCode: 1, accepted_red: true,  accepted_red_issue: '99' },
   ]);
   fs.writeFileSync(
     path.join(fix11.cacheDir, 'run-gaps-manual.md'),
     'gap: coresim-busy — one transient Busy event\n',
     'utf8'
   );
-  run(fix11.root, ['--project', 'proj-t11', '--json']); // sweptClasses: in_run_repair(n1) + manual:coresim-busy
+  run(fix11.root, ['--project', 'proj-t11', '--json']); // sweptClasses: deferred_red_chain + manual:coresim-busy
   const projDir11 = path.join(fix11.root, 'kaola-workflow', 'proj-t11');
-  // Only the manual gap is mapped in the summary — in_run_repair(n1) is left unmapped.
+  // Only the manual gap is mapped in the summary — deferred_red_chain is left unmapped.
   writeSummary(fix11.cacheDir, projDir11, [
     '- manual:coresim-busy (one transient Busy event): noise: environment',
   ]);
@@ -477,7 +442,7 @@ try {
   if (r11.jsonOut) {
     assert(r11.jsonOut.result === 'refuse', 'T11: result = refuse');
     assert(r11.jsonOut.reason === 'gaps_unswept', 'T11: reason = gaps_unswept (not observed_gap_unseeded), got ' + r11.jsonOut.reason);
-    assert(Array.isArray(r11.jsonOut.unmapped) && r11.jsonOut.unmapped.some(u => u.reasonClass === 'in_run_repair'), 'T11: unmapped includes in_run_repair');
+    assert(Array.isArray(r11.jsonOut.unmapped) && r11.jsonOut.unmapped.some(u => u.reasonClass === 'deferred_red_chain'), 'T11: unmapped includes deferred_red_chain, got ' + JSON.stringify(r11.jsonOut.unmapped));
   }
 } finally {
   try { fs.rmSync(fix11.root, { recursive: true, force: true }); } catch (_) {}
@@ -498,7 +463,7 @@ try {
   fs.mkdirSync(archiveCacheDir, { recursive: true });
   const archivedArtifact = {
     project: project12,
-    sweptClasses: [{ reasonClass: 'in_run_repair', sample: 'n2', count: 1 }],
+    sweptClasses: [{ reasonClass: 'deferred_red_chain', sample: 'codex:99', count: 1 }],
   };
   const archivedRunGapsPath = path.join(archiveCacheDir, 'run-gaps.json');
   fs.writeFileSync(archivedRunGapsPath, JSON.stringify(archivedArtifact, null, 2) + '\n', 'utf8');
@@ -528,7 +493,7 @@ try {
   const preserved = JSON.parse(fs.readFileSync(archivedRunGapsPath, 'utf8'));
   assert(Array.isArray(preserved.sweptClasses) && preserved.sweptClasses.length === 1,
     'T12.2: the archived run-gaps.json must be untouched (still 1 swept class), got: ' + JSON.stringify(preserved.sweptClasses));
-  assert(preserved.sweptClasses[0] && preserved.sweptClasses[0].reasonClass === 'in_run_repair' && preserved.sweptClasses[0].sample === 'n2',
+  assert(preserved.sweptClasses[0] && preserved.sweptClasses[0].reasonClass === 'deferred_red_chain' && preserved.sweptClasses[0].sample === 'codex:99',
     'T12.2: the archived run-gaps.json content must be byte-preserved, got: ' + JSON.stringify(preserved.sweptClasses));
 } finally {
   try { fs.rmSync(fix12.root, { recursive: true, force: true }); } catch (_) {}
@@ -562,10 +527,8 @@ const fix14 = makeFixture('proj-t14');
 try {
   // Live project has its own distinct defect signal (differs from the archived content below, so a
   // clobber would be detectable even by content, not just by refusal).
-  writeProvenance(fix14.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
+  writeChainReceipt(fix14.cacheDir, [
+    { name: 'claude', exitCode: 1, accepted_red: true, accepted_red_issue: 'live-77' },
   ]);
 
   const archiveCacheDir14 = path.join(fix14.root, 'kaola-workflow', 'archive', 'proj-t14', '.cache');
@@ -573,7 +536,7 @@ try {
   const archivedRunGapsPath14 = path.join(archiveCacheDir14, 'run-gaps.json');
   const archivedArtifact14 = {
     project: 'proj-t14',
-    sweptClasses: [{ reasonClass: 'in_run_repair', sample: 'archived-n9', count: 5 }],
+    sweptClasses: [{ reasonClass: 'deferred_red_chain', sample: 'archived-gitea:404', count: 5 }],
   };
   const archivedRaw14 = JSON.stringify(archivedArtifact14, null, 2) + '\n';
   fs.writeFileSync(archivedRunGapsPath14, archivedRaw14, 'utf8');
@@ -603,10 +566,8 @@ try {
 // ---------------------------------------------------------------------------
 const fix15 = makeFixture('proj-t15');
 try {
-  writeProvenance(fix15.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
+  writeChainReceipt(fix15.cacheDir, [
+    { name: 'codex', exitCode: 1, accepted_red: true, accepted_red_issue: '99' },
   ]);
 
   const ownOutputPath15 = path.join('kaola-workflow', 'proj-t15', '.cache', 'run-gaps.json');
@@ -636,10 +597,8 @@ try {
 // ---------------------------------------------------------------------------
 const fix16 = makeFixture('proj-t16');
 try {
-  writeProvenance(fix16.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
+  writeChainReceipt(fix16.cacheDir, [
+    { name: 'codex', exitCode: 1, accepted_red: true, accepted_red_issue: '99' },
   ]);
 
   // Foreign archive dir for a DIFFERENT project exists, but no run-gaps.json lives there yet.
@@ -672,10 +631,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix17 = makeFixture('proj-t17');
 try {
-  writeProvenance(fix17.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix17.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -718,10 +673,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix18 = makeFixture('proj-t18');
 try {
-  writeProvenance(fix18.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix18.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -766,10 +717,6 @@ try {
 const fix19 = makeFixture('proj-t19');
 try {
   // Clean signals: sweptClasses will be empty, and nothing is seeded via run-gaps-manual.md.
-  writeProvenance(fix19.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix19.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -811,10 +758,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix20 = makeFixture('proj-t20');
 try {
-  writeProvenance(fix20.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix20.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -822,7 +765,7 @@ try {
   const projDir20 = path.join(fix20.root, 'kaola-workflow', 'proj-t20');
   writeSummary(fix20.cacheDir, projDir20, [
     '- none',
-    '- No in_run_repair (all nodes passed first-try, no reopen), no deferred_red_chain (unwaived receipt).',
+    '- No deferred_red_chain (the receipt carries no waiver), nothing seeded by hand (no manual gaps).',
     '- **R5 / #635** (FILED) — the load-flake; filed as #635 with a roadmap stub.',
     '- manual:typo (some sample): filed: 726',   // malformed: missing "#" — the mapping attempt
   ]);
@@ -843,7 +786,7 @@ try {
   assert(warnLines.length === 1 && warnLines[0].indexOf('- manual:typo (some sample): filed: 726') !== -1,
     'T20: the diagnostic quotes the offending line verbatim, got ' + JSON.stringify(warnLines[0]));
   assert((r20.stderr || '').indexOf('- none') === -1, 'T20: "- none" must NOT warn (free-text bullets are ignored by design)');
-  assert((r20.stderr || '').indexOf('deferred_red_chain (unwaived receipt)') === -1, 'T20: a prose bullet with parentheses must NOT warn');
+  assert((r20.stderr || '').indexOf('deferred_red_chain (the receipt carries no waiver)') === -1, 'T20: a prose bullet with parentheses must NOT warn');
   assert((r20.stderr || '').indexOf('R5 / #635') === -1, 'T20: a prose bullet naming a filed issue must NOT warn');
   assert((r20.stdout || '').indexOf('malformed') === -1, 'T20: the diagnostic must never contaminate stdout (--json consumers parse it)');
 } finally {
@@ -873,10 +816,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix21 = makeFixture('proj-t21');
 try {
-  writeProvenance(fix21.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix21.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -921,10 +860,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix22 = makeFixture('proj-t22');
 try {
-  writeProvenance(fix22.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix22.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -973,10 +908,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix23 = makeFixture('proj-t23');
 try {
-  writeProvenance(fix23.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix23.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -1014,10 +945,6 @@ try {
 
 const fix23b = makeFixture('proj-t23b');
 try {
-  writeProvenance(fix23b.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix23b.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);
@@ -1059,10 +986,6 @@ try {
 // ---------------------------------------------------------------------------
 const fix24 = makeFixture('proj-t24');
 try {
-  writeProvenance(fix24.cacheDir, [
-    { event: 'open',  nodeId: 'n1' },
-    { event: 'close', nodeId: 'n1' },
-  ]);
   writeChainReceipt(fix24.cacheDir, [
     { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
   ]);

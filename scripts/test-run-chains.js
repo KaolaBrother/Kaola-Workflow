@@ -964,37 +964,65 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// T29 (#618): plan-validator --finalize-check must REFUSE a FRESH, HEAD-bound receipt whose
-// chains[] array is EMPTY, with a typed `chains_empty` reason — mirroring the PRODUCER's own
-// no_chains guard (T11 above) on the CONSUMER (gate) side. Before the fix, the redChains filter is
-// vacuously empty over an empty array, so `{headSha:<HEAD>, chains: []}` reads as "zero chains
-// verified" == "all chains green" and the gate wrongly PASSES.
+// T29 (#618): the CONSUMER (gate) side of T11's producer guard. A FRESH, HEAD-bound receipt whose
+// chains[] array is EMPTY must classify `chains_empty` — because the red filter is vacuously
+// satisfied over an empty array, so `{headSha:<HEAD>, chains: []}` would otherwise read as "zero
+// chains verified" == "all chains green".
+//
+// The gate no longer REFUSES and no longer lives in a plan validator. It is
+// `adaptiveSchema.evaluateChainReceipt(root, {cacheDir})`, called IN PROCESS by claim.js's finalize,
+// returning a typed FINDING the caller records and acts on. So this pins the classification —
+// the measurement that survived the conversion — and pins that taking it is not an exception:
+// a reporting gate that threw would be a refusal wearing a different name.
+//
+// The finalize-level half of the conversion (finalize EXITS 0 over this finding, carries it on the
+// envelope, and writes it durably under `## Validation`) is pinned in separate custody by
+// scripts/test-finalize-door.js T3c, over a real claim.js finalize. What belongs HERE, in the
+// producer's own suite, is the pairing with T11: the file that refuses to WRITE an empty receipt and
+// the reader that refuses to be fooled by one are the same contract seen from both ends.
 // ---------------------------------------------------------------------------
 {
-  const PLAN_VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const adaptiveSchema = require('./kaola-workflow-adaptive-schema.js');
   const repo29 = makeGitRepo();
   try {
-    // self-host marker: package.json declares an edition chain script, so the finalize discriminator
-    // classifies this repo as chain-receipt (self-host), not the consumer final-validation.md path.
+    // self-host marker: package.json declares an edition chain script, so the validation
+    // discriminator classifies this repo as chain-receipt (self-host), not the consumer
+    // final-validation.md path.
     fs.writeFileSync(path.join(repo29, 'package.json'), JSON.stringify({ scripts: {
       'test:kaola-workflow:claude': 'true' } }) + '\n');
     G.exec(repo29, ['add', 'package.json'], { encoding: 'utf8' });
     G.exec(repo29, ['commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
-    const proj = path.join(repo29, 'kaola-workflow', 'issue-618');
-    fs.mkdirSync(proj, { recursive: true });
-    const planPath = path.join(proj, 'workflow-plan.md');
-    fs.writeFileSync(planPath, '# plan\n');
-    G.exec(repo29, ['add', '-A'], { encoding: 'utf8' });
-    G.exec(repo29, ['commit', '-m', 'plan'], { encoding: 'utf8' });
+    // The run folder's .cache is where finalize reads the receipt from; it is untracked scratch, so
+    // it is created but never committed (an empty dir has nothing for git to record anyway).
+    const cacheDir = path.join(repo29, 'kaola-workflow', 'issue-618', '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
     const headSha = G.exec(repo29, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(proj, '.cache', 'chain-receipt.json'), JSON.stringify({ headSha, chains: [] }));
-    const r = spawnSync(process.execPath, [PLAN_VALIDATOR, planPath, '--finalize-check', '--json'],
-      { cwd: repo29, encoding: 'utf8', timeout: 30000 });
-    let out = null;
-    try { out = JSON.parse(r.stdout.trim()); } catch (_) {}
-    assert(r.status === 1, 'T29: --finalize-check refuses (non-zero exit) on a fresh, empty chains[] receipt; got status ' + r.status + ' stdout=' + r.stdout);
-    assert(out && out.result === 'refuse' && out.reason === 'chains_empty', 'T29: typed chains_empty refusal on an empty chains[] receipt; got ' + JSON.stringify(out));
+
+    const evaluate = () => {
+      try { return { finding: adaptiveSchema.evaluateChainReceipt(repo29, { cacheDir, project: 'issue-618' }) }; }
+      catch (e) { return { threw: e }; }
+    };
+
+    fs.writeFileSync(path.join(cacheDir, 'chain-receipt.json'), JSON.stringify({ headSha, chains: [] }));
+    const empty = evaluate();
+    assert(!empty.threw, 'T29: taking the measurement over an empty chains[] receipt does not throw — '
+      + 'the gate reports, it does not refuse; got ' + String(empty.threw && empty.threw.message));
+    assert(empty.finding && empty.finding.classification === 'chains_empty',
+      'T29: a fresh, HEAD-bound receipt with an empty chains[] classifies chains_empty; got '
+      + JSON.stringify(empty.finding && empty.finding.classification));
+    assert(empty.finding && empty.finding.green === false,
+      'T29: chains_empty is NOT green — zero verified chains must never read as all-green; got '
+      + JSON.stringify(empty.finding && empty.finding.green));
+
+    // The negative control that makes the assertion above falsifiable: the SAME fixture with one
+    // green chain in the array classifies chains_green, so `chains_empty` is a reaction to the empty
+    // array and not to something else about this receipt.
+    fs.writeFileSync(path.join(cacheDir, 'chain-receipt.json'), JSON.stringify({
+      headSha, chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] }));
+    const green = evaluate();
+    assert(green.finding && green.finding.classification === 'chains_green' && green.finding.green === true,
+      'T29: the same fresh receipt carrying one green chain classifies chains_green; got '
+      + JSON.stringify(green.finding && { c: green.finding.classification, g: green.finding.green }));
   } finally {
     try { fs.rmSync(repo29, { recursive: true, force: true }); } catch (_) {}
   }

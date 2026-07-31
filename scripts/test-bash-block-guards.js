@@ -85,58 +85,7 @@ function git(cwd, args) { return execFileSync('git', ['-C', cwd, ...args], { enc
 }
 
 // ---------------------------------------------------------------------------
-// Test B (#361/#345): the Finalization four-gate barrier resolves the validator via kaola_script.
-// Execute the resolver PORTION of the block (def + VALIDATOR=...) in a fixture and assert it resolves
-// to an existing path — the consumer-repo brick #345 fixed would leave VALIDATOR empty / bare.
-// ---------------------------------------------------------------------------
-{
-  const block = extractBashBlocks(read('commands/kaola-workflow-finalize.md'), '--barrier-check')[0];
-  assert(!!block, 'B: Finalization four-gate barrier bash block is extractable');
-  if (block) {
-    // static: the block must use the resolver and carry NO bare validator path (the #345 contract).
-    assert(block.includes('VALIDATOR="$(kaola_script kaola-workflow-plan-validator.js)"'),
-      'B (#345): the gate block resolves the validator via kaola_script');
-    assert(!block.includes('node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check'),
-      'B (#345): the gate block carries NO bare validator path');
-    // dynamic: run the resolver portion (up to and including VALIDATOR=) in a kaola-workflow-named
-    // fixture with ./scripts present, and confirm it resolves to a real file.
-    const upto = block.indexOf('VALIDATOR="$(kaola_script kaola-workflow-plan-validator.js)"');
-    const resolverPortion = block.slice(0, upto)
-      + 'VALIDATOR="$(kaola_script kaola-workflow-plan-validator.js)"\nprintf %s "$VALIDATOR"\n';
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bashblock-gate-'));
-    fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
-    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'kaola-workflow' }));
-    fs.writeFileSync(path.join(tmp, 'scripts', 'kaola-workflow-plan-validator.js'), '// stub');
-    const sp = path.join(tmp, 'gate.sh');
-    fs.writeFileSync(sp, resolverPortion);
-    const res = spawnSync('bash', [sp], { cwd: tmp, encoding: 'utf8', env: { ...process.env, HOME: tmp } });
-    assert(res.status === 0 && res.stdout === './scripts/kaola-workflow-plan-validator.js',
-      'B (#345): the resolver portion executes and resolves VALIDATOR to ./scripts/... got "' + res.stdout + '" (exit ' + res.status + ')');
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Test C (#361/#345): cross-edition static guard — the forge Finalization four-gate blocks must also
-// resolve via kaola_script and carry no bare validator path. (The forge command files are not under
-// this canonical chain's dynamic harness; this static guard complements the #345 forge validator pins.)
-// ---------------------------------------------------------------------------
-for (const ed of [
-  { file: 'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md', name: 'kaola-gitlab-workflow-plan-validator.js' },
-  { file: 'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md', name: 'kaola-gitea-workflow-plan-validator.js' },
-]) {
-  const block = extractBashBlocks(read(ed.file), '--barrier-check')[0];
-  assert(!!block, 'C: ' + ed.file + ' four-gate block is extractable');
-  if (block) {
-    assert(block.includes('VALIDATOR="$(kaola_script ' + ed.name + ')"'),
-      'C (#345): ' + ed.file + ' resolves the validator via kaola_script');
-    assert(!block.includes('node scripts/' + ed.name + ' "$PLAN" --resume-check'),
-      'C (#345): ' + ed.file + ' carries NO bare validator path');
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Test D (#423/#816): negative scenario — a project with NO workflow-plan.md. The ledger-regression
+// Test D (#423/#816): negative scenario — a project with NO mission-list.md. The record-regression
 // guard has nothing to protect, so the mirror must FAIL OPEN (proceed, still mirroring renames)
 // rather than refuse. A guard that fails closed here bricks every first sync.
 // ---------------------------------------------------------------------------
@@ -163,8 +112,8 @@ for (const ed of [
   git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
 
   const out = mirrorFinalizationArtifacts(wt, proj);
-  assert(out && !out.refused && out.ledger_compare === 'skipped_no_plan',
-    'D (#423): with no plan the ledger guard fails OPEN (skipped_no_plan), got ' + JSON.stringify(out));
+  assert(out && !out.refused && out.ledger_compare === 'skipped_no_record',
+    'D (#423): with no run record the mirror guard fails OPEN (skipped_no_record), got ' + JSON.stringify(out));
   assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
     'D (#423): renamed file is mirrored to worktree by its NEW path even when no plan present');
   fs.rmSync(tmp, { recursive: true, force: true });

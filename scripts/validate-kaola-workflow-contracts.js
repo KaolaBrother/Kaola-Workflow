@@ -83,9 +83,7 @@ assert(entry && entry.source && entry.source.path === './plugins/kaola-workflow'
 const skills = [
   'kaola-workflow-init',
   'kaola-workflow-next',
-  'kaola-workflow-finalize',
-  'kaola-workflow-adapt',
-  'kaola-workflow-plan-run'
+  'kaola-workflow-finalize'
 ];
 
 for (const skill of skills) {
@@ -96,37 +94,15 @@ for (const skill of skills) {
   assertIncludes(file, 'kaola-workflow/');
   for (const token of retired) assertNotIncludes(file, token);
 }
-// #287: planner-first control boundary pinned across all editions
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'planner_control_boundary_violation');
 
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'active folders');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--target-issue');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'watch-pr');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'extract and reassign `delegation_policy:` alongside `phase` and `next_skill`');
 // Issue #210: Codex defaults to delegated compliance — the startup delegate-vs-inline prompt is retired.
 const nextSkill210 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
 assertNotIncludes(nextSkill210, 'Ask the user once at startup');
 assertNotIncludes(nextSkill210, 'How should delegation be handled');
-assertIncludes(nextSkill210, 'Codex subagent delegation is the default.');
-assertIncludes(nextSkill210, 'The default `delegation_policy` is `delegate`');
-assertIncludes(nextSkill210, 'KAOLA_DELEGATION_POLICY=delegate');
-assertIncludes(nextSkill210, '.codex/agents/kaola-workflow/');
-// #598 AC3: the delegation probe must also accept a global profile install — keep the
-// project-local needle above GREEN (add, never remove) and pin the global path alongside it.
-assertIncludes(nextSkill210, '~/.codex/agents/kaola-workflow/');
-assertIncludes(nextSkill210, 'record `local-fallback-tool-unavailable` with a non-empty Evidence value');
-assertIncludes(nextSkill210, 'only when the user explicitly');
-assertIncludes(nextSkill210, 'default `delegation_policy` to `delegate` without prompting');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'KAOLA_CLAIM="$(node -e');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '[ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$KAOLA_PROJECT" ]');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$KAOLA_PROJECT" --reason git-freshness-block');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$PICK_NEXT_PROJECT" --reason git-freshness-block');
-// Issue #190: M1 — Codex fast-path routing parity (RED guard)
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Startup Step 0a-1');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Branch: {branch from Sink block');
-// the status-report `Workflow path:` line reports the adaptive workflow path — the only path.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {adaptive}');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Parallel decision: {green|yellow|red');
 // issue #207: fast-overlap parity (Codex) — trap-2 tolerant keep. The fast/full SKILLs are retired,
 // but the Codex classifier port RETAINS its defensive fast-summary.md `## Scope` reader (readers
 // ignore the now-legacy artifact; only the write side was removed). Pin the retained reader.
@@ -144,33 +120,7 @@ assert(
   initSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
 );
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
-// #475: pin the consumer (non-npm) finalize gate prose so the dual-mode concept cannot drift out of the SKILL.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final_validation_unverified');
-// #653: the consumer candidate binding (validated_candidate_hash) must reach BOTH consumer-recording
-// surfaces — the plan-run All-done consumer block and the finalize gate prose.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'validated_candidate_hash');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'validated_candidate_hash');
-// n5 (#653 finding D): selection-evidence docking must reach the next SKILL; the
-// observed_gap_unseeded refusal and run-gap manual-seed prose must reach the finalize/plan-run SKILLs.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection-evidence');
-// The selection record + the typed clarification channel are runtime-neutral rules, so the Codex
-// SKILL pack must speak both or the codex runtime silently loses a contract the script still keeps.
-// The re-pin is bidirectional in the SAME diff: the retired planner-first lock is asserted ABSENT
-// from the codex planner profile beside the new positive pins.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection_record_note');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--selection-record');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'clarification_required');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.cache/origin/');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'clarification_required');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'do not author a node to re-derive it');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'Consume evidence, never accept a conclusion');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'planner_control_boundary_violation');
-assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'No-target survey mode');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'observed_gap_unseeded');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'run-gaps-manual.md');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'metadata captured before archive');
 // #336: keep-open partial-close sink lane (codex SKILL.md is the finalize seam — no command file).
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_action');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-issue-open');
@@ -183,116 +133,16 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'merge-s
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'agent_type="contractor"');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'contractor');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'ONE resumable script transaction');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'finalize \\\n       --project "$KAOLA_PROJECT"');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'implementation_commit_missing');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'staging_guard_multi_project');
-// #816: the crash-resume vocabulary relocates here from the retired role profile — the typed codes
-// a finalize surface documents must stay documented on every runtime (runtime-lexicon parity).
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'finalize_incomplete');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'already_finalized');
-
-// Issue #77: typed-acknowledgement delegation gate — remove ungated fallback language (the
-// research/ideation/plan/execute/review/fast SKILLs are retired; only surviving gate SKILLs remain).
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'subagents are available; otherwise update docs');
-
-// Issue #77: typed-acknowledgement delegation gate — require new status vocabulary in the surviving
-// delegation SKILLs (finalize + next).
-const delegationSkills = [
-  'kaola-workflow-finalize',
-  'kaola-workflow-next',
-];
-for (const skill of delegationSkills) {
-  assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'subagent-invoked');
-  assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'local-fallback-explicit');
-  assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'local-fallback-tool-unavailable');
-}
-for (const skill of ['kaola-workflow-finalize']) {
-  assertIncludes(
-    `${pluginRoot}/skills/${skill}/SKILL.md`,
-    'Plain `invoked` is intentional for non-Codex-role workflow gates'
-  );
-}
-
-// Issue #91: delegation_policy must be checked against phase compliance ledgers.
-const repairState = require('./kaola-workflow-repair-state.js');
-assert(
-  typeof repairState.delegationPolicyCompliance === 'function',
-  'kaola-workflow-repair-state.js must export delegationPolicyCompliance'
-);
-
-function complianceFixture(rows) {
-  return [
-    '# Phase Fixture',
-    '',
-    '## Required Agent Compliance',
-    '| Requirement | Status | Evidence | Skip Reason |',
-    '|-------------|--------|----------|-------------|',
-    ...rows.map(row => `| ${row[0]} | ${row[1]} | ${row[2] || ''} | ${row[3] || ''} |`)
-  ].join('\n');
-}
-
-function policyState(policy) {
-  return `# Kaola-Workflow State\n\ndelegation_policy: ${policy}\n`;
-}
-
-function assertPolicyAllowed(policy, rows, label) {
-  const result = repairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
-  assert(result.ok, `${label} should satisfy delegation_policy ${policy}: ${result.reason || 'blocked'}`);
-}
-
-function assertPolicyBlocked(policy, rows, label) {
-  const result = repairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
-  assert(!result.ok, `${label} should violate delegation_policy ${policy}`);
-}
-
-assertPolicyAllowed('delegate', [
-  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
-  // #372: a NON-Codex-role workflow gate row carrying plain `invoked` (delegationPolicyCompliance
-  // ignores non-role rows). Was the retired 'advisor ideation gate'; now a surviving non-role gate.
-  ['documentation docking', 'invoked', '.cache/doc-docking.md', '']
-], 'delegated Codex role row with a non-role workflow gate');
-assertPolicyAllowed('delegate', [
-  ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
-], 'delegate policy with all role rows unavailable and evidenced');
-assertPolicyAllowed('local-authorized', [
-  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
-], 'explicit local authorization');
-assertPolicyAllowed('tool-unavailable', [
-  ['doc-updater', 'N/A', '.cache/doc-updater.md', 'No documentation changes needed.'],
-  ['final validation', 'invoked', '.cache/final-validation.md', '']
-], 'finalize non-role invoked rows with N/A doc-updater');
-assertPolicyBlocked('delegate', [
-  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
-], 'local fallback under delegate policy');
-assertPolicyBlocked('delegate', [
-  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
-  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
-], 'mixed local fallback under delegate policy');
-assertPolicyAllowed('tool-unavailable', [
-  ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
-], 'mandatory named reviewer invocation under legacy tool-unavailable policy');
-assertPolicyBlocked('tool-unavailable', [
-  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', '']
-], 'ordinary subagent row under tool-unavailable policy');
-// Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
-assertPolicyAllowed('delegate', [
-  ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
-], 'issue #210 no-prompt default: delegate auto-detects evidenced tool-unavailable (regression lock)');
-assertPolicyAllowed('local-authorized', [
-  ['code-explorer', 'local-fallback-explicit', 'user disabled delegation', '']
-], 'issue #210 explicit local fallback: local-authorized only on explicit user request');
 
 const sharedScripts = [
   'kaola-workflow-active-folders.js',
   'kaola-workflow-claim.js',
   'kaola-workflow-classifier.js',
-  'kaola-workflow-repair-state.js',
   'kaola-workflow-roadmap.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
   'validate-workflow-contracts.js',
-  'kaola-workflow-codex-preflight.js',
-  'kaola-workflow-task-mirror.js'
+  'kaola-workflow-codex-preflight.js'
 ];
 
 for (const script of sharedScripts) {
@@ -307,7 +157,6 @@ for (const file of [
   `${pluginRoot}/scripts/kaola-workflow-active-folders.js`,
   `${pluginRoot}/scripts/kaola-workflow-claim.js`,
   `${pluginRoot}/scripts/kaola-workflow-classifier.js`,
-  `${pluginRoot}/scripts/kaola-workflow-repair-state.js`,
   `${pluginRoot}/scripts/kaola-workflow-sink-merge.js`,
   `${pluginRoot}/scripts/kaola-workflow-sink-pr.js`
 ]) {
@@ -326,7 +175,6 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'kw:claim\\
 // #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
 // policy field, PROTECTED set) in the Codex plugin tree.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, 'REASONING_FLOOR_ROLES');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, 'WRITE_OVERLAP_POLICY_LEGAL');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'PROTECTED_BASENAMES');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-sink-merge.js`, 'readActiveFolders');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-sink-pr.js`, 'patchLockFile');
@@ -344,18 +192,6 @@ for (const edition of ['claude', 'codex', 'gitlab', 'gitea']) {
 }
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
 assert(read('CLAUDE.md').split(/\r?\n/).length < 200, 'CLAUDE.md must stay below the 200-line target');
-// The repo-root CLAUDE.md durable-state concept is asserted with this exact term list by
-// scripts/validate-workflow-contracts.js; only the Codex-surface twin below is edition-specific.
-assertConcept(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Codex init durable state contract', [
-  'kaola-workflow/.roadmap/issue-*.md',
-  'do not purge',
-  'kaola-workflow/{project}/',
-  'workflow-state.md',
-  // #572: the injected block now re-grounds durable state on the adaptive plan, not phase files.
-  'workflow-plan.md',
-  '## Node Ledger',
-  '.cache/{node-id}.md'
-]);
 // Both docs/workflow-state-contract.md concepts (durable sources / generated mirrors, and legacy
 // coordination as transitional only) are asserted with these exact term lists by
 // scripts/validate-workflow-contracts.js on the same repo-root path.
@@ -384,11 +220,6 @@ assertConcept(`${pluginRoot}/scripts/kaola-workflow-roadmap.js`, 'atomic roadmap
   "fs.openSync(filePath, 'wx')",
   'fs.fsyncSync(fd)'
 ]);
-// #389 (#353/#354 completion): the plan-validator --freeze writer (plan_hash stamp + mid-run repair
-// re-freeze carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence
-// writer route through the crash-safe atomic replace.
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'writeFileAtomicReplace(planPath');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`, 'writeFileAtomicReplace(fpath');
 
 function extractRedirectBlock(file) {
   const text = read(file);
@@ -541,95 +372,7 @@ assert(normalizeForgeNoun(gitlabCmdTemplate) === githubTemplateNorm,
 assert(normalizeForgeNoun(giteaCmdTemplate) === githubTemplateNorm,
   '#572: Gitea injected ## Kaola-Workflow template must match GitHub modulo the forge-noun line (#309)');
 
-// issue #227: adaptive-path contract (Codex skills + byte-synced plugin scripts).
-assert(exists(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`), 'codex adaptive plan validator missing');
-assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`), 'codex adaptive schema module missing');
-// #770: adaptive is the ONLY workflow path — the path SELECTOR (KAOLA_PATH / --workflow-path /
-// path_not_installed / the fast/full path names) is retired. There is nothing left to select; a
-// stale request just runs adaptive. Pin the surviving vocabulary only.
-assertConcept(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'adaptive is the only path', [
-  'adaptive', 'default'
-]);
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'workflow-plan.md exists -> kaola-workflow-plan-run');
-// v5.1.0: the adaptive front-end routing must stay enforced in the router SKILL mirror too — the
-// skill routes a fresh adaptive run to the workflow-planner front end (kaola-workflow-adapt skill).
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
-assertConcept(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'adaptive authoring', [
-  'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
-]);
-// The front end's PRODUCT is pinned; its execution form is not — whether the `workflow-planner`
-// role runs as a subagent or in the session is the orchestrator's call and carries no needle. The
-// bare `workflow-planner` needle that used to sit here was vacuous: `agent_type: "workflow-planner"`
-// in the loop below contains it, so it could never fail on its own. Role identity is pinned there.
-for (const [surface, role, task] of [
-  [`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner', 'workflow_planner_<issue-or-project>']
-]) {
-  for (const token of ['agents.spawn_agent', `agent_type: "${role}"`, `task_name: "${task}"`,
-    'fork_turns: "none"', 'isolated, self-contained control-plane brief', 'argument-shape refusal', 'exactly once']) {
-    assertIncludes(surface, token);
-  }
-}
-// #789: issue-scout is fully retired — the no-target backlog survey folded into the
-// workflow-planner (dispatched by the adapt skill above), so the "next" SKILL no longer
-// dispatches any agent of its own; assert the retired control-plane literal never resurfaces.
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue-scout');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_scout');
-// The router's whole issue-selection contract, including the structural profile-section-citation
-// guard, is asserted on THIS SAME Codex router SKILL path by the root validator's six-next-surface
-// loop, with a SUPERSET of needles, in the always-selected claude chain.
-// #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
-// the project-local needle above GREEN (add, never remove) and pin the global path alongside it.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.codex/agents/kaola-workflow/');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '~/.codex/agents/kaola-workflow/');
-// #255: the checklist-backed handoff contract must stay enforced — the orchestrator reads the
-// planner's handoff packet (it no longer runs a contractor classify/freeze chain). Lock the two
-// terminal handoff statuses so the design cannot silently drift back to a pre-handoff approval gate.
-// #272: token renamed from ready_to_dispatch_first_node → ready_to_run (plan-run owns node lifecycle).
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'ready_to_run');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'plan_invalid');
-assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`), '#255 adaptive handoff aggregator missing from Codex plugin');
-assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`), '#272 adaptive node aggregator missing from Codex plugin');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'would_orphan_in_progress'); // #343 mid-gate reopen
-// #338: anti-drift pin — the finalize sink row is main-session-direct.
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'main-session-direct');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-direct');
-// #344: the Codex plan-run SKILL references $KAOLA_SCRIPTS for every lifecycle call; it must
-// DEFINE KAOLA_SCRIPTS (plugin-cache find-fallback) before its first use — undefined outside
-// this repo. Pin the assignment + the cache probe so removal regresses the chain.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '*/kaola-workflow/*/scripts/kaola-workflow-adaptive-node.js'");
-// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the agent lockstep.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'clear-halt');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "subcommand === 'clear-halt'");
-for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
-  'repair_requires_replan', 'repair_limit_reached', "'--attempt-id'", 'uniqueMaximalReviewProducer']) {
-  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, token);
-}
-for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
-  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, token);
-}
-// #683: the candidate-partition repair proof (P1-P5) + the append-only rebind ledger. These are the
-// fail-closed refusals that replace a whole-plan DISCARD when two gates fail simultaneously; a port that
-// silently drops one re-opens the dead-end.
-for (const token of ['candidate_residue_changed', 'candidate_slice_changed', 'candidate_delta_unattributed',
-  'rebind_base_rewrite_unsafe', 'rebind_limit_reached', 'rebind_replay_diverged',
-  'review_journal_schema_upgrade_required', 'effectiveProducerBinding', 'buildSyntheticBase',
-  'proveRebindAdmissible', 'reconcilePendingRebind', 'REVIEW_REPAIR_LIMIT']) {
-  assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-node.js', token);
-}
-for (const token of ['candidate_declared', 'candidate_residue_digest', 'review_journal_rebind_malformed',
-  'review_journal_rebind_chain_invalid', 'REVIEW_REBIND_LIMIT', 'effectiveCandidate']) {
-  assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', token);
-}
-// #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
-// findings-route.json output + VERDICT_ROLES table must be present in the Codex aggregators.
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'OPERATOR_HINT_REGISTRY');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-commit-node.js`, 'OPERATOR_HINT_REGISTRY');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'OPERATOR_HINT_REGISTRY');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'route-findings'");
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'--summary'");
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'findings-route.json'");
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'VERDICT_ROLES');
 // #816: the finalize seam records no attestation — the field, the back-fill, and the inline-suspect
 // warning are retired. Pinned as an ABSENCE so a revival reds the chain.
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'finalize_contractor_attested');
@@ -637,58 +380,8 @@ assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'attestContra
 // #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
 // claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-planner-spawn');
-// the planner startup surfaces themselves must instruct the flag, not just the producer script.
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, '--attest-planner-spawn');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--attest-planner-spawn');
-// #359: producer-attested evidence-token vocabulary in the codex agent profiles.
-assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');
-assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'non-empty column-0 `RED:`');
-// #634: producer-attested evidence-token vocabulary in the metric-optimizer Codex agent profile.
-assertIncludes(`${pluginRoot}/agents/metric-optimizer.toml`, 'iterations_used');
 
-// Codex 0.144 durable-result wall. Every DAG node profile writes its complete result directly to
-// the exact seeded cache path, including roles that are logically read-only. The workflow-planner
-// runs outside the Node Ledger, so its canonical workflow artifacts are the durable
-// full result (and they mirror into a seeded cache when supplied). Every parent-facing return is compact.
-{
-  const orchestrationRoles = new Set(['workflow-planner']);
-  const roleTomls = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
-    .filter(file => file.endsWith('.toml'))
-    .map(file => file.slice(0, -'.toml'.length))
-    .sort();
-  for (const role of roleTomls) {
-    const tomlText = read(`${pluginRoot}/agents/${role}.toml`);
-    assert(/FULL/i.test(tomlText) && /compact orchestrator summary/i.test(tomlText),
-      `Codex agents/${role}.toml must carry the full-result + compact-summary contract`);
-    if (orchestrationRoles.has(role)) {
-      assert(/durable full result/i.test(tomlText),
-        `Codex agents/${role}.toml must name its canonical durable full result`);
-    } else {
-      assert(tomlText.includes('dispatch.evidence_file') && tomlText.includes('evidence-binding'),
-        `Codex agents/${role}.toml must carry the seeded full-cache binding contract`);
-    }
-  }
-}
-assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
-  '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
-  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
-  'merge_conflict', 'synthesizer',
-  // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
-  'top-up', 'reconcile', 'opening',
-  // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
-  'mirror-project'
-]);
-// #341: forge-neutral agent-profile authoring guidance pinned (planner toml + plan-run SKILL).
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'forge-neutral');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '--forbidden-only');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_task_name');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_dispatch_mode');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort');
 
-// #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
-// actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
-// no-improvise prohibition on every plan-run spawn.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'opened=<node-id> role=<role> task=<codex_task_name>');
 
 // #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
 // inline-fallback format, verbatim.
@@ -700,12 +393,6 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'opened=
 // only; see kaola-workflow-claim.js).
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--codex-dispatch-mode');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--codex-dispatch-mode');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'routeAdaptive');
-assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'enable_adaptive');
-assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'enable_adaptive');
 // #266: Codex-only compact/resume hook — no claude scripts/ copy; codex plugin tree only.
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`), '#266 codex compact-resume hook missing from Codex plugin');
 
@@ -735,17 +422,6 @@ const codexInstaller = require(path.join(root, pluginRoot, 'scripts', 'install-c
 const codexProfiles = codexInstaller.validateSourceProfiles(path.join(root, pluginRoot));
 assert(codexProfiles.ok,
   'Codex source agent profiles fail schema validation:\n  - ' + codexProfiles.errors.join('\n  - '));
-for (const role of codexProfiles.roles) {
-  const profilePath = `${pluginRoot}/agents/${role}.toml`;
-  assertIncludes(profilePath, 'FULL');
-  assertIncludes(profilePath, 'compact orchestrator summary');
-  if (codexInstaller.CODEX_ORCHESTRATION_ROLES.includes(role)) {
-    assertIncludes(profilePath, 'durable full result');
-  } else {
-    assertIncludes(profilePath, 'dispatch.evidence_file');
-    assertIncludes(profilePath, 'evidence-binding');
-  }
-}
 const codexSchema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
 const codexPreflight = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js'));
 const sorted = values => [...values].sort();
@@ -821,13 +497,6 @@ assert(extraInReadme.length === 0,
 assert(!blockMatch[1].includes('docs-lookup'),
   'README role catalog must not list the retired docs-lookup role');
 
-// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
-// (Codex edition surfaces). A dropped token reds this chain at the contract-validator step.
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'agent-registration gap');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'forge-port ordering gap');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'full accumulated root diff');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'registration surface');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full accumulated root diff');
 
 // #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
 // exactly the agent profiles present in agents/ — both directions. A profile copied without its
@@ -866,38 +535,12 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     '#451: config/agents.toml must not register any [agents.<role>-max] table: ' + maxTables.join(', '));
 }
 
-// #775 Codex 0.145 re-baseline: Codex >=0.145.0 resolves the sub-agent's own model/reasoning
-// effort itself (not a guaranteed parent-session equality) — the retired "child inherits the
-// current parent session" claim and the codex_tier_unresolved refusal are both gone; Kaola never
-// writes or overrides agents.default_subagent_model / agents.default_subagent_reasoning_effort.
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'current parent session');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "the sub-agent's model/reasoning effort itself");
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-session equality');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model: dispatch.codex_model');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort: dispatch.codex_reasoning_effort');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_tier_unresolved');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_profile_tier_mismatch');
-// Retirement lock: the runtime parent-equals-child child-JSONL probe is retired. Inherit-by-omission
-// plus the profile-freshness preflight already guarantee the pair structurally, so re-proving it at
-// runtime is redundant. These stay negative so a reintroduced probe fails closed here.
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_profile_runtime_mismatch');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-equals-child inheritance proof');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'installed profile path');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`sonnet`/absent');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'declarative reasoning/wait-budget metadata');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'child inherits the current parent session');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'declarative tier metadata');
-assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'child inherits the current parent session');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'resolves the sub-agent\'s own model/reasoning effort independently');
-assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'codex_profile_tier_mismatch');
 
 // #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
 // run-start notice + the consent-halt escalation on both the codex SKILL and the root Claude
 // command mirror (this validator also owns the root commands/ surface for the github edition;
 // see the AGENTS.md redirect + CLAUDE.md template checks above for precedent).
 for (const planRunSurface of [
-  `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`,
-  'commands/kaola-workflow-plan-run.md'
 ]) {
   assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
   assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
@@ -913,23 +556,7 @@ for (const planRunSurface of [
   assertIncludes(planRunSurface, 'the runtime mode-refuses the spawn');
 }
 
-// The fork_turns unconditional mandate and its two retired-qualifier bans on the Codex plan-run
-// SKILL, the Join Protocol anchor and its wait-budget / delegation-outcome / writerHalt needles on
-// BOTH the Codex SKILL and the root Claude command, are all
-// asserted on THESE SAME PATHS by the root validator's three-SKILL and three-command plan-run
-// loops, in the always-selected claude chain.
-for (const file of ['agents/workflow-planner.md', `${pluginRoot}/agents/workflow-planner.toml`]) {
-  assertIncludes(file, 'planner_override');
-  assertIncludes(file, 'difficulty alone is not evidence');
-  assertIncludes(file, 'never inflate a budget to hide a wedged agent');
-}
 
-// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
-// prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, 'MAIN_SESSION_GATE_ROLE');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'G3: main-session-gate');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-gate');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate');
 
 // #400: registry-driven route-reachability contract. Every route/skill target a claim/startup/resume
 // receipt can emit MUST resolve to an installed surface — the Codex dead zone (#400) was the schema
@@ -942,10 +569,7 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constants.
   // Values are emitted as `<skill> {project}`; reachability is the bare skill name. (Commands are
   // the Claude-edition surface, asserted in validate-workflow-contracts.)
-  const emittedSkillTargets = [
-    schema.PLAN_RUN_SKILL,
-    schema.ADAPT_SKILL
-  ];
+  const emittedSkillTargets = [];
   const installedSkills = new Set(
     fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory())
@@ -961,9 +585,6 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   // carry the command's route/wiring tokens, or the route resolves to a hollow surface. finalize
   // SKILL must wire the bundle member-set flag (#369); next SKILL must carry the adaptive route +
   // auto-bundle restructure (#380); plan-run/adapt must carry the executor/front-end route tokens.
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'workflow-plan.md exists -> kaola-workflow-plan-run');
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'close-and-open-next');
-  assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'kaola-workflow-plan-run');
 }
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.
@@ -974,132 +595,6 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
-// Re-plan edition contract: exercise the packaged Codex aggregator and its pure authority/fence
-// seams. These assertions inspect returned behavior rather than counting labels in source text.
-{
-  const scriptsDir = path.join(root, pluginRoot, 'scripts');
-  const replanPath = path.join(scriptsDir, 'kaola-workflow-replan.js');
-  assert(fs.existsSync(replanPath), 'Codex re-plan aggregator must be packaged');
-
-  const manifest = require(path.join(scriptsDir, 'kaola-workflow-install-manifest.js'));
-  assert(JSON.stringify(manifest.supportScripts('github').filter(name => /workflow-replan\.js$/.test(name)))
-      === JSON.stringify(['kaola-workflow-replan.js']),
-  'Codex package manifest must resolve the canonical re-plan script name exactly once');
-
-  const cli = require('child_process').spawnSync(process.execPath,
-    [replanPath, 'status', '--project', 'n5-missing-codex-project', '--json'],
-    { cwd: root, encoding: 'utf8' });
-  const cliResult = JSON.parse(String(cli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
-  assert(cli.status !== 0 && cliResult.reason === 'replan_authority_path_invalid',
-    'Codex re-plan CLI must execute and return the typed missing-authority refusal');
-
-  const schema = require(path.join(scriptsDir, 'kaola-workflow-adaptive-schema.js'));
-  const replan = require(replanPath);
-  const handoff = require(path.join(scriptsDir, 'kaola-workflow-adaptive-handoff.js'));
-  const adaptiveNode = require(path.join(scriptsDir, 'kaola-workflow-adaptive-node.js'));
-  assert(JSON.stringify(schema.REPLAN_PHASES) === JSON.stringify([
-    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
-  ]) && JSON.stringify(schema.REPLAN_STATUSES) === JSON.stringify([
-    'none', 'in_progress', 'candidate_changed', 'consent_halt',
-  ]) && JSON.stringify(schema.REPLAN_CAS_SEAMS) === JSON.stringify([
-    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
-  ]), 'Codex schema must expose the canonical re-plan phases/statuses/CAS seams');
-
-  // R6-699-03: buildPlannerPacket reads transaction.snapshot.{authority_projection,authority_digest},
-  // so the fixture transaction must carry a real projection built the way prepareReplan does (via the
-  // exported buildSnapshotAuthorityProjection) and its canonical digest, not a hand-typed placeholder.
-  const n5Transaction = {
-    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
-    parent: {
-      claim_identity: { repository_id: 'repo', worktree_path: root },
-      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
-      plan_epoch: 1, plan_hash: '3'.repeat(64),
-      plan_digest: schema.sha256Hex(Buffer.from('n5-contract-plan')),
-      task_mirror_exact_digest: schema.sha256Hex(Buffer.from('n5-contract-task-mirror')),
-      ledger_digest: schema.sha256Hex(Buffer.from('n5-contract-ledger')),
-      state_authority_digest: schema.sha256Hex(Buffer.from('n5-contract-state-authority')),
-    },
-    epoch_lineage_id: '4'.repeat(64),
-    source: {
-      source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
-      source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
-      inherited_frontier_classes: ['code'], validation_obligations: [],
-      journal_digest: schema.sha256Hex(Buffer.from('n5-contract-journal')),
-    },
-    cas: { prepare: { candidate_digest: '6'.repeat(64), claim_root_base_digest: '2'.repeat(64),
-      inherited_frontier_digest: '7'.repeat(64) } },
-    budget: {
-      count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
-      case_b_proof: null, consent_ledger_digest: '9'.repeat(64),
-    },
-    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-n5' },
-  };
-  n5Transaction.snapshot = {
-    authority_projection: replan.buildSnapshotAuthorityProjection(n5Transaction),
-  };
-  n5Transaction.snapshot.authority_digest = schema.sha256Canonical(n5Transaction.snapshot.authority_projection);
-  const packet = replan.buildPlannerPacket({ project: 'issue-n5-contract' }, n5Transaction);
-  const packetKeys = new Set();
-  (function collect(value) {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) return value.forEach(collect);
-    for (const [key, child] of Object.entries(value)) { packetKeys.add(key); collect(child); }
-  })(packet);
-  for (const forbiddenKey of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
-    'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
-    assert(!packetKeys.has(forbiddenKey), 'planner packet must not carry orchestrator-authored DAG key: ' + forbiddenKey);
-  }
-  assert(packet.child_output_path === 'workflow-plan.next.md',
-    'planner packet must bind the sole child-authoring path');
-
-  const childPath = path.join(require('os').tmpdir(), 'kw-n5-codex-attestation', 'workflow-plan.next.md');
-  let childWrites = 0;
-  const unattested = handoff.runReplanHandoff({
-    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
-    authority: {
-      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
-      transaction_id: 'a'.repeat(64), child_path: childPath,
-      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
-    },
-    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
-    writeFile: () => { childWrites++; },
-  });
-  assert(unattested.reason === 'replan_child_authority_unverified' && childWrites === 0,
-    'missing planner attestation must refuse before any child write');
-
-  const orientation = adaptiveNode.replanOrientation({
-    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
-    legal_mutation: 'replan resume', transaction: {
-      transaction_id: 'a'.repeat(64), phase: 'planner_pending',
-      parent: { plan_hash: 'b'.repeat(64) }, child: {}, cas: {},
-    },
-  }, 'issue-n5-contract');
-  assert(orientation.resume_command ===
-    'node scripts/kaola-workflow-replan.js resume --project issue-n5-contract --json',
-  'Codex orientation must expose only the canonical edition-local resume command');
-
-  const closure = require(path.join(scriptsDir, 'kaola-workflow-closure-contract.js'));
-  assert((closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('preserved')
-      && (closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('failed')
-      && closure.CLOSURE_INVARIANTS.some(row => row.id === 'epoch-lineage-preserved'),
-  'Codex closure contract must preserve the recursive epoch-lineage receipt');
-
-  for (const skill of ['kaola-workflow-plan-run', 'kaola-workflow-adapt',
-    'kaola-workflow-finalize', 'kaola-workflow-next']) {
-    const file = `${pluginRoot}/skills/${skill}/SKILL.md`;
-    const text = read(file);
-    const match = /(?:^|\n)## In-progress re-plan control plane\s*\n([\s\S]*?)(?=\n## |$)/.exec(text);
-    assert(match && match[1].includes('kaola-workflow-replan.js')
-        && match[1].includes('resume --project {project} --json')
-        && match[1].includes('workflow-plan.next.md')
-        && match[1].includes('replan-planner-attestation.json'),
-    file + ' must route the canonical Codex re-plan transaction');
-    for (const forbiddenRoute of ['kaola-workflow-claim.js discard --project',
-      'discard+restart a fresh adaptive run', 'auto-takeover', 'approval gate']) {
-      assert(!match[1].includes(forbiddenRoute), file + ' must not expose ' + forbiddenRoute + ' during re-plan');
-    }
-  }
-}
 
 // Reviewer-contract-v2 repository/install wall. Generated sources, all three Codex installer
 // editions, the root/plugin-cache preflight, validation-runner distribution, and reviewer-v2
@@ -1163,11 +658,6 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   }
 
   for (const edition of editionRoots) {
-    const schema = require(path.join(root, edition, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-    for (const name of ['deriveGateMode', 'buildReviewContext', 'validateReviewEvidenceBinding',
-      'reduceReviewReceipts', 'compareValidationObligations', 'validateReviewJournalV2']) {
-      assert(typeof schema[name] === 'function', edition + ' adaptive schema must export ' + name);
-    }
   }
   // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME Codex paths by the root
   // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
