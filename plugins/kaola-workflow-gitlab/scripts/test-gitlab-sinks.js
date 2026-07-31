@@ -1685,7 +1685,7 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
   console.log('GitLab #707 worktree-evidence archive test passed');
 }
 
-// --- #746: the archive step's ONE documented benign silent skip ---------------------------------
+// --- #746: a live folder that recorded nothing must not be classified as an archive refusal ------
 //
 // DELETED: (a) — "an archive refusal whose signal is a snapshot_error REASON rather than a file
 // list (empty missing[]) must fail the sink LOUDLY". Its fixture built a schema-2 epoch envelope —
@@ -1694,8 +1694,17 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
 // verifyCurrentEpochAuthority return state_ledger_progress_invalid with an empty missing[]. Epochs,
 // the re-plan CAS machinery and the ledger are gone, so that refusal has no producer left.
 //
-// (b) survives on its own terms and is the over-tighten guard: the one benign shape reads no plan
-// at all, so the narrowing that made empty-missing[] refusals loud must not have swallowed it.
+// (b) survives, but NOT as the over-tighten guard it was named for. That guard was about the
+// `snapshot_error` allowlist (BENIGN_ARCHIVE_SKIP_REASONS = {'state_missing'}), and the arm that
+// reads `archiveResult.snapshot_error` is now unreachable: nothing assigns that field any more,
+// since its producers were the epoch/plan-authority checks deleted with (a). Every surviving
+// mention across claim.js and sink-merge.js is a read.
+//
+// What (b) still discriminates is the OTHER refusal arm, `evidenceLosing` (`missing.length > 0`):
+// a folder holding only journal residue recorded nothing an archive could lose, and must not be
+// treated as a folder that LOST something. Mutation-proved — making archiveProjectDir return
+// `{archive_incomplete: true, missing: ['workflow-state.md']}` when the state file is absent
+// turns this green into an exit-1 `archive_refusal`.
 {
   const sinkScript746 = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
   const mkJournalOnlyFixture746 = (project) => {
@@ -1718,7 +1727,7 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
   const parseLast746 = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
 
-  // (b) over-tighten guard: the journal-only live dir (state_missing) still silently skips + sinks.
+  // (b) a journal-only live dir recorded nothing an archive could lose: skipped, still sinks.
   {
     const project = 'issue-97462';
     const { root, branch } = mkJournalOnlyFixture746(project);
@@ -1729,7 +1738,7 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
       assert.strictEqual(p.status, 'sinked', '#746-gitlab-b: the benign journal-only shape must still reach status:sinked, got ' + JSON.stringify(p));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
-  console.log('GitLab #746 benign-skip over-tighten guard passed');
+  console.log('GitLab #746 journal-only live dir is skipped, not classified evidence-losing');
 }
 
 console.log('GitLab sink tests passed');

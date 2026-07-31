@@ -38,8 +38,9 @@
 //       (sink-receipt.json.tmp, a nested x/.cache/sink-receipt.json, a sink-receipt.json
 //       DIRECTORY) stay bucket-3 foreign dirt and refuse sink_blocked with ZERO mutation.
 //   (m) #715/#518 — regression lock: THIS sink's own live + archive receipts remain exempt.
-//   (o) #746 — over-tighten guard: the ONE documented benign shape (a journal-only live dir with no
-//       workflow-state.md → snapshot_error:'state_missing') must STILL silently skip and sink.
+//   (o) #746 — a live folder that recorded nothing (journal residue only, no workflow-state.md)
+//       must not be classified as an archive refusal: the sink skips it and still reaches
+//       status:sinked.
 //   (p) #832 / ADR 0013 R3 — when the run archive exists ONLY inside the tree being deleted, the
 //       teardown RESCUES it up into main, verifies every file landed, and only then removes the
 //       tree; a rescue that cannot land fails closed under `mirror_sync_failed` with the tree left
@@ -911,9 +912,21 @@ function buildBranchlessFixture(project, issue) {
 // ledger are gone, so the refusal it drove has no producer left. (o) below is what survives: the
 // over-tighten guard on the ONE benign silent skip, which reads no plan at all.
 
-// The one documented benign shape: a journal-only live dir with NO workflow-state.md at all
-// (snapshot_error:'state_missing', missing:[]) — nothing was recorded, so there is nothing to
-// lose and the historical silent skip must survive the narrowing.
+// A journal-only live dir with NO workflow-state.md at all — nothing was recorded there, so there
+// is nothing an archive could lose and refusing would brick benign resumes.
+//
+// This scenario was named for the `snapshot_error` allowlist (BENIGN_ARCHIVE_SKIP_REASONS =
+// {'state_missing'}), and that is no longer what it measures: the sink's `swallowedAuthorityRefusal`
+// arm reads `archiveResult.snapshot_error`, and NOTHING assigns that field any more — its producers
+// were the epoch/plan-authority checks, which are gone. Every remaining mention across claim.js and
+// sink-merge.js is a read. So the allowlist is currently unreachable and this passes because the
+// arm cannot fire, not because the allowlist exempts the shape.
+//
+// What it still discriminates, and the reason it stays: the OTHER refusal arm, `evidenceLosing`
+// (`missing.length > 0`). Mutation-proved — making archiveProjectDir return
+// `{archive_incomplete: true, missing: ['workflow-state.md']}` when the state file is absent turns
+// this green into `archive_refusal: archive_incomplete`, so the scenario does pin that a folder
+// which recorded nothing is not treated as a folder that LOST something.
 function buildJournalOnlyLiveDirFixture(project, issue) {
   const tmpRoot = makeTmpRoot();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
@@ -944,7 +957,7 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
 
 
 (function testJournalOnlyLiveDirKeepsHistoricalSilentSkip() {
-  console.log('Test (#746 o): the ONE benign shape — a journal-only live dir with no workflow-state.md (snapshot_error:state_missing) — must STILL silently skip the archive and reach status:sinked (over-tighten guard)');
+  console.log('Test (#746 o): a journal-only live dir with no workflow-state.md recorded nothing an archive could lose — the sink must skip it and still reach status:sinked, never classify it as evidence-losing');
   const project = 'issue-74602';
   const issue = 74602;
   const fx = buildJournalOnlyLiveDirFixture(project, issue);
