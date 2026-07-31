@@ -23,8 +23,6 @@ delete process.env.KAOLA_WORKFLOW_OFFLINE;
 const forge = require('./kaola-gitlab-forge');
 const sinkMr = require('./kaola-gitlab-workflow-sink-mr');
 const sinkMerge = require('./kaola-gitlab-workflow-sink-merge');
-const planValidator = require('./kaola-gitlab-workflow-plan-validator');
-const planValidatorScript = path.join(__dirname, 'kaola-gitlab-workflow-plan-validator.js');
 
 function withForge(stubs, fn) {
   const originals = {};
@@ -43,79 +41,18 @@ function tempRoot(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), name));
 }
 
-// A finalize with NO frozen workflow-plan.md now refuses adaptive_plan_missing (adaptive is
-// the only workflow path). This fixture jumps straight from a hand-rolled state to finalize to
-// exercise closure/archive-rename behavior — not an authored adaptive run — so seed a minimal
-// FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation gate, letting
-// finalize's adaptive --finalize-check proceed. Mirrors the proven
-// scripts/simulate-workflow-walkthrough.js seedAdaptiveFinalizeFixture helper (and this repo's
-// own test-gitlab-workflow-scripts.js copy). Seed LAST, after every other fixture file is in
-// place, so the recorded validated_candidate_hash matches the tree finalize recomputes over.
-function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
+// These fixtures jump straight from a hand-rolled state to finalize to exercise closure /
+// archive-rename behaviour. All finalize needs from them is the consumer-mode validation record:
+// a passing verdict BOUND to the tree it was recorded over. The `writeSet` parameter is retained
+// so call sites read unchanged — a declared write set is no longer a thing that can be declared,
+// and nothing consumes it. Seed LAST, after every other fixture file is in place, so the recorded
+// validated_candidate_hash matches the tree finalize recomputes over.
+function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {   // eslint-disable-line no-unused-vars
   const dir = path.join(fixtureRoot, 'kaola-workflow', project);
-  fs.mkdirSync(dir, { recursive: true });
-  const planPath = path.join(dir, 'workflow-plan.md');
-  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
-  const nodesTable = paths.length ? [
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
-    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
-    '| n4 | finalize | n3 | — | 1 | sequence |',
-  ] : [
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | finalize | n1 | — | 1 | sequence |',
-  ];
-  const ledgerRows = paths.length
-    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
-    : ['| n1 | complete |', '| n2 | complete |'];
-  const complianceRows = paths.length ? [
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
-    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
-    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
-  ] : [
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
-  ];
-  const tasks = paths.length ? [
-    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
-    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-  ] : [
-    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-  ];
-  const planBody = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    ...nodesTable, '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
-    ...ledgerRows, '',
-    '## Required Agent Compliance', '',
-    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
-    ...complianceRows, ''
-  ].join('\n');
-  const planHash = planValidator.computePlanHash(planBody);
-  fs.writeFileSync(planPath, '<!-- plan_hash: ' + planHash + ' -->\n\n' + planBody);
-  const glVal = (a) => spawnSync(process.execPath, [planValidatorScript, ...a], { cwd: fixtureRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  let finalHash = '';
-  try { finalHash = JSON.parse(glVal([planPath, '--freeze', '--json']).stdout).planHash || ''; } catch (_) {}
-  const sFile = path.join(dir, 'workflow-state.md');
-  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
-    const s = fs.readFileSync(sFile, 'utf8')
-      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
-      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
-      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
-      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
-    fs.writeFileSync(sFile, s);
-    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
-  }
   fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  const schema = require('./kaola-workflow-adaptive-schema');
   let cand = '';
-  try { cand = JSON.parse(glVal([planPath, '--candidate-hash', '--json']).stdout).validated_candidate_hash || ''; } catch (_) {}
+  try { cand = schema.computeCodeTreeHash(fixtureRoot, project, schema.VALIDATION_TEST_CONSUMES) || ''; } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
     'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
@@ -1686,24 +1623,21 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
   }
 }
 
-// --- #707: worktree-postured sink must archive the worktree's .cache node evidence; an
-// evidence-empty live folder whose ## Node Ledger proves recorded evidence must refuse loudly ----
+// --- #707: a worktree-postured sink must archive the worktree's untracked .cache evidence -------
+//
+// DELETED: (b) — "an evidence-empty live folder whose ## Node Ledger proves recorded evidence must
+// refuse node_evidence_missing". That refusal derived its required-evidence set from the ledger:
+// every `complete` row implied a `.cache/<id>.md`. The ledger is gone and nothing declares a
+// required set, so the refusal has no producer. What replaced it is a different property with a
+// different fixture shape (an archive move must not LOSE a file), and it is pinned where it lives.
 {
   const sinkScript707 = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
-  const planWithLedger707 = (rows) => {
-    const lines = [
-      '# Workflow Plan', '', '## Meta', 'labels: test', '',
-      '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |',
-      '|---|---|---|---|---|---|',
-    ];
-    for (const r of rows) lines.push('| ' + r.id + ' | ' + (r.role || 'implementer') + ' | — | — | 1 | sequence |');
-    lines.push('', '## Node Ledger', '', '| id | status |', '|---|---|');
-    for (const r of rows) lines.push('| ' + r.id + ' | ' + r.status + ' |');
-    lines.push('');
-    return lines.join('\n');
-  };
-  const mkFixture707 = (project, withWorktreeEvidence) => {
+  // A run-plan document, present so the run folder has the shape a real run leaves behind. Its
+  // CONTENT is inert: the sink names `workflow-plan.md` only as one entry in its untracked
+  // project-state dirt bucket and never parses it.
+  const runPlanDoc707 = (note) =>
+    ['# Workflow Plan', '', note || 'fixture plan — content is not read by the sink.', ''].join('\n');
+  const mkFixture707 = (project) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-707-'));
     const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
     const branch = 'workflow/' + project;
@@ -1714,20 +1648,15 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     fs.mkdirSync(liveDir, { recursive: true });
     fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
       '# Kaola-Workflow State\n\n## Project\nname: ' + project + '\nstatus: active\n\n## Last Updated\n' + new Date().toISOString() + '\n');
-    fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), planWithLedger707([
-      { id: 'n1-impl', status: 'complete' },
-      { id: 'n2-finalize', role: 'finalize', status: 'in_progress' },
-    ]));
+    fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), runPlanDoc707('worktree-postured run'));
     fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable');
     git('add', '-A'); git('commit', '-m', 'feat: deliverable + live state');
     git('checkout', 'main');
-    if (withWorktreeEvidence) {
-      const wtPath = path.join(root, '.kw', 'worktrees', project);
-      G.exec(root, ['worktree', 'add', wtPath, branch], { encoding: 'utf8' });
-      const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
-      fs.mkdirSync(wtCache, { recursive: true });
-      fs.writeFileSync(path.join(wtCache, 'n1-impl.md'), 'worktree evidence n1\n');
-    }
+    const wtPath = path.join(root, '.kw', 'worktrees', project);
+    G.exec(root, ['worktree', 'add', wtPath, branch], { encoding: 'utf8' });
+    const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(wtCache, { recursive: true });
+    fs.writeFileSync(path.join(wtCache, 'run-evidence.md'), 'worktree evidence\n');
     return { root, branch };
   };
   const runSink707 = (root, branch, project) => spawnSync(process.execPath,
@@ -1735,151 +1664,40 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
   const parseLast707 = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
 
-  // (a) worktree-postured: the worktree's untracked node evidence lands in the archive + at HEAD.
+  // (a) worktree-postured: the worktree's untracked evidence lands in the archive + at HEAD.
   {
     const project = 'issue-97071';
-    const { root, branch } = mkFixture707(project, true);
+    const { root, branch } = mkFixture707(project);
     try {
       const r = runSink707(root, branch, project);
       const p = parseLast707(r.stdout);
       assert.strictEqual(p.status, 'sinked', '#707-gitlab-a: sink must complete, got ' + JSON.stringify(p) + '\nstderr: ' + r.stderr);
       assert.strictEqual(r.status, 0, '#707-gitlab-a: sink must exit 0, got ' + r.status);
       const archRel = (p.receipt && p.receipt.archive_dest) || ('kaola-workflow/archive/' + project);
-      assert.ok(fs.existsSync(path.join(root, archRel, '.cache', 'n1-impl.md')),
+      assert.ok(fs.existsSync(path.join(root, archRel, '.cache', 'run-evidence.md')),
         '#707-gitlab-a: the worktree .cache evidence must be archived, archive .cache holds: '
         + JSON.stringify((() => { try { return fs.readdirSync(path.join(root, archRel, '.cache')); } catch (_) { return '<none>'; } })()));
       let committed = false;
-      try { committed = G.exec(root, ['cat-file', '-t', 'HEAD:' + archRel + '/.cache/n1-impl.md'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'blob'; } catch (_) {}
+      try { committed = G.exec(root, ['cat-file', '-t', 'HEAD:' + archRel + '/.cache/run-evidence.md'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'blob'; } catch (_) {}
       assert.ok(committed, '#707-gitlab-a: the archived evidence must be committed at HEAD');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
-  // (b) evidence-empty live folder + ledger-proven evidence → loud typed refusal, nothing deleted.
-  {
-    const project = 'issue-97072';
-    const { root, branch } = mkFixture707(project, false);
-    try {
-      const r = runSink707(root, branch, project);
-      const p = parseLast707(r.stdout);
-      assert.strictEqual(r.status, 1, '#707-gitlab-b: an evidence-empty archive attempt must exit 1, got ' + r.status + '\nstdout: ' + r.stdout);
-      assert.ok(p.result === 'refuse' && p.reason === 'sink_incomplete' && p.step === 'finalize'
-        && p.archive_refusal === 'node_evidence_missing'
-        && Array.isArray(p.missing) && p.missing.includes('.cache/n1-impl.md'),
-        '#707-gitlab-b: typed refusal (sink_incomplete/finalize/node_evidence_missing) required, got ' + JSON.stringify(p));
-      assert.ok(fs.existsSync(path.join(root, 'kaola-workflow', project, 'workflow-state.md')),
-        '#707-gitlab-b: the live project folder must survive the refusal');
-      assert.ok(!fs.existsSync(path.join(root, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
-        '#707-gitlab-b: no archived copy may exist after the refusal');
-    } finally { fs.rmSync(root, { recursive: true, force: true }); }
-  }
-  console.log('GitLab #707 worktree-evidence archive + evidence-empty refusal tests passed');
+  console.log('GitLab #707 worktree-evidence archive test passed');
 }
 
-// --- #746: an archive refusal whose signal is a snapshot_error REASON rather than a file list
-// (empty missing[] — the schema-2 epoch-authority family) must fail the sink LOUDLY; the one
-// documented benign shape (state_missing on a journal-only live dir) still silently skips. -----
+// --- #746: the archive step's ONE documented benign silent skip ---------------------------------
+//
+// DELETED: (a) — "an archive refusal whose signal is a snapshot_error REASON rather than a file
+// list (empty missing[]) must fail the sink LOUDLY". Its fixture built a schema-2 epoch envelope —
+// claim identity, claim-root base, epoch lineage, a stored plan_hash over a `## Nodes` /
+// `## Node Ledger` pair, and a derived task mirror — for one purpose: to make
+// verifyCurrentEpochAuthority return state_ledger_progress_invalid with an empty missing[]. Epochs,
+// the re-plan CAS machinery and the ledger are gone, so that refusal has no producer left.
+//
+// (b) survives on its own terms and is the over-tighten guard: the one benign shape reads no plan
+// at all, so the narrowing that made empty-missing[] refusals loud must not have swallowed it.
 {
-  const schema746 = require('./kaola-workflow-adaptive-schema');
-  const { generateMirror: generateMirror746 } = require('./kaola-gitlab-workflow-task-mirror');
   const sinkScript746 = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
-  const nodeRows746 = [
-    // n2-finalize depends on n1-impl (the builder chains depends_on), so `complete` above a
-    // `pending` dependency is the ledger-progress drift.
-    { id: 'n1-impl', role: 'implementer', status: 'pending', compliance: 'pending' },
-    { id: 'n2-finalize', role: 'finalize', status: 'complete', compliance: 'pending' },
-  ];
-  // Ledger + compliance sit OUTSIDE computePlanHash coverage, so a ledger row can drift against
-  // its own dependencies while the stored plan hash stays valid — the post-run out-of-sync shape
-  // verifyCurrentEpochAuthority refuses as state_ledger_progress_invalid.
-  // (#833: this fixture used to drive the same shape through state_compliance_progress_invalid;
-  // that tier is retired with the stored compliance table, so the vehicle moved to the ledger
-  // tier. The property under test — a sink must never report status:sinked over an authority
-  // refusal it silently skipped — is unchanged.)
-  const schema2Plan746 = (rows) => {
-    const lines = [
-      '# Workflow Plan — sink-test', '', '## Meta', 'project: sink-test', 'labels: test', '',
-      '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
-      '| --- | --- | --- | --- | --- | --- | --- |',
-    ];
-    let previous = null;
-    for (const r of rows) {
-      lines.push('| ' + r.id + ' | ' + r.role + ' | ' + (previous || '—') + ' | — | 1 | sequence | standard |');
-      previous = r.id;
-    }
-    lines.push('', '## Node Ledger', '', '| id | status |', '| --- | --- |');
-    for (const r of rows) lines.push('| ' + r.id + ' | ' + r.status + ' |');
-    lines.push('', '## Required Agent Compliance', '',
-      '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |');
-    for (const r of rows) {
-      lines.push(r.compliance === 'pending'
-        ? '| ' + r.role + ' (' + r.id + ') | pending | | |'
-        : '| ' + r.role + ' (' + r.id + ') | invoked | .cache/' + r.id + '.md | |');
-    }
-    lines.push('');
-    let text = lines.join('\n');
-    const hash = planValidator.computePlanHash(text);
-    return { text: text.replace(/^# Workflow Plan[^\n]*\n/, m => m + '\n<!-- plan_hash: ' + hash + ' -->\n'), hash };
-  };
-  const mkAuthorityDriftFixture746 = (project, issue) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitlab-746-'));
-    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
-    const branch = 'workflow/' + project;
-    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
-    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-    git('checkout', '-b', branch);
-    const plan = schema2Plan746(nodeRows746);
-    const claimTs = '2026-07-21T00:00:00.000Z';
-    const identity = schema746.buildClaimIdentity({
-      schema_version: 2, repository_id: 'local:' + root, issue_numbers: [issue], primary_issue: issue,
-      bundle_id: null, closure_policy: 'all_or_nothing', branch, worktree_path: root,
-      claim_ts: claimTs, session_marker: 'test-session',
-    });
-    const rootBase = schema746.buildClaimRootBase({
-      schema_version: 2, object_format: 'sha1', commit: 'a'.repeat(40), tree: 'b'.repeat(40), branch,
-    });
-    const lineage = schema746.buildEpochLineage(identity, rootBase);
-    const baseState = [
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'step: start', '',
-      '## Planning Evidence', 'plan_hash: ' + plan.hash, 'decision: auto-run',
-      'first_node_id: ' + nodeRows746[0].id, 'first_node_role: ' + nodeRows746[0].role, '',
-      '## Sink', 'branch: ' + branch, 'issue_number: ' + issue, 'sink: merge',
-      'main_root: (test)', 'session_marker: test-session', 'claim_ts: ' + claimTs, '',
-    ].join('\n');
-    const state = schema746.writeEpochStateBlock(baseState, {
-      epoch_schema_version: 2,
-      claim_repository_id: identity.repository_id,
-      claim_identity_digest: lineage.claim_identity_digest,
-      claim_root_object_format: rootBase.object_format,
-      claim_root_base_commit: rootBase.commit,
-      claim_root_base_tree: rootBase.tree,
-      claim_root_base_digest: lineage.claim_root_base_digest,
-      epoch_lineage_id: lineage.epoch_lineage_id,
-      plan_epoch: 1,
-      active_plan_hash: plan.hash,
-      inherited_frontier_digest: 'none',
-      inherited_frontier_classes: 'none',
-      automatic_review_replans: 0,
-      authorized_epoch_ceiling: 2,
-      case_b_exemption_consumed: false,
-      replan_status: 'none',
-      replan_transaction_id: 'none',
-      replan_phase: 'none',
-      active_snapshot_manifest_digest: 'none',
-    });
-    const liveDir = path.join(root, 'kaola-workflow', project);
-    fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), plan.text);
-    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), state);
-    fs.writeFileSync(path.join(liveDir, 'workflow-tasks.json'),
-      JSON.stringify(generateMirror746({ planContent: plan.text, now: claimTs }), null, 2) + '\n');
-    // Evidence IS present, so the #707 floor is satisfied and only the authority path is exercised.
-    fs.writeFileSync(path.join(liveDir, '.cache', 'n1-impl.md'), 'evidence-binding: n1-impl\nverdict: pass\n');
-    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable');
-    git('add', '-A'); git('commit', '-m', 'feat: deliverable + live state');
-    git('checkout', 'main');
-    return { root, branch };
-  };
   const mkJournalOnlyFixture746 = (project) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitlab-746b-'));
     const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
@@ -1900,23 +1718,6 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
   const parseLast746 = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
 
-  // (a) empty missing[] + a real snapshot_error → loud typed refusal, nothing archived/deleted.
-  {
-    const project = 'issue-97461';
-    const { root, branch } = mkAuthorityDriftFixture746(project, 97461);
-    try {
-      const r = runSink746(root, branch, project, 97461);
-      const p = parseLast746(r.stdout);
-      assert.strictEqual(r.status, 1, '#746-gitlab-a: a swallowed epoch-authority refusal must exit 1, got ' + r.status + '\nstdout: ' + r.stdout);
-      assert.ok(p.result === 'refuse' && p.reason === 'sink_incomplete' && p.step === 'finalize'
-        && p.archive_refusal === 'state_ledger_progress_invalid',
-        '#746-gitlab-a: typed refusal (sink_incomplete/finalize/state_ledger_progress_invalid) required, got ' + JSON.stringify(p));
-      assert.ok(fs.existsSync(path.join(root, 'kaola-workflow', project, 'workflow-state.md')),
-        '#746-gitlab-a: the live project folder must survive the refusal');
-      assert.ok(!fs.existsSync(path.join(root, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
-        '#746-gitlab-a: no archived copy may exist after the refusal');
-    } finally { fs.rmSync(root, { recursive: true, force: true }); }
-  }
   // (b) over-tighten guard: the journal-only live dir (state_missing) still silently skips + sinks.
   {
     const project = 'issue-97462';
@@ -1928,7 +1729,7 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
       assert.strictEqual(p.status, 'sinked', '#746-gitlab-b: the benign journal-only shape must still reach status:sinked, got ' + JSON.stringify(p));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
-  console.log('GitLab #746 swallowed-authority-refusal loud-fail + benign-skip tests passed');
+  console.log('GitLab #746 benign-skip over-tighten guard passed');
 }
 
 console.log('GitLab sink tests passed');

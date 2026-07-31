@@ -340,12 +340,15 @@ assert(!exists('scripts/kaola-workflow-subagent-statusline.js'), 'subagent statu
 
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
 assert(read('CLAUDE.md').split(/\r?\n/).length < 200, 'CLAUDE.md must stay below the 200-line target');
+// Kept in step with the injected block below — they are the same contract, one authored and one
+// generated. `.cache/` stood here for the per-node evidence files; an item's outcome now lives in
+// the mission list's own `result` field, so the record to pin is the list.
 assertConcept('CLAUDE.md', 'compact durable state contract', [
   'kaola-workflow/.roadmap/issue-*.md',
   'do not purge',
   'kaola-workflow/{project}/',
   'workflow-state.md',
-  '.cache/'
+  'mission-list.md'
 ]);
 assertConcept('commands/workflow-init.md', 'generated CLAUDE durable state contract', [
   'kaola-workflow/.roadmap/issue-*.md',

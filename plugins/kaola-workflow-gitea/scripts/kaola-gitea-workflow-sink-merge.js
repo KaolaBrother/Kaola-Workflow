@@ -895,12 +895,11 @@ const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'finalize', 'stash_re
 
 // #746: the ONLY archive `snapshot_error` the finalize step may silently skip over. A journal-only
 // live dir (no workflow-state.md — it holds nothing but the sink's own receipt) recorded nothing
-// the archive could lose, so skipping it is benign and refusing would brick resumes. Every other
-// authority/snapshot refusal — state_compliance_progress_invalid, state_ledger_progress_invalid,
-// state_active_plan_hash_mismatch, state_planning_evidence_stale_first_node, snapshot_authority_invalid,
-// snapshot_verifier_unavailable, … — is a real post-run incompleteness and must fail the sink
-// loudly rather than be laundered into status:sinked over an un-archived project. Default is
-// fail-closed: an unrecognized reason refuses.
+// the archive could lose, so skipping it is benign and refusing would brick resumes. Any OTHER
+// snapshot_error is a real post-run incompleteness and must fail the sink loudly rather than be
+// laundered into status:sinked over an un-archived project. Default is fail-closed: an unrecognized
+// reason refuses. The named epoch/plan-authority reasons this list used to enumerate went with the
+// machinery that raised them; the allowlist stays derived from the one benign shape, not from them.
 const BENIGN_ARCHIVE_SKIP_REASONS = new Set(['state_missing']);
 
 // Routed through the shared primitive so the step journal gets the fsync + parent-dir fsync the

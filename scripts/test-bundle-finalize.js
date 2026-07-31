@@ -40,7 +40,7 @@ const G = require('./test-git-fixture');
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
 const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
-const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js');
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema.js');
 
 let passed = 0;
 let failed = 0;
@@ -107,47 +107,19 @@ function writeRoadmapMirror(tmpRoot, issueNums) {
   fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'), content);
 }
 
-// Same pattern as simulate-workflow-walkthrough.js's seedAdaptiveFinalizeFixture (proven
-// elsewhere, used dozens of times): a finalize with NO frozen workflow-plan.md now refuses
-// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight
-// from a hand-rolled state to finalize to exercise terminal archive/closure normalization —
-// not an authored adaptive run — so seed a minimal FROZEN adaptive workflow-plan.md plus a
-// passing consumer-mode final-validation gate, letting finalize's adaptive --finalize-check
-// proceed to the archive/closure behavior each fixture actually asserts.
-function stampVerifiedFinalizePlan(planPath) {
-  const content = fs.readFileSync(planPath, 'utf8');
-  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)) return;
-  const validator = require(planValidatorScript);
-  const hash = validator.computePlanHash(content);
-  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
-}
-
+// These fixtures jump straight from a hand-rolled state to finalize to exercise terminal
+// archive/closure normalization, not a run. They used to seed a frozen workflow-plan.md purely so
+// finalize's `adaptive_plan_missing` refusal would not fire before the archive behavior each
+// fixture asserts. Both the plan and that refusal are gone — a finalize with no plan is not an
+// error — so the fixture only has to make the project folder exist. It still records a passing
+// consumer-mode validation, because finalize now READS that and reports it: seeding it keeps each
+// fixture's report shaped like the green case it is meant to represent, and nothing here refuses
+// either way.
 function seedAdaptiveFinalizeFixture(tmpRoot, project) {
   const dir = path.join(tmpRoot, 'kaola-workflow', project);
-  fs.mkdirSync(dir, { recursive: true });
-  const planPath = path.join(dir, 'workflow-plan.md');
-  fs.writeFileSync(planPath, [
-    // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall.
-    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | finalize | n1 | — | 1 | sequence |', '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
-    '| n1 | complete |', '| n2 | complete |', '',
-    '## Required Agent Compliance', '',
-    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |', ''
-  ].join('\n'));
-  stampVerifiedFinalizePlan(planPath);
-  try { JSON.parse(spawnSync(process.execPath, [planValidatorScript, planPath, '--freeze', '--json'], { cwd: tmpRoot, encoding: 'utf8' }).stdout); } catch (_) {}
   fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
   let cand = '';
-  try {
-    cand = JSON.parse(spawnSync(process.execPath, [planValidatorScript, planPath, '--candidate-hash', '--json'], { cwd: tmpRoot, encoding: 'utf8' }).stdout).validated_candidate_hash || '';
-  } catch (_) { cand = ''; }
+  try { cand = adaptiveSchema.computeCodeTreeHash(tmpRoot, project) || ''; } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
     'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
@@ -168,10 +140,7 @@ function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts
     'status: active',
     '',
     '## Current Position',
-    // These fixtures exercise bundle closure, sink, and archive behavior rather than the
-    // node-by-node adaptive lifecycle itself; a minimal frozen adaptive plan is seeded
-    // alongside (seedAdaptiveFinalizeFixture below) so Finalization's adaptive
-    // --finalize-check gate passes and the archive/closure behavior under test can run.
+    // These fixtures exercise bundle closure, sink, and archive behavior, not a run.
     'phase: adaptive',
     'phase_name: Adaptive',
     'workflow_path: adaptive',
@@ -1543,10 +1512,10 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
   }
 })();
 
-// #699: the canonical epoch-1 planless tuple is positive authority, not a
-// missing-plan error. Archive it directly and prove the live folder is removed
-// only after the shared verifier accepts the complete shape.
-(function testCanonicalPlanlessEpochOneArchive699() {
+// #699: a plan-absent claim record is positive authority, not a missing-plan error.
+// Archive it directly and prove the live folder is removed only after the shared
+// verifier accepts the complete shape.
+(function testCanonicalPlanlessArchive699() {
   const root = makeTmpRoot();
   const project = 'issue-69901';
   const projectDir = path.join(root, 'kaola-workflow', project);
@@ -1561,17 +1530,10 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     fs.mkdirSync(projectDir, { recursive: true });
     fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
       '# Kaola-Workflow State', '', '## Project', 'name: ' + project,
-      'status: active', '', '## Planning Evidence', 'plan_hash: none',
-      'decision: none', 'first_node_id: none', 'first_node_role: none', '',
-      '## Epoch Lineage', 'epoch_schema_version: ' + anchors.epoch_schema_version,
+      'status: active', '',
+      '## Claim Identity',
       'claim_repository_id: ' + anchors.claim_repository_id,
-      'claim_identity_digest: ' + anchors.claim_identity_digest,
-      'claim_root_object_format: ' + anchors.claim_root_object_format,
-      'claim_root_base_commit: ' + anchors.claim_root_base_commit,
-      'claim_root_base_tree: ' + anchors.claim_root_base_tree,
-      'claim_root_base_digest: ' + anchors.claim_root_base_digest,
-      'epoch_lineage_id: ' + anchors.epoch_lineage_id, 'plan_epoch: 1',
-      'active_plan_hash: none', 'active_snapshot_manifest_digest: none', '',
+      'claim_identity_digest: ' + anchors.claim_identity_digest, '',
       '## Sink', 'issue_number: 69901', 'branch: workflow/' + project, 'sink: merge',
       'main_root: ' + root, 'session_marker: bundle-finalize-699',
       'claim_ts: 2026-01-01T00:00:00Z', '',
@@ -1579,7 +1541,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     const result = archiveProjectDir(root, project, 'abandoned', '.planless');
     assert(result && result.archived === true && result.dest
       && !fs.existsSync(projectDir) && fs.existsSync(result.dest),
-    '#699 canonical planless epoch-1 authority archives successfully, got ' + JSON.stringify(result));
+    '#699 a plan-absent claim record archives successfully, got ' + JSON.stringify(result));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 })();
 

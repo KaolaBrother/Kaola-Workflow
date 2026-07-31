@@ -58,7 +58,17 @@ const BROAD_BANDS = [
 ];
 
 function partA() {
-  ok(REGISTRY.length >= 40, 'registry covers the artifact surface (' + REGISTRY.length + ' rows)');
+  // Non-vacuity, DERIVED rather than a magic count: the ruling has to cover the whole closed
+  // record vocabulary, so every one of the four records must be owned by at least one row. A
+  // hard-coded row floor tracks whatever the registry happened to be the day it was written and
+  // has to be edited down every time the artifact surface shrinks, which makes it evidence of
+  // nothing.
+  const owned = new Set(REGISTRY.filter(row => row[1] === 'record').map(row => row[2]));
+  deepEqual([...owned].sort(), [...schema.KERNEL_RECORDS].sort(),
+    'every one of the four records is owned by at least one registry row, and no row owns a fifth');
+  ok(REGISTRY.length > owned.size,
+    'the ruling covers more than the bare records — derivable and preference bands are ruled too ('
+    + REGISTRY.length + ' rows)');
 
   const seen = new Set();
   for (const row of REGISTRY) {
@@ -182,33 +192,18 @@ function partB() {
 
 // ===========================================================================
 // PART C — the ruling is total.
+//
+// THE EMPIRICAL HALF IS GONE, and it is worth saying why rather than letting a shorter function
+// look like a tidy-up. Totality used to be checked over TWO corpora: what real archived runs
+// actually wrote (~350 of them, empirical — "not a list someone typed"), and what the production
+// scripts declare (forward-looking). Every archived run in this repository was produced by the
+// node executor, and its artifacts — `barrier-base-*`, `barrier-open-*`, `workflow-tasks.json`,
+// the epoch and review families — are exactly what the ruling stopped ruling when that machinery
+// was deleted. Keeping the arm would mean either re-adding rows for machinery that is gone or
+// hand-listing a hundred historical names, and either one turns the check into the typed list it
+// exists to avoid. So only the forward half survives, and totality is no longer witnessed against
+// anything a run really produced. It re-arms on its own the day a mission-list run archives.
 // ===========================================================================
-
-// collectArchiveCorpus — every distinct project-relative artifact path a real archived run left in
-// this repository. This is the corpus the ruling has to be total over: not a list someone typed,
-// but what the workflow actually wrote, across ~350 archived runs.
-function collectArchiveCorpus() {
-  const archive = path.join(ROOT, 'kaola-workflow', 'archive');
-  const corpus = new Set();
-  let projects = [];
-  try { projects = fs.readdirSync(archive, { withFileTypes: true }); } catch (_) { return corpus; }
-  for (const project of projects) {
-    if (!project.isDirectory()) continue;
-    const base = path.join(archive, project.name);
-    walk(base, base);
-  }
-  function walk(dir, base) {
-    let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { walk(full, base); continue; }
-      if (!entry.isFile()) continue;
-      corpus.add(path.relative(base, full).split(path.sep).join('/'));
-    }
-  }
-  return corpus;
-}
 
 // collectDeclaredArtifactNames — every artifact path the production scripts name as a literal.
 // The archive corpus is historical; this is the FORWARD half, so an artifact introduced by a new
@@ -278,27 +273,32 @@ const DECLARED_NOT_ARTIFACT = new Set([
 ]);
 
 function partC() {
-  const archive = collectArchiveCorpus();
   const declared = collectDeclaredArtifactNames();
 
-  // Non-vacuity: this suite must not pass because it looked at nothing.
-  ok(archive.size >= 200, 'the archived-run corpus is real (' + archive.size + ' distinct artifact paths)');
-  ok(declared.size >= 20, 'the declared-name corpus is real (' + declared.size + ' names)');
+  // The declared-name floor is DERIVED from the registry rather than typed: every literal
+  // `.cache/…` row the ruling carries names an artifact some production script declares, so the
+  // scan must find all of them. A hand-set count would have to be edited down every time the
+  // artifact surface shrinks, which is exactly when a blind scanner would be hardest to notice.
+  const literalCacheRows = REGISTRY
+    .map(row => row[0])
+    .filter(matcher => typeof matcher === 'string' && matcher.startsWith('.cache/'));
+  const missed = literalCacheRows.filter(rel => !declared.has(rel));
+  deepEqual(missed, [],
+    'the declared-name scan finds every literal .cache/ artifact the ruling names — a scan that '
+    + 'missed one is reading less of the source than the registry claims to rule');
 
   // Non-vacuity, NESTED half. The scan must actually reach below `.cache/`, or the totality claim
   // is total only over the flat band and every subdirectory family is silently exempt. Re-narrowing
   // the scanner's character class reddens HERE, at the cause, instead of at the next unruled band.
   const nestedNames = [...declared].filter(rel => rel.slice('.cache/'.length).includes('/'));
-  ok(nestedNames.length >= 4,
+  ok(nestedNames.length >= 1,
     'the declared-name scan SEES nested artifact paths (' + nestedNames.length + ') — a scanner that cannot match a "/" is blind to every artifact under a subdirectory');
-  const declaredBands = nestedNames.filter(rel => rel.endsWith('/'));
-  ok(declaredBands.length >= 3,
-    'the scan sees declared BAND prefixes too (' + declaredBands.length + ') — the form a concatenated nested path is declared in');
+  // The BAND-PREFIX half has no witness left: every family whose concrete paths were built by
+  // concatenation (`.cache/epochs/`, `.cache/committed-transactions/`, `.cache/replan-sources/`)
+  // went with the machinery that wrote them. The discharge logic below still runs, so a band
+  // reintroduced tomorrow is still checked — but nothing currently proves the scan can see one.
 
   const unclassified = [];
-  for (const rel of archive) {
-    if (schema.classifyDurableArtifact(rel).ruling === 'unclassified') unclassified.push('archive: ' + rel);
-  }
   for (const rel of declared) {
     if (DECLARED_NOT_ARTIFACT.has(rel)) continue;
     // A declared BAND prefix names a family whose concrete paths are built by concatenation, so
@@ -316,16 +316,10 @@ function partC() {
   deepEqual(unclassified, [],
     'every durable artifact is ruled record / derivable / preference — an unclassified one inherits neither the atomic-write obligation nor resume coverage');
 
-  // The two contested rows specifically: both are called AUTHORITATIVE in the state contract,
-  // so their ruling is a substantive claim and it must be the one the registry actually returns.
-  equal(schema.classifyDurableArtifact('.cache/review-attempts.json').ruling, 'record',
-    'the review journal is ruled a record');
-  equal(schema.classifyDurableArtifact('.cache/review-attempts.json').record, 'evidence',
-    'the review journal is the Evidence record (the settled state of the review oracle)');
-  equal(schema.classifyDurableArtifact('.cache/replan-transaction.json').ruling, 'record',
-    'the re-plan transaction is ruled a record');
-  equal(schema.classifyDurableArtifact('.cache/replan-transaction.json').record, 'plan',
-    'the re-plan transaction is the Plan record (epoch lineage)');
+  // The two contested rows this block used to pin — the review journal and the re-plan
+  // transaction — were dedicated rows because the state contract called them AUTHORITATIVE. Both
+  // the review oracle and the re-plan epoch machinery are retired, the contract no longer names
+  // either, and neither has a row of its own any more. There is nothing contested left to pin.
 }
 
 // ===========================================================================
@@ -333,15 +327,19 @@ function partC() {
 // ===========================================================================
 
 // The vehicles. Each drives the REAL production writers over real fixtures; together they cover
-// the plan/position/evidence/forge bands, the mirror and archive copies, and the epoch-snapshot
-// staging writer. They are run, not imported, so a spawned CLI is observed too.
+// the position/evidence/forge bands, the mirror and the archive copy. They are run, not imported,
+// so a spawned CLI is observed too.
+//
+// FOUR VEHICLES WENT WITH THE NODE EXECUTOR — `test-commit-node.js`, `test-adaptive-handoff.js`,
+// `test-ledger-chain-tamper.js` and `test-barrier-base-integrity.js`, plus a fifth vehicle this
+// file drove itself (a spawned `kaola-workflow-adaptive-node.js` CLI over a frozen plan, which
+// existed because the in-process vehicles injected their own writeFile doubles and never reached
+// the CLI's own durable-write wiring). What they covered and nothing else now does is named at the
+// foot of PART E.
 const VEHICLES = [
-  'test-commit-node.js',            // barrier baselines, ledger flips, plan/state writes
-  'test-adaptive-handoff.js',       // freeze: plan, state, acceptance anchor
-  'test-ledger-chain-tamper.js',    // the ledger chain journal
-  'test-barrier-base-integrity.js', // re-plan epoch snapshot staging + transaction writes
   'test-sink-merge.js',             // forge journals, sink-staged evidence union
   'test-claim-hardening.js',        // the main<->worktree mirror and the archive copy
+  'simulate-workflow-walkthrough.js', // claim/state/evidence writes end to end
 ];
 
 // The exempt classes. Default-ON: anything not listed here that writes a `record` path by a
@@ -361,13 +359,12 @@ const EXEMPT_CLASSES = ['atomic-helper-internal', 'exclusive-create-verified', '
 // passed. That mutation is now red.
 const DYNAMIC_EXEMPT_CLASSES = ['exclusive-create-verified', 'mirror-copy', 'append-only'];
 
-// Non-record artifacts that legitimately take the atomic replace anyway (see PART E).
-const ATOMIC_SCOPE_EXEMPT = [
-  {
-    path: 'workflow-tasks.json',
-    why: 'the re-plan epoch fork routes all 41 of its durable writes through one journaled primitive under an asserted transaction label; the task mirror is derivable, but writing it by a second, unjournaled route would put a fork-time write outside the transaction that has to resume it',
-  },
-];
+// Non-record artifacts that legitimately take the atomic replace anyway (see PART E). Empty, and
+// that is the tighter state: the one entry that stood here — `workflow-tasks.json`, the derivable
+// task mirror written through the re-plan fork's journaled primitive — went with the task mirror
+// and the re-plan machinery. With no exemptions, every non-record path taking the atomic replace
+// is a finding.
+const ATOMIC_SCOPE_EXEMPT = [];
 
 const NON_ATOMIC_EXEMPT = [
   {
@@ -383,40 +380,8 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the rename that COMPLETES the atomic replace; this is the obligation being met, not a bypass of it',
   },
   {
-    file: 'kaola-workflow-replan.js', api: 'openSync', klass: 'exclusive-create-verified',
-    why: 'epoch-snapshot staging and the transaction writers create a path that does not yet exist with O_EXCL, fsync it, and verify the bytes against a recorded digest before the manifest seals — a torn create fails snapshot_copy_verify_failed instead of replacing a live record',
-  },
-  {
-    file: 'kaola-workflow-replan.js', api: 'writeFileSync', klass: 'exclusive-create-verified',
-    why: 'the fd writes inside those O_EXCL create sequences; every durable replan mutation itself routes through durableWriteFile, which calls the atomic replace under an asserted transaction label',
-  },
-  {
-    file: 'kaola-workflow-replan.js', api: 'writeSync', klass: 'exclusive-create-verified',
-    why: 'the chunked fd write inside durableCreateExclusiveFile, fsynced and digest-verified before the transaction advances',
-  },
-  {
-    file: 'kaola-workflow-replan.js', api: 'renameSync', klass: 'atomic-helper-internal',
-    why: 'durableRename fsyncs the destination directory after the rename and fires its transaction failpoint — the journaled form of a rename, not an in-place write',
-  },
-  {
-    file: 'kaola-workflow-adaptive-node.js', api: 'openSync', klass: 'exclusive-create-verified',
-    why: 'the rotated repair-source history is written O_EXCL + fsync onto a fresh path and read back with a digest and byte-equality check before use; it never overwrites a live record',
-  },
-  {
-    file: 'kaola-workflow-adaptive-node.js', api: 'writeFileSync', klass: 'non-record-target',
-    why: 'the fd writes inside its own O_EXCL and temp-and-rename sequences, the derivable projections (run-progress, findings-route, the cached subcommand envelope), and two --selftest fixtures; no site writes a record path in place, which the observed half re-checks at runtime',
-  },
-  {
-    file: 'kaola-workflow-adaptive-node.js', api: 'renameSync', klass: 'atomic-helper-internal',
-    why: 'the rename completing the repair-source publish, and an injected rename option threaded into the mirror',
-  },
-  {
-    file: 'kaola-workflow-adaptive-node.js', api: 'appendFileSync', klass: 'append-only',
-    why: 'node-timings.jsonl, provenance-log.jsonl and outcome-log.jsonl are the parent-owned run sidecars — preference artifacts whose writers swallow every error and whose readers report diagnostics, never verdicts',
-  },
-  {
-    file: 'kaola-workflow-adaptive-node.js', api: 'copyFileSync', klass: 'mirror-copy',
-    why: 'the injected copyFile option used by the idempotent project mirror, which copies from a source folder still on disk',
+    file: 'kaola-workflow-adaptive-schema.js', api: 'appendFileSync', klass: 'append-only',
+    why: 'appendOutcomeRecord writing outcome-log.jsonl — a parent-owned run sidecar ruled preference, whose writer swallows every error and whose reader reports a diagnostic, never a verdict. It moved into this file when the module that used to host it was deleted, and this ledger row moved with it',
   },
   {
     file: 'kaola-workflow-claim.js', api: 'copyFileSync', klass: 'mirror-copy',
@@ -451,10 +416,6 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the repo-level adaptive config default, which is not project state',
   },
   {
-    file: 'kaola-workflow-repair-state.js', api: 'renameSync', klass: 'non-record-target',
-    why: 'renames the retired phase6-summary.md marker forward; both names are preference artifacts',
-  },
-  {
     file: 'kaola-workflow-roadmap.js', api: 'writeFileSync', klass: 'outside-project-space',
     why: 'the roadmap mirror and issue sources live at kaola-workflow/ and kaola-workflow/.roadmap/, outside every project folder — and are written through this file\'s own atomic replace regardless',
   },
@@ -477,10 +438,6 @@ const NON_ATOMIC_EXEMPT = [
   {
     file: 'kaola-workflow-run-chains.js', api: 'renameSync', klass: 'atomic-helper-internal',
     why: 'the rename that completes it — this is the atomic obligation being met for chain-receipt.json, not a bypass of it',
-  },
-  {
-    file: 'kaola-workflow-task-mirror.js', api: 'writeFileSync', klass: 'non-record-target',
-    why: 'workflow-tasks.json is ruled derivable — this very file is its derivation',
   },
   {
     file: 'kaola-workflow-classifier.js', api: 'writeFileSync', klass: 'outside-project-space',
@@ -512,108 +469,12 @@ function dynamicallyExempt(file, api) {
   return !!entry && DYNAMIC_EXEMPT_CLASSES.includes(entry.klass);
 }
 
-// ---------------------------------------------------------------------------
-// The CLI vehicle, and why it is not optional.
-//
-// The suite vehicles above call the production FUNCTIONS in-process, and several of them inject
-// their own `writeFile` test double. That exercises the logic but not the wiring: the CLI's own
-// durable-write injection — the one line every ledger and plan write actually flows through in a
-// real run — is only reached when the script is invoked as a process. Measured: de-atomizing that
-// injection left every in-process vehicle green.
-//
-// So this drives the real `kaola-workflow-adaptive-node.js` CLI over a real git repository with a
-// real frozen plan, as a spawned process, and the observer rides in through NODE_OPTIONS. With the
-// same mutation planted it reports `workflow-plan.md <- writeFileSync`, which is the finding.
-// ---------------------------------------------------------------------------
-const GIT_ENV = {
-  GIT_AUTHOR_NAME: 'Kernel Conformance', GIT_AUTHOR_EMAIL: 'kernel@example.com',
-  GIT_COMMITTER_NAME: 'Kernel Conformance', GIT_COMMITTER_EMAIL: 'kernel@example.com',
-  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
-};
-
-function driveKernelCli(log) {
-  const validator = require('./kaola-workflow-plan-validator');
-  const env = Object.assign({}, process.env, GIT_ENV);
-  // A REAL git repository is part of the environment the observed CLI runs inside — the
-  // durable-write paths it exercises are resolved against a real work tree, not a stub.
-  // spawn-class: environment
-  const git = args => spawnSync('git', ['-C', repoRoot, ...args],
-    { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
-
-  const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-kernel-cli-')));
-  git(['init', '-b', 'main']);
-  git(['config', 'user.name', 'Kernel Conformance']);
-  git(['config', 'user.email', 'kernel@example.com']);
-  git(['config', 'commit.gpgsign', 'false']);
-  fs.writeFileSync(path.join(repoRoot, 'product.js'), 'module.exports = 1;\n');
-  git(['add', '-A']); git(['commit', '-m', 'root']);
-  git(['checkout', '-b', 'workflow/issue-777']);
-
-  const project = 'issue-777';
-  const projectDir = path.join(repoRoot, 'kaola-workflow', project);
-  fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
-
-  let plan = [
-    '# Workflow Plan — ' + project, '', '## Meta', 'project: ' + project, 'plan_form: spine',
-    'labels: enhancement', 'speculative_open_policy: auto',
-    'validation_command: node -e "process.exit(0)"', 'validation_timeout_minutes: 30',
-    'plan_schema_version: 2', '', '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-    '| impl | tdd-guide | — | product.js | 1 | sequence | standard | — | — | — | — |',
-    '| finalize | finalize | impl | — | 1 | sequence | — | — | — | — | — |',
-    '', '## Design', '',
-    'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering. Done means validation passes.',
-    '', '## Acceptance', '', 'A1: the declared write set lands the change the issue asked for.',
-    'A2: the recorded validation_command passes over the candidate.',
-    '', '## Node Ledger', '', '| id | status |', '| --- | --- |',
-    '| impl | pending |', '| finalize | pending |',
-    '', '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
-    '| --- | --- | --- | --- |', '| tdd-guide (impl) | pending | | |', '| finalize (finalize) | pending | | |', '',
-  ].join('\n');
-  const planHash = validator.computePlanHash(plan);
-  plan = plan.replace(/^# Workflow Plan[^\n]*\n/, match => match + '\n<!-- plan_hash: ' + planHash + ' -->\n');
-  fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), plan);
-  fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
-    '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-    '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
-    'step: start', 'next_command: /kaola-workflow-plan-run ' + project,
-    'next_skill: kaola-workflow-plan-run ' + project,
-    '', '## Planning Evidence', 'plan_hash: ' + planHash, 'decision: auto-run',
-    'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
-    'first_node_id: impl', 'first_node_role: tdd-guide', '', '## Sink', 'branch: workflow/issue-777',
-    'issue_number: 777', 'sink: merge', 'main_root: ' + repoRoot, 'session_marker: kernel-conformance',
-    'claim_ts: 2026-07-28T00:00:00.000Z', 'worktree_path: ' + repoRoot, '',
-  ].join('\n'));
-  git(['add', '-A']); git(['commit', '-m', 'seed']);
-
-  const cliEnv = Object.assign({}, env, {
-    KAOLA_KERNEL_WRITE_LOG: log,
-    NODE_OPTIONS: [process.env.NODE_OPTIONS || '', '--require',
-      path.join(ROOT, 'scripts', 'kernel-write-observer.js')].filter(Boolean).join(' '),
-  });
-  for (const args of [['orient', '--project', project, '--json'],
-                      ['open-next', '--project', project, '--json']]) {
-    // The CLI must be a REAL child process or the observation is worthless: an in-process
-    // vehicle injects its own writeFile doubles and never reaches the CLI's own durable-write
-    // wiring — which is exactly how an earlier draft of this suite passed the de-atomization
-    // mutation it exists to catch.
-    // spawn-class: durable-handoff
-    const result = spawnSync(process.execPath,
-      [path.join(ROOT, 'scripts', 'kaola-workflow-adaptive-node.js'), ...args],
-      { cwd: repoRoot, encoding: 'utf8', env: cliEnv, stdio: ['ignore', 'pipe', 'pipe'] });
-    ok(result.status === 0, 'CLI vehicle stays green under observation: ' + args[0]
-      + (result.status === 0 ? '' : '\n' + String(result.stdout || '') + String(result.stderr || '')));
-  }
-}
-
 function runVehicles() {
   const reuse = process.env.KAOLA_KERNEL_CONFORMANCE_LOG;
   if (reuse) return fs.readFileSync(reuse, 'utf8');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-kernel-conformance-'));
   const log = path.join(dir, 'writes.jsonl');
   fs.writeFileSync(log, '');
-  driveKernelCli(log);
   for (const vehicle of VEHICLES) {
     // Each vehicle runs under the --require write observer, which can only see writes made by
     // a real process. The whole atomic-write obligation is a claim about what lands on disk
@@ -646,11 +507,22 @@ function partDE(text) {
   ok(owners.size >= 3, 'the observation covers at least three of the four records: ' + [...owners].sort().join(', '));
 
   // --- PART D: completeness. No production writer reaches a record path off the atomic path.
+  //
+  // NODE'S OWN DELEGATION IS NOT A SECOND CALL SITE. `fs.appendFileSync` calls `fs.writeFileSync`
+  // internally with an append flag, so the observer — which patches both — records ONE append as
+  // two events at the SAME production frame. Adjudicating the delegated `writeFileSync` separately
+  // turns every append onto a record path into a violation the ledger cannot excuse, because the
+  // frame's `writeFileSync` row carries a different class than its `appendFileSync` row. Measured:
+  // `finalization-summary.md <- writeFileSync at kaola-workflow-sink-pr.js:108`, where line 108 is
+  // an `appendFileSync` and there is no `writeFileSync` in that function at all. This never fired
+  // before only because no observed append targeted a `record` path.
   const violations = [];
   for (const [rel, slot] of paths) {
     if (schema.classifyDurableArtifact(rel).ruling !== 'record') continue;
+    const appendFrames = slot.direct.get('appendFileSync') || new Set();
     for (const [api, frames] of slot.direct) {
       for (const frame of frames) {
+        if (api === 'writeFileSync' && appendFrames.has(frame)) continue;
         const file = frame.split(':')[0];
         if (dynamicallyExempt(file, api)) continue;
         violations.push(rel + ' <- ' + api + ' at ' + frame);
@@ -684,8 +556,14 @@ function partDE(text) {
       'a scoping exemption is only meaningful for a NON-record artifact: ' + entry.path);
   }
 
-  const atomicPaths = [...paths.values()].filter(slot => slot.atomic.size > 0).length;
-  ok(atomicPaths >= 15, 'the scoping half is non-vacuous (' + atomicPaths + ' paths written through the atomic replace)');
+  // Non-vacuity for the scoping half, by WITNESS rather than by count. The position record is
+  // written through `writeFileAtomicReplace` on every claim, so an observation in which it never
+  // took the atomic path did not reach the writers at all — and a bare count would go on passing
+  // as the observed surface shrinks, which is exactly when a blind observation is hardest to spot.
+  const atomicPathList = [...paths.entries()].filter(([, slot]) => slot.atomic.size > 0).map(([rel]) => rel);
+  ok(atomicPathList.includes('workflow-state.md'),
+    'the scoping half is non-vacuous: the position record was observed taking the atomic replace ('
+    + atomicPathList.length + ' atomic paths: ' + atomicPathList.sort().join(', ') + ')');
 }
 
 // ===========================================================================
@@ -743,7 +621,13 @@ function collectWriteSurface() {
 
 function partF() {
   const surface = collectWriteSurface();
-  ok(surface.size >= 10, 'the static scan found the production write surface (' + surface.size + ' files)');
+  // Non-vacuity, DERIVED: a scan that found nothing would satisfy the `unledgered` half below by
+  // measuring nothing at all. The one file guaranteed by construction to carry write APIs is the
+  // one that OWNS the atomic replace — a scanner that cannot see it is blind, not clean. The
+  // `dead` half then covers the rest: every ledger entry must still be found by this same scan.
+  ok(surface.has('kaola-workflow-adaptive-schema.js'),
+    'the static scan reaches the file that owns the atomic replace ('
+    + surface.size + ' files scanned)');
 
   const ledger = new Set(NON_ATOMIC_EXEMPT.map(entry => entry.file + ' ' + entry.api));
 
@@ -785,4 +669,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { driveKernelCli, parseRulingTable, NON_ATOMIC_EXEMPT, ATOMIC_SCOPE_EXEMPT, VEHICLES };
+module.exports = { parseRulingTable, NON_ATOMIC_EXEMPT, ATOMIC_SCOPE_EXEMPT, VEHICLES };

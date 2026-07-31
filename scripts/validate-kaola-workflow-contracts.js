@@ -47,9 +47,9 @@ const retired = [
   ['derive', 'session'].join('-'),
   ['verify', 'startup'].join('-'),
   ['can', 'hand' + 'off'].join('-'),
-  // #255: the bare 'handoff' token is no longer retired — it is the live name of the
-  // adaptive planner-to-first-node handoff (kaola-workflow-adaptive-handoff.js). Only the
-  // legacy session-lease 'can-handoff' compound stays retired (kept above).
+  // #255: the bare 'handoff' token is not retired — it is ordinary vocabulary for passing work
+  // between an agent and its successor, and surfaces use it that way. Only the legacy
+  // session-lease 'can-handoff' compound stays retired (kept above).
   ['startup', 'receipt'].join(' '),
   ['session', 'id'].join('_'),
   ['last', 'heart' + 'beat'].join('_'),

@@ -195,10 +195,9 @@ async function main() {
   }
 
   // #709: in a CONSUMER repo (no package.json / no test:kaola-workflow:* chain), CHANGELOG/README/
-  // docs are validation-invisible (matching isBarrierInvisible). A finalize-sink CHANGELOG edit
+  // docs are validation-invisible (matching isBookkeepingPath). A finalize-sink CHANGELOG edit
   // must NOT change computeLandableTreeDigest — the self-host assumption stops leaking into consumer
-  // repos. The two validators (validation-runner + plan-validator) agree on visibility.
-  const pv = require('./kaola-workflow-plan-validator');
+  // repos.
   const consumerRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-consumer-'));
   try {
     git(consumerRepo, ['init', '-q']);
@@ -209,14 +208,8 @@ async function main() {
     git(consumerRepo, ['add', '-A']); git(consumerRepo, ['commit', '-q', '-m', 'init']);
     assert.strictEqual(runner.detectSelfHostNpm(consumerRepo), false,
       '#709: a consumer repo (no package.json) is NOT self-host');
-    // visibility agreement: both validators treat CHANGELOG/README/docs as invisible in a consumer repo
     assert.strictEqual(runner.isValidationInvisible('CHANGELOG.md', [], { self_host: false }), true,
       '#709: validation-runner treats CHANGELOG as invisible in a consumer repo');
-    assert.strictEqual(pv.isValidationInvisible('CHANGELOG.md', null, [], { self_host: false }), true,
-      '#709: plan-validator treats CHANGELOG as invisible in a consumer repo');
-    assert.strictEqual(pv.isValidationInvisible('CHANGELOG.md', null, [], { self_host: false }),
-      runner.isValidationInvisible('CHANGELOG.md', [], { self_host: false }),
-      '#709: both validators AGREE on CHANGELOG visibility in a consumer repo');
     const digestBefore = runner.computeLandableTreeDigest(consumerRepo);
     assert.match(digestBefore, HEX, '#709: consumer digest computes');
     // A finalize-sink CHANGELOG edit + README edit + docs edit — all validation-invisible in consumer
