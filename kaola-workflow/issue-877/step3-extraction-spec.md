@@ -58,14 +58,36 @@ propagates a refusal as `finalize_gate_unverified` from `cmdFinalize` (`claim.js
 read-only second call site in `evaluateFinalizePreconditions` (`claim.js:3898`). The validator's
 `--finalize-check` has three arms. They are not equal and must not be treated as one.
 
-**Arm A — validation (the chain receipt). SURVIVES as a verdict.** Ported to
-`adaptiveSchema.evaluateChainReceipt`, called **in process** — no spawn, no plan path. Keep the
-dual-mode repo-kind discriminator (self-host iff the git top-level `package.json` declares
-`test:kaola-workflow:*`; present-but-unparseable → `repo_kind_undetermined`, fail-closed), the
-self-host arm reading `.cache/chain-receipt.json` with `codeTreeHash` freshness and the `headSha`
-fallback, the consumer arm reading `.cache/final-validation.md`, and the typed precedence family
-`chains_unverified > chains_stale > chains_empty > chains_red`. This is First Principle 5 — own your
-own verdicts — and it is the one place a finalize may still stop.
+**Arm A — validation (the chain receipt). SURVIVES AS A MEASUREMENT, NOT A VERDICT.**
+
+> **Correction, 2026-07-31.** An earlier draft of this spec kept arm A as the one refusal finalize
+> may still raise. That was wrong, and it was wrong in the specific direction ADR 0017 warns about —
+> preserving a mechanism because removing it makes the system harder to reason about. ADR 0016's R3
+> is *"publication to mainline without a content-bound witness"*, and the chain receipt **is** that
+> witness. ADR 0017 names *"a witness bound to different bytes"* explicitly among the things the sink
+> now **reports**, and states plainly: *the refusal count reaches zero; nothing in the mission-list
+> design refuses.* So arm A converts like every other refusal did: **delete the verdict, keep the
+> measurement.**
+
+Port to `adaptiveSchema.evaluateChainReceipt`, called **in process** — no spawn, no plan path. Keep
+every measurement intact: the dual-mode repo-kind discriminator (self-host iff the git top-level
+`package.json` declares `test:kaola-workflow:*`), the self-host arm reading
+`.cache/chain-receipt.json` with `codeTreeHash` freshness and the `headSha` fallback, the consumer
+arm reading `.cache/final-validation.md`, and the typed classification family
+`chains_unverified > chains_stale > chains_empty > chains_red > chains_green`.
+
+What changes is only what is done with it. `evaluateChainReceipt` returns a typed **finding**;
+finalize **does not exit non-zero on it**. It reports on the envelope as `validation: {...}` and
+writes the same finding durably into `finalization-summary.md` under `## Validation`. The
+orchestrator reads it and owns the outcome — re-run the chains, fix the red, or proceed knowingly.
+
+This is not a weakening of First Principle 5. That principle says never let a system we do not own
+be the judge of done; it does not say a door must slam. We still compute our own verdict from our
+own chains — we hand it to the party accountable for the result instead of enforcing it against them.
+
+**One thing stays hard, and it is not a gate.** If the archive move would *lose a file*, the archive
+operation fails loudly. That is an operation refusing to destroy data, not a workflow judging work —
+the same class as a failed write. Do not convert it.
 
 **Arm B — the attribution sweep. BECOMES A REPORT. It must not refuse.** Its teeth came entirely
 from *declared write sets*: a machine-checkable path set authored before the work. ADR 0017 removes
@@ -144,8 +166,10 @@ and stays unbuilt.
 1. `claim.js` and `run-chains.js` no longer `require` `kaola-workflow-plan-validator.js`. Nothing
    outside the retiring set does.
 2. A finalize over a green, fresh receipt passes with no plan file present anywhere.
-3. A finalize over a stale receipt refuses `chains_stale`; over a missing receipt,
-   `chains_unverified`; over a red receipt, `chains_red`. Precedence holds when several apply.
+3. A finalize over a stale / missing / red receipt **still passes** — it does not exit non-zero —
+   and reports the typed finding (`chains_stale`, `chains_unverified`, `chains_red`) both on the
+   envelope under `validation` and durably in `finalization-summary.md` under `## Validation`.
+   The classification precedence still holds when several conditions apply at once.
 4. A finalize whose diff touches paths no record describes **passes**, reports them on
    `changed_paths`, and leaves them in `finalization-summary.md` under `## Changed Paths`.
 5. `run-chains.js --release-check` reproduces every refusal the plan-validator verb produced:

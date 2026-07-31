@@ -39,6 +39,11 @@
   status: in-flight
   dispatched: subagent `triage-walkthrough` (code-explorer, sonnet), read-only, reporting to kaola-workflow/.origin/877/walkthrough-triage.md
 
+- item: CORRECTION to my own spec, carried here so it is not re-litigated — the finalize chain-receipt gate loses its verdict too. The first draft of step3-extraction-spec.md kept arm A as "the one place a finalize may still stop". That was wrong: ADR 0016's R3 is publication without a content-bound witness, the chain receipt IS that witness, and ADR 0017 names "a witness bound to different bytes" among the things the sink now REPORTS while stating the refusal count reaches zero. Keeping it was preserving a mechanism because removing it makes the system harder to reason about — the exact move the ADR's method note warns about. Arm A now returns a typed finding, finalize does not exit non-zero on it, and the finding is written to finalization-summary.md under ## Validation as well as onto the envelope. Two things deliberately do NOT convert: run-chains --release-check keeps every refusal (release tooling a human invokes, outside the run design, and the project mandates an unwaived four-chain receipt for a tag), and an archive that would LOSE a file still fails loudly (an operation refusing to destroy data is not a workflow judging work).
+  status: done
+  dispatched: self, plus corrections sent to `extract-impl` and `finalize-door-tests` mid-flight
+  result: kaola-workflow/issue-877/step3-extraction-spec.md — the correction is inline in the "finalize door" section and in acceptance clause 3.
+
 - item: Triage the other mixed suites — claim-hardening, gap-sweep, run-chains, sink-merge, refusal-route-sweep, interior-gate-freshness, barrier-base-integrity — and settle whether kaola-workflow-gap-sweep.js itself has a subject left once there are no nodes.
   status: in-flight
   dispatched: subagent `triage-mixed-tests` (code-explorer, sonnet), read-only, reporting to kaola-workflow/.origin/877/mixed-tests-triage.md
