@@ -176,7 +176,12 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       '<!-- PIN: sink-reports-orchestrator-owns -->',
-      'The sink does not refuse and it does not decide.',
+      // The sink DOES still stop — four operational refusals survive, and a converted finding stops
+      // without merging. What it no longer does is judge the work. The old token asserted a
+      // categorical "does not refuse" that the code never implemented; these two pin the two halves
+      // of the true contract instead, so a relapse in either direction is caught.
+      'does not judge your work',
+      'stops without merging',
       'This is not "merge anyway and report."',
       'get the merge correct',
       'resynchronize',
