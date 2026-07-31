@@ -36,8 +36,9 @@
   result: OBSERVED, all four. Decompose and dispatch and close are demonstrated by the closed items above. For the resume drill the `changelog-draft` dispatch was killed mid-flight on purpose, and recovery was then performed from this file alone — read the H1 for the goal, list the in-flight items with their `dispatched` fields, check each promised output locator on disk, and decide. All three promised outputs were absent; `triage-mixed-tests` could be shown alive, the other two could not, so the dead one was re-dispatched. TWO FINDINGS. (1) The design works: the file carried enough to resume with no context, which is exactly what the usage-limit wipe destroyed. (2) A real gap — `dispatched` records what went out but NOT whether it is still running, and a successor generally cannot probe the liveness of a process it did not start. The fix is a procedure, not a fifth field: look for the WORK, not the worker — if the promised output has landed, close; otherwise re-dispatch unless liveness is provable. That also makes "name where the output was to land" the load-bearing half of the `dispatched` field. Written into docs/mission-list.md under Resuming; no new field, no new machinery.
 
 - item: Triage simulate-workflow-walkthrough.js scenario by scenario — it is the integration suite and covers BOTH the dying DAG and surviving claim/finalize/sink/release behaviour, so wholesale deletion would take real coverage with it. Needs the release-check scenarios located, since that gate is moving to run-chains.
-  status: in-flight
-  dispatched: subagent `triage-walkthrough` (code-explorer, sonnet), read-only, reporting to kaola-workflow/.origin/877/walkthrough-triage.md
+  status: done
+  dispatched: subagent `triage-walkthrough` (code-explorer, sonnet), read-only
+  result: kaola-workflow/.origin/877/walkthrough-triage.md. THE SUITE MUST NOT BE DELETED — 294 scenarios, 68 DAG / 207 SURVIVOR / 19 MIXED. The raw inventory implied wholesale deletion and that would have destroyed 70% surviving coverage. The --release-check block is not a standalone scenario at all: it is lines 3816-4008 buried inside testBundle424432433ValidatorGates, so that function must be SPLIT. The agent also corrected my brief — scenarios are registered through a registry, not inline `scenario((` calls, so the ordinal recipe I gave it was wrong.
 
 - item: CORRECTION to my own spec, carried here so it is not re-litigated — the finalize chain-receipt gate loses its verdict too. The first draft of step3-extraction-spec.md kept arm A as "the one place a finalize may still stop". That was wrong: ADR 0016's R3 is publication without a content-bound witness, the chain receipt IS that witness, and ADR 0017 names "a witness bound to different bytes" among the things the sink now REPORTS while stating the refusal count reaches zero. Keeping it was preserving a mechanism because removing it makes the system harder to reason about — the exact move the ADR's method note warns about. Arm A now returns a typed finding, finalize does not exit non-zero on it, and the finding is written to finalization-summary.md under ## Validation as well as onto the envelope. Two things deliberately do NOT convert: run-chains --release-check keeps every refusal (release tooling a human invokes, outside the run design, and the project mandates an unwaived four-chain receipt for a tag), and an archive that would LOSE a file still fails loudly (an operation refusing to destroy data is not a workflow judging work).
   status: done
@@ -45,8 +46,9 @@
   result: kaola-workflow/issue-877/step3-extraction-spec.md — the correction is inline in the "finalize door" section and in acceptance clause 3.
 
 - item: Triage the other mixed suites — claim-hardening, gap-sweep, run-chains, sink-merge, refusal-route-sweep, interior-gate-freshness, barrier-base-integrity — and settle whether kaola-workflow-gap-sweep.js itself has a subject left once there are no nodes.
-  status: in-flight
-  dispatched: subagent `triage-mixed-tests` (code-explorer, sonnet), read-only, reporting to kaola-workflow/.origin/877/mixed-tests-triage.md
+  status: done
+  dispatched: subagent `triage-mixed-tests` (code-explorer, sonnet), read-only
+  result: kaola-workflow/.origin/877/mixed-tests-triage.md. gap-sweep.js SURVIVES — only its in_run_repair reason class dies, the other two and the whole gate half are untouched. test-run-chains is 41/41 survivor. test-claim-hardening is 8 DAG groups of 38, but three of them (#522/#816/#837) have surviving SUBJECTS that must be re-homed into test-finalize-door.js rather than deleted. test-sink-merge is 3 DAG of 18. test-refusal-route-sweep DIES ENTIRELY — not by cell count but by subject, since ADR 0017 retires the refusal mechanism itself.
 
 - item: Extract the load-bearing pieces onto the list form (step 3) — relocate the plan-independent helpers into the byte-identical adaptive-schema.js, re-point claim.js and run-chains.js off the plan-validator, rewrite the finalize door as validation-plus-report, and re-derive archive completeness now that the ledger is not the required set. The wave is deliberately ADDITIVE: the plan-validator is left running and untouched, so every intermediate commit stays shippable.
   status: in-flight
@@ -60,8 +62,9 @@
   dispatched: split in two. Subagent `agent-prompts` (implementer, opus) owns agents/*.md and the 48 hand-maintained plugins/*/agents/*.toml twins — delete workflow-planner, strip dead machinery from the other 14 roles, keep the craft, and carry the consent rule as prose since the durable valve is being deleted. The routing half is NOT dispatched yet: the 30 command/SKILL surfaces are GENERATED from 5 skeletons in templates/routing/ by generate-routing-surfaces.js (TOPICS at :78), so that half is "delete 2 skeletons, rewrite 3, regenerate" rather than 30 hand edits — and it waits on the extraction so the finalize skeleton describes the door that actually ships.
 
 - item: Draft the [Unreleased] CHANGELOG entry for the campaign, naming the accepted losses so they are not discovered later as surprises.
-  status: in-flight
-  dispatched: subagent `changelog-draft` (general-purpose, sonnet), writing to kaola-workflow/.origin/877/changelog-draft.md, forbidden from editing CHANGELOG.md itself
+  status: done
+  dispatched: `changelog-draft` (killed mid-flight for the resume drill), then re-dispatched as `changelog-draft-2` after recovery from this file showed its output had not landed
+  result: kaola-workflow/.origin/877/changelog-draft.md. Folded into CHANGELOG.md at step 6.
 
 - item: Rewrite CLAUDE.md to describe what ships and remove its ADR 0017 banner; update README, docs/api.md, architecture, conventions, the state contract and the doc index (step 6, last).
   status: todo

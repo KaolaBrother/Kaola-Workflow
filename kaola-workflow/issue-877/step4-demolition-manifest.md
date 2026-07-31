@@ -58,15 +58,64 @@ Wholly DAG, delete outright: `test-adaptive-node.js` (32,542) · `test-replan.js
 `test-plan-design-section.js` (391) · `test-ledger-chain-tamper.js` (407) · `test-plan-run.js` (139) ·
 `test-ledger-compare.js` (107, unless §2 keeps its subject).
 
-**Do NOT delete wholesale — triage first:** `simulate-workflow-walkthrough.js` (23,690) and
-`test-claim-hardening.js` (6,251), plus `test-gap-sweep.js`, `test-run-chains.js`,
-`test-sink-merge.js`, `test-refusal-route-sweep.js`. These cover surviving behaviour too. Scenario-level
-classifications are at `.origin/877/walkthrough-triage.md` and `.origin/877/mixed-tests-triage.md`.
-The walkthrough's `--release-check` scenarios must SURVIVE and be re-pointed at
-`run-chains.js --release-check`.
+### Triage outcomes — these are measured, not assumed
 
-`test-refusal-route-sweep.js` needs a decision, not a reflex: ADR 0017 drives the refusal count to
-zero, so report whether the suite has any subject left rather than trimming it row by row.
+Full detail in `.origin/877/walkthrough-triage.md` and `.origin/877/mixed-tests-triage.md`. Read
+them before touching a mixed suite; the numbers below are the headline only.
+
+**`simulate-workflow-walkthrough.js` — DO NOT DELETE.** 294 scenarios: **68 DAG, 207 SURVIVOR, 19
+MIXED** (plus 4 boundary cases flagged `?`, treat as MIXED). Deleting it wholesale would destroy 70%
+surviving coverage — classifier, roadmap, worktree, sink-merge, watch-pr, release, closure-audit,
+contract validators, labels, the dispatch-log hook and bundle-claim. Delete the DAG ordinals only.
+- **The `--release-check` block is NOT a standalone scenario.** It is lines **3816-4008** (13
+  sub-cases) buried *inside* `testBundle424432433ValidatorGates` (ordinal 198, spanning 3354-4233).
+  Split that function: extract 3816-4008 verbatim, re-point every `planValidatorScript` call at
+  `kaola-workflow-run-chains.js --release-check`, and let the rest of the function fall with the DAG.
+  Its `mkRepo` / `writeReceipt` locals are shared with the dying attribution cases — re-derive them,
+  do not delete them.
+- **Archive completeness scenarios are pure survivors** (ordinals 99, 260, 261) and already target
+  `claim.js` directly. Keep as-is.
+- **Shared helpers that must NOT go as collateral:** `assert`, `runNode`/`runNodeAsync`, `json`,
+  `read`, `statePath`, `writeProject`, `assertNoLegacyCoordDirs`, `plantActiveFolder(WithBase)`,
+  `plantRoadmapIssue`, `classifierScript`+`runClassifierOffline`, `runClaimOnline*`,
+  `runClosureAudit*`, `writeGhShimForStartup`, `writeShimFiles`, `ghMockEnv`,
+  `initGitRepo(WithBareRemote)`, the `G` git-fixture module, `headOf`, `cleanup`.
+- **DAG-only helpers that die with it:** `seedAdaptiveFinalizeFixture`, `alignFinalizeFixtureAcrossRoots`,
+  `plantFrozenPlan`, `stampVerifiedLegacyPlan`, `injectSpineForm`/`injectDesignSection`,
+  `runLegacyFreeze`, `freezeLegacyContent`, `adaptiveTmp`, `ADAPTIVE_PLAN`, `validatePlanFixture`,
+  `gateWarning*`/`assert(No)GateLeak`, `plantHandoffState`.
+
+**`test-claim-hardening.js`** — 38 groups: **8 DAG, 30 SURVIVOR** (the DAG groups are fixture-heavy,
+~55% of lines). But three of the eight — **#522, #816, #837** — have DAG *fixtures* and SURVIVING
+*subjects* (finalize must verify a receipt exists, report every unmet precondition in one read-only
+pass, own the worktree→main mirror sync). **Do not delete their subject.** It is re-homed in the new
+`scripts/test-finalize-door.js`; confirm it is covered there before removing the group. #686 (barrier
+refs) and #699 (epoch/claim-root identity) delete outright. #735/#755 need re-derivation: `abandon`
+survives, but its logic is keyed on ledger completeness.
+
+**`test-run-chains.js`** — **0 DAG, 41 SURVIVOR.** Keep the whole suite. One caveat: **T29**
+(lines 967-1001) proves finalize does not vacuously pass an empty `chains[]` receipt, but drives it
+through `plan-validator --finalize-check`. Re-point it at wherever that check now lives; do not let
+it disappear with its host.
+
+**`test-gap-sweep.js`** — 24 scenarios: 1 MIXED, 23 SURVIVOR. Trim the `in_run_repair` half of T1.
+Eight other scenarios merely *use* a nodeId fixture as a cheap vehicle to synthesise a swept class;
+swap it for the `deferred_red_chain` or `manual:*` fixture already in the suite.
+
+**`kaola-workflow-gap-sweep.js` SURVIVES** — verdict settled. Of its three reason classes only
+`in_run_repair` (nodeId with >1 open events) dies; `deferred_red_chain` (from the surviving
+run-chains receipt) and `manual:<slug>` are fully meaningful, and the whole gate half has zero node
+dependency. Drop the one class, keep the script.
+
+**`test-sink-merge.js`** — 18 scenarios: **3 DAG** (i, j, n — ledger-derived evidence requirements and
+an epoch-authority fixture), **15 SURVIVOR**.
+
+**`test-refusal-route-sweep.js` — DELETE ENTIRELY.** Not by cell count but by subject: ADR 0017
+retires the refusal mechanism itself. `sink_verdict` *is* R3 and becomes a report; `consent_required`
+becomes the orchestrator asking the user. The registry it sweeps has no successor, so the suite has
+no subject. `KERNEL_REFUSAL_REGISTRY` and the route-contract machinery go with it.
+
+**`test-interior-gate-freshness.js`, `test-barrier-base-integrity.js`** — confirmed 100% DAG.
 
 ## 4. The three enumerated name-lists — shrink in the same commit
 
