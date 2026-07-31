@@ -1,111 +1,91 @@
 # Kaola-Workflow
 
-**Loop engineering for coding agents.** Instead of prompting an agent and hoping, you hand Kaola-Workflow an issue and it designs the loop that prompts the agent for you: a **task-shaped DAG of role nodes** sized to the issue, each node running inside a verified act → check → close cycle, with fail-closed **exit conditions**, adversarial **verification loops**, and **durable state** that survives sessions and context resets — all inside a locked claim → worktree → *free design* → Finalization frame. Runs on four agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), and [Kimi Code](https://www.kimi.com/code)** — across the **GitHub, GitLab, and Gitea** forges.
+**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on four agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), and [Kimi Code](https://www.kimi.com/code)** — across the **GitHub, GitLab, and Gitea** forges.
 
 ## Philosophy
 
-**You don't prompt the agent. You design the loop.**
+**The agent can already do this. Write down what it cannot remember.**
 
-The leverage in agentic coding has moved from writing prompts to engineering the loops that run agents: what feeds them context, what verifies their output, and what decides whether to iterate, escalate, or stop. Kaola-Workflow is that loop, engineered with discipline — no *loopmaxxing*. Every loop has a grader, a circuit breaker, and a fail-closed exit condition, because an unverified iteration is just expensive noise. The point is not loops that run unattended; it is **loops that are safe to leave running**.
+A capable orchestrator decomposes work, dispatches subagents, runs independent things concurrently, and does not drift — with no framework at all. What it cannot survive is being killed mid-run: content lives in git, but **what was in flight** and **what remained to do** live only in a process, and die with it.
 
-That discipline comes from one creed:
+So the design is sized to exactly that gap. Coordination state moves onto disk, and nothing else is added:
+
+- **One file per run**, `kaola-workflow/{project}/mission-list.md`. Not a plan, not a schedule — a record.
+- **Four fields per item**: the mission in one line of prose, its status, what went out and to whom, and where the outcome landed.
+- **Three write moments**: created, dispatched, closed. `dispatched` is written *before* the work goes out, because everything between dispatch and return is the window in which a process dies.
+- **No script required.** A file convention suffices.
+
+That creed in one line:
 
 **Make coding agents do more — more automation, less manual toil, faster results — without ever trading away accuracy.**
 
-The creed is codified as five **first-principles axioms** (`templates/axioms.md`), applied in priority order whenever a situation is not already resolved by a specific rule, gate, or refusal. When they conflict, the higher one wins:
+It is codified as five **first-principles axioms** (`templates/axioms.md`), applied in priority order whenever a situation is not already settled. When they conflict, the higher one wins:
 
 1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome there is.
 2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
 3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and higher model tiers are means, not goals.
-4. **Machines decide facts; humans decide values.** Route irreversible or value-laden calls to the consent valve; leave everything checkable to run automatically.
+4. **Machines decide facts; humans decide values.** Irreversible or value-laden calls go to you; leave everything checkable to run automatically.
 5. **Own your own verdicts.** Never let a system the workflow does not own — CI, an external service — be the judge of done.
 
-The axiom layer is embedded byte-identically into every generated project's guidance (all six `workflow-init` surfaces, with a machine-enforced drift guard) and is **tighten-only**: an axiom may make an agent stricter, but never licenses skipping a typed gate, refusal, or barrier.
+The axiom layer is embedded byte-identically into every generated project's guidance (all six `workflow-init` surfaces, with a machine-enforced drift guard).
 
 A few beliefs follow from that order.
 
-**Correctness *is* efficiency.** Independent, adversarial verification and **fail-closed** checkpoints catch mistakes before they compound. Preventing rework is the cheapest optimization there is.
+**An item is a mission, not a specification.** It carries no role, no file list, no dependency edge, no model, no width. Carrying evidence is the point — *"investigate whether X still holds; the claim is at `foo.js:120`"* is an item; a schedule is not. The orchestrator decides how to run an item **when it reaches it**, with everything it has learned by then.
 
-**Parallelism is a means, not a goal.** The agent runs genuinely independent work at the same time to save you time — but it never forces fan-out for its own sake. Over-parallelizing just burns tokens and context for no real gain. **Width is sized to the true shape of the task.**
+**Concurrency carries no machinery at all.** There is no disjointness proof, no serializer taxonomy, no evidence line, no fan-out cap, and nothing inspects the decision. The frontier is not computed — it is the list minus done minus in-flight, visible by reading. Independent work runs concurrently because that is faster; work that feeds other work runs in order because it has to. The agent can already tell the difference.
 
-**Serial requires evidence; parallel doesn't.** Concurrency is the standing default for independent work. Holding a frontier serial is a positive claim that must cite present-tense, checkable evidence — a named data dependency ("name the artifact one unit consumes from the other, or co-open"), a named shared irreversible resource, or a host without worktree support. Guesses and anticipations ("might overlap") are inadmissible: wrongly-parallel work costs one bounded synthesis pass inside isolated worktrees, while wrongly-serial work silently costs wall-clock on every frontier. The burden of proof always sits on serial — this decides *whether* to parallelize; *how wide* stays sized to the true shape of the task.
+**Tools stay tools.** Subagents and per-issue worktrees are offered and declinable — decline either and the run still finishes. A tool you cannot decline and still finish would be a gate wearing a tool's name, and there are none.
 
-**One engine for every problem.** A single adaptive planner composes a task-shaped plan for *any* kind of work — building a feature, fixing a bug, or investigating an open question — from a small set of **reusable roles**. The same engine serves every problem type.
+**Measure, then report; the agent owns the outcome.** Validation, the paths a run changed, and the sink all *measure* and hand the finding to the orchestrator instead of slamming a door. That is not "proceed anyway": moving the verdict moves the **accountability**, onto the only party with enough context to fix what it finds.
 
-**Spend to match the work.** Parallel width, number of agents, and model strength all scale to the genuine scope of the issue. Small work stays small. Nothing is over-engineered.
+**Humans decide what only humans should.** Questions of fact are resolved autonomously. Irreversible and value-laden calls — a destructive Git operation, a deployment, a credential action, a schema or public-API change, reorganizing your issues — are put to you in conversation, before they are taken.
 
-**Humans decide what only humans should.** The system investigates and resolves questions of **fact** on its own. It escalates genuine matters of **judgment, value, and taste** to you.
-
-**A refusal is a cost, and stopping you is the expensive kind.** Every place the workflow refuses spends your attention, so refusing is held to a standard rather than reached for. A refusal must sit at one of three loci — kernel-write integrity, the sink, or the consent valve — *and* be crucial there; anything recoverable in place ships as an advisory that tells you what to do next. If the agent's own next step after a refusal would be a deterministic transformation, the script performs that transformation and the refusal retires: **a refusal whose remedy is mechanical is a missing tool wearing a uniform.** The one thing never auto-repaired is a deviation that is itself evidence — a hash mismatch, an unattributed diff, a broken chain — because repairing those launders the signal they exist to raise.
-
-Keeping that standard true over time takes three parts, and they only work together: a **rule** for deciding what may refuse, an **instrument** that measures what each interruption actually costs, and a **ratchet** that is forward-only — red on new unclassified growth, silent on removal. A rule with no measurement subtracts by anecdote; measurement with no ratchet lets what you removed grow back; a ratchet with no rule just freezes whatever happens to exist. The ratchet is deliberately one-directional because a guard that reddens when you *delete* code taxes the cleanup it was built to protect.
-
-Removing a refusal is not free either: it requires a pinned traversal of the **legal** path, not only the refusing one, and retiring a code takes its recovery instructions off every prompt surface in the same change. Otherwise a "removed" refusal survives as instructions describing a stop that no longer happens.
-
-### The loop vocabulary, mapped to mechanisms
-
-Every loop-engineering concept here is backed by a concrete mechanism — nothing is framing without a script or gate behind it:
-
-| Loop-engineering concept | Kaola-Workflow mechanism |
-|---|---|
-| Agent loop | Per-node role execution via the running-set scheduler |
-| Verification loop / grader | Adversarial verifier + fail-closed quality gates |
-| Exit condition | Post-dominance gates and the finalization sink — nodes close on recorded evidence, not on exit-0 |
-| Circuit breaker | Bounded repair plus claim-scoped re-plan epochs; the third automatic review-driven transition consent-halts |
-| Durable state tracking | `workflow-state.md`, the frozen plan ledger, per-node evidence, and immutable epoch snapshots — resumable across sessions and context resets |
-| Human-in-the-loop escalation | Consent-halt valve: facts are resolved autonomously, judgment goes to you |
-| Outer loop | `/goal` cross-turn autonomy toward one objective |
-| Harness | The locked claim → worktree → free design → finalization frame |
+**Correctness *is* efficiency.** Independent review and local, self-owned validation catch mistakes before they compound. Preventing rework is the cheapest optimization there is, and no external pipeline is ever the judge of done.
 
 ### What you get
 
-- **Engineered loops, not one-shot prompts** — every node runs act → verify → close, and the run iterates, escalates, or stops on explicit conditions, never on hope.
-- **Adaptive, task-shaped planning** sized to each issue.
-- **Multi-model** across Claude Code, Codex, and opencode, right-sizing the model for each step.
-- **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work. Write frontiers the planner proves **disjoint** co-open as isolated parallel legs **by default** (per-leg worktree isolation + a mandatory synthesizer reconcile are the correctness net); only genuinely-overlapping writes stay serial/consent-gated, and any host without worktree support degrades to serial.
-- **Independent adversarial verification** plus fail-closed quality gates.
-- **Candidate-bound reviewer contracts** — generated reviewer behavior, runtime-neutral review
-  contexts, immutable finding identities, deterministic local validation vectors, and
-  planner-designated common certifiers are checked mechanically before a schema-2 gate can pass.
-- **Optimize-shaped work** ("make it faster / smaller / less flaky") via a bounded metric-ratchet role — direction, not destination, with a regression gate on every step.
-- **Durable per-step artifacts** with full resumability across sessions and context resets.
-- **Claim-preserving re-plan epochs** when a frozen DAG cannot repair safely in place: the parent stays immutable and authoritative while `workflow-planner` authors a new child against the same claim, branch, worktree, and candidate.
-- A locked **claim → isolated worktree → free design → finalization** frame.
+- **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
+- **A claim that is bookkeeping, not a gate** — it records which issue, branch and worktree the run owns, so parallel sessions do not collide.
+- **Subagents and per-issue worktrees** as declinable tools, with 14 vendored roles across all four runtimes.
+- **Multi-model** across Claude Code, Codex, opencode, and Kimi Code, right-sizing the model per dispatch.
+- **Independent review** — generated, runtime-neutral reviewer contracts (`code-reviewer`, `adversarial-verifier`, `security-reviewer`) with deterministic profile identity across runtimes.
+- **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
+- **A finalization that reports** — validation classification, the paths the run changed, and the sink's findings all land on the envelope *and* durably in the archived summary.
 - **Four agent runtimes** (Claude Code, Codex, opencode, Kimi Code) across **three forges** (GitHub, GitLab, Gitea).
-- **Goal-driven autonomy** via `/goal` — keep a session working toward one objective across many turns.
 
 ## Overview
 
 ```
-   /workflow-init       once per project — generates CLAUDE.md,
-        │               ROADMAP.md, and the docs map
+   /workflow-init            once per project — generates CLAUDE.md,
+        │                    ROADMAP.md, and the docs map
         ▼
-   /workflow-next       per cycle — resumes from
-        │               kaola-workflow/{project}/workflow-state.md
+   /workflow-next            per cycle
         │
-        └──► Adaptive planning
-               the agent freely composes a task-shaped DAG of role nodes,
-               sized to the issue — sequence, fan-out, loop, or select —
-               then runs it node-by-node ──────────────────► Finalization
-
-   Finalization   doc-updater · sink-merge | sink-pr
-                  archive folder, close issue,
-                  push branch or open PR, refresh ROADMAP.md
+        ├─ pick the work     you read the backlog and rank it; the user's
+        │                    named issue always wins
+        ├─ claim             kaola-workflow/{project}/workflow-state.md
+        │                    + a repo-local worktree
+        ├─ write the list    kaola-workflow/{project}/mission-list.md
+        │                    — the goal, then one item per mission
+        └─ run it            decide dispatch-or-do-it-yourself when you
+             │               reach each item; three write moments
+             ▼
+   /kaola-workflow-finalize  validate · dock docs · summary · closure ·
+                             archive · commit · sink. Every step measures
+                             and reports; you own the outcome.
 ```
 
 ## Autonomy and goal contract
 
-Kaola-Workflow is goal-driven — `/goal` is the **outer loop** around the
-per-issue workflow loop. Use it in either Claude Code or Codex to keep a
-session working on a single objective across many turns until the
-platform's stop condition is satisfied. The Kaola-Workflow Codex
-skills also embed a `## Goal Contract` for phase-level continuation that
-works even when `/goal` is not in play.
+`/goal` is a **platform** stop-condition wrapper, not a Kaola mechanism — it is
+the outer loop around the per-issue workflow. Use it in either Claude Code or
+Codex to keep a session working on one objective across many turns.
 
 ### Using `/goal` with Claude Code or Codex
 
 `/goal` originated in Codex and was adopted by Claude Code. Both
-platforms treat it as a stop-condition wrapper: you type a goal in plain
+platforms treat it the same way: you type a goal in plain
 language and the session keeps working without pausing until the goal is
 satisfied (or the platform's budget runs out).
 
@@ -115,8 +95,8 @@ default cap of 500 turns. Examples:
 
 ```text
 /goal use the kaola-workflow commands to finish issue #42.
-/goal finish issue #42 — every plan node closed, validation green,
-      workflow-plan.md's Node Ledger all-complete.
+/goal finish issue #42 — every mission-list item done, validation green,
+      the issue closed and the folder archived.
 /goal use kaola-workflow to finish all remaining open issues, one at a
       time, until ROADMAP.md has no active entries.
 ```
@@ -131,12 +111,13 @@ versions — enable it by setting `goals = true` under `[features]` in
 /goal use the workflow-next skill to finish all remaining open issues.
 ```
 
-Each Kaola-Workflow Codex skill also embeds a `## Goal Contract` section
-that holds a phase-level continuation rule. That contract is independent
-of the platform `/goal` and applies even when `/goal` is not active —
-invoking a skill alone (for example, `Use the workflow-next skill
-to finish issue #42.`) is enough to keep it working until its phase
-objective, evidence, and `workflow-state.md` next pointer are complete.
+`/goal` is optional. Invoking a command or skill directly — for example
+`Use the workflow-next skill to finish issue #42.` — is enough on its own;
+the run is driven by its mission list, not by a platform continuation flag.
+
+Separately, `KAOLA_GOAL` is the operator-side goal text. Finalization records
+that a goal was **declared**, with its source — never that it was met; nothing
+in this workflow checks whether a goal was achieved.
 
 Routine workflow bookkeeping is autonomous. Generated project/folder names,
 collision suffixes such as `-2`, cache/artifact paths, and ordering that does
@@ -173,19 +154,22 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `security-reviewer` | Gate — review (conditional) | reasoning |
 | `doc-updater` | Finalization — docs | standard |
 | `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | standard |
-| `workflow-planner` | Front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically; in no-target mode also runs the backlog survey + selection) | reasoning |
 | `synthesizer` | Parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | reasoning |
 | `metric-optimizer` | Bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | standard |
 
+**Roles are tools, not assignments.** No role is pre-assigned to anything: the orchestrator reaches
+for one by name at the moment it needs it, and running an item inline instead is an equally valid
+call. There is no planning agent and no bookkeeping agent — the orchestrator writes the mission list
+and runs the finalize transaction itself.
+
 The **Tier** column is each role's *static default* — the `DEFAULT_AGENT_MODELS`
-fallback the runtime resolver uses when a node carries no tier. There is **no
-install-time model axis**: every install ships the same assignment, and the
-frozen plan's per-node `{reasoning|standard}` column overrides it wherever a plan
-says so.
+fallback the runtime resolver uses when a dispatch names no tier. There is **no
+install-time model axis**: every install ships the same assignment, and the orchestrator may pass a
+different model on any single dispatch.
 
 For an **installed** agent the tier above is the only thing that decides: install
 rewrites each installed agent's frontmatter to `model: inherit`, so the resolver's
-frontmatter step never fires and the chain is `plan column → DEFAULT_AGENT_MODELS
+frontmatter step never fires and the chain is `dispatch → DEFAULT_AGENT_MODELS
 → inherit`. Each role's *source* frontmatter carries the identical value and
 governs exactly one case — an ad-hoc dispatch pointed at this repository's
 `agents/` directory rather than the installed one. The two are kept byte-equal by
@@ -194,54 +178,27 @@ directory it was dispatched from.
 
 On the current Codex runtime, every named Kaola role profile omits top-level `model` and
 `model_reasoning_effort`, so the child inherits both effective values from the parent session. The
-portable `reasoning`/`standard` plan tiers (and legacy `opus`/`sonnet` aliases) remain declarative
-metadata for role defaults and 40/20-minute wait budgets; they do not select a Codex child pair.
+portable `reasoning`/`standard` tiers (and legacy `opus`/`sonnet` aliases) remain declarative
+metadata for role defaults; they do not select a Codex child pair.
 Reasoning-floor roles still fail closed: a fresh current-session JSONL proof must establish a
 classified `gpt-5.6-sol`/`xhigh`-or-higher parent posture before dispatch.
 
-`adversarial-verifier` is locally authored for the [adaptive workflow](#adaptive-workflow)
-rather than derived from ECC — a dedicated refute-by-default skeptic generated from the same
-versioned reviewer behavior source as `code-reviewer`. It is always read-only (touches zero
-repository files). The graph, not role prose, decides its mode: a verifier downstream of a change
-producer and able to reach the sink is a `change_gate`; otherwise it is an analytical
-`investigation`. It installs on every edition.
+Three roles are locally authored rather than derived from ECC:
 
-There is no mechanical-bookkeeper role. Judgment-adjacent seams ride the orchestrator and
-mechanical floors ride scripts, with no judgment-forbidden agent in between: the finalize seam's
-whole residue — artifact mirror (with its ledger-regression guard), archive + status close, roadmap
-staging, and the `chore: finalize <project>` commit gate — is ONE resumable `cmdFinalize`
-transaction the orchestrator runs directly and reasons over. `workflow-planner` stays: the
-claim/author/freeze seam at run start is a genuine reasoning delegation, where orchestrator context
-economy is at its maximum.
+- `adversarial-verifier` — a refute-by-default skeptic generated from the same versioned reviewer
+  behavior source as `code-reviewer`. It is always read-only (touches zero repository files). Point
+  it at a claim you want broken, not at work you want approved.
+- `synthesizer` — a reasoning-class write-convergence specialist. Reach for it when two concurrent
+  write legs collide and the reconciliation is by *intent* rather than by textual hunks; it is
+  pointless for cleanly-disjoint legs.
+- `metric-optimizer` — a bounded ratchet for *direction-not-destination* work ("make it faster /
+  smaller / less flaky") where no acceptance threshold is knowable up front. Each iteration proposes
+  a change, applies it, runs the regression gate, measures the metric (median-of-K), and accepts or
+  reverts against the running baseline until a stop condition fires.
 
-`workflow-planner` is locally authored for the [adaptive workflow](#adaptive-workflow) front end: a
-fixed-Opus agent the main session dispatches **once** at the start of the adaptive path. It runs the
-claim/startup (worktree + `workflow-state.md`), **authors** the `## Nodes` DAG, per-node
-`## Node Briefs` (each node's goal line — the durable node-to-node information channel,
-hash-covered when present), plus an empty `## Node Ledger` into `workflow-plan.md`, runs the
-plan-validator `--json` as a self-check, and then
-**runs `kaola-workflow-adaptive-handoff.js`** — which freezes mechanically on `result:in-grammar`,
-resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`
-(preserving the `## Sink` block) — returning a checklist-backed packet (`handoff_status: ready_to_run`
-with advisory `first_node` metadata on success; `plan_invalid` with no mutation on `refuse`). The
-handoff does **not** open the first node or record its baseline — `/kaola-workflow-plan-run` owns the
-complete node lifecycle including the first node, opening and dispatching every node via
-`kaola-workflow-adaptive-node.js`. It never **judges** risk and never asks the user —
-`decision:auto-run` vs `ask` is audit metadata recorded by the handoff; the run proceeds either way
-with no approval gate. It never dispatches a subagent (a subagent cannot dispatch a subagent — it
-returns control to main), and is pinned to the reasoning tier on every install. It is
-DISTINCT from the vendored read-only `planner`, which
-stays a read-only in-plan node role.
-
-The standalone `issue-scout` agent (issue #328/#646) is retired: in no-target mode (no issue
-named), `workflow-planner` now runs the [bundle-lane](#multi-issue-bundle-lane-adaptive-only)
-backlog survey itself — reading forge issues, the local roadmap, and active folders — selects a
-same-scope bundle (or a single issue) jointly with how it decomposes the work, then claims +
-authors + freezes in ONE dispatch. There is no separate pre-claim survey hop.
-
-`synthesizer` is locally authored for the adaptive parallel-write path (issue #463): a reasoning-class write-convergence specialist. When planner-proven-disjoint write legs co-open as isolated worktrees, the last member's close octopus-merges them mechanically; the `synthesizer` is dispatched **only** when that mechanical merge hits a real conflict, and reconciles the legs into the feature branch by *intent* rather than by textual hunks. It is never invoked for cleanly-disjoint legs and is pinned to the reasoning tier by the reasoning floor.
-
-`metric-optimizer` is locally authored for optimize-shaped work (issue #634) — *direction-not-destination* deliverables ("make it faster / smaller / less flaky") where no acceptance threshold is knowable at freeze. Each iteration of its bounded, budget-capped ratchet loop proposes a change, applies it, runs the regression gate, measures the metric (median-of-K), and accepts or reverts against the running baseline, until a stop condition fires. It is an ordinary `sequence`-shaped implement role — `code-reviewer` still post-dominates it, its contract lives in the plan's `## Meta` `optimize(<node-id>)` block, and a change-gate `adversarial-verifier` reproduces the final metric before finalize.
+One rule about review is worth stating because it is judgment, not machinery: a review gate reviewing
+its own writer-context is no gate. If the same session did the work, take the finding to the user
+rather than self-issuing a pass.
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -253,9 +210,9 @@ differs from the agent's frontmatter). **After installing or re-running
 
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
->   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `knowledge-lookup`,
->   `doc-updater`, `adversarial-verifier`, `metric-optimizer`) run silently.
->   Opus-dispatched agents (`planner`, `workflow-planner`, `synthesizer`,
+>   agents (`code-explorer`, `investigator`, `tdd-guide`, `implementer`, `build-error-resolver`,
+>   `knowledge-lookup`, `doc-updater`, `adversarial-verifier`, `metric-optimizer`) run silently.
+>   Opus-dispatched agents (`planner`, `synthesizer`,
 >   `code-architect`, `code-reviewer`, and `security-reviewer`) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
 >
@@ -292,7 +249,7 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 Being additive is about *edition machinery*, not about forge support: both runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`).
 
-**Adaptive planning runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only. Adaptive is the only workflow path; there is nothing to select. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
+**The same workflow runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only; there is no workflow path to select. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -345,9 +302,9 @@ cd Kaola-Workflow
 #### Agent model tiers
 
 There is **no install-time model axis**. Every install ships one model assignment
-per role (the **Tier** column under [Workflow roles](#workflow-roles)), and the
-frozen plan's per-node `{reasoning|standard}` column is the sanctioned way to
-right-size any single node up or down. The retired install-time model-profile flag
+per role (the **Tier** column under [Workflow roles](#workflow-roles)), and passing
+a different `model=` on a single dispatch is the way to right-size one piece of work
+up or down. The retired install-time model-profile flag
 is now an unknown argument and fails loudly at the terminal — by design.
 
 ```bash
@@ -355,10 +312,9 @@ is now an unknown argument and fails loudly at the terminal — by design.
 ./install.sh --forge=gitlab               # GitLab edition
 ```
 
-#### Adaptive workflow path
+#### Nothing to configure
 
-The [adaptive workflow](#adaptive-workflow) requires no configuration:
-`./install.sh` installs it and nothing else.
+There is one workflow and no path to select. `./install.sh` installs it and nothing else.
 
 Then in Claude Code:
 
@@ -415,7 +371,7 @@ The install seeds `opencode.json` with **two model tiers as reasoning-effort var
 
 ### kimi
 
-Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the 11 commands become directory-form Skills (so `/workflow-next` works as-is) and the 15 roles ship as `kaola-role-*` contract Skills, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no two-tier effort mapping; the planner's per-node tier is recorded as ledger metadata only. From a local clone:
+Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the three commands become directory-form Skills (so `/workflow-next` works as-is) and each vendored role ships as a `kaola-role-*` contract Skill, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no two-tier effort mapping, and a role's tier is declarative metadata only. From a local clone:
 
 ```bash
 ./install-kimi.sh --global --yes   # deploy skills into ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
@@ -617,7 +573,7 @@ prose from stochastic models.
 
 Codex custom-agent TOMLs keep only `name`, `description`, `nickname_candidates`, and
 `developer_instructions` at top level. Reviewer behavior identity and the complete-profile self-hash
-are embedded in `developer_instructions`, where the adaptive runtime can verify them without adding
+are embedded in `developer_instructions`, where the runtime can verify them without adding
 unsupported role-schema fields — Codex logs a role file carrying one as a malformed agent role
 definition and ignores it.
 
@@ -647,12 +603,10 @@ local-tool fallback. The installer also refuses symlinked, escaping, or
 wrong-type managed destinations instead of following them outside their declared project/HOME
 authority.
 
-The review mechanism on Claude Code, Codex, and opencode is the **adaptive** schema-2
-`code-reviewer`/`security-reviewer` post-dominance gates and review-attempt journal — documented
-above under "Reviewer contract 2 for newly authored plans" and in `docs/api.md`. The compatibility
-literal `review_attestation: full_review_completed` that `code-reviewer`/`security-reviewer` emit
-for a schema-1 block is a fixed token name (unrelated to the schema-2 gate vocabulary) and remains
-live.
+Review works the same way on every runtime: dispatch `code-reviewer`, `security-reviewer`, or
+`adversarial-verifier` when the work calls for one, and read what comes back. Their *behavior* is
+generated from one versioned source and is provably identical across runtimes; what they find is not,
+because they are stochastic models. Identical behavior contracts do not imply identical findings.
 
 #### Config audit for effort-safe subagents
 
@@ -819,23 +773,17 @@ EITHER a valid global `~/.codex` scope OR a valid project scope, and **fails clo
 neither is valid**. The **hooks** are global by design (`~/.codex`) and are reported
 under the `user` scope.
 
-The primary skills are:
+The skills are:
 
 ```text
 kaola-workflow-init
 kaola-workflow-next
-kaola-workflow-research
-kaola-workflow-ideation
-kaola-workflow-plan
-kaola-workflow-execute
-kaola-workflow-review
 kaola-workflow-finalize
 ```
 
-Both Codex packs provide the same adaptive workflow, state repair, compliance ledger,
-TDD evidence, review, documentation docking, roadmap refresh, archive, and a
-final commit-and-push step. They do not depend on external agent dependencies.
-Instead,
+Each Codex pack provides the same workflow as the Claude commands — the mission list,
+review, documentation docking, roadmap refresh, archive, and the sink. They depend on no
+external agent packages. Instead,
 `kaola-workflow-init` automatically installs Codex-native role profiles that
 mirror the Claude workflow roles:
 
@@ -852,32 +800,25 @@ code-reviewer
 security-reviewer
 doc-updater
 adversarial-verifier
-workflow-planner
 synthesizer
 metric-optimizer
 ```
 
-(`adversarial-verifier` is the read-only falsifier for the adaptive path; its mode is derived from
-the frozen graph as either an analytical investigation or a change gate. `workflow-planner` is the
-adaptive DAG front end (it also runs the backlog survey + bundle-lane selection itself in no-target
-mode).
-`synthesizer` is the
-adaptive parallel-write convergence role (#463) — reasoning-class, dispatched only
-to reconcile concurrent write legs by intent on a real merge conflict. `metric-optimizer`
-is the adaptive bounded metric-ratchet role — each iteration it proposes a change,
-applies it, runs the regression gate, measures the metric, and accepts or rejects it
+(`adversarial-verifier` is a read-only, refute-by-default falsifier. `synthesizer` is a
+reasoning-class write-convergence role, worth reaching for only when concurrent write legs actually
+conflict. `metric-optimizer` is a bounded metric-ratchet — each iteration it proposes a change,
+applies it, runs the regression gate, measures the metric, and accepts or reverts it
 against the running baseline until a stop condition fires.)
 
 The managed setup copies role configs into `~/.codex/agents/kaola-workflow/` (global
 default; a project-local override targets `<project>/.codex/agents/kaola-workflow/`
 instead) and maintains a `# BEGIN kaola-workflow agents` block in `~/.codex/config.toml`
 while preserving unrelated config. Codex workflows default to delegation
-(`delegation_policy: delegate`) without prompting: phases invoke those roles for
-delegated research, planning, execution, repair, review, and documentation work.
+(`delegation_policy: delegate`) without prompting: the orchestrator dispatches those roles for
+research, execution, repair, review, and documentation work.
 When the role profiles are absent the workflow auto-detects this, keeps the
-`delegate` policy, and records the affected rows as evidenced
-`local-fallback-tool-unavailable`. The current Codex session performs the work
-locally under `local-authorized` only when you explicitly disable delegation.
+`delegate` policy, and records `local-fallback-tool-unavailable`. The current Codex session performs
+the work locally under `local-authorized` only when you explicitly disable delegation.
 
 Codex 0.144 reloads a named role profile after transient spawn overrides, so Kaola
 does not rely on per-spawn `model` or `reasoning_effort`. Standalone role TOMLs
@@ -888,29 +829,19 @@ back to omission; partial or illegal pins are malformed. This per-profile rule i
 separate from the user-owned root `model_reasoning_effort` setting, which controls
 the parent session's dispatch posture and is never rewritten by profile migration.
 
-The adaptive planner writes portable `reasoning`/`standard` tier tokens.
-Codex dispatch cards expose `codex_profile_mode: "inherit"` and retain the role's
-default tier as declarative metadata only — Codex >=0.145.0 resolves the
-sub-agent's own model/reasoning effort itself, not a guaranteed parent-session
-equality, and Kaola never writes or overrides it.
+Codex dispatch retains the role's default `reasoning`/`standard` tier as declarative metadata
+only — Codex >=0.145.0 resolves the sub-agent's own model/reasoning effort itself, not a guaranteed
+parent-session equality, and Kaola never writes or overrides it.
 
-Every Codex DAG node role writes its full nonce-bound deliverable directly to the seeded
-`dispatch.evidence_file` under `kaola-workflow/{project}/.cache/` before returning. Its final message
-is only a compact `<node-id> <role>: <outcome>; evidence=<path>` summary for the main orchestrator.
-Dependent nodes consume the full cache artifact through `dispatch.upstream_evidence`; plan-run runs
-`record-evidence --verify` before closing the producer, and a seed-only or malformed artifact cannot
-advance the DAG. If the parent summary transport disconnects, a terminal child plus a green verified
-cache artifact may continue as `returned_partial`; without that artifact the node stays open.
-
-`workflow-planner` runs outside the Node Ledger. Its complete workflow-state and plan artifacts are
-the authoritative durable full result; it returns a compact summary to the orchestrator and also
-mirrors the full packet into `dispatch.evidence_file` when its dispatch supplies a seeded cache
-file.
+**Say where the deliverable goes.** A role that can write (`Write`/`Edit` in its manifest) writes its
+full deliverable to a path the dispatch names and returns a compact summary; a read-only role returns
+its full deliverable as its final message, for the orchestrator to persist. Getting this backwards is
+how work is lost at the dispatch boundary — a chat-only deliverable from a killed agent is gone, and
+the mission list's `dispatched` field is what lets a successor go looking for the file instead.
 
 Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
 is the only mode — there is no v1/thread-id fallback. Once `features.multi_agent_v2.enabled = true`
-is set, plan-run passes `task_name: dispatch.codex_task_name`, a sanitized value
-derived from the workflow node id and role, with `fork_turns: "none"` and no
+is set, dispatches pass a sanitized `task_name` with `fork_turns: "none"` and no
 transient model/effort overrides; the named standalone profile (or Codex's own
 runtime resolution) owns the model/reasoning pair.
 
@@ -930,145 +861,137 @@ In any Claude Code session, run:
 /workflow-next
 ```
 
-The command is a thin router. It first checks local/remote Git state, safely fast-forwards clean behind-only branches, and asks before risky synchronization such as diverged history, dirty worktrees with upstream changes, rebases, merges, stashes, resets, or conflicts. It then scans `kaola-workflow/`, reads `workflow-state.md` when present, and routes to the right command.
+`/workflow-next` is the whole workflow: it picks the work, claims it, writes the run’s mission list,
+and runs it.
 
-### Adaptive workflow
+### 1. Pick the work
 
-For every issue — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the agent **freely composes a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. `./install.sh` installs it and nothing else; there is nothing to configure.
+**You** select the target; no script picks for you. If the user named an issue, that issue is the
+target and nothing substitutes for it. If the user described a task with no issue number, resolve the
+description to the issue it belongs to (or file one) first. If neither, read the backlog —
+`kaola-workflow/ROADMAP.md` and its `### Project rules`, each `kaola-workflow/.roadmap/issue-*.md`,
+the open issue list, the active folders, the archived summaries — rank by the priority frontier, and
+**state the selection aloud before claiming it**.
+
+Everything before the claim is free: dispatch read-only agents, read whatever you need, ask the user
+when the pick is genuinely ambiguous. A clean selection claims without asking.
+
+### 2. Claim
+
+The claim is bookkeeping, not a gate. It atomically creates `kaola-workflow/{project}/` with its
+`workflow-state.md` — recording which issue, branch and worktree this run owns — and provisions a
+repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` unless `KAOLA_WORKTREE_NATIVE=0`
+disables it.
+
+The claim **answers; it does not refuse.** `owned` or `acquired` means you have the folder.
+Anything else reports a fact about the target rather than a verdict about you — fix the argument,
+retry, work offline, or re-state your reason and claim something else. The one thing it puts back to
+you is your own uncommitted work: that is a question, not a refusal.
+
+A run normally carries one issue. Several may share a run when they are all open, unclaimed, and
+share a coherent scope — see [Multi-issue bundle lane](#multi-issue-bundle-lane).
+
+### 3. Write the mission list
+
+`kaola-workflow/{project}/mission-list.md` is the run’s coordination record and the one file a
+successor needs. It is written immediately after the claim, before any work goes out:
+
+````markdown
+# <the goal, one line>
+
+- item: <the mission, one line of prose>
+  status: todo
+
+- item: <the mission>
+  status: in-flight
+  dispatched: <what went out and to whom, and where its output was to land>
+
+- item: <the mission>
+  status: done
+  dispatched: <what went out and to whom>
+  result: <where the outcome landed — a path, or a few lines inline>
+````
+
+| field | content | written |
+|---|---|---|
+| `item` | the mission — one line of prose, hints and facts | at creation |
+| `status` | `todo` \| `in-flight` \| `done` | on change |
+| `dispatched` | what went out and to whom, enough to decide re-dispatch vs. wait | at dispatch |
+| `result` | where the outcome landed — a path, or a few lines inline | at close |
+
+Items are identified by their order in the file; nothing depends on a stable ID, and items may be
+added at any time. Full convention: [docs/mission-list.md](docs/mission-list.md).
+
+### 4. Run it
+
+Read the list. The frontier is the list minus done minus in-flight — visible by reading, never
+computed. Pick from it.
+
+**Decide the shape when you get there, not before.** When you reach an item, decide whether to
+dispatch subagents or do the work yourself, and at what width. Nothing inspects that decision.
+Independent work runs concurrently; work that genuinely feeds other work runs in order.
+
+**The three write moments** are the whole discipline:
+
+1. **Created** — write `item` and `status: todo`.
+2. **Dispatched** — write `dispatched` and flip `status` to `in-flight`, **before the work goes out**.
+   Writing it afterwards is exactly the failure this file exists to prevent. Name **where the output
+   was to land**; that locator is what makes recovery possible.
+3. **Closed** — write `result` and flip `status` to `done`.
+
+Work you do yourself is still an item — `in-flight` with `dispatched: self`.
+
+### 5. Finish
+
+When every item is `done`:
 
 ```
-/workflow-next                       # routes to the adaptive workflow (the only path)
+/kaola-workflow-finalize {project}
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes the legal schema-2 **planless** epoch-1 state, and when online/native provisions a worktree at `.kw/worktrees/<project>/`; offline mode provisions neither a worktree nor an in-place feature branch), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG, per-node `## Node Briefs`, plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and atomically publishes the legal **planned** state by replacing `active_plan_hash` plus the complete `## Planning Evidence` tuple (`plan_hash`, governance decision/risk, first-node id/role). As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and hands off to Finalization on an all-complete ledger.
+Finalization validates, docks the documentation, writes the summary, settles closure, archives the
+run, commits, and sinks. **Every step measures and reports; you decide what to do about what it
+says** — which is not licence to ship something you know is wrong. Moving the verdict moves the
+accountability onto you, because you are the only party with enough context to carry it.
 
-Beyond the vendored set, the adaptive path adds locally-authored roles: `adversarial-verifier` (a
-read-only, refute-by-default falsifier whose investigation/change-gate mode comes from graph
-reachability), `synthesizer` (parallel-write convergence on a real merge conflict), and
-`metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the
-`workflow-planner` orchestration role described in
-[Workflow roles](#workflow-roles).
+- **Validation** — self-host repos run `kaola-workflow-run-chains.js` to produce
+  `.cache/chain-receipt.json`; consumer repos record their own `verdict: pass` in
+  `.cache/final-validation.md`. The finalize transaction classifies the result (absent / stale /
+  empty / red / green) onto the envelope as `validation` and durably under `## Validation`.
+- **Changed paths** — the paths the run actually touched, on the envelope as `changed_paths` and
+  durably under `## Changed Paths`. Nothing compares them against a declaration; the report exists so
+  a reader can notice what does not belong.
+- **The finalize transaction** — one resumable script call covering the artifact mirror, archive and
+  status close, roadmap staging, and the `chore: finalize {project}` commit gate. `--check`
+  evaluates every precondition in one read-only pass and reports all of them together. Re-running the
+  same call resumes at whichever step it stopped on.
+- **The archive still fails loudly if it would lose a file.** That is an operation refusing to
+  destroy data, and it is the one hard stop left in the phase.
 
-**Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `workflow-planner`'s no-target selection, recorded as `goal_declared` in the closure receipt — a note that a goal was declared, never a check that it was met). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
+### The sink reports; the orchestrator owns the outcome
 
-**Legacy contract-1 review transactions and bounded repair.** Verified already-frozen plans that
-predate `plan_schema_version` keep their original evidence vocabulary and schema-1 journal bytes.
-Their gate closes are recorded in the plan-bound
-`.cache/review-attempts.json` journal before lifecycle settlement. One effective-verdict predicate
-requires `verdict: pass`, zero blocking findings, and no unresolved in-scope `action=fix` finding.
-A failed sequence gate or settled fan-out refutation returns its gate members to `pending` while the
-durable attempt remains the blocker; `orient`, ordinary openers, and generic `reopen-node` refuse
-until it is repaired. The agent selects a writer from the frozen DAG and calls
-`repair-node --attempt-id <attempt> --node-id <writer>`; the harness proves that writer is the unique
-maximal executed producer, preserves its original barrier identity and candidate digest, and never
-chooses an owner or rewrites the DAG. Zero or multiple eligible owners return
-`repair_requires_replan`. Repair retries converge across every durable seam, sibling cleanup follows
-the greatest validated ordinal for each logical gate member rather than JSON array order, and each
-logical gate permits five consumed repairs before the sixth returns `repair_limit_reached`.
-`findings-route.json` is only a regenerable view of the journal's canonical routing rows. See
-`docs/api.md` and `docs/decisions/D-682-01.md`.
+The sink does not refuse and does not decide. It tells you what it found — content on the branch that
+no record describes, a witness bound to different bytes than the ones being published, a merge that
+did not fast-forward — and then **you** are accountable for the branch ending up right. Three
+resolutions are legitimate:
 
-**Planner-owned re-plan epochs.** A real `repair-node` result of `repair_requires_replan` is first
-persisted mechanically as the schema-2 `.cache/replan-source.json` outcome bound to the settled,
-unconsumed review attempt; operators never seed that file by hand. `kaola-workflow-replan.js` then
-preserves the active claim, label, branch, worktree, claim-root base, and inherited candidate
-frontier while it advances `prepared → planner_pending → child_frozen → parent_archived → committed`.
-The frozen parent remains byte-immutable and authoritative until activation, and only a genuinely
-dispatched `workflow-planner` may write the seeded `workflow-plan.next.md` child.
+- **get the merge correct** — rebase onto the updated mainline and retry the fast-forward, the normal
+  answer when another lane merged first;
+- **resynchronize** — reconcile whatever diverged, then re-run the sink so it resumes;
+- **file a pull request instead** — a perfectly good resolution precisely because it stages the
+  content for review rather than publishing it. Reach for it when the right call is a human’s.
 
-Before dispatch, the transaction derives a non-circular `snapshot_authority_projection` from stable
-parent/source/entry-CAS authority. Despite its historical field name, a schema-2 child's
-`parent_snapshot_manifest_digest` binds the projection digest; the later full manifest separately
-seals the projection, exact child and attestation, every archived file, its self-digest, and its exact
-file digest. Historical schema-1 children whose field remains `pending` pass only when every external
-seal proves `legacy_external_binding`. The runtime inventories 41 durable-write label families plus
-deterministic per-file/per-seam labels, and the focused proof covers all 12 combinations of four CAS
-seams × candidate/root/frontier axes. Any mismatch returns `replan_candidate_changed` without epoch
-or counter advance; activation rolls forward through its six journal steps rather than pretending the
-multi-file state change is filesystem-atomic.
-
-Every parent epoch remains under `.cache/epochs/<ordinal>/`, including the complete review/rebind
-ledger, and inherited code/security work retains G4 certifier obligations. Two automatic
-review-driven transitions are allowed at claim scope; the next consent-halts and one audited user
-extension adds exactly one slot. The one-shot zero-cost diagnosis-to-build route is available only
-without failed/unresolved review authority and with a completed parent, four exact schema-2
-`diagnosis_complete` artifacts, artifact-only writers, and exact child citations. Archive callers
-accept only `archived:true` or the idempotent `skipped:"source-missing"`; every other result stops
-before claim/worktree/roadmap/remote cleanup. See `docs/api.md`, `docs/workflow-state-contract.md`,
-and `docs/decisions/D-699-01.md`.
-
-This implementation is still awaiting terminal runtime certification: the versioned-authority engine
-is implemented and its focused suite is green, but the lifecycle/publication caller repair and the
-packaged-edition fixture parity work are separate, still-in-progress write surfaces, and the named
-certifiers plus three read-only falsification nodes have not yet run. See `[Unreleased]` in
-`CHANGELOG.md` and `docs/decisions/D-699-01.md` for current status.
-**Reviewer contract 2 for newly authored plans.** New adaptive plans declare
-`plan_schema_version: 2`; the dispatch contract and review journal are version 2 as well. Each gate
-declares a claim, surface, and one of `sequence`, `replicated_majority`, or `partitioned_all`.
-`code_certifier` and conditional `security_certifier` identify a real common certifier wall; an
-inherited code/security frontier remains a virtual producer even when the child plan has no writer.
-
-At open time the harness writes a canonical runtime-neutral review context and separately binds the
-runtime-specific resolved profile hash. Evidence must echo the context, behavior, profile, candidate,
-and contract identities before findings are parsed. The harness, not reviewer prose, derives three
-independent axes: `execution_status`, the role's `domain_outcome`, and `gate_effect`. A complete
-investigation accepts `refuted`, `not_refuted`, or `indeterminate`, closes with `gate_effect:none`,
-and creates no product-repair attempt. A change-gate adversarial result passes only on
-`not_refuted`; code/security gates pass only on `approved` with zero admitted blockers.
-
-Findings use machine-validated anchors and harness-assigned stable UIDs. Closure attempts must account
-for the prior frontier, bind new blockers to the repair delta, prove resolutions on the current
-candidate, and retain comparable passing validation vectors. A scope expansion or two consecutive
-non-progress repairs returns the settled typed handoff `replan_required` with reason
-`review_scope_expanded` or `review_nonconvergent`. The harness stops there: it does not select a
-writer, rewrite the frozen DAG, or activate a replacement epoch; that activation is separate work.
-See `docs/api.md` and decisions D-693-01 through D-698-01.
-
-#### Supported adaptive patterns
-
-The four shapes (`sequence`, `fanout`, `loop`, `select`) are a *grammar*, not a fixed menu — the planner composes them with `depends_on` edges and the right role on each node into a task-shaped DAG. The patterns below are **composable building blocks, not options to choose between**: the planner draws *several* into one DAG to fit the issue (the final **Composed** row stacks three at once). Each row is a real, in-grammar `workflow-plan.md` the validator accepts; the **Governance** column is the decision `kaola-workflow-plan-validator.js` returns (`auto-run` = proceeds immediately; `ask` = recorded as audit metadata by the handoff, which still freezes and proceeds — no approval gate — but the blast-radius reason is surfaced in the packet for the orchestrator).
-
-| Pattern | What it is | How the planner composes it | Governance |
-|---|---|---|---|
-| **Plan-then-implement** | The linear shape: explore, plan, implement, review, finalize. | `code-explorer` → `planner` → `tdd-guide` → `code-reviewer` → `finalize`, each `depends_on` the previous (`shape: sequence`). | `auto-run` (no fan-out, no loop) |
-| **Fan-out-and-synthesize** | Work that splits into disjoint sub-areas, then merges. | `fanout(impl)`: N `tdd-guide` nodes over **pairwise-disjoint** top-level directories (e.g. `api/` and `cli/`), then a `code-reviewer` node that `depends_on` every leg — the merge/synthesize point. The logical width is unbounded by `KAOLA_FANOUT_CAP` (default 4); that cap limits only how many members run at once, and the executor drains a wider fan-out by rolling bounded dispatch. | `ask` (write-role fan-out → blast-radius) |
-| **Adversarial verification** | Re-test a finished claim with independent skeptics. | After the `code-reviewer` gate, a read-only `fanout(verify)` of `adversarial-verifier` nodes (empty write sets, each prompted to *refute*) feeding the sink; the orchestrator tallies a quorum from their `verdict: pass\|fail` evidence. Read-only fan-out has **zero** blast radius. | `auto-run` |
-| **Bounded loop (review-fix)** | Re-run one role until a mechanical verdict passes. | A `loop(<cap>)` node (e.g. a `code-reviewer` or `build-error-resolver` cycle) re-invoked up to a static cap (`LOOP_CAP` = 5); a #251 `verdict: pass` exits early. The cap is the halting guarantee — the loop can only end sooner, never run longer. | `ask` (loop present) |
-| **Generate-and-filter** | Generate several candidate approaches, filter to the best, then build it. | Read-only `fanout(gen)` of angled `planner` attempts → a `planner` reduce node (the rubric/filter that picks one) → a single `tdd-guide` implements the winner → `code-reviewer` gate → `finalize`. The "discard" is the reduce node's choice, not a grammar feature. | `auto-run` (read-only generators + one sequential implement) |
-| **Tournament** | Competing candidate plans reduced to a winner by pairwise judges. | Read-only `fanout(attempt)` of `planner` nodes → hand-wired pairwise `code-reviewer` judges (each `depends_on` two attempts) → a final judge → `finalize`. There is no native bracket shape — the bracket is ordinary `depends_on` wiring; feed the winner to a downstream `tdd-guide` to build it. | `auto-run` (read-only) |
-| **Classify-And-Act** | Routing to exactly one of several mutually-exclusive arms based on what a read-only classifier finds (e.g. "fix the CSV exporter **or** the HTML renderer, whichever is at fault"). | A read-only `code-explorer` classifier node writes `selector: <arm-id>` to its `.cache/<id>.md` evidence; each arm carries `shape: select(<group>)` and a `selector_source` pointing to the classifier. On the classifier's commit, `plan-validator --selector-check` reads the selector and **fail-closes (exit 1, blocking the commit) on a missing or foreign value** — the script-mechanical guarantee that neither "run all" nor "run none" can occur. It returns `armsToNa`; the close-node transaction marks unselected arms `n/a` in the ledger, and `next-action.js` treats `n/a` arms as terminal so only the one selected arm becomes ready. Risk is assessed over the union of all arms; the selector is read-only (zero blast radius); `n/a` arms cannot smuggle unreviewed writes because they never execute. | `auto-run` (selector is read-only; write-role arms are mutually exclusive, not concurrent) |
-| **Non-delegable acceptance gate** (`main-session-gate`, #334) | A required acceptance check no subagent can perform — a GPU/visual confirmation, a device-in-hand verification, an explicit human sign-off. | A built-in `main-session-gate` node (no agent profile; the main session itself runs the check and records `verdict: pass\|fail` into `.cache/<id>.md`) placed **after** `code-reviewer` so it post-dominates every code-producing node (**G3**). It is read-only, shape `sequence` only, never a fan-out/select arm, and never a frontier fan-out member. `--gate-verify`/`--verdict-check` block finalization until it is complete with a passing verdict — there is no legal `n/a` skip, so a numerical-green implement path can never reach the sink without crossing the manual decision. | `auto-run` (read-only gate) |
-| **Composed (multi-pattern)** | The realistic case — several patterns stacked in one DAG. The planner *composes*, it does not pick one. | e.g. a read-only multi-modal sweep (`fanout(sweep)` of `code-explorer` → `planner`) **then** a parallel implement (`fanout(impl)` of `tdd-guide` → `code-reviewer` gate) **then** an adversarial-verify skeptic fan-out → `finalize`: one 10-node plan in which `code-reviewer` still post-dominates **both** implement legs. Locked as a fixture in `testAdaptivePatternLibrary`. | `ask` (write-role fan-out present) |
-
-The first seven are building blocks; the last row stacks three of them. The two read-only design shapes (**Generate-and-filter**, **Tournament**) — they compare or select approaches and write nothing, so they carry zero blast radius and auto-run; the chosen approach then flows into an ordinary write-role implement under the same gates. Every plan, whatever its shape, still crosses the same non-removable walls: a single unique `finalize` sink, `code-reviewer` **post-dominating** every code-producing node, and `security-reviewer` post-dominating every sensitive node (re-derived from the files actually touched, not an author flag). A plan that routes a gate around itself is a typed refusal, not a silent pass.
-
-#### Parallel ready-set execution
-
-The executor runs **one FRONTIER UNIT at a time** rather than strictly one node at a time. A frontier unit is either a single node (the legacy path, unchanged) or a fan-out of ready siblings when `next-action.js` reports `readyPending.length >= 2`.
-
-**Responsibility split.** `kaola-workflow-adaptive-node.js` owns fan-out **STATE**: it opens the frontier (`open-ready`), closes members individually (`close-node`), and repairs a crashed manifest (`reconcile-running-set`) against `kaola-workflow/{project}/.cache/running-set.json`. The plan-run SKILL running in the main session owns concurrent **DISPATCH**: after `open-ready` completes, the main session issues multiple `Agent()` calls in one message — one per opened member. The script never spawns an agent; a subagent cannot dispatch a subagent. A green plan-run is not evidence of wall-clock parallelism — the only observable concurrency is at host runtime when the main session issues those concurrent `Agent()` calls.
-
-**Read-only fan-out** (fully supported): siblings with empty declared write sets need no filesystem isolation. They share the active worktree; each writes `.cache/{id}.md` evidence; `close-node` trivially passes the per-node barrier (empty declared set → empty diff). Use cases include Fan-out-and-synthesize research legs, Adversarial Verification skeptic fan-outs, and quorum reviews.
-
-**Write-role fan-out** (`fanout(...)` over disjoint write sets): each member requires an isolated node worktree keyed by `(project, node-id)`. Disjointness is proven at validator freeze time and re-confirmed at `open-ready` (fail-closed on overlap). **Planner-proven-disjoint write frontiers co-open as isolated parallel legs by default** (D-542-01) — per-leg worktree isolation plus the mandatory synthesizer reconcile are the correctness net, so no operator toggle is needed to opt in. At the last member's `close-node`, the synthesizer octopus-merges the disjoint legs into the feature branch and a group barrier diffs against the UNION of every member's declared write set — no attribution ambiguity is possible because every path belongs to exactly one member. Only genuinely-overlapping (non-disjoint) writes stay serial and consent-gated (`--write-overlap-consent` + `write_overlap_policy`). Where the host lacks isolated-worktree support — or when `KAOLA_PARALLEL_WRITES=0` forces it — write-role fan-out members **degrade to serialized execution**, opened one at a time through the same per-node lifecycle. Correctness is preserved; wall-clock parallelism is forgone. Full mechanics: `docs/plan-run-cards/frontier-batch.md`.
-
-**`kaola-workflow-adaptive-node.js`** is pure composition over `next-action.js`, `commit-node.js`, and `plan-validator.js`. It adds no new barrier or gate surface — the per-member close calls the same `commit-node --node-id N` barrier (deferred to the group barrier for a lane-group member); Finalization `--barrier-check` sees normal `complete` rows in the ledger after the last member closes.
-
-**`workflow-planner` now authors efficient DAGs**: expose independent work as siblings (a shared ready frontier) so the executor can open them together; serialize only for true dependencies, shared file lanes, selectors, loops, or gates.
-
-**Running-set scheduler (#377):** the executor tracks a *running set* — the set of nodes currently open and executing. Serial execution is simply the running set at a concurrency ceiling of one; a fan-out raises the cap up to `FANOUT_CAP` (write, default 4) or `FANOUT_CAP_READONLY` (read-only, default 8). `open-ready` enters a node into the running set, `close-node` removes it, and `reconcile-running-set` repairs the set after a crash. There is no separate "serial mode" — serial is just the running-set scheduler with a cap of one. The running-set scheduler owns the frontier path in full, including default-on disjoint write co-open.
-
-**Read∥write co-open (#622/#641):** read and write frontiers may also overlap, in both directions. A read node co-opens behind a live leg-contained write, and a leg-contained write co-opens *behind live reads*, whenever four fail-closed preconditions hold (leg-coupled write, clean parent tree, disjointness proven, no live lane group) — any miss returns the byte-identical serial hold with a typed `serialDegradeReason` explaining why. A consent-tier `observes: scratch` plan annotation additionally lets a legless docs writer co-open behind a scratch-only `adversarial-verifier` gate. The `merge_awaits_read_drain` fence is the isolation net: each leg's merge is held until live reads drain, so the parent tree the reads observe stays untouched.
-
-For the design history, see `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
+Then clean up after the sink: dispose of the journals, remove your own branch and worktree, leave the
+folder archived. Clean up **your own lane only**, and only after your own merge lands. A true content
+conflict halts and asks a human; it is never auto-resolved.
 
 ### Active-work tracking
 
 Active work is tracked under `{project-root}/kaola-workflow/{project-name}/` while active and
 archived to `{project-root}/kaola-workflow/archive/`; unfinished work is tracked in
-`{project-root}/kaola-workflow/ROADMAP.md`. The adaptive planner composes role nodes into a
-`workflow-plan.md` DAG (frozen `plan_hash` + `## Node Ledger`) and runs them dynamically, landing in
-the Finalization sink. Adaptive is the only workflow path; there is nothing to select.
+`{project-root}/kaola-workflow/ROADMAP.md`. An active folder holds two durable files —
+`workflow-state.md` (what the run owns) and `mission-list.md` (what it is doing) — plus a `.cache/`
+directory for whatever the run chooses to keep there.
 
 ## Automation scripts
 
@@ -1089,20 +1012,20 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`, and appends an optional project-local `kaola-workflow/.roadmap/_rules.md` to the generated `## Rules` section under a `### Project rules` sub-heading (no-op, byte-identical output, when the file is absent or empty). Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Planning, Finalization |
-| `kaola-workflow-repair-state.js` | Reconstructs `workflow-state.md` from the frozen `workflow-plan.md` when state is missing or stale, so a resumed session has a single safe next command. A project with no adaptive plan returns a typed "no adaptive plan available for repair". | Init / Resume |
-| `kaola-workflow-replan.js` (GitHub/Codex) / `kaola-gitlab-workflow-replan.js` (GitLab) / `kaola-gitea-workflow-replan.js` (Gitea) | Owns claim-preserving schema-2 re-plan epochs: prepare from a settled typed review outcome, fence ordinary mutation, request a planner-authored child, verify four candidate/claim-root/frontier CAS seams, snapshot the parent epoch, journal activation, resume crash prefixes, extend the consent ceiling one slot at a time, and verify retained snapshots. | Adaptive repair / Resume / Finalization verification |
+| `kaola-workflow-gap-sweep.js` | Sweeps the run's own discovered defects from `.cache/` — waived red chains, plus whatever the orchestrator seeded into `.cache/run-gaps-manual.md` — and reconciles them against the summary's `## Run gaps` section in both directions. | Finalization |
 | `kaola-workflow-closure-audit.js` (GitHub) / `kaola-gitlab-workflow-closure-audit.js` (GitLab) / `kaola-gitea-workflow-closure-audit.js` (Gitea) | Reports closure drift (stale `.roadmap` sources, `ROADMAP.md` listing closed issues, stale `workflow:in-progress` labels, active folders/unarchived PR/MR folders for closed issues). Dry-run JSON by default; `--execute` repairs only safe local roadmap/label drift and never deletes active folders or worktrees. GitLab edition uses `unarchived_mr_folders` with lowercase MR state matching (`merged`/`closed`). Gitea edition keeps `unarchived_pr_folders` with lowercase PR state matching (`merged`/`closed`). Complements `stale-worktree-check`/`-cleanup` (which owns worktree/branch drift). | On demand / audit |
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Finalization merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Finalization |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
-| `kaola-workflow-run-chains.js` | Runs all four edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, workTreeHash, startedAt, chains:[{name, exit}]}`). Used by the orchestrator at Finalization (Step 8c) and gated by `--finalize-check` (`chains_unverified`, `chains_stale`, `chains_red`). `--accept-known-red name:issue` registers a waiver for a known-red chain. | Finalization |
+| `kaola-workflow-run-chains.js` | Runs the edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, codeTreeHash, startedAt, chains:[{name, exit}]}`). The orchestrator runs it as the last pre-finalization action; the finalize transaction then reads and classifies the receipt. `--accept-known-red name:issue` registers a waiver for a known-red chain. Also hosts the pre-tag `--release-check` gate. | Finalization, Release |
 
 ### Validation and test scripts
 
 | Script | What it asserts |
 |--------|-----------------|
-| `simulate-workflow-walkthrough.js` | End-to-end integration test of the claim, repair, roadmap, and hook surfaces. Must exit 0 with `Workflow walkthrough simulation passed`. Run before claiming any workflow-related change complete. |
-| `kaola-workflow-validation-runner.js` | Executes a frozen schema-2 validation policy locally in a scrubbed environment, binds command/cwd/env/toolchain/candidate identities, and reduces bounded repetitions to deterministic `pass`, `fail`, or `inconclusive` receipts. It is self-contained and does not depend on a hosted pipeline. |
+| `simulate-workflow-walkthrough.js` | End-to-end integration test of the claim, finalize, roadmap, sink, and hook surfaces. Must exit 0 with `Workflow walkthrough simulation passed`. Run before claiming any workflow-related change complete. |
+| `kaola-workflow-validation-runner.js` | Executes a validation command locally in a scrubbed environment, binds command/cwd/env/toolchain/candidate identities, and reduces bounded repetitions to a deterministic `pass`, `fail`, or `inconclusive` receipt. It is self-contained and does not depend on a hosted pipeline. |
+| `test-finalize-door.js` | Pins the finalize door's report-don't-refuse contract: a stale, missing, or red receipt still passes and reports the typed finding twice — on the envelope and durably in the summary — while a lossy archive and a bad release candidate still refuse. |
 | `validate-workflow-contracts.js` | Contractual assertions on the Claude Code surface — command files, agent installs, and documented invariants. **Tag-existence check (issue #177)**: Verifies local git tag `kaola-workflow--v<version>` matches `package.json` version; uses `git rev-parse --verify refs/tags/<tag>` to validate. Skipped when `KAOLA_WORKFLOW_OFFLINE=1` or `.git` absent. |
 | `validate-kaola-workflow-contracts.js` | Same contractual assertions on the Codex plugin surface under `plugins/kaola-workflow/`. |
 | `validate-script-sync.js` | Byte-identical drift guard between `scripts/` (Claude Code) and `plugins/kaola-workflow/scripts/` (Codex), plus shared hook copies that must stay in sync across GitHub, GitLab, and Gitea surfaces. |
@@ -1112,7 +1035,7 @@ when developing locally. Drift between `scripts/` and
 
 Kaola-Workflow treats `kaola-workflow/{project}/workflow-state.md` plus the configured forge's issue and PR/MR state as the durable coordination contract. No lease/session layer remains.
 
-The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: `ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `kaola-workflow/.roadmap/_rules.md` appended under `### Project rules`), `.roadmap/` is not purged wholesale, active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and `.cache/` evidence.
+The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: `ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `kaola-workflow/.roadmap/_rules.md` appended under `### Project rules`), `.roadmap/` is not purged wholesale, active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, `mission-list.md`, and the `.cache/` directory.
 
 **Environment Variables:**
 
@@ -1120,17 +1043,17 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 |----------|---------|---------|
 | `KAOLA_GH_REMOTE_TIMEOUT_MS` | `30000` | Timeout in milliseconds for GitHub/GitLab/Gitea API calls during closure audit, active-folder checks, remote validation, and sink-merge/sink-pr gh calls. Set lower in tests to simulate API hangs. Values above 600000ms (10 minutes) are clamped to 600000ms to prevent hang protection bypass (issue #185) |
 | `KAOLA_RUN_CHAINS_TIMEOUT_MS` | `1800000` | Per-chain `spawnSync` kill ceiling in milliseconds for `kaola-workflow-run-chains.js`. Default 1800000 (30 min), raised from a prior 900000 (15 min, issue #512) after a live run on a constrained host outgrew that budget. Invalid/zero/negative values fall back to the default. No upper clamp (local test suite, not a remote-hang risk). A killed chain's receipt entry now records `timed_out: true` (issue #608), and the failure summary labels a timed-out chain inline so it reads distinctly from a genuine test regression |
-| `KAOLA_FINALIZE_BASE` | (unset) | Override the integration-branch base for `cmdFinalize`'s `--finalize-check` attribution sweep (`scripts/kaola-workflow-claim.js` ×4 editions). Defaults to unset → the validator's `main` default (byte-equivalent for branch-per-issue runs). Set to a project merge-base (or `HEAD` for an in-place run whose own changes are already verified by the chain receipt) so the sweep attributes only the project's own diff on a shared/multi-issue branch. Also settable via the `--base <ref>` flag (flag wins). The per-node `--barrier-check` anti-laundering guard still rejects `--base` (issue #539) |
+| `KAOLA_FINALIZE_BASE` | (unset) | Override the integration-branch base for the finalize transaction's changed-paths report (`scripts/kaola-workflow-claim.js` ×4 editions). Defaults to unset → a `main` base, which is byte-equivalent for branch-per-issue runs. Set it to a project merge-base (or `HEAD` for an in-place run whose own changes are already covered by the chain receipt) so the report shows only this run's own diff on a shared or multi-issue branch. Also settable via the `--base <ref>` flag (flag wins) |
 | `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub/GitLab/Gitea calls for local tests or air-gapped usage. When unset and remote validation fails, startup answers `target_unavailable` (exit 0, `claim: 'none'`) instead of silently proceeding |
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
-| `KAOLA_PATH` | (unset) | Retired, with no residue. Adaptive is the only workflow path; the claim silently ignores this variable (any value, or unset) and always runs adaptive. The requested value is not recorded either — the persisted `workflow_path` state field is the constant `adaptive`, never an echo of the request. The `--workflow-path` flag is likewise accepted-but-ignored (a stderr notice, never a refusal) |
-| `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
-| `KAOLA_PARALLEL_WRITES` | `1` (ON) | Default-ON master switch for default-on disjoint write parallelism (D-542-01). When ON, write frontiers the planner proves **disjoint** (`parallel_safe`) co-open as isolated parallel legs — per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net. Set to `0` (also `false`/`no`) to force every write frontier serial. Overlapping (non-disjoint) writes stay serial/consent-gated regardless, and a host without worktree support degrades to serial regardless |
-| `--write-overlap-consent` / `write_overlap_policy` | (overlap only) | The overlap-only consent gate. `--write-overlap-consent` plus a plan `write_overlap_policy: coarse` (anything other than `off`) is what permits a **genuinely-overlapping** (non-disjoint) write frontier to co-open under a coarse shared lane; it does NOT gate disjoint co-open (that is default-on, above). With the policy `off` or consent absent, an overlapping frontier stays serial |
-| `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` usage at exit 0, writing nothing). Adaptive path only |
-| `KAOLA_GOAL` | (unset) | Operator-side goal text for goal-conditioned bundles (#441). When set, the orchestrator places the goal in the `workflow-planner` dispatch prompt so it is transcribed as `goal: <text>` into `## Meta` of `workflow-plan.md`, hash-covered by `computePlanHash`. In no-target mode, `workflow-planner` reads `KAOLA_GOAL` as clustering context and surfaces a `goal_alignment` note in its selection. Finalization records `goal_declared: true\|false` in the closure receipt, with `goal_declared_source` (`env`\|`plan`) and `goal_declared_probed` (the plan paths examined) — advisory, and a record that a goal was DECLARED only: nothing checks whether it was achieved |
+| `KAOLA_WORKTREE_NATIVE` | `1` (ON) | Provision a repo-local Git worktree at `<repo-root>/.kw/worktrees/<project>/` on every claim. Set to `0` for a repo-root run with no worktree. The worktree is a tool: decline it and the run still finishes |
+| `KAOLA_COTENANT` | (unset) | Set to `1` to declare that another session is active on this checkout, so lane classification treats every foreign active folder as `live` and leaves it alone |
+| `KAOLA_PATH` | (unset) | Retired, with no residue. There is one workflow; the claim silently ignores this variable (any value, or unset). The requested value is not recorded either — the persisted `workflow_path` state field is the constant `adaptive`, never an echo of the request. The `--workflow-path` flag is likewise accepted-but-ignored (a stderr notice, never a refusal) |
+| `KAOLA_TARGET_ISSUE` | (unset) | The issue number this run targets. Equivalent to `--target-issue N` |
+| `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` usage at exit 0, writing nothing) |
+| `KAOLA_GOAL` | (unset) | Operator-side goal text. Subagent shells do not inherit env vars across the spawn boundary, so a goal that must reach a dispatched agent travels in the dispatch prompt — the orchestrator owns placing it there. Finalization records `goal_declared: true\|false` in the closure receipt, with `goal_declared_source` (`env`\|`plan`) and `goal_declared_probed` (the paths examined) — advisory, and a record that a goal was DECLARED only: **nothing checks whether it was achieved** |
 
 **Active-folder subcommands:**
 
@@ -1139,7 +1062,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `startup` / `bootstrap` | `node scripts/kaola-workflow-claim.js startup --target-issue <N> [--runtime claude|codex] [--sink merge|pr]` | Validates and atomically creates or reuses the active folder for issue N |
 | `status` | `node scripts/kaola-workflow-claim.js status` | Lists active folders and their issue, branch, phase, sink, and worktree metadata |
 | `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory forge labels when online |
-| `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree] [--base <ref>]` | Marks the folder closed and moves it to `kaola-workflow/archive/`; by default removes the linked worktree, while `--keep-worktree` preserves it for the final commit gate. `--base <ref>` (or `KAOLA_FINALIZE_BASE`) scopes the finalize-check attribution sweep to the project's own diff on a **shared/multi-issue branch** — pass the project merge-base (or `HEAD` for an in-place run verified by the chain receipt); defaults to unset → the validator's `main` default, so branch-per-issue runs are byte-equivalent. The per-node `--barrier-check` anti-laundering guard still rejects `--base` (#539) |
+| `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree] [--check] [--json] [--base <ref>]` | The one resumable finalize transaction: artifact mirror, archive + status close, roadmap staging, and the `chore: finalize <project>` commit gate. It also reports `validation` and `changed_paths` on its envelope and durably in the summary. `--check` evaluates every precondition in one read-only pass, reporting all of them together with zero side effects. By default it removes the linked worktree; `--keep-worktree` preserves it for the final commit gate. `--base <ref>` (or `KAOLA_FINALIZE_BASE`) scopes the changed-paths report on a **shared/multi-issue branch** |
 | `sink-fallback` | `node scripts/kaola-workflow-claim.js sink-fallback --project <name> [--reason <text>]` | Records merge-impossible fallback; updates Sink block to sink: pr; writes .cache/sink-fallback.json |
 | `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when the forge reports MERGED or CLOSED. GitLab edition uses `watch-mr` (`kaola-gitlab-workflow-claim.js watch-mr`) instead. |
 | `stale-worktree-check` | `node scripts/kaola-workflow-claim.js stale-worktree-check` | Detects and reports worktrees and branches for closed or archived issues that are not currently active |
@@ -1163,7 +1086,7 @@ Valid `parallel_mode` values:
 - `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, exact file-path overlaps, file-area overlaps, and active folders.
 - Other values: Bypass classification; treat all issues as green for fast claiming.
 
-Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`. A claimed project's in-flight file-set is read from its declared adaptive write set.
+Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`.
 
 When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
 
@@ -1259,7 +1182,7 @@ The local roadmap is a working mirror, not the source of truth. Keep only active
 
 The workflow also enforces context discipline: `CLAUDE.md` targets under 200 lines, the local roadmap should not become history storage, and agent prompts should include only the relevant phase excerpts needed for the delegated task.
 
-Each phase records a required-agent compliance ledger. Each active workflow also maintains `workflow-state.md`, which records the current phase, intra-phase step, next command, pending gates, and ownership rules. After resume or compaction, the main session must read that state file and the relevant compliance ledger before continuing.
+Each active workflow maintains two files: `workflow-state.md`, which records what the run owns — issue, branch, worktree, sink, next command — and `mission-list.md`, which records what it is doing. After resume or compaction, read both before continuing.
 
 Avoid redundant validation runs: an implement node uses targeted affected checks, a review-gate node validates only review fixes or cites existing evidence, and Finalization runs each full final command once against the final candidate state. Small targeted commands may run in the main session, while expensive or noisy test/lint/type/build commands should be delegated and summarized from cache evidence.
 
@@ -1353,18 +1276,21 @@ leaves commit-and-push as the final step on a clean, synced workspace.
 
 ## Resuming
 
-Any interrupted session resumes from `workflow-state.md` first, then reconstructs from the frozen `workflow-plan.md` if state is missing or stale — the `## Node Ledger` tracks each node's `pending`/`in_progress`/`complete`/`n/a` status, and every node records intra-run checkpoints in its own `.cache/{node-id}.md` evidence plus the ledger.
+**This is what the mission list is for.** A successor with no context reads
+`kaola-workflow/{project}/mission-list.md` top to bottom: the H1 is the goal, `done` items with their
+`result` are what is already known, `todo` items are what remains. The `in-flight` items are the only
+decision to make.
 
-### State bootstrap and repair
+**Look for the work, not for the worker.** `dispatched` records what went out, not whether it is
+still running, and a successor usually cannot probe the liveness of a process it did not start. So
+check the locator: if the output the dispatch promised has landed — the file exists, the commit is in
+git — close the item and write its `result`. If it has not, re-dispatch, unless you can positively
+show the dispatch is still alive. Re-dispatching read-only work costs a little time; waiting on a
+worker that died costs the run. That is the entire recovery procedure.
 
-When `/workflow-next` can reconstruct one safe next command from the frozen
-`workflow-plan.md` (or, for a legacy pre-retirement project, its terminal `finalization-summary.md`),
-it repairs or creates `kaola-workflow/{project}/workflow-state.md`
-before routing by running `scripts/kaola-workflow-repair-state.js` when the
-helper is available. It does not create state for brand-new work, ambiguous
-active projects, or unresolved compliance gates that
-make the next command unsafe; a project with no adaptive plan and no legacy artifact returns a
-typed "no adaptive plan available for repair" instead of guessing.
+`workflow-state.md` carries the claim itself — issue, branch, worktree, sink. If it is missing or
+unreadable but the folder's contents identify the run unambiguously, reconstruct it conservatively
+and say that you did. If it is genuinely ambiguous, ask.
 
 Hook installation is covered in the [Hook policy](#hook-policy) section above —
 do not hand-merge entries into `~/.claude/settings.json`.
@@ -1373,17 +1299,17 @@ do not hand-merge entries into `~/.claude/settings.json`.
 
 When a run is complete as a cycle but the issue must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` preserves the per-issue roadmap source (instead of deleting it) and regenerates `ROADMAP.md` still listing `#N`; `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim exactly like a normal close, but posts a keep-open comment instead of closing the issue. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
 
-## Multi-issue bundle lane (adaptive-only)
+## Multi-issue bundle lane
 
-Issue #328 adds an additive bundle lane that lets N same-scope issues share one worktree, one branch, one `workflow-plan.md`, and one finalization that closes all N issues together. The single-issue path is byte-unchanged.
+The bundle lane lets N same-scope issues share one worktree, one branch, one mission list, and one finalization that closes all N issues together. The single-issue path is unchanged.
 
-### Three entry modes
+### Two entry modes
 
-1. **Single issue (unchanged)** — `--target-issue N` or `KAOLA_TARGET_ISSUE=N`. No bundle fields. Behavior identical to prior releases.
+1. **Single issue** — `--target-issue N` or `KAOLA_TARGET_ISSUE=N`. No bundle fields.
 
-2. **Explicit bundle** — pass `--target-issues A,B,C` (comma-separated, sorted+deduped) or set `KAOLA_TARGET_ISSUES=A,B,C`. Adaptive path only. The claim script validates all targets before any mutation (all-or-nothing: if any target is invalid the whole bundle is refused). On success, one `kaola-workflow/bundle-A-B-C/` folder is created and one `workflow/bundle-A-B-C` branch is provisioned (forge editions prefix the edition name, e.g. `workflow/gitlab-bundle-A-B-C`).
+2. **Bundle** — pass `--target-issues A,B,C` (comma-separated, sorted+deduped) or set `KAOLA_TARGET_ISSUES=A,B,C`. The claim script validates all targets before any mutation (all-or-nothing: if any target is invalid the whole bundle is refused). On success, one `kaola-workflow/bundle-A-B-C/` folder is created and one `workflow/bundle-A-B-C` branch is provisioned (forge editions prefix the edition name, e.g. `workflow/gitlab-bundle-A-B-C`).
 
-3. **Auto-bundle via `workflow-planner`** — when the user names no issue, `workflow-planner` runs its own no-target backlog survey and selects a same-scope issue set jointly with how it decomposes the work, then claims + authors + freezes in ONE dispatch. There is no separate pre-claim recommendation step to adopt.
+Which mode applies is the orchestrator's call, made while reading the backlog: several issues share a run when they are all open, unclaimed, and coherent in scope. That is a shape judgement and nothing caps it — say which issues you bundled and why.
 
 Setting both `--target-issue` and `--target-issues` (or both env-var equivalents) answers `target_ambiguity` usage at exit 0; no state is written either way.
 
@@ -1405,10 +1331,6 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 ### All-or-nothing finalization
 
 `cmdFinalize` on a bundle project closes every issue in `issue_numbers`, removes every `.roadmap/issue-N.md` source file, regenerates `ROADMAP.md` once, and archives the single bundle folder. Partial closure is not a success state — if one issue close fails the attempt is retried or surfaced as a failure.
-
-### Adaptive path only
-
-Adaptive is the only workflow path, so the bundle lane always runs `workflow_path: adaptive` — there is nothing else it could run.
 
 ## Parallel active work
 
@@ -1570,7 +1492,7 @@ KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js
 
 # 4. Independently check that the full, unwaived, all-green receipt is clean
 #    and bound by exact SHA to HEAD.
-node scripts/kaola-workflow-plan-validator.js --release-check
+node scripts/kaola-workflow-run-chains.js --release-check
 
 # 5. Authorize and create the tag. The command verifies candidate provenance,
 #    receipt coherence, raw candidate bytes, and raw tag-tree bytes.
