@@ -8871,9 +8871,15 @@ scenario(() => {
     unlink: (f) => removed.push(path.basename(f)),
     readdir: () => [],
   });
-  assert(result.result === 'refuse' && result.reason === 'would_strand_completed_dependent',
-    '#748-STRAND: a MID-RUN reopen that would strand a COMPLETE NON-finalize descendant refuses, got '
+  // CONVERTED: this reports instead of stopping. Everything below is unchanged and is what the
+  // refusal was actually protecting — the named rows, a truthful detail, and zero mutation. The
+  // pre-write property is now carried by a FIELD (`mutation_performed`) rather than inferred from a
+  // non-zero exit, so it is asserted directly beside the ledger/unlink/shell checks that prove it.
+  assert(result.result === 'answer' && result.reason === 'would_strand_completed_dependent',
+    '#748-STRAND: a MID-RUN reopen that would strand a COMPLETE NON-finalize descendant REPORTS, got '
     + JSON.stringify(result));
+  assert(result.mutation_performed === false,
+    '#748-STRAND: and says plainly that it wrote nothing, got ' + JSON.stringify(result.mutation_performed));
   assert(JSON.stringify(result.stranded) === JSON.stringify(['docs']),
     '#748-STRAND: the refusal NAMES the offending node(s), got ' + JSON.stringify(result.stranded));
   assert(/docs/.test(String(result.detail)) && !/finalize sink/.test(String(result.detail)),
@@ -22539,9 +22545,16 @@ scenario(() => {
 
     // P0 — serialization is NOT relaxed. (This is also N10.)
     const orphan = R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...P]);
-    assert(orphan.result === 'refuse' && orphan.reason === 'would_orphan_in_progress'
+    // CONVERTED: it reports rather than stopping. Serialization is the property under test, and it
+    // is a statement about EFFECT, so `mutation_performed` is asserted rather than the verdict —
+    // the second repair being told "wa is still open" means nothing unless it also did not run.
+    assert(orphan.result === 'answer' && orphan.reason === 'would_orphan_in_progress'
       && JSON.stringify(orphan.inProgress) === JSON.stringify(['wa']),
-      '#683 N10/P0: a SECOND concurrent repair still refuses would_orphan_in_progress — repairs stay serialized');
+      '#683 N10/P0: a SECOND concurrent repair reports would_orphan_in_progress naming the open writer, got '
+      + JSON.stringify(orphan));
+    assert(orphan.mutation_performed === false && ledger683('wb') !== 'in_progress',
+      '#683 N10/P0: and it did NOT run — repairs stay serialized, got '
+      + JSON.stringify({ mutation_performed: orphan.mutation_performed, wb: ledger683('wb') }));
 
     // wa fixes its file and closes. Note the gate does NOT reopen yet: gb:1 is still unresolved.
     fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
