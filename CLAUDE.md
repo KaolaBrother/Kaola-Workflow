@@ -38,15 +38,15 @@ landed, close the item; otherwise re-dispatch, unless you can show the dispatch 
 
 - `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional
   project-local `.roadmap/_rules.md` appended under `### Project rules`); do not hand-edit the mirror.
-- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file. A source
-  file left behind after closure is silent, and nothing invokes the detector automatically — check by
-  hand with `node scripts/kaola-workflow-roadmap.js validate-remote` (exit 1 = drift; `skipped: offline`
-  under `KAOLA_WORKFLOW_OFFLINE=1`).
+- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file. A file
+  left behind is silent and nothing detects it automatically — check by hand with
+  `node scripts/kaola-workflow-roadmap.js validate-remote` (exit 1 = drift).
 - `workflow-state.md` is the **claim** record: which issue, which branch, which worktree. It does not
   describe the run.
 - `mission-list.md` is the **run** record. It is not attested, not frozen, and not machine-verified —
   that absence is deliberate, not an oversight.
-- Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
+- Active work lives in `kaola-workflow/{project}/`; those active folders are the run inventory a
+  successor reads first, and stay until archived or safely discarded.
 
 ## First Principles
 
@@ -89,10 +89,9 @@ failure classes never actually observed are **recorded, not built** — see ADR 
 
 ### Concurrency carries no machinery
 
-There is no disjointness check, no antichain sweep, no serializer taxonomy, no evidence line, and no
-fan-out cap. The frontier is *list minus done minus in-flight*, visible by reading. Decompose to
-genuine independence and dispatch that wide — no wider, no narrower. Over-fanning fragments context
-and adds synthesis cost; under-fanning wastes wall-clock. **You decide, uninspected.**
+No disjointness check, no antichain sweep, no serializer taxonomy, no evidence line, no fan-out cap.
+The frontier is *list minus done minus in-flight*, visible by reading. Decompose to genuine
+independence and dispatch that wide — no wider, no narrower. **You decide, uninspected.**
 
 **Dispatch production; keep decisions.** Your context is the run's scarcest resource, so delegating
 discretionary production is the default and what stays inline is the deciding itself. Subagents and
@@ -102,9 +101,8 @@ a tool's name.**
 ### Self-sufficient by default; CI/CD is not a gate
 
 A run must complete on a repo with **no CI/CD configured**, with no degradation. CI/CD is never a
-required gate and is never mentioned in plans, prose, finalize output or suggestions unless the user
-clearly states it is mandated. Accuracy still comes from inside: keep adversarial verification, the
-validation chains, and the walkthrough suite.
+required gate and is never mentioned in prose, finalize output or suggestions unless the user states
+it is mandated. Accuracy comes from inside: adversarial verification, the chains, the walkthrough.
 
 ### One rule, one wording
 
@@ -118,15 +116,14 @@ and **a guard is evidence only once mutation-proven** — a green suite is not p
 ### Test custody
 
 Whoever implements a behaviour does not author its tests. `tdd-guide` holds the test artifact;
-`implementer` reads and runs tests but never writes them.
-
-**A test is deleted with its mechanism, never repaired ahead of it.** Never rewrite a pin so it keeps
-passing against machinery that is gone, and never re-add a field to satisfy a test.
+`implementer` reads and runs tests but never writes them. **A test is deleted with its mechanism,
+never repaired ahead of it** — never rewrite a pin so it keeps passing against machinery that is
+gone, and never re-add a field to satisfy a test.
 
 ## Key Scripts
 
 - `kaola-workflow-claim.js` — claim, release/discard, status, startup, pick-next, resume, finalize,
-  worktree management, sink-fallback, verify-sink, labels.
+  worktrees, sink-fallback, verify-sink, labels.
 - `kaola-workflow-roadmap.js` — roadmap mirror. `generate` makes no remote call; `validate-remote` is
   the only subcommand touching the forge. Ported per forge.
 - `kaola-workflow-run-chains.js` — runs the validation chains, writes the receipt, diff-scopes chain
@@ -155,9 +152,7 @@ included; it is an opt-in diagnostic.
 - The installed command surface is three: `/workflow-init`, `/workflow-next`, `/kaola-workflow-finalize`.
 - Lint/typecheck/build: unknown (Node scripts only, no formal pipeline).
 
-## Documentation Update Checklist
-
-On any user-visible change: `README.md` · API docs · `CHANGELOG.md` under `[Unreleased]` ·
+On any user-visible change, update: `README.md` · API docs · `CHANGELOG.md` under `[Unreleased]` ·
 architecture docs if structure changed · inline comments where public interfaces changed.
 
 ## Non-Negotiable Rules
@@ -167,9 +162,8 @@ architecture docs if structure changed · inline comments where public interface
 - Keep it simple and surgical: solve the requested problem, touch only what it requires, and add no
   speculative abstractions. **There is already too much in this project.**
 - Goal-driven execution: define verifiable success criteria before starting, and loop until they pass.
-- Verify facts, don't fabricate: confirm API/library behaviour against documentation, source, or a run.
-  Name what you do not know and find out.
-- Reuse before adding: search for an existing equivalent and extend it rather than duplicate.
+- Verify facts, don't fabricate: confirm API/library behaviour against documentation, source, or a
+  run. Name what you do not know and find out. Reuse before adding: extend, don't duplicate.
 - Escalate irreversible changes: do not unilaterally alter a user-owned contract (public API, schema
   or data migration, dependency swap, deletion of working capability) — state the decision and its
   evidence, then get confirmation.
@@ -179,7 +173,7 @@ architecture docs if structure changed · inline comments where public interface
 ## Validation Policy
 
 - Background hooks (subagent-dispatch-log) are advisory; do not re-run their checks redundantly.
-- Verify with `node scripts/simulate-workflow-walkthrough.js` before claiming workflow changes complete.
+- Verify with the walkthrough suite before claiming workflow changes complete.
 - **Chain selection belongs to the producer.** `kaola-workflow-run-chains.js` diff-scopes it at
   finalize: a non-edition-touching diff runs the `claude` chain alone; an edition-touching diff — or an
   unresolved diff base — fails closed to all four. A release tag always requires the full, unwaived
@@ -188,18 +182,17 @@ architecture docs if structure changed · inline comments where public interface
   skeletons in `templates/routing/`; edit the skeleton and regenerate, never a rendered surface.
   `node scripts/generate-routing-surfaces.js --check` prints the surface count and is wired into every chain.
 - **opencode and kimi are additive runtime editions**, not forges: not wired into `npm test`,
-  `edition-sync.js`, or `install.sh`. An edition-only diff triggers no four-chain obligation; run
-  `node scripts/test-opencode-edition.js` / `node scripts/test-kimi-edition.js` instead.
+  `edition-sync.js`, or `install.sh`. An edition-only diff triggers no four-chain obligation; run its
+  own suite instead.
 
 ## Documentation Map
 
 - `README.md` — overview and install. · `CHANGELOG.md` — user-visible changes.
-- `docs/mission-list.md` — **the run record's format.** · `docs/README.md` — index.
-- `docs/architecture.md` · `docs/api.md` · `docs/conventions.md` · `docs/workflow-state-contract.md`
-- `docs/decisions/` — ADRs. · `kaola-workflow/ROADMAP.md` — roadmap mirror.
+- `docs/mission-list.md` — **the run record's format.** · `docs/README.md` — index. ·
+  `docs/architecture.md` · `docs/api.md` · `docs/conventions.md` · `docs/workflow-state-contract.md`
+  · `docs/decisions/` — ADRs. · `kaola-workflow/ROADMAP.md` — roadmap mirror.
 
 ## Maintenance
 
-- Keep this file under 200 lines; move detail to `docs/` or skills.
-- Add rules only after repeated mistakes, review feedback, or stable project conventions.
-- Do not use `@path` imports for optional reference material.
+Keep this file under 200 lines; move detail to `docs/` or skills. Add rules only after repeated
+mistakes, review feedback, or stable conventions, and do not use `@path` imports.
