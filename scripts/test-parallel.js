@@ -413,9 +413,14 @@ async function selfTest() {
 
   // (f6) planUnits: a registered suite expands into N tagged shard units; anything else
   // stays one unit; the queue is ordered longest-hint-first.
+  // The registry is EMPTY in the shipped tree — the two suites that were once registered are
+  // deleted, and the walkthrough is deliberately excluded. So register a synthetic suite here
+  // rather than reading production data: this pins the EXPANSION MECHANISM, which survives, and
+  // stops the assertion going vacuous (or crashing) whenever the registry's contents change.
   {
-    const suite = Object.keys(pool.SHARDED_SUITES)[0];
-    const units = pool.planUnits([suite, 'node scripts/test-next-action.js'], {});
+    const suite = 'node scripts/test-synthetic-shardable.js';
+    pool.SHARDED_SUITES[suite] = 4;
+    const units = pool.planUnits([suite, 'node scripts/test-run-chains.js'], {});
     const shardUnits = units.filter(u => u.suite === suite);
     const width = pool.SHARDED_SUITES[suite];
     assert('(f6a) a registered suite expands to its declared width', shardUnits.length === width);
@@ -423,16 +428,19 @@ async function selfTest() {
       new Set(shardUnits.map(u => u.command)).size === width
       && shardUnits.every(u => u.command.startsWith(suite + ' --shard ')));
     assert('(f6c) an unregistered step stays a single whole-suite unit',
-      units.filter(u => u.command === 'node scripts/test-next-action.js').length === 1);
+      units.filter(u => u.command === 'node scripts/test-run-chains.js').length === 1);
     assert('(f6d) the queue is ordered longest-hint-first',
       units.every((u, i) => i === 0 || units[i - 1].cost >= u.cost));
+    delete pool.SHARDED_SUITES[suite];
   }
 
   // (f7) KAOLA_TEST_POOL_SHARDS=off disables expansion — the escape hatch runs the whole suite.
   {
-    const suite = Object.keys(pool.SHARDED_SUITES)[0];
+    const suite = 'node scripts/test-synthetic-shardable.js';
+    pool.SHARDED_SUITES[suite] = 4;
     const units = pool.planUnits([suite], { KAOLA_TEST_POOL_SHARDS: 'off' });
     assert('(f7) SHARDS=off runs the suite whole', units.length === 1 && units[0].command === suite);
+    delete pool.SHARDED_SUITES[suite];
   }
 
   // (f8) Pool sizing: serial on request, forced on a number, bounded on auto, and a typo

@@ -101,9 +101,19 @@ assert(chains.length > 0, 'package.json must declare at least one test chain');
 
 // --- (A) registration --------------------------------------------------------------------
 const suites = fs.readdirSync(SCRIPTS_DIR).filter(f => /^test-.*\.js$/.test(f)).sort();
-assert(suites.length > 40,
-  'NON-VACUITY: expected the repo to carry many test-*.js files, found ' + suites.length
-  + ' — the scan is looking in the wrong place');
+// NON-VACUITY, by WITNESS rather than by count. The scan must find THIS FILE and every file the
+// EXEMPT table names — a scan pointed at the wrong directory finds neither, and the count of
+// suites in the repo is not a property anybody is defending. The previous form was `> 40`, which
+// went red the moment the corpus legitimately shrank and would have had to be edited downward
+// each time, which is exactly when a misdirected scan is hardest to notice.
+assert(suites.includes(path.basename(__filename)),
+  'NON-VACUITY: the test-*.js scan does not find this file itself — it is looking in the wrong '
+  + 'place (found ' + suites.length + ' file(s) in ' + SCRIPTS_DIR + ')');
+for (const name of Object.keys(EXEMPT)) {
+  assert(suites.includes(name),
+    'NON-VACUITY/STALE: the EXEMPT table names ' + name + ' but the scan does not find it — either '
+    + 'the scan is misdirected or the exemption outlived the file it excused');
+}
 
 const registeredIn = new Map();
 for (const f of suites) {

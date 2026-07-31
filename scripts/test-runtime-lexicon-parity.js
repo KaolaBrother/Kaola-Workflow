@@ -171,10 +171,30 @@ const SURVEY_PATTERNS = Object.freeze([
 // Anti-vacuity floors. If the extractor or a runtime tree silently breaks, the
 // oracle would pass green while guarding nothing. These make that fail LOUD.
 //
-// The candidate floor was 100 while the shared engine tree carried the node executor, the plan
-// validator and the refusal kernel — most of the typed-code corpus. Those are deleted; what the
-// floor exists to catch (a broken extractor reading nothing) is unchanged at the smaller number.
-const MIN_CANDIDATES = 40;
+// THE CANDIDATE FLOOR IS DERIVED, NOT TYPED. It used to be an integer — 100 while the shared
+// engine carried the node executor and the plan validator, then 40 once those were deleted. An
+// integer measured against a vocabulary that is being driven toward zero is a SCHEDULED FALSE RED:
+// it must be re-typed after every subtraction, and the day someone forgets, the suite fails while
+// nothing is wrong. That is the most expensive kind of red, because it teaches its readers that a
+// red here means nothing.
+//
+// What the floor uniquely guarded is a broken EXTRACTOR — a walk that finds no engine file, or
+// patterns that match nothing — passing green while enforcing nothing over an empty universe.
+// That failure has a ZERO signature, so guard zero. Zero is the one threshold that never needs
+// re-typing: it stays correct at 60 codes, at 6, and at 1.
+//
+// BLIND SPOT, stated next to the guard because that is where it belongs: a PARTIAL extraction.
+// One of the two EMIT_PATTERNS silently ceasing to match still yields a non-empty set and still
+// passes. The integer never caught that either — a floor of 40 is blind to a 60 -> 41 truncation,
+// and today one pattern derives 60 codes while the other derives 7, so the union hides a total
+// failure of the second. The harm is also bounded: a dropped code costs the parity VERDICT on that
+// code, never a wrong verdict on the codes that remain. A guard that would close it has to read
+// the same corpus with a second, differently-written detector, and two detectors that must agree
+// on regex minutiae are two things to keep in step for a failure nobody has observed.
+//
+// The two runtime-tree floors below stay integers on purpose: they measure the DOCUMENTATION trees
+// (17 files / ~120-150 KB per runtime today), which this design does not shrink toward zero, so
+// they are not scheduled to go stale. If a runtime's docs ever approach 5 files, that is a finding.
 const MIN_FILES_PER_RUNTIME = 5;
 const MIN_BYTES_PER_RUNTIME = 20000;
 
@@ -423,12 +443,23 @@ function main(argv) {
 
   // --- Derive the candidate universe. ---
   const { codes, engineFileCount } = deriveEmittedCodes(repo, EMIT_PATTERNS);
-  if (codes.size < MIN_CANDIDATES) {
+  // Two distinct zero-signature breaks, reported separately because they route differently: an
+  // empty tree is a walk/path problem, an empty derivation over a real tree is a pattern problem.
+  if (engineFileCount === 0) {
+    failures.push({
+      kind: 'engine_tree_missing',
+      detail: 'the shared engine walk found NO scripts/kaola-workflow-*.js file — the tree moved, '
+        + 'the filename convention changed, or --repo points somewhere that is not a checkout; '
+        + 'refusing to pass vacuously over an empty universe',
+    });
+  } else if (codes.size === 0) {
     failures.push({
       kind: 'derivation_vacuous',
-      detail: 'derived ' + codes.size + ' typed codes from ' + engineFileCount
-        + ' shared engine file(s); floor is ' + MIN_CANDIDATES
-        + ' — the extractor or the engine tree is broken, refusing to pass vacuously',
+      detail: 'derived 0 typed codes from ' + engineFileCount + ' shared engine file(s) — either '
+        + 'EMIT_PATTERNS no longer matches how this repo spells a typed emit, or the typed '
+        + 'vocabulary genuinely reached zero. Those are indistinguishable from here and the second '
+        + 'means this oracle has no subject left, so a human decides: repair the patterns, or '
+        + 'delete this guard. Refusing to pass vacuously either way',
     });
   }
 

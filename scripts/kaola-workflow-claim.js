@@ -2637,7 +2637,10 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // that dropped the run record / finalization summary / a per-item .cache evidence file refuses
     // here, before either live copy is deleted (see verifyArchiveComplete).
     const v = verifyArchiveComplete(src, dest);
-    if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, dest };
+    // Carry BOTH incompleteness signals. verifyArchiveComplete can fail with an EMPTY missing[]
+    // and a non-empty mismatched[] — a file that reached the destination with different bytes — and
+    // dropping that half left the sink unable to tell a corrupt archive from a clean one.
+    if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, mismatched: v.mismatched || [], dest };
     // (d) delete BOTH live copies — only after copy+verify confirmed.
     fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
     const mainLive = path.join(mainRoot, 'kaola-workflow', project);
@@ -3896,7 +3899,7 @@ function cmdFinalize() {
   if (!closureContract.archiveSucceeded(result) && result.archive_incomplete !== true) {
     output({
       result: 'refuse',
-      reason: result.reason || result.snapshot_error || 'archive_refused',
+      reason: result.reason || 'archive_refused',
       project: args.project,
       detail: result.detail,
       reasoning: 'archival did not return an explicit success result; no roadmap, issue, label, worktree, or branch cleanup was performed.'
@@ -4437,7 +4440,7 @@ function cmdRelease() {
   const result = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
   if (!closureContract.archiveSucceeded(result)) {
     output({ released: false, result: 'refuse', project: folder.project,
-      reason: result.reason || result.snapshot_error || (result.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
+      reason: result.reason || (result.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
       detail: result.detail, missing: result.missing,
       reasoning: 'archival did not return an explicit success result; worktree, branch, and claim-label cleanup was not attempted.' }, 1);
     return;
@@ -5355,7 +5358,7 @@ function cmdWatchPr() {
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
       if (!closureContract.archiveSucceeded(archiveResult)) {
         archiveRefusals.push({ folder: folder.project,
-          reason: archiveResult.reason || archiveResult.snapshot_error || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
+          reason: archiveResult.reason || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
           detail: archiveResult.detail, missing: archiveResult.missing });
         continue;
       }
@@ -5451,7 +5454,7 @@ function cmdWatchPr() {
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
       if (!closureContract.archiveSucceeded(archiveResult)) {
         archiveRefusals.push({ folder: folder.project,
-          reason: archiveResult.reason || archiveResult.snapshot_error || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
+          reason: archiveResult.reason || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
           detail: archiveResult.detail, missing: archiveResult.missing });
         continue;
       }
