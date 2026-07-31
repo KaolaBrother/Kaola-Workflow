@@ -1,0 +1,10 @@
+{"ts":"2026-07-31T13:32:03Z","agent_type":"rt-commands","agent_id":"art-commands-7641b9b341751f50","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:32:24Z","agent_type":"rt-agents","agent_id":"art-agents-45ab99917b5eb2c2","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:32:46Z","agent_type":"rt-mechanism","agent_id":"art-mechanism-67bf85080136009e","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:33:08Z","agent_type":"rt-guards","agent_id":"art-guards-7415b2a0c7f4ef1c","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:38:10Z","agent_type":"retired-lexicon","agent_id":"aretired-lexicon-d37bf9ddb4e150c7","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:38:33Z","agent_type":"docs-adaptation","agent_id":"adocs-adaptation-39426ed716b50e66","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:39:47Z","agent_type":"impl-kernel-trim","agent_id":"aimpl-kernel-trim-b294a94955ecc7bd","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:50:32Z","agent_type":"rt-commands","agent_id":"art-commands-7641b9b341751f50","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:52:06Z","agent_type":"impl-kernel-trim","agent_id":"aimpl-kernel-trim-b294a94955ecc7bd","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-07-31T13:55:45Z","agent_type":"rt-mechanism","agent_id":"art-mechanism-67bf85080136009e","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}

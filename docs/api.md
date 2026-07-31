@@ -28,9 +28,10 @@ result from a shelled subprocess.
   `refuse` (a hard stop), `escalate` (pause and ask the user), or `consent` (a value call for the
   user). A refusal additionally carries a snake_case `reason` token and, where one exists, an
   `operator_hint`. Per-command payloads carry extra fields — additive, never required.
-- The shared constructors live in `kaola-workflow-adaptive-schema.js` (the ×4 byte-identical
-  anchor): `refuse(reason, extra)`, `answer(...)`, and `emit(obj)`, which writes exactly one compact
-  JSON line.
+- The envelope is a shape, not a library: each script builds and prints its own. The kernel
+  (`kaola-workflow-adaptive-schema.js`, the ×4 byte-identical anchor) still exports
+  `refuse(reason, extra)`; the `answer(...)` and `emit(obj)` constructors were removed once
+  measurement showed nothing had ever called them.
 
 **The run design contains no refusals.** The refusals documented below all sit at operations, not at
 the work: a release tag whose receipt does not cover it, an archive that would lose a file, a sink
