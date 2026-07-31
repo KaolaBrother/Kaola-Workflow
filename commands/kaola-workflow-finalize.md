@@ -61,7 +61,7 @@ or tooling; the review gate for a review finding. There is no mandated mode, no 
 and no approval attached to that choice. Write fix output to `.cache/final-validation-fix-{n}.md`
 and rerun the exact command that failed.
 
-Routed-fix dispatches, when you dispatch one — include the `model=` line exactly:
+Routed-fix dispatches, when you dispatch one:
 
 ```text
 Agent(
@@ -129,10 +129,7 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
 
-Dispatch `doc-updater` with the changed files, the checklist, and the working directory. Every
-dispatch below carries an explicit `model=` line — the installer fills each `model="{...}"`
-placeholder from the agent's own profile, and it is what shows the model badge. Pass it exactly as
-shown; never omit it.
+Dispatch `doc-updater` with the changed files, the checklist, and the working directory.
 
 ```text
 Agent(

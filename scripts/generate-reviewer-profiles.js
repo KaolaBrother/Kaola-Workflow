@@ -54,6 +54,22 @@ const EXPECTED_DOMAIN_OUTCOMES = Object.freeze({
   'security-reviewer': Object.freeze(['approved', 'changes_requested']),
 });
 
+// The positive content guard over the behavior contract. One source renders into twelve surfaces,
+// and the failure this exists for is a policy going missing from that render in silence — so every
+// token here MUST survive in the role's prose or generation refuses.
+//
+// Membership rule: a token stays iff losing it silently would change what the reviewer DOES. It
+// excludes a field name belonging to machinery no longer in the tree, however load-bearing that
+// name once was. Mandating retired vocabulary is the same defect as failing to ban it, so a token
+// retires WITH its mechanism and the concept that replaces it is pinned in the same edit — never a
+// net loss of guard.
+//
+// The two receipt fields qualify for DIFFERENT reasons, and the distinction is worth keeping
+// straight. `verdict:` has a live machine reader — parseRecordedVerdict in
+// kaola-workflow-adaptive-schema.js matches that column-zero row. `findings_blocking:` does NOT:
+// the same function parses it, but its only caller drops the parsed value. It is pinned on the
+// membership rule alone — a reviewer that stops saying how many findings are blocking has
+// materially changed the output the orchestrator reads.
 const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
   'code-reviewer': Object.freeze([
     '>80%',
@@ -64,13 +80,9 @@ const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
     'zero findings',
     'style preferences',
     'Consolidate',
-    'review phase',
-    'review_scope_expanded',
-    'finding-anchor-v1',
-    'domain_outcome: approved',
-    'domain_outcome: changes_requested',
-    'execution_status',
-    'gate_effect',
+    'primary anchor',
+    'verdict:',
+    'findings_blocking:',
   ]),
   'adversarial-verifier': Object.freeze([
     'Presume the claim false',
@@ -78,21 +90,11 @@ const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
     'one context-provided claim',
     'strongest failure path',
     'attempted counterexample',
-    'gate_mode',
-    'investigation mode',
-    'change_gate mode',
-    'gate_aggregation',
-    'replicated_majority',
-    'partitioned_all',
-    'review phase',
-    'review_scope_expanded',
-    'finding-anchor-v1',
-    'domain_outcome: refuted',
-    'domain_outcome: not_refuted',
-    'domain_outcome: indeterminate',
-    'claim_outcome',
-    'execution_status',
-    'gate_effect',
+    'not a product-repair verdict',
+    'Never count votes',
+    'primary anchor',
+    'verdict:',
+    'findings_blocking:',
   ]),
   'security-reviewer': Object.freeze([
     'OWASP',
@@ -104,11 +106,9 @@ const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
     'candidate-caused',
     'zero findings',
     'fix_role=security',
-    'finding-anchor-v1',
-    'domain_outcome: approved',
-    'domain_outcome: changes_requested',
-    'execution_status',
-    'gate_effect',
+    'primary anchor',
+    'verdict:',
+    'findings_blocking:',
   ]),
 });
 
@@ -178,6 +178,18 @@ const OUTPUT_SPECS = Object.freeze([
 const EXPECTED_OUTPUT_PATHS = Object.freeze(OUTPUT_SPECS.map(spec => spec.path));
 const PROVENANCE_BAN = /#\d{1,6}|D-\d{3}-\d{2}|\bINV-\d+|\bADR(?:[ -]\d{2,4})?|\b(?:PR|MR|AC)#\d+/;
 const RUNTIME_NOUN_BAN = /\b(?:Claude|Codex|OpenCode|GitHub|GitLab|Gitea)\b/i;
+// Vocabulary belonging to machinery that is gone. Retiring a concept and leaving its word in a
+// shipped prompt teaches a reader a design that no longer exists, which is the same defect as
+// mandating it — so a token retires from the required table and arrives here in one edit.
+//
+// This is an ENUMERATED LIST, not a rule about retired words in general: a retired token nobody adds
+// here ships exactly as before. It is applied to RENDERED content rather than to `contractText`,
+// because that is the only region wide enough to see it — the adapter prose is written by
+// renderAdapter below, never authored in the contract, and `node-id` survived a cleanup that named it
+// precisely because every content check read the authored contract and nothing read the render.
+// Deliberately absent: `review phase` and `replan` are ordinary English, and `domain_outcomes` is a
+// live receipt_contract field, so only its retired rendered form `domain_outcome:` is listed.
+const RETIRED_VOCABULARY_BAN = /\bnode-id\b|\bgate_effect\b|\bgate_mode\b|\bgate_aggregation\b|\bchange_gate\b|\breplicated_majority\b|\bpartitioned_all\b|\bexecution_status\b|\bclaim_outcome\b|\breview_scope_expanded\b|\bdomain_outcome:/;
 const CORE_START = '<!-- reviewer-behavior-core:start -->';
 const CORE_END = '<!-- reviewer-behavior-core:end -->';
 
@@ -230,28 +242,93 @@ function assertNoProvenance(value, label) {
   if (match) throw new Error(`${label}_provenance_forbidden: ${match[0]}`);
 }
 
-function contradictoryDescription(role, description, body) {
+// Contradiction detection over the contract's policy prose. The required-token table above catches a
+// policy that goes MISSING; this catches one that is COUNTERMANDED — prose added beside the rule it
+// inverts, with every required token left intact. Every region that reaches a rendered surface is
+// scanned: the one-line `description`, each section `heading`, and the `sections[].lines` body.
+// Headings render as `## <heading>` into all twelve surfaces, so a region left unscanned here is
+// shipped prose no check reads — `contractText` below therefore spans headings AND lines, which is
+// also what brings headings under the required-token table and RUNTIME_NOUN_BAN.
+//
+// Detection is lexical and recognizes three shapes: prose directing the reader to set aside a rule
+// stated elsewhere in the same contract (an added rule that contradicts a kept one has to say which
+// of the two wins, and this is the vocabulary for saying so); prose asserting a pinned rule's
+// opposite outright; and prose revoking a pinned rule. A contradiction phrased outside those three
+// is not caught — no general claim over semantic contradiction is made here or implied.
+//
+// Scanning granularity differs by region, and the difference is a rule, not an accident. A
+// description and a heading are each ONE short phrase, so both are read whole, with no clause
+// splitting and no negation filter: brevity must not become an exemption, and a title is never
+// written in the prohibition voice that forces the body's filter. The body IS a rule list written
+// largely in the negative ("Never invent a finding", "Do not report ..."), where a whole-region scan
+// matches the prohibition of the very behavior a pattern names, so it is read clause by clause and a
+// clause carrying a negation particle is skipped — by the inversion list only. A countermand is
+// already sentence-scoped by construction (`[^.]` cannot cross a period), so it is tested over the
+// whole body unsplit and unfiltered: clause splitting would let a comma defeat it, and the negation
+// filter would let "do not hesitate to disregard the preceding sections" through. Revocations skip
+// the filter for the same reason — their negation IS the contradiction.
+//
+// KNOWN LIMITS, kept current on purpose. Out-of-vocabulary phrasing escapes: an inversion that
+// avoids these words is not caught, and neither is a bare restatement of a rule's opposite that
+// matches no pattern (`Presume the claim true` inverts a pinned token and passes). The revocation
+// list is per-rule, not per-role — two roles have none, so only the adversarial verifier's
+// uncertainty rule is covered against a negated restatement. Nothing here reads meaning.
+//
+// The countermand test is DELIBERATELY unfiltered, and it costs a known false positive: a legitimate
+// prohibition that names its target, such as "Never override the rule above", refuses and has to be
+// rephrased ("Never set this rule aside"). Lexically that sentence is the same shape as "do not
+// hesitate to disregard the preceding sections", and no rule this side of meaning separates them, so
+// the ambiguous case refuses rather than ships — the reviewer contract's own doctrine, applied to
+// itself. Exposure is narrow by measurement: of every heading and line in the contract, exactly one
+// carries a countermand verb at all, and it matches no target noun.
+const COUNTERMAND_PATTERN = /\b(?:disregard|ignore|overrid(?:e|es|ing)|supersed(?:e|es|ing)|waives?|set aside|notwithstanding|regardless of)\b[^.]{0,60}\b(?:above|preceding|earlier|foregoing|previous|prior|rule|policy|section|instruction)\b/;
+const NEGATION_PARTICLE = /\b(?:never|not|nor|neither|no|none|without)\b/;
+
+const INVERTED_POLICY_PATTERNS = Object.freeze({
+  'code-reviewer': Object.freeze([
+    /(?:report|include)[^.]{0,80}(?:uncertain|speculative|low-confidence|low confidence)/,
+    /zero findings[^.]{0,40}(?:fail|invalid|incomplete)/,
+    /refute-if-uncertain/,
+  ]),
+  'adversarial-verifier': Object.freeze([
+    /(?:uncertainty|incomplete confirmation)[^.]{0,60}(?:passes|approves|supports)/,
+    /precision-first[^.]{0,40}report only/,
+    /uncertain\w*[^.]{0,60}\b(?:favou?rs?|counts? for|benefit of the doubt)\b/,
+  ]),
+  'security-reviewer': Object.freeze([
+    /(?:approve|pass)[^.]{0,60}(?:despite|with|ignoring)[^.]{0,40}(?:critical|high|vulnerab)/,
+    /ignore[^.]{0,40}(?:vulnerabilit|finding|secret)/,
+    /zero findings[^.]{0,40}(?:fail|invalid|incomplete)/,
+  ]),
+});
+
+// Revocations of a pinned rule. The negation particle is what makes the clause a contradiction, so
+// the body's negation filter must not skip these.
+const REVOKED_POLICY_PATTERNS = Object.freeze({
+  'code-reviewer': Object.freeze([]),
+  'adversarial-verifier': Object.freeze([
+    /uncertain\w*[^.]{0,60}\b(?:not|never)\b[^.]{0,40}against/,
+  ]),
+  'security-reviewer': Object.freeze([]),
+});
+
+function contradictoryPolicy(role, description, headings, body) {
   const desc = description.toLowerCase();
-  if (role === 'code-reviewer') {
-    if (/(?:report|include)[^.]{0,80}(?:uncertain|speculative|low-confidence|low confidence)/.test(desc)
-        || /zero findings[^.]{0,40}(?:fail|invalid|incomplete)/.test(desc)
-        || /refute-if-uncertain/.test(desc)) {
-      return true;
-    }
-    if (body.includes('>80%') && /regardless of confidence/.test(desc)) return true;
+  const inverted = INVERTED_POLICY_PATTERNS[role];
+  const revoked = REVOKED_POLICY_PATTERNS[role];
+  for (const phrase of [desc, ...headings.map(heading => heading.toLowerCase())]) {
+    if (inverted.some(pattern => pattern.test(phrase))) return true;
+    if (revoked.some(pattern => pattern.test(phrase))) return true;
+    if (COUNTERMAND_PATTERN.test(phrase)) return true;
   }
-  if (role === 'adversarial-verifier') {
-    if (/(?:uncertainty|incomplete confirmation)[^.]{0,60}(?:passes|approves|supports)/.test(desc)
-        || /precision-first[^.]{0,40}report only/.test(desc)) {
-      return true;
-    }
+  if (role === 'code-reviewer' && body.includes('>80%') && /regardless of confidence/.test(desc)) {
+    return true;
   }
-  if (role === 'security-reviewer') {
-    if (/(?:approve|pass)[^.]{0,60}(?:despite|with|ignoring)[^.]{0,40}(?:critical|high|vulnerab)/.test(desc)
-        || /ignore[^.]{0,40}(?:vulnerabilit|finding|secret)/.test(desc)
-        || /zero findings[^.]{0,40}(?:fail|invalid|incomplete)/.test(desc)) {
-      return true;
-    }
+  if (COUNTERMAND_PATTERN.test(body)) return true;
+  for (const clause of body.split(/[.;:,\n]/)) {
+    if (revoked.some(pattern => pattern.test(clause))) return true;
+    if (NEGATION_PARTICLE.test(clause)) continue;
+    if (inverted.some(pattern => pattern.test(clause))) return true;
   }
   return false;
 }
@@ -319,7 +396,9 @@ function validateBehaviorContracts(source) {
     if (contract.receipt_contract.finding_schema !== 'finding-anchor-v1') {
       throw new Error(`behavior_contract_${role}_finding_schema_invalid`);
     }
-    const contractText = contract.sections.flatMap(section => section.lines).join(' ');
+    const headings = contract.sections.map(section => section.heading);
+    const contractText = contract.sections
+      .flatMap(section => [section.heading, ...section.lines]).join(' ');
     if (RUNTIME_NOUN_BAN.test(contractText)) {
       throw new Error(`behavior_contract_${role}_core_not_runtime_neutral`);
     }
@@ -328,8 +407,8 @@ function validateBehaviorContracts(source) {
         throw new Error(`behavior_contract_${role}_required_policy_missing: ${token}`);
       }
     }
-    if (contradictoryDescription(role, contract.description, contractText.toLowerCase())) {
-      throw new Error(`behavior_contract_${role}_contradictory_description`);
+    if (contradictoryPolicy(role, contract.description, headings, contractText.toLowerCase())) {
+      throw new Error(`behavior_contract_${role}_contradictory_policy`);
     }
     assertNoProvenance(contract, `behavior_contract_${role}`);
   }
@@ -435,7 +514,7 @@ function renderAdapter(role, adapter) {
 
   if (adapter.evidence_transport === 'write-seeded-cache') {
     lines.push('- Evidence transport: SELF-WRITE the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.');
-    lines.push(`- After the evidence is complete, return only a compact orchestrator summary: <node-id> ${role}: <outcome>; evidence=<dispatch.evidence_file>.`);
+    lines.push(`- After the evidence is complete, return only a compact orchestrator summary: ${role}: <outcome>; evidence=<dispatch.evidence_file>.`);
   } else {
     throw new Error(`runtime_adapter_evidence_transport_unhandled: ${adapter.evidence_transport}`);
   }
@@ -577,6 +656,10 @@ function renderProfiles(behaviorContracts, runtimeAdapters) {
     if (PROVENANCE_BAN.test(rendered.content)) {
       throw new Error(`generated_profile_provenance_forbidden: ${spec.path}`);
     }
+    const retired = rendered.content.match(RETIRED_VOCABULARY_BAN);
+    if (retired) {
+      throw new Error(`generated_profile_retired_vocabulary_forbidden: ${spec.path}: ${retired[0]}`);
+    }
     return Object.freeze({
       ...spec,
       behavior_contract_version: sourceContract.behavior_contract_version,
@@ -639,6 +722,8 @@ function checkGeneratedProfiles(root = ROOT, options = {}) {
     }
     const provenance = actual.match(PROVENANCE_BAN);
     if (provenance) errors.push(`generated_profile_provenance_forbidden: ${profile.path}: ${provenance[0]}`);
+    const retired = actual.match(RETIRED_VOCABULARY_BAN);
+    if (retired) errors.push(`generated_profile_retired_vocabulary_forbidden: ${profile.path}: ${retired[0]}`);
     try {
       if (extractBehaviorCore(actual) !== extractBehaviorCore(profile.content)) {
         errors.push(`generated_profile_behavior_core_drift: ${profile.path}`);

@@ -10,7 +10,7 @@ own content, and editing runtime configuration under `$HOME` are all in that cla
 change, show the minimal diff, and wait for the answer. Creating a missing scaffold file is not —
 get on with it.
 <!-- /PIN -->
-<!-- REGION:command -->
+<!-- REGION:command — only this surface has an argument channel: its frontmatter declares an `argument-hint` and its body reads `$ARGUMENTS`, which the skill surface cannot receive -->
 
 Prepare the current project for repeated `/workflow-next` implementation cycles.
 
@@ -26,7 +26,7 @@ Use `$ARGUMENTS` as optional project context.
 
 Inspect the project root:
 <!-- /REGION -->
-<!-- REGION:skill -->
+<!-- REGION:skill — the counterpart opening for a surface with no argument channel: no `## Inputs`, and the body opens as a Required-Behavior list instead of a `$ARGUMENTS`-fed Step 1 -->
 
 Bootstrap the current repo for repeated Kaola-Workflow for Codex cycles. Preserve existing project guidance and add only missing Codex-specific structure.
 
@@ -38,15 +38,13 @@ Bootstrap the current repo for repeated Kaola-Workflow for Codex cycles. Preserv
 
 ```bash
 pwd
-<!-- REGION:command -->
 test -f CLAUDE.md && echo "CLAUDE.md exists" || echo "CLAUDE.md missing"
-<!-- /REGION -->
 git rev-parse --is-inside-work-tree
 git status --short --branch
 git remote -v
 test -d kaola-workflow && find kaola-workflow -maxdepth 3 -type f | sort
 find docs -maxdepth 3 -type f 2>/dev/null | sort
-<!-- REGION:command -->
+<!-- REGION:command — the overflow policy routes optional content to `.claude/rules/*.md` and `CLAUDE.local.md`, config locations that exist only on this runtime; the skill's counterpart names `.codex/agents/` and `.codex/config.toml` instead -->
 test -f package.json && node -e "const p=require('./package.json'); console.log('package scripts:', Object.keys(p.scripts||{}).join(', ')||'none')"
 find . -maxdepth 2 \( -name 'Makefile' -o -name 'pyproject.toml' -o -name 'Cargo.toml' -o -name 'go.mod' -o -name 'requirements.txt' \) -print
 ```
@@ -94,7 +92,7 @@ Optional content belongs elsewhere unless it must be read in every session:
 
 Append equivalent missing sections only. Treat headings with the same meaning as equivalent; do not duplicate. Replace bracketed placeholders with detected values; do not leave placeholder text in `CLAUDE.md`. Omit optional sections when there is no real content.
 <!-- /REGION -->
-<!-- REGION:skill -->
+<!-- REGION:skill — the counterpart placement: role profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`, paths that exist only on this runtime -->
 ```
 
 3. Create or update `AGENTS.md` only when needed. Preserve user-authored content.
@@ -209,46 +207,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 ```
 <!-- KW-CLAUDE-TEMPLATE-END -->
 
-<!-- REGION:command -->
-> **Codex hooks note:** Running `install-codex-agent-profiles.js --global` installs the
-> agent profiles **globally** into `~/.codex` (one install, all repos) AND refreshes the
-> global hooks. Trust hooks once via `/hooks`. If a project-local `.codex/hooks.json`
-> already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
-> Audit Codex config before claiming role dispatch readiness: Codex >=0.145.0 is required
-> (`kaola-workflow-codex-preflight.js` refuses `codex_version_unsupported` below that floor), and
-> `kaola-workflow-codex-preflight.js --doctor --json` must show `features.multi_agent_v2.enabled`
-> true. MultiAgentV2 is **opt-in and off by default** — only V1 `multi_agent` is on by default —
-> so it has to be written into `config.toml` for Codex to expose the V2 task-name spawn tools at
-> all. Three shapes are accepted: `[features.multi_agent_v2]` with `enabled = true`, the inline
-> `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
-> `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not** enable it — `[agents]`
-> configures roles and limits (`agents.<name>.*`, `max_depth`, `max_threads`), and Codex 0.145.0
-> loads such a config clean with the feature still off, so set the switch in one of the three shapes
-> above instead. Put the concurrency budget at
-> `features.multi_agent_v2.max_concurrent_threads_per_session` and do **not** also set
-> `agents.max_threads` — it is a separate `[agents]` key, **not an alias**, and it does not raise
-> the MultiAgentV2 cap; Codex 0.145.0 accepts the key rather than complaining, so a stray one
-> leaves the cap where it was instead of erroring. Note that
-> `multi_agent_v2` is not carried in the public Codex configuration reference, which documents
-> `[features] multi_agent` for enabling subagents and `[agents]` only for role/limit settings
-> (`max_threads`, `max_depth`). The V2 flag and its bounds are verified against upstream SOURCE at
-> tag `rust-v0.145.0` — `codex-rs/core/src/config/mod.rs` defines
-> `DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4` and `effective_agent_max_threads`
-> uses `saturating_sub(1)` — source-verified, never documentation-verified, and both may change in a
-> future release. Kaola never
-> writes this flag for you; if it is not explicitly true, preflight refuses
-> `codex_multi_agent_v2_required` and its diff must be applied by hand with user authorization —
-> never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone
-> is NOT the same as dispatch-ready: read the doctor JSON's additive `dispatch_posture` field too
-> — `proactive` (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
-> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless explicitly asked
-> for sub-agents/delegation/parallel work — always available and always documented
-> — or, only if your Codex exposes an `ultra` reasoning effort for your model/plan (undocumented as
-> of Codex >=0.145.0; check the `/model` picker), the operator sets
-> `model_reasoning_effort = "ultra"`. Report the doctor's `dispatch_posture_warning` remediation
-> verbatim; do not claim readiness from the enabled flag alone. Never silently edit
-> `~/.codex/config.toml`; show the minimal diff and apply it only with user authorization.
-
+<!-- REGION:command — the posture probe reads `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and this session's settings env block, which exist only on this runtime; the skill's counterpart audits its own runtime's config and reports `dispatch_posture` instead -->
 > **Claude dispatch posture note:** Audit dispatch posture for this session before claiming
 > role-dispatch readiness: probe the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable
 > first; if unset, fall back to the session settings env block. Report
@@ -266,7 +225,7 @@ If an existing `CLAUDE.md` is bloated or duplicates the sections above, do not s
 
 ## Step 3 — Create `AGENTS.md`
 <!-- /REGION -->
-<!-- REGION:skill -->
+<!-- REGION:skill — the profile install and the config audit act on `~/.codex/agents/`, `~/.codex/config.toml` and the `codex` CLI, and `install-codex-agent-profiles.js` ships only in the plugin trees this surface can reach; none of it resolves on the command runtime -->
 5. Agent role profiles are a one-time GLOBAL install — `workflow-init` does NOT install them per repo.
 
 Profiles install once into `~/.codex` and are available in every repo (parity with Claude global agents). `workflow-init` only scaffolds the project. If not yet installed (or after upgrade), run the one-time global install:
@@ -286,7 +245,7 @@ Writes `~/.codex/agents/kaola-workflow/*.toml` + the managed block in `~/.codex/
 Run an agent-guided Codex config audit before claiming role dispatch readiness:
 
 ```bash
-codex features list | rg 'multi_agent_v2' || true
+codex features list | grep 'multi_agent_v2' || true
 node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project-root "$PWD" --json
 ```
 
@@ -442,7 +401,7 @@ Canonical `AGENTS.md` redirect block to write:
 ---
 
 *All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
-<!-- REGION:command -->
+<!-- REGION:command — KNOWN RESIDUAL, structural shape and NOT a capability difference: both surfaces carry this same scaffold tree, under a numbered Step heading here and as item 6 of a Required-Behavior list on the skill. Nothing about either runtime forces that. It is kept rather than collapsed because collapsing costs a real surface: either the command loses its Step 1 to 5 numbering, or it loses the tree itself. A damaged surface is a worse trade than a divergence that says out loud what it is. Collapse it the day the command's Step numbering is reworked for another reason. -->
 ```
 
 ---
@@ -467,14 +426,14 @@ CHANGELOG.md
 ```
 
 Use these initial file bodies when a file is missing.
-
-### `kaola-workflow/ROADMAP.md`
 <!-- /REGION -->
-<!-- REGION:skill -->
+<!-- REGION:skill — KNOWN RESIDUAL, the counterpart of the region above and the same admission: item 6 already stated the scaffold tree, so the file bodies open under a plain heading rather than a Step 4. Same content, different structural heading, no runtime capability behind it. These two are the only regions in these skeletons NOT justified by a capability difference; every other one names a path, tool or channel that exists on one runtime and not the other. -->
 ```
 
-## Initial Roadmap Body
+## Initial File Bodies
 <!-- /REGION -->
+
+### `kaola-workflow/ROADMAP.md`
 
 ```markdown
 # Kaola-Workflow Roadmap
@@ -486,14 +445,12 @@ Use these initial file bodies when a file is missing.
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 <!-- SPLICE:in-shared-003 -->
-<!-- REGION:command -->
 
 ## Rules
 
-<!-- SPLICE:in-cmd-005 -->
-- After each `/workflow-next` cycle, refresh this file from issue state.
+<!-- SPLICE:in-shared-004 -->
 - Move completed workflow project folders to `kaola-workflow/archive/`.
-<!-- SPLICE:in-cmd-006 -->
+<!-- SPLICE:in-shared-005 -->
 - Keep commit and push as the final Finalization step after docs, issues, roadmap,
   archive, and metadata are complete.
 ```
@@ -502,11 +459,11 @@ After creating or confirming `kaola-workflow/ROADMAP.md`, bootstrap the per-issu
 
 ```bash
 mkdir -p kaola-workflow/.roadmap
-<!-- SPLICE:in-cmd-007 -->
+<!-- SLOT:in-roadmap-resolver -->
 [ -f "$ROADMAP_JS" ] && node "$ROADMAP_JS" generate
 ```
 
-<!-- SPLICE:in-cmd-008 -->
+<!-- SPLICE:in-shared-006 -->
 
 ### `docs/README.md`
 
@@ -556,21 +513,21 @@ Document coding style, testing rules, Git practices, naming, and review expectat
 
 ## Active Folder Initialization
 
-<!-- SPLICE:in-cmd-009 -->
+<!-- SPLICE:in-shared-007 -->
 
 ```bash
-<!-- SPLICE:in-cmd-010 -->
+<!-- SLOT:in-claim-resolver -->
 [ -f "$CLAIM_JS" ] && node "$CLAIM_JS" claim \
   --project "{project}" --issue {N}
 ```
 
-<!-- SPLICE:in-cmd-011 -->
+<!-- SPLICE:in-shared-008 -->
 
-<!-- SPLICE:in-cmd-012 -->
+<!-- SPLICE:in-shared-009 -->
 
 ---
 
-## Step 5 — Git And Roadmap Summary
+<!-- SPLICE:in-summary-heading -->
 
 After edits:
 
@@ -578,17 +535,16 @@ After edits:
 2. Run `wc -l CLAUDE.md` and report whether it is under the 200-line target.
 3. Summarize:
    - whether Git is initialized
-<!-- SPLICE:in-cmd-013 -->
+<!-- SPLICE:in-shared-010 -->
    - whether `CLAUDE.md` was created or updated
    - whether AGENTS.md was created, was already conforming, or was migrated
    - which required `CLAUDE.md` sections are present
    - which docs/roadmap files were created
-<!-- SPLICE:in-cmd-014 -->
+<!-- SPLICE:in-shared-011 -->
 4. Do not commit unless the user explicitly asks.
 
-End with the next useful command:
+End with the next useful entry point:
 
 ```text
-/workflow-next
-<!-- /REGION -->
+<!-- SPLICE:in-next-route -->
 ```

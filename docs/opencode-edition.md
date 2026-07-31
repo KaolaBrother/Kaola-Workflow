@@ -42,7 +42,7 @@ Everything under `.opencode/` is **generated from canonical** by
 | ----------------------- | ----------------------------- | ----- |
 | `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. Generated reviewers preserve their canonical normalized behavior core and identity. |
 | `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's central effort resolution (`task` tool, no per-call `model=`). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
-| `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 3 runtime-neutral hook scripts, byte-copied. |
+| `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 1 runtime-neutral hook script, byte-copied. |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
 One file is **authored** (not generated) and verified present by the test:
@@ -69,25 +69,20 @@ runtime may produce different natural-language findings, explanations, or domain
 the underlying model execution is stochastic. The transform also makes no claim about private
 runtime prompt-loader bytes; it proves the tracked/generated filesystem surface.
 
-The review mechanism on opencode is the **adaptive** schema-2
-`code-reviewer`/`security-reviewer` post-dominance gates and review-attempt journal — the
-same mechanism Claude Code and Codex use, documented in `docs/api.md`. Runtime transport differs
-across editions, but these review decisions and evidence gates do not.
+The review mechanism on opencode is the same generated `code-reviewer`/`security-reviewer`
+profiles every runtime carries, documented in `docs/api.md`. Runtime transport differs
+across editions, but the reviewer contract they run does not.
 
 ### Schema-2 reviewer identity (#708)
 
 The opencode reviewer profiles carry the schema-2 identity fields
 (`behavior_contract_version`, `behavior_contract_hash`, `resolved_profile_hash`) in their
-frontmatter so `resolveReviewerProfileIdentity` can bind review-gate receipts to the exact profile
-bytes. The `resolved_profile_hash` is **re-stamped over the transformed opencode bytes** (not the
-Claude hash — the frontmatter differs post-transform, so the Claude hash does not bind these
-bytes). Without these fields, every review-gated adaptive plan on opencode hard-refused at
-`open-next` with `review_profile_unavailable` / `review_profile_identity_unavailable`.
-
-Runtime resolution is opencode-aware: `detectReviewRuntime` recognizes the opencode install layout
-(`<config>/kaola-workflow/scripts/`), and `reviewerProfilePath` probes the project
-(`<cwd>/.opencode/agent/`), global (`<config>/agent/`), and self-dev (`agents/`) candidate locations
-in that order (opencode resolves config global→project, so project wins).
+frontmatter, stamped by the same transform that generates the profile. The `resolved_profile_hash`
+is **re-stamped over the transformed opencode bytes** (not the Claude hash — the frontmatter
+differs post-transform, so the Claude hash does not bind these bytes). The runtime resolver that
+once read these fields back to bind a review-gate receipt retired with the node/DAG executor;
+nothing currently reads them at run time. `scripts/test-opencode-edition.js` still verifies the
+stamped bytes against canonical.
 
 ## Model effort — two tiers as reasoning-effort variants
 

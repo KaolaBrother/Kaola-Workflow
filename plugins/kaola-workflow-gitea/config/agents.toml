@@ -1,20 +1,20 @@
 [agents.code-explorer]
-description = "Kaola-Workflow for Codex Phase 1 codebase researcher: maps affected files, patterns, tests, and config without editing."
+description = "Kaola-Workflow for Codex codebase researcher: maps affected files, patterns, tests, and config without editing."
 config_file = "./agents/kaola-workflow/code-explorer.toml"
 nickname_candidates = ["Explorer", "Mapper", "Scout"]
 
 [agents.knowledge-lookup]
-description = "Kaola-Workflow for Codex Phase 1 knowledge researcher: checks curated library/API docs (Context7) and, when runtime allows, the open web only when external behavior or expertise matters."
+description = "Kaola-Workflow for Codex knowledge researcher: checks curated library/API docs (Context7) and, when runtime allows, the open web only when external behavior or expertise matters."
 config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
 nickname_candidates = ["Docs", "Reference", "Lookup"]
 
 [agents.planner]
-description = "Kaola-Workflow for Codex Phase 2 strategist: compares grounded implementation approaches and scope tradeoffs."
+description = "Kaola-Workflow for Codex implementation planner: turns a requirement into a stepwise implementation plan with dependencies, risks, phasing, and a testing strategy."
 config_file = "./agents/kaola-workflow/planner.toml"
-nickname_candidates = ["Planner", "Strategist", "Options"]
+nickname_candidates = ["Planner", "Strategist", "Steps"]
 
 [agents.code-architect]
-description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, file sets, task order, and validation commands."
+description = "Kaola-Workflow for Codex architect: produces dependency-safe blueprints, file sets, task order, and validation commands."
 config_file = "./agents/kaola-workflow/code-architect.toml"
 nickname_candidates = ["Architect", "Blueprint", "Designer"]
 
@@ -49,7 +49,7 @@ config_file = "./agents/kaola-workflow/security-reviewer.toml"
 nickname_candidates = ["Security", "Audit", "Threat"]
 
 [agents.doc-updater]
-description = "Kaola-Workflow for Codex Finalization documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
+description = "Kaola-Workflow for Codex documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
 config_file = "./agents/kaola-workflow/doc-updater.toml"
 nickname_candidates = ["Docs", "Docking", "Writer"]
 

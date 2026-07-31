@@ -41,8 +41,8 @@ Everything under `.kimi/` is **generated from canonical** by
 
 | Canonical source | kimi edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (5 commands). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped (see [Path selection](#path-selection) below). |
-| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (15 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. |
+| `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (3 commands). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped (see [Path selection](#path-selection) below). |
+| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (14 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. |
 | `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 1 runtime-neutral hook script — payload-adapted at generation time where the Kimi payload field name differs (dispatch-log; see [Hooks](#hooks)). |
 | `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The two canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
 
@@ -52,7 +52,7 @@ user's model choices — those live only in the user-owned Kimi `config.toml`.
 ## Roles as Skills
 
 Kimi Code's Agent tool has **no named custom subagents** — only the three built-in types
-`coder` (full tools), `explore` (read-only), and `plan`. The 15 canonical roles therefore
+`coder` (full tools), `explore` (read-only), and `plan`. The 14 canonical roles therefore
 cannot ship as named agent definitions the way they do on Claude Code (`agents/*.md`),
 Codex (`.toml` profiles), or opencode (`.opencode/agent/*.md`). Instead each role ships as a
 **role-contract Skill** `kaola-role-<role>`, and every canonical dispatch card —
@@ -101,8 +101,8 @@ Consequences, all enforced by the test:
 **Declared runtime divergence.** Kimi is the one runtime whose subagents cannot carry a
 per-dispatch tier: every subagent inherits the session model. That is a genuine capability
 difference, so it is *declared* rather than produced by a per-runtime rewrite rule. The
-declaration itself is the `inherit_session_model` entry in the `RUNTIME_NATIVE` exemption
-table (`scripts/test-runtime-lexicon-parity.js`), carrying its one-line reason; this
+declaration itself is the `inherit_session_model` entry in the `KIMI_RUNTIME_NATIVE` table in
+`scripts/test-kimi-edition.js`, carrying its one-line reason; this
 paragraph describes it but is not it. `test-kimi-edition.js` asserts the entry exists, that
 its reason states the inheritance, and that the generated tree matches it — no `model:`
 frontmatter field and no per-call `model=` override in any generated Skill — so deleting the
@@ -123,12 +123,9 @@ For the reviewer gate roles the transform also emits a `<!-- kimi-reviewer-ident
 comment block (body, column zero) holding `behavior_contract_version` /
 `behavior_contract_hash` from the canonical frontmatter plus a fresh `resolved_profile_hash`
 re-stamped over the final kimi bytes (the canonical Claude hash never binds post-transform
-bytes — the opencode renderAgent discipline). At runtime `reviewerProfilePath` resolves the
-kimi-native skill — project `<project>/.kimi-code/skills/kaola-role-<role>/SKILL.md` first,
-then global `<kimi-home>/skills/kaola-role-<role>/SKILL.md`, then the self-dev canonical
-path — while `detectReviewRuntime` recognizes the `<kimi-home>/kaola-workflow/scripts/`
-install layout (realpath-compared, before the opencode pattern), so a review-gated plan
-binds the kimi profile identity instead of hard-refusing `review_profile_unavailable`.
+bytes — the opencode renderAgent discipline). The runtime resolver that once read this identity
+back to bind a review-gated plan retired with the node/DAG executor; nothing currently reads it
+at run time.
 
 `scripts/test-kimi-edition.js` extracts the delimited reviewer core and proves that role,
 `behavior_contract_version`, `behavior_contract_hash`, and every normalized core byte match
@@ -152,7 +149,7 @@ never touched**.
 
 `install-kimi.sh` is a standalone installer — it has its own `--forge` flag and does not run
 through `install.sh --forge`. It deploys the workflow command skills — finalize, workflow-init,
-workflow-next — plus all 15 `kaola-role-*` skills. `copy_skills` is
+workflow-next — plus all 14 `kaola-role-*` skills. `copy_skills` is
 **self-healing**: before re-copying it prunes every kaola-owned skill dir not in that set, so a
 reinstall converges to exactly the workflow skill set on disk. Support scripts come from the
 selected forge's script tree, and the installer fails closed if an allowlisted script is missing
@@ -232,7 +229,7 @@ token anywhere in the generated tree (the kimi twin of the opencode #544 path-le
 - **Self-dev (this repo)** — `package.json` name is `kaola-workflow`, so `./scripts/`
   resolves first. Nothing else needed; the edition works in place.
 - **Consumer project** — `install-kimi.sh` copies the support scripts (the
-  install-manifest `--scripts` set for the selected `--forge`) plus the 3 hook scripts to
+  install-manifest `--scripts` set for the selected `--forge`) plus the 1 hook script to
   `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hooks}/` (a path
   `kaola_script()` already searches), so commands resolve without editing them. Skip with
   `--no-scripts`.
@@ -259,7 +256,7 @@ token anywhere in the generated tree (the kimi twin of the opencode #544 path-le
 ./install-kimi.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-Add `--yes` for non-interactive use. The install deploys the workflow command skills plus all 15
+Add `--yes` for non-interactive use. The install deploys the workflow command skills plus all 14
 `kaola-role-*` skills.
 
 ### Deploy layout — project vs global (scope-dependent)
@@ -330,7 +327,7 @@ opencode precedent).
 The edition is covered by `scripts/test-kimi-edition.js`, which regenerates the tree itself
 (`--write`) before asserting:
 
-- **K1 — count/structure parity:** exactly 5 command skills + 15 `kaola-role-*` skills;
+- **K1 — count/structure parity:** exactly 3 command skills + 14 `kaola-role-*` skills;
   every `SKILL.md` carries `name` + `description`; role skills are named `kaola-role-*`.
 - **K2 — no transform residue:** no `{X_MODEL}` placeholders, no `model="{`, no "MUST pass
   `model=`" prose, no `,,` collapse artifacts; `--runtime kimi` present.
@@ -356,11 +353,6 @@ The edition is covered by `scripts/test-kimi-edition.js`, which regenerates the 
   adaptation applied (see [Hooks](#hooks)).
 - **K8 — route reachability:** every receipt-emitted command target resolves under
   `.kimi/skills/`.
-- **K9 — reviewer profile resolution end-to-end:** hermetic installs (real `install-kimi.sh`
-  with temp `HOME` + `KIMI_CODE_HOME` + `--target`) prove a review-gated plan resolves the
-  kimi-native reviewer SKILL.md — project candidate wins over global, global fallback when
-  no project candidate exists, a stray `.opencode/agent/` profile never hijacks the kimi
-  identity, and a typed `review_profile_unavailable` refusal when no kimi profile exists.
 - **P0 / P1 / P4 / U1 / A1 — installer contract**: command-set
   exhaustiveness (canonical commands == the workflow command set exactly, fail-closed on a new command);
   default deploy set; re-install idempotency (exactly one managed hooks block);

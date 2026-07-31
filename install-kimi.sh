@@ -21,7 +21,7 @@
 #   ./install-kimi.sh --regenerate            # refresh the generated tree from canonical here
 #
 # COMMAND SKILLS: the install deploys the workflow command skills (kaola-workflow-finalize,
-# workflow-init, workflow-next) plus all 15 kaola-role-* skills into the skills/ dir. The
+# workflow-init, workflow-next) plus all 14 kaola-role-* skills into the skills/ dir. The
 # generated .kimi/ tree is produced by sync-kimi-edition.js from the canonical sources.
 #
 # DEPLOY LAYOUT (scope-dependent):
@@ -69,7 +69,7 @@ Usage: ./install-kimi.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
 
 SUPPORT SCRIPTS + HOOKS: workflow skills resolve support scripts via
 ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts (the list comes from
-scripts/kaola-workflow-install-manifest.js); the 3 kimi hook scripts land in
+scripts/kaola-workflow-install-manifest.js); the 1 kimi hook script lands in
 ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/hooks and are wired into
 ${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml as a managed [[hooks]] block (idempotent;
 validated with `kimi doctor config` when a kimi binary is on PATH).
@@ -194,7 +194,7 @@ copy_skills() {
 
 # Install the support scripts + hook scripts the workflow skills invoke. Scripts land in
 # ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts (list from the single-source
-# install manifest, same as install-opencode.sh); the 3 kimi hook .sh scripts land in
+# install manifest, same as install-opencode.sh); the 1 kimi hook .sh script lands in
 # .../kaola-workflow/hooks (chmod 755).
 install_support_scripts() {
   if [[ "$NO_SCRIPTS" -eq 1 ]]; then
@@ -466,6 +466,3 @@ merge_hooks_config
 echo ""
 echo "Next: open the project in Kimi Code and run a workflow command, e.g.:"
 echo "  /workflow-init"
-# #2 / D-542-01: planner-proven-disjoint parallel write frontiers are default-ON (no operator
-# toggle). Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net.
-echo "Disjoint parallel writes are default-ON (set KAOLA_PARALLEL_WRITES=0 to force serial)."

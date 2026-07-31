@@ -286,7 +286,7 @@ assert(giteaCmdTemplate === giteaSkillTemplate,
   'CLAUDE.md template must be byte-identical within Gitea forge pair');
 
 // #572 (AC4): the injected ## Kaola-Workflow template must be re-grounded on the adaptive
-// DAG-of-roles model — NO retired 6-phase-as-default vocabulary may survive in the consumer
+// mission-list model — NO retired 6-phase-as-default vocabulary may survive in the consumer
 // block. #538 made adaptive the unconditional default, so a numbered `Phase <n>` token or the
 // "phase file/artifact" durable-state framing in the injected block teaches a retired model.
 // Ban both across every forge's extracted template (the consumer-facing region only — the
@@ -304,15 +304,28 @@ for (const file of initFiles) {
 // #769: the two bans above are scoped to the injected consumer CLAUDE.md region, so the SHIPPED
 // marketplace manifests were never inspected and carried retired six-phase copy past #538 / #572 /
 // #573 / #725 / #765 unchallenged. Manifest text is the listing a user reads before installing, so
-// it must describe the model the plugin actually runs: a planner authors and freezes a task-shaped
-// DAG of role nodes in workflow-plan.md, then the executor runs it node-by-node via the running-set
-// scheduler. Ban the retired grammar over every shipped plugin.json (Codex + forge Claude, all
-// editions) and pin a positive adaptive anchor so blanked copy cannot pass the ban vacuously.
+// it must describe the model the plugin actually runs. Ban the retired grammar over every shipped
+// plugin.json (Codex + forge Claude, all editions) and pin a positive anchor so blanked copy cannot
+// pass the ban vacuously.
+//
+// #882: ADR 0017 (docs/decisions/0017-the-mission-list.md, docs/mission-list.md) retired the frozen
+// task-shaped DAG of role nodes, its workflow-plan.md record, and the running-set scheduler that
+// executed it node-by-node, replacing all of it with the mission list: one file per run, four fields
+// per item, written and read by the orchestrator directly — no script owns it, nothing freezes. The
+// positive anchor below was still requiring every manifest to advertise the retired DAG grammar, and
+// the retired terms had no ban here at all, so a manifest reverting to them stayed green. Ban the
+// retired grammar the same way the six-phase copy above is banned, and anchor on the model that
+// actually ships.
 const MANIFEST_GRAMMAR_BANS = [
   [/\b(?:six|6)[-\s]?phase\b/i, 'six-phase / 6-phase'],
   [PHASE_FILE_BAN, 'phase file / phase artifact'],
   [/phase routing/i, 'phase routing'],
-  [PHASE_NUMBER_BAN, 'numbered Phase <n>']
+  [PHASE_NUMBER_BAN, 'numbered Phase <n>'],
+  [/workflow-plan\.md/i, 'workflow-plan.md'],
+  [/\brole nodes?\b/i, 'role node(s)'],
+  [/\bfreez(?:e|es|ing)\b/i, 'freeze / freezes / freezing'],
+  [/running-set scheduler/i, 'running-set scheduler'],
+  [/DAG[-\s]of[-\s]role/i, 'DAG of role nodes / DAG-of-roles']
 ];
 // listed explicitly (not globbed) so a manifest that stops shipping is a visible edit here;
 // the canonical Claude edition ships commands from the repo root and has no manifest of its own.
@@ -333,7 +346,7 @@ for (const file of shippedManifests) {
       file + ': shipped plugin manifest must not advertise retired workflow grammar (' + label +
       ') — the workflow is adaptive-only (#769)');
   }
-  assertConcept(file, 'the adaptive DAG-of-roles model', ['adaptive', 'DAG of role nodes']);
+  assertConcept(file, 'the adaptive mission-list model', ['adaptive', 'mission list']);
 }
 
 // #609: the injected ## Kaola-Workflow template must FORBID vendor-model embellishment of the
@@ -537,40 +550,34 @@ assert(!blockMatch[1].includes('docs-lookup'),
 }
 
 
-// #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
-// run-start notice + the consent-halt escalation on both the codex SKILL and the root Claude
-// command mirror (this validator also owns the root commands/ surface for the github edition;
-// see the AGENTS.md redirect + CLAUDE.md template checks above for precedent).
-for (const planRunSurface of [
-]) {
-  assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
-  assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
-  assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
-  // #817: the fence's ROLE LIST is itself the contract — every REVIEW_GATE_ROLES member that
-  // reviews someone else's work must sit inside it. `main-session-gate` is deliberately absent:
-  // it is non-delegable and REQUIRED to run inline, so fencing it would be a contradiction.
-  // Pinning the exact list is bidirectional — dropping a role, or adding `main-session-gate`,
-  // breaks this needle.
-  assertIncludes(planRunSurface, 'For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`,');
-  // #817: the mode-refused-spawn trigger must stay NAMED. Without it a runtime that refuses every
-  // spawn is reclassified as ordinary judged-inline and the prominent run-start notice never fires.
-  assertIncludes(planRunSurface, 'the runtime mode-refuses the spawn');
-}
-
-
-
 // #400: registry-driven route-reachability contract. Every route/skill target a claim/startup/resume
 // receipt can emit MUST resolve to an installed surface — the Codex dead zone (#400) was the schema
 // emitting kaola-workflow-plan-run / kaola-workflow-adapt to skills that did not exist on the forge
-// plugins. require() the schema route constants (no hand-listed drift) + the static next_skill
-// fallbacks claim.js prints, and assert each resolves to a `skills/<name>/SKILL.md` dir. A missing
-// skill reds the chain with the unreachable target named.
+// plugins. require() the schema route constants (no hand-listed drift) and assert each resolves to a
+// `skills/<name>/SKILL.md` dir. A missing skill reds the chain with the unreachable target named.
+//
+// #883: the retired plan-run / adapt / fast / research targets left this list EMPTY, so the loop
+// below had nothing to iterate and the assertion could not run — a dead check wearing the shape of a
+// live one. The route survived the retirement: claim.js still builds `next_skill` from the schema
+// constant (`NEXT_SKILL + ' ' + project`, kaola-workflow-claim.js writeState), so that target is what
+// the contract is now derived from, and the list is fenced against going empty again.
 {
   const schema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-  // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constants.
+  // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constant.
   // Values are emitted as `<skill> {project}`; reachability is the bare skill name. (Commands are
   // the Claude-edition surface, asserted in validate-workflow-contracts.)
-  const emittedSkillTargets = [];
+  const emittedSkillTargets = [schema.NEXT_SKILL];
+  // Vacuity fence — the failure this check actually suffered. An empty list, or an entry that is not
+  // a usable skill name (a deleted schema constant reads as `undefined`), makes the loop below assert
+  // nothing at all; that must red here rather than pass silently.
+  assert(emittedSkillTargets.length > 0 &&
+    emittedSkillTargets.every(t => typeof t === 'string' && t.length > 0),
+    '#883: the receipt-emitted skill target list must be non-empty and name only resolvable ' +
+    `skills — the route-reachability loop asserts nothing otherwise; got ${JSON.stringify(emittedSkillTargets)}`);
+  // The derivation above is only sound while claim.js emits next_skill FROM the schema constant; if
+  // it ever inlines a literal, this list becomes a parallel hand-kept one and stops tracking the route.
+  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'adaptiveSchema.NEXT_SKILL');
+  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "'next_skill: ' + (data.next_skill || adaptiveSkill)");
   const installedSkills = new Set(
     fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory())
@@ -582,10 +589,6 @@ for (const planRunSurface of [
       `#400: route-reachability — receipt-emitted skill target "${target}" has no installed ` +
       `skills/${target}/SKILL.md in ${pluginRoot} (broken route, the #400 dead zone)`);
   }
-  // Content-reachability tier (catches #369/#380): an installed SKILL that mirrors a command must
-  // carry the command's route/wiring tokens, or the route resolves to a hollow surface. finalize
-  // SKILL must wire the bundle member-set flag (#369); next SKILL must carry the adaptive route +
-  // auto-bundle restructure (#380); plan-run/adapt must carry the executor/front-end route tokens.
 }
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.

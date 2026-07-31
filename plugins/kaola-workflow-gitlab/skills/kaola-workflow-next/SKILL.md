@@ -125,6 +125,10 @@ A run normally carries one issue. Several issues may share one run when they are
 unclaimed, and share a coherent scope; that is a shape judgement and nothing caps it. Say which
 issues you bundled and why.
 
+**Goal context.** When `KAOLA_GOAL` is exported, treat it as a soft filter inside the chosen
+priority tier: note the alignment, never exclude on mismatch, and never let it outrank an open,
+actionable frontier issue. Finalization records that a goal was DECLARED — never that it was met.
+
 ## Step 2 — Freshness, before the claim
 
 Classify local and remote state and settle it before anything is claimed, so a dirty or behind
@@ -153,11 +157,8 @@ roadmap sources and say why the remote read was skipped.
 current, and do not hand-edit the mirror:
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitlab/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitlab/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 [ -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-roadmap.js" ] && node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-roadmap.js" validate
 ```
 
@@ -169,11 +170,8 @@ request lands. Sweep those once here, so a folder whose request has since merged
 archived rather than mistaken for live work:
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitlab/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitlab/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$CLAIM_JS" watch-mr >/dev/null 2>&1 || true
 ```
 
@@ -188,11 +186,8 @@ carrying several issues, swap `--target-issue "$KAOLA_TARGET_ISSUE"` for
 never reorders it.
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitlab/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitlab/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$CLAIM_JS" startup --runtime codex --target-issue "$KAOLA_TARGET_ISSUE"
 ```
 

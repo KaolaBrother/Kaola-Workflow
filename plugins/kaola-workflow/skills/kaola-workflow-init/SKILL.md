@@ -23,6 +23,7 @@ Bootstrap the current repo for repeated Kaola-Workflow for Codex cycles. Preserv
 
 ```bash
 pwd
+test -f CLAUDE.md && echo "CLAUDE.md exists" || echo "CLAUDE.md missing"
 git rev-parse --is-inside-work-tree
 git status --short --branch
 git remote -v
@@ -160,7 +161,7 @@ Writes `~/.codex/agents/kaola-workflow/*.toml` + the managed block in `~/.codex/
 Run an agent-guided Codex config audit before claiming role dispatch readiness:
 
 ```bash
-codex features list | rg 'multi_agent_v2' || true
+codex features list | grep 'multi_agent_v2' || true
 node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project-root "$PWD" --json
 ```
 
@@ -317,7 +318,9 @@ Canonical `AGENTS.md` redirect block to write:
 *All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 ```
 
-## Initial Roadmap Body
+## Initial File Bodies
+
+### `kaola-workflow/ROADMAP.md`
 
 ```markdown
 # Kaola-Workflow Roadmap
@@ -329,4 +332,110 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 | none | Initialize roadmap | open | none | Link GitHub issues or add active work |
+
+## Rules
+
+- A separate roadmap/research session owns discovering and adding future work to GitHub issues.
+- `kaola-workflow-next` fetches GitHub issues, mirrors active implementation work here, and advances one item per cycle.
+- After each `kaola-workflow-next` cycle, refresh this file from issue state.
+- Move completed workflow project folders to `kaola-workflow/archive/`.
+- Close linked GitHub issues only after acceptance criteria pass.
+- Keep commit and push as the final Finalization step after docs, issues, roadmap,
+  archive, and metadata are complete.
+```
+
+After creating or confirming `kaola-workflow/ROADMAP.md`, bootstrap the per-issue directory and regenerate:
+
+```bash
+mkdir -p kaola-workflow/.roadmap
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+ROADMAP_JS="$(kaola_script kaola-workflow-roadmap.js)"
+[ -f "$ROADMAP_JS" ] && node "$ROADMAP_JS" generate
+```
+
+If `kaola-workflow-roadmap.js` is unavailable (not yet installed), skip this step.
+
+### `docs/README.md`
+
+```markdown
+# Documentation Index
+
+- [Architecture](architecture.md)
+- [API](api.md)
+- [Conventions](conventions.md)
+- [Decisions](decisions/)
+- [Changelog](../CHANGELOG.md)
+```
+
+### `docs/architecture.md`
+
+```markdown
+# Architecture
+
+Document system boundaries, major components, data flow, and deployment shape.
+```
+
+### `docs/api.md`
+
+```markdown
+# API
+
+Document public APIs, endpoints, schemas, events, and integration contracts.
+```
+
+### `docs/conventions.md`
+
+```markdown
+# Conventions
+
+Document coding style, testing rules, Git practices, naming, and review expectations.
+```
+
+### `CHANGELOG.md`
+
+```markdown
+# Changelog
+
+## Unreleased
+
+- Initialized Kaola-Workflow documentation structure.
+```
+
+## Active Folder Initialization
+
+If a GitHub issue is known, create the active workflow folder before starting:
+
+```bash
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
+[ -f "$CLAIM_JS" ] && node "$CLAIM_JS" claim \
+  --project "{project}" --issue {N}
+```
+
+Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the GitHub issue number. If the issue number is unknown, omit `--issue`.
+
+If `kaola-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts.
+
+---
+
+## Git And Roadmap Summary
+
+After edits:
+
+1. Run `git status --short --branch`.
+2. Run `wc -l CLAUDE.md` and report whether it is under the 200-line target.
+3. Summarize:
+   - whether Git is initialized
+   - whether a GitHub remote exists
+   - whether `CLAUDE.md` was created or updated
+   - whether AGENTS.md was created, was already conforming, or was migrated
+   - which required `CLAUDE.md` sections are present
+   - which docs/roadmap files were created
+   - whether GitHub issues were available for sync
+4. Do not commit unless the user explicitly asks.
+
+End with the next useful entry point:
+
+```text
+kaola-workflow-next
 ```

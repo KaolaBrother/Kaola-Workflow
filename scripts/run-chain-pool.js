@@ -75,23 +75,40 @@ const SHARDED_SUITES = {};
 // Measured wall-clock hints (seconds) used ONLY to order the pool queue longest-first,
 // so the critical path starts at t=0 instead of behind a queue of sub-second steps.
 // A missing entry defaults to DEFAULT_COST. Scheduling only — never a verdict.
+//
+// The numbers are INDICATIVE, not calibrated: they are sampled on a loaded box and rounded UP, so
+// read each as an upper band rather than a measurement. Round up when unsure — the two errors are
+// not symmetric. An over-estimate only starts a cheap step earlier than it needed to; an
+// under-estimate starts an expensive one late, and a step that starts late cannot finish early.
+// Listed descending so the queue order is legible by reading; nothing enforces either the order or
+// the keys, so an entry naming a suite that no longer exists is silent noise — check the filename
+// when you touch a row.
+//
+// The lookup is by EXACT command string, so an invocation carrying flags needs its OWN row. The
+// walkthrough has two: the bare key is live for the full tier, which runs the suite whole, and the
+// `--shard auto/12` key is the fast gate's, which runs one sampled slice for a fraction of the
+// cost. Change a step's flags and its row goes silently back to DEFAULT_COST — that is the failure
+// mode to watch here, and it is why the sharded cost is MEASURED rather than derived from the whole
+// suite's (the slices vary widely, and dividing the whole by the shard width is not close). Prefix
+// matching in planUnits would make this self-maintaining; it is deliberately not built, because one
+// mis-scheduled step is answered by one row.
 const DEFAULT_COST = 3;
 const COST_HINT = {
   'node scripts/simulate-workflow-walkthrough.js': 360,
   'node scripts/test-claim-hardening.js': 52,
+  'node scripts/test-release.js': 44,
   'node scripts/test-install-upgrade-rewrite.js': 28,
   'node scripts/test-install-model-rendering.js': 25,
   'node scripts/test-sink-merge.js': 20,
+  'node scripts/test-install-all.js': 12,
   'node scripts/test-install-adaptive-config.js': 11,
+  'node scripts/simulate-workflow-walkthrough.js --shard auto/12': 11,
+  'node scripts/test-bundle-claim.js': 10,
   'node scripts/test-validation-runner.js': 8,
   'node scripts/test-run-chains.js': 8,
-  'node scripts/test-install-all.js': 6,
+  'node scripts/test-bundle-finalize.js': 8,
   'node scripts/test-bundle-state.js': 5,
   'node scripts/test-route-reachability.js': 4,
-  'node scripts/test-install-upgrade.js': 4,
-  'node scripts/test-bundle-finalize.js': 4,
-  'node scripts/test-bundle-claim.js': 4,
-  'node scripts/test-release.js': 4,
   'node scripts/validate-workflow-contracts.js': 3,
 };
 

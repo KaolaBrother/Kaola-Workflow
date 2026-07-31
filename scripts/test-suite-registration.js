@@ -39,12 +39,13 @@ const EXEMPT = Object.freeze({
     'LIBRARY, not a suite — scenario sharding for the hand-rolled suites.',
   'test-spawn-census.js':
     'LIBRARY, not a suite — the advisory fail-open runtime spawn census the suites arm.',
-  'test-opencode-edition.js':
-    'ADDITIVE RUNTIME EDITION. opencode is a runtime, not a forge: deliberately not wired into '
-    + 'npm test, edition-sync, install.sh, or the six routing surfaces. Run it directly.',
-  'test-kimi-edition.js':
-    'ADDITIVE RUNTIME EDITION. Same rule as opencode — run it directly, not via a chain.',
 });
+// The two additive-runtime-edition suites used to be EXEMPT here, on the reason that they were
+// wired into no script at all. They now run under `test:kaola-workflow:editions`, so that reason
+// stopped being true and the entries went with it — an exemption that is not true is worse than
+// none, which is this table's own rule. The additive-edition posture itself is unchanged: neither
+// suite is in `npm test`, in a forge chain, or in the fast gate, so an edition-only diff still
+// triggers no four-chain obligation.
 
 // Suites the FAST gate deliberately defers to the full tier. CLAUDE.md documents the fast gate
 // as "every cheap step at full coverage, but it samples the walkthrough at a rotating 1/12 shard
@@ -52,7 +53,6 @@ const EXEMPT = Object.freeze({
 // silently vanishing from the fast gate is distinguishable from one deliberately held back.
 const FULL_ONLY = Object.freeze([
   'test-claim-hardening.js',
-  'test-release.js',
   'test-run-chains.js',
   'test-sink-merge.js',
 ]);
@@ -186,6 +186,50 @@ if (typeof fast === 'string' && typeof full === 'string') {
     assert(!fast.includes('scripts/' + f),
       'STALE FULL_ONLY: ' + f + ' is declared deferred from the fast gate but the fast gate runs '
       + 'it. Remove it from FULL_ONLY — a deferral that is not true hides the next real drop.');
+  }
+}
+
+// --- (G) every script an npm script INVOKES must exist ------------------------------------
+//
+// The registration check above runs one direction only: it enumerates test-*.js files on disk and
+// asserts each is reachable from a chain. The reverse was wide open, and it broke for real — a
+// suite was deleted by ruling, its two chain references survived in package.json, and the FAST GATE
+// would have died on a module-not-found. Every check here stayed green, because a dangling
+// reference is invisible to a scan that starts from the filesystem.
+//
+// SCOPE, stated so a reader knows the boundary rather than assuming a universal: this matches
+// `node <path>` invocations inside the `scripts` table — the shape npm scripts actually use to run
+// a script in this repo — across EVERY script, not just the chains, since `sync:editions`,
+// `test:parallel` and the edition runner invoke scripts too and any of them can be left dangling.
+// It is NOT a general "every referenced path exists" sweep over arbitrary strings, and it
+// deliberately validates no other table: the COST_HINT and ceiling tables were considered and left
+// alone, because no failure has been observed there.
+{
+  // `node scripts/x.js`, `node plugins/<edition>/scripts/y.js` — optionally quoted, with any flags
+  // following. The path is the first token after `node` that ends in .js.
+  const INVOCATION = /\bnode\s+(?:"([^"]+\.js)"|'([^']+\.js)'|([^\s"']+\.js))/g;
+  const invoked = new Map(); // repo-relative path -> [script names]
+  for (const [name, body] of Object.entries(pkg.scripts || {})) {
+    for (const m of String(body).matchAll(INVOCATION)) {
+      const rel = m[1] || m[2] || m[3];
+      if (!invoked.has(rel)) invoked.set(rel, []);
+      invoked.get(rel).push(name);
+    }
+  }
+  // Non-vacuity by witness rather than by count: this file is itself invoked by a chain, so a regex
+  // that stopped matching — or a scan pointed at the wrong table — finds it missing and says so,
+  // and no corpus size is pinned anywhere here.
+  const self = 'scripts/' + path.basename(__filename);
+  assert(invoked.has(self),
+    'NON-VACUITY: the npm-invocation scan does not find ' + self + ', which is invoked by the '
+    + 'chains — the pattern or the table it reads has moved (found ' + invoked.size + ' invocation(s))');
+
+  for (const [rel, where] of [...invoked.entries()].sort()) {
+    assert(fs.existsSync(path.join(repoRoot, rel)),
+      'DANGLING SCRIPT REFERENCE: ' + JSON.stringify(where.sort()) + ' invoke `node ' + rel
+      + '` but no such file exists, so those scripts die on a module-not-found the moment they run. '
+      + 'A deletion has to remove the invocation too — the registration check above starts from the '
+      + 'filesystem and cannot see a reference to a file that is gone.');
   }
 }
 

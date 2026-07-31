@@ -27,7 +27,7 @@ It is codified as five **first-principles axioms** (`templates/axioms.md`), appl
 4. **Machines decide facts; humans decide values.** Irreversible or value-laden calls go to you; leave everything checkable to run automatically.
 5. **Own your own verdicts.** Never let a system the workflow does not own — CI, an external service — be the judge of done.
 
-The axiom layer is embedded byte-identically into every generated project's guidance (all six `workflow-init` surfaces, with a machine-enforced drift guard).
+The axiom layer is embedded byte-identically into every generated project's guidance (all twelve `workflow-init` surfaces, with a machine-enforced drift guard).
 
 A few beliefs follow from that order.
 
@@ -557,7 +557,7 @@ node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-
 Start a new Codex chat/session to pick up the updated plugin files and config.
 
 For the standalone-profile release, both refresh steps above are required: the plugin upgrade
-replaces the cached source profiles, and the profile installer copies all 15 role TOMLs into the
+replaces the cached source profiles, and the profile installer copies all 14 role TOMLs into the
 active global/project scope. A plugin-only upgrade leaves stale generated profiles in place; the
 doctor reports the mismatch instead of treating the install as current.
 
@@ -1051,6 +1051,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKTREE_NATIVE` | `1` (ON) | Provision a repo-local Git worktree at `<repo-root>/.kw/worktrees/<project>/` on every claim. Set to `0` for a repo-root run with no worktree. The worktree is a tool: decline it and the run still finishes |
 | `KAOLA_COTENANT` | (unset) | Set to `1` to declare that another session is active on this checkout, so lane classification treats every foreign active folder as `live` and leaves it alone |
 | `KAOLA_PATH` | (unset) | Retired, with no residue. There is one workflow; the claim silently ignores this variable (any value, or unset). The requested value is not recorded either — the persisted `workflow_path` state field is the constant `adaptive`, never an echo of the request. The `--workflow-path` flag is likewise accepted-but-ignored (a stderr notice, never a refusal) |
+| `KAOLA_RUNTIME` | (unset) | Explicit runtime override, read by `kaola-workflow-claim.js` when stamping `workflow-state.md`. Precedence: `--runtime` flag wins, then `KAOLA_RUNTIME`, then inference from an opencode model env var, else `claude` |
 | `KAOLA_TARGET_ISSUE` | (unset) | The issue number this run targets. Equivalent to `--target-issue N` |
 | `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` usage at exit 0, writing nothing) |
 | `KAOLA_GOAL` | (unset) | Operator-side goal text. Subagent shells do not inherit env vars across the spawn boundary, so a goal that must reach a dispatched agent travels in the dispatch prompt — the orchestrator owns placing it there. Finalization records `goal_declared: true\|false` in the closure receipt, with `goal_declared_source` (`env`\|`plan`) and `goal_declared_probed` (the paths examined) — advisory, and a record that a goal was DECLARED only: **nothing checks whether it was achieved** |
@@ -1184,7 +1185,7 @@ The workflow also enforces context discipline: `CLAUDE.md` targets under 200 lin
 
 Each active workflow maintains two files: `workflow-state.md`, which records what the run owns — issue, branch, worktree, sink, next command — and `mission-list.md`, which records what it is doing. After resume or compaction, read both before continuing.
 
-Avoid redundant validation runs: an implement node uses targeted affected checks, a review-gate node validates only review fixes or cites existing evidence, and Finalization runs each full final command once against the final candidate state. Small targeted commands may run in the main session, while expensive or noisy test/lint/type/build commands should be delegated and summarized from cache evidence.
+Avoid redundant validation runs: an item that only touches implementation runs targeted affected checks, an item that only fixes review feedback validates just the fix or cites existing evidence, and Finalization runs each full final command once against the final candidate state. Small targeted commands may run in the main session, while expensive or noisy test/lint/type/build commands should be delegated and summarized from cache evidence.
 
 ## Hook policy
 
@@ -1218,7 +1219,7 @@ those paths.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
-| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, next skill, in-progress node, pending gates, consent markers, task summary) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
+| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, goal, next skill, in-flight items with their dispatched locators, progress counts) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` — an advisory spawn record; no check consumes it. Fires only with Codex `multi_agent` enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 **Caveats and preconditions:**
@@ -1541,7 +1542,7 @@ git pull
 ./install.sh
 ```
 
-To converge all three runtimes from one synchronized checkout, reinstall each runtime explicitly
+To converge all four runtimes from one synchronized checkout, reinstall each runtime explicitly
 (replace the Codex marketplace selector with the installed row reported by
 `codex plugin list --json`):
 
@@ -1566,6 +1567,9 @@ node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
 
 # opencode — additive runtime, global install.
 ./install-opencode.sh --global --yes
+
+# Kimi Code — additive runtime, global install.
+./install-kimi.sh --global --yes
 ```
 
 Restart Claude Code after reinstalling. If Codex hook content changed, open a new

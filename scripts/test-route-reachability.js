@@ -434,13 +434,140 @@ for (const ed of codexEditions) {
 // ===========================================================================
 const { REQUIRED_BLOCKS } = require('../templates/routing/required-blocks.js');
 
-// Edition dirs reuse the existing edition tables (a rename / 7th edition flows
-// through automatically). command surfaces live on the claude editions, skill
-// surfaces on the codex editions.
+// THE SURFACE UNIVERSE IS TWELVE TREES, NOT SIX. Six are tracked (three claude
+// command dirs + three codex skills dirs); six are GENERATED and gitignored —
+// .opencode{,-gitlab,-gitea} and .kimi{,-gitlab,-gitea}. Deriving from the
+// claude/codex edition tables alone left those six unchecked, which made the
+// old comment here ("a rename / 7th edition flows through automatically") true
+// of the editions it knew and false of the four it did not.
+//
+// TWO LANES, NOT TWO FILE SHAPES. A lane is where the content COMES FROM, and
+// that is what a block's surface_type_tag selects:
+//   command — rendered from commands/*.md: the claude command dirs, the opencode
+//             command dirs, AND the kimi skills dirs (Kimi packages a command as
+//             a directory-form Skill, so it is skill-SHAPED but command-lane and
+//             carries the COMMAND basename).
+//   skill   — rendered from the skill skeletons: the codex skills dirs.
+// Conflating lane with shape is what would have put the kimi surfaces in the
+// wrong bucket and derived `.kimi/skills/kaola-workflow-init/SKILL.md`, a path
+// no edition ships.
+//
+// Every entry is a PATH BUILDER asked of the module that owns the tree, so no
+// path segment is restated here. A fourth forge added to the routing registry's
+// edition tables reaches all four runtimes with no edit to this file: FORGES is
+// derived from those tables, and both sync modules take the forge as an argument.
+const opencodeSync = require('./sync-opencode-edition.js');
+const kimiSync = require('./sync-kimi-edition.js');
+const {
+  FORGES: ROUTING_FORGES,
+  GENERATED_SURFACES: ROUTING_SURFACES,
+  COMMAND_EDITIONS: ROUTING_COMMAND_EDITIONS,
+  SKILL_EDITIONS: ROUTING_SKILL_EDITIONS,
+} = require('./generate-routing-surfaces.js');
+
+// The additive runtime editions, as (id, per-forge surface-path builder) pairs.
+// Both builders are the generators' own, so a tree rename inside a sync module
+// propagates here rather than drifting from here.
+const RUNTIME_EDITIONS = [
+  {
+    id: 'opencode',
+    surfaceFor: forge => base =>
+      path.relative(REPO, path.join(opencodeSync.outDirs(forge).command, base + '.md')),
+  },
+  {
+    id: 'kimi',
+    surfaceFor: forge => base => kimiSync.skillRel(base, forge),
+  },
+];
+
+// The TRACKED half comes from the routing registry's own edition tables, not from
+// the claudeEditions/codexEditions literals above. Those literals are T1..T4's
+// (pre-existing, byte-frozen) edition source and are a hand-kept twin of the same
+// two tables; deriving the manifest universe through them would have left the
+// tracked six pinned to a hand-typed list while the generated six flowed through —
+// measured, with a fourth forge planted in a mirror: 14 trees instead of 16.
 const MANIFEST_EDITIONS = {
-  command: claudeEditions.map(e => e.commandsDir),
-  skill: codexEditions.map(e => e.skillsDir),
+  command: [
+    ...ROUTING_COMMAND_EDITIONS.map(e => ({
+      id: `${e.forge}-claude`,
+      surface: base => `${e.dir}/${base}.md`,
+    })),
+    ...RUNTIME_EDITIONS.flatMap(rt => ROUTING_FORGES.map(forge => ({
+      id: `${rt.id}-${forge}`,
+      surface: rt.surfaceFor(forge),
+    }))),
+  ],
+  skill: ROUTING_SKILL_EDITIONS.map(e => ({
+    id: `${e.forge}-codex`,
+    surface: base => `${e.dir}/${base}/SKILL.md`,
+  })),
 };
+
+// ANTI-VACUITY FLOOR ON THE UNIVERSE ITSELF. Everything below reports "clean
+// over N obligated file-checks", and N is a product of these lists — so a
+// derivation that silently yields a short list would report a clean sweep over a
+// fraction of the tree, which is the exact defect this extension repairs.
+//
+// THE ANCHOR IS INDEPENDENT OF THE TABLE IT CHECKS. Computing the expected width
+// from RUNTIME_EDITIONS.length would be a guard that cannot fail: deleting an
+// entry shrinks the expectation and the measurement in lockstep and stays green.
+// Mutation-proved — dropping the kimi entry passed, which is how this floor got
+// rewritten. So the roster is read off the FILESYSTEM instead: one
+// `sync-<runtime>-edition.js` module per additive runtime edition. A tree whose
+// generator ships but whose entry is missing here now reds, and a runtime edition
+// genuinely retired takes its module with it and the floor follows.
+//
+// THE BOUNDARY, stated because a comment claiming a universal its body does not
+// deliver is worse than no comment: only the RUNTIME term is independently
+// anchored. The FORGE term is still read from the same registry this checks, so
+// deleting a forge from the edition tables shrinks the universe from twelve
+// surfaces to eight and this suite stays green at an unchanged assertion count —
+// mutation-proved. That case is caught by test-generate-routing-surfaces.js's
+// "registry derives 18 surfaces" assertion, in the always-selected claude chain,
+// which is why the forge term is left registry-derived rather than re-anchored.
+const RUNTIME_EDITION_MODULES = fs.readdirSync(path.join(REPO, 'scripts'))
+  .filter(f => /^sync-[a-z0-9-]+-edition\.js$/.test(f))
+  .map(f => f.slice('sync-'.length, -'-edition.js'.length))
+  .sort();
+{
+  const declared = RUNTIME_EDITIONS.map(rt => rt.id).sort();
+  assert(declared.join(',') === RUNTIME_EDITION_MODULES.join(','),
+    `MANIFEST universe: every additive runtime edition that ships a generator must be checked — `
+    + `generators [${RUNTIME_EDITION_MODULES.join(', ')}] vs declared [${declared.join(', ')}]`);
+  // One tree per (runtime x forge). The tracked runtimes are the registry's own
+  // surface types (command -> claude, skill -> codex); the additive ones are the
+  // generator roster read off disk. Neither term is MANIFEST_EDITIONS itself.
+  const trackedRuntimes = new Set(ROUTING_SURFACES.map(r => r.surface_type)).size;
+  const expected = ROUTING_FORGES.length * (trackedRuntimes + RUNTIME_EDITION_MODULES.length);
+  const actual = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
+  assert(actual === expected,
+    `MANIFEST universe: the obligated surface tree must span every runtime x forge edition — `
+    + `expected ${expected} tree(s), derived ${actual} `
+    + `(${MANIFEST_EDITIONS.command.map(e => e.id).join(', ')} | `
+    + `${MANIFEST_EDITIONS.skill.map(e => e.id).join(', ')})`);
+  assert(ROUTING_FORGES.length > 0 && RUNTIME_EDITION_MODULES.length > 0 && actual > 0,
+    'MANIFEST universe: a zero-width universe would make every check below vacuously clean');
+}
+
+// The SIX generated trees are gitignored and absent from a fresh checkout, so
+// they are rendered IN MEMORY through the sync modules' own renderers — the same
+// bytes `sync --check` asserts the on-disk tree equals. That is provisioning-
+// free and hermetic, and it cannot be defeated by a stale or missing tree: there
+// is no "skip when absent" path here, because a check that quietly enforces
+// nothing when its subject is missing is the defect, not the safeguard.
+const GENERATED_SURFACE_CONTENT = (() => {
+  const map = new Map();
+  for (const forge of ROUTING_FORGES) {
+    for (const row of ROUTING_SURFACES.filter(r => r.surface_type === 'command' && r.forge === forge)) {
+      const base = path.basename(row.path, '.md');
+      const canon = fs.readFileSync(path.join(REPO, row.path), 'utf8');
+      const ocRel = path.relative(REPO, path.join(opencodeSync.outDirs(forge).command, base + '.md'));
+      map.set(ocRel, opencodeSync.renderCommand(canon, forge, ocRel));
+      map.set(kimiSync.skillRel(base, forge), kimiSync.renderCommand(canon, base, forge));
+    }
+  }
+  return map;
+})();
 
 // Topic basenames — READ FROM THE GENERATED-SURFACE REGISTRY, the same TOPICS table that renders
 // the surfaces and drives the T1/T2 emitted-target set. That is the no-drift anchor: a rename or a
@@ -495,9 +622,11 @@ function deriveObligated(block, editions, topicBasename) {
   const files = [];
   for (const stype of types) {
     const base = topicBasename[block.topic][stype];
-    for (const dir of (editions[stype] || [])) {
-      files.push(stype === 'command' ? `${dir}/${base}.md` : `${dir}/${base}/SKILL.md`);
-    }
+    // Each edition owns its own path shape (flat `<dir>/<base>.md` vs directory-
+    // form `<dir>/<base>/SKILL.md`); the LANE picks the basename, the edition
+    // picks the layout. Asking the edition is what lets one lane hold surfaces of
+    // both shapes — which the kimi trees are.
+    for (const ed of (editions[stype] || [])) files.push(ed.surface(base));
   }
   return { error: null, files };
 }
@@ -546,9 +675,7 @@ function checkManifest({ blocks, readSurface, editions, topicBasename, foreignMa
   for (const topic of Object.keys(topicBasename)) {
     for (const stype of ['command', 'skill']) {
       const base = topicBasename[topic][stype];
-      for (const dir of (editions[stype] || [])) {
-        inScope.push(stype === 'command' ? `${dir}/${base}.md` : `${dir}/${base}/SKILL.md`);
-      }
+      for (const ed of (editions[stype] || [])) inScope.push(ed.surface(base));
     }
   }
   for (const f of inScope) {
@@ -588,7 +715,13 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 {
   const realResult = checkManifest({
     blocks: REQUIRED_BLOCKS,
-    readSurface: rel => (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null),
+    // Tracked surfaces come off disk; the six generated trees come from the
+    // in-memory render. A generated path that the render did not produce falls
+    // through to the disk read and then to `null`, which reds as absent-surface —
+    // absent-but-expected is loud, never skipped.
+    readSurface: rel => (GENERATED_SURFACE_CONTENT.has(rel)
+      ? GENERATED_SURFACE_CONTENT.get(rel)
+      : (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null)),
     editions: MANIFEST_EDITIONS,
     topicBasename: TOPIC_BASENAME,
     foreignMarkers: FOREIGN_MARKERS,
@@ -659,8 +792,11 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     assert(!!block, `consent: ${topic} must carry a consent-in-conversation manifest block`);
     if (!block) continue;
     const { error, files } = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
-    assert(!error && files.length === 6,
-      `consent: the ${topic} consent block must obligate all 6 of its surfaces (both/both)`);
+    // The width is DERIVED, not the literal 6 that stood here while four editions
+    // were invisible: a both/both block obligates every tree in both lanes.
+    const everyTree = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
+    assert(!error && files.length === everyTree,
+      `consent: the ${topic} consent block must obligate all ${everyTree} of its surfaces (both/both), got ${files.length}`);
     const marker = norm(block.content_tokens[0]);
     assert(block.content_tokens.slice(1).length > 0
       && block.content_tokens.slice(1).every(t => !marker.includes(norm(t))),
@@ -676,37 +812,38 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 //     block (⊇ the legacy surface set) or is an accepted residual. Covers the
 //     #624-fix gate flags + workflow_path:adaptive explicitly. --------------
 {
-  const dirs = MANIFEST_EDITIONS;
-  const fnCmd = dirs.command.map(d => `${d}/kaola-workflow-finalize.md`);
-  const fnSkill = dirs.skill.map(d => `${d}/kaola-workflow-finalize/SKILL.md`);
-  const nxCmd = dirs.command.map(d => `${d}/workflow-next.md`);
-  const nxSkill = dirs.skill.map(d => `${d}/kaola-workflow-next/SKILL.md`);
-  const inCmd = dirs.command.map(d => `${d}/workflow-init.md`);
-  const inSkill = dirs.skill.map(d => `${d}/kaola-workflow-init/SKILL.md`);
-  const FN6 = [...fnCmd, ...fnSkill], NX6 = [...nxCmd, ...nxSkill], IN6 = [...inCmd, ...inSkill];
+  // Surface lists per topic, asked of the editions rather than string-built, and
+  // named for the lane rather than a count — they were FN_ALL/NX_ALL/IN_ALL while six
+  // trees were invisible, and a name carrying a stale number is how a widened
+  // universe stays unnoticed.
+  const lanes = topic => [
+    ...MANIFEST_EDITIONS.command.map(e => e.surface(TOPIC_BASENAME[topic].command)),
+    ...MANIFEST_EDITIONS.skill.map(e => e.surface(TOPIC_BASENAME[topic].skill)),
+  ];
+  const FN_ALL = lanes('finalize'), NX_ALL = lanes('next'), IN_ALL = lanes('init');
 
   const LEGACY_PAIRS = [
     // consent — every topic × 6 (both/both); the rule that replaced the durable valve
-    { token: 'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.', surfaces: NX6 },
-    { token: 'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.', surfaces: IN6 },
-    { token: 'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.', surfaces: FN6 },
+    { token: 'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.', surfaces: NX_ALL },
+    { token: 'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.', surfaces: IN_ALL },
+    { token: 'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.', surfaces: FN_ALL },
     // finalize × 6
-    { token: '<!-- PIN: closure-audit -->', surfaces: FN6 },
-    { token: '--issue-numbers', surfaces: FN6 },
-    { token: 'issue_numbers', surfaces: FN6 },
-    { token: 'final-validation.md', surfaces: FN6 },
-    { token: 'chain-receipt.json', surfaces: FN6 },
-    { token: '## Validation', surfaces: FN6 },
-    { token: '## Changed Paths', surfaces: FN6 },
-    { token: '`changed_paths`', surfaces: FN6 },
-    { token: '<!-- PIN: sink-reports-orchestrator-owns -->', surfaces: FN6 },
+    { token: '<!-- PIN: closure-audit -->', surfaces: FN_ALL },
+    { token: '--issue-numbers', surfaces: FN_ALL },
+    { token: 'issue_numbers', surfaces: FN_ALL },
+    { token: 'final-validation.md', surfaces: FN_ALL },
+    { token: 'chain-receipt.json', surfaces: FN_ALL },
+    { token: '## Validation', surfaces: FN_ALL },
+    { token: '## Changed Paths', surfaces: FN_ALL },
+    { token: '`changed_paths`', surfaces: FN_ALL },
+    { token: '<!-- PIN: sink-reports-orchestrator-owns -->', surfaces: FN_ALL },
     // next × 6
-    { token: 'mission-list.md', surfaces: NX6 },
-    { token: 'docs/mission-list.md', surfaces: NX6 },
-    { token: 'dispatched: self', surfaces: NX6 },
-    { token: 'Look for the work, not for the worker.', surfaces: NX6 },
-    { token: '--target-issue', surfaces: NX6 },
-    { token: '--target-issues', surfaces: NX6 },
+    { token: 'mission-list.md', surfaces: NX_ALL },
+    { token: 'docs/mission-list.md', surfaces: NX_ALL },
+    { token: 'dispatched: self', surfaces: NX_ALL },
+    { token: 'Look for the work, not for the worker.', surfaces: NX_ALL },
+    { token: '--target-issue', surfaces: NX_ALL },
+    { token: '--target-issues', surfaces: NX_ALL },
   ];
 
   for (const p of LEGACY_PAIRS) {
@@ -719,8 +856,14 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 // --- RED-PROOF battery: by-construction self-tests over in-memory fixtures (NO
 //     real-tree mutation). Each plants a defect and asserts the checker reds. -
 {
-  // 1-edition, 1-topic synthetic universe.
-  const ED = { command: ['cmd'], skill: ['skl'] };
+  // 1-edition-per-lane, 1-topic synthetic universe. Editions are path builders,
+  // exactly as the real ones are, so the fixtures drive the identical code path.
+  const flat = dir => base => `${dir}/${base}.md`;
+  const skillDir = dir => base => `${dir}/${base}/SKILL.md`;
+  const ED = {
+    command: [{ id: 'cmd', surface: flat('cmd') }],
+    skill: [{ id: 'skl', surface: skillDir('skl') }],
+  };
   const TB = { t: { command: 'foo', skill: 'foo' } };
   const mapSurface = surfaces => rel => (Object.prototype.hasOwnProperty.call(surfaces, rel) ? surfaces[rel] : null);
 
@@ -757,11 +900,33 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   expectRed('new-surface-missing', {
     blocks: [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
       content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }],
-    editions: { command: ['x', 'y'], skill: ['sx'] },
+    editions: {
+      command: [{ id: 'x', surface: flat('x') }, { id: 'y', surface: flat('y') }],
+      skill: [{ id: 'sx', surface: skillDir('sx') }],
+    },
     surfaces: {
       'x/foo.md': '<!-- PIN: a --> anchor-token',
       'sx/foo/SKILL.md': '<!-- PIN: a --> anchor-token',
       // y/foo.md deliberately absent
+    },
+  });
+
+  // (3b) NEW-SHAPE-MISSING — the same proof for a SKILL-SHAPED entry sharing the
+  //      COMMAND lane, which is exactly what the kimi trees are. Without this the
+  //      lane/shape split would be exercised only by the real tree, and a
+  //      regression that collapsed shape back onto lane would still look green
+  //      here. `z` derives `z/foo/SKILL.md`, not `z/foo.md`.
+  expectRed('new-shape-missing', {
+    blocks: [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
+      content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }],
+    editions: {
+      command: [{ id: 'x', surface: flat('x') }, { id: 'z', surface: skillDir('z') }],
+      skill: [{ id: 'sx', surface: skillDir('sx') }],
+    },
+    surfaces: {
+      'x/foo.md': '<!-- PIN: a --> anchor-token',
+      'sx/foo/SKILL.md': '<!-- PIN: a --> anchor-token',
+      'z/foo.md': '<!-- PIN: a --> anchor-token', // the FLAT path — the skill-dir one is absent
     },
   });
 

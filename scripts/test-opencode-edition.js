@@ -96,6 +96,36 @@ function parseFrontmatterKeys(content) {
 }
 
 // ---------------------------------------------------------------------------
+// A0 — THE SUBJECT UNDER TEST IS THE GENERATOR, NOT THE TREE.
+//
+// This suite self-provisions by running `sync --write` above, so any assertion of the form
+// `read(<generated>) === sync.render*(read(<canonical>))` compares a freshly regenerated artifact
+// to its own source and CANNOT FAIL. Measured, not theorised: a generator mutated to ship every
+// non-reviewer role contract as a 2-line stub instead of its full body passed this suite 442/442.
+//
+// So the assertions below are stated as PROPERTIES OF THE GENERATOR'S OUTPUT, derived from the
+// TRACKED canonical sources at run time. They are deliberately not byte-pins on what the generator
+// emits today: canonical moves, and the expectation moves with it.
+//
+// The identity comparisons are kept where they express a real if narrow property — the render is
+// DETERMINISTIC across the --write subprocess and this process — and are relabelled to say only
+// that, never "parity with canonical", which is the claim they cannot support.
+// ---------------------------------------------------------------------------
+{
+  const provisioned = fs.existsSync(sync.OUT_AGENT_DIR) && fs.existsSync(sync.OUT_COMMAND_DIR);
+  assert(provisioned,
+    'A0: the generated tree exists after sync --write — an ABSENT tree must fail loudly here rather '
+    + 'than let every readdir-driven loop below iterate over nothing');
+  if (!provisioned) {
+    // Stop here rather than let the first readdir throw: a stack trace three assertions later is a
+    // worse report than one line naming the cause, and every count after it would be meaningless.
+    console.error('FATAL: sync --write reported success but produced no tree at '
+      + sync.OUT_AGENT_DIR + ' / ' + sync.OUT_COMMAND_DIR + ' — nothing below can be tested.');
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // A1/A2/A3: agents — every canonical agent is generated, model-agnostic, and
 // permission-mapped from its canonical tool set.
 // ---------------------------------------------------------------------------
@@ -103,6 +133,20 @@ const canonAgents = sync.listCanonAgents();
 const genAgentFiles = fs.readdirSync(sync.OUT_AGENT_DIR).filter(f => f.endsWith('.md'));
 assert(new Set(genAgentFiles.map(f => f.slice(0, -3))).size === canonAgents.length,
   'A1: .opencode/agent/ count matches canonical agent count (' + canonAgents.length + ')');
+// A1-roster: the count above compares a just-regenerated tree against the roster that generated
+// it, so it holds however wrong that roster is. The LIVE property is that the generator's roster
+// predicate sees the whole TRACKED canonical inventory — read here independently of the generator.
+{
+  const trackedAgents = fs.readdirSync(path.join(REPO, 'agents'))
+    .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+  assert(trackedAgents.length > 0,
+    'A1-roster: the canonical agents/ inventory is non-empty — an empty enforcement domain would '
+    + 'make every per-agent assertion in this file vacuously true');
+  assert(JSON.stringify([...canonAgents].sort()) === JSON.stringify(trackedAgents),
+    'A1-roster: listCanonAgents() is EXACTLY the tracked agents/*.md inventory — a role the '
+    + 'predicate drops is a role that silently never ships; canonical=' + JSON.stringify(trackedAgents)
+    + ' generator=' + JSON.stringify([...canonAgents].sort()));
+}
 
 for (const name of canonAgents) {
   const rel = '.opencode/agent/' + name + '.md';
@@ -125,6 +169,103 @@ for (const name of canonAgents) {
   }
 }
 
+// A3-domain: the `if (readOnly)` branch above fires for ZERO roles today (all 14 canonical roles
+// grant Write), so on its own it is a conditional that reads like coverage and asserts nothing —
+// and a tool-grant parse that broke and returned nothing would look exactly the same. Assert the
+// partition instead of skipping it: recompute it here straight from the tracked frontmatter, with
+// no generator function in the loop, so the emptiness is a stated fact and the moment a read-only
+// role exists the branch above starts enforcing for real.
+{
+  const grantsWrite = name => {
+    const line = (read('agents/' + name + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
+    const t = line.replace(/[[\]"']/g, ' ').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    return t.includes('write') || t.includes('edit');
+  };
+  const independentReadOnly = canonAgents.filter(n => !grantsWrite(n)).sort();
+  const generatorReadOnly = canonAgents.filter(n => {
+    const set = new Set(sync.parseTools(sync.parseFrontmatter(read('agents/' + n + '.md')).fm.tools).map(t => t.toLowerCase()));
+    return !set.has('write') && !set.has('edit');
+  }).sort();
+  assert(canonAgents.length > 0,
+    'A3-domain: the canonical role set is non-empty (the A2/A3 loop above has something to enforce over)');
+  assert(JSON.stringify(generatorReadOnly) === JSON.stringify(independentReadOnly),
+    'A3-domain: the generator\'s tool-grant parse agrees with an independent read of the canonical '
+    + '`tools:` frontmatter — generator=' + JSON.stringify(generatorReadOnly)
+    + ', independent=' + JSON.stringify(independentReadOnly)
+    + (independentReadOnly.length === 0
+      ? ' (empty is the CORRECT answer for this roster and is asserted, not skipped)' : ''));
+  for (const name of independentReadOnly) {
+    const fmText = (read('.opencode/agent/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
+    assert(/edit:\s*deny/.test(fmText),
+      'A3-domain[' + name + ']: read-only role denies edit in its generated permission block');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A3-bash: the LIVE tool-restriction axis, asserted in BOTH directions.
+//
+// The edit axis above governs an empty set — every canonical role grants Write — so A3/A3-domain
+// now carry exactly one property: that the tool-grant parse still agrees with the frontmatter, and
+// that its emptiness is a stated fact rather than a silent skip. They no longer witness the
+// generator emitting anything, because there is nothing for them to emit.
+//
+// The BASH axis is the one that ships. The generator writes `permission: bash: deny` for every
+// canonical role that withholds Bash, and nothing asserted that until now: a regression in
+// deniedPermissionAxes would ship those roles WITH shell access and every assertion in this file
+// would stay green.
+//
+// BOTH directions, because a one-sided check passes a predicate that denies everything — deny-all
+// is as wrong as deny-nothing and is the easier mistake to make. The expected partition is derived
+// from the canonical frontmatter with a parser local to this file, so a bug in the generator's own
+// parse cannot define the answer it is checked against, and a fourth restricted role is covered the
+// day it is added rather than the day someone remembers to list it.
+// ---------------------------------------------------------------------------
+{
+  const grants = (name, tool) => {
+    const line = (read('agents/' + name + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
+    return line.replace(/[[\]"']/g, ' ').split(/[,\s]+/)
+      .map(s => s.trim().toLowerCase()).filter(Boolean).includes(tool);
+  };
+  const deniesBash = name => {
+    const fmText = (read('.opencode/agent/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
+    return /^\s*bash:\s*deny\s*$/m.test(fmText);
+  };
+  const restricted = canonAgents.filter(n => !grants(n, 'bash')).sort();
+  const unrestricted = canonAgents.filter(n => grants(n, 'bash')).sort();
+
+  // Non-vacuity on BOTH sides: with either partition empty this degrades to a one-directional
+  // check, which is the failure mode it exists to avoid — so the emptiness would have to be said
+  // out loud rather than inferred from a loop that quietly ran zero times.
+  assert(restricted.length > 0,
+    'A3-bash: at least one canonical role withholds Bash — an empty restricted set makes the '
+    + 'deny-side assertion vacuous and the guard one-directional');
+  assert(unrestricted.length > 0,
+    'A3-bash: at least one canonical role grants Bash — an empty unrestricted set makes the '
+    + 'must-NOT-deny assertion vacuous, which is what a deny-everything predicate needs to pass');
+
+  // The generator's own predicate is checked against the independent partition, which also gives
+  // deniedPermissionAxes a consumer.
+  const generatorRestricted = canonAgents.filter(n => {
+    const set = new Set(sync.parseTools(sync.parseFrontmatter(read('agents/' + n + '.md')).fm.tools).map(t => t.toLowerCase()));
+    return sync.deniedPermissionAxes(set).includes('bash');
+  }).sort();
+  assert(JSON.stringify(generatorRestricted) === JSON.stringify(restricted),
+    'A3-bash: deniedPermissionAxes() names the same Bash-withholding roles as the canonical '
+    + 'frontmatter read independently — generator=' + JSON.stringify(generatorRestricted)
+    + ', canonical=' + JSON.stringify(restricted));
+
+  for (const name of restricted) {
+    assert(deniesBash(name),
+      'A3-bash[' + name + ']: canonical withholds Bash, so the generated agent MUST carry '
+      + '`bash: deny` — without it this role ships with shell access on opencode');
+  }
+  for (const name of unrestricted) {
+    assert(!deniesBash(name),
+      'A3-bash[' + name + ']: canonical GRANTS Bash, so the generated agent must NOT deny it — a '
+      + 'predicate that denies every role would satisfy the deny-side assertions above and fail here');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // A4/A5: commands — every canonical command is generated and free of the
 // install-time model placeholders (models are centralized in opencode.json).
@@ -133,6 +274,18 @@ const canonCommands = sync.listCanonCommands();
 const genCommandFiles = fs.readdirSync(sync.OUT_COMMAND_DIR).filter(f => f.endsWith('.md'));
 assert(new Set(genCommandFiles).size === canonCommands.length,
   'A4: .opencode/command/ count matches canonical command count (' + canonCommands.length + ')');
+// A4-roster: the live property behind that count — the generator's command roster is EXACTLY the
+// tracked commands/*.md inventory, read here without the generator (see A1-roster).
+{
+  const trackedCommands = fs.readdirSync(path.join(REPO, 'commands'))
+    .filter(f => f.endsWith('.md')).sort();
+  assert(trackedCommands.length > 0,
+    'A4-roster: the canonical commands/ inventory is non-empty — an empty enforcement domain would '
+    + 'make every per-command assertion in this file vacuously true');
+  assert(JSON.stringify([...canonCommands].sort()) === JSON.stringify(trackedCommands),
+    'A4-roster: listCanonCommands() is EXACTLY the tracked commands/*.md inventory; canonical='
+    + JSON.stringify(trackedCommands) + ' generator=' + JSON.stringify([...canonCommands].sort()));
+}
 for (const file of canonCommands) {
   const rel = '.opencode/command/' + file;
   assert(exists(rel), 'A4[' + file + ']: generated command exists');
@@ -160,13 +313,47 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A6: parity — regenerating from canonical reproduces every committed file
-// byte-for-byte (the edition-sync invariant, applied to the opencode tree).
+// A6: render DETERMINISM — the tree `sync --write` produced in a separate process equals what
+// renderAgent produces here. That is the whole claim: this suite regenerated the tree moments ago,
+// so this can never witness a disagreement with CANONICAL, only a renderer that is not a pure
+// function of its input (a clock, a Set iteration order, an env read).
+//
+// A6-body is the armed half — see A0. The generated agent must still CARRY the canonical role
+// contract, checked against tracked bytes with no generator function in the loop.
 // ---------------------------------------------------------------------------
 for (const name of canonAgents) {
   const expected = sync.renderAgent(read('agents/' + name + '.md'), name);
   assert(read('.opencode/agent/' + name + '.md') === expected,
-    'A6[' + name + ']: generated agent in parity with canonical (run --write to fix)');
+    'A6[' + name + ']: renderAgent is deterministic across the --write subprocess and this process');
+}
+
+// A6-body: every non-empty line of the canonical role contract survives into the generated agent.
+// The generator declares agent bodies VERBATIM apart from the Claude script-path rewrite, and that
+// rewrite is a no-op on every current agent — measured: zero canonical body lines fail to survive,
+// so the exemption set is EMPTY and any miss is a real transform, not a known one. A new body
+// rewrite reds here on purpose: "one rule, one wording" makes a runtime divergence something to
+// declare, and this is where an undeclared one surfaces.
+{
+  const bodyOf = text => {
+    const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+    return m ? text.slice(m[0].length) : text;
+  };
+  let checkedLines = 0;
+  for (const name of canonAgents) {
+    const canonLines = bodyOf(read('agents/' + name + '.md')).split('\n').map(s => s.trim()).filter(Boolean);
+    const generated = read('.opencode/agent/' + name + '.md');
+    const missing = canonLines.filter(line => !generated.includes(line));
+    checkedLines += canonLines.length;
+    assert(canonLines.length > 0,
+      'A6-body[' + name + ']: the canonical role contract has a non-empty body — an empty one would '
+      + 'make the survival check below vacuous');
+    assert(missing.length === 0,
+      'A6-body[' + name + ']: every canonical contract line survives into the generated agent — '
+      + missing.length + ' of ' + canonLines.length + ' missing, first: '
+      + JSON.stringify(String(missing[0]).slice(0, 120)));
+  }
+  assert(checkedLines > 0,
+    'A6-body: the survival check covered at least one canonical contract line (scan bite)');
 }
 
 // Reviewer contracts retain deterministic normalized behavior identity through the OpenCode
@@ -175,7 +362,15 @@ for (const name of canonAgents) {
 for (const role of reviewerGenerator.ROLES) {
   const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
   const opencodeText = read('.opencode/agent/' + role + '.md');
-  const opencode = reviewerGenerator.behaviorIdentityFromCore(opencodeText);
+  // behaviorIdentityFromCore THROWS on a body whose behavior-core markers are gone. Measured: a
+  // generator that drops the reviewer body aborts this file mid-run with a stack trace, so every
+  // assertion after this point is never reached and the failure count is a lie. Catch it into a
+  // clean FAIL — the same shape as the identity assertions below, which is what a reader trusts.
+  let opencode = null;
+  try { opencode = reviewerGenerator.behaviorIdentityFromCore(opencodeText); } catch (e) {
+    assert(false, `A6-reviewer[${role}]: the generated agent still carries an extractable behavior core — ${e.message}`);
+    opencode = { role: null, behavior_contract_version: null, behavior_contract_hash: null, core: null };
+  }
   assert(opencode.role === canonical.role
     && opencode.behavior_contract_version === canonical.behavior_contract_version
     && opencode.behavior_contract_hash === canonical.behavior_contract_hash,
@@ -183,15 +378,20 @@ for (const role of reviewerGenerator.ROLES) {
   assert(opencode.core === canonical.core,
     `A6-reviewer[${role}]: OpenCode transform preserves reviewer behavior-core bytes`);
   // #708: the opencode reviewer profile carries its OWN re-stamped resolved_profile_hash (over the
-  // transformed opencode bytes), so resolveReviewerProfileIdentity can bind schema-2 review receipts
-  // to the exact profile bytes that produced them. The hash must be present, valid (verifyResolved
+  // transformed opencode bytes), so the stamp binds the profile that actually ships. The runtime
+  // resolver that once read it back retired with the node executor — this suite is its consumer now. The hash must be present, valid (verifyResolved
   // ProfileHash throws on mismatch), and DIFFERENT from the Claude hash (the bytes differ). Without
   // it, every review-gated adaptive plan on opencode hard-refuses at open-next with
   // review_profile_identity_unavailable.
   const ocHash = (opencodeText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
   assert(ocHash && /^[0-9a-f]{64}$/.test(ocHash),
     `A6-reviewer[${role}]: OpenCode reviewer carries a valid resolved_profile_hash`);
-  reviewerGenerator.verifyResolvedProfileHash(opencodeText);
+  // Bare, this THROWS on a bad hash and kills the run — a verdict nobody counted. The kimi twin
+  // already catches it into an assertion; this is that shape.
+  let ocHashVerifies = true;
+  try { reviewerGenerator.verifyResolvedProfileHash(opencodeText); } catch (_) { ocHashVerifies = false; }
+  assert(ocHashVerifies,
+    `A6-reviewer[${role}]: resolved_profile_hash verifies over the opencode bytes (zeroed-self sha256)`);
   const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
   assert(ocHash !== clHash,
     `A6-reviewer[${role}]: OpenCode resolved_profile_hash is re-stamped over opencode bytes (differs from Claude)`);
@@ -224,10 +424,16 @@ for (const retired of ['contractor.md', 'workflow-planner.md']) {
 assert(sync.opencodeAgentSuffix('implementer') === ''
   && sync.opencodeAgentSuffix('code-reviewer') === '',
   'A13: opencodeAgentSuffix is empty for every surviving role — no agent body is rewritten');
+// Same reading as the agent loop above: render DETERMINISM, not parity with canonical. Command
+// bodies carry several DECLARED transforms (badge strip, Path Intent strip, placeholder strip,
+// runtime rewrite, comma collapse), so a blanket line-survival rule of the A6-body kind would be a
+// pin on the current transform set rather than a property. What holds the command surface honest is
+// the content-reachability band instead — A14/A16/A22/A24/S2/A25 assert the PINs, wiring literals,
+// template bytes and banned tokens directly against the generated files.
 for (const file of canonCommands) {
   const expected = sync.renderCommand(read('commands/' + file));
   assert(read('.opencode/command/' + file) === expected,
-    'A6[' + file + ']: generated command in parity with canonical (run --write to fix)');
+    'A6[' + file + ']: renderCommand is deterministic across the --write subprocess and this process');
 }
 
 // ---------------------------------------------------------------------------

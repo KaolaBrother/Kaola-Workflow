@@ -31,8 +31,11 @@
 // every sub-case runs the REAL installer with its own temp HOME +
 // KIMI_CODE_HOME + --target under os.tmpdir()).
 //
-// Not wired into `npm test` and no package.json script (the opencode-edition
-// precedent: additive runtime editions keep their own runner).
+// Runs under `npm run test:kaola-workflow:editions` alongside the opencode
+// suite. Still outside `npm test`, the forge chains and the fast gate: an
+// additive runtime edition is not a forge, so an edition-only diff triggers no
+// four-chain obligation. The script exists so the suite is runnable and
+// discoverable by name rather than only by remembering the path.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -84,11 +87,84 @@ function generatedTreeFiles() {
   return out;
 }
 
-const canonCommands = sync.listCanonCommands();                    // ['kaola-workflow-adapt.md', ...]
+const canonCommands = sync.listCanonCommands();                    // ['kaola-workflow-finalize.md', ...]
 const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // command basenames
 const canonAgents = sync.listCanonAgents();                        // roles (top-level agents/*.md only)
 const roleDirNames = canonAgents.map(a => 'kaola-role-' + a);
 const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
+
+// ---------------------------------------------------------------------------
+// K0 — THE SUBJECT UNDER TEST IS THE GENERATOR, NOT THE TREE.
+//
+// This suite self-provisions by running `sync --write` above, so any assertion comparing the
+// generated tree to `sync.render*()` — or to `sync --check`, which re-renders from the same
+// sources — compares a freshly regenerated artifact to its own source and CANNOT FAIL. Measured on
+// the opencode twin: a generator mutated to ship every non-reviewer role contract as a 2-line stub
+// passed that suite 442/442. Those comparisons are kept where they express render DETERMINISM and
+// relabelled to claim only that; the armed assertions are stated as properties of the output,
+// derived from the TRACKED canonical sources at run time so the expectation moves when they do.
+// ---------------------------------------------------------------------------
+{
+  const provisioned = fs.existsSync(path.join(REPO, '.kimi', 'skills'));
+  assert(provisioned,
+    'K0: the generated .kimi/skills tree exists after sync --write — an ABSENT tree must fail loudly '
+    + 'here rather than let every readdir-driven loop below iterate over nothing');
+  if (!provisioned) {
+    // Stop here rather than let the first readdir throw: a stack trace is a worse report than one
+    // line naming the cause, and every count after it would be meaningless.
+    console.error('FATAL: sync --write reported success but produced no tree at '
+      + path.join(REPO, '.kimi', 'skills') + ' — nothing below can be tested.');
+    process.exit(1);
+  }
+  const trackedAgents = fs.readdirSync(path.join(REPO, 'agents'))
+    .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+  const trackedCommands = fs.readdirSync(path.join(REPO, 'commands'))
+    .filter(f => f.endsWith('.md')).sort();
+  assert(trackedAgents.length > 0 && trackedCommands.length > 0,
+    'K0-roster: the canonical agents/ and commands/ inventories are both non-empty — an empty '
+    + 'enforcement domain would make every per-role and per-command loop in this file vacuously true');
+  // K1's count assertions below compare a just-regenerated tree against the roster that generated
+  // it, so they hold however wrong that roster is. This is the live property underneath them: the
+  // generator's roster predicate sees the whole tracked inventory, and a role it drops is a role
+  // that silently never ships on this runtime.
+  assert(JSON.stringify([...canonAgents].sort()) === JSON.stringify(trackedAgents),
+    'K0-roster: listCanonAgents() is EXACTLY the tracked agents/*.md inventory; canonical='
+    + JSON.stringify(trackedAgents) + ' generator=' + JSON.stringify([...canonAgents].sort()));
+  assert(JSON.stringify([...canonCommands].sort()) === JSON.stringify(trackedCommands),
+    'K0-roster: listCanonCommands() is EXACTLY the tracked commands/*.md inventory; canonical='
+    + JSON.stringify(trackedCommands) + ' generator=' + JSON.stringify([...canonCommands].sort()));
+}
+
+// ---------------------------------------------------------------------------
+// K0-body: every non-empty line of the canonical role contract survives into the generated
+// kaola-role-* Skill. The kimi render wraps canonical agent bodies, and the declared rewrites
+// (Claude script paths, --runtime) are substitutions, never deletions — measured: zero canonical
+// body lines fail to survive, so the exemption set is EMPTY and any miss is a real transform. This
+// is the assertion that a body-dropping generator cannot pass, and it reads only tracked bytes.
+// ---------------------------------------------------------------------------
+{
+  const bodyOf = text => {
+    const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+    return m ? text.slice(m[0].length) : text;
+  };
+  let checkedLines = 0;
+  for (const role of canonAgents) {
+    const canonLines = bodyOf(read('agents/' + role + '.md')).split('\n').map(s => s.trim()).filter(Boolean);
+    const rel = skillDir('kaola-role-' + role);
+    const generated = exists(rel) ? read(rel) : '';
+    const missing = canonLines.filter(line => !generated.includes(line));
+    checkedLines += canonLines.length;
+    assert(canonLines.length > 0,
+      'K0-body[' + role + ']: the canonical role contract has a non-empty body — an empty one would '
+      + 'make the survival check below vacuous');
+    assert(missing.length === 0,
+      'K0-body[' + role + ']: every canonical contract line survives into kaola-role-' + role
+      + ' — ' + missing.length + ' of ' + canonLines.length + ' missing, first: '
+      + JSON.stringify(String(missing[0]).slice(0, 120)));
+  }
+  assert(checkedLines > 0,
+    'K0-body: the survival check covered at least one canonical contract line (scan bite)');
+}
 
 // ---------------------------------------------------------------------------
 // K1: count/structure parity — one command Skill dir per canonical command + one kaola-role-*
@@ -173,12 +249,26 @@ for (const name of ['workflow-next']) {
 // capabilities genuinely differ, and only when that divergence is declared as a named entry with a
 // one-line reason. Prose in docs/kimi-edition.md cannot satisfy that: deleting a paragraph is
 // invisible to every suite. Binding the assertion to the table makes removal fail HERE.
+//
+// The table used to live in scripts/test-runtime-lexicon-parity.js. That guard was deleted because
+// it never had a subject — it compared the engine's ENVELOPE vocabulary against runtime surfaces
+// carrying INTERFACE vocabulary, two families that live in different places by design, so its
+// enforced domain was 0 of 62 and always had been. The DECLARATION is not the guard: its subject is
+// real and shipping, and it is checked against the generated tree immediately below. So the entry
+// moves here rather than dying with the oracle that happened to host it, reason text intact.
+//
+// This is the only entry that relocated, because it is the only one with a reader. The other
+// fourteen were notes to a reader inside a guard that enforced nothing; they went with it, and are
+// recoverable from git history if a subject ever appears.
+const KIMI_RUNTIME_NATIVE = Object.freeze({
+  inherit_session_model:
+    'Kimi subagents always inherit the session model, so Kimi surfaces carry no per-dispatch model= override and no model: frontmatter field; the other runtimes resolve a tier per dispatch.',
+});
 {
-  const { RUNTIME_NATIVE } = require('./test-runtime-lexicon-parity.js');
   const KEY = 'inherit_session_model';
-  const reason = RUNTIME_NATIVE[KEY];
+  const reason = KIMI_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
-    'K2-declaration: RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason — the Kimi '
+    'K2-declaration: KIMI_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason — the Kimi '
       + 'model-inheritance divergence is a DECLARED runtime difference, not an undocumented one');
   assert(/inherit/i.test(reason) && /session model/i.test(reason),
     'K2-declaration: the "' + KEY + '" reason must state that Kimi subagents inherit the session model');
@@ -200,8 +290,13 @@ for (const name of ['workflow-next']) {
 }
 
 // ---------------------------------------------------------------------------
-// K3: byte-parity — regenerating from canonical reproduces every committed
-// file byte-for-byte (sync --check exits 0 on the just-written tree).
+// K3: render DETERMINISM — `--check` re-renders from canonical and compares against the tree
+// `--write` produced moments ago in another process, so the only disagreement it can witness is a
+// renderer that is not a pure function of its input (a clock, a Set iteration order, an env read).
+// It is NOT byte-parity with canonical, which was the label it used to carry: a template-mangling
+// transform added to the generator leaves both sides mangled and K3 green. What catches that is
+// K11 (template bytes vs the tracked canonical source) and K0-body (canonical contract lines
+// survive into the generated Skill).
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
@@ -210,7 +305,7 @@ for (const name of ['workflow-next']) {
     [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), '--check'],
     { encoding: 'utf8' });
   assert(r.status === 0,
-    'K3: sync-kimi-edition --check exits 0 (generated tree in byte-parity with canonical)' +
+    'K3: sync-kimi-edition --check exits 0 against the tree --write just produced (render is deterministic across processes)' +
     (r.status !== 0 ? ' — ' + String(r.stderr || r.stdout).split('\n')[0] : ''));
 }
 
@@ -312,10 +407,105 @@ for (const name of ['workflow-next']) {
   }
   assert(totalCards > 0,
     'K5: canonical commands carry at least one Agent() dispatch card (rewrite bite)');
-  // roleKindMap sanity: the read-only set is computed from canonical frontmatter.
-  for (const role of sync.readOnlyRoles()) {
-    assert(kinds[role] === 'explore',
-      'K5: readOnlyRoles member ' + role + ' maps to explore');
+  // roleKindMap vs an INDEPENDENT reading of the canonical tool grants.
+  //
+  // The loop this replaces was `for (const role of sync.readOnlyRoles())` — and readOnlyRoles()
+  // returns [], so it iterated over nothing and asserted nothing while reading like coverage. Empty
+  // is the CORRECT answer for the current roster (all 14 roles grant Write), which is exactly why a
+  // silent skip is the wrong shape: a predicate that broke and started returning [] would look
+  // identical. So the domain is asserted, not iterated: the kind map is compared against the same
+  // partition recomputed here straight from the tracked frontmatter, with no generator function in
+  // the loop. Both directions are named, so the assertion says something whether the read-only set
+  // is empty or not, and it starts enforcing per-member the moment a read-only role exists.
+  {
+    const grantsWrite = role => {
+      const line = (read('agents/' + role + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
+      const tools = line.replace(/[[\]"']/g, ' ').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+      return tools.includes('write') || tools.includes('edit');
+    };
+    const expectedExplore = canonAgents.filter(r => !grantsWrite(r)).sort();
+    const expectedCoder = canonAgents.filter(grantsWrite).sort();
+    assert(expectedCoder.length + expectedExplore.length === canonAgents.length
+      && canonAgents.length > 0,
+      'K5-kinds: the tool-grant partition covers every canonical role (' + canonAgents.length + ')');
+    assert(JSON.stringify([...sync.readOnlyRoles()].sort()) === JSON.stringify(expectedExplore),
+      'K5-kinds: readOnlyRoles() is EXACTLY the set of canonical roles granting neither Write nor '
+      + 'Edit — independently recomputed=' + JSON.stringify(expectedExplore)
+      + ', generator=' + JSON.stringify([...sync.readOnlyRoles()].sort())
+      + (expectedExplore.length === 0
+        ? ' (empty is the CORRECT answer for this roster and is asserted, not skipped)' : ''));
+    for (const role of expectedExplore) {
+      assert(kinds[role] === 'explore', 'K5-kinds: read-only role ' + role + ' dispatches as explore');
+    }
+    for (const role of expectedCoder) {
+      assert(kinds[role] === 'coder', 'K5-kinds: write-capable role ' + role + ' dispatches as coder');
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // K5-restriction: the LIVE tool-restriction axis, asserted in BOTH directions.
+  //
+  // On kimi this matters more than anywhere else, and the generator says why: a Skill is a prompt
+  // package, canonical `tools:` is DROPPED from the frontmatter, and every role is dispatched as
+  // `coder`. So the restriction can only be carried by the contract PROSE — absent that line a
+  // Bash-less canonical role silently gains shell access on this runtime. Nothing asserted it: this
+  // suite had no restriction assertion at all, so a regression in restrictionNote() shipped three
+  // roles with shell access and stayed green.
+  //
+  // BOTH directions, because a one-sided check passes a predicate that restricts everything, and
+  // deny-all is as wrong as deny-nothing. The partition is derived from the canonical frontmatter by
+  // the local parser above, so the generator's own parse cannot define the answer it is checked
+  // against, and a fourth restricted role is covered the day it is added.
+  //
+  // This block is also the CONSUMER of sync.restrictedRoles(), which shipped exported "for
+  // inspection" with none. An exported function nobody calls is indistinguishable from a broken one.
+  {
+    const grantsBash = role => {
+      const line = (read('agents/' + role + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
+      return line.replace(/[[\]"']/g, ' ').split(/[,\s]+/)
+        .map(s => s.trim().toLowerCase()).filter(Boolean).includes('bash');
+    };
+    const SHELL_CLAUSE = 'may not run shell commands';
+    const restricted = canonAgents.filter(r => !grantsBash(r)).sort();
+    const unrestricted = canonAgents.filter(grantsBash).sort();
+    const contractOf = role => read(skillDir('kaola-role-' + role));
+
+    // Non-vacuity on BOTH sides: with either partition empty this degrades to a one-directional
+    // check, which is the failure mode it exists to avoid.
+    assert(restricted.length > 0,
+      'K5-restriction: at least one canonical role withholds Bash — an empty restricted set makes '
+      + 'the restriction-present assertion vacuous and the guard one-directional');
+    assert(unrestricted.length > 0,
+      'K5-restriction: at least one canonical role grants Bash — an empty unrestricted set makes '
+      + 'the must-NOT-restrict assertion vacuous, which is what a restrict-everything predicate '
+      + 'needs to pass');
+
+    // restrictedRoles() gains a consumer: its key set must be the independently derived one. It
+    // covers the write/edit clause too, so it is compared as a SUPERSET-free exact set against the
+    // roles withholding either governed capability, not against the Bash partition alone.
+    const generatorRestricted = Object.keys(sync.restrictedRoles()).sort();
+    const anyWithheld = canonAgents.filter(r => {
+      const line = (read('agents/' + r + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
+      const t = line.replace(/[[\]"']/g, ' ').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+      return !(t.includes('write') || t.includes('edit')) || !t.includes('bash');
+    }).sort();
+    assert(JSON.stringify(generatorRestricted) === JSON.stringify(anyWithheld),
+      'K5-restriction: restrictedRoles() names exactly the canonical roles withholding a governed '
+      + 'capability — generator=' + JSON.stringify(generatorRestricted)
+      + ', canonical=' + JSON.stringify(anyWithheld));
+
+    for (const role of restricted) {
+      assert(contractOf(role).includes(SHELL_CLAUSE),
+        'K5-restriction[' + role + ']: canonical withholds Bash, so the generated role contract MUST '
+        + 'carry "' + SHELL_CLAUSE + '" — a Skill drops canonical `tools:` and every role dispatches '
+        + 'as coder, so without this line the role has shell access on kimi');
+    }
+    for (const role of unrestricted) {
+      assert(!contractOf(role).includes(SHELL_CLAUSE),
+        'K5-restriction[' + role + ']: canonical GRANTS Bash, so the generated contract must NOT '
+        + 'forbid shell commands — a predicate restricting every role would satisfy the assertions '
+        + 'above and fail here');
+    }
   }
   // Every kaola-role-* reference inside a command skill resolves to a generated
   // role skill dir (no dangling Skill reference).
@@ -386,9 +576,40 @@ for (const role of reviewerGenerator.ROLES) {
 // ---------------------------------------------------------------------------
 {
   const toml = read('.kimi/hooks/kimi-hooks.toml');
+  // Determinism only — .kimi/ is gitignored, so this compares the fragment --write just produced
+  // against the same renderer. The armed assertions are the structural ones below (rule count,
+  // event partition, exact command lines, managed-block markers) and the hook-script comparisons
+  // further down, which read the TRACKED canonical hooks/.
   assert(toml === sync.renderKimiHooksToml(),
-    'K7: committed kimi-hooks.toml is byte-equal to renderKimiHooksToml() (regenerate via --write)');
+    'K7: renderKimiHooksToml is deterministic across the --write subprocess and this process');
+  // Declared before K7-canon below, which reads it: a `const` referenced above its declaration is a
+  // temporal-dead-zone ReferenceError that both `node --check` and a bare `require()` step over.
   const blocks = toml.match(/^\[\[hooks\]\]$/gm) || [];
+  // K7-canon: the fragment's two rules must map the TRACKED canonical hooks.json entries, so a
+  // generator that stopped reading canonical (or mapped one entry twice) is caught against source
+  // rather than against itself.
+  {
+    let canonHooks = null;
+    try { canonHooks = JSON.parse(read('hooks/hooks.json')); } catch (_) { canonHooks = null; }
+    assert(canonHooks && canonHooks.hooks && typeof canonHooks.hooks === 'object',
+      'K7-canon: the tracked canonical hooks/hooks.json parses — the kimi fragment is DERIVED from '
+      + 'it, so an unreadable source must fail here rather than silently justify whatever was rendered');
+    const canonEvents = canonHooks && canonHooks.hooks
+      ? Object.keys(canonHooks.hooks).filter(k => Array.isArray(canonHooks.hooks[k])).sort() : [];
+    // DERIVED, not pinned: the fragment must carry one rule per canonical event. Writing `=== 2` on
+    // both sides would pin today's corpus size, and the natural repair for a count pin is to bump
+    // the number — which restores green with a canonical hook silently unmapped.
+    assert(canonEvents.length > 0 && blocks.length === canonEvents.length,
+      'K7-canon: the fragment carries one [[hooks]] rule per canonical event entry — canonical='
+      + JSON.stringify(canonEvents) + ' (' + canonEvents.length + '), fragment rules=' + blocks.length);
+    // The count above is only half of it: the fragment must map THESE two events, not any two.
+    // SessionStart"compact" is the Claude spelling of the Kimi PostCompact rule, so the pairing is
+    // named rather than assumed — a canonical event renamed on one side alone reds here.
+    assert(JSON.stringify(canonEvents) === JSON.stringify(['SessionStart', 'SubagentStart']),
+      'K7-canon: the canonical event set the kimi fragment maps is {SessionStart, SubagentStart} — '
+      + 'got ' + JSON.stringify(canonEvents) + '; the kimi counterparts asserted above are '
+      + '{PostCompact, SubagentStart}, so a rename on either side must be reconciled deliberately');
+  }
   assert(blocks.length === 2,
     'K7: kimi-hooks.toml carries EXACTLY 2 [[hooks]] rules (mapped from canonical hooks.json) — got ' + blocks.length);
   const ALLOWED_EVENTS = new Set(['SubagentStart', 'PostCompact']);

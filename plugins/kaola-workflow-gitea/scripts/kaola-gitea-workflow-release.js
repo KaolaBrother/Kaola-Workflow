@@ -13,7 +13,7 @@ const { execFileSync } = require('child_process');
 // gate's carry-over route enforces (evaluateReleasePrepCarryOver). Stamping a file the gate would
 // refuse, or refusing one --prepare stamps, is exactly the drift this require removes. The kernel
 // is base-named in every edition tree, so this line renders unchanged in every port.
-const { CODEX_MANIFEST_RELPATHS, CLAUDE_MANIFEST_RELPATHS, RELEASE_FILES } = require('./kaola-workflow-adaptive-schema.js');
+const { CODEX_MANIFEST_RELPATHS, CLAUDE_MANIFEST_RELPATHS, RELEASE_FILES, evaluateReleaseReceipt } = require('./kaola-workflow-adaptive-schema.js');
 const RELEASE_TAG_PREFIX = 'kaola-workflow' + '--v';
 
 function flagVal(args, flag) { const i = args.indexOf(flag); return i < 0 ? null : (args[i + 1] || null); }
@@ -136,12 +136,26 @@ function validateTransaction(rows, version) {
 }
 
 function readChainReceipt(root) { try { return JSON.parse(fs.readFileSync(path.join(root, '.cache', 'chain-receipt.json'), 'utf8')); } catch (_) { return null; } }
+// #881: the BINDING half of this probe is the SAME kernel evaluation both gates read, so --verify
+// cannot report stale the exact state --release-check and --tag accept. ONLY the binding is
+// borrowed, and that is deliberate: the gate asks a strictly stronger question, and the kernel
+// records the asymmetry itself at evaluateReleaseReceipt — "release.js's own greenness probe treats
+// headSha === 'unknown' as green; this gate must not copy that leniency". Coverage, waivers, a
+// dirty-stamped tree and an unbound headSha all refuse there and are all invisible here, exactly as
+// before; --verify is informational and exits 0, so importing the gate whole would turn a report
+// into a verdict. A FAILED carry-over is the one refusal that means "this receipt does not bind" —
+// every reason the gate reaches after the binding arm means the binding held, and what it then
+// objects to is the probe's to ignore.
+function receiptBindsTo(root, head) {
+  const verdict = evaluateReleaseReceipt(root, { candidate: head });
+  return verdict.ok || !(verdict.carryOver && verdict.carryOver.failed);
+}
 function chainReceiptGreenness(root) {
   const r = readChainReceipt(root); if (!r) return { green: false, reason: 'chains_unverified' };
   const hp = gitProbe(root, ['rev-parse', 'HEAD']);
   if (!hp.ok) return { green: false, reason: 'chains_stale' };
   const head = hp.value;
-  if (r.headSha && r.headSha !== head && r.headSha !== 'unknown') return { green: false, reason: 'chains_stale', receiptHead: r.headSha, currentHead: head };
+  if (r.headSha && r.headSha !== head && r.headSha !== 'unknown' && !receiptBindsTo(root, head)) return { green: false, reason: 'chains_stale', receiptHead: r.headSha, currentHead: head };
   if (!Array.isArray(r.chains) || !r.chains.length) return { green: false, reason: 'chains_empty' };
   for (const c of r.chains) { const code = c.exitCode != null ? c.exitCode : c.exit; if (code !== 0 && !c.accepted_red) return { green: false, reason: 'chains_red', chain: c.name, exitCode: code }; }
   return { green: true };
@@ -211,20 +225,25 @@ function runPrepare(root, o) {
   doStep('prepare_readme', 'README.md', () => { let readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8'); readme = readme.replace(/(Codex `kaola-workflow[^`]*` plugin manifest: `)[^`]*/g, '$1' + codexVersion).replace(/(Claude Code command install, [^:]+: `)[^`]*/g, '$1' + o.version); fs.writeFileSync(path.join(root, 'README.md'), readme); });
   const surface = preparedSurface(root);
   append(root, { step: 'prepared', status: 'done', version: o.version, rootVersion: o.version, codexVersion, codexVersionSource: start.codexVersionSource, baselineSha: start.baselineSha, date, preparedSurface: surface, candidateSha: null, authorized: false });
-  return emit(o.jsonMode, { result: 'ok', mode: 'prepare', version: o.version, codex_version: codexVersion, codex_version_source: o.codexVersionOverride ? 'explicit' : 'derived', prepared_surface: surface, tag: null, candidate_authorized: false }, `prepare: ok — commit only the ${RELEASE_FILES.length} release files, then run the offline full chain`);
+  return emit(o.jsonMode, { result: 'ok', mode: 'prepare', version: o.version, codex_version: codexVersion, codex_version_source: o.codexVersionOverride ? 'explicit' : 'derived', prepared_surface: surface, tag: null, candidate_authorized: false }, `prepare: ok — commit only the ${RELEASE_FILES.length} release files; a green unwaived four-chain receipt from the finishing run carries over that commit, otherwise run the offline full chain`);
 }
 
+// #881: the pre-tag chain gate IS the kernel's evaluateReleaseReceipt — the SAME function
+// kaola-gitea-workflow-run-chains.js --release-check calls, not a second copy of it. Binding, coverage,
+// greenness and the typed refusal family (chains_unverified > chains_stale > chains_empty >
+// repo_kind_undetermined > chains_incomplete > chains_red > chains_waived) all come from there, so
+// the two entry points cannot answer differently: what --release-check accepts, --tag accepts —
+// including the release-prep carry-over, which binds a receipt stamped at an ANCESTOR of the
+// candidate when every intervening path is release-prep-only. The four-chain, unwaived, clean-tree
+// demand is untouched; only WHERE the green receipt may be bound moved. This delegation is why the
+// documented sequence (--release-check passes, then --tag) can no longer dead-end on chains_stale.
 function chainCheck(root, candidate) {
-  let r; try { r = JSON.parse(fs.readFileSync(path.join(root, '.cache', 'chain-receipt.json'), 'utf8')); } catch (_) { return { ok: false, reason: 'chains_unverified' }; }
-  if (!r.headSha || r.headSha === 'unknown' || r.headSha !== candidate || r.workTreeHash !== 'clean') return { ok: false, reason: 'chains_stale' };
-  if (!Array.isArray(r.chains) || !r.chains.length) return { ok: false, reason: 'chains_empty' };
-  let pkg; try { pkg = jsonFile(root, 'package.json'); } catch (_) {}
-  const expected = ['claude', 'codex', 'gitlab', 'gitea'].filter(n => pkg && pkg.scripts && typeof pkg.scripts['test:kaola-workflow:' + n] === 'string');
-  if (!expected.length) return { ok: false, reason: 'repo_kind_undetermined' };
-  const names = new Set(r.chains.map(c => c.name)); if (expected.some(n => !names.has(n))) return { ok: false, reason: 'chains_incomplete' };
-  if (r.chains.some(c => c.exitCode !== 0 && c.accepted_red !== true)) return { ok: false, reason: 'chains_red' };
-  if (r.chains.some(c => c.accepted_red === true)) return { ok: false, reason: 'chains_waived' };
-  return { ok: true, receipt: r };
+  const verdict = evaluateReleaseReceipt(root, { candidate });
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
+  // The receipt's own stamped commit — the candidate on the exact route, the carried-over ancestor
+  // otherwise. This is what the publication rows bind as chainHeadSha, so an idempotent rerun over
+  // the same receipt recomputes the same value on either route.
+  return { ok: true, chainHeadSha: verdict.carryOver ? verdict.carryOver.receiptSha : verdict.candidate };
 }
 function contentMatches(root, b) {
   const pkg = jsonFile(root, 'package.json'); if (!pkg || pkg.version !== b.rootVersion) return 'package_version_mismatch';
@@ -292,14 +311,14 @@ function runTag(root, o) {
   let existing = null;
   if (tags.tags.includes(tag)) { const ep = gitProbe(root, ['rev-parse', '--verify', tag + '^{commit}']); if (!ep.ok) return refuse(o.jsonMode, 'tag_target_unavailable', { exit_code: ep.exitCode }); existing = ep.value; }
   if (existing && existing !== candidate) return refuse(o.jsonMode, 'tag_conflict');
-  const publication = validatePublication(rows || [], o.version, b, candidate, chain.receipt.headSha, tag, existing);
+  const publication = validatePublication(rows || [], o.version, b, candidate, chain.chainHeadSha, tag, existing);
   if (!publication.ok) return refuse(o.jsonMode, publication.reason);
   if (publication.state === 'complete') {
     if (!tagTreeMatches(root, tag, b)) return refuse(o.jsonMode, 'tag_binding_stale');
     return emit(o.jsonMode, { result: 'ok', mode: 'tag', idempotent: true, version: o.version, codex_version: b.codexVersion, candidate_sha: candidate, tag }, 'tag: ok (idempotent)');
   }
   if (!tagTreeMatches(root, candidate, b)) return refuse(o.jsonMode, 'candidate_tree_verification_failed');
-  append(root, { step: 'tag_authorized', status: 'done', version: o.version, candidateSha: candidate, rootVersion: b.rootVersion, codexVersion: b.codexVersion, preparedSurface: b.preparedSurface, chainHeadSha: chain.receipt.headSha, tag });
+  append(root, { step: 'tag_authorized', status: 'done', version: o.version, candidateSha: candidate, rootVersion: b.rootVersion, codexVersion: b.codexVersion, preparedSurface: b.preparedSurface, chainHeadSha: chain.chainHeadSha, tag });
   let created = false;
   if (!existing) { const cp = gitProbe(root, ['update-ref', 'refs/tags/' + tag, candidate, '0000000000000000000000000000000000000000']); if (!cp.ok) return refuse(o.jsonMode, 'tag_create_failed', { exit_code: cp.exitCode }); created = true; }
   const post = gitProbe(root, ['rev-parse', '--verify', tag + '^{commit}']);
@@ -307,10 +326,16 @@ function runTag(root, o) {
     if (created) { const rollback = gitProbe(root, ['update-ref', '-d', 'refs/tags/' + tag, candidate]); if (!rollback.ok) return refuse(o.jsonMode, 'tag_rollback_failed', { exit_code: rollback.exitCode }); }
     return refuse(o.jsonMode, post.ok ? 'tag_tree_verification_failed' : 'tag_target_unavailable', post.ok ? null : { exit_code: post.exitCode });
   }
-  append(root, { step: 'tag_complete', status: 'done', version: o.version, candidateSha: candidate, rootVersion: b.rootVersion, codexVersion: b.codexVersion, preparedSurface: b.preparedSurface, chainHeadSha: chain.receipt.headSha, tag });
+  append(root, { step: 'tag_complete', status: 'done', version: o.version, candidateSha: candidate, rootVersion: b.rootVersion, codexVersion: b.codexVersion, preparedSurface: b.preparedSurface, chainHeadSha: chain.chainHeadSha, tag });
   return emit(o.jsonMode, { result: 'ok', mode: 'tag', version: o.version, codex_version: b.codexVersion, candidate_sha: candidate, tag, tag_tree_verified: true }, 'tag: ok — ' + tag + ' -> ' + candidate);
 }
-function runCut(root, o) { return refuse(o.jsonMode, 'cut_compatibility_refusal', { sequence: ['--prepare --version X.Y.Z', 'commit only release files', 'run offline full chain receipt', 'pass kaola-gitea-workflow-run-chains.js --release-check', '--tag --version X.Y.Z'] }, 'cut: REFUSED — run prepare, commit only release files, run the offline full chain receipt, pass kaola-gitea-workflow-run-chains.js --release-check, then tag'); }
+// #881: step 3 is CONDITIONAL — the chain run is the fallback, not the default, because a green
+// unwaived four-chain receipt from the finishing run binds across a release-prep-only commit. The
+// step LITERAL is byte-identical to the same list in docs/api.md: one list, one wording, two
+// renderings. Keep it a step with a qualifier, matching every other element's imperative register —
+// the prose statement of the rule belongs in the human refusal line and --prepare's message below,
+// which are prose about the rule rather than steps. If you reword one list, reword the other.
+function runCut(root, o) { return refuse(o.jsonMode, 'cut_compatibility_refusal', { sequence: ['--prepare --version X.Y.Z', 'commit only release files', 'run the offline full chain receipt (skip if a green receipt already carries over)', 'pass kaola-gitea-workflow-run-chains.js --release-check', '--tag --version X.Y.Z'] }, 'cut: REFUSED — run prepare, commit only release files; a green unwaived four-chain receipt from the finishing run carries over, otherwise run the offline full chain; pass kaola-gitea-workflow-run-chains.js --release-check, then tag'); }
 function runPush(root, o) {
   const p = jsonFile(root, 'package.json'), tag = p ? RELEASE_TAG_PREFIX + p.version : null;
   const guidance = ['Push the local tag to the remote:', '  git push origin ' + (tag || '<tag>'), '', 'Then run the forge release-create command with --latest to publish the release.', 'Example for a forge that supports a release-create command:', '  <forge-cli> release create ' + (tag || '<tag>') + ' --notes-from-tag --latest', '', 'No forge binary (forge CLI) is invoked by this script; the publish step', 'remains a manual or forge-specific step.'].join('\n');

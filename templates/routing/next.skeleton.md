@@ -1,5 +1,5 @@
 <!-- SLOT:nx-frontmatter -->
-<!-- REGION:skill -->
+<!-- REGION:skill — the gate resolves the one enabled edition from `codex plugin list --json` and runs the preflight out of that plugin-cache tuple; neither the CLI nor the cache exists on the command runtime -->
 
 <!-- PIN: codex-profile-preflight -->
 ## Codex Profile Freshness Gate
@@ -121,12 +121,10 @@ A run normally carries one issue. Several issues may share one run when they are
 unclaimed, and share a coherent scope; that is a shape judgement and nothing caps it. Say which
 issues you bundled and why.
 
-<!-- REGION:command -->
 **Goal context.** When `KAOLA_GOAL` is exported, treat it as a soft filter inside the chosen
 priority tier: note the alignment, never exclude on mismatch, and never let it outrank an open,
 actionable frontier issue. Finalization records that a goal was DECLARED — never that it was met.
 
-<!-- /REGION -->
 ## Step 2 — Freshness, before the claim
 
 Classify local and remote state and settle it before anything is claimed, so a dirty or behind
@@ -272,7 +270,7 @@ branch and worktree. Keep their commits separate — a commit spanning two folde
 one's diff attributable. Another session's folder is not yours: leave its branch, its worktree and
 its issues alone.
 
-<!-- REGION:skill -->
+<!-- REGION:skill — it defers to the Codex Profile Freshness Gate above as the authority on profile availability, and that gate renders on this surface only -->
 ## Delegation
 
 Subagent delegation is the default posture and is established without asking the user. Invoke the
@@ -295,7 +293,7 @@ Mission list: {n done / n in-flight / n todo}
 <!-- SPLICE:nx-required-next -->
 ```
 
-<!-- REGION:command -->
+<!-- REGION:command — chaining into the next surface means invoking a command, which only a command runtime can do; a skill is retrieved, never invoked -->
 If nested command execution is available in this session, continue by applying the matching
 command. Otherwise stop after printing it.
 

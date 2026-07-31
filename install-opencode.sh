@@ -497,6 +497,3 @@ echo ""
 echo "Next: open the project in opencode and run a workflow command, e.g.:"
 echo "  /workflow-init"
 echo "Models resolve from opencode.json; both tiers inherit your opencode default unless you pin them."
-# #2 / D-542-01: planner-proven-disjoint parallel write frontiers are default-ON (no operator
-# toggle). Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net.
-echo "Disjoint parallel writes are default-ON (set KAOLA_PARALLEL_WRITES=0 to force serial)."

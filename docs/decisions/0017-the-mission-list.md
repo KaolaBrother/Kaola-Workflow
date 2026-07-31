@@ -131,6 +131,27 @@ is a lookup rather than a campaign.
 | co-open items sharing a working tree | per-item results that cannot be told apart | label the blend as a blend — a joint result, honestly named |
 | an unrecoverable merge | a sink outcome the orchestrator could not repair after the fact | a rescue ref per merge, recording pre-merge state |
 | a value call taken by the agent | an irreversible choice a human should have made | the consent valve |
+| a typed envelope code documented asymmetrically across runtimes | any typed `reason:` code appearing on a runtime surface **at all** — the enforcement domain becoming non-zero. Today it is 0 of 62 | `scripts/test-runtime-lexicon-parity.js`, deleted 2026-08-01, recoverable from git history at `b3bc7acf` |
+
+The lexicon row is the only one whose mechanism was **built first and removed after**, so it carries
+the measurement that retired it. The guard compared two vocabularies that live in different families
+by design: the engine emits an **envelope** vocabulary — the machine-readable `reason:` field of a
+JSON receipt — while the runtime trees carry an **interface** vocabulary of dispatch field names, env
+vars, config knobs and contract field names. Their intersection was 0 of 62 derived codes across all
+102 runtime documents, and not one occurrence of `reason:` exists in `commands/`, `agents/` or any
+`SKILL.md`. 33 of the 62 are documented, runtime-neutrally, under `docs/`; the other 29 nowhere.
+`docs/conventions.md` legalizes the empty state outright — a typed code "must be documented on
+**every** runtime or on none" — and 62/62 satisfy it by being on none. The guard was therefore always
+green, always vacuous, and its headline ("0 asymmetric across 6 runtimes") read as a clean sweep over
+a domain that was empty.
+
+**Do not resurrect this by widening the derivation.** Five candidate derivations were measured —
+object-literal keys, quoted string keys, dot-field reads, any snake_case in the engine, and deriving
+from the surfaces themselves. Every one that makes the domain non-empty pulls in Codex-only config
+knobs (`max_threads`, `model_reasoning_effort`, `dispatch_posture`, …), forge-native tokens
+(`issue_iid`), and prose noise (`node_modules`), each needing its own hand-typed exemption — up to 22
+for the surface-derived variant. That is re-authoring the guard as a different guard, not repairing
+it. The arming observation above is the cheap one: watch the intersection, not the pattern.
 
 The consent valve deserves one note. In the observed configuration it was not absent — it was the
 orchestrator **asking the user**, which happened and worked. A durable valve is only needed once a

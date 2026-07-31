@@ -118,11 +118,8 @@ Gate on repo kind. It is detected, never configured.
 On the self-host branch:
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$KAOLA_SCRIPTS/kaola-workflow-run-chains.js" --project {project}
 ```
 
@@ -231,11 +228,8 @@ Finishing an issue includes capturing the defects the run itself discovered. Swe
 the two sides:
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$KAOLA_SCRIPTS/kaola-workflow-gap-sweep.js" --project {project} --check
 ```
 
@@ -274,11 +268,8 @@ merge-sink-only.
 Capture this now, while `workflow-state.md` still exists — the merge path archives it in Step 10:
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
 SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
 SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
@@ -415,11 +406,8 @@ closed issue still carrying the in-progress label, a stale roadmap source, or an
 folder that the sink's own reporting did not catch.
 
 ```bash
-KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
-if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-claim.js" ]; then
-  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-claim.js' -print -quit 2>/dev/null)")"
-fi
-CLAIM_JS="$KAOLA_SCRIPTS/kaola-workflow-claim.js"
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js"            # dry-run: report only (default)
 # node "$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js" --execute  # repair safe local drift
 ```

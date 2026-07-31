@@ -956,19 +956,6 @@ function runDirectMerge(args, opts) {
   // Step 2 — preconditions, ALL before any destructive step (#346). Each is checkout-independent
   // (operates on mainRoot / the branch ref). Any failure throws → exit 1, ZERO mutation, worktree
   // intact. assertWorktreeClean is the data-loss guard.
-  // #561: lane-group backstop on the legacy (non---sink) main-advance path too — mirror the --sink
-  // path's sinkPreflight backstop. A residual lane_group means surviving legs' committed work is NOT on
-  // the feature branch (#552 crash-window); advancing main here would silently lose it. Pure read, zero
-  // mutation, FIRST in the precondition block. Emit the SAME typed refusal the --sink path emits.
-  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, args.project);
-  if (laneGroupRefusal) {
-    sinkEmit({
-      result: 'refuse',
-      reason: laneGroupRefusal.reason || 'lingering_lane_group',
-      detail: laneGroupRefusal.detail,
-    }, 1);
-    return;
-  }
   const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
   assert(!status, 'Worktree must be clean before direct merge sink runs');
   const liveFolderFinding = assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
@@ -1324,45 +1311,7 @@ function sinkLandStagedUnion(src, dest) {
   }
 }
 
-// #552: fail-closed backstop against the lane-group crash-window desync. A clean write-parallel group
-// completion DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path); a
-// residual key at sink time means the group never synthesized + merged its legs, so surviving legs' committed
-// work is NOT on the branch and advancing main would be the #552 silent loss. Dual-location read (live +
-// post-finalize archive), pure read, zero mutation; returns a typed refusal or null.
-function lingeringLaneGroupRefusal(mainRoot, project) {
-  const locations = [
-    path.join(mainRoot, 'kaola-workflow', project, '.cache', 'running-set.json'),
-    path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'running-set.json'),
-  ];
-  for (const rsPath of locations) {
-    let rs;
-    try { rs = JSON.parse(fs.readFileSync(rsPath, 'utf8')); } catch (_) { continue; } // absent/unreadable: try next
-    const lg = rs && rs.lane_group;
-    const members = (lg && Array.isArray(lg.members)) ? lg.members : [];
-    if (lg && members.length > 0) {
-      const legCount = (lg.legs && typeof lg.legs === 'object') ? Object.keys(lg.legs).length : 0;
-      const finding = recordSinkFinding(
-        'lingering_lane_group',
-        ['running-set.json (' + rsPath + ') still carries a lane_group "' + (lg.group_id || '(unknown)') +
-          '" with ' + members.length + ' member(s) and ' + legCount + ' leg(s). A clean write-parallel group ' +
-          'completion DELETES the lane_group key; a residual key means the group never ran its synthesizer + ' +
-          'group barrier (the #552 crash-window desync), so surviving legs\' committed work is NOT on the feature ' +
-          'branch. Refusing to sink — main must not advance with code missing.'],
-        'Recover the legs\' committed work by hand from the leg branches/worktrees the running-set '
-          + 'names, then re-run the sink; or run sink-pr so what survives is staged for review rather '
-          + 'than published.',
-        { lane_group_id: lg.group_id || null, members: members.length, legs: legCount, running_set_path: rsPath });
-      return { ok: false, reason: 'lingering_lane_group', detail: finding.detail[0], finding };
-    }
-  }
-  return null;
-}
-
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
-  // #552: lane-group backstop FIRST — a pure read, zero mutation, BEFORE the dirty-tree scan/stash.
-  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, project);
-  if (laneGroupRefusal) return laneGroupRefusal;
-
   // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
   // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
   // path's assertWorktreeClean. It throws on a dirty OR unprobeable worktree (fail-closed); convert to
@@ -1546,12 +1495,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
       if (!preResult.ok) {
         // sink_blocked and worktree_dirty KEEP — proceeding destroys the user's own uncommitted
-        // work, so no proceed-path exists. lingering_lane_group is CONVERTED: it judges the state
-        // of the work, so it carries a typed finding and a named field on the receipt, while still
-        // stopping, because publishing legs that never merged is the silent loss it exists to catch.
-        if (preResult.reason === 'lingering_lane_group') {
-          recordStopOnReceipt('lane_group_stop', preResult.finding ? preResult.finding.lane_group_id || 'unknown' : 'unknown');
-        }
+        // work, so no proceed-path exists.
         sinkEmit({ result: 'refuse', reason: preResult.reason || 'sink_blocked', ...(preResult.foreign_dirt ? { foreign_dirt: preResult.foreign_dirt } : {}), detail: preResult.detail }, 1); return;
       }
       if (preResult.stashRef) receipt.stash_ref = preResult.stashRef;

@@ -5038,163 +5038,6 @@ function testSinkMergeRefusesLiveFolder() {
   }
 }
 
-// #552: the sink-merge lingering-lane_group fail-closed backstop. A clean write-parallel group completion
-// DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path); a residual key
-// at sink time means the group never ran its synthesizer + group barrier (the #552 crash-window desync), so
-// the surviving legs' committed work is NOT on the branch — advancing main here would be the #552 silent
-// loss. sinkPreflight refuses (lingering_lane_group, zero mutation) reading BOTH the live project .cache and
-// the post-finalize archive .cache. RED-provable: drop the backstop ⇒ the sink proceeds past preflight.
-function testSinkRefusesLingeringLaneGroup() {
-  const lingering = {
-    state: 'open',
-    nodes: [{ id: 'B', role: 'tdd-guide' }],
-    lane_group: { group_id: 'lane-9552', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9552/A' }, B: { legPath: '.kw/legs/issue-9552/B' } } },
-  };
-  function runSink(tmp) {
-    return spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-9552', '--branch', 'workflow/issue-9552', '--issue', '9552', '--sink', '--json'],
-      { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  }
-  function setupRepo(tmp) {
-    initGitRepo(tmp);
-    G.git(tmp, ['checkout', '-b', 'workflow/issue-9552']);
-    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    G.git(tmp, ['add', 'feature.txt']);
-    G.git(tmp, ['commit', '-m', 'feat: issue 9552']);
-    G.git(tmp, ['checkout', 'main']);
-  }
-  // ---- RED-1 (LIVE location): a lingering lane_group in kaola-workflow/<project>/.cache blocks the sink. ----
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-552-sink-live-')));
-    try {
-      setupRepo(tmp);
-      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      const result = runSink(tmp);
-      assert(result.status !== 0, '#552-sink RED-1 (live): must refuse (exit non-zero) on a lingering lane_group, got status ' + result.status);
-      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
-      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
-        '#552-sink RED-1 (live): typed refusal lingering_lane_group, got ' + JSON.stringify(parsed));
-      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      assert(mainBefore === mainAfter, '#552-sink RED-1 (live): main must NOT advance, before ' + mainBefore + ' after ' + mainAfter);
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- RED-2 (ARCHIVE location, the realistic post-finalize state): same refusal via the archive read. ----
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-552-sink-arch-')));
-    try {
-      setupRepo(tmp);
-      const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9552', '.cache');
-      fs.mkdirSync(archCache, { recursive: true });
-      fs.writeFileSync(path.join(archCache, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      const result = runSink(tmp);
-      assert(result.status !== 0, '#552-sink RED-2 (archive): must refuse on a lingering lane_group in the archive, got status ' + result.status);
-      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
-      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
-        '#552-sink RED-2 (archive): typed refusal lingering_lane_group via dual-location read, got ' + JSON.stringify(parsed));
-      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      assert(mainBefore === mainAfter, '#552-sink RED-2 (archive): main must NOT advance');
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- GREEN (no false-positive): a running-set WITHOUT a lane_group key (a cleanly-completed run) must
-  //      NOT trip the backstop — the sink may still refuse for another reason, but NEVER lingering_lane_group. ----
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-552-sink-green-')));
-    try {
-      setupRepo(tmp);
-      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }, null, 2)); // lane_group KEY cleared
-      const result = runSink(tmp);
-      let parsed = {};
-      try { parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) {}
-      assert(parsed.reason !== 'lingering_lane_group',
-        '#552-sink GREEN: a cleared running-set (no lane_group key) must NOT trip the backstop, got ' + JSON.stringify(parsed));
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  console.log('testSinkRefusesLingeringLaneGroup: PASSED');
-}
-
-// #561: the lane-group backstop must ALSO guard the LEGACY (non---sink) main-advance path — the in-place
-// merge sink that finalize routes through by DEFAULT (no --sink). Before #561 only the --sink path
-// (sinkPreflight) carried the #552 backstop; the legacy ffMergeLoop path advanced main with ZERO
-// lane_group awareness. RED-provable: drop the legacy backstop ⇒ the legacy path proceeds past the
-// precondition block. Reads BOTH the live project .cache and the post-finalize archive .cache.
-function testSinkLegacyPathRefusesLingeringLaneGroup() {
-  const lingering = {
-    state: 'open',
-    nodes: [{ id: 'B', role: 'tdd-guide' }],
-    lane_group: { group_id: 'lane-9561', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9561/A' }, B: { legPath: '.kw/legs/issue-9561/B' } } },
-  };
-  // NO --sink flag ⇒ routes to the legacy main() ffMergeLoop advance path.
-  function runLegacySink(tmp) {
-    return spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-9561', '--branch', 'workflow/issue-9561', '--issue', '9561', '--json'],
-      { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  }
-  function setupRepo(tmp) {
-    initGitRepo(tmp);
-    G.git(tmp, ['checkout', '-b', 'workflow/issue-9561']);
-    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    G.git(tmp, ['add', 'feature.txt']);
-    G.git(tmp, ['commit', '-m', 'feat: issue 9561']);
-    G.git(tmp, ['checkout', 'main']);
-  }
-  // ---- RED-1 (LIVE location): a lingering lane_group in kaola-workflow/<project>/.cache blocks the legacy sink. ----
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-561-legacy-live-')));
-    try {
-      setupRepo(tmp);
-      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9561', '.cache');
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      const result = runLegacySink(tmp);
-      assert(result.status !== 0, '#561 legacy RED-1 (live): must refuse on a lingering lane_group, got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
-      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
-        '#561 legacy RED-1 (live): typed refusal lingering_lane_group on the non---sink path, got ' + JSON.stringify(parsed));
-      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      assert(mainBefore === mainAfter, '#561 legacy RED-1 (live): main must NOT advance, before ' + mainBefore + ' after ' + mainAfter);
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- RED-2 (ARCHIVE location, the realistic post-finalize state): same refusal via the archive read. ----
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-561-legacy-arch-')));
-    try {
-      setupRepo(tmp);
-      const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9561', '.cache');
-      fs.mkdirSync(archCache, { recursive: true });
-      fs.writeFileSync(path.join(archCache, 'running-set.json'), JSON.stringify(lingering, null, 2));
-      const mainBefore = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      const result = runLegacySink(tmp);
-      assert(result.status !== 0, '#561 legacy RED-2 (archive): must refuse via the archive read, got status ' + result.status);
-      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
-      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
-        '#561 legacy RED-2 (archive): typed refusal via dual-location read, got ' + JSON.stringify(parsed));
-      const mainAfter = G.git(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
-      assert(mainBefore === mainAfter, '#561 legacy RED-2 (archive): main must NOT advance');
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- GREEN (no false-positive): a cleared running-set (no lane_group key) must NOT trip the legacy backstop. ----
-  {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-561-legacy-green-')));
-    try {
-      setupRepo(tmp);
-      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9561', '.cache');
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }, null, 2)); // lane_group KEY cleared
-      const result = runLegacySink(tmp);
-      let parsed = {};
-      try { parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) {}
-      assert(parsed.reason !== 'lingering_lane_group',
-        '#561 legacy GREEN: a cleared running-set must NOT trip the backstop, got ' + JSON.stringify(parsed));
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  console.log('testSinkLegacyPathRefusesLingeringLaneGroup: PASSED');
-}
-
 // #562: the --sink merge step force-removes the linked worktree (`git worktree remove --force`); before
 // #562 it did so with NO clean precondition (the legacy path had assertWorktreeClean, the --sink path did
 // not), so a worktree carrying uncommitted work was silently destroyed. The fix hoists assertWorktreeClean
@@ -10008,25 +9851,75 @@ function testSinkTransactionCleanEndToEnd() {
 // consumer's CLAUDE.md and the pointer's referent would silently disagree; this reds npm test. The
 // startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('') is
 // always true), so the guard is load-bearing on BOTH the canonical file and every embed.
+//
+// TWELVE SURFACES, DERIVED. The list used to be six hand-typed paths, which covered the tracked
+// trees and left the six GENERATED ones — .opencode{,-gitlab,-gitea} and .kimi{,-gitlab,-gitea} —
+// free to drift with nothing to catch it. Neither half is typed here now: the tracked six come from
+// the routing registry that renders them, and the generated six are rendered through the sync
+// modules' own renderers. A fourth forge reaches all four runtimes with no edit to this function.
+//
+// WHY THE GENERATED TREES ARE RENDERED, NOT READ. They are gitignored and absent from a fresh
+// checkout and from every worktree, so a disk read would face a choice between a permanent false red
+// and a skip-when-absent — and a check that quietly enforces nothing when its subject is missing is
+// the defect this extension exists to remove. Rendering is the same bytes `sync --check` asserts the
+// on-disk tree equals, so the subject is always present and can never be a stale tree. Absence is
+// still loud, one level up: the expected surface COUNT is derived independently, so a renderer that
+// yields nothing reds instead of silently shrinking the sweep.
 function testAxiomBlockByteIdentity() {
+  const routing = require('./generate-routing-surfaces.js');
+  const opencodeSync = require('./sync-opencode-edition.js');
+  const kimiSync = require('./sync-kimi-edition.js');
+
   const axioms = read(path.join(repoRoot, 'templates', 'axioms.md'));
   assert(axioms.startsWith('## First Principles'),
     'templates/axioms.md must open with the ## First Principles heading; got: ' + JSON.stringify(axioms.slice(0, 40)));
-  const initSurfaces = [
-    'commands/workflow-init.md',
-    'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
-    'plugins/kaola-workflow-gitea/commands/workflow-init.md',
-    'plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md',
-    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md',
-    'plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md',
-  ];
-  for (const rel of initSurfaces) {
-    const body = read(path.join(repoRoot, rel));
-    assert(body.includes(axioms),
-      rel + ' must embed the canonical templates/axioms.md First Principles block byte-identically ' +
+
+  // The topic this guard is about. Named, not derived — it IS the subject — but asserted, so a
+  // rename reds here instead of silently deriving an empty surface set and passing over nothing.
+  const INIT_TOPIC = 'init';
+  assert(Object.prototype.hasOwnProperty.call(routing.TOPICS, INIT_TOPIC),
+    'the routing registry must still carry the "' + INIT_TOPIC + '" topic this guard checks');
+
+  // Tracked surfaces: straight from the registry rows that render them.
+  const surfaces = routing.GENERATED_SURFACES
+    .filter(r => r.topic === INIT_TOPIC)
+    .map(r => ({ id: r.path, body: read(path.join(repoRoot, r.path)) }));
+
+  // Generated surfaces: rendered in memory from each forge's init COMMAND row (both additive
+  // runtime editions render from the command lane; Kimi packages it as a directory-form Skill).
+  for (const forge of routing.FORGES) {
+    const row = routing.commandSurfacesForForge(forge).find(r => r.topic === INIT_TOPIC);
+    assert(!!row, 'forge ' + forge + ' must ship an ' + INIT_TOPIC + ' command surface to render from');
+    const base = path.basename(row.path, '.md');
+    const canon = read(path.join(repoRoot, row.path));
+    const ocRel = path.relative(repoRoot, path.join(opencodeSync.outDirs(forge).command, base + '.md'));
+    surfaces.push({ id: ocRel, body: opencodeSync.renderCommand(canon, forge, ocRel) });
+    surfaces.push({ id: kimiSync.skillRel(base, forge), body: kimiSync.renderCommand(canon, base, forge) });
+  }
+
+  // ANTI-VACUITY, and its HONEST boundary — the two terms of this width are not equally anchored.
+  // The RUNTIME term is independent: it is read off the filesystem (one `sync-<runtime>-edition.js`
+  // per additive runtime), so deleting a runtime from any table cannot shrink expectation and
+  // measurement together. Deriving it from surfaces.length would be a guard that cannot fail.
+  // The FORGE term is NOT independent: it comes from the same registry this measures, so deleting a
+  // forge from the edition tables shrinks both sides in lockstep and this floor stays green —
+  // mutation-proved. That case is caught one guard over, by test-generate-routing-surfaces.js's
+  // "registry derives 18 surfaces" assertion, which is why it is left rather than re-anchored. Do
+  // not read this comment as claiming the width is independent of everything; it is independent of
+  // the runtime list only.
+  const runtimeEditionCount = fs.readdirSync(path.join(repoRoot, 'scripts'))
+    .filter(f => /^sync-[a-z0-9-]+-edition\.js$/.test(f)).length;
+  const expected = routing.FORGES.length * (2 + runtimeEditionCount); // claude + codex + each additive runtime
+  assert(surfaces.length === expected,
+    'the axiom block must be checked on every runtime x forge init surface — expected ' + expected
+      + ', derived ' + surfaces.length + ' (' + surfaces.map(s => s.id).join(', ') + ')');
+
+  for (const s of surfaces) {
+    assert(s.body.includes(axioms),
+      s.id + ' must embed the canonical templates/axioms.md First Principles block byte-identically ' +
       '(drift from templates/axioms.md detected)');
   }
-  console.log('testAxiomBlockByteIdentity: PASSED');
+  console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' surfaces)');
 }
 
 // ---------------------------------------------------------------------------
@@ -10553,8 +10446,6 @@ function buildRegistry() {
   add('testReadPriorityConfig',                           testReadPriorityConfig);
   add('testE2EGitHubMergeFullChain',                      testE2EGitHubMergeFullChain);
   add('testSinkMergeRefusesLiveFolder',                   testSinkMergeRefusesLiveFolder);
-  add('testSinkRefusesLingeringLaneGroup',                testSinkRefusesLingeringLaneGroup);
-  add('testSinkLegacyPathRefusesLingeringLaneGroup',      testSinkLegacyPathRefusesLingeringLaneGroup);
   add('testSinkRefusesDirtyWorktree',                     testSinkRefusesDirtyWorktree);
   add('testProbeHelpersFailClosed',                       testProbeHelpersFailClosed);
   add('testArchiveIntegrityPortedToAllEditions832',       testArchiveIntegrityPortedToAllEditions832);

@@ -17,7 +17,7 @@
 // ONE model tier: there is NO Reasoning/Standard split on Kimi (the Codex inherit
 // precedent). Kimi Code's Agent tool supports only three built-in subagent types
 // (`coder`, `explore`, `plan`) and has no per-dispatch model override — every
-// subagent inherits the session model. The 15 canonical roles therefore ship as
+// subagent inherits the session model. The 14 canonical roles therefore ship as
 // ROLE-CONTRACT Skills (`kaola-role-<role>`): the command dispatch cards are
 // rewritten to `subagent_type="coder"` (write roles) / `"explore"` (read-only
 // roles — computed from the canonical frontmatter `tools:` array, never hand-listed)
@@ -142,9 +142,54 @@ function roleKindMap() {
   return map;
 }
 
+// The roles dispatched as `explore`. Empty is the CORRECT answer for the current roster, not a
+// missing restriction: every canonical role carries Write because every role writes its own
+// findings, and Kimi's `explore` cannot write. Mapping a role to `explore` to express a tool
+// restriction would cost it the ability to persist its evidence, so the restriction is carried by
+// restrictionNote() instead — see the declared divergence there.
 function readOnlyRoles() {
   const map = roleKindMap();
   return Object.keys(map).filter(n => map[n] === 'explore').sort();
+}
+
+// Canonical tools → the capability a role is denied when its profile grants none of them. The same
+// derivation the opencode generator applies to its `permission:` block, so the two editions agree
+// on what a role may do; only the mechanism differs.
+//
+// DECLARED DIVERGENCE: Kimi has no per-role tool configuration at all. Its Agent tool exposes three
+// built-in subagent types (coder/explore/plan) and a Skill is a prompt package, not an agent
+// definition — so on this runtime the restriction can only be CARRIED BY THE ROLE CONTRACT, not
+// enforced by the runtime. Claude enforces it through the frontmatter `tools:` list and opencode
+// through `permission: <axis>: deny`; here it is an instruction the role is bound to follow. Absent
+// this line a Bash-less canonical role would silently gain shell access on kimi, because every role
+// is dispatched as `coder`.
+const CANONICAL_RESTRICTIONS = Object.freeze([
+  { tools: ['write', 'edit'], clause: 'create or modify files' },
+  { tools: ['bash'], clause: 'run shell commands' },
+]);
+
+// The role-contract restriction line for a canonical tool set, or '' when the profile withholds
+// nothing. Derived from the profile; there is no hand-maintained role list to drift.
+function restrictionNote(toolSet) {
+  const denied = CANONICAL_RESTRICTIONS
+    .filter(r => !r.tools.some(t => toolSet.has(t)))
+    .map(r => r.clause);
+  if (!denied.length) return '';
+  return '**Tool restriction:** this role may not ' + denied.join(' and ')
+    + '. If the task cannot be completed without that, report it as a finding and stop — never do it yourself.';
+}
+
+// The roles whose canonical profile withholds a capability, and the clause each is denied. Exported
+// for inspection: this is the set restrictionNote() actually writes into the generated contracts.
+function restrictedRoles() {
+  const out = {};
+  for (const name of listCanonAgents()) {
+    const c = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
+    const toolSet = lowerSet(parseTools(parseFrontmatter(c).fm.tools));
+    const note = restrictionNote(toolSet);
+    if (note) out[name] = note;
+  }
+  return out;
 }
 
 // --- renderers (pure; exported for parity test) ---
@@ -153,6 +198,9 @@ function renderAgent(canonContent, agentName, forge) {
   forge = forge || DEFAULT_FORGE;
   const { fm, body } = parseFrontmatter(canonContent);
   const isReviewer = REVIEWER_ROLES.has(agentName);
+  // Canonical `tools:` is DROPPED from the Skill frontmatter (a Skill is a prompt package), so any
+  // capability the profile withholds has to be restated in the contract or it is lost on kimi.
+  const restriction = restrictionNote(lowerSet(parseTools(fm.tools)));
   const lines = ['---'];
   lines.push('name: kaola-role-' + agentName);
   lines.push('description: ' + (fm.description || ''));
@@ -183,6 +231,10 @@ function renderAgent(canonContent, agentName, forge) {
   const bodyText = rewriteClaudeScriptPaths(body, forge)
     .replace(/--runtime claude\b/g, '--runtime kimi')
     .trim().replace(/\s+$/, '');
+  if (restriction) {
+    lines.push(restriction);
+    lines.push('');
+  }
   lines.push(bodyText);
   let content = lines.join('\n') + '\n';
   if (isReviewer) {
@@ -190,6 +242,107 @@ function renderAgent(canonContent, agentName, forge) {
     content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
   }
   return content;
+}
+
+// The edition's ONE answer to the canonical model-badge instruction. Canonical states that
+// instruction as PROSE ("… carries an explicit `model=` line … never omit it"); Kimi has no
+// per-dispatch model override at all, so every such sentence is restated as this single wording.
+const KIMI_BADGE_GUIDANCE = 'Never pass a per-call model override; sub-agents inherit the session model.';
+
+// The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
+// their own line inside a dispatch card and are removed by stripCardModelPlaceholders, so this
+// matches the INSTRUCTION however it happens to be worded.
+const MODEL_MENTION = /model=/;
+
+// The index at which the sentence containing `at` begins — just past the last sentence terminator
+// before it. A terminator is `.`/`:` + whitespace followed by a capital or a backtick, which is
+// what stops "e.g." (a lowercase follower) from reading as a boundary.
+function sentenceStart(text, at) {
+  const re = /[.:]\s+(?=[A-Z`])/g;
+  let start = 0;
+  let m;
+  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
+  return start;
+}
+
+// Rewrite ONE prose paragraph: if it carries a `model=` mention, replace from the START OF THAT
+// SENTENCE to the end of the paragraph with `guidance`; otherwise return it untouched. Text before
+// that sentence survives verbatim ("Dispatch `doc-updater` with the changed files, …"). Running to
+// the end of the paragraph is deliberate: every observed wording puts the instruction last, and
+// its trailing clauses ("Pass it exactly as shown; never omit it.") are anaphoric continuations
+// that must not outlive the sentence they refer to.
+function rewriteBadgeParagraph(para, guidance) {
+  const at = para.search(MODEL_MENTION);
+  if (at < 0) return para;
+  return para.slice(0, sentenceStart(para, at)) + guidance;
+}
+
+// Restate the canonical model-badge instruction in the edition's wording — ANCHORED to whole
+// sentences, never to the `model="{...}"` token inside one (the kimi twin of the opencode
+// rewrite).
+//
+// This replaces a global unanchored strip that excised the placeholder from INSIDE a prose
+// sentence, leaving the surrounding backticks as a literal empty code span (``) while the
+// instruction still read "Pass it exactly as shown; never omit it" — with nothing shown, beside a
+// dispatch card that no longer carried a `model=` line. A token strip can half-apply; replacing a
+// whole sentence run cannot.
+//
+// Prose only: fenced code blocks pass through untouched. A wording this MISSES is not silently
+// shipped — assertNoBadgeResidue fails the render.
+function rewriteBadgeInstructions(text, guidance) {
+  const out = [];
+  let fenced = false;
+  let para = [];
+  function flushPara() {
+    if (!para.length) return;
+    out.push(rewriteBadgeParagraph(para.join('\n'), guidance));
+    para = [];
+  }
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) {
+      flushPara();
+      fenced = !fenced;
+      out.push(line);
+    } else if (fenced) {
+      out.push(line);
+    } else if (line.trim() === '') {
+      flushPara();
+      out.push(line);
+    } else {
+      para.push(line);
+    }
+  }
+  flushPara();
+  return out.join('\n');
+}
+
+// Card placeholders — the `model="{ROLE_MODEL}"` / `model="{...}"` assignment inside a dispatch
+// card. LINE-anchored (the whole line is the assignment, and the line goes with it), so it can
+// only ever remove a card line. The unanchored predecessor reached into prose; it also left a
+// doubled comma behind, which needed a second global `,{2,}` collapse to repair — removing the
+// line outright leaves nothing to repair.
+function stripCardModelPlaceholders(text) {
+  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
+}
+
+// Fail-loud post-condition. Kimi has no per-dispatch model override, so after the rewrites NO
+// `model=` may survive anywhere on the surface — card placeholders are already gone, and the
+// edition's own guidance names no `model=` token at all. Anything left is a HARD ERROR rather than
+// a silently shipped contradiction: a canonical wording the rewrite did not match, a surviving
+// install-time placeholder, or an empty code span left by a token strip. This is what keeps the
+// transform honest across canonical edits that have not happened yet.
+function assertNoBadgeResidue(text, label) {
+  const probe = text.split(KIMI_BADGE_GUIDANCE).join('');
+  const problems = [];
+  // Exactly two backticks, never three — a ``` fence is not an empty span.
+  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
+  for (const line of probe.split(/\r?\n/)) {
+    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
+  }
+  if (problems.length) {
+    throw new Error('sync-kimi-edition: model-badge residue in ' + (label || '(command)')
+      + ' — the anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
+  }
 }
 
 // kimi-native `kaola_script()` shell resolver (the kimi twin of #544's opencode
@@ -239,9 +392,11 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
 }
 
-function transformCommandBody(body, forge) {
+function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  const lines = body.split(/\r?\n/);
+  // Anchored badge rewrite FIRST, on canonical text only — before the loop below substitutes the
+  // edition's own one-liner, so that guidance is never fed back through the rewrite.
+  const lines = rewriteBadgeInstructions(body, KIMI_BADGE_GUIDANCE).split(/\r?\n/);
   const out = [];
   let i = 0;
   while (i < lines.length) {
@@ -257,7 +412,7 @@ function transformCommandBody(body, forge) {
     if (/^##\s+Agent Model Badge\s*$/.test(line)) {
       while (out.length && out[out.length - 1].trim() === '') out.pop();
       if (out.length) out.push('');
-      out.push('Never pass a per-call model override; sub-agents inherit the session model.');
+      out.push(KIMI_BADGE_GUIDANCE);
       out.push('');
       i++;
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
@@ -320,32 +475,9 @@ function transformCommandBody(body, forge) {
         + 'prompt="First invoke the `kaola-role-' + role + '` Skill and follow its contract for the entire task. ';
     }
   );
-  // Standalone "You MUST pass model="{X_MODEL}" … do not omit the `model=` line."
-  // dispatch instructions that sit OUTSIDE the (now stripped) badge block — e.g.
-  // adapt's planner-dispatch note (whitespace-tolerant: canonical wraps the tail
-  // across a line break). Kimi has no per-dispatch model override at all.
-  text = text.replace(
-    /You MUST pass[^.]*?do not omit\s+the `model=` line\./g,
-    'Never pass a per-call model override; sub-agents inherit the session model.'
-  );
-  // review-fix prose (phase4/phase5/finalize): "For every …, include the explicit
-  // model= parameter in the `Agent(...)` call exactly as documented above — never
-  // omit it." references the (stripped) badge. Rewrite to the kimi inherit guidance,
-  // keeping the dispatch descriptor so the sentence still reads in context.
-  text = text.replace(
-    /For every ([^.]*?), include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
-    'For every $1, never pass a per-call model override; sub-agents inherit the session model.'
-  );
-  // Parenthesized then bare forms — real placeholders first, then literal ellipsis
-  // (same regex family as the opencode transform).
-  text = text.replace(/\s*\(\s*model="\{[A-Z_]+_MODEL\}"\s*\)/g, '');
-  text = text.replace(/\s*model="\{[A-Z_]+_MODEL\}"/g, '');
-  text = text.replace(/\s*\(\s*model="\{\.\.\.\}"\s*\)/g, '');
-  text = text.replace(/\s*model="\{\.\.\.\}"/g, '');
-  // Dispatch-card placeholders leave a doubled comma (",,") when the model= line
-  // collapses into the preceding subagent_type line; collapse any comma run back to a
-  // single comma.
-  text = text.replace(/,{2,}/g, ',');
+  // Card placeholder lines. The prose forms are already restated by rewriteBadgeInstructions
+  // above, so this only ever sees a card.
+  text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // Inline "Step 0a-1" residue mentions in workflow-next (the Path Intent SECTION
@@ -364,6 +496,8 @@ function transformCommandBody(body, forge) {
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped
   // above) is rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text, forge);
+  // Fail loud rather than half-apply: no `model=` may still stand by the time the surface ships.
+  assertNoBadgeResidue(text, label);
   return text;
 }
 
@@ -378,7 +512,7 @@ function renderCommand(canonContent, commandName, forge) {
   lines.push('description: ' + (fm.description || ''));
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body, forge).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge, skillRel(commandName, forge)).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -444,11 +578,41 @@ function retiredSkillDirs(forge) {
     .map(e => e.name);
 }
 
+// The hook files a fresh render produces: the byte-copied scripts plus the generated TOML fragment.
+function expectedHookFiles() {
+  return HOOK_SCRIPTS.concat(['kimi-hooks.toml']);
+}
+
+// Retired BYTE-COPIED artifacts in the generator-owned hooks dir: a file whose extension is one
+// this generator writes there but whose basename it no longer emits (the retired
+// `kaola-workflow-write-lane.sh` / `kaola-workflow-pre-commit.sh` hooks, which nothing registers
+// and which --write kept re-shipping because a generator that only ever ADDS makes every retired
+// artifact immortal).
+//
+// Deliberately narrow. ONE directory, never recursive, regular files only, and only the extensions
+// this generator itself writes there — so it cannot reach a subdirectory or an unrelated file type
+// a user placed alongside. The tree ROOT is never swept.
+function retiredHookFiles(forge) {
+  const dir = path.join(REPO, treeLabel(forge), 'hooks');
+  if (!fs.existsSync(dir)) return [];
+  const expected = new Set(expectedHookFiles());
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(e => e.isFile())
+    .map(e => e.name)
+    .filter(n => ['.sh', '.toml'].includes(path.extname(n)) && !expected.has(n))
+    .sort();
+}
+
 function pruneSkills(forge) {
   let removed = 0;
   for (const name of retiredSkillDirs(forge)) {
     fs.rmSync(path.join(REPO, treeLabel(forge), 'skills', name), { recursive: true, force: true });
     console.log('pruned     ' + treeLabel(forge) + '/skills/' + name + ' (retired surface)');
+    removed++;
+  }
+  for (const f of retiredHookFiles(forge)) {
+    fs.rmSync(path.join(REPO, treeLabel(forge), 'hooks', f), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/hooks/' + f + ' (retired artifact)');
     removed++;
   }
   return removed;
@@ -605,6 +769,11 @@ function runCheck(forge) {
   for (const name of retiredSkillDirs(forge)) {
     mismatches.push({ rel: tree + '/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
+  // Same for the byte-copied hooks: one this generator no longer emits is retired, and --check
+  // called such a tree green until it was reported here.
+  for (const f of retiredHookFiles(forge)) {
+    mismatches.push({ rel: tree + '/hooks/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
+  }
   if (mismatches.length) {
     console.error('sync-kimi-edition[' + forge + ']: PARITY FAILED (' + mismatches.length + ' file(s)):');
     for (const m of mismatches) console.error('  - ' + m.rel + ' — ' + m.reason);
@@ -650,11 +819,15 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT, kimiKaolaScript,
+  rewriteBadgeInstructions, rewriteBadgeParagraph, sentenceStart, stripCardModelPlaceholders,
+  assertNoBadgeResidue, KIMI_BADGE_GUIDANCE,
   renderKimiHooksToml, treeLabel, skillRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForKimi, HOOK_ADAPTATIONS,
+  expectedHookFiles, retiredHookFiles,
   parseFrontmatter, parseTools,
   roleKindMap, readOnlyRoles,
+  CANONICAL_RESTRICTIONS, restrictionNote, restrictedRoles,
   listCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   OUT_SKILLS_DIR, OUT_HOOKS_DIR, REPO,

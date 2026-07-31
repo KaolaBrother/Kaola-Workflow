@@ -931,9 +931,6 @@ for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
 done
 
-# #703: verify the canonical plan-run card shipped (repair-routing.md is the barrier/repair recovery
-# recipe the command cites); a missing card means packaging dropped the docs and operators fly blind.
-
 if [[ "$verification_failed" -ne 0 ]]; then
   exit 1
 fi
@@ -946,10 +943,6 @@ fi
 echo ""
 echo "Open any Claude Code session and run:  /workflow-init"
 echo "Then run implementation cycles with:  /workflow-next"
-echo ""
-# #2 / D-542-01: planner-proven-disjoint parallel write frontiers are default-ON (no operator
-# toggle). Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net.
-echo "Disjoint parallel writes are default-ON (set KAOLA_PARALLEL_WRITES=0 to force serial)."
 echo ""
 
 CLAUDE_DISPATCH_POSTURE="$(detect_claude_dispatch_posture)"

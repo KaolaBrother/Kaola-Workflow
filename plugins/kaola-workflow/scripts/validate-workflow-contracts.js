@@ -165,6 +165,14 @@ const phaseCommands = [
 const retiredPathSelector = ['KAOLA_PATH', ['--workflow', 'path'].join('-'), 'path_not_installed',
   'workflow_path_refused', 'bundle_requires_adaptive'];
 
+// The retired DAG-executor vocabulary. ONE list, two consumers: the next surfaces below, and the
+// injected consumer CLAUDE.md template region on the init surfaces. It was previously an inline
+// literal at the next-surface loop alone, and the template lives ONLY on the init surfaces — so a
+// template rewritten to teach the retired executor passed every guard in this repo. Hoisted rather
+// than copied: two lists of one rule is the drift, not the fix.
+const retiredExecutor = ['workflow-plan.md', 'Node Ledger', 'plan_hash', 'workflow-planner',
+  'post-dominat', 'parallel_safe', 'running-set', 'fan-out cap'];
+
 for (const file of phaseCommands) {
   assert(exists(file), file + ' is missing');
   assertIncludes(file, 'workflow-state.md');
@@ -258,8 +266,7 @@ for (const file of nextSurfaces) {
   assertIncludes(file, 'Irreversible and value-laden calls belong to the user');
 
   // The retired vocabulary must not return on any surface.
-  for (const gone of ['workflow-plan.md', 'Node Ledger', 'plan_hash', 'workflow-planner',
-    'post-dominat', 'parallel_safe', 'running-set', 'fan-out cap']) {
+  for (const gone of retiredExecutor) {
     assertNotIncludes(file, gone);
   }
 }
@@ -460,6 +467,47 @@ assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | cl
 // generated section must stay runtime-neutral (tier vocabulary), never a Claude model noun. Pin the
 // constraint sentence on the root Claude workflow-init surface (the codex validator pins all six).
 assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
+
+// The injected consumer CLAUDE.md template is the only place this repo teaches a downstream project
+// how the workflow runs, and it lives exclusively inside the KW-CLAUDE-TEMPLATE region of the init
+// surfaces. Every retired-vocabulary ban here ran over the next and finalize surfaces, which do not
+// carry the template — so rewriting that region to teach the retired DAG executor passed everything.
+// Ban the SAME list inside the region, and assert the mission-list vocabulary POSITIVELY: absence of
+// retired vocabulary is not presence of correct design, and a blanked region satisfies every ban.
+// Scoped to the region, not the whole surface — the surrounding command prose may legitimately name
+// a retired mechanism while describing its removal.
+{
+  const TEMPLATE_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
+  const TEMPLATE_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  // The rule the template must teach, in the region's own words. Every needle is load-bearing: the
+  // record's name, its four fields, the write discipline, and the uncomputed frontier.
+  const missionListVocabulary = ['mission-list.md', '`item`', '`status`', '`dispatched`', '`result`',
+    'Three write moments', 'the list minus done minus in-flight'];
+  // The rendered root surface AND the skeleton it is generated from, so the defect is red at the
+  // source and not only after a regenerate (same reason the next skeleton is swept above).
+  for (const file of ['commands/workflow-init.md', 'templates/routing/init.skeleton.md']) {
+    const content = read(file);
+    const from = content.indexOf(TEMPLATE_START);
+    const to = content.indexOf(TEMPLATE_END);
+    assert(from !== -1 && to !== -1 && to > from,
+      file + ': KW-CLAUDE-TEMPLATE-START/END markers missing or inverted — every assertion below ' +
+      'would inspect nothing');
+    const template = norm(content.slice(from + TEMPLATE_START.length, to));
+    assert(template.trim().length > 0,
+      file + ': the KW-CLAUDE-TEMPLATE region is empty — the bans below would pass vacuously');
+
+    for (const gone of retiredExecutor) {
+      assert(!template.includes(norm(gone)),
+        file + ': the injected consumer CLAUDE.md template must not teach the retired DAG executor — ' +
+        'found "' + gone + '" inside the KW-CLAUDE-TEMPLATE region');
+    }
+    for (const taught of missionListVocabulary) {
+      assert(template.includes(norm(taught)),
+        file + ': the injected consumer CLAUDE.md template must teach the mission list — the ' +
+        'KW-CLAUDE-TEMPLATE region is missing "' + taught + '"');
+    }
+  }
+}
 
 // issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the
 // route-agnostic terminal routine. Assert canonical present + legacy absent.

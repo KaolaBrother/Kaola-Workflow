@@ -682,6 +682,110 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   assert(threw, 'commandSurfacesForForge refuses an unknown forge instead of returning []');
 }
 
+// ---------------------------------------------------------------------------
+// REGION-REASON — every divergence states WHY it exists.
+//
+// A region records THAT a surface diverges; the reason on the directive line records why. The
+// renderer reads only the condition and makes the reason OPTIONAL, so a bare `<!-- REGION:skill -->`
+// renders identically to an annotated one and nothing anywhere notices. Until this block, the
+// annotations were held by convention alone — and "each divergence either removed, or annotated
+// with the capability difference that justifies it" is an acceptance criterion, not a style note.
+//
+// This pin asserts a reason is PRESENT. It does NOT adjudicate whether the reason is a good one:
+// there is no taxonomy of acceptable reasons here and no observed failure asking for one. That is
+// deliberate and load-bearing — one region pair (init.skeleton.md, the scaffold-tree heading) is
+// annotated with a presentation-shape reason rather than a capability difference, and it passes on
+// presence exactly like every other region, which is the correct outcome. A known residual that
+// says out loud what it is remains legible to a reader; a grammar would only have taught it to
+// phrase itself past the check.
+// ---------------------------------------------------------------------------
+{
+  // Deliberately BROADER than the renderer's own RE_REGION_OPEN. That pattern makes the reason
+  // optional AND would not match a malformed directive at all, so reusing it would let exactly the
+  // two shapes this block exists to catch — the bare region and the typo'd one — pass unseen.
+  const REGION_OPEN_ANY = /^<!--\s*REGION:/;
+  const REGION_WITH_REASON = /^<!--\s*REGION:[A-Za-z0-9_+,-]+\s+—\s+(\S[\s\S]*?)\s*-->$/;
+
+  // Factored out so it can be mutation-proved below without writing to a real skeleton.
+  const regionsMissingReason = text => text.split('\n')
+    .map((line, i) => ({ text: line.trim(), n: i + 1 }))
+    .filter(x => REGION_OPEN_ANY.test(x.text) && !REGION_WITH_REASON.test(x.text));
+  const reasonsIn = text => text.split('\n')
+    .map(l => (l.trim().match(REGION_WITH_REASON) || [])[1])
+    .filter(Boolean);
+
+  const routingDir = path.resolve(__dirname, '..', 'templates', 'routing');
+  const registered = [...new Set(GENERATED_SURFACES.map(r => r.skeleton))].sort();
+  const onDisk = fs.readdirSync(routingDir).filter(f => f.endsWith('.skeleton.md')).sort();
+  // An unregistered skeleton would carry regions this scan never reads, so the scan's own domain is
+  // asserted rather than assumed.
+  eq(onDisk.join(','), registered.join(','),
+    'REGION-reason: the skeletons on disk are exactly the registered ones, so the scan below sees '
+    + 'every region there is');
+
+  let totalRegions = 0;
+  const allReasons = [];
+  for (const skeleton of registered) {
+    const text = fs.readFileSync(path.join(routingDir, skeleton), 'utf8');
+    const opens = text.split('\n').filter(l => REGION_OPEN_ANY.test(l.trim())).length;
+    const missing = regionsMissingReason(text);
+    totalRegions += opens;
+    allReasons.push(...reasonsIn(text));
+    assert(missing.length === 0,
+      `REGION-reason: every REGION directive in ${skeleton} carries a reason after the em dash — `
+      + `${missing.length} of ${opens} do not: `
+      + missing.map(m => `${skeleton}:${m.n} ${JSON.stringify(m.text.slice(0, 60))}`).join(', '));
+  }
+  // Non-vacuity by witness: a scan pointed at the wrong directory, or a grammar change that stopped
+  // matching, finds zero regions and every assertion above passes for the wrong reason.
+  assert(totalRegions > 0,
+    `REGION-reason: the scan found ZERO region directives across ${JSON.stringify(registered)} — `
+    + 'it is looking in the wrong place or the directive grammar moved');
+  eq(allReasons.length, totalRegions,
+    'REGION-reason: every region found is also a region whose reason was extracted (the two scans '
+    + 'agree, so neither is silently matching a different line set)');
+
+  // The reason is AUTHORING metadata. The renderer emits unrecognised comment lines verbatim, so a
+  // reason that reached a shipped surface would be a new defect — consumer-facing text carrying an
+  // internal justification for a divergence the consumer cannot see.
+  const repoRoot = path.resolve(__dirname, '..');
+  // Deduplicated: the preflight-gate reason is written identically in two skeletons, and reporting
+  // one leak twice makes a reader count defects that are not there.
+  const distinctReasons = [...new Set(allReasons)];
+  let leaked = 0;
+  for (const row of GENERATED_SURFACES) {
+    const surface = fs.readFileSync(path.join(repoRoot, row.path), 'utf8');
+    for (const reason of distinctReasons) {
+      if (surface.includes(reason)) {
+        leaked++;
+        assert(false, `REGION-reason: the reason ${JSON.stringify(reason.slice(0, 60))} reached the `
+          + `shipped surface ${row.path} — reasons are authoring metadata and must not render`);
+      }
+    }
+  }
+  assert(leaked === 0,
+    `REGION-reason: no region reason reaches any of the ${GENERATED_SURFACES.length} shipped surfaces`);
+
+  // MUTATION PROOF, both directions, against REAL skeleton bytes held in memory — the tree is never
+  // written. Stripping the reason from one real region must be seen; restoring it must clear.
+  {
+    const victim = registered.find(s => reasonsIn(fs.readFileSync(path.join(routingDir, s), 'utf8')).length > 0);
+    assert(!!victim, 'REGION-reason mutation: at least one skeleton carries an annotated region to strip');
+    const original = fs.readFileSync(path.join(routingDir, victim), 'utf8');
+    const target = original.split('\n').find(l => REGION_WITH_REASON.test(l.trim()));
+    const bare = target.trim().replace(REGION_WITH_REASON, (m, r) => m.replace(' — ' + r, ''));
+    assert(bare !== target.trim() && REGION_OPEN_ANY.test(bare) && !/—/.test(bare),
+      `REGION-reason mutation: the stripped form is a bare region directive — got ${JSON.stringify(bare)}`);
+    const stripped = original.replace(target, bare);
+    eq(regionsMissingReason(stripped).length, 1,
+      `REGION-reason mutation (RED): stripping the reason from ${victim} must be detected`);
+    eq(regionsMissingReason(original).length, 0,
+      `REGION-reason mutation (GREEN): the unmodified ${victim} has no unannotated region`);
+    eq(fs.readFileSync(path.join(routingDir, victim), 'utf8'), original,
+      'REGION-reason mutation: the real skeleton on disk was never written');
+  }
+}
+
 if (failed > 0) {
   console.error(`\ntest-generate-routing-surfaces: ${failed} assertion(s) FAILED (${passed} passed).`);
   process.exit(1);

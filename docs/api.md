@@ -1020,13 +1020,14 @@ usage: kaola-workflow-release.js --verify | --prepare --version X.Y.Z [--codex-v
 ```
 --prepare --version X.Y.Z
 commit only the release files
-run the offline full chain receipt
+run the offline full chain receipt (skip if a green receipt already carries over)
 pass kaola-workflow-run-chains.js --release-check
 --tag --version X.Y.Z
 ```
 
 The `--release-check` step is the gate documented above. `--prepare` bumps the versioned files;
-`--tag` creates the annotated tag at the verified commit; `--push` publishes.
+`--tag` creates the annotated tag at the verified commit — the same route `--tag` and
+`--release-check` now share — and `--push` publishes.
 
 ## Installation and edition sync
 
@@ -1152,6 +1153,12 @@ primitives.
 
 **`scripts/kaola-workflow-roadmap.js`** — see Roadmap Operations above.
 
+**`scripts/kaola-workflow-ledger-compare.js`** — `countComplete(missionListText)`,
+`compareLedgers(srcText, destText)`. Record-regression guard for the finalize Step-8a artifact
+mirror: fails closed only when the destination `mission-list.md` records strictly more
+`status: done` items than the source about to overwrite it, fail-open otherwise. Forge-neutral
+(byte-identical across editions); required by `kaola-workflow-claim.js`.
+
 ### GitLab edition
 
 **`kaola-gitlab-workflow-sink-merge.js`** — `classifyMergeError(error)` (same contract as GitHub,
@@ -1179,7 +1186,8 @@ checks both the live folder and the archive before updating state, returning
 returns `{pr, project}`, updating the `## Sink` block with `pr_url`, `pr_number`, `full_name` and
 `project_html_url`.
 
-**`kaola-gitea-workflow-sink-merge.js`** — `ensureMergeReady(args, opts)`,
-`readProjectInfo(root, project)`, `finalValidationPassed(root, project)`.
+**`kaola-gitea-workflow-sink-merge.js`** — `classifyMergeError(error)`, `closeLinkedIssue(root,
+project, issueIid, opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,
+`runDirectMerge(args, opts)`, `assertBranchHasNonWorkflowChanges(...)`.
 
 **`kaola-gitea-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root)`.

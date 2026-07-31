@@ -47,4 +47,3 @@ scripts/test-active-folders-field-parity.js
 scripts/generate-routing-surfaces.js --check
 scripts/test-generate-routing-surfaces.js
 scripts/test-install-all.js
-scripts/test-runtime-lexicon-parity.js

@@ -12,11 +12,19 @@
 //                                 context (surface_type x forge)
 //   <!-- SPLICE:name -->          replaced by a mid-paragraph variant resolved
 //                                 for the render context
-//   <!-- REGION:cond -->          keep the body only when cond matches the
+//   <!-- REGION:cond — why -->    keep the body only when cond matches the
 //   ...body...                    context, else drop the whole region. cond is
 //   <!-- /REGION -->              a ','-joined OR of '+'-joined ANDs of
 //                                 surface_type / forge tags, e.g.
 //                                 `command+github` or `gitlab,gitea`.
+//
+// A REGION open directive carries its own justification after an em dash: the
+// capability difference that makes the divergence real, in one clause, on the
+// same line as the condition. It is authoring metadata — the renderer reads the
+// condition and drops the rest, so no reason ever reaches a shipped surface. A
+// region records THAT a surface diverges; the reason records WHY, and a region
+// whose reason cannot name a runtime difference is drift to be collapsed rather
+// than a divergence to be kept.
 //
 // REGION vs SPLICE is not a style choice. A SPLICE always emits exactly one
 // value, so its smallest possible rendering is one line — it cannot express
@@ -152,7 +160,11 @@ function commandSurfacesForForge(forge) {
 // ---------------------------------------------------------------------------
 const RE_SLOT = /^<!--\s*SLOT:([A-Za-z0-9_-]+)\s*-->$/;
 const RE_SPLICE = /^<!--\s*SPLICE:([A-Za-z0-9_-]+)\s*-->$/;
-const RE_REGION_OPEN = /^<!--\s*REGION:([A-Za-z0-9_+,-]+)\s*-->$/;
+// The optional ` — why` tail is anchored on the em dash so a typo in the
+// condition cannot be silently swallowed as prose: a directive that fails this
+// match is emitted as literal text and its `<!-- /REGION -->` then throws
+// 'unmatched /REGION', which is the loud failure a mistyped tag deserves.
+const RE_REGION_OPEN = /^<!--\s*REGION:([A-Za-z0-9_+,-]+)(?:\s+—\s+.*?)?\s*-->$/;
 const RE_REGION_CLOSE = /^<!--\s*\/REGION\s*-->$/;
 
 // condMatches — a ','-joined OR of '+'-joined ANDs; each tag matches

@@ -63,8 +63,9 @@ const schema = require('./kaola-workflow-adaptive-schema');
 // #708: the reviewer-profile generator owns the deterministic resolved_profile_hash stamping
 // (sha256 of the file with the hash field zeroed). The opencode transform rewrites the
 // frontmatter, so the Claude hash no longer binds these bytes; we re-stamp a fresh hash over
-// the opencode bytes so resolveReviewerProfileIdentity can bind schema-2 review receipts to
-// the exact profile bytes that produced them.
+// the opencode bytes so the stamp binds the profile that actually ships. The runtime resolver
+// that once read it back to bind a review receipt retired with the node executor; the stamp is
+// kept because test-opencode-edition.js verifies it against canonical, not for a runtime reader.
 const reviewerGen = require('./generate-reviewer-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
@@ -139,6 +140,29 @@ function lowerSet(arr) {
   return new Set(arr.map(x => String(x).toLowerCase()));
 }
 
+// Canonical tool → the opencode permission axis that governs it. A generated agent's restrictions
+// are DERIVED from its canonical profile's `tools:` list: an axis is denied when canonical grants
+// none of the tools that axis governs. The profile is the source of truth; there is no role list
+// here to drift from it.
+//
+// This replaces a "neither Write nor Edit" predicate that NO role satisfied — all 14 canonical
+// roles carry Write (every role writes its own findings), so the restriction branch never fired and
+// all 14 generated agents shipped unrestricted. The emitter was fine; the predicate was the defect.
+//
+// DECLARED DIVERGENCE — `edit`: opencode has no `write` permission of its own. Its write tool asks
+// the `edit` permission, so denying `edit` also removes the ability to create a file. A role granted
+// Write but not Edit therefore CANNOT have Edit denied here without losing Write, and keeps the edit
+// tool on opencode. That is a coupling in the runtime, not an incidental choice in this generator.
+const PERMISSION_AXES = Object.freeze([
+  { axis: 'edit', tools: ['write', 'edit'] },
+  { axis: 'bash', tools: ['bash'] },
+]);
+
+// The axes to deny for a canonical tool set — those granting none of their governed tools.
+function deniedPermissionAxes(toolSet) {
+  return PERMISSION_AXES.filter(a => !a.tools.some(t => toolSet.has(t))).map(a => a.axis);
+}
+
 // Canonical model tier: opus → reasoning, everything else (sonnet/inherit) → standard.
 function roleTier(canonModelValue) {
   return String(canonModelValue || '').toLowerCase() === 'opus' ? 'reasoning' : 'standard';
@@ -182,8 +206,7 @@ function renderAgent(canonContent, agentName, forge) {
   const { fm, body } = parseFrontmatter(canonContent);
   const tools = parseTools(fm.tools);
   const toolSet = lowerSet(tools);
-  const readOnly = !toolSet.has('write') && !toolSet.has('edit');
-  const hasBash = toolSet.has('bash');
+  const denied = deniedPermissionAxes(toolSet);
   const isReviewer = REVIEWER_ROLES.has(agentName);
 
   const lines = ['---'];
@@ -192,17 +215,16 @@ function renderAgent(canonContent, agentName, forge) {
   // No model field: standard tier inherits opencode.json "model"; reasoning tier
   // is resolved by the opencode.json agent.<role>.model override. Keeping generated
   // agents model-agnostic is what lets the user own both tiers in one file.
-  if (readOnly) {
+  if (denied.length) {
     lines.push('permission:');
-    lines.push('  edit: deny');
-    if (!hasBash) lines.push('  bash: deny');
+    for (const axis of denied) lines.push('  ' + axis + ': deny');
   }
   // #708: schema-2 reviewer identity. The opencode reviewer profile carries the runtime-neutral
   // behavior contract (version + hash) from the canonical Claude source, plus a freshly-stamped
   // resolved_profile_hash over the transformed opencode bytes (NOT the Claude hash — the
-  // frontmatter differs, so the Claude hash no longer binds these bytes). Without these fields
-  // resolveReviewerProfileIdentity refuses with review_profile_identity_unavailable, hard-blocking
-  // every review-gated adaptive plan on opencode. The hash is re-stamped AFTER the full content
+  // frontmatter differs, so the Claude hash no longer binds these bytes). The runtime resolver
+  // these fields once fed is retired with the node executor, so their consumer today is the
+  // edition suite, which checks the stamp against canonical. The hash is re-stamped AFTER the full content
   // is assembled (below) so it binds every rendered byte.
   if (isReviewer) {
     if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
@@ -248,6 +270,113 @@ const OPENCODE_BADGE_BLOCK = [
   '',
 ].join('\n');
 
+// The edition's ONE answer to the canonical model-badge instruction. Canonical states that
+// instruction as PROSE ("… carries an explicit `model=` line … never omit it"); opencode has no
+// per-call `model=` at all, so every such sentence is restated as this single wording.
+const OPENCODE_BADGE_GUIDANCE =
+  'Dispatch the role via `subagent_type`; its effort variant resolves centrally from '
+  + "`opencode.json` (reasoning-tier roles use the model's TOP effort, standard-tier its SECOND). "
+  + 'Never pass a per-call `model=`.';
+
+// The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
+// their own line inside a fenced dispatch card and are removed by stripCardModelPlaceholders, so
+// this matches the INSTRUCTION however it happens to be worded.
+const MODEL_MENTION = /model=/;
+
+// The index at which the sentence containing `at` begins — just past the last sentence terminator
+// before it. A terminator is `.`/`:` + whitespace followed by a capital or a backtick, which is
+// what stops "e.g." (a lowercase follower) from reading as a boundary.
+function sentenceStart(text, at) {
+  const re = /[.:]\s+(?=[A-Z`])/g;
+  let start = 0;
+  let m;
+  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
+  return start;
+}
+
+// Rewrite ONE prose paragraph: if it carries a `model=` mention, replace from the START OF THAT
+// SENTENCE to the end of the paragraph with `guidance`; otherwise return it untouched. Text
+// before that sentence survives verbatim ("Dispatch `doc-updater` with the changed files, …").
+// Running to the end of the paragraph is deliberate: every observed wording puts the instruction
+// last, and its trailing clauses ("Pass it exactly as shown; never omit it.") are anaphoric
+// continuations that must not outlive the sentence they refer to.
+function rewriteBadgeParagraph(para, guidance) {
+  const at = para.search(MODEL_MENTION);
+  if (at < 0) return para;
+  return para.slice(0, sentenceStart(para, at)) + guidance;
+}
+
+// Restate the canonical model-badge instruction in the edition's wording — ANCHORED to whole
+// sentences, never to the `model="{...}"` token inside one.
+//
+// This replaces a global unanchored strip that excised the placeholder from INSIDE a prose
+// sentence, leaving the surrounding backticks as a literal empty code span (``) while the
+// instruction still read "Pass it exactly as shown; never omit it" — with nothing shown, beside a
+// dispatch card that no longer carried a `model=` line, in a file that had already said the
+// opposite 100 lines earlier. A token strip can half-apply; replacing a whole sentence run cannot.
+//
+// Prose only: fenced code blocks pass through untouched. A wording this MISSES is not silently
+// shipped — assertNoBadgeResidue fails the render.
+function rewriteBadgeInstructions(text, guidance) {
+  const out = [];
+  let fenced = false;
+  let para = [];
+  function flushPara() {
+    if (!para.length) return;
+    out.push(rewriteBadgeParagraph(para.join('\n'), guidance));
+    para = [];
+  }
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) {
+      flushPara();
+      fenced = !fenced;
+      out.push(line);
+    } else if (fenced) {
+      out.push(line);
+    } else if (line.trim() === '') {
+      flushPara();
+      out.push(line);
+    } else {
+      para.push(line);
+    }
+  }
+  flushPara();
+  return out.join('\n');
+}
+
+// Card placeholders — the `model="{ROLE_MODEL}"` / `model="{...}"` assignment inside a dispatch
+// card. LINE-anchored (the whole line is the assignment, and the line goes with it), so it can
+// only ever remove a card line. The unanchored predecessor reached into prose; it also left a
+// doubled comma behind, which needed a second global `,{2,}` collapse to repair — removing the
+// line outright leaves nothing to repair.
+function stripCardModelPlaceholders(text) {
+  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
+}
+
+// Fail-loud post-condition. After the rewrites the only `model=` text this edition may ship is its
+// OWN guidance; anything else is a HARD ERROR rather than a silently shipped contradiction —
+// a canonical wording the rewrite did not match, a surviving install-time placeholder, or an empty
+// code span left by a token strip. This is what keeps the transform honest across canonical edits
+// that have not happened yet: a reworded instruction fails the render instead of half-applying.
+function assertNoBadgeResidue(text, label) {
+  // Scan the WHOLE surface, fenced blocks included: the card placeholders are already gone by
+  // this point, so ANY surviving `model=` is residue wherever it sits. Only the edition's own two
+  // wordings are subtracted first.
+  const probe = text
+    .split(OPENCODE_BADGE_BLOCK).join('')
+    .split(OPENCODE_BADGE_GUIDANCE).join('');
+  const problems = [];
+  // Exactly two backticks, never three — a ``` fence is not an empty span.
+  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
+  for (const line of probe.split(/\r?\n/)) {
+    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
+  }
+  if (problems.length) {
+    throw new Error('sync-opencode-edition: model-badge residue in ' + (label || '(command)')
+      + ' — the anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
+  }
+}
+
 // opencode-native `kaola_script()` shell resolver (issue #544, folded into #543). The canonical
 // resolver ships a CLAUDE search path verbatim — `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow`
 // (a plugin-resident copy may ALSO add the gitlab/gitea forge dirs). On the opencode edition that is a
@@ -290,9 +419,11 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
 }
 
-function transformCommandBody(body, forge) {
+function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  const lines = body.split(/\r?\n/);
+  // Anchored badge rewrite FIRST, on canonical text only — before the loop below substitutes
+  // OPENCODE_BADGE_BLOCK, so the edition's own guidance is never fed back through the rewrite.
+  const lines = rewriteBadgeInstructions(body, OPENCODE_BADGE_GUIDANCE).split(/\r?\n/);
   const out = [];
   let i = 0;
   while (i < lines.length) {
@@ -352,41 +483,14 @@ function transformCommandBody(body, forge) {
     i++;
   }
   let text = out.join('\n');
-  // plan-run dispatch prose: opencode applies the effort variant per-role (central), so the
-  // Claude "Pass model=dispatch.model (e.g. model="{ROLE_MODEL}")" instruction becomes a note
-  // that the role selects the variant and dispatch.model records the planner's tier intent only.
-  text = text.replace(
-    /Pass `model=dispatch\.model` \(the `model` field from `dispatch`, e\.g\.\s*`model="\{[A-Z_]+_MODEL\}"`\) and `dispatch\.nonce`/g,
-    "The role's effort variant is applied centrally per opencode.json (reasoning-tier roles → the model's TOP effort, standard-tier roles → its SECOND); `dispatch.model` records the tier intent only. Pass `dispatch.nonce`"
-  );
-  // Standalone "You MUST pass model="{ROLE_MODEL}" … do not omit the model= line." dispatch
-  // instructions that sit OUTSIDE the badge block (e.g. adapt's planner-dispatch note). The
-  // badge-block rewrite handles the in-block ones; this catches the survivors.
-  text = text.replace(
-    /You MUST pass[^.]*?do not omit\s+the `model=` line\./g,
-    "Dispatch the role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier → the model's TOP effort, standard-tier → its SECOND). Never pass a per-call `model=`."
-  );
-  // review-fix prose (phase4/phase5/finalize): "For every …, include the explicit model=
-  // parameter … as documented above — never omit it" references the badge (now replaced to
-  // say "do NOT pass model="). Whitespace-flexible (\s+) so newlines between any tokens match.
-  // Rewrite the whole sentence to the opencode variant guidance.
-  text = text.replace(
-    /For every[^.]*?include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
-    "Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier roles use the model's TOP effort, standard-tier its SECOND). Never pass a per-call `model=`."
-  );
   // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
   // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
   // or inline `Agent(...)` code spans.
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
-  // Parenthesized then bare forms — real placeholders first, then literal ellipsis.
-  text = text.replace(/\s*\(\s*model="\{[A-Z_]+_MODEL\}"\s*\)/g, '');
-  text = text.replace(/\s*model="\{[A-Z_]+_MODEL\}"/g, '');
-  text = text.replace(/\s*\(\s*model="\{\.\.\.\}"\s*\)/g, '');
-  text = text.replace(/\s*model="\{\.\.\.\}"/g, '');
-  // Dispatch-card placeholders leave a doubled comma (",,") when the model= line collapses
-  // into the preceding subagent_type line; collapse any comma run back to a single comma.
-  text = text.replace(/,{2,}/g, ',');
+  // Card placeholder lines. The prose forms are already restated by rewriteBadgeInstructions
+  // above, so this only ever sees a card.
+  text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // #F6: the former adapt repair-loop strip (`text.replace(/downgrade to full path \/\s*/g,'')`)
@@ -416,10 +520,13 @@ function transformCommandBody(body, forge) {
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped above) is
   // rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text, forge);
+  // Fail loud rather than half-apply: nothing but the edition's own guidance may still say
+  // `model=` by the time the surface ships.
+  assertNoBadgeResidue(text, label);
   return text;
 }
 
-function renderCommand(canonContent, forge) {
+function renderCommand(canonContent, forge, label) {
   const { fm, body } = parseFrontmatter(canonContent);
   const lines = ['---'];
   lines.push('description: ' + (fm.description || ''));
@@ -428,7 +535,7 @@ function renderCommand(canonContent, forge) {
   // .opencode/agent/* subagents via the task tool, so no `agent:` is set.
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body, forge).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge, label).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -667,7 +774,7 @@ function writeCommands(forge) {
   let wrote = 0;
   for (const file of listCanonCommands(forge)) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
-    const out = renderCommand(canon, forge);
+    const out = renderCommand(canon, forge, treeLabel(forge) + '/command/' + file);
     const dest = path.join(out_dir, file);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       fs.writeFileSync(dest, out);
@@ -750,9 +857,39 @@ function retiredMdFiles(outDir, expectedBasenames) {
     .sort();
 }
 
+// Retired BYTE-COPIED artifacts in a generator-owned subdirectory: a file whose extension is one
+// this generator writes into that dir but whose basename it no longer emits (the retired
+// `kaola-workflow-write-lane.sh` / `kaola-workflow-pre-commit.sh` hooks, which nothing registers
+// and which --write kept re-shipping because a generator that only ever ADDS makes every retired
+// artifact immortal).
+//
+// Deliberately narrow. It looks at ONE directory, never recurses, skips anything that is not a
+// regular file, and only considers the extensions this generator itself writes there — so it
+// cannot reach `.opencode/node_modules/`, the tree's own `.gitignore`, or any subdirectory or
+// unrelated file type a user placed alongside. The tree ROOT is never swept.
+function retiredCopiedFiles(outDir, expectedBasenames, extensions) {
+  if (!fs.existsSync(outDir)) return [];
+  const expected = new Set(expectedBasenames);
+  return fs.readdirSync(outDir, { withFileTypes: true })
+    .filter(e => e.isFile())
+    .map(e => e.name)
+    .filter(n => extensions.includes(path.extname(n)) && !expected.has(n))
+    .sort();
+}
+
 function pruneRetired(forge) {
   const dirs = outDirs(forge);
   let removed = 0;
+  for (const f of retiredCopiedFiles(dirs.hooks, HOOK_SCRIPTS, ['.sh'])) {
+    fs.rmSync(path.join(dirs.hooks, f), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/hooks/' + f + ' (retired artifact)');
+    removed++;
+  }
+  for (const f of retiredCopiedFiles(dirs.plugins, PLUGIN_SCRIPTS, ['.js'])) {
+    fs.rmSync(path.join(dirs.plugins, f), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/plugins/' + f + ' (retired artifact)');
+    removed++;
+  }
   const cmds = retiredMdFiles(dirs.command, listCanonCommands(forge).map(f => f.slice(0, -3)));
   for (const f of cmds) {
     fs.rmSync(path.join(dirs.command, f), { force: true });
@@ -814,7 +951,7 @@ function runCheck(forge) {
       mismatches.push({ rel, reason: 'missing generated command' });
       continue;
     }
-    const expected = renderCommand(canon, forge);
+    const expected = renderCommand(canon, forge, rel);
     if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
   for (const script of HOOK_SCRIPTS) {
@@ -857,6 +994,14 @@ function runCheck(forge) {
   }
   for (const f of retiredMdFiles(dirs.agent, listCanonAgents())) {
     mismatches.push({ rel: tree + '/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+  }
+  // Same for the byte-copied artifacts: a hook or plugin this generator no longer emits is retired,
+  // and --check called such a tree green until it was reported here.
+  for (const f of retiredCopiedFiles(dirs.hooks, HOOK_SCRIPTS, ['.sh'])) {
+    mismatches.push({ rel: tree + '/hooks/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
+  }
+  for (const f of retiredCopiedFiles(dirs.plugins, PLUGIN_SCRIPTS, ['.js'])) {
+    mismatches.push({ rel: tree + '/plugins/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
   }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
@@ -923,9 +1068,12 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderAdaptiveConfig, renderNeutralConfig,
   transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
+  rewriteBadgeInstructions, rewriteBadgeParagraph, sentenceStart, stripCardModelPlaceholders,
+  assertNoBadgeResidue, OPENCODE_BADGE_GUIDANCE, OPENCODE_BADGE_BLOCK,
   opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,
+  PERMISSION_AXES, deniedPermissionAxes,
   topTierRoles, standardTierRoles,
   parseModelProvider, detectInheritModel, buildAdaptOpts,
   listCanonAgents, listCanonCommands,
@@ -936,5 +1084,5 @@ module.exports = {
   CANON_AGENTS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
   OUT_AGENT_DIR, OUT_COMMAND_DIR, OUT_HOOKS_DIR, OUT_PLUGINS_DIR, OPENCODE_JSON, REPO,
   HOOK_SCRIPTS, PLUGIN_SCRIPTS,
-  writePlugin,
+  writePlugin, retiredMdFiles, retiredCopiedFiles, pruneRetired,
 };

@@ -1,5 +1,5 @@
 <!-- SLOT:fz-frontmatter -->
-<!-- REGION:skill -->
+<!-- REGION:skill — the gate resolves the one enabled edition from `codex plugin list --json` and runs the preflight out of that plugin-cache tuple; neither the CLI nor the cache exists on the command runtime -->
 
 <!-- PIN: codex-profile-preflight -->
 ## Codex Profile Freshness Gate
@@ -101,7 +101,7 @@ result, and you are the only party with enough context to be.
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
 
-<!-- REGION:command -->
+<!-- REGION:command — the `model="{...}"` placeholders are filled at install time for this surface; the skill surface has no placeholder to fill and resolves each role's model from its installed profile at spawn time -->
 ## Agent Model Badge
 
 Every subagent dispatch below carries an explicit `model=` line — the installer fills each
@@ -137,8 +137,8 @@ or tooling; the review gate for a review finding. There is no mandated mode, no 
 and no approval attached to that choice. Write fix output to `.cache/final-validation-fix-{n}.md`
 and rerun the exact command that failed.
 
-<!-- REGION:command -->
-Routed-fix dispatches, when you dispatch one — include the `model=` line exactly:
+<!-- REGION:command — the `Agent(...)` call form with an installer-filled `model="{...}"` placeholder is this surface's dispatch shape; the skill surface spawns the same roles by name with no call block to show -->
+Routed-fix dispatches, when you dispatch one:
 
 ```text
 Agent(
@@ -207,11 +207,8 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
 
-<!-- REGION:command -->
-Dispatch `doc-updater` with the changed files, the checklist, and the working directory. Every
-dispatch below carries an explicit `model=` line — the installer fills each `model="{...}"`
-placeholder from the agent's own profile, and it is what shows the model badge. Pass it exactly as
-shown; never omit it.
+<!-- REGION:command — the `Agent(...)` call form with an installer-filled `model="{...}"` placeholder is this surface's dispatch shape; the skill surface spawns the same role by name with no call block to show -->
+Dispatch `doc-updater` with the changed files, the checklist, and the working directory.
 
 ```text
 Agent(
@@ -222,7 +219,7 @@ Agent(
 )
 ```
 <!-- /REGION -->
-<!-- REGION:skill -->
+<!-- REGION:skill — the spawn counterpart of the `Agent(...)` block above: this runtime names the role and resolves its model from the installed profile, so there is no call block and no placeholder -->
 Delegate to the `doc-updater` role with the changed files, the checklist, and
 `Working directory: ${ACTIVE_WORKTREE_PATH}`. Pass the role's configured model on the spawn call.
 Update docs only when behavior, API, setup, architecture, environment, roadmap, or user-facing

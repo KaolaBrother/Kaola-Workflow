@@ -84,58 +84,6 @@ function run(script) {
   }
 }
 
-// #552: the FORGE sink-merge lingering-lane_group fail-closed backstop (hand-port parity with canonical).
-// The gitea sink-merge is a DIVERGENT hand-port with NO byte-parity guard, so this functional test is the
-// only regression lock against the hand-port drifting (the #550 lesson). A residual lane_group key at sink
-// time means unmerged leg work, so the sink must refuse and main must NOT advance.
-function testGiteaSinkRefusesLingeringLaneGroup() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-552-sink-')));
-  const sinkScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-merge.js');
-  const lingering = JSON.stringify({ state: 'open', nodes: [{ id: 'B', role: 'tdd-guide' }], lane_group: { group_id: 'lane-9552', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9552/A' }, B: { legPath: '.kw/legs/issue-9552/B' } } } }, null, 2);
-  try {
-    G.exec(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
-    G.exec(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8', stdio: 'pipe' });
-    G.exec(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8', stdio: 'pipe' });
-    fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-    G.exec(tmp, ['add', 'README.md'], { encoding: 'utf8', stdio: 'pipe' });
-    G.exec(tmp, ['commit', '-m', 'init'], { encoding: 'utf8', stdio: 'pipe' });
-    G.exec(tmp, ['checkout', '-b', 'workflow/issue-9552'], { encoding: 'utf8', stdio: 'pipe' });
-    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
-    G.exec(tmp, ['add', 'feature.txt'], { encoding: 'utf8', stdio: 'pipe' });
-    G.exec(tmp, ['commit', '-m', 'feat: issue 9552'], { encoding: 'utf8', stdio: 'pipe' });
-    G.exec(tmp, ['checkout', 'main'], { encoding: 'utf8', stdio: 'pipe' });
-    // RED (live location).
-    const liveCache = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
-    fs.mkdirSync(liveCache, { recursive: true });
-    fs.writeFileSync(path.join(liveCache, 'running-set.json'), lingering);
-    const mainBefore = G.exec(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).trim();
-    const r1 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-    assert.notStrictEqual(r1.status, 0, 'gitea #552: sink must refuse on a lingering lane_group, got status ' + r1.status);
-    const p1 = JSON.parse(String(r1.stdout || '').trim().split('\n').pop());
-    assert.strictEqual(p1.reason, 'lingering_lane_group', 'gitea #552: typed refusal lingering_lane_group, got ' + JSON.stringify(p1));
-    assert.strictEqual(G.exec(tmp, ['rev-parse', 'main'], { encoding: 'utf8' }).trim(), mainBefore, 'gitea #552: main must NOT advance');
-    // RED (archive location): dual-location read.
-    fs.rmSync(liveCache, { recursive: true, force: true });
-    const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9552', '.cache');
-    fs.mkdirSync(archCache, { recursive: true });
-    fs.writeFileSync(path.join(archCache, 'running-set.json'), lingering);
-    const r2 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-    const p2 = JSON.parse(String(r2.stdout || '').trim().split('\n').pop());
-    assert.strictEqual(p2.reason, 'lingering_lane_group', 'gitea #552: dual-location (archive) refusal, got ' + JSON.stringify(p2));
-    // GREEN (no false-positive): a running-set with NO lane_group key must NOT trip the backstop.
-    fs.rmSync(archCache, { recursive: true, force: true });
-    fs.mkdirSync(liveCache, { recursive: true });
-    fs.writeFileSync(path.join(liveCache, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }, null, 2));
-    const r3 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-    let p3 = {};
-    try { p3 = JSON.parse(String(r3.stdout || '').trim().split('\n').pop()); } catch (_) {}
-    assert.notStrictEqual(p3.reason, 'lingering_lane_group', 'gitea #552 GREEN: a cleared running-set (no lane_group key) must NOT trip the backstop, got ' + JSON.stringify(p3));
-    console.log('testGiteaSinkRefusesLingeringLaneGroup: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
 function testFallbackGuardsAfterArchive() {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-fallback-archive-'));
   try {
@@ -201,7 +149,6 @@ function testFallbackGuardsAfterArchive() {
 }
 
 testFallbackGuardsAfterArchive();
-testGiteaSinkRefusesLingeringLaneGroup();
 
 function _initGitRepo(root) {
   let r = G.git(root, ['init'], { encoding: 'utf8' });

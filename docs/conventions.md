@@ -300,7 +300,7 @@ Three roles are exceptions handled by the generator, not by hand: see § Generat
 
 This is deliberate, and it is what `run-chains.js` already does: `resolveChains` maps the `claude` chain to the sampled command with no override, so every chain receipt — release receipts included — has always been fast-gate evidence. The rule now matches the tool instead of contradicting it.
 
-- **What the fast gate does NOT execute on a given run.** One suite is sampled: `simulate-workflow-walkthrough` runs `--shard auto/12`, so 11 of every 12 scenarios are skipped per run. Four are deferred whole — `test-claim-hardening`, `test-sink-merge`, `test-release`, `test-run-chains` — because they are not registry-backed, so sampling is unavailable and whole-suite deferral was the only option. Read the current membership off `package.json` rather than this list: the fast gate is the `test:kaola-workflow:claude` script and the full tier is `test:kaola-workflow:claude:full`, and their difference is the answer.
+- **What the fast gate does NOT execute on a given run.** One suite is sampled: `simulate-workflow-walkthrough` runs `--shard auto/12`, so 11 of every 12 scenarios are skipped per run. Three are deferred whole — `test-claim-hardening`, `test-sink-merge`, `test-run-chains` — because they are not registry-backed, so sampling is unavailable and whole-suite deferral was the only option. `test-release` moved into the fast gate with #881, since the release gate would otherwise carry no mandated coverage at all. Read the current membership off `package.json` rather than this list: the fast gate is the `test:kaola-workflow:claude` script and the full tier is `test:kaola-workflow:claude:full`, and their difference is the answer.
 - **The rotation is the bound on that loss.** `--shard auto/N` seeds the slice index from HEAD: the same commit always runs the same slice (so a red is reproducible and re-running cannot shuffle a failure out of view), while consecutive commits run different slices (so the whole registry is covered across N commits). A fixed slice would leave the other N−1 permanently unexecuted for the same runtime — strictly worse.
 - **Coverage loss stays fail-closed.** The shard-coverage audit still asserts that shards agree on the registered scenario count and that their slices sum to exactly it, so a partition that drops or duplicates a scenario reds the chain.
 - **A cut must name its surviving gate.** Deferring a suite from the fast gate does not retire it — `claude:full` still runs it — but since the full tier is never mandated, that is a place to reach for the suite deliberately, not a backstop that fires on its own. Never defer without recording the defect class that stops being checked per-run and where it is still checked.
@@ -308,13 +308,8 @@ This is deliberate, and it is what `run-chains.js` already does: `resolveChains`
 
 ## Cross-runtime lexicon parity (#812)
 
-A typed code emitted by the shared engine (`scripts/kaola-workflow-*.js`) can reach **any** runtime, so it must be documented on **every** runtime or on none. `scripts/test-runtime-lexicon-parity.js` enforces this and is wired into the claude chain (~0.3s).
+A typed code emitted by the shared engine (`scripts/kaola-workflow-*.js`) can reach **any** runtime, so the convention is that it should be documented on **every** runtime or on none. **Nothing currently enforces this.** `scripts/test-runtime-lexicon-parity.js`, the guard that used to, was deleted 2026-08-01 (recoverable from git history at `b3bc7acf`): it compared the engine's ENVELOPE vocabulary (machine-readable `reason:` codes) against runtime surfaces carrying INTERFACE vocabulary (dispatch fields, env vars, config knobs) — two families that live in different places by design, so the intersection was 0 of 62 and always had been. See the watch list in `docs/decisions/0017-the-mission-list.md` for the full envelope-vs-interface finding and why the failure class is recorded rather than rebuilt.
 
-- **The domain is derived, not curated.** Candidates are the snake_case typed codes the shared engine actually emits, read off both spellings — a `reason:` field and the first argument of `refuse|halt|warn|blocked|refusal(...)`. Read the current count off a run of the guard; do not quote one here, because a quoted count goes stale the next time a code lands. The oracle never decides which codes are agent-facing; a code documented nowhere is silent and a code documented everywhere is silent, so **only asymmetry speaks**. Widening coverage means widening `EMIT_PATTERNS`, never hand-adding a token.
-- **Enforcement is the default.** `RUNTIME_NATIVE` allowlists what is **exempt** (with a one-line capability reason), the inverse of `test-agent-profile-parity.js`'s opt-in `FEATURE_TOKENS`, where a token nobody remembered to add is silently unguarded. It is **bidirectional**: a Codex-only token is a violation exactly like a Codex-missing one.
-- **Six buckets, not four.** The three Codex editions are collected separately (`codex-github` / `codex-gitlab` / `codex-gitea`). Merging them let a code surviving in only one edition count as present for all three — the very drift the oracle exists to catch.
-- **The canonical agent tree is flat, and nested subtrees are excluded by construction.** The sync scripts render only the top-level agents + commands, so walking a nested override subtree would red the always-run chain for a structural difference rather than a drift.
-- **Anti-vacuity floors are part of the guard.** A broken extractor refuses with `derivation_vacuous` and an empty runtime tree with `runtime_tree_vacuous`, because a guard that silently measures nothing is the failure mode this issue exists to close.
 - **Mutation-proof any new guard.** `test-kimi-edition.js` previously passed 415 assertions while detecting no template drift at all. A green suite is not evidence; only a demonstrated RED-on-mutation is.
 
 ## The validation-invisible allowband (#424 / #547)
@@ -515,8 +510,9 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   `docs/api.md` for the full envelope shapes and `docs/decisions/D-651-01.md` for the design.
 - **Working sequence:** `--prepare` → one release-only commit →
   `--release-check` passes → `--tag` → online post-tag validation → push the named tag → publish.
-  A four-chain receipt recorded at the pre-prep commit carries over the release-only commit, so
-  no chain re-run at the bump commit is required; re-running there
+  A four-chain receipt recorded at the pre-prep commit carries over the release-only commit — the
+  same route `--tag` and `--release-check` now share — so no chain re-run at the bump commit is
+  required; re-running there
   (`KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js` — OFFLINE skips the
   tag-existence check that would otherwise fail before the tag exists) also binds, via strict
   equality.
@@ -561,8 +557,9 @@ receipt alone authorizes a ref mutation.
   committed receipt refuse `candidate_surface_mismatch`.
 - **`--tag --version X.Y.Z`** — requires a clean tracked worktree, coherent prepare receipt,
   exact candidate provenance and bytes, and a nonempty receipt covering every declared edition chain.
-  The chain receipt must be clean-stamped, unwaived, all green, and have `headSha` exactly equal to
-  candidate HEAD. Authorization and completion rows bind version, independent Codex version,
+  The chain receipt must be clean-stamped, unwaived, all green, and bind to candidate HEAD via the
+  same route `--release-check` accepts — exact `headSha` equality, or the release-prep carry-over
+  from an ancestor commit. Authorization and completion rows bind version, independent Codex version,
   ordered prepared surface, candidate SHA, chain HEAD, and tag name. Tag creation is an atomic
   zero-old ref update at candidate HEAD. The command then resolves the tag and reads every prepared
   file from the tag tree as raw bytes; a newly-created tag is compare-deleted if verification fails.
@@ -572,10 +569,12 @@ receipt alone authorizes a ref mutation.
   `cut_compatibility_refusal` envelope returns the executable replacement sequence.
 - **`--push`** — emits forge-neutral operator guidance for pushing the local tag and running the forge `release-create --latest` command. The script itself performs no remote mutation and invokes no forge CLI binary; publication remains a manual or forge-specific step.
 
-**Relationship to `--release-check`.** `--tag` performs its own strict local receipt checks, while
-`run-chains.js --release-check` remains a separate mandatory step and a stable external contract.
-Run it after the candidate-bound offline receipt and before `--tag`; do not infer its pass
-from prepare or from tag's checks. It calls no external pipeline.
+**Relationship to `--release-check`.** `--tag` no longer performs its own separate check — it binds
+to candidate HEAD via the same route `--tag` and `--release-check` now share, so the two cannot
+disagree. `run-chains.js --release-check` remains a separate mandatory step and a stable external
+contract: run it before `--tag`, whether the receipt it reads is a fresh offline run or one
+carried over from an earlier release-prep-only commit, and do not infer its pass from `--prepare`
+or from `--tag`'s own checks. It calls no external pipeline.
 
 **Registration surface:** `kaola-workflow-release.js` is registered in `COMMON_SCRIPTS` (so the canonical-to-codex byte-mirror is enforced by `validate-script-sync.js`) and in the rename-normalized forge-ports family, but **NOT** in the install-manifest `SUPPORT_SCRIPT_NAMES` block. It is a maintainer/dev tool on the same operational profile as `release-surface-drift.js` (D-442-01 §6). If a chain goes red demanding manifest registration, stop and surface it rather than silently widening SUPPORT_SCRIPTS.
 
@@ -722,11 +721,13 @@ See `docs/decisions/D-579-01.md` for the full decision record.
 `templates/axioms.md` is the single canonical source for the workflow’s five tie-breaking axioms
 (correct first; then save human time; then spend as little as possible; machines decide facts,
 humans decide values; own your own verdicts). It reaches consumers by EMBEDDING byte-identically
-into the six workflow-init CLAUDE.md-template surfaces — never per-edition copies, since
+into the twelve workflow-init CLAUDE.md-template surfaces — never per-edition copies, since
 `templates/` has no runtime `require()` consumer and the `BYTE_IDENTICAL_GROUPS` mechanism is built
 for that case, not this one. The drift guard is a `simulate-workflow-walkthrough.js` scenario,
-`testAxiomBlockByteIdentity`, comparing the canonical file’s trimmed content against each of the six
-embeds. The six `next` routing surfaces carry a short reference pointer to the block rather than the
+`testAxiomBlockByteIdentity`, comparing the canonical file’s content against all twelve surfaces —
+the six tracked command/skill files read from disk, plus the six opencode/kimi surfaces rendered in
+memory via the same sync scripts that generate them, mutation-proven on the previously-uncovered
+opencode/kimi trees. The six `next` routing surfaces carry a short reference pointer to the block rather than the
 block itself; that pointer is prose the generator renders, not a `required-blocks.js` entry.
 
 **Tie-breaker protocol.** Axioms apply only when no shipped rule already resolves a situation — walk

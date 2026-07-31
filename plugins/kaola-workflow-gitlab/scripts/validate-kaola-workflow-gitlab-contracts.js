@@ -431,22 +431,6 @@ for (const gone of ['checkDispatchAttestations', 'persistAttestationToSummary',
 // test-gitlab-workflow-scripts.js must exercise operator_hint + route-findings + --summary.
 
 
-// #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
-// actually prints — pinned on BOTH the command and SKILL surfaces. The card-acquisition rule, the
-// no-improvise prohibition and the #604/#605 announcement formats are manifest-obligated tokens
-// (pr-dispatch-card-visibility), proven on these same paths by the derived-universe presence check.
-for (const planRunSurface of [
-]) {
-  assertIncludes(planRunSurface, 'opened=<node-id> role=<role> task=<codex_task_name>');
-
-
-  // The gate-instrumentation-provisioning anchor, the retired KAOLA_GATE_WINDOW_FENCE ban, and the
-  // Join Protocol's wait-budget / delegation-outcome / writerHalt needles are asserted on THESE
-  // SAME EDITION PATHS by the root validator's six-surface gate-fence loop and its three-command +
-  // three-SKILL join-protocol loops, in the always-selected claude chain.
-}
-
-
 // The one-request teammate rule on this edition's plan-run COMMAND, and the fork_turns
 // unconditional mandate plus its two retired-qualifier bans on this edition's plan-run SKILL, are
 // asserted on THESE SAME EDITION PATHS by the root validator's three-command and three-SKILL
@@ -537,7 +521,23 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
 // REQUIRED skill); this is the required-target registry that closes it.
 {
   const schema = require('./kaola-workflow-adaptive-schema.js');
-  const emittedSkillTargets = [];
+  // #883: the retired plan-run / adapt / fast / research targets left this list EMPTY, so the loop
+  // below had nothing to iterate and the assertion could not run. The route survived the retirement:
+  // gitlab claim.js still builds `next_skill` from the schema constant, so that target is what the
+  // contract is derived from, and the list is fenced against going empty again.
+  const emittedSkillTargets = [schema.NEXT_SKILL];
+  // Vacuity fence — the failure this check actually suffered. An empty list, or an entry that is not
+  // a usable skill name (a deleted schema constant reads as `undefined`), makes the loop below assert
+  // nothing at all; that must red here rather than pass silently.
+  assert(emittedSkillTargets.length > 0 &&
+    emittedSkillTargets.every(t => typeof t === 'string' && t.length > 0),
+    '#883: the receipt-emitted skill target list must be non-empty and name only resolvable skills — ' +
+    'the route-reachability loop asserts nothing otherwise; got ' + JSON.stringify(emittedSkillTargets));
+  // The derivation above is only sound while claim.js emits next_skill FROM the schema constant; if
+  // it ever inlines a literal, this list becomes a parallel hand-kept one and stops tracking the route.
+  assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'adaptiveSchema.NEXT_SKILL');
+  assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js',
+    "'next_skill: ' + (data.next_skill || adaptiveSkill)");
   const installedSkills = new Set(
     fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory())
@@ -549,31 +549,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
       '#400: route-reachability — receipt-emitted skill target "' + target + '" has no installed ' +
       pluginRoot + '/skills/' + target + '/SKILL.md (broken route, the forge-codex #400 dead zone)');
   }
-  // Content-reachability tier (catches #369/#380): a mirrored SKILL must carry the command's
-  // route/wiring tokens or the route resolves to a hollow surface.
-  // #463 (AC11): pin the synthesizer role in the forge-codex SKILL too (the #400 dead-zone surface).
-  // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
-  // the project-local needle GREEN (add, never remove) and pin the global path alongside it.
-  // #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
-  // run-start notice + the consent-halt escalation on both the GitLab command and SKILL mirror.
-  for (const planRunSurface of [
-  ]) {
-    assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
-    assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
-    assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
-    // #817: the fence's ROLE LIST is itself the contract — every REVIEW_GATE_ROLES member that
-    // reviews someone else's work must sit inside it. `main-session-gate` is deliberately absent:
-    // it is non-delegable and REQUIRED to run inline, so fencing it would be a contradiction.
-    // Pinning the exact list is bidirectional — dropping a role, or adding `main-session-gate`,
-    // breaks this needle.
-    assertIncludes(planRunSurface, 'For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`,');
-    // #817: the mode-refused-spawn trigger must stay NAMED. Without it a runtime that refuses every
-    // spawn is reclassified as ordinary judged-inline and the prominent run-start notice never fires.
-    assertIncludes(planRunSurface, 'the runtime mode-refuses the spawn');
-  }
-  // #451/#582: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the
-  // per-node tier maps to per-spawn reasoning-effort on the dispatch descriptor, and unproven
-  // tiered v1 dispatch fails closed.
 }
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.

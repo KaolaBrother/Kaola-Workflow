@@ -1266,49 +1266,9 @@ function sinkLandStagedUnion(src, dest) {
   }
 }
 
-// #552: fail-closed backstop against the lane-group crash-window desync. A clean write-parallel group
-// completion DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path: it
-// runs the synthesizer + group barrier, merges every leg into the feature branch, then drops the key). So
-// a lane_group key that STILL EXISTS at sink time means a group never cleanly synthesized + merged its legs
-// — the surviving legs' committed work is NOT on the branch. Advancing main here would be the #552 silent
-// loss (a green run merges with code missing). Read running-set.json from BOTH the LIVE project dir AND the
-// post-finalize ARCHIVE dir (sink-merge runs from main root AFTER cmdFinalize archives — mirrors the
-// resolveSinkReceiptPath dual-location), and refuse if either carries a non-empty lane_group. Pure read,
-// zero mutation; returns a typed refusal object or null. Scoped to a NON-EMPTY lane_group key (a cleared
-// run deletes the key, not empties it) so a normal completed run's leftover running-set.json never false-trips.
-function lingeringLaneGroupRefusal(mainRoot, project) {
-  const locations = [
-    path.join(mainRoot, 'kaola-workflow', project, '.cache', 'running-set.json'),
-    path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'running-set.json'),
-  ];
-  for (const rsPath of locations) {
-    let rs;
-    try { rs = JSON.parse(fs.readFileSync(rsPath, 'utf8')); } catch (_) { continue; } // absent/unreadable: try next
-    const lg = rs && rs.lane_group;
-    const members = (lg && Array.isArray(lg.members)) ? lg.members : [];
-    if (lg && members.length > 0) {
-      const legCount = (lg.legs && typeof lg.legs === 'object') ? Object.keys(lg.legs).length : 0;
-      const finding = recordSinkFinding(
-        'lingering_lane_group',
-        ['running-set.json (' + rsPath + ') still carries a lane_group "' + (lg.group_id || '(unknown)') +
-          '" with ' + members.length + ' member(s) and ' + legCount + ' leg(s). A clean write-parallel group ' +
-          'completion DELETES the lane_group key; a residual key means the group never ran its synthesizer + ' +
-          'group barrier (the #552 crash-window desync), so surviving legs\' committed work is NOT on the feature ' +
-          'branch. Nothing was merged and nothing was pushed.'],
-        'Recover the legs\' committed work by hand from the leg branches/worktrees the running-set '
-          + 'names, then re-run the sink; or run sink-pr so what survives is staged for review rather '
-          + 'than published.',
-        { lane_group_id: lg.group_id || null, members: members.length, legs: legCount, running_set_path: rsPath });
-      return { ok: false, reason: 'lingering_lane_group', detail: finding.detail[0], finding };
-    }
-  }
-  return null;
-}
-
 // #429: preflight — classify the dirty tree into three buckets and handle them.
 // Returns { ok: true, stashRef, removedDuplicates } on success, or
 // { ok: false, reason: 'sink_blocked', foreign_dirt: [...] } on foreign dirt, or
-// { ok: false, reason: 'lingering_lane_group', detail } on the #552 backstop, or
 // { ok: false, reason: 'worktree_dirty', detail } on the #562 dirty/unprobeable worktree guard.
 // INVARIANT: if foreign_dirt is non-empty, NO mutation occurs.
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
@@ -1318,10 +1278,6 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   // main). For projDuplicates, key on defBranch (the commit IS on main/defBranch) instead of the
   // nonexistent feature branch.
   const branchless = branch === 'TBD';
-  // #552: lane-group backstop FIRST — a pure read, zero mutation, BEFORE the dirty-tree scan/stash.
-  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, project);
-  if (laneGroupRefusal) return laneGroupRefusal;
-
   // #562: worktree-clean data-loss guard — mirror the legacy path's assertWorktreeClean (:1461). The
   // --sink merge step force-removes the linked worktree (removeWorktree → `git worktree remove --force`)
   // with NO clean precondition, so a dirty worktree's uncommitted work would be silently destroyed — the
@@ -1622,15 +1578,9 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
 
       const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
       if (!preResult.ok) {
-        // Two classes reach here and both stop with zero mutation. sink_blocked (foreign dirt) and
+        // Both classes that reach here stop with zero mutation. sink_blocked (foreign dirt) and
         // worktree_dirty KEEP — proceeding would destroy the user's own uncommitted work, so there
-        // is no proceed-path to offer. lingering_lane_group is CONVERTED: it judges the state of
-        // the work, so it now carries a typed finding, a named field on the receipt, and a way
-        // forward — while still stopping, because publishing legs that never merged is exactly the
-        // silent loss it was built to catch.
-        if (preResult.reason === 'lingering_lane_group') {
-          recordStopOnReceipt('lane_group_stop', preResult.finding ? preResult.finding.lane_group_id || 'unknown' : 'unknown');
-        }
+        // is no proceed-path to offer.
         const out = {
           result: 'refuse',
           reason: preResult.reason || 'sink_blocked',
@@ -2494,24 +2444,10 @@ function main() {
   // Two kinds stop here and the difference is what the operator is owed, not whether it stops. The
   // KEEP guards — assertCleanWorktree, assertBranchPushedToUpstream, assertWorktreeClean — protect
   // work that proceeding would destroy or lose, so they throw and offer no sanctioned way past. The
-  // CONVERTED ones — the lane-group backstop, assertNoLiveWorkflowFolder, and
-  // assertBranchHasNonWorkflowChanges — judge the state of the work, so they emit a typed envelope
-  // carrying a named finding and a route forward. This path has no step journal, so the envelope IS
-  // the durable record; that is why each of these emits rather than throwing.
-  //
-  // #561: lane-group backstop on the legacy (non---sink) main-advance path too — mirror the --sink
-  // path's sinkPreflight backstop. A residual lane_group means surviving legs' committed work is
-  // NOT on the feature branch (#552 crash-window desync); advancing main here would silently lose
-  // it. Pure read, zero mutation, FIRST in the precondition block.
-  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, args.project);
-  if (laneGroupRefusal) {
-    sinkEmit({
-      result: 'refuse',
-      reason: laneGroupRefusal.reason || 'lingering_lane_group',
-      detail: laneGroupRefusal.detail,
-    }, 1);
-    return;
-  }
+  // CONVERTED ones — assertNoLiveWorkflowFolder and assertBranchHasNonWorkflowChanges — judge the
+  // state of the work, so they emit a typed envelope carrying a named finding and a route forward.
+  // This path has no step journal, so the envelope IS the durable record; that is why each of these
+  // emits rather than throwing.
   assertCleanWorktree(mainRoot, [args.project]);
   const liveFolderFinding = assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (liveFolderFinding) {

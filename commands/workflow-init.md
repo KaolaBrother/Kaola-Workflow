@@ -187,45 +187,6 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 ```
 <!-- KW-CLAUDE-TEMPLATE-END -->
 
-> **Codex hooks note:** Running `install-codex-agent-profiles.js --global` installs the
-> agent profiles **globally** into `~/.codex` (one install, all repos) AND refreshes the
-> global hooks. Trust hooks once via `/hooks`. If a project-local `.codex/hooks.json`
-> already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
-> Audit Codex config before claiming role dispatch readiness: Codex >=0.145.0 is required
-> (`kaola-workflow-codex-preflight.js` refuses `codex_version_unsupported` below that floor), and
-> `kaola-workflow-codex-preflight.js --doctor --json` must show `features.multi_agent_v2.enabled`
-> true. MultiAgentV2 is **opt-in and off by default** — only V1 `multi_agent` is on by default —
-> so it has to be written into `config.toml` for Codex to expose the V2 task-name spawn tools at
-> all. Three shapes are accepted: `[features.multi_agent_v2]` with `enabled = true`, the inline
-> `multi_agent_v2 = { enabled = true, ... }` under `[features]`, and a bare
-> `multi_agent_v2 = true`. A top-level `[agents] enabled = true` does **not** enable it — `[agents]`
-> configures roles and limits (`agents.<name>.*`, `max_depth`, `max_threads`), and Codex 0.145.0
-> loads such a config clean with the feature still off, so set the switch in one of the three shapes
-> above instead. Put the concurrency budget at
-> `features.multi_agent_v2.max_concurrent_threads_per_session` and do **not** also set
-> `agents.max_threads` — it is a separate `[agents]` key, **not an alias**, and it does not raise
-> the MultiAgentV2 cap; Codex 0.145.0 accepts the key rather than complaining, so a stray one
-> leaves the cap where it was instead of erroring. Note that
-> `multi_agent_v2` is not carried in the public Codex configuration reference, which documents
-> `[features] multi_agent` for enabling subagents and `[agents]` only for role/limit settings
-> (`max_threads`, `max_depth`). The V2 flag and its bounds are verified against upstream SOURCE at
-> tag `rust-v0.145.0` — `codex-rs/core/src/config/mod.rs` defines
-> `DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4` and `effective_agent_max_threads`
-> uses `saturating_sub(1)` — source-verified, never documentation-verified, and both may change in a
-> future release. Kaola never
-> writes this flag for you; if it is not explicitly true, preflight refuses
-> `codex_multi_agent_v2_required` and its diff must be applied by hand with user authorization —
-> never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone
-> is NOT the same as dispatch-ready: read the doctor JSON's additive `dispatch_posture` field too
-> — `proactive` (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
-> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless explicitly asked
-> for sub-agents/delegation/parallel work — always available and always documented
-> — or, only if your Codex exposes an `ultra` reasoning effort for your model/plan (undocumented as
-> of Codex >=0.145.0; check the `/model` picker), the operator sets
-> `model_reasoning_effort = "ultra"`. Report the doctor's `dispatch_posture_warning` remediation
-> verbatim; do not claim readiness from the enabled flag alone. Never silently edit
-> `~/.codex/config.toml`; show the minimal diff and apply it only with user authorization.
-
 > **Claude dispatch posture note:** Audit dispatch posture for this session before claiming
 > role-dispatch readiness: probe the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable
 > first; if unset, fall back to the session settings env block. Report
@@ -442,7 +403,7 @@ After edits:
    - whether GitHub issues were available for sync
 4. Do not commit unless the user explicitly asks.
 
-End with the next useful command:
+End with the next useful entry point:
 
 ```text
 /workflow-next

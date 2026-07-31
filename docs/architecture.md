@@ -333,8 +333,8 @@ verifies one.
 framework); it must exit 0 with `Workflow walkthrough simulation passed`.
 
 Two tiers. `npm run test:kaola-workflow:claude` is the **fast gate**: every cheap step at full
-coverage, but three heavyweight suites run a rotating 1/12 slice and six non-samplable suites are
-deferred. `test:kaola-workflow:claude:full` runs everything and is never mandated — the fast gate is
+coverage, but one heavyweight suite runs a rotating 1/12 slice and three non-samplable suites are
+deferred whole. `test:kaola-workflow:claude:full` runs everything and is never mandated — the fast gate is
 sufficient evidence everywhere, including a release receipt; the full tier is an opt-in diagnostic.
 See `conventions.md` § Two validation tiers.
 
@@ -342,4 +342,4 @@ Chain selection at finalize belongs to the producer: `run-chains.js` diff-scopes
 `--project` / `--plan`. A non-edition-touching diff runs the `claude` chain alone; an
 edition-touching diff — or an unresolved diff base — fails closed to all four. A release tag always
 requires the full, unwaived four-chain receipt regardless of scope — bound at the tagged commit, or
-carried over release-prep-only commits.
+carried over release-prep-only commits, the same route `--tag` and `--release-check` now share.
