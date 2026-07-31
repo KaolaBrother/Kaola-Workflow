@@ -974,7 +974,7 @@ function runDirectMerge(args, opts) {
   const liveFolderFinding = assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (liveFolderFinding) {
     sinkEmit({
-      result: 'refuse', reason: 'run_not_finalized',
+      result: 'report', status: 'not_merged', reason: 'run_not_finalized',
       branch: args.branch, project: args.project,
       detail: liveFolderFinding.detail[0],
     }, 1);
@@ -985,7 +985,7 @@ function runDirectMerge(args, opts) {
     const emptyBranchFinding = assertBranchHasNonWorkflowChanges(mainRoot, args.branch, defBranch);
     if (emptyBranchFinding) {
       sinkEmit({
-        result: 'refuse', reason: 'no_implementation_changes',
+        result: 'report', status: 'not_merged', reason: 'no_implementation_changes',
         branch: args.branch, default_branch: defBranch,
         workflow_only_files: emptyBranchFinding.workflow_only_files,
         detail: emptyBranchFinding.detail[0],
@@ -1025,7 +1025,7 @@ function runDirectMerge(args, opts) {
   let testGate = doRebase(args, alreadyUpToDate, mainRoot, defBranch);
   if (testGate.result === 'red') {
     sinkEmit({
-      result: 'refuse', reason: 'chains_red', post_rebase_tests: 'red',
+      result: 'report', status: 'not_merged', reason: 'chains_red', post_rebase_tests: 'red',
       branch: args.branch, default_branch: defBranch,
       detail: 'the post-rebase chains are RED over ' + args.branch + '. Nothing was merged into '
         + defBranch + ', nothing was pushed, and no issue was closed.',
@@ -1040,7 +1040,7 @@ function runDirectMerge(args, opts) {
     // into giveUp's "FF race: exhausted retries", reporting a red suite as a merge race.
     if (ffOutcome.reason === 'chains_red') {
       sinkEmit({
-        result: 'refuse', reason: 'chains_red', post_rebase_tests: 'red',
+        result: 'report', status: 'not_merged', reason: 'chains_red', post_rebase_tests: 'red',
         branch: args.branch, default_branch: defBranch,
         detail: 'the chains went RED on the re-rebased tree during fast-forward recovery. This is a '
           + 'red suite, NOT a merge race. Nothing was merged or pushed.',
@@ -1636,7 +1636,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       if (testGate.result === 'red') {
         recordStopOnReceipt('post_rebase_tests', 'red');
         sinkEmit({
-          result: 'refuse', reason: 'chains_red', step: 'merge', post_rebase_tests: 'red',
+          result: 'report', status: 'not_merged', reason: 'chains_red', step: 'merge', post_rebase_tests: 'red',
           branch: args.branch, default_branch: defBranch,
           detail: 'the post-rebase chains are RED over ' + args.branch + '. Nothing was merged into '
             + defBranch + ', nothing was pushed, and no issue was closed; the merge step is left NOT done '
@@ -1654,7 +1654,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         if (ffOutcome.reason === 'chains_red') {
           recordStopOnReceipt('post_rebase_tests', 'red');
           sinkEmit({
-            result: 'refuse', reason: 'chains_red', step: 'merge', post_rebase_tests: 'red',
+            result: 'report', status: 'not_merged', reason: 'chains_red', step: 'merge', post_rebase_tests: 'red',
             branch: args.branch, default_branch: defBranch,
             detail: 'the chains went RED on the re-rebased tree during fast-forward recovery. This is '
               + 'a red suite, NOT a merge race. Nothing was merged or pushed; the merge step is left '
