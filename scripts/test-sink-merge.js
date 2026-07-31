@@ -666,96 +666,12 @@ function buildWorktreeEvidenceFixture(project, issue, opts) {
   }
 })();
 
-(function testEvidenceEmptyArchiveRefusesLoudlyThenRecovers() {
-  console.log('Test (#707 i): an evidence-empty live folder whose ledger PROVES recorded node evidence must refuse loudly (typed, exit 1, resumable) — never archive an empty evidence trail; restoring evidence + re-running completes');
-  const project = 'issue-70702';
-  const issue = 70702;
-  // No worktree, no evidence anywhere — but the ledger says n1-impl/n2-review completed.
-  const fx = buildWorktreeEvidenceFixture(project, issue, {});
-  fx.projectName = project;
-  try {
-    const result = runSink(fx, ['--issue', String(issue)]);
-    const out = lastJson(result);
-
-    assert(result.status === 1, '#707 i: sink must exit 1 on an evidence-empty archive attempt; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'finalize',
-      '#707 i: typed refusal must be result:refuse reason:sink_incomplete step:finalize; got ' + JSON.stringify(out));
-    assert(out && out.archive_refusal === 'node_evidence_missing',
-      '#707 i: archive_refusal must be node_evidence_missing; got ' + JSON.stringify(out && out.archive_refusal));
-    assert(out && Array.isArray(out.missing) && out.missing.includes('.cache/n1-impl.md') && out.missing.includes('.cache/n2-review.md'),
-      '#707 i: missing must list the ledger-proven evidence files; got ' + JSON.stringify(out && out.missing));
-
-    // Fail-closed: the live folder survives untouched; NO archived copy of it exists anywhere.
-    assert(fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project, 'workflow-state.md')),
-      '#707 i: the live project folder must SURVIVE the refusal (fail-closed, nothing deleted)');
-    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
-      '#707 i: no plain archive of the project may exist after the refusal');
-    assert(suffixedArchiveRel(fx.tmpRoot, project) === null
-      || !fs.existsSync(path.join(fx.tmpRoot, suffixedArchiveRel(fx.tmpRoot, project), 'workflow-state.md')),
-      '#707 i: no collision-suffixed archive of the project may exist after the refusal');
-    // The issue was NOT closed (closure never ran).
-    const calls = readLog(fx.logFile);
-    assert(!calls.includes('close:' + issue), '#707 i: the issue must NOT be closed on a refused sink; calls=' + JSON.stringify(calls));
-
-    // RECOVERY: restore the run's evidence into the live folder, re-run --sink → completes with
-    // the evidence archived + committed (the finalize step was left NOT done, so the resume retries it).
-    const liveCache = path.join(fx.tmpRoot, 'kaola-workflow', project, '.cache');
-    fs.mkdirSync(liveCache, { recursive: true });
-    fs.writeFileSync(path.join(liveCache, 'n1-impl.md'), 'restored n1 evidence\n');
-    fs.writeFileSync(path.join(liveCache, 'n2-review.md'), 'restored n2 evidence\n');
-    const second = runSink(fx, ['--issue', String(issue)]);
-    const out2 = lastJson(second);
-    assert(second.status === 0, '#707 i: the recovery re-run must exit 0; got ' + second.status + '\nstdout: ' + second.stdout + '\nstderr: ' + second.stderr);
-    assert(out2 && out2.status === 'sinked', '#707 i: the recovery re-run must reach status:sinked; got ' + JSON.stringify(out2 && out2.status));
-    const archRel = (out2 && out2.receipt && out2.receipt.archive_dest) || suffixedArchiveRel(fx.tmpRoot, project) || ('kaola-workflow/archive/' + project);
-    assert(catFileType(fx.tmpRoot, 'HEAD:' + archRel + '/.cache/n1-impl.md') === 'blob',
-      '#707 i: after recovery the restored evidence must be archived + committed at HEAD');
-  } finally {
-    cleanup(fx);
-  }
-})();
-
-(function testVerifyArchiveCompleteRequiresLedgerEvidence() {
-  console.log('Test (#707 j): verifyArchiveComplete with requireLedgerEvidence can NEVER pass an evidence-empty copy of a ledger-complete source; the flag-less source-relative contract is unchanged');
-  const claim = require(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'));
-  const base = makeTmpRoot();
-  try {
-    const src = path.join(base, 'src');
-    const dest = path.join(base, 'dest');
-    fs.mkdirSync(src, { recursive: true });
-    fs.writeFileSync(path.join(src, 'workflow-state.md'), '# Kaola-Workflow State\nstatus: active\n');
-    fs.writeFileSync(path.join(src, 'workflow-plan.md'), planWithLedger([
-      { id: 'n1', status: 'complete' },
-      { id: 'n2', status: 'n/a' },
-    ]));
-    // dest is a FAITHFUL copy of the (already evidence-gutted) source — the passes-on-empty shape.
-    fs.mkdirSync(dest, { recursive: true });
-    for (const f of ['workflow-state.md', 'workflow-plan.md']) fs.copyFileSync(path.join(src, f), path.join(dest, f));
-
-    const flagless = claim.verifyArchiveComplete(src, dest);
-    assert(flagless && flagless.ok === true,
-      '#707 j: WITHOUT the flag the source-relative contract is unchanged (a faithful copy passes); got ' + JSON.stringify(flagless));
-
-    const hardened = claim.verifyArchiveComplete(src, dest, { requireLedgerEvidence: true });
-    assert(hardened && hardened.ok === false,
-      '#707 j: WITH requireLedgerEvidence an evidence-empty copy of a ledger-complete source must REFUSE; got ' + JSON.stringify(hardened));
-    assert(hardened && Array.isArray(hardened.missing) && hardened.missing.includes('.cache/n1.md'),
-      '#707 j: the refusal must name the ledger-proven evidence file; got ' + JSON.stringify(hardened && hardened.missing));
-    assert(hardened && Array.isArray(hardened.missing) && !hardened.missing.includes('.cache/n2.md'),
-      '#707 j: an n/a ledger row must NOT be demanded; got ' + JSON.stringify(hardened && hardened.missing));
-
-    // With the evidence present in BOTH copies, the hardened check passes.
-    for (const d of [src, dest]) {
-      fs.mkdirSync(path.join(d, '.cache'), { recursive: true });
-      fs.writeFileSync(path.join(d, '.cache', 'n1.md'), 'evidence\n');
-    }
-    const satisfied = claim.verifyArchiveComplete(src, dest, { requireLedgerEvidence: true });
-    assert(satisfied && satisfied.ok === true,
-      '#707 j: with the evidence present the hardened check passes; got ' + JSON.stringify(satisfied));
-  } finally {
-    try { fs.rmSync(base, { recursive: true, force: true }); } catch (_) {}
-  }
-})();
+// DELETED: #707 i (evidence-empty live folder refuses via the ledger-proven evidence set) and
+// #707 j (verifyArchiveComplete --requireLedgerEvidence). Both pinned an archive completeness
+// floor DERIVED from the `## Node Ledger`: every `complete` row implies its .cache/<id>.md.
+// There is no ledger to derive it from any more. The completeness PROPERTY survives as a
+// measurement — every file present under the run folder before the move must be present after
+// it — and it still refuses; it is the derived required-set, and only that, which is gone.
 
 // --------------------------------------------------------------------------- #711 branchless
 

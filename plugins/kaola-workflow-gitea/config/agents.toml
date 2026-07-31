@@ -14,12 +14,12 @@ config_file = "./agents/kaola-workflow/planner.toml"
 nickname_candidates = ["Planner", "Strategist", "Options"]
 
 [agents.code-architect]
-description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, write sets, task order, and validation commands."
+description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, file sets, task order, and validation commands."
 config_file = "./agents/kaola-workflow/code-architect.toml"
 nickname_candidates = ["Architect", "Blueprint", "Designer"]
 
 [agents.tdd-guide]
-description = "Kaola-Workflow for Codex test author: holds custody of the test artifact, authors the suite from the acceptance surface, and proves it fails on the recorded baseline."
+description = "Kaola-Workflow for Codex test author: holds custody of the test artifact, authors the suite from the acceptance surface, and proves it fails on the baseline."
 config_file = "./agents/kaola-workflow/tdd-guide.toml"
 nickname_candidates = ["TDD", "Test Author", "Oracle"]
 
@@ -59,16 +59,11 @@ config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
 
 [agents.synthesizer]
-description = "Kaola-Workflow for Codex adaptive write-convergence specialist: reconciles concurrent write legs by intent on a real merge conflict; reasoning-class, held to a non-lowerable reasoning-tier floor, never invoked for cleanly-disjoint legs."
+description = "Kaola-Workflow for Codex write-convergence specialist: reconciles concurrent write branches by intent on a real merge conflict; reasoning-class, held to a non-lowerable reasoning-tier floor, never invoked for cleanly-disjoint work."
 config_file = "./agents/kaola-workflow/synthesizer.toml"
 nickname_candidates = ["Synthesizer", "Merger", "Reconciler"]
 
-[agents.workflow-planner]
-description = "Kaola-Workflow for Codex adaptive front end: claims the project + worktree and authors the workflow-plan.md DAG; never freezes, judges, asks, or dispatches."
-config_file = "./agents/kaola-workflow/workflow-planner.toml"
-nickname_candidates = ["Workflow Planner", "DAG Author", "Front End"]
-
 [agents.metric-optimizer]
-description = "Kaola-Workflow for Codex adaptive metric-ratchet specialist: proposes, applies, regression-gates, and measures a metric (median-of-K) each iteration, accepting or rejecting against the running baseline until a stop condition fires."
+description = "Kaola-Workflow for Codex metric-ratchet specialist: proposes, applies, regression-gates, and measures a metric (median-of-K) each iteration, accepting or rejecting against the running baseline until a stop condition fires."
 config_file = "./agents/kaola-workflow/metric-optimizer.toml"
 nickname_candidates = ["Optimizer", "Ratchet", "Tuner"]

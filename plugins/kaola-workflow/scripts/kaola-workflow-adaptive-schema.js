@@ -6834,6 +6834,817 @@ function projectRelativeArtifactPath(absPath) {
   return rest.slice(1).join('/');
 }
 
+// ===========================================================================
+// THE VALIDATION SURFACE — relocated here because its previous host is a plan
+// reader and the plan is going away.
+//
+// Everything below answers a question about the REPOSITORY, not about a plan: is the chain receipt
+// bound to this tree, does this release candidate carry an unwaived full-coverage receipt, which
+// paths did this branch touch. None of it ever needed a node, a ledger or a write set — it lived in
+// the plan validator only because that is where the finalize verb happened to be wired.
+//
+// It lands in THIS file for one reason: this is the module that is byte-identical across all four
+// editions and is already required by the claim, sink and chain-producer scripts. Producer and gate
+// must compute the same hash over the same band, and the only way to guarantee that is one function
+// and one constant, read by both — which is exactly what the arrangement it replaces relied on.
+// ===========================================================================
+
+const VALIDATION_GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
+// Paths this repo's own validation READS but the default code band treats as invisible
+// (docs/** is invisible so a doc edit does not invalidate a receipt). Widening this makes the
+// freshness key STRICTER, never looser. 32 archived plans declared such a widening per-run; almost
+// all of them named docs/plan-run-cards/**, which this campaign deletes.
+const VALIDATION_TEST_CONSUMES = Object.freeze([]);
+
+// A repo-root-relative path is BOOKKEEPING — written by the run itself rather than by the work, so
+// a change to it is not a change to the product — iff it matches one of:
+//   - docs/**                       — the documentation tree (any depth).
+//   - CHANGELOG.md (repo root only) — release notes.
+//   - README.md    (repo root only) — project readme.
+//   - kaola-workflow/{project}/**   — the active project's run state + `.cache/` evidence.
+// Matching is path-SHAPE, not suffix: a nested `plugins/.../README.md` is NOT at the repo root, so
+// it is OUTSIDE the band; `agents/*.md`, `commands/*.md`, `plugins/*/skills/**/*.md`,
+// `plugins/*/agents/*.toml` are all behavioral and stay visible. Pure (no fs). `project` is the
+// active project folder name; when absent, the generic `kaola-workflow/{anything}/**` band is
+// honored so a caller with no project context never false-flags another run's state.
+function isBookkeepingPath(p, project) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (rel === 'CHANGELOG.md') return true;          // repo-root only
+  if (rel === 'README.md') return true;             // repo-root only
+  if (/^docs\//.test(rel)) return true;             // docs/** (any depth)
+  if (project) {
+    if (rel === 'kaola-workflow/' + project) return true;
+    if (rel.startsWith('kaola-workflow/' + project + '/')) return true;
+    return false;
+  }
+  return /^kaola-workflow\/[^/]+\//.test(rel);
+}
+
+// The prose files this repo's OWN chain tests read as input, so a change to one CAN flip a chain
+// verdict and must therefore stay code-visible:
+//   - README.md                        — validate-workflow-contracts (usage/env-var tokens).
+//   - CHANGELOG.md                     — validate-workflow-contracts (`## [<version>]` heading).
+//   - docs/api.md                      — both contract validators (closure schema, forge-parity).
+//   - docs/workflow-state-contract.md  — both contract validators (durable-sources cross-ref).
+//   - docs/agents-source.md            — validate-vendored-agents (vendored-agent provenance).
+// Fail-closed by direction: a path NOT proven inert stays CODE (an over-broad list only costs an
+// extra re-run, never a missed regression). Pure (no fs).
+const SELF_HOST_TEST_CONSUMED = Object.freeze([
+  'README.md',
+  'CHANGELOG.md',
+  'docs/api.md',
+  'docs/workflow-state-contract.md',
+  'docs/agents-source.md',
+]);
+// SELF_HOST_TEST_CONSUMED is a self-host assumption (the four kaola-workflow test chains read these
+// prose files). A consumer repo has no such chains, so CHANGELOG/README/docs stay validation-
+// invisible there (matching isBookkeepingPath). detectSelfHostNpm probes package.json for a
+// `test:kaola-workflow:<edition>` script — the exact predicate run-chains.js resolveChains uses.
+// Memoized per repoRoot. Fail-closed: an indeterminate repo reads as self-host (stricter band).
+// ENOENT (no package.json) → genuine consumer.
+const _validationSelfHostCache = new Map();
+function detectSelfHostNpm(repoRoot) {
+  const fs = require('fs');
+  const path = require('path');
+  const key = String(repoRoot || '');
+  if (_validationSelfHostCache.has(key)) return _validationSelfHostCache.get(key);
+  let result;
+  try {
+    const pkgRaw = fs.readFileSync(path.join(key || '.', 'package.json'), 'utf8');
+    const pkg = JSON.parse(pkgRaw);
+    const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+    result = ['claude', 'codex', 'gitlab', 'gitea'].some(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+  } catch (e) {
+    result = (e && e.code === 'ENOENT') ? false : true;
+  }
+  _validationSelfHostCache.set(key, result);
+  return result;
+}
+function testConsumes(p, extra, opts) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  // The self-host list applies ONLY to self-host repos. Default self_host=true is fail-closed.
+  const selfHost = !(opts && opts.self_host === false);
+  if (selfHost && SELF_HOST_TEST_CONSUMED.indexOf(rel) !== -1) return true;
+  return Array.isArray(extra) && extra.indexOf(rel) !== -1;
+}
+// A path is VALIDATION-INVISIBLE (excluded from the code-tree hash; a fresh receipt may be cited
+// over it) iff a change to it cannot flip a chain verdict. = the bookkeeping band PLUS the whole
+// `kaola-workflow/` run-state tree (never code-under-test; folded in PROJECT-INDEPENDENTLY so the
+// producer and gate agree even if the project tag differs), MINUS any test-consumed prose (which
+// stays CODE). testConsumes is checked FIRST so a verdict-affecting doc is never excluded. Pure.
+function isValidationInvisible(p, project, testConsumedExtra, opts) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (testConsumes(rel, testConsumedExtra, opts)) return false;   // verdict-affecting prose stays CODE
+  if (isBookkeepingPath(rel, project)) return true;
+  if (/^kaola-workflow\//.test(rel)) return true;                 // whole run-state tree
+  return false;
+}
+
+// The run archive resolves against MAIN's project root regardless of invocation cwd, so a
+// SOURCE-MISSING finalize resume is handed a project folder that lives in MAIN's archive while the
+// candidate under validation — the branch, its commits, and the working tree the finalize gate
+// reasons about — is the LINKED WORKTREE the caller invoked from. Deriving the root from the folder
+// path alone then aims the candidate hash and the chain-receipt freshness arm at the wrong working
+// tree, and a settled re-entry refuses over a candidate nothing changed.
+//
+// Narrow by construction: it applies only when the caller's cwd is a DIFFERENT working tree of the
+// SAME repository (proven by `git worktree list`, not guessed) and that tree does not contain the
+// folder. Every ordinary invocation — cwd inside the folder's own tree — resolves exactly as before,
+// and any probe failure falls back to the passed-in root, so the gate keeps failing closed.
+function resolveFinalizeCheckRoot(planRoot) {
+  const fs = require('fs');
+  const { execFileSync } = require('child_process');
+  const topLevel = dir => {
+    try {
+      return fs.realpathSync(execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+    } catch (_) { return ''; }
+  };
+  let cwdTop, planTop;
+  try { cwdTop = topLevel(process.cwd()); } catch (_) { return planRoot; }
+  planTop = topLevel(planRoot);
+  if (!cwdTop || !planTop || cwdTop === planTop) return planRoot;
+  let listed = '';
+  try {
+    listed = execFileSync('git', ['-C', planTop, 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+  } catch (_) { return planRoot; }
+  const sameRepo = listed.split('\n')
+    .filter(l => l.startsWith('worktree '))
+    .some(l => {
+      try { return fs.realpathSync(l.slice('worktree '.length).trim()) === cwdTop; } catch (_) { return false; }
+    });
+  return sameRepo ? cwdTop : planRoot;
+}
+
+// Snapshot the LANDABLE worktree into a throwaway index and return the tree SHA. The index is first
+// seeded from HEAD (`read-tree HEAD`), then `git add -A` layers the working state on top. This
+// captures exactly the set that will be committed and merged: tracked changes (INCLUDING a
+// modification to a tracked-but-gitignored file — committed then later gitignored, but still
+// tracked, so still landable) + untracked-NON-ignored files. Genuinely-untracked .gitignored paths
+// stay OUT OF SCOPE: the sink only ever stages approved/explicit paths (never `git add -f`), so such
+// a write never lands. A zero-commit repo has no HEAD → the read-tree is skipped (the bare
+// empty-index `add -A` still records a valid base). The index lives OUTSIDE the repo (os.tmpdir) and
+// is keyed by pid+tag so concurrent callers never collide, and so its own path can never leak into
+// the snapshot.
+function snapshotWorktree(root, tag) {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  const idx = path.join(os.tmpdir(), 'kw-barrier-idx-' + process.pid + '-' + String(tag).replace(/[^A-Za-z0-9_-]/g, '_'));
+  try { fs.unlinkSync(idx); } catch (_) {}
+  try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
+  const env = Object.assign({}, process.env, { GIT_INDEX_FILE: idx });
+  try {
+    try { execFileSync('git', ['-C', root, 'read-tree', 'HEAD'], { env, stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    execFileSync('git', ['-C', root, 'add', '-A'], { env, stdio: ['ignore', 'ignore', 'ignore'] });
+    return execFileSync('git', ['-C', root, 'write-tree'], { env, encoding: 'utf8' }).trim();
+  } finally {
+    try { fs.unlinkSync(idx); } catch (_) {}
+    try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
+  }
+}
+
+// A content address of the CODE-RELEVANT landable tree — the chain-receipt freshness key. A bare
+// headSha pin forces a full re-run on ANY new commit, including a docs-only / CHANGELOG-narrative /
+// run-state-only commit whose code tree is byte-identical (a measured ~30-min waste per finalize).
+// This hash flips iff a verdict-affecting path changes: snapshotWorktree() captures the
+// committed+working LANDABLE set, `ls-tree -r` enumerates it as `<mode> <type> <sha>\t<path>`,
+// isValidationInvisible() drops the inert prose / run state, and the surviving lines (path + blob
+// sha, so content changes flip the hash) are sha256'd in sorted order. Returns null on ANY git
+// failure so the caller fails CLOSED (treat as stale → re-run). `testConsumedExtra` is the optional
+// band widening, replayed from the receipt at the gate so producer and gate compute the IDENTICAL
+// band. THE PRODUCER AND THE GATE MUST BOTH REACH THIS ONE FUNCTION — a second copy is a second
+// answer, and the disagreement shows up as an unreproducible chains_stale.
+function computeCodeTreeHash(root, project, testConsumedExtra, opts) {
+  const crypto = require('crypto');
+  const { execFileSync } = require('child_process');
+  // Auto-detect self_host (consumer repos exclude CHANGELOG/README/docs from the candidate hash).
+  // An explicit opts.self_host overrides the probe (test seam + deterministic calls).
+  const selfHost = (opts && opts.self_host !== undefined) ? opts.self_host : detectSelfHostNpm(root);
+  const visibilityOpts = { self_host: selfHost };
+  let treeSha;
+  try { treeSha = snapshotWorktree(root, 'validation'); } catch (_) { return null; }
+  if (!treeSha) return null;
+  let listing;
+  try { listing = execFileSync('git', ['-C', root, 'ls-tree', '-r', treeSha], { encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER }); } catch (_) { return null; }
+  const lines = listing.split('\n').map(s => s.replace(/\r$/, '')).filter(Boolean).filter(line => {
+    const tab = line.indexOf('\t');
+    const rel = tab >= 0 ? line.slice(tab + 1) : line;
+    return !isValidationInvisible(rel, project, testConsumedExtra, visibilityOpts);
+  });
+  lines.sort();
+  return crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
+}
+
+const STALE_PATHS_LIMIT = 20;
+// ONE visibility filter behind both readers below, so the stale-culprit diagnostics and the
+// bookkeeping-advance predicate can never disagree about which paths a verdict depends on.
+// Drops everything isValidationInvisible() classifies as inert; returns a sorted, de-duped array.
+function filterVisiblePaths(rawLines, project, extra) {
+  const seen = new Set();
+  const paths = [];
+  for (const raw of rawLines) {
+    const rel = String(raw || '').trim().replace(/^\.\//, '');
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    if (!isValidationInvisible(rel, project, extra)) paths.push(rel);
+  }
+  paths.sort();
+  return paths;
+}
+
+// Culprit hints: the stamped COMMIT vs the TREE IN FRONT OF US (uncommitted edits + untracked
+// files included) — a diagnostic, so it casts the widest net. null on ANY git failure.
+function visibleChangedPathsSince(root, project, stampedHead, extra) {
+  const { execFileSync } = require('child_process');
+  let diffOut = '';
+  let untrackedOut = '';
+  try {
+    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, '--name-only'], { encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+    untrackedOut = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+  } catch (_) {
+    return null;
+  }
+  return filterVisiblePaths((diffOut + '\n' + untrackedOut).split('\n'), project, extra);
+}
+
+// A LEGACY (headSha-only) receipt pins the gate to an exact COMMIT, so ANY new commit reads as
+// stale — including the finalize transaction's OWN `chore: archive` bookkeeping commit, which the
+// transaction authors BEFORE this gate re-runs on a crash-resumed re-entry. That dead-ends the
+// resume behind a receipt only a hand re-run could refresh: a blocker the workflow itself created,
+// which is a repair obligation, never evidence. Resolve it with the SAME visibility predicate the
+// codeTreeHash arm already uses: the advance is inert iff every path differing between the two
+// COMMITS is validation-invisible.
+//
+// Deliberately commit-to-commit, NOT tree-to-commit. This arm is a statement about the receipt's
+// binding to a commit and has never considered working-tree dirt (a sha match passes today no
+// matter how dirty the tree is), so widening it to the worktree here would make a RESUME stricter
+// than the first-pass run it resumes.
+//
+// Not a loosening for genuine drift: one visible path (code, or test-consumed prose) still refuses,
+// and any git failure or unresolvable sha reads false. Modern receipts never reach here.
+function headAdvanceIsValidationInvisible(root, project, receipt, currentHead) {
+  const { execFileSync } = require('child_process');
+  const stampedHead = String((receipt && receipt.headSha) || '').trim();
+  const head = String(currentHead || '').trim();
+  if (!stampedHead || !head) return false;
+  const extra = Array.isArray(receipt && receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  let diffOut = '';
+  try {
+    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, head, '--name-only'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+  } catch (_) { return false; }
+  return filterVisiblePaths(diffOut.split('\n'), project, extra).length === 0;
+}
+
+function computeChainsStaleDiagnostics(root, project, receipt) {
+  if (!receipt || typeof receipt !== 'object') return null;
+  const stampedHead = String(receipt.headSha || '').trim();
+  if (!stampedHead || receipt.workTreeHash !== 'clean') return null;
+  const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  const paths = visibleChangedPathsSince(root, project, stampedHead, extra);
+  if (!paths || !paths.length) return null;
+  const proseCount = paths.filter(p => testConsumes(p, extra)).length;
+  const staleKind = proseCount === paths.length ? 'prose-only' : (proseCount === 0 ? 'code' : 'mixed');
+  const out = { stale_paths: paths.slice(0, STALE_PATHS_LIMIT), stale_kind: staleKind };
+  if (paths.length > STALE_PATHS_LIMIT) out.stale_paths_truncated = true;
+  return out;
+}
+function attachChainsStaleDiagnostics(payload, root, project, receipt) {
+  const diag = computeChainsStaleDiagnostics(root, project, receipt);
+  return diag ? Object.assign(payload, diag) : payload;
+}
+
+// The condition-specific operator templates for the validation family, carried across verbatim so
+// the text an operator reads at a refusal does not change with the code's address. Anything not
+// listed falls through to the kernel registry's family hint via composeOperatorHint.
+const VALIDATION_HINTS = Object.freeze({
+  chains_unverified: () => 'No chain receipt found. Run kaola-workflow-run-chains.js after the last commit so HEAD is covered.',
+  chains_stale: () => 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.',
+  chains_empty: () => 'Chain receipt has an empty chains[] array — zero chains were verified. Regenerate the receipt with kaola-workflow-run-chains.js over a resolved chain set (the producer itself refuses to write an empty chains[] receipt; see the no_chains refusal).',
+  chains_red: (ctx) => {
+    const timedOut = (ctx && Array.isArray(ctx.timedOutChains)) ? ctx.timedOutChains.filter(Boolean) : [];
+    if (timedOut.length) {
+      return `One or more chains are RED with no waiver — ${timedOut.join(', ')} hit the per-chain TIMEOUT (not necessarily a real test failure). Raise KAOLA_RUN_CHAINS_TIMEOUT_MS and re-run, or investigate a hang; any other (non-timeout) red chain still needs a fix or an explicit waiver (--accept-known-red <name>:<open-issue>).`;
+    }
+    return 'One or more chains are RED with no waiver. Fix the failing chain or waive it explicitly (--accept-known-red <name>:<open-issue>).';
+  },
+  chains_waived: (ctx) => `Chain(s) waived (accepted_red) in the receipt${ctx && Array.isArray(ctx.waivedChains) && ctx.waivedChains.length ? ': ' + ctx.waivedChains.join(', ') : ''}. A waiver is legal at adaptive finalize but a release tag requires an UNWAIVED all-green four-chain receipt — fix the waived chain and regenerate the receipt with kaola-workflow-run-chains.js at the release-candidate commit.`,
+  chains_incomplete: (ctx) => `Chain receipt does not cover the full declared chain set${ctx && Array.isArray(ctx.missingChains) && ctx.missingChains.length ? ' — missing: ' + ctx.missingChains.join(', ') : ''}. A release requires a receipt over EVERY declared test:kaola-workflow:* edition chain — regenerate with kaola-workflow-run-chains.js (no --chains subset) at the release-candidate commit.`,
+  final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification: record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
+  final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
+  final_validation_unbound: () => 'final-validation.md lacks a column-0 validated_candidate_hash — recompute the candidate hash and re-record after confirming the tree still matches the validated candidate; if uncertain, re-run the validation command.',
+  final_validation_stale: () => 'A relevant source/test/test-consumed file changed after validation — re-run the recorded validation command and re-record final-validation.md (including a fresh hash); never hand-patch the hash.',
+  repo_kind_undetermined: () => 'package.json is present but UNREADABLE/unparseable, so the repo kind (self-host npm vs consumer) cannot be determined. The finalize gate refuses rather than silently using the weaker consumer gate. Fix the file permissions or the malformed JSON, or remove package.json if this is genuinely a non-npm consumer repo, then re-run.',
+});
+function validationHint(reason, ctx) {
+  return composeOperatorHint(reason, ctx || {}, VALIDATION_HINTS,
+    'Validation refused (reason: ' + reason + '). Regenerate the chain receipt over the current tree and re-run.');
+}
+
+// The repo-kind discriminator, shared by the finalize gate and the release gate: self-host iff the
+// package.json at the GIT TOP-LEVEL declares an EDITION chain script
+// `test:kaola-workflow:<claude|codex|gitlab|gitea>` — the EXACT predicate run-chains resolveChains
+// uses, so the producer and the gate never disagree about the repo kind.
+//
+// THREE states, not two, so a transient fault never silently downgrades a genuine self-host to the
+// WEAKER consumer gate (a fail-OPEN):
+//   (1) package.json ABSENT (ENOENT)                    → GENUINE consumer.
+//   (2) PRESENT but UNREADABLE (EACCES/EIO) or UNPARSEABLE → INDETERMINATE: repo_kind_undetermined.
+//   (3) readable JSON, no edition chain script          → genuine consumer.
+// Returns { kind: 'self-host' | 'consumer' | 'undetermined', pkgPath, detail }.
+function classifyRepoKind(root) {
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  let pkgRoot = root;
+  try { pkgRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { pkgRoot = root; }
+  const pkgPath = path.join(pkgRoot, 'package.json');
+  let pkgRaw = null;
+  try {
+    pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { kind: 'consumer', pkgPath, detail: null };
+    return { kind: 'undetermined', pkgPath, detail: 'unreadable (' + ((e && e.code) || (e && e.message) || 'unknown') + ')' };
+  }
+  let pkg;
+  try { pkg = JSON.parse(pkgRaw); } catch (_) { return { kind: 'undetermined', pkgPath, detail: 'unparseable JSON' }; }
+  const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+  const names = ['claude', 'codex', 'gitlab', 'gitea'].filter(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+  return { kind: names.length ? 'self-host' : 'consumer', pkgPath, detail: null, chains: names };
+}
+
+// evaluateChainReceipt — THE ONE VALIDATION VERDICT, and the one place a finalize may still stop.
+//
+// First Principle 5: own your own verdicts. The question "did this repo's own tests pass over THIS
+// tree" is answered from artifacts this workflow produced, with no plan, no ledger and no external
+// pipeline in the loop. Called IN PROCESS — there is no subprocess to spawn and no file to parse a
+// verdict back out of.
+//
+// IT REPORTS; IT DOES NOT REFUSE. The chain receipt is precisely the content-bound witness the old
+// publication refusal named, and that refusal is now a report like every other one: the measurement
+// is unchanged and what the caller does with it is what changed. This function returns a typed
+// FINDING; the caller records it and acts. That is not a weakening of "own your own verdicts" — we
+// still compute the verdict from our own chains rather than from a system we do not own, and we
+// hand it to the party accountable for the result instead of enforcing it against them.
+//
+// DUAL-MODE by repo kind:
+//   • SELF-HOST (npm): a machine-verifiable `.cache/chain-receipt.json` should exist, be fresh, be
+//     non-empty, and be all-green-or-waived. Freshness PREFERS the codeTreeHash content address and
+//     FALLS BACK to the headSha pin for a legacy receipt that predates the field (a code or
+//     test-consumed-prose change still flips the hash).
+//   • CONSUMER (non-npm product repo): the agent OWNS verification, so the measurement is the
+//     agent's recorded `.cache/final-validation.md` — presence, a column-0 `verdict: pass`, and a
+//     column-0 `validated_candidate_hash` equal to the recomputed code-tree hash. It COMPARES TWO
+//     HASHES; it never re-executes tests.
+//
+// Typed classification family (structural, never string-matched), most severe first:
+//   chains_unverified > chains_stale > chains_empty > chains_red > chains_green, and on the
+//   consumer arm final_validation_unverified > final_validation_failed > final_validation_unbound >
+//   final_validation_stale > chains_green. `repo_kind_undetermined` classifies an indeterminate
+//   repo — the one state in which NO measurement can be taken at all.
+//
+// opts: { cacheDir (required), project, receiptPath, head, currentCodeTree, testConsumedExtra }.
+// Returns { classification, green, mode, chains, detail, operator_hint, ...diagnostics }.
+function evaluateChainReceipt(root, opts) {
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  const options = opts || {};
+  const cacheDir = options.cacheDir;
+  const projTag = options.project || null;
+  const finding = (classification, detail, extra) => Object.assign(
+    { classification, green: false, mode: null,
+      operator_hint: validationHint(classification, extra && extra.hintCtx), detail },
+    (extra && extra.payload) || {});
+
+  const repoKind = classifyRepoKind(root);
+  if (repoKind.kind === 'undetermined') {
+    return finding('repo_kind_undetermined',
+      ['package.json at ' + repoKind.pkgPath + ' is present but ' + repoKind.detail
+        + ' — the repo kind (self-host npm vs consumer) cannot be determined, so neither measurement'
+        + ' can be taken; the weaker consumer reading is NOT silently substituted']);
+  }
+  // The hash band addresses the GIT TOP-LEVEL so the gate and the run-chains producer — which uses
+  // its own getGitTopLevel(cwd) — address the SAME tree and never falsely disagree.
+  let hashRoot = root;
+  try { hashRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { hashRoot = root; }
+
+  if (repoKind.kind === 'self-host') {
+    const receiptPath = options.receiptPath || path.join(cacheDir, 'chain-receipt.json');
+    let receiptRaw = null;
+    try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
+    const withMode = f => Object.assign(f, { mode: 'chain-receipt' });
+    if (receiptRaw == null) {
+      return withMode(finding('chains_unverified', ['no chain receipt at ' + receiptPath
+        + ' — run kaola-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" is not evidence']));
+    }
+    let receipt = null;
+    try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
+    if (!receipt || typeof receipt !== 'object') {
+      return withMode(finding('chains_unverified', ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it']));
+    }
+    if (typeof receipt.codeTreeHash === 'string' && receipt.codeTreeHash) {
+      const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : VALIDATION_TEST_CONSUMES;
+      const currentCodeTree = options.currentCodeTree || computeCodeTreeHash(hashRoot, projTag, extra);
+      if (!currentCodeTree || String(receipt.codeTreeHash).trim() !== currentCodeTree) {
+        return attachChainsStaleDiagnostics(withMode(finding('chains_stale',
+          ['chain receipt codeTreeHash "' + receipt.codeTreeHash + '" != current code-tree hash "'
+            + (currentCodeTree || '(unresolved)') + '" — code (or test-consumed prose) changed since the chains ran; regenerate the receipt'])),
+        hashRoot, projTag, receipt);
+      }
+    } else {
+      const currentHead = options.head || (() => { try { return execFileSync('git', ['-C', hashRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
+      if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
+        // A sha mismatch alone cannot tell "the code advanced" from "the workflow advanced HEAD past
+        // its own receipt with a bookkeeping commit". Ask which paths actually moved before saying
+        // stale — an inert advance is not staleness.
+        if (!headAdvanceIsValidationInvisible(hashRoot, projTag, receipt, currentHead)) {
+          return attachChainsStaleDiagnostics(withMode(finding('chains_stale',
+            ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "'
+              + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'])),
+          hashRoot, projTag, receipt);
+        }
+      }
+    }
+    const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
+    const chainRows = chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true }));
+    // An EMPTY chains[] is NOT the same as an all-green one: the red filter below is vacuously empty
+    // over an empty array, so "no red chains" would be indistinguishable from "no chains ran at
+    // all". Classified on its own token BEFORE the red check, mirroring the producer's own no_chains
+    // guard.
+    if (chains.length === 0) {
+      return withMode(finding('chains_empty', ['chain receipt at ' + receiptPath
+        + ' has an empty chains[] array — zero chains were verified; regenerate the receipt with kaola-workflow-run-chains.js over a resolved chain set']));
+    }
+    const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
+    if (redChains.length) {
+      const names = redChains.map(c => c.name || '(unnamed)').join(', ');
+      const timedOutChains = redChains.filter(c => c && c.timed_out === true).map(c => c.name || '(unnamed)');
+      return withMode(finding('chains_red',
+        ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'],
+        { hintCtx: { timedOutChains },
+          payload: { chains: chainRows,
+            redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, timed_out: c.timed_out === true })) } }));
+    }
+    return { classification: 'chains_green', green: true, mode: 'chain-receipt', chains: chainRows,
+      detail: [chains.length + ' chain(s) green over this tree'], operator_hint: null };
+  }
+
+  const fvPath = path.join(cacheDir, 'final-validation.md');
+  const withFvMode = f => Object.assign(f, { mode: 'final-validation', chains: [] });
+  let fvRaw = null;
+  try { fvRaw = fs.readFileSync(fvPath, 'utf8'); } catch (_) { fvRaw = null; }
+  if (fvRaw == null || !fvRaw.trim()) {
+    return withFvMode(finding('final_validation_unverified', ['no agent validation evidence at ' + fvPath
+      + ' — a consumer (non-npm) repo records its validation in .cache/final-validation.md (with a column-0 `verdict: pass`), not a chain receipt']));
+  }
+  const fv = parseNodeVerdict(fvRaw);
+  if (!fv.found || fv.verdict !== 'pass') {
+    return withFvMode(finding('final_validation_failed',
+      ['.cache/final-validation.md does not record `verdict: pass` (column 0) — the agent\'s own validation did not pass (found verdict: ' + (fv.found ? fv.verdict : '(none)') + ')']));
+  }
+  // The verdict proves the validation PASSED, not that it validated THIS candidate. Both directions
+  // are classified rather than assumed away: an absent/malformed binding is final_validation_unbound
+  // (an omitted field must not read as bound); a mismatch is final_validation_stale, with both
+  // hashes carried so a reader can check the claim rather than take it on trust.
+  const bind = parseValidatedCandidateHash(fvRaw);
+  if (!bind.present || !bind.hash) {
+    return withFvMode(finding('final_validation_unbound', ['.cache/final-validation.md carries no well-formed'
+      + ' column-0 `validated_candidate_hash:` line — the pass verdict is not bound to a candidate snapshot; record one computed after the last relevant edit']));
+  }
+  const extra = Array.isArray(options.testConsumedExtra) ? options.testConsumedExtra : VALIDATION_TEST_CONSUMES;
+  const currentCandidate = options.currentCodeTree || computeCodeTreeHash(hashRoot, projTag, extra);
+  if (!currentCandidate || currentCandidate !== bind.hash) {
+    return withFvMode(finding('final_validation_stale',
+      ['recorded validated_candidate_hash "' + bind.hash + '" != current code-tree hash "'
+        + (currentCandidate || '(unresolved)') + '" — a relevant source/test/test-consumed file changed after the recorded validation; re-run the validation command and re-record final-validation.md with a fresh hash'],
+      { payload: { recorded_candidate_hash: bind.hash, current_candidate_hash: currentCandidate || null } }));
+  }
+  return { classification: 'chains_green', green: true, mode: 'final-validation', chains: [],
+    detail: ['agent validation recorded and bound to this tree'], operator_hint: null,
+    validated_candidate_hash: currentCandidate };
+}
+
+// evaluateReleaseReceipt — THE PRE-TAG RELEASE GATE. A check-only twin of the chain-receipt arm
+// above, pinned STRICTLY to the release-candidate commit. Reads only the receipt + local git
+// (self-owned: no CI/CD, no forge calls); mutates nothing. Deltas vs the finalize arm, each of them
+// load-bearing:
+//   • NO project folder — at release time the run is archived, so the receipt default is the git
+//     top-level's .cache/chain-receipt.json, overridable via opts.receiptPath.
+//   • STRICT headSha EQUALITY against the candidate (default HEAD). The codeTreeHash content-address
+//     relaxation is deliberately NOT used — a release tag names an exact commit, so only that
+//     commit's receipt counts.
+//   • headSha 'unknown'/missing is a REFUSAL, never a pass (release.js's own greenness probe treats
+//     headSha === 'unknown' as green; this gate must not copy that leniency — an unbound receipt
+//     proves nothing about the candidate).
+//   • a DIRTY-stamped receipt (workTreeHash != 'clean') refuses: the chains validated the commit
+//     PLUS uncommitted edits, not the tree the tag would name.
+//   • ANY waived chain (accepted_red) refuses chains_waived — a waiver is legal at finalize, never
+//     for a release tag.
+//   • the receipt must COVER the full resolved chain set. A SUBSET receipt is a legitimate producer
+//     output but never four-chain release evidence: chains_incomplete. An unresolvable chain set
+//     fails CLOSED with repo_kind_undetermined, because a release is self-host-by-definition and an
+//     empty expected set would make coverage vacuous.
+// Typed precedence family: chains_unverified > chains_stale > chains_empty > repo_kind_undetermined
+// > chains_incomplete > chains_red > chains_waived — coverage before greenness.
+// opts: { receiptPath, candidate }. Returns { ok: true, mode: 'release-check', candidate, chains }
+// or { ok: false, reason, operator_hint, errors, ... }.
+function evaluateReleaseReceipt(root, opts) {
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  const options = opts || {};
+  // KEY ORDER IS PART OF THE PORT: reason, hint, payload, errors — the emitted envelope is
+  // byte-identical to the verb this replaces, so a caller diffing the two sees nothing move.
+  const refuseWith = (reason, errors, extra) => Object.assign(
+    { ok: false, reason, operator_hint: validationHint(reason, extra && extra.hintCtx) },
+    (extra && extra.payload) || {}, { errors });
+
+  const receiptPath = options.receiptPath || path.join(root, '.cache', 'chain-receipt.json');
+  let receiptRaw = null;
+  try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
+  if (receiptRaw == null) {
+    return refuseWith('chains_unverified', ['no chain receipt at ' + receiptPath
+      + ' — run kaola-workflow-run-chains.js at the release-candidate commit so the tag names a verified tree']);
+  }
+  let receipt = null;
+  try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
+  if (!receipt || typeof receipt !== 'object') {
+    return refuseWith('chains_unverified', ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it']);
+  }
+  // Candidate = the exact commit the tag would name. rev-parse ^{commit} normalizes a ref/short sha
+  // to the full sha; an unresolvable candidate fails CLOSED into the stale arm ('(unresolved)').
+  const candidateArg = options.candidate || 'HEAD';
+  let candidate = '';
+  try { candidate = execFileSync('git', ['-C', root, 'rev-parse', '--verify', candidateArg + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { candidate = ''; }
+  const stamped = String(receipt.headSha || '').trim();
+  if (!stamped || stamped === 'unknown') {
+    return attachChainsStaleDiagnostics(refuseWith('chains_stale',
+      ['chain receipt headSha "' + (stamped || '(missing)') + '" is not bound to a commit — a release tag names an exact commit; regenerate the receipt with kaola-workflow-run-chains.js at the release-candidate commit']),
+    root, null, receipt);
+  }
+  if (!candidate || stamped !== candidate) {
+    return attachChainsStaleDiagnostics(refuseWith('chains_stale',
+      ['chain receipt headSha "' + stamped + '" != release candidate "' + (candidate || '(unresolved)')
+        + '" — regenerate the receipt at the candidate commit (strict sha equality; the finalize-time codeTreeHash relaxation does not apply to a release tag)']),
+    root, null, receipt);
+  }
+  if (receipt.workTreeHash !== 'clean') {
+    return refuseWith('chains_stale', ['chain receipt was stamped over a DIRTY worktree (workTreeHash "'
+      + (receipt.workTreeHash || '(missing)') + '" != "clean") — the chains validated the commit plus uncommitted edits, not the tree the tag would name; commit everything and regenerate the receipt']);
+  }
+  const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
+  if (chains.length === 0) {
+    return refuseWith('chains_empty', ['chain receipt at ' + receiptPath
+      + ' has an empty chains[] array — zero chains were verified; regenerate the receipt with kaola-workflow-run-chains.js over a resolved chain set']);
+  }
+  // COVERAGE: resolve the expected chain set from package.json (the exact predicate run-chains
+  // resolveChains and the finalize discriminator use, so producer and gate never disagree). Fail
+  // CLOSED on an unresolvable set: passing coverage against an empty expected set would let ANY
+  // receipt through (a fail-open).
+  const pkgPath = path.join(root, 'package.json');
+  let expectedChains = null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+    expectedChains = ['claude', 'codex', 'gitlab', 'gitea'].filter(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+  } catch (_) { expectedChains = null; }
+  if (!expectedChains || expectedChains.length === 0) {
+    return refuseWith('repo_kind_undetermined', ['cannot resolve the release chain set from ' + pkgPath
+      + ' (missing/unreadable/unparseable package.json, or no test:kaola-workflow:* edition chain scripts declared) — the release gate verifies the receipt against the FULL declared chain set and refuses rather than passing a vacuous coverage check']);
+  }
+  const gotChains = new Set(chains.map(c => c && c.name).filter(Boolean));
+  const missingChains = expectedChains.filter(n => !gotChains.has(n));
+  if (missingChains.length) {
+    return refuseWith('chains_incomplete',
+      ['chain receipt covers only [' + Array.from(gotChains).join(', ') + '] of the declared chain set ['
+        + expectedChains.join(', ') + '] — missing: ' + missingChains.join(', ')
+        + '; a release demands the FULL unwaived set — regenerate with kaola-workflow-run-chains.js (no --chains subset) at the candidate commit'],
+      { hintCtx: { missingChains }, payload: { missingChains, expectedChains } });
+  }
+  const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
+  if (redChains.length) {
+    const names = redChains.map(c => c.name || '(unnamed)').join(', ');
+    const timedOutChains = redChains.filter(c => c && c.timed_out === true).map(c => c.name || '(unnamed)');
+    return refuseWith('chains_red',
+      ['chain(s) RED with no waiver: ' + names + ' — a release candidate must be all-green; fix the chain and regenerate the receipt'],
+      { hintCtx: { timedOutChains },
+        payload: { redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, timed_out: c.timed_out === true })) } });
+  }
+  const waivedChains = chains.filter(c => c && c.accepted_red === true);
+  if (waivedChains.length) {
+    const names = waivedChains.map(c => c.name || '(unnamed)');
+    return refuseWith('chains_waived',
+      ['chain(s) waived (accepted_red): ' + names.join(', ')
+        + ' — a waiver is legal at adaptive finalize but a release tag requires an UNWAIVED all-green receipt; fix the waived chain and regenerate the receipt at the candidate commit'],
+      { hintCtx: { waivedChains: names },
+        payload: { waivedChains: waivedChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red_issue: c.accepted_red_issue || null })) } });
+  }
+  return { ok: true, mode: 'release-check', candidate,
+    chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: false })) };
+}
+
+// changedPathsSinceBase — the branch-level MEASUREMENT the finalize attribution refusal became.
+//
+// It used to compare this list against declared write sets and refuse anything left over. Declared
+// write sets are gone, and a free-text result is not a path set — parsing one back into one would
+// re-invent the declaration this design removed. So the comparison goes and the measurement stays:
+// the caller reports these paths and records them durably, and a reader decides whether they belong.
+// A git failure yields null (unknown), which is reported as such — it is not a verdict either way.
+function changedPathsSinceBase(root, base, project) {
+  const { execFileSync } = require('child_process');
+  let diffOut;
+  try {
+    diffOut = execFileSync('git', ['-C', root, 'diff', String(base || 'main') + '...HEAD', '--name-only'],
+      { encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+  } catch (_) { return null; }
+  const seen = new Set();
+  const out = [];
+  for (const raw of diffOut.split('\n')) {
+    const rel = String(raw || '').trim();
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    if (isBookkeepingPath(rel, project) || /^kaola-workflow\//.test(rel)) continue;
+    out.push(rel);
+  }
+  out.sort();
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The expansion-record readers. RELOCATED, NOT DESIGNED — they arrive here unchanged, and they are
+// here only because the archive rollup that reads them outlives the module they used to live in.
+// They are retiring machinery: nothing new should call them.
+// ---------------------------------------------------------------------------
+
+// A fence-aware, ambiguity-refusing section body reader — byte-parity with the classifier's oracle,
+// reimplemented here because this module is the cross-edition byte anchor and is base-named in all
+// four trees, so it cannot require the per-forge-renamed classifier. DUPLICATE heading or unclosed
+// fence yields '' (ambiguous is not "absent" and must never read as a body).
+function sectionBodyStrict(content, heading) {
+  const lines = String(content || '').split('\n');
+  const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
+  const fenceRe = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
+  let fam = '', fenceLen = 0;
+  let found = 0, collecting = false, done = false;
+  const out = [];
+  for (const line of lines) {
+    const m = line.match(fenceRe);
+    if (m) {
+      const run = m[1];
+      if (!fam) { fam = run[0]; fenceLen = run.length; }
+      else if (run[0] === fam && run.length >= fenceLen && /^\s*$/.test(m[2])) { fam = ''; fenceLen = 0; }
+    }
+    if (!fam && headRe.test(line)) {
+      found++;
+      if (found > 1) return '';
+      collecting = true;
+      continue;
+    }
+    if (collecting && !fam && /^##\s/.test(line)) { collecting = false; done = true; }
+    if (collecting) out.push(line);
+  }
+  if (fam) return '';
+  if (found !== 1) return '';
+  return (done || collecting) ? out.join('\n') : '';
+}
+
+const EXPANSION_RECORDS_HEADING = 'Expansion Records';
+const EXPANSION_DERIVATION_KEYS = Object.freeze(['grain', 'path', 'join', 'probe', 'serializer']);
+
+// The composed unit id — one derivation, so the writer, the reader and the reconciler can never
+// disagree about which ledger row belongs to which unit.
+function expansionUnitId(point, ordinal, name) {
+  return String(point) + '-r' + String(ordinal) + '-' + String(name);
+}
+
+// Parse `## Expansion Records` into an ordered list of blocks. Total and non-throwing: a malformed
+// block is REPORTED (`malformed`), never silently dropped.
+// Returns { records: [...], opens: Set<recordId>, discharges: Set<pointId>, blocks: [...] }.
+function parseExpansionRecords(content) {
+  const body = sectionBodyStrict(content, EXPANSION_RECORDS_HEADING);
+  const headerRe = /^(record|open|discharge)\(([^)]*)\)[ \t]*:[ \t]*$/;   // column 0
+  const fieldRe = /^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)[ \t]*$/;         // indented key: value
+  const blocks = [];
+  let cur = null;
+  const flush = () => { if (cur) blocks.push(cur); cur = null; };
+  for (const raw of String(body || '').split('\n')) {
+    const h = raw.match(headerRe);
+    if (h) { flush(); cur = { kind: h[1], key: h[2].trim(), fields: {}, units: [] }; continue; }
+    if (cur) {
+      const fm = raw.match(fieldRe);
+      if (fm) {
+        if (fm[1] === 'unit') cur.units.push(fm[2]);
+        else cur.fields[fm[1]] = fm[2];
+        continue;
+      }
+      if (raw.trim() !== '' && !/^[ \t]/.test(raw)) flush();
+    }
+  }
+  flush();
+
+  const records = [];
+  const opens = new Set();
+  const discharges = new Set();
+  for (const b of blocks) {
+    if (b.kind === 'open') { opens.add(b.key); continue; }
+    if (b.kind === 'discharge') { discharges.add(b.key); continue; }
+    const malformed = [];
+    const m = b.key.match(/^(.+)#([1-9][0-9]*)$/);
+    const point = m ? m[1] : (String(b.fields.point || '').trim() || '');
+    const ordinal = m ? Number(m[2]) : NaN;
+    if (!m) malformed.push('record id "' + b.key + '" is not <point>#<ordinal>');
+    const declaredPoint = String(b.fields.point || '').trim();
+    if (m && declaredPoint && declaredPoint !== point) {
+      malformed.push('record ' + b.key + ' declares point "' + declaredPoint + '" which disagrees with its id');
+    }
+    const units = [];
+    const seenNames = new Set();
+    for (const line of b.units) {
+      const cells = String(line).split('|').map(c => c.trim());
+      const name = cells[0] || '';
+      if (!/^[A-Za-z0-9_-]+$/.test(name)) { malformed.push('record ' + b.key + ' unit name "' + name + '" is not [A-Za-z0-9_-]+'); continue; }
+      if (seenNames.has(name)) { malformed.push('record ' + b.key + ' repeats unit name "' + name + '"'); continue; }
+      seenNames.add(name);
+      const dash = v => (v && v !== '—' && v !== '-') ? v : '';
+      units.push({
+        name,
+        id: expansionUnitId(point, ordinal, name),
+        role: cells[1] || '',
+        model: dash(cells[2] || '').toLowerCase(),
+        writeSetRaw: cells[3] || '—',
+        mode: (cells[4] || '').toLowerCase(),
+        dependsOnNames: dash(cells[5] || '').split(',').map(s => s.trim()).filter(Boolean),
+      });
+    }
+    if (!units.length) malformed.push('record ' + b.key + ' declares no unit lines');
+    records.push({
+      id: b.key,
+      point,
+      ordinal,
+      plan_hash: String(b.fields.plan_hash || '').trim().toLowerCase(),
+      derivation: EXPANSION_DERIVATION_KEYS.reduce((acc, k) => {
+        acc[k] = String(b.fields[k] == null ? '' : b.fields[k]).trim();
+        return acc;
+      }, {}),
+      units,
+      malformed,
+    });
+  }
+  records.sort((a, b2) => (a.point < b2.point ? -1 : a.point > b2.point ? 1 : (a.ordinal - b2.ordinal)));
+  return { records, opens, discharges, blocks };
+}
+
+// expansionRecordEfficiency — pure aggregate over EVERY record composed for ONE expansion point
+// (including superseded re-expansions). Answers, from data already in hand at archive time — no new
+// durable file, no metering, no timing:
+//   width      total units across every record on the point (the actual fan-out spent to finish it)
+//   mode       'serial' when ANY unit anywhere on the point declared mode serial, else 'co_open'
+//   serializer the first S1/S2/S3 token named in any record's recorded `serializer` derivation line,
+//              else 'none' — AUDIT-ONLY: it reads free text for a token, never re-derives anything
+//   rework     re-expansions beyond the first (records.length - 1)
+// Never throws: an empty/malformed `recs` answers the all-zero/'none' shape.
+function expansionRecordEfficiency(recs) {
+  const list = Array.isArray(recs) ? recs : [];
+  const width = list.reduce((sum, r) => sum + ((r && Array.isArray(r.units)) ? r.units.length : 0), 0);
+  const anySerial = list.some(r => (r && Array.isArray(r.units) ? r.units : []).some(u => u.mode === 'serial'));
+  const serializerText = list.map(r => (r && r.derivation && r.derivation.serializer) || '').join(' ');
+  const tagMatch = /\bS[123]\b/.exec(serializerText);
+  return {
+    width,
+    mode: anySerial ? 'serial' : 'co_open',
+    serializer: tagMatch ? tagMatch[0].toUpperCase() : 'none',
+    rework: Math.max(0, list.length - 1),
+  };
+}
+
+// The one durable coordination record: `kaola-workflow/<run>/mission-list.md`. Named here rather
+// than spelled at each reader so the file's name lives in the same byte-identical module every
+// edition already loads.
+const MISSION_LIST_FILE = 'mission-list.md';
+
+// parseGoal — the run's goal, read from the mission list's H1 (`# <goal>`). One line, at the top of
+// the one file, because the same usage limit that kills a subagent applies to the session holding
+// the goal in context.
+//
+// The H1 is the WHOLE grammar: the FIRST `# ` heading wins, so an item's prose further down cannot
+// displace it. Tolerates a leading UTF-8 BOM. Returns { goal: <string> } when present, { goal: null }
+// when absent — the same shape its readers already destructure. Pure (no fs).
+function parseGoal(content) {
+  const text = String(content || '').replace(/^﻿/, '');
+  const m = text.match(/^#[ \t]+(.+?)[ \t]*$/m);
+  const goal = m ? m[1].trim() : '';
+  return { goal: goal || null };
+}
+
 module.exports = {
   LANE_STALENESS_MS,
   LANE_STALENESS_PROVENANCE,
@@ -7141,4 +7952,24 @@ module.exports = {
   classifyDurableArtifact,
   isKernelRecordPath,
   projectRelativeArtifactPath,
+  // The validation surface. ONE band constant and ONE hash helper, read by BOTH the producer
+  // (run-chains) and the gates (finalize, release) — a second copy of either is a second answer.
+  VALIDATION_TEST_CONSUMES,
+  SELF_HOST_TEST_CONSUMED,
+  isBookkeepingPath,
+  detectSelfHostNpm,
+  classifyRepoKind,
+  resolveFinalizeCheckRoot,
+  computeCodeTreeHash,
+  headAdvanceIsValidationInvisible,
+  attachChainsStaleDiagnostics,
+  evaluateChainReceipt,
+  evaluateReleaseReceipt,
+  changedPathsSinceBase,
+  // Relocated expansion-record readers — retiring machinery kept alive only for the archive rollup.
+  sectionBodyStrict,
+  parseExpansionRecords,
+  expansionRecordEfficiency,
+  MISSION_LIST_FILE,
+  parseGoal,
 };

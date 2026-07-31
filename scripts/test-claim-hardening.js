@@ -1460,33 +1460,11 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     return { status: result.status, stdout: result.stdout, stderr: result.stderr, json };
   }
 
-  // --- #522 Scenario A: adaptive plan + NO chain-receipt → finalize_gate_unverified (RED) ---
-  {
-    let fx;
-    try {
-      fx = mkSelfHostRepo522('no-receipt');
-      const headSha = fx.headSha;
-
-      const r = runFinalize522(fx.wtRoot, fx.project);
-
-      // Pre-fix: cmdFinalize returns exit 0 + no refusal. Post-fix: must refuse.
-      assert(r.status !== 0,
-        '#522(A): finalize without chain-receipt must exit non-zero (pre-fix: exit ' + r.status + ', no gate)');
-      assert(r.json && r.json.reason === 'finalize_gate_unverified',
-        '#522(A): finalize_gate_unverified reason required (got ' + JSON.stringify(r.json) + ')');
-
-      // No `chore: archive` commit must land (HEAD must still be the impl commit).
-      const headAfter = G.git(fx.wtRoot, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-      assert(headAfter === headSha,
-        '#522(A): NO archive commit must land when gate refuses (HEAD changed: ' + headSha + ' → ' + headAfter + ')');
-
-    } finally {
-      if (fx) {
-        try { fs.rmSync(fx.mainRoot, { recursive: true, force: true }); } catch (_) {}
-        try { fs.rmSync(fx.wtRoot, { recursive: true, force: true }); } catch (_) {}
-      }
-    }
-  }
+  // DELETED: #522 Scenario A — "finalize without a chain-receipt must exit non-zero with
+  // finalize_gate_unverified, and land no archive commit". The validation arm no longer refuses: it
+  // classifies (`chains_unverified`) and reports, on the envelope and durably in
+  // finalization-summary.md's `## Validation`, and the finalize completes. The measurement is
+  // unchanged; only what the caller does with it changed.
 
   // --- #522 Scenario B: valid chain-receipt seeded → gate passes, finalize succeeds ---
   {
@@ -1519,61 +1497,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     }
   }
 
-  // --- #522 Scenario C: a plan-absent finalize now REFUSES adaptive_plan_missing (fast/full retired) ---
-  {
-    const tmpC = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522c-')));
-    const project = 'issue-522c';
-    const GIT_ENV = {
-      ...process.env,
-      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
-      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
-    };
-    try {
-      G.exec(tmpC, ['init', '-b', 'main'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      G.exec(tmpC, ['config', 'user.email', 't@t.com'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      G.exec(tmpC, ['config', 'user.name', 'Test'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      G.exec(tmpC, ['config', 'commit.gpgsign', 'false'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      fs.writeFileSync(path.join(tmpC, 'README.md'), 'x\n');
-      G.exec(tmpC, ['add', '-A'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-      G.exec(tmpC, ['commit', '-m', 'init'], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
-
-      // Project folder with NO workflow-plan.md and a stale legacy `workflow_path: fast` field.
-      // Under retirement a plan-absent finalize collapses to a typed adaptive_plan_missing refusal
-      // regardless of the stale field — never the retired fast N/A pass, never a retired-verifier shell.
-      const projDir = path.join(tmpC, 'kaola-workflow', project);
-      fs.mkdirSync(projDir, { recursive: true });
-      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
-        '# Kaola-Workflow State',
-        '## Project', 'name: ' + project, 'status: active',
-        '## Current Position', 'phase: 2', 'phase_name: Implementation',
-        'workflow_path: fast',
-        '## Sink', 'branch: workflow/' + project, 'issue_number: 522', 'sink: merge', 'run_posture: in-place'
-      ].join('\n') + '\n');
-
-      const r = spawnS522(process.execPath,
-        [CLAIM522, 'finalize', '--project', project],
-        {
-          cwd: tmpC, encoding: 'utf8', timeout: 30000,
-          env: Object.assign({}, process.env, {
-            KAOLA_WORKFLOW_OFFLINE: '1',
-            KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
-            KAOLA_WORKTREE_NATIVE: '0',
-          })
-        });
-
-      let jsonC = null;
-      try { jsonC = JSON.parse(String(r.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-      assert(r.status !== 0 && jsonC && jsonC.reason === 'finalize_gate_unverified'
-          && jsonC.inner_reason === 'adaptive_plan_missing',
-        '#522(C): a plan-absent finalize (stale fast field) must refuse adaptive_plan_missing, got status='
-          + r.status + ' output=' + JSON.stringify(jsonC));
-      assert(fs.existsSync(projDir),
-        '#522(C): the refused plan-absent finalize must leave the live project folder in place');
-
-    } finally {
-      try { fs.rmSync(tmpC, { recursive: true, force: true }); } catch (_) {}
-    }
-  }
+  // DELETED: #522 Scenario C — "a plan-absent finalize must refuse adaptive_plan_missing".
+  // There is no plan to be missing. The finalize door reads a chain receipt (or the agent's
+  // recorded final-validation evidence) and a git diff; it never opens a run record, so a folder
+  // without one finalizes normally. `adaptive_plan_missing` is gone with the artifact it named.
 }
 
 // --- #816: cmdFinalize owns the whole mechanical finalization as ONE resumable transaction ------
@@ -2121,25 +2048,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fxd); }
   }
 
-  // --- T6e: a GENUINELY stale receipt still refuses — the resume relief is not a gate hole -------
-  // The bookkeeping-advance allowance is scoped to advancement no chain verdict can see. A commit
-  // touching a real code path between the receipt and HEAD must still refuse chains_stale.
-  {
-    const fx = mk816('issue-816m');
-    try {
-      fs.writeFileSync(path.join(fx.wtRoot, 'impl.txt'), 'implementation CHANGED after the chains ran\n');
-      g816(fx.wtRoot, ['add', '-A']);
-      g816(fx.wtRoot, ['commit', '-m', 'feat: more implementation']);
-      const r = runFinalize816(fx);
-      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_gate_unverified'
-        && r.json.inner_reason === 'chains_stale',
-        '#816(T6e): a receipt left behind by a REAL code commit must still refuse chains_stale, got status='
-        + r.status + ' json=' + JSON.stringify(r.json));
-      const log = gOut816(fx.wtRoot, ['log', '--format=%s', '-5']);
-      assert(!/^chore: (finalize|archive) /m.test(log),
-        '#816(T6e): the stale gate must refuse BEFORE any commit, got log:\n' + log);
-    } finally { cleanup816(fx); }
-  }
+  // DELETED: #816 T6e — "a receipt left behind by a REAL code commit must still refuse
+  // chains_stale, before any commit". The bookkeeping-advance DISCRIMINATION it protected is intact
+  // and still classifies that case `chains_stale`; what is gone is the refusal that followed the
+  // classification. Finalize now completes and hands the finding to the orchestrator.
 
   // --- T7: attestation inversion — the contractor field/warning are gone, legacy is tolerated ---
   {
@@ -4123,25 +4035,16 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     '',
   ].join('\n');
   for (const editionClaim of claimScripts) {
-    // A stale non-adaptive workflow_path field (full / fast / a typo) and an absent field all
-    // collapse to adaptive_plan_missing — proving the TRAP-4 collapse across all four editions.
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale', canonicalReview, staleEvidence);
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'malformed', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n');
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'absent-field', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n', { omitWorkflowPath: true });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-adaptive', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { workflowPath: 'adaptive' });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-full', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { workflowPath: 'full' });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-fast', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { workflowPath: 'fast' });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-typo', malformedReview,
-      binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { workflowPath: 'typo' });
+    // DELETED: the seven PLAN-PATH cases (stale / malformed / absent-field / stale-adaptive /
+    // stale-full / stale-fast / stale-typo). Each asserted that a folder with no
+    // workflow-plan.md refuses `adaptive_plan_missing`, whatever its stale `workflow_path` field
+    // said. There is no plan to be missing: the finalize door reads a receipt and a git diff and
+    // never opens a run record, so all seven now finalize normally.
+    //
+    // The two STATE-MODE cases survive unchanged, and they are the reason the harness stays: an
+    // unreadable or wrong-type workflow-state.md still refuses before any side effect. That is a
+    // record-integrity refusal — the authority the transaction is about to stamp cannot be read —
+    // not a judgement about the work, and it is deliberately not converted.
     runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'state-missing', malformedReview,
       binding + '\ndomain_outcome: approved\nverdict: pass\n',
       { stateMode: 'missing', expectedInnerReason: 'state_missing' });
@@ -4308,51 +4211,10 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.rmSync(root, { recursive: true, force: true });
   }
 
-  // A legacy (fast/full) archive crash-resume has no frozen workflow-plan.md, so under retirement it
-  // can no longer resume-finalize through the removed Phase 5 verifier — a plan-absent archive is an
-  // adaptive_plan_missing refusal that leaves the terminal archive untouched. (A genuine ADAPTIVE
-  // crash-resume archive carries a workflow-plan.md and takes the --finalize-check path instead.)
-  {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-plan-absent-finalize-resume-')));
-    const project = 'issue-720-resume';
-    const archivePath = path.join(root, 'kaola-workflow', 'archive', project);
-    fs.mkdirSync(archivePath, { recursive: true });
-    const archivedState = [
-      '# Kaola-Workflow State',
-      '## Project',
-      'name: ' + project,
-      'status: closed',
-      '## Current Position',
-      'phase: 6',
-      'workflow_path: full',
-      'step: complete',
-      'next_command: none (archived)',
-      '## Sink',
-      'issue_number: 720',
-      'sink: merge',
-      '',
-    ].join('\n');
-    fs.writeFileSync(path.join(archivePath, 'workflow-state.md'), archivedState);
-    const result = spawnSync(process.execPath,
-      [claimScripts[0].file, 'finalize', '--project', project], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 30000,
-        env: Object.assign({}, process.env, {
-          KAOLA_WORKFLOW_OFFLINE: '1',
-          KAOLA_WORKTREE_NATIVE: '0',
-        }),
-      });
-    let json = null;
-    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
-        && json.inner_reason === 'adaptive_plan_missing',
-      'a plan-absent legacy archive crash-resume must refuse adaptive_plan_missing; got status=' + result.status
-        + ' output=' + JSON.stringify(json));
-    assert(fs.readFileSync(path.join(archivePath, 'workflow-state.md'), 'utf8') === archivedState,
-      'a plan-absent legacy archive crash-resume refusal must preserve the terminal archive state');
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  // DELETED: "a plan-absent legacy archive crash-resume must refuse adaptive_plan_missing and
+  // leave the terminal archive untouched". A run record's absence is not a fault — the finalize
+  // door does not read one — so this archive resumes rather than refusing, and the token it named
+  // no longer exists.
 }
 
 // --- #715 F1: restore-gate dest exemption is scoped to the EXACT dest ---------
@@ -4916,9 +4778,16 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 
   // CONTROL 1 (#833) — the CLOSED archive path over the same never-produced compliance artifact.
   // It used to fail closed on `state_compliance_authority_invalid`; with that tier retired the
-  // absent section is simply not an authority signal, so the closed archive SUCCEEDS — and it
-  // RENDERS the derived receipt table into the archived plan, hash-neutrally. The fail-closed
-  // posture that matters is unchanged and is proven by CONTROL 2 below (a post-freeze tamper).
+  // absent section is simply not an authority signal, so the closed archive SUCCEEDS. The
+  // fail-closed posture that matters is unchanged and is proven by CONTROL 2 below (a post-freeze
+  // tamper).
+  //
+  // DELETED with the render: the three assertions that the archive MATERIALIZES the derived
+  // `## Required Agent Compliance` table (its rows, its `pending` cell for an unreached node, and
+  // its plan_hash neutrality). The table was derived wholly from `## Nodes` x `## Node Ledger` x
+  // `.cache`, and re-materializing it would mean carrying that plan grammar into the module every
+  // edition shares byte-for-byte. What is asserted below is what still holds: an absent section is
+  // not an authority signal, and a stored section is left byte-for-byte alone.
   {
     const fx = fixture735({ impl: 'complete', review: 'pending', finalize: 'pending' },
       { complianceFor: null });
@@ -4932,14 +4801,8 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         '#735/#833 control: a CLOSED archive no longer refuses over an absent compliance section, got '
           + JSON.stringify(closed));
       const archivedPlan = fs.readFileSync(path.join(closed.dest, 'workflow-plan.md'), 'utf8');
-      assert(archivedPlan.includes('## Required Agent Compliance')
-        && /\| tdd-guide \(impl\) \| subagent-invoked \| evidence-binding: impl abc \|/.test(archivedPlan),
-      '#833: the archive RENDERS the derived receipt table from (nodes x ledger x .cache), got:\n'
-        + archivedPlan.slice(archivedPlan.indexOf('## Required Agent Compliance')));
-      assert(/\| finalize \(finalize\) \| pending \|/.test(archivedPlan),
-        '#833: an unreached node renders `pending` in the archived receipt');
       assert(validator735.computePlanHash(archivedPlan) === validator735.readStoredHash(archivedPlan),
-        '#833: the archive-time render is plan_hash-NEUTRAL — the archived plan still verifies');
+        '#833: archiving is plan_hash-NEUTRAL — the archived plan still verifies');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 
@@ -5620,9 +5483,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         '#837(P2): rung 1 must be reported, got ' + JSON.stringify(reasons));
       assert(reasons.includes('staging_guard_multi_project'),
         '#837(P2): rung 2 must be reported IN THE SAME pass, got ' + JSON.stringify(reasons));
-      assert(reasons.includes('chains_unverified'),
-        '#837(P2): rung 3 must be reported IN THE SAME pass, got ' + JSON.stringify(reasons));
-      assert(reasons.length >= 3,
+      // DELETED: the two assertions that put the validation rung in `reasons` and required
+      // `reasons.length >= 3`. Validation stopped being a PRECONDITION when it stopped being a
+      // verdict — it is reported in `checks.validation` for a reader to act on, and a non-green
+      // classification no longer makes `ok` false. Leaving it in `reasons` would have kept
+      // `--check` as the door the conversion removed, one surface over.
+      assert(reasons.length >= 2,
         '#837(P2): ALL N unmet preconditions come back from ONE invocation, got ' + JSON.stringify(reasons));
       const checks = (r.json && r.json.checks) || {};
       assert(checks.implementation_commit === 'missing',
@@ -5630,7 +5496,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       assert(checks.staging_guard === 'staging_guard_multi_project',
         '#837(P2): checks.staging_guard must carry the guard reason, got ' + JSON.stringify(checks));
       assert(checks.validation === 'chains_unverified',
-        '#837(P2): checks.validation must carry the validation gate inner reason, got ' + JSON.stringify(checks));
+        '#837(P2): checks.validation must carry the validation classification, got ' + JSON.stringify(checks));
       assert(Array.isArray(checks.dirty_paths) && checks.dirty_paths.includes('impl.txt'),
         '#837(P2): checks.dirty_paths must name the uncommitted implementation paths, got '
         + JSON.stringify(checks.dirty_paths));

@@ -3,8 +3,8 @@
 
 // generate-routing-surfaces.js — the routing-surface render engine + CLI.
 //
-// Regenerates the 30 template-shaped surfaces (plan-run x6 + next x6 + init x6
-// + finalize x6 + adapt x6) from one canonical skeleton per topic. A skeleton is the UNION
+// Regenerates the 18 template-shaped surfaces (next x6 + init x6 + finalize x6)
+// from one canonical skeleton per topic. A skeleton is the UNION
 // structure of a topic's command + skill surfaces, annotated with directives on
 // their own comment lines:
 //
@@ -44,13 +44,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const schema = require('./kaola-workflow-adaptive-schema.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
 
 const REPO = path.resolve(__dirname, '..');
 const TEMPLATE_DIR = path.join(REPO, 'templates', 'routing');
-const stripSlash = c => String(c).replace(/^\//, '');
 
 // ---------------------------------------------------------------------------
 // Editions — reuse the same per-forge dir layout the reachability checker uses
@@ -68,19 +66,10 @@ const SKILL_EDITIONS = [
   { forge: 'gitea', dir: 'plugins/kaola-workflow-gitea/skills' },
 ];
 
-// Topic config. Basenames derive from the schema registry (the same anchor the
-// T1/T2 emitted-target set uses) wherever the registry carries the topic —
-// today that is plan-run and adapt; the registry declares no init/finalize/next
-// constant, so those three name their basenames here. `next` and `init` are
+// Topic config — the whole command surface, three topics. `next` and `init` are
 // ASYMMETRIC (command basenames workflow-next / workflow-init vs skill
-// basenames kaola-workflow-next / kaola-workflow-init); finalize and adapt are
-// symmetric.
+// basenames kaola-workflow-next / kaola-workflow-init); finalize is symmetric.
 const TOPICS = {
-  'plan-run': {
-    skeleton: 'plan-run.skeleton.md',
-    command_basename: stripSlash(schema.PLAN_RUN_COMMAND),
-    skill_basename: schema.PLAN_RUN_SKILL,
-  },
   next: {
     skeleton: 'next.skeleton.md',
     command_basename: 'workflow-next',
@@ -96,11 +85,6 @@ const TOPICS = {
     command_basename: 'kaola-workflow-finalize',
     skill_basename: 'kaola-workflow-finalize',
   },
-  adapt: {
-    skeleton: 'adapt.skeleton.md',
-    command_basename: stripSlash(schema.ADAPT_COMMAND),
-    skill_basename: schema.ADAPT_SKILL,
-  },
 };
 
 // deriveSurfacePath — compute the surface path exactly as the reachability
@@ -110,7 +94,7 @@ function deriveSurfacePath(surface_type, dir, base) {
   return surface_type === 'command' ? `${dir}/${base}.md` : `${dir}/${base}/SKILL.md`;
 }
 
-// GENERATED_SURFACES — the 30 registry rows { topic, surface_type, forge, path,
+// GENERATED_SURFACES — the 18 registry rows { topic, surface_type, forge, path,
 // skeleton }. path is COMPUTED, never hand-typed.
 const GENERATED_SURFACES = (() => {
   const rows = [];

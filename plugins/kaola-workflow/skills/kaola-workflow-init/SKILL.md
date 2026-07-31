@@ -5,6 +5,15 @@ description: Use when setting up a project for Kaola-Workflow for Codex, also ca
 
 # Kaola-Workflow Init
 
+<!-- PIN: consent-in-conversation -->
+**Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
+taking one. Nothing collects that approval on your behalf, so this rule is the whole mechanism.
+Initializing a repository, rewriting an existing instructions file that already carries the user's
+own content, and editing runtime configuration under `$HOME` are all in that class: propose the
+change, show the minimal diff, and wait for the answer. Creating a missing scaffold file is not —
+get on with it.
+<!-- /PIN -->
+
 Bootstrap the current repo for repeated Kaola-Workflow for Codex cycles. Preserve existing project guidance and add only missing Codex-specific structure.
 
 ## Required Behavior
@@ -58,51 +67,49 @@ find docs -maxdepth 3 -type f 2>/dev/null | sort
 
 ## First Principles
 
-These are the workflow's tie-breaking axioms, applied in priority order whenever a situation is not already resolved by a specific rule, gate, or refusal.
+These are the workflow's tie-breaking axioms, applied in priority order whenever a situation is not already settled.
 
 1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome.
 2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
 3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and higher model tiers are means, not goals.
-4. **Machines decide facts; humans decide values.** Route irreversible or value-laden calls to the consent valve; leave everything checkable to run automatically.
+4. **Machines decide facts; humans decide values.** Take irreversible and value-laden calls to the user and ask, in conversation; leave everything checkable to run automatically.
 5. **Own your own verdicts.** Never let a system the workflow does not own (CI, an external service) be the judge of done.
 
-**Tie-breaker protocol:** when no shipped rule covers a situation, resolve it by walking these axioms in order and record a one-line derivation in the node's evidence file. This derivation is optional — its absence never blocks a gate.
-
-**Tighten-only boundary:** an axiom may only make an agent stricter, never looser. Never cite an axiom to skip a typed gate, refusal, or barrier — gates define the allowed space; axioms only break ties inside it.
+**Tie-breaker protocol:** when nothing else covers a situation, resolve it by walking these axioms in order and record a one-line derivation alongside the work. Recording it is useful and never required.
 
 **Dispatch production; keep decisions:** the orchestrator's context is the run's scarcest resource — a handoff costs once, inline residue taxes every later decision — so delegating discretionary production is the default and only the deciding stays inline; weigh the economics per case by judgment, with no justifier, evidence line, or approval attached.
 
-**Parallel by default:** concurrency is the standing default for independent work. Holding work serial is a positive claim that requires present-tense, checkable evidence — a named data dependency (name the artifact one unit consumes from the other), a named shared irreversible resource, or a host without isolated worktrees; guesses and anticipations ("might overlap") never justify serial. Wrongly-parallel work costs one bounded reconcile inside isolated legs; wrongly-serial work silently costs wall-clock on every frontier. This governs whether to run work concurrently — width stays sized to the true shape of the task.
+**Parallel by default:** concurrency is the standing default for independent work, and work that genuinely feeds other work runs in order because it has to. Nothing inspects that choice — no proof, no evidence line, no cap: you can tell the difference, and the frontier is in front of you. Width stays sized to the true shape of the task rather than pushed as wide as it will go.
 
 ## Kaola-Workflow
 
 - Start and resume all workflow work through the workflow router entrypoint your runtime installs.
-- Keep node work scoped, resumable, and recorded under `kaola-workflow/`.
-- Maintain `workflow-state.md` for active work; it records the frozen plan reference, the running set, pending gates, and the next command.
-- The workflow runs an adaptive, task-shaped DAG of role nodes: the `planner` authors and freezes `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler.
-- Delegate node work to the vendored subagents by default; the main session owns orchestration, review, validation, integration, and final decisions.
-- Name nodes by function: read/research → `code-explorer`/`knowledge-lookup`; strategy/blueprint → `planner`/`code-architect`; execution → `tdd-guide` (owns the test paths) and `implementer` (owns the production paths); gates → `code-reviewer`/`adversarial-verifier`; docs → `doc-updater`.
+- A run claims one issue — or one explicitly selected same-scope set — and records what it owns in `kaola-workflow/{project}/workflow-state.md`: which issue, which branch, which worktree.
+- The run's coordination record is `kaola-workflow/{project}/mission-list.md`: an H1 carrying the goal, then one item per mission with `item`, `status` (`todo`/`in-flight`/`done`), `dispatched`, and `result`. The agent writes it; no script owns it.
+- Three write moments, and they are the whole discipline: write the item at creation; write `dispatched` and flip to `in-flight` BEFORE the work goes out; write `result` and flip to `done` at close. Writing `dispatched` afterwards is the failure the file exists to prevent.
+- An item is a mission, not a specification — one line of prose carrying what to achieve plus the facts already known, never a role, a file list, a dependency edge, a model, or a shape. Decide how to run it when you reach it.
+- The frontier is not computed: it is the list minus done minus in-flight, visible by reading. How much of it to open, and whether to dispatch or work inline, is the agent's call and nothing inspects it.
+- Delegate work to the vendored subagents by default; the main session owns orchestration, review, validation, integration, and final decisions. Subagents and worktrees are tools — offered, and declinable.
 - Name roles by function and reasoning tier, never by a vendor model name — write `planner (reasoning tier)`, not `planner (<model>)`. Keep this section runtime-neutral so it reads correctly on every runtime that reads this repo.
-- For read/research nodes, spawn `code-explorer` for codebase research and `knowledge-lookup` when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed.
+- For read/research work, spawn `code-explorer` for codebase research and `knowledge-lookup` when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed.
 - Custody, not order, splits the two writing roles: `tdd-guide` authors the tests and writes no production code; `implementer` writes the production code and reads and runs the tests but never writes them.
 - Route build/type/lint validation failures to `build-error-resolver`; route behavior, coverage, and test-defect failures back to `tdd-guide`, the role that owns the test artifact.
+- Route documentation work to `doc-updater`, and require it to transcribe verified ground truth — real command output, real signatures, existing schema — or to say what it needs; never let it invent field names, keys, enum values, or example numbers.
 - Use the vendored agent role names exactly as installed; prefer short names like `planner`. When spawning a Kaola subagent, pass the role's configured model on the spawn call — each agent ships its model in its installed profile.
 - At workflow-router startup, fetch remote-tracking refs, classify local/upstream sync state, and ask before any risky synchronization.
 - Use a persistent-objective prompt so work continues until its objective and completion audit are satisfied.
 - That objective prompt must not use "next issue in line" or any phrasing that implies automatic cross-issue continuation. Each workflow run targets one issue; finishing it is the terminal event. The single-issue completion contract requires explicit re-direction for the next issue.
 - Treat nonessential workflow bookkeeping as autonomous: generated project names, collision suffixes like `-2`, cache/artifact paths, and harmless ordering choices are selected automatically and recorded.
-- For essential technical decisions, apply your own judgment, apply the selected answer, and record the evidence under `.cache/{node-id}.md`.
-- Prompt the user only for true external authorization or materially user-owned choices, including risky Git synchronization, destructive rewrites, deployment/credential actions, and issue or roadmap reorganization.
+- For essential technical decisions, apply your own judgment, apply the selected answer, and say what the evidence was.
+- Take irreversible and value-laden calls to the user and ask, in conversation, before acting: risky Git synchronization, destructive rewrites, deployment or credential actions, and issue or roadmap reorganization. Nothing collects that approval for you.
 - GitHub issues are the roadmap source of truth when available; `kaola-workflow/ROADMAP.md` is the local active-work mirror.
 - `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`; do not hand-edit the mirror.
 - Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
-- Active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and per-node `.cache/{node-id}.md` evidence.
 - Roadmap/research sessions create or refine issues; workflow runs implement one selected item and refresh the mirror.
-- After resume or compaction, read `workflow-state.md`, `workflow-plan.md` (the `## Node Ledger`), and the compliance ledger before continuing.
-- State Bootstrap And Repair: if the workflow router safely reconstructs one next command from `workflow-plan.md` and its `## Node Ledger`, run the state repair helper and repair `workflow-state.md` before routing.
-- The workflow path is adaptive.
-- End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
+- After resume or compaction, read `workflow-state.md` and `mission-list.md` before continuing: the H1 is the goal, `done` items carry what is already known, `in-flight` items are the decision to make, `todo` items are what remains.
+- Resuming an `in-flight` item means looking for the WORK, not the worker: if the output its `dispatched` line promised has landed, close it; otherwise re-dispatch, unless the dispatch is provably still alive.
+- End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and then the final commit and push.
 - Active issue work runs in a repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` by default; set `KAOLA_WORKTREE_NATIVE=0` to disable. See README for the full contract.
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
 
@@ -219,13 +226,15 @@ proof is the doctor's `dispatch_posture` field, not the feature flags alone.
 Trust the hooks once with `/hooks` in Codex. If a project-local `.codex/hooks.json`
 already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 
-### The adaptive workflow path
+### How a run is coordinated
 
-Adaptive is the workflow path; every install ships it and there is nothing to
-select or configure.
+One file per run. A run claims its issue, then writes
+`kaola-workflow/{project}/mission-list.md` — an H1 carrying the goal, then one item per mission
+with `item`, `status`, `dispatched`, and `result`. There is nothing to select or configure, and no
+script owns the file.
 
-A stale `KAOLA_PATH` / `--workflow-path` request from an old session or script is silently
-ignored — the claim always runs adaptive.
+A stale workflow-path request from an old session or script is silently ignored; there is only one
+way to run.
 
 6. Create only missing scaffold files:
 

@@ -35,6 +35,10 @@
 //   --output <path>               Override the receipt output path (default: .cache/chain-receipt.json)
 //   --mock-chain <name>:<script>  (for testing) Replace a chain's command with a shell script
 //   --json                        Emit a brief summary JSON to stdout after completion
+//   --release-check               Verify an EXISTING receipt against a release candidate and exit.
+//                                 Check-only (runs no chain, writes nothing, contacts no forge) and
+//                                 STRICTER than the finalize gate — see runReleaseCheck below.
+//                                 Optional: --candidate <sha-ish> (default HEAD), --receipt <path>.
 //
 // RECEIPT PATH (#546): plan-validator --finalize-check reads the chain receipt from
 // <plan-dir>/.cache/chain-receipt.json where plan-dir == path.dirname(<plan-path>). Run from the
@@ -132,6 +136,12 @@ const crypto = require('crypto');
 // drift surface). isTransientFetchStderr returns true iff captured stdout/stderr carries a known
 // transient-infra signature (TLS/handshake/ETIMEDOUT/ECONNRESET/429/EAI_AGAIN/5xx, classifier ~:853).
 const { isTransientFetchStderr } = require('./kaola-gitea-workflow-classifier.js');
+// The validation surface: the code-tree hash this producer stamps into the receipt, the band the
+// gate replays, and the release gate this file now serves. Producer and gate MUST reach the same
+// helper and the same constant or they disagree, and the disagreement surfaces as an
+// unreproducible chains_stale. The kernel is BASE-NAMED in all four trees and is absent from the
+// forge rename map, so this require renders unchanged in every edition port.
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 
 // #666: cap unbounded-in-repo-size git spawnSync/execFileSync calls at 64 MB — Node's default
 // maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
@@ -144,12 +154,9 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 // It has no fsync either. This is a COST guarantee, not a gate: both readers (--finalize-check /
 // --release-check) already fail closed on unparseable JSON with `chains_unverified`.
 //
-// Deliberately a LOCAL copy of the adaptive-schema primitive rather than a require of it: this file
-// is a rename-normalized forge family, so the gitlab/gitea ports are byte-derived by rewriting every
-// `kaola-workflow-<name>` token to `kaola-{forge}-workflow-<name>`. adaptive-schema is base-named in
-// ALL four trees (it is the cross-edition byte anchor), so a require of it here would normalize to a
-// `kaola-{forge}-workflow-adaptive-schema` module that does not exist and break both forge ports.
-// The helper below carries no forge-renameable token.
+// A LOCAL copy of the adaptive-schema primitive: the helper below carries no forge-renameable token
+// and predates the kernel require above, and duplicating six lines of tmp+fsync+rename is cheaper
+// than re-proving the receipt-write path.
 function writeReceiptAtomic(filePath, content) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
@@ -797,8 +804,42 @@ function resolveChains(cwd) {
   };
 }
 
+// --release-check — THE PRE-TAG RELEASE GATE, hosted here because this is the file that PRODUCES
+// the receipt it reads. Check-only: it runs no chain, writes nothing, and touches no forge. The
+// verdict itself lives in the kernel (adaptiveSchema.evaluateReleaseReceipt) so the finalize gate
+// and this one share one band, one hash and one precedence family; this function is only the CLI
+// skin — flag parsing and the typed envelope.
+//
+// Emits the same envelope shape as every other refusal on this CLI: `{ result, reason,
+// operator_hint, errors, ... }` under --json, one `typed refusal: <reason>` line otherwise. Exit 1
+// on any refusal, 0 on pass.
+function runReleaseCheck(args, cwd) {
+  const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+  const json = args.includes('--json');
+  const root = getGitTopLevel(cwd) || cwd;
+  const verdict = adaptiveSchema.evaluateReleaseReceipt(root, {
+    receiptPath: flagVal('--receipt'),
+    candidate: flagVal('--candidate'),
+  });
+  if (!verdict.ok) {
+    const payload = Object.assign({ result: 'refuse' }, verdict);
+    delete payload.ok;
+    process.stdout.write((json ? JSON.stringify(payload)
+      : 'typed refusal: ' + verdict.reason + ' (' + (verdict.errors || []).join('; ') + ')') + '\n');
+    return 1;
+  }
+  process.stdout.write((json
+    ? JSON.stringify({ result: 'pass', mode: 'release-check', candidate: verdict.candidate, chains: verdict.chains })
+    : 'release ok (' + verdict.chains.length + ' chains green, unwaived, at ' + verdict.candidate + ')') + '\n');
+  return 0;
+}
+
 async function main(argv) {
   const args = argv.slice(2);
+
+  // The release gate is a READ, not a run: dispatch it before any chain resolution, receipt path or
+  // outcome-telemetry wiring, none of which it uses.
+  if (args.includes('--release-check')) return runReleaseCheck(args, process.cwd());
 
   let requestedChains = null; // null = run all resolved chains (config or npm-default)
   // #546: collect the receipt-path flags; resolve AFTER parsing so precedence (--output > --plan >
@@ -880,7 +921,17 @@ async function main(argv) {
         '\n' +
         'On a host with core headroom the chains run CONCURRENTLY (max-of-chains makespan);\n' +
         'a constrained host falls back to serial. Override with KAOLA_RUN_CHAINS_CONCURRENCY\n' +
-        '(auto | serial | <N>).\n'
+        '(auto | serial | <N>).\n' +
+        '\n' +
+        '--release-check [--candidate <sha-ish>] [--receipt path] [--json]\n' +
+        '  The PRE-TAG release gate: verify an existing receipt against a release candidate.\n' +
+        '  Check-only — runs no chain, writes nothing, contacts no forge. STRICTER than the\n' +
+        '  finalize gate: strict headSha equality against the candidate (default HEAD; the\n' +
+        '  codeTreeHash relaxation does not apply to a tag), a dirty-stamped receipt refuses,\n' +
+        '  ANY waived chain refuses, and the receipt must cover EVERY declared\n' +
+        '  test:kaola-workflow:* edition chain. Typed precedence: chains_unverified >\n' +
+        '  chains_stale > chains_empty > repo_kind_undetermined > chains_incomplete >\n' +
+        '  chains_red > chains_waived. Exit 0 on pass, 1 on any typed refusal.\n'
       );
       return 0;
     } else {
@@ -1025,21 +1076,13 @@ async function main(argv) {
   const headSha = getHeadSha(cwd);
   const workTreeHash = getWorkTreeHash(cwd);
   // #547 (D-547-01): the code-relevant-tree content hash — the chain-receipt freshness key the
-  // plan-validator --finalize-check gate recomputes. Computed via the SAME exported helper the gate
-  // calls (require, like next-action.js) so producer and gate never disagree. The plan's optional
-  // `validation_test_consumes` band widening is read from the frozen plan and RECORDED in the receipt
-  // so the gate replays the IDENTICAL band. Any failure → null/[] → the gate falls back to the headSha
-  // pin (fail-closed). Self-host-only, so the require is reached only on the Kaola-Workflow repo.
-  const planValidator = require('./kaola-gitea-workflow-plan-validator.js');
+  // finalize gate recomputes. Computed via the SAME exported helper the gate calls, over the SAME
+  // exported band constant, so producer and gate never disagree. The band is RECORDED in the receipt
+  // so the gate replays the identical list even if the constant later changes. Any failure → null →
+  // the gate falls back to the headSha pin (fail-closed).
   const gitTop = getGitTopLevel(cwd);
-  let validationTestConsumes = [];
-  try {
-    let planContent = null;
-    if (pathOpts.plan) planContent = fs.readFileSync(pathOpts.plan, 'utf8');
-    else if (pathOpts.project) planContent = fs.readFileSync(path.join(gitTop, 'kaola-workflow', pathOpts.project, 'workflow-plan.md'), 'utf8');
-    if (planContent) validationTestConsumes = planValidator.parseValidationTestConsumes(planContent);
-  } catch (_) { validationTestConsumes = []; }
-  const codeTreeHash = planValidator.computeCodeTreeHash(gitTop, pathOpts.project || null, validationTestConsumes);
+  const validationTestConsumes = adaptiveSchema.VALIDATION_TEST_CONSUMES.slice();
+  const codeTreeHash = adaptiveSchema.computeCodeTreeHash(gitTop, pathOpts.project || null, validationTestConsumes);
 
   // Ensure .cache directory exists before running chains.
   const outputDir = path.dirname(outputPath);

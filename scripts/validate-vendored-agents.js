@@ -20,7 +20,7 @@ const vendoredAgents = [
 // upstream/blob-sha/sha256/license/copyright asserts and the agents-source.md vendored-table row
 // do NOT apply. They still must be valid managed agents (front matter at byte 0, name, model,
 // marker). Two sub-kinds: (a) locally-authored adaptive-path roles with no upstream blob
-// (adversarial-verifier/implementer/workflow-planner); (b) code-reviewer + security-reviewer,
+// (adversarial-verifier/implementer); (b) code-reviewer + security-reviewer,
 // which were FORKED from ECC into local agents (#279 follow-up) so they can carry the
 // Kaola-Workflow findings-emission contract in their bodies — they remain DERIVED from ECC (MIT,
 // Affaan Mustafa), but that attribution is now honored at the project level in docs/agents-source.md
@@ -34,7 +34,6 @@ const localAgents = [
   'metric-optimizer',
   'security-reviewer',
   'synthesizer',
-  'workflow-planner',
 ];
 const allAgents = [...vendoredAgents, ...localAgents];
 
@@ -56,7 +55,7 @@ function assertIncludes(file, needle) {
 
 // ---------------------------------------------------------------------------
 // Future-agent wall (per-role evidence contract). Every node-role agent — the managed roster
-// MINUS the orchestration role (the workflow-planner authors the plan and is not a node-role
+// MINUS nothing: every vendored agent is a dispatchable role (the orchestration role that authored
 // evidence producer) — must carry BOTH
 // halves of the evidence contract, so the NEXT agent added to the roster cannot silently ship
 // without it:
@@ -69,7 +68,7 @@ function assertIncludes(file, needle) {
 const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
 const { ROLE_CAPABILITY_MANIFEST, ROLE_KINDS } = require('./kaola-workflow-adaptive-schema');
 
-const NON_NODE_ROLES = new Set(['workflow-planner']);
+const NON_NODE_ROLES = new Set([]);
 
 // role -> one-line reason a node-role agent may ship with fewer than two registry tokens. EMPTY:
 // every current node role reaches the >=2-token floor. A future presence-only role (whose evidence

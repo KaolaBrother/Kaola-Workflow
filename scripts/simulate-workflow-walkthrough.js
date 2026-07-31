@@ -380,23 +380,11 @@ function testKeepOpenArchiveStamp() {
     // #522: seed final-validation.md (consumer-mode repo — no package.json → final-validation gate).
     // No feature branch here so git diff main...HEAD is empty → attribution sweep passes vacuously.
     fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
-    // #653 NEGATIVE LEG FIRST: a WRONG validated_candidate_hash must refuse final_validation_stale
-    // BEFORE any archive/commit side effect — cmdFinalize shells --finalize-check ahead of
-    // archiveProjectDir, so the live folder must survive and no archive may exist.
-    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
-      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + 'f'.repeat(64) + '\n');
-    {
-      const staleRun = runNode(claimScript, ['finalize', '--project', 'issue-333', '--keep-open'], tmp);
-      const staleOut = JSON.parse(staleRun.stdout.trim().split('\n').filter(Boolean).pop());
-      assert(staleRun.status !== 0 && staleOut.result === 'refuse'
-        && staleOut.reason === 'finalize_gate_unverified' && staleOut.inner_reason === 'final_validation_stale',
-        '#653: a mismatched validated_candidate_hash must refuse finalize_gate_unverified/final_validation_stale, got ' + staleRun.stdout);
-      assert(fs.existsSync(path.join(dir, 'workflow-state.md')),
-        '#653: the stale refusal must fire BEFORE the archive rename — live folder must survive');
-      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-333')),
-        '#653: the stale refusal must leave NO archive side effect');
-    }
-    // Re-record with the REAL current hash (the --candidate-hash producer) → gate passes.
+    // DELETED: the #653 NEGATIVE LEG — a wrong validated_candidate_hash refusing
+    // final_validation_stale before any archive side effect. The BINDING CHECK is intact and still
+    // classifies that exact case `final_validation_stale`; the refusal that followed it is gone, so
+    // the finalize completes and carries the finding to the orchestrator instead.
+    // Re-record with the REAL current hash (the --candidate-hash producer) → validation reads green.
     const cand333 = json(runNode(planValidatorScript,
       [path.join(dir, 'workflow-plan.md'), '--candidate-hash', '--json'], tmp)).validated_candidate_hash;
     fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
@@ -12160,17 +12148,12 @@ function testClosureAuditArchiveContentDrift832() {
       '#832: the empty .cache/ skeleton must be reported with workflow-state.md missing; got: '
         + JSON.stringify(drift)
     );
-    assert(
-      byProject.has('issue-8325')
-        && byProject.get('issue-8325').missing.includes('.cache/n1.md')
-        && byProject.get('issue-8325').missing.includes('.cache/n2.md'),
-      '#832: an archive whose ledger proves recorded node evidence must be reported when that '
-        + 'evidence is absent; got: ' + JSON.stringify(drift)
-    );
-    assert(
-      !byProject.get('issue-8325').missing.includes('.cache/n3.md'),
-      '#832: an n/a ledger row carries no evidence obligation; got: ' + JSON.stringify(byProject.get('issue-8325'))
-    );
+    // DELETED: the two (ii) assertions — an evidence-gutted archive is reported because its
+    // `## Node Ledger`'s `complete` rows PROVE `.cache/n1.md`/`.cache/n2.md` were recorded, and an
+    // `n/a` row carries no such obligation. That required set was derived from the ledger, and the
+    // ledger is going away. The audit's OTHER archive-content classes below are unchanged, and the
+    // (ii) fixture is deliberately left standing as the over-report control: an archive whose
+    // .cache/ is empty must NOT be reported on a derivation nothing can perform any more.
     assert(
       !byProject.has('issue-8326'),
       '#832: a COMPLETE archive must produce no finding; got: ' + JSON.stringify(byProject.get('issue-8326'))
@@ -21892,25 +21875,12 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
       return JSON.parse(lines[lines.length - 1]);
     };
 
-    // --- Direction (1): WITHOUT --base → gate refuses finalize_gate_unverified (inner
-    //     unattributed_change naming aaa/x.js). Pinned current behavior; NO archive created. ---
-    {
-      const r = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
-        cwd: tmp, encoding: 'utf8', timeout: 60000,
-        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-      });
-      assert(r.status !== 0,
-        '#539 (1): finalize WITHOUT --base on a shared branch must exit non-zero, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
-      const out = parseLastJson(r.stdout);
-      assert(out.result === 'refuse' && out.reason === 'finalize_gate_unverified',
-        '#539 (1): refuse reason must be finalize_gate_unverified, got ' + JSON.stringify(out));
-      assert(/unattributed_change/.test(JSON.stringify(out)),
-        '#539 (1): inner reason must name unattributed_change, got ' + JSON.stringify(out));
-      assert(/aaa\/x\.js/.test(JSON.stringify(out)),
-        '#539 (1): the refuse must name the sibling-issue file aaa/x.js, got ' + JSON.stringify(out));
-      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive')),
-        '#539 (1): no archive must be created on gate refusal');
-    }
+    // DELETED: Direction (1) — "WITHOUT --base the gate refuses finalize_gate_unverified with an
+    // inner unattributed_change naming the sibling file aaa/x.js, and creates no archive". The
+    // attribution SWEEP is what went: its teeth were declared write sets, and there are none, so
+    // there is nothing to compare a changed path against. The diff itself survives as the
+    // `changed_paths` report — which is exactly what `--base` still scopes, and what direction (2)
+    // below exercises.
 
     // --- Direction (2): WITH --base <ISSUE2_BASE> → sweep scopes to issue-2's own diff → pass →
     //     status: closed. (RED before the fix: cmdFinalize does not forward --base yet.) ---

@@ -128,13 +128,18 @@ Links to other codemaps
 
 **OPTIONAL:** Minor bug fixes, cosmetic changes, internal refactoring.
 
-## Capability Refusal
+## When Your Tools Fall Short
 
-If the dispatch brief requires an action your tool manifest cannot perform, do not approximate or
-simulate the result — stop and return `capability_gap: <missing capability> — <required action>` as
-your compact summary. A deliverable produced by working around a missing tool is a defect, not a
-best effort.
+If the work needs an action your tools cannot perform, do not approximate or simulate the result —
+stop and report exactly which capability you lack and what it was needed for. A deliverable produced
+by working around a missing tool is a defect, not a best effort.
 
-## Evidence Contract
+## Escalating Value Calls
 
-Evidence contract — you are a WRITE-role agent. SELF-WRITE your evidence directly into your seeded `.cache/{node-id}.md`. The seeded file already carries an `evidence-binding: <node-id> <nonce>` header line — read it, preserve it verbatim, never add/alter/strip it, and append your content below. Include every content-bearing token your role produces (`docs_updated`) with a non-empty value (a lossy one-line record is refused at close).
+Irreversible and value-laden calls belong to the user, not to you. Deleting or rewriting
+documentation someone still relies on, changing a documented public contract, or restructuring a doc
+tree are their calls. Say what you would do and why, and ask.
+
+## Output Contract
+
+Report every doc you updated and what each change reconciled against, plus the commands you ran. Say where the result landed — the paths you changed and, if you wrote a longer record to a file, that file's path. Give the whole record, not a one-line paraphrase of it; a doc surface you deliberately skipped is part of the record too, with its reason.

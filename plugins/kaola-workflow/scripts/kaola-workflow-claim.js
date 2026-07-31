@@ -22,9 +22,10 @@ const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath } = adaptiveSchema;
 // #579: lane classifier (resolveSessionMarker + classifyLane) — imported in-process (no subprocess).
 const { resolveSessionMarker, classifyLane } = require('./kaola-workflow-classifier');
-// #441: parseGoal — reads the `goal:` line from ## Meta in workflow-plan.md.
-// #763: the shared expansion-efficiency derivation (the archive rollup line below).
-const { parseGoal, parseLedger, parseExpansionRecords, expansionRecordEfficiency, renderAgentComplianceSection } = require('./kaola-workflow-plan-validator');
+// parseGoal reads the run's goal (the mission list's H1); the two expansion readers feed the
+// archive rollup line below. All three come from the kernel, so nothing in the finalize/archive
+// path loads a plan reader.
+const { parseGoal, parseExpansionRecords, expansionRecordEfficiency } = adaptiveSchema;
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 // #356: bound every gh round-trip so a hung remote can never wedge a claim indefinitely (the
@@ -2713,29 +2714,12 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     }
     authorityDowngraded = reason;
   }
-  // #707: fail-closed node-evidence floor for the archive-owning sink (opts.requireNodeEvidence).
-  // Both archive branches below (linked-run copy AND in-place rename) destroy the last live copy;
-  // the in-place rename path never runs verifyArchiveComplete at all ("trivially complete" —
-  // true for COPY fidelity, blind to a source that was ALREADY evidence-gutted). So the guard
-  // runs HERE, before any mutation (state stamping, sentinel rewrites, rename/copy): when the
-  // `## Node Ledger` proves node evidence was recorded during the run (complete rows) but the
-  // source folder no longer holds it, refuse and leave everything untouched. Opt-in because
-  // finalize paths archiving minimal/legacy folders enforce their evidence policy elsewhere; the
-  // sink is the last writer before the live copies disappear.
-  if (statusValue === 'closed' && opts && opts.requireNodeEvidence) {
-    const recordedEvidence = listRecordedNodeEvidence(src);
-    const missingEvidence = recordedEvidence.filter(rel => !fs.existsSync(path.join(src, ...rel.split('/'))));
-    if (missingEvidence.length) {
-      return {
-        archived: false, archive_incomplete: true, reason: 'node_evidence_missing',
-        missing: missingEvidence,
-        detail: 'the ## Node Ledger proves node evidence was recorded during the run (complete rows), but '
-          + missingEvidence.length + ' evidence file(s) are absent from the live folder being archived. '
-          + 'Archiving now would persist an evidence-empty archive and delete the last live copy. '
-          + 'Restore the run\'s .cache evidence (the worktree copy, if it still exists) and re-run.'
-      };
-    }
-  }
+  // The #707 pre-flight evidence floor stood here: it asked the `## Node Ledger` which evidence
+  // files the run had recorded, and refused when the folder about to be archived no longer held
+  // them. There is no ledger to ask any more, and a free-text result is not a file list — the same
+  // vanished-declaration this campaign hits everywhere. What survives is the completeness
+  // MEASUREMENT in verifyArchiveComplete: every file the source holds must reach the destination
+  // before either live copy is deleted.
   const state = stateFile(root, project);
   let archiveIssueNumber = null;
   // #328: read issue_numbers early (before rename) so we have the full member list
@@ -2752,26 +2736,12 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // workflow-state.md is silently skipped by readActiveFolders and the project goes invisible.
     writeFile(state, content);
   } catch (_) {}
-  // #833: RENDER the `## Required Agent Compliance` receipt table into the plan being archived.
-  // The table is no longer maintained during a run (nothing mirrors the ledger any more), so this
-  // is where the human-readable receipt is materialized — ONCE, at the boundary, from the same
-  // derivation every reader uses. Hash-NEUTRAL by construction: the section lives outside
-  // computePlanHash, so the archived plan still verifies against its frozen plan_hash. BEFORE the
-  // rename/copy so the rendered copy is what lands in archive/. Best-effort: a render failure must
-  // never turn a legitimate archive into a refusal — the ledger and .cache evidence it derives
-  // from are archived either way.
-  try {
-    const archivePlanPath = path.join(src, 'workflow-plan.md');
-    if (fs.existsSync(archivePlanPath)) {
-      const planText = fs.readFileSync(archivePlanPath, 'utf8');
-      const cacheDir = path.join(src, '.cache');
-      const rendered = renderAgentComplianceSection(planText, {
-        readEvidence: nodeId => fs.readFileSync(path.join(cacheDir, nodeId + '.md'), 'utf8'),
-        readProvenance: () => fs.readFileSync(path.join(cacheDir, 'provenance-log.jsonl'), 'utf8'),
-      });
-      if (rendered !== planText) writeFile(archivePlanPath, rendered);
-    }
-  } catch (_) {}
+  // The `## Required Agent Compliance` receipt table used to be rendered into the plan here, at the
+  // archive boundary. It was derived — wholly — from `## Nodes` x `## Node Ledger` x `.cache`, and
+  // rendering it again would mean carrying that whole plan grammar into the one module every
+  // edition shares byte-for-byte, purely to re-materialize a cosmetic table for a record shape that
+  // is going away. A plan that already carries a stored section is left byte-for-byte alone, as it
+  // always was: nothing reads it for a verdict.
   // #324: sanitize the archived finalization-summary's PRE-SINK sentinels so a later audit reading
   // only the archive cannot mistake a merged/closed run for one still "READY FOR FINAL GIT GATE".
   // BEFORE renameSync so the sanitized copy is what lands in archive/. Swallow-on-error (robust).
@@ -2824,12 +2794,11 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     dest = path.join(archiveBase, project + (suffix || ''));
     if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
     copyDir(src, dest);
-    // (c) verify archive completeness before any deletion. #676: SOURCE-RELATIVE — every evidence
-    // file that exists in the live SOURCE folder must survive into the copied DEST; a lossy copy
-    // that dropped the frozen plan / finalization summary / a per-node .cache gate-evidence file
-    // refuses here, before either live copy is deleted (see verifyArchiveComplete). #707: an
-    // evidence-requiring archiver additionally demands the ledger-proven node evidence in DEST.
-    const v = verifyArchiveComplete(src, dest, { requireLedgerEvidence: !!(opts && opts.requireNodeEvidence) });
+    // (c) verify archive completeness before any deletion. #676: SOURCE-RELATIVE — every file that
+    // exists in the live SOURCE folder must survive byte-for-byte into the copied DEST; a lossy copy
+    // that dropped the run record / finalization summary / a per-item .cache evidence file refuses
+    // here, before either live copy is deleted (see verifyArchiveComplete).
+    const v = verifyArchiveComplete(src, dest);
     if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, dest };
     // (d) delete BOTH live copies — only after copy+verify confirmed.
     fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
@@ -3322,26 +3291,27 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
 // The verdict is deleted; the measurement under it is kept and named for what it actually is.
 //
 // Advisory only — never throws, never blocks finalize.
-// planDirs: ordered array of directories to search for workflow-plan.md (archive dest first,
-//   then live). Returns { declared, source, probed }:
+// planDirs: ordered array of run folders to search (archive dest first, then live).
+//   Returns { declared, source, probed }:
 //   declared — a goal TEXT was found. Not a claim that anything was achieved.
-//   source   — 'env' (KAOLA_GOAL, non-empty after trim) | 'plan' (a `goal:` line in ## Meta) | null.
-//   probed   — every plan path examined, in order, so a reader can see exactly what was inspected
+//   source   — 'env' (KAOLA_GOAL, non-empty after trim) | 'plan' (the mission list's H1) | null.
+//   probed   — every file examined, in order, so a reader can see exactly what was inspected
 //              and re-run the same check by hand. Empty when KAOLA_GOAL answered first and no file
 //              was opened — which is itself the honest record of what happened.
+// The goal is read from the run record's H1. A folder carrying no mission list declares nothing,
+// which is the honest answer rather than a second reader kept alive for a record shape that is
+// going away.
 function computeGoalDeclaration(planDirs) {
   const probed = [];
   const envGoal = (process.env.KAOLA_GOAL || '').trim();
   if (envGoal) return { declared: true, source: 'env', probed };
-  // Probe each planDir for a workflow-plan.md with a goal: line.
   for (const dir of (planDirs || [])) {
     if (!dir) continue;
-    const planPath = path.join(dir, adaptiveSchema.PLAN_FILE);
-    probed.push(planPath);
+    const recordPath = path.join(dir, adaptiveSchema.MISSION_LIST_FILE);
+    probed.push(recordPath);
     try {
-      if (!fs.existsSync(planPath)) continue;
-      const content = fs.readFileSync(planPath, 'utf8');
-      const { goal } = parseGoal(content);
+      if (!fs.existsSync(recordPath)) continue;
+      const { goal } = parseGoal(fs.readFileSync(recordPath, 'utf8'));
       if (goal) return { declared: true, source: 'plan', probed };
     } catch (_) {}
   }
@@ -3777,52 +3747,86 @@ function finalizeAuthorityHint(livePresent, innerReason) {
   return 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.';
 }
 
-// The #522 finalize validation gate as a pure probe: shells the plan-validator's --finalize-check
-// (read-only — its landable-tree snapshot lives in an index OUTSIDE the repo) and returns the typed
-// verdict. Returns { ok: true } or { ok: false, gate?, inner_reason, operator_hint, errors }.
+// THE FINALIZE REPORT. Two measurements, neither of which refuses.
+//
+// (A) VALIDATION — did this repo's own tests pass over THIS tree? Answered from artifacts this
+//     workflow produced (a chain receipt, or the agent's recorded final-validation evidence) with
+//     no external pipeline in the loop, computed IN PROCESS: no subprocess, no plan path, no plan.
+//     Read-only — the landable-tree snapshot it takes lives in an index OUTSIDE the repo.
+//
+//     It used to slam the door. It no longer does. The chain receipt is exactly the content-bound
+//     witness the publication refusal was named for, and that refusal converts like all the others:
+//     delete the verdict, keep the measurement. The finding is reported on the envelope and written
+//     durably into finalization-summary.md; the orchestrator reads it and owns the outcome — re-run
+//     the chains, fix the red, or proceed knowingly. What is NOT weakened is who computes the
+//     answer: it is still this workflow's own chains, never a system we do not own.
+//
+// (B) THE CHANGED-PATH REPORT — this used to be an attribution sweep that compared the branch diff
+//     against declared write sets and refused the remainder. Declared write sets are gone; a
+//     free-text result is not a path set, and parsing one back into one would re-invent the
+//     declaration. So the comparison goes and the measurement stays.
+//
+// For both: the durable write is not optional. A conversion that emits a finding and drops the
+// state the refusal was freezing is a deletion, not a conversion.
+//
+// A missing run record is not an error either: the mission list is a convention, not a
+// precondition, and neither measurement reads it.
+//
+// Returns { validation, changed_paths, changed_paths_probe } — no ok, because there is nothing here
+// to fail.
 function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
-  const planPath = path.join(authorityDir, adaptiveSchema.PLAN_FILE);
-  if (!fs.existsSync(planPath)) {
-    // Adaptive is the only workflow path. A finalize with NO frozen workflow-plan.md present is an
-    // unconditional typed refusal — there is no sibling verifier to shell and no N/A pass. A stale
-    // non-adaptive workflow_path field is reported for diagnostics but does not change the verdict.
-    return {
-      ok: false,
-      gate: 'workflow_path',
-      inner_reason: 'adaptive_plan_missing',
-      workflow_path: field(authorityState, 'workflow_path') || adaptiveSchema.ADAPTIVE_PATH,
-      operator_hint: 'Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.',
-      errors: ['adaptive_plan_missing']
-    };
-  }
-  const validatorScript = path.join(__dirname, 'kaola-workflow-plan-validator.js');
-  let gateResult = null;
-  let gateError = null;
+  const cacheDir = path.join(authorityDir, '.cache');
+  // The candidate under validation is the working tree the caller invoked from, which on a
+  // source-missing resume is NOT the tree the archived run folder sits in.
+  const gateRoot = adaptiveSchema.resolveFinalizeCheckRoot(root);
+  const project = path.basename(authorityDir);
+  const validation = adaptiveSchema.evaluateChainReceipt(gateRoot, { cacheDir, project });
+  // `base` scopes the diff to a project's OWN divergence on a shared multi-issue branch. A git
+  // failure yields null — reported as "not measured", never as a verdict either way.
+  const changed = adaptiveSchema.changedPathsSinceBase(gateRoot, base || 'main', project);
+  return {
+    validation,
+    changed_paths: changed || [],
+    changed_paths_probe: changed === null ? 'unavailable' : 'measured',
+  };
+}
+
+// The durable half of the two reports. `## Validation` and `## Changed Paths` in the run's
+// finalization-summary.md are where the measurements outlive the process that took them — without
+// them the conversion from refusal to report would be a deletion. Both are idempotent across a
+// crash-resumed re-entry (the heading is checked first) and swallow-on-error, like the other
+// summary writers: they record measurements, so they must never be able to fail a finalize.
+function appendSummarySection(projectDir, heading, lines) {
   try {
-    // #539: forward --base to the whole-plan --finalize-check ONLY, so the attribution sweep can
-    // scope to a project's OWN diff on a SHARED multi-issue branch. The per-node --barrier-check
-    // STILL rejects --base (the anti-laundering guard) — unchanged.
-    const validatorArgv = [validatorScript, planPath, '--finalize-check', '--json'];
-    if (base) validatorArgv.push('--base', base);
-    const raw = execFileSync(process.execPath, validatorArgv,
-      { cwd: root, encoding: 'utf8', timeout: 120000 });
-    gateResult = JSON.parse(raw.trim());
-  } catch (e) {
-    // Non-zero exit from validator means a refusal — parse its JSON output.
-    const stdout = e && e.stdout ? String(e.stdout).trim() : '';
-    try { gateResult = JSON.parse(stdout); } catch (_) { gateError = stdout || String(e && e.message || e); }
+    const p = path.join(projectDir, 'finalization-summary.md');
+    let s = '';
+    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
+    if (new RegExp('^' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'm').test(s)) return false;
+    const block = [heading, ''].concat(lines).join('\n') + '\n';
+    writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
+    return true;
+  } catch (_) { return false; }
+}
+function persistValidationToSummary(projectDir, validation) {
+  const v = validation || {};
+  const lines = ['classification: ' + (v.classification || 'unknown'),
+    'green: ' + (v.green === true)];
+  if (v.mode) lines.push('mode: ' + v.mode);
+  for (const d of (v.detail || [])) lines.push('', d);
+  if (!v.green && v.operator_hint) lines.push('', v.operator_hint);
+  return appendSummarySection(projectDir, '## Validation', lines);
+}
+function persistChangedPathsToSummary(projectDir, changed, probe) {
+  const lines = [];
+  if (probe === 'unavailable') {
+    lines.push('not measured — the branch diff could not be enumerated.');
+  } else if (!changed || !changed.length) {
+    lines.push('none outside the run-state and documentation bands.');
+  } else {
+    lines.push('Files this branch changed outside the run-state and documentation bands:', '');
+    for (const rel of changed) lines.push('- ' + rel);
   }
-  if (!gateResult || gateResult.result !== 'pass') {
-    const innerReason = (gateResult && gateResult.reason) || gateError || 'validator_error';
-    return {
-      ok: false,
-      inner_reason: innerReason,
-      operator_hint: (gateResult && gateResult.operator_hint)
-        || 'Resolve the inner refusal, then re-run finalize. No archive commit was made.',
-      errors: (gateResult && gateResult.errors) || [innerReason]
-    };
-  }
-  return { ok: true };
+  return appendSummarySection(projectDir, '## Changed Paths', lines);
 }
 
 // ONE pass over EVERY finalize precondition. Returns { checks, reasons }:
@@ -3830,12 +3834,17 @@ function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
 //   checks.workflow_state        — 'ok' or the workflow_state rung's inner reason
 //   checks.implementation_commit — the probe state, or 'not_checked' outside the commit-gate lane
 //   checks.staging_guard         — 'ok' or the guard's reason
-//   checks.validation            — 'pass' or the plan-validator --finalize-check inner reason
+//   checks.validation            — the validation CLASSIFICATION ('chains_green' when green)
 //   checks.dirty_paths           — uncommitted non-`kaola-workflow/` paths in the run root
 // `reasons` carries the MOST SPECIFIC token per UNMET precondition — an inner reason wherever the
 // ladder has one — and is EMPTY when the run is finalize-ready. Nothing here short-circuits: a
 // failed rung never hides a later one, which is the whole point of the subtraction. A pending
 // worktree→main sync is machinery-repairable and is therefore reported as state, never as a reason.
+//
+// The validation rung is REPORTED, never a reason: it stopped being a precondition when it stopped
+// being a verdict. A non-green classification shows up in `checks.validation` for a reader to act
+// on, and does not make `ok` false — otherwise `--check` would still be the door this conversion
+// removed, one surface over.
 function evaluateFinalizePreconditions(root, project, opts) {
   const options = opts || {};
   const reasons = [];
@@ -3844,7 +3853,8 @@ function evaluateFinalizePreconditions(root, project, opts) {
     workflow_state: 'ok',
     implementation_commit: 'not_checked',
     staging_guard: 'ok',
-    validation: 'pass',
+    validation: 'not_checked',
+    changed_paths: [],
     dirty_paths: []
   };
 
@@ -3889,18 +3899,16 @@ function evaluateFinalizePreconditions(root, project, opts) {
     }
   }
 
-  // The validation gate needs a proven authority to read the frozen plan from. Without one the
-  // workflow_state rung above already owns the refusal, so report the gate as unevaluated rather
-  // than inventing a second verdict for the same missing artifact.
+  // The validation measurement needs a proven authority to locate the run's `.cache/` from. Without
+  // one the workflow_state rung above already owns the refusal, so report it as unevaluated rather
+  // than inventing a second answer for the same missing artifact.
   if (!authority.authorityDir) {
     checks.validation = 'not_checked';
   } else {
-    const gate = probeFinalizeValidationGate(root, authority.authorityDir, authority.authorityState,
+    const report = probeFinalizeValidationGate(root, authority.authorityDir, authority.authorityState,
       options.base || null);
-    if (!gate.ok) {
-      checks.validation = gate.inner_reason;
-      reasons.push(gate.inner_reason);
-    }
+    checks.validation = (report.validation && report.validation.classification) || 'not_checked';
+    checks.changed_paths = report.changed_paths;
   }
 
   return { checks, reasons };
@@ -4094,33 +4102,28 @@ function cmdFinalize() {
       }
     }
   }
-  // #522: FINALIZE GATE — BEFORE any irreversible side effect (archive rename, worktree removal,
-  // issue close). When a workflow-plan.md is present (adaptive run), shell the plan-validator's
-  // --finalize-check which enforces the dual-mode validation gate:
-  //   SELF-HOST (npm): chain-receipt.json bound to HEAD must exist, be fresh, and be all-green.
-  //   CONSUMER (non-npm): .cache/final-validation.md with column-0 `verdict: pass` must exist.
-  // Both modes also run the attribution sweep (B). On any non-`pass` result, refuse to commit —
-  // exit non-zero with finalize_gate_unverified carrying the inner reason. Gate is UNCONDITIONAL
-  // for BOTH the --keep-worktree path and the in-place path, placed here (before archiveProjectDir)
-  // so no side effect has occurred on refusal. Adaptive is the only workflow path, so a finalize
-  // with NO frozen workflow-plan.md present is an unconditional typed `adaptive_plan_missing`
-  // refusal — there is no retired fast/full verifier to shell and no N/A pass.
+  // THE TWO FINALIZE REPORTS — taken BEFORE the archive moves the folder, so both land in the copy
+  // that is kept:
+  //   validation    — SELF-HOST (npm): the chain receipt over THIS tree. CONSUMER (non-npm): the
+  //                   agent-recorded .cache/final-validation.md, bound to the candidate it
+  //                   validated. Classified, never enforced.
+  //   changed_paths — what this branch touched outside the run-state and documentation bands.
+  // NEITHER refuses, and neither is allowed to: a finalize whose receipt is stale, red or missing
+  // still completes, carrying the finding where the orchestrator will read it. That party owns the
+  // outcome — re-run the chains, fix the red, or proceed knowingly.
   // #837: probed by the SAME pure helper the one-pass `--check` report reads. `--base` is sourced
-  // from the flag and/or KAOLA_FINALIZE_BASE env, defaulting to UNSET (→ the validator's `main`
-  // default). The per-node --barrier-check STILL rejects --base (the anti-laundering guard).
+  // from the flag and/or KAOLA_FINALIZE_BASE env, defaulting to `main`.
+  let finalizeValidation = null;
+  let finalizeChangedPaths = [];
+  let finalizeChangedProbe = 'measured';
   {
-    const gate = probeFinalizeValidationGate(root, finalizeAuthorityDir, finalizeAuthorityState,
+    const report = probeFinalizeValidationGate(root, finalizeAuthorityDir, finalizeAuthorityState,
       args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null);
-    if (!gate.ok) {
-      const emit = { result: 'refuse', reason: 'finalize_gate_unverified' };
-      if (gate.gate) emit.gate = gate.gate;
-      emit.inner_reason = gate.inner_reason;
-      if (gate.workflow_path) emit.workflow_path = gate.workflow_path;
-      emit.operator_hint = gate.operator_hint;
-      emit.errors = gate.errors;
-      output(emit, 1);
-      return;
-    }
+    finalizeValidation = report.validation;
+    finalizeChangedPaths = report.changed_paths || [];
+    finalizeChangedProbe = report.changed_paths_probe || 'measured';
+    persistValidationToSummary(finalizeAuthorityDir, finalizeValidation);
+    persistChangedPathsToSummary(finalizeAuthorityDir, finalizeChangedPaths, finalizeChangedProbe);
   }
   const result = archiveProjectDirSafely(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
   if (!closureContract.archiveSucceeded(result) && result.archive_incomplete !== true) {
@@ -4629,14 +4632,23 @@ function cmdFinalize() {
   // code reflect the invariant verdict (exit 4 on ok:false) for an exit-code-gated caller. Without
   // --strict the exit stays 0 (the orchestrator + existing tests read the JSON, not $?).
   const strictFailCode = (args.strict && invariantResult && invariantResult.ok === false) ? 4 : undefined;
-  output(Object.assign({ status: 'closed' }, result, {
+  // `validation` and `changed_paths` are MEASUREMENTS on the envelope, never verdicts: what this
+  // repo's own chains said about this tree, and what this branch touched outside the run-state and
+  // documentation bands. Nothing compares either to anything, and neither can fail the finalize.
+  // Both are durable in the archived finalization-summary.md under `## Validation` /
+  // `## Changed Paths` — the envelope copies are for whoever is reading the run right now.
+  const finalizeEmit = Object.assign({ status: 'closed' }, result, {
     claim_label_removed: claimLabelRemoved,
     archive_state_stamped: archiveStateStamped,
     issue_disposition: issueDisposition,
+    validation: finalizeValidation,
+    changed_paths: finalizeChangedPaths,
     closure_receipt: closureReceipt,
     closure_invariants: invariantResult,
     finalize_transaction: finalizeTx
-  }), strictFailCode);
+  });
+  if (finalizeChangedProbe !== 'measured') finalizeEmit.changed_paths_probe = finalizeChangedProbe;
+  output(finalizeEmit, strictFailCode);
 }
 
 function cwdInside(target) {
@@ -5303,28 +5315,6 @@ function listSourceEvidenceFiles(srcDir) {
   return rels;
 }
 
-// #707: the run record that SURVIVES a gutted .cache/ — every `## Node Ledger` row whose status is
-// `complete` was evidence-checked at close time (the per-node lifecycle refuses to close a node
-// whose .cache/<node-id>.md is missing), so the ledger inside workflow-plan.md PROVES those
-// evidence files were recorded during the run even when the folder being archived no longer holds
-// them (the worktree-postured divergence: evidence written to the WORKTREE's live copy while the
-// archiver reads the MAIN checkout's). Returns the expected `.cache/<id>.md` relative paths;
-// [] when the folder has no parseable plan/ledger (legacy non-adaptive folders, discards, minimal
-// fixtures) so plan-less archives are never affected. n/a / pending / in_progress rows carry no
-// evidence obligation. Node ids are validated against the sanitizeNodeId grammar so a corrupted
-// ledger cell can never smuggle a path segment into the required set.
-function listRecordedNodeEvidence(dirPath) {
-  let content;
-  try { content = fs.readFileSync(path.join(dirPath, 'workflow-plan.md'), 'utf8'); } catch (_) { return []; }
-  let ledger;
-  try { ledger = parseLedger(content); } catch (_) { return []; }
-  const rels = [];
-  for (const [id, status] of ledger) {
-    if (status === 'complete' && /^[A-Za-z0-9_-]+$/.test(id)) rels.push('.cache/' + id + '.md');
-  }
-  return rels;
-}
-
 // #426/#676: verify a freshly-COPIED archive preserved every evidence file the live SOURCE held,
 // BEFORE either live copy is deleted. SOURCE-RELATIVE (see listSourceEvidenceFiles): `srcDir` is
 // the live folder, `destDir` the copied archive. Returns { ok, missing } where `missing` lists the
@@ -5339,14 +5329,17 @@ function listRecordedNodeEvidence(dirPath) {
 // it is the single #426 archive-integrity invariant (a state-less source is malformed and must not
 // be deleted before its archive is proven to carry the state file).
 //
-// #707 hardening (opt-in via opts.requireLedgerEvidence): a SOURCE-relative check is blind to a
-// source that was ALREADY gutted before the copy — a faithful copy of an evidence-empty folder
-// passes trivially, which is exactly how evidence-empty archives shipped. When the caller attests
-// it is archiving a completed run (the sink transaction), the `## Node Ledger`'s complete rows are
-// added to the required set, so an archive missing ledger-proven node evidence can NEVER pass —
-// regardless of what the source currently holds. Off by default: finalize paths that archive
-// minimal/legacy folders keep the unchanged source-relative contract.
-function verifyArchiveComplete(srcDir, destDir, opts) {
+// The completeness property is a MEASUREMENT, not a declaration: the archive is complete iff every
+// file present under the run folder before the move is present, byte-for-byte, after it. It used to
+// be reinforced by a required set DERIVED from the run record — every `complete` ledger row implies
+// its `.cache/<id>.md` — which is the same "declared set" the finalize attribution sweep rested on,
+// one layer down, and it goes for the same reason: there is no ledger to derive it from. Nothing is
+// weakened at the door that matters, because the recursive source walk below already requires every
+// file the source holds, including the ones no ledger row ever implied.
+//
+// The refusal STAYS. Losing a durable record while moving it is exactly the irreversible harm a
+// refusal is for, and this one fires before either live copy is deleted.
+function verifyArchiveComplete(srcDir, destDir) {
   if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'], mismatched: [] };
   try {
     const srcRoot = fs.lstatSync(srcDir);
@@ -5388,10 +5381,6 @@ function verifyArchiveComplete(srcDir, destDir, opts) {
   // subtree prevented the recursive enumerator from observing it.
   const required = new Set(listSourceEvidenceFiles(srcDir));
   required.add('workflow-state.md');
-  // #707: ledger-proven node evidence is required in DEST even when the SOURCE no longer holds it.
-  if (opts && opts.requireLedgerEvidence) {
-    for (const rel of listRecordedNodeEvidence(srcDir)) required.add(rel);
-  }
   for (const rel of sourceFiles.keys()) required.add(rel);
   const missing = [];
   const mismatched = invalid.slice();
@@ -6046,8 +6035,6 @@ module.exports = {
   worktreePathFor,
   verifyImplPublished,
   verifyArchiveComplete,
-  // #707: ledger-proven node-evidence enumeration — the run record that survives a gutted .cache/.
-  listRecordedNodeEvidence,
   cmdVerifySink,
   closeIssueIdempotent,
   // #686: barrier-ref archive-time reap (sanitizeBarrierTag) + the legacy keep-set sweep

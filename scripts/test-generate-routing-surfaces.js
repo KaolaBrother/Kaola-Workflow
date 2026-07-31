@@ -62,28 +62,37 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
 }
 
 // ---------------------------------------------------------------------------
-// Re-plan control-plane slots: the generated plan-run and next families must
-// render the edition-local aggregator basename while keeping one canonical
-// control-plane contract for command and skill surfaces.
+// Scripts-resolver slots: ONE resolver per topic family, two surface shapes,
+// three forges. It is the seam every sibling script invocation downstream
+// depends on, so each rendering must name its OWN edition's claim aggregator
+// and set both variables the skeleton then uses — a resolver that renders the
+// wrong edition's basename fails silently at runtime, on the consumer's box.
 // ---------------------------------------------------------------------------
 {
   const ir = { slots: SLOTS, splices: {} };
-  const expectedScripts = {
-    github: 'kaola-workflow-replan.js',
-    gitlab: 'kaola-gitlab-workflow-replan.js',
-    gitea: 'kaola-gitea-workflow-replan.js',
+  const expectedClaim = {
+    github: 'kaola-workflow-claim.js',
+    gitlab: 'kaola-gitlab-workflow-claim.js',
+    gitea: 'kaola-gitea-workflow-claim.js',
   };
-  for (const slotName of ['pr-replan-control-plane', 'nx-replan-control-plane']) {
+  const foreignClaim = {
+    github: ['kaola-gitlab-workflow-claim.js', 'kaola-gitea-workflow-claim.js'],
+    gitlab: ['kaola-gitea-workflow-claim.js'],
+    gitea: ['kaola-gitlab-workflow-claim.js'],
+  };
+  for (const slotName of ['nx-scripts-resolver', 'fz-scripts-resolver']) {
     for (const surfaceType of ['command', 'skill']) {
       for (const forge of ['github', 'gitlab', 'gitea']) {
         const rendered = renderSkeleton(`<!-- SLOT:${slotName} -->`, ctx(surfaceType, forge), ir);
-        assert(rendered.includes(expectedScripts[forge]),
-          `${slotName}: ${surfaceType}/${forge} renders the edition-local re-plan aggregator`);
-        for (const token of ['replan_in_progress', 'replan_phase', 'parent_plan_hash',
-          'child_plan_hash', 'last_cas_result', 'resume --project',
-          'replan_planner_dispatch_required', 'workflow-plan.next.md']) {
-          assert(rendered.includes(token),
-            `${slotName}: ${surfaceType}/${forge} carries re-plan token ${token}`);
+        assert(rendered.includes(expectedClaim[forge]),
+          `${slotName}: ${surfaceType}/${forge} names its own edition's claim aggregator`);
+        for (const alien of foreignClaim[forge]) {
+          assert(!rendered.includes(alien),
+            `${slotName}: ${surfaceType}/${forge} must not name another edition's ${alien}`);
+        }
+        for (const v of ['KAOLA_SCRIPTS=', 'CLAIM_JS=']) {
+          assert(rendered.includes(v),
+            `${slotName}: ${surfaceType}/${forge} sets ${v} for the skeleton lines that follow`);
         }
       }
     }
@@ -152,19 +161,37 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
 }
 
 // ---------------------------------------------------------------------------
-// rename-table: forge-noun rename applied to the rendered output.
+// rename-table: the post-render forge-noun rename.
+//
+// The SHIPPED table is empty — every forge-specific basename the three
+// skeletons name is forge-keyed at source in slots.js, which is the stronger
+// mechanism (it cannot mistake prose for a path). An empty table would make an
+// identity-only assertion unfalsifiable, so the mechanism is proven against an
+// INJECTED table and the shipped table's emptiness is asserted as its own fact.
 // ---------------------------------------------------------------------------
 {
-  const ir = { slots: {}, splices: {} };
-  const skel = 'run kaola-workflow-adaptive-node.js now';
-  eq(renderSkeleton(skel, ctx('command', 'github'), ir), 'run kaola-workflow-adaptive-node.js now', 'rename: github is canonical (no rename)');
-  eq(renderSkeleton(skel, ctx('command', 'gitlab'), ir), 'run kaola-gitlab-workflow-adaptive-node.js now', 'rename: gitlab');
-  eq(renderSkeleton(skel, ctx('command', 'gitea'), ir), 'run kaola-gitea-workflow-adaptive-node.js now', 'rename: gitea');
+  const { RENAMES, FORGE_INVARIANT } = require('../templates/routing/rename-table.js');
+  eq(Object.keys(RENAMES).length, 0,
+    'rename-table: the shipped table is empty — forge basenames are keyed at source, not substituted after');
 
-  // resolve-agent-model stays un-renamed on every forge (design invariant)
-  const skel2 = 'resolve kaola-workflow-resolve-agent-model.js';
-  eq(applyRenames(skel2, 'gitlab'), 'resolve kaola-workflow-resolve-agent-model.js', 'rename: resolve-agent-model un-renamed on gitlab');
-  eq(applyRenames(skel2, 'gitea'), 'resolve kaola-workflow-resolve-agent-model.js', 'rename: resolve-agent-model un-renamed on gitea');
+  // POSITIVE (injected): the substitution still works, per forge, and github stays canonical.
+  const table = { 'kaola-workflow-probe.js': { gitlab: 'kaola-gitlab-workflow-probe.js', gitea: 'kaola-gitea-workflow-probe.js' } };
+  const text = 'run kaola-workflow-probe.js now';
+  eq(applyRenames(text, 'github', table), 'run kaola-workflow-probe.js now', 'rename: github is canonical (no rename)');
+  eq(applyRenames(text, 'gitlab', table), 'run kaola-gitlab-workflow-probe.js now', 'rename: gitlab');
+  eq(applyRenames(text, 'gitea', table), 'run kaola-gitea-workflow-probe.js now', 'rename: gitea');
+
+  // The declared forge-invariant scripts must never acquire an entry.
+  for (const name of FORGE_INVARIANT) {
+    assert(!Object.prototype.hasOwnProperty.call(RENAMES, name),
+      `rename-table: ${name} is declared forge-invariant and must not be renamed`);
+  }
+
+  // Rendering goes through applyRenames with the SHIPPED table, so a surface is byte-identical
+  // across forges wherever the skeleton itself does not diverge.
+  const ir = { slots: {}, splices: {} };
+  eq(renderSkeleton('plain body', ctx('command', 'gitlab'), ir), 'plain body',
+    'rename: the shipped (empty) table leaves rendered bytes untouched');
 }
 
 // ---------------------------------------------------------------------------
@@ -196,68 +223,17 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
 }
 
 // ---------------------------------------------------------------------------
-// Real plan-run generation contract: all six outputs must be exact renders of
-// the canonical skeleton and carry the complete reviewer-contract-v2 execution
-// block. This is deliberately in the render-engine test (not only the CLI
-// --check) so a field can neither disappear from every generated surface nor be
-// hand-added to an output without its canonical source.
-// ---------------------------------------------------------------------------
-{
-  const repo = path.resolve(__dirname, '..');
-  const rows = GENERATED_SURFACES.filter(row => row.topic === 'plan-run');
-  eq(rows.length, 6, 'real plan-run registry derives exactly six surfaces');
-  const ir = { slots: SLOTS, splices: SPLICES };
-  const required = [
-    '<!-- PIN: reviewer-contract-v2-execution -->',
-    '`plan_schema_version`',
-    '`contract_version`',
-    '`behavior_contract_version`',
-    '`behavior_contract_hash`',
-    '`resolved_profile_hash`',
-    '`review_context_hash`',
-    '`review_context_path`',
-    '`candidate_digest`',
-    '`gate_mode`',
-    '`logical_gate`',
-    '`gate_claim`',
-    '`gate_surface`',
-    '`gate_aggregation`',
-    '`validation_obligations`',
-    '`.cache/validation-vectors/`',
-    '`replan_required`',
-    '`review_scope_expanded`',
-    '`review_nonconvergent`',
-    '`contract_version: 1`',
-  ];
-  for (const row of rows) {
-    const skeleton = loadSkeleton(row.skeleton, row.topic);
-    const rendered = renderSkeleton(skeleton, { surface_type: row.surface_type, forge: row.forge }, ir);
-    const committed = fs.readFileSync(path.join(repo, row.path), 'utf8');
-    eq(committed, rendered, `real plan-run byte identity: ${row.path}`);
-    for (const token of required) {
-      assert(rendered.includes(token), `real plan-run v2 field ${token} propagates to ${row.path}`);
-    }
-    const marker = rendered.indexOf('<!-- PIN: reviewer-contract-v2-execution -->');
-    const end = rendered.indexOf('<!-- /PIN -->', marker);
-    const block = marker >= 0 && end > marker ? rendered.slice(marker, end) : '';
-    assert(block.length > 0, `real plan-run v2 block is bounded on ${row.path}`);
-    assert(!/(?:#\d+|\bD-\d+-\d+\b|\bADR[- ]?\d+\b)/i.test(block),
-      `real plan-run v2 block carries rules without issue/decision provenance on ${row.path}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Topic registry: every registered topic derives exactly six surfaces (3 forges
 // x command + skill) and every path is COMPUTED from the topic basenames. Two
 // topics are ASYMMETRIC (command basename differs from skill basename); the
-// other two are symmetric. Asserted structurally so a topic can neither be
+// third is symmetric. Asserted structurally so a topic can neither be
 // registered with a hand-typed path nor silently drop a forge.
 // ---------------------------------------------------------------------------
 {
   const { TOPICS } = require('./generate-routing-surfaces.js');
   const topics = Object.keys(TOPICS).sort();
-  eq(topics.join(','), 'adapt,finalize,init,next,plan-run', 'registry carries exactly the five generated topics');
-  eq(GENERATED_SURFACES.length, 30, 'registry derives 30 surfaces (5 topics x 6)');
+  eq(topics.join(','), 'finalize,init,next', 'registry carries exactly the three generated topics');
+  eq(GENERATED_SURFACES.length, 18, 'registry derives 18 surfaces (3 topics x 6)');
   for (const topic of topics) {
     const rows = GENERATED_SURFACES.filter(r => r.topic === topic);
     eq(rows.length, 6, `${topic}: six surfaces`);
@@ -273,30 +249,31 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   eq(TOPICS.init.skill_basename, 'kaola-workflow-init', 'init: skill basename');
   assert(TOPICS.init.command_basename !== TOPICS.init.skill_basename, 'init is ASYMMETRIC like next');
   eq(TOPICS.finalize.command_basename, TOPICS.finalize.skill_basename, 'finalize is symmetric');
-  eq(TOPICS.adapt.command_basename, TOPICS.adapt.skill_basename, 'adapt is symmetric');
-  // adapt (like plan-run) takes its basenames from the schema registry, not from
-  // a string typed into the topic table, so a rename there cannot desync them.
-  const schema = require('./kaola-workflow-adaptive-schema.js');
-  eq(TOPICS.adapt.command_basename, schema.ADAPT_COMMAND.replace(/^\//, ''), 'adapt command basename derives from the schema registry');
-  eq(TOPICS.adapt.skill_basename, schema.ADAPT_SKILL, 'adapt skill basename derives from the schema registry');
-  // Paths are derived, never hand-typed: spot-check one row per new topic.
+  // Every registered topic names a skeleton that is actually on disk, so a topic can never be
+  // registered against a source file nobody staged.
+  for (const topic of topics) {
+    assert(typeof TOPICS[topic].skeleton === 'string' && TOPICS[topic].skeleton.endsWith('.skeleton.md'),
+      `${topic}: names a .skeleton.md source`);
+    assert(fs.existsSync(path.resolve(__dirname, '..', 'templates', 'routing', TOPICS[topic].skeleton)),
+      `${topic}: its skeleton source is on disk`);
+  }
+  // Paths are derived, never hand-typed: spot-check one row per topic.
   const pathOf = (topic, surface_type, forge) =>
     (GENERATED_SURFACES.find(r => r.topic === topic && r.surface_type === surface_type && r.forge === forge) || {}).path;
   eq(pathOf('init', 'command', 'github'), 'commands/workflow-init.md', 'init github command path derived');
   eq(pathOf('init', 'skill', 'gitlab'), 'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md', 'init gitlab skill path derived');
   eq(pathOf('finalize', 'command', 'gitea'), 'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md', 'finalize gitea command path derived');
   eq(pathOf('finalize', 'skill', 'github'), 'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md', 'finalize github skill path derived');
-  eq(pathOf('adapt', 'command', 'gitlab'), 'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md', 'adapt gitlab command path derived');
-  eq(pathOf('adapt', 'skill', 'gitea'), 'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md', 'adapt gitea skill path derived');
+  eq(pathOf('next', 'command', 'gitlab'), 'plugins/kaola-workflow-gitlab/commands/workflow-next.md', 'next gitlab command path derived');
+  eq(pathOf('next', 'skill', 'gitea'), 'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md', 'next gitea skill path derived');
 }
 
 // ---------------------------------------------------------------------------
-// Real init + finalize + adapt generation contract. These three topics were
-// hand-ported per runtime before they were skeleton-backed, so the byte-identity
-// assertion is the whole point: a rule may no longer be edited into one surface
-// without its canonical source. Each topic also pins the tokens that must reach
-// ALL SIX of its surfaces, so a rule cannot quietly leave the command-or-skill
-// half.
+// Real generation contract for all three topics. They were hand-ported per
+// runtime before they were skeleton-backed, so the byte-identity assertion is
+// the whole point: a rule may no longer be edited into one surface without its
+// canonical source. Each topic also pins the tokens that must reach ALL SIX of
+// its surfaces, so a rule cannot quietly leave the command-or-skill half.
 // ---------------------------------------------------------------------------
 {
   const repo = path.resolve(__dirname, '..');
@@ -308,51 +285,40 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
       'kaola-workflow/ROADMAP.md',
       'kaola-workflow/.roadmap/',
       'workflow-state.md',
-      'workflow-plan.md',
+      'mission-list.md',
       'First Principles',
       'Tie-breaker',
       'doc-updater',
     ],
+    next: [
+      '<!-- PIN: consent-in-conversation -->',
+      'workflow-state.md',
+      'mission-list.md',
+      'docs/mission-list.md',
+      'status: todo',
+      'in-flight',
+      'dispatched: self',
+      '--target-issue',
+      '--target-issues',
+      'Look for the work, not for the worker.',
+      'kaola-workflow-finalize',
+    ],
     finalize: [
-      '<!-- PIN: replan-finalize -->',
+      '<!-- PIN: consent-in-conversation -->',
+      '<!-- PIN: sink-reports-orchestrator-owns -->',
       '<!-- PIN: closure-audit -->',
       'finalization-summary.md',
       'workflow-state.md',
-      'workflow-plan.md',
-      '`## Acceptance`',
+      'mission-list.md',
+      '## Validation',
+      '## Changed Paths',
+      'chain-receipt.json',
+      'final-validation.md',
       '--issue-numbers',
       'closure-audit',
-      'validated_candidate_hash',
-      'gaps_unswept',
       'sink-merge',
       'doc-updater',
-      '`archive/`',
-    ],
-    adapt: [
-      '<!-- PIN: replan-adapt -->',
-      '<!-- PIN: reviewer-contract-v2-authoring -->',
-      '<!-- PIN: claim-escalate -->',
-      'workflow-planner',
-      'workflow-plan.md',
-      'workflow-plan.next.md',
-      'workflow-state.md',
-      'plan_schema_version: 2',
-      'planner_control_boundary_violation',
-      'replan_planner_attestation_invalid',
-      'replan_in_progress',
-      'handoff_status: ready_to_run',
-      'plan_invalid',
-      'acceptance_repair_fenced',
-      'anchored_acceptance_surface',
-      '`## Acceptance`',
-      '`## Design`',
-      'claim_verdict',
-      'target_set_indeterminate',
-      'target_ambiguity',
-      '--target-issues',
-      'Binding scope:',
-      'no-target survey',
-      'KAOLA_WORKFLOW_OFFLINE=1',
+      'kaola-workflow/archive/',
     ],
   };
   for (const [topic, required] of Object.entries(requiredByTopic)) {
@@ -371,108 +337,88 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
 }
 
 // ---------------------------------------------------------------------------
-// adapt: the two `## Acceptance` repair-fence clauses are ONE wording on all six
-// surfaces.
+// The consent rule is ONE wording across ALL EIGHTEEN surfaces.
 //
-// The command shapes hard-wrap their prose and the skill shapes do not, so these
-// clauses are stored as skeleton literals once per SURFACE SHAPE (one inside
-// REGION:command, one inside REGION:skill) rather than once outright: the render
-// engine has no reflow, and reflowing to force a single stored copy would move
-// committed bytes. Byte-identity is therefore not the available invariant here —
-// SUBSTANCE identity is, and it is the one that carries the rule. What a repair
-// iteration may and may not touch must never fork into two readings, so the text
-// is compared whitespace-normalized: the wrap difference is ignored and every
+// It replaced a durable valve, so it is the entire mechanism for keeping an
+// irreversible or value-laden call with the user. A mechanism that reads
+// differently on three topics is three mechanisms, and the one a reader lands
+// on is an accident of which command they invoked. Byte-identity is not the
+// available invariant (the three topics illustrate the rule with their own
+// examples), so the invariant is the RULE SENTENCE itself: extracted from each
+// surface and compared whitespace-normalized, so a re-wrap is ignored and every
 // other difference goes red.
 // ---------------------------------------------------------------------------
 {
   const repo = path.resolve(__dirname, '..');
   const ir = { slots: SLOTS, splices: SPLICES };
-  const CLAUSES = {
-    'repair-fence': ['Repair may fix `## Meta`', 'that is not repair.'],
-    'acceptance-repair-fenced': ['- **`reason: acceptance_repair_fenced`**', 'delete the anchor by hand.'],
-  };
-  const normalize = s => s.replace(/\s+/g, ' ').trim();
+  const CLAUSE = ['**Consent.** Irreversible and value-laden calls', 'taking one.'];
+  const normalize = str => str.replace(/\s+/g, ' ').trim();
 
-  // extractClause — PURE. Returns the normalized clause, or null when either
-  // marker is missing (an absent clause is itself a failure, never a pass).
-  const extractClause = (text, [start, end]) => {
-    const i = text.indexOf(start);
+  // extractClause — PURE. Returns the normalized clause, or null when either marker is missing
+  // (an absent clause is itself a failure, never a pass).
+  const extractClause = text => {
+    const i = text.indexOf(CLAUSE[0]);
     if (i < 0) return null;
-    const j = text.indexOf(end, i);
+    const j = text.indexOf(CLAUSE[1], i);
     if (j < 0) return null;
-    return normalize(text.slice(i, j + end.length));
+    return normalize(text.slice(i, j + CLAUSE[1].length));
   };
 
-  // clauseSplits — PURE detector over a map of surface -> rendered text. Returns
-  // one entry per clause that does NOT resolve to exactly one wording, so the
-  // same function can run against the real renders (must be empty) and against a
-  // deliberately-forked set (must not be).
+  // clauseSplits — PURE detector over surface -> text. Returns a non-empty list when the rule
+  // does NOT resolve to exactly one wording, so the same function runs against the real renders
+  // (must be empty) and against a deliberately-forked set (must not be).
   const clauseSplits = rendered => {
-    const out = [];
-    for (const [name, markers] of Object.entries(CLAUSES)) {
-      const byWording = new Map();
-      for (const [surface, text] of Object.entries(rendered)) {
-        const clause = extractClause(text, markers);
-        const bucket = clause === null ? '(absent)' : clause;
-        if (!byWording.has(bucket)) byWording.set(bucket, []);
-        byWording.get(bucket).push(surface);
-      }
-      if (byWording.size !== 1 || byWording.has('(absent)')) {
-        const missing = byWording.get('(absent)');
-        out.push({
-          clause: name,
-          wordings: byWording.size,
-          detail: `adapt clause '${name}' has ${byWording.size} wording(s) across the six surfaces: ` +
-            [...byWording.entries()]
-              .map(([w, v]) => `${v.join('+')}${w === '(absent)' ? ' [ABSENT]' : ''}`).join(' | ') +
-            (missing ? `. It could not be located on ${missing.length} surface(s) — an absent clause is never a pass` : '') +
-            `. One rule, one wording — reconcile the text, do not add a second reading.`,
-        });
-      }
+    const byWording = new Map();
+    for (const [surface, text] of Object.entries(rendered)) {
+      const bucket = extractClause(text) === null ? '(absent)' : extractClause(text);
+      if (!byWording.has(bucket)) byWording.set(bucket, []);
+      byWording.get(bucket).push(surface);
     }
-    return out;
+    if (byWording.size === 1 && !byWording.has('(absent)')) return [];
+    return [{
+      wordings: byWording.size,
+      detail: `the consent rule has ${byWording.size} wording(s) across the eighteen surfaces: `
+        + [...byWording.entries()]
+          .map(([w, v]) => `${v.join('+')}${w === '(absent)' ? ' [ABSENT]' : ''}`).join(' | ')
+        + '. One rule, one wording — reconcile the text, do not add a second reading.',
+    }];
   };
 
-  const renderedAdapt = {};
-  for (const row of GENERATED_SURFACES.filter(r => r.topic === 'adapt')) {
-    renderedAdapt[`${row.surface_type}/${row.forge}`] =
-      renderSkeleton(loadSkeleton(row.skeleton, row.topic), { surface_type: row.surface_type, forge: row.forge }, ir);
+  const renderedAll = {};
+  const committedAll = {};
+  for (const row of GENERATED_SURFACES) {
+    const key = `${row.topic}/${row.surface_type}/${row.forge}`;
+    renderedAll[key] = renderSkeleton(loadSkeleton(row.skeleton, row.topic),
+      { surface_type: row.surface_type, forge: row.forge }, ir);
+    committedAll[key] = fs.readFileSync(path.join(repo, row.path), 'utf8');
   }
-  eq(Object.keys(renderedAdapt).length, 6, 'adapt one-wording check covers all six surfaces');
+  eq(Object.keys(renderedAll).length, 18, 'consent one-wording check covers all eighteen surfaces');
 
-  // POSITIVE: every clause resolves to exactly one wording today.
-  const splits = clauseSplits(renderedAdapt);
-  for (const s of splits) console.error(`  FAIL: ${s.detail}`);
-  eq(splits.length, 0, 'every adapt `## Acceptance` fence clause is ONE wording across all six surfaces');
+  // POSITIVE: one wording today, in the render AND in the committed bytes.
+  for (const sp of clauseSplits(renderedAll)) console.error(`  FAIL: ${sp.detail}`);
+  eq(clauseSplits(renderedAll).length, 0, 'the consent rule is ONE wording across all eighteen surfaces');
+  eq(clauseSplits(committedAll).length, 0, 'the committed surfaces carry ONE wording of the consent rule');
 
-  // Also assert against the COMMITTED bytes, not only the render, so the check
-  // still means something if a surface is ever regenerated from a forked source.
-  const committedAdapt = {};
-  for (const row of GENERATED_SURFACES.filter(r => r.topic === 'adapt')) {
-    committedAdapt[`${row.surface_type}/${row.forge}`] = fs.readFileSync(path.join(repo, row.path), 'utf8');
-  }
-  eq(clauseSplits(committedAdapt).length, 0, 'the committed adapt surfaces carry ONE wording per fence clause');
-
-  // NEGATIVE (mutation proof): fork one surface's wording and one surface's
-  // presence. Without this the two blocks above are only evidence that today's
-  // text happens to agree.
+  // NEGATIVE (mutation proof): fork one surface's wording, and delete it from another. Without
+  // these the two assertions above are only evidence that today's text happens to agree.
   {
-    const forked = Object.assign({}, renderedAdapt);
-    forked['skill/gitea'] = forked['skill/gitea'].replace('that is not repair.', 'that is fine, proceed.');
-    const found = clauseSplits(forked);
-    assert(found.some(s => s.clause === 'repair-fence' && s.wordings === 2),
-      'mutation proof: a second wording of the repair-fence clause on ONE surface goes red');
+    const forked = Object.assign({}, renderedAll);
+    forked['finalize/skill/gitea'] = forked['finalize/skill/gitea']
+      .replace('belong to the user', 'are yours to make');
+    assert(clauseSplits(forked).some(sp => sp.wordings === 2),
+      'mutation proof: a second wording of the consent rule on ONE surface goes red');
 
-    const dropped = Object.assign({}, renderedAdapt);
-    dropped['command/gitlab'] = dropped['command/gitlab'].split('anchored_acceptance_surface').join('REMOVED');
-    assert(clauseSplits(dropped).some(s => s.clause === 'acceptance-repair-fenced'),
-      'mutation proof: mangling the clause on ONE surface goes red (absence is never a pass)');
+    const dropped = Object.assign({}, renderedAll);
+    dropped['next/command/gitlab'] = dropped['next/command/gitlab']
+      .split('**Consent.** Irreversible and value-laden calls').join('REMOVED');
+    assert(clauseSplits(dropped).length > 0,
+      'mutation proof: deleting the consent rule from ONE surface goes red (absence is never a pass)');
 
-    // Boundary: the wrap difference itself must NOT be reported, or the guard
-    // would be unsatisfiable by the shipped bytes and get disabled.
-    const rewrapped = Object.assign({}, renderedAdapt);
-    rewrapped['command/github'] = rewrapped['command/github'].replace(
-      'reach in-grammar but MUST NOT alter', 'reach in-grammar but\n  MUST NOT alter');
+    // Boundary: a re-wrap alone must NOT be reported, or the guard is unsatisfiable by the
+    // shipped bytes and gets disabled.
+    const rewrapped = Object.assign({}, renderedAll);
+    rewrapped['init/command/github'] = rewrapped['init/command/github']
+      .replace('ask, in conversation, before\ntaking one.', 'ask, in conversation,\nbefore taking one.');
     eq(clauseSplits(rewrapped).length, 0, 'mutation proof: re-wrapping alone is NOT reported (substance, not bytes)');
   }
 }
@@ -630,7 +576,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
 
 // ---------------------------------------------------------------------------
 // NEGATIVE (mutation proof): --check must go RED when a generated init,
-// finalize or adapt surface is hand-edited. Run against a disposable copy of the
+// next or finalize surface is hand-edited. Run against a disposable copy of the
 // render inputs so the real tree is never mutated; the CLI's exit code and its
 // DRIFT line are both asserted, because a guard that only prints is not a guard.
 // ---------------------------------------------------------------------------
@@ -650,7 +596,6 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   try {
     for (const rel of [
       'scripts/generate-routing-surfaces.js',
-      'scripts/kaola-workflow-adaptive-schema.js',
       'templates/routing/rename-table.js',
       'templates/routing/slots.js',
     ]) copy(rel);
@@ -661,19 +606,19 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
 
     const clean = runCheck();
     eq(clean.status, 0, 'mutation proof: sandbox baseline --check exits 0');
-    assert(/all 30 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 30 surfaces');
+    assert(/all 18 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 18 surfaces');
 
-    // One surface per newly generated topic, each on a different surface_type,
-    // so both render shapes are proven guarded. adapt is covered on BOTH shapes
-    // and on a FORGE twin as well as the canonical github surface, because the
-    // forge editions are exactly the copies a hand-edit historically reached
-    // without the canonical one changing.
+    // Every topic is covered on BOTH render shapes, and the FORGE twins as well as the canonical
+    // github surface, because the forge editions are exactly the copies a hand-edit historically
+    // reached without the canonical one changing.
     const victims = [
       { topic: 'init', surface_type: 'skill', forge: 'gitea' },
+      { topic: 'init', surface_type: 'command', forge: 'github' },
+      { topic: 'next', surface_type: 'command', forge: 'github' },
+      { topic: 'next', surface_type: 'skill', forge: 'gitlab' },
       { topic: 'finalize', surface_type: 'command', forge: 'github' },
-      { topic: 'adapt', surface_type: 'command', forge: 'github' },
-      { topic: 'adapt', surface_type: 'skill', forge: 'gitlab' },
-      { topic: 'adapt', surface_type: 'command', forge: 'gitea' },
+      { topic: 'finalize', surface_type: 'skill', forge: 'gitea' },
+      { topic: 'finalize', surface_type: 'command', forge: 'gitlab' },
     ];
     for (const v of victims) {
       const row = GENERATED_SURFACES.find(r =>
