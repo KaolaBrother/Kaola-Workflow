@@ -51,7 +51,8 @@
   status: todo
 
 - item: Propagate to the four editions and the runtime prompt surfaces (step 5), including agents/*.md and the three hand-maintained plugins/*/agents/*.toml twins that no generator owns. Owner ruling 2026-07-31 — the command surface COLLAPSES TO THREE: /workflow-init, /workflow-next (which now creates and runs the mission list), /kaola-workflow-finalize. /kaola-workflow-adapt and /kaola-workflow-plan-run are deleted, and so is agents/workflow-planner.md; the vendored role agents survive as dispatchable tools.
-  status: todo
+  status: in-flight
+  dispatched: split in two. Subagent `agent-prompts` (implementer, opus) owns agents/*.md and the 48 hand-maintained plugins/*/agents/*.toml twins — delete workflow-planner, strip dead machinery from the other 14 roles, keep the craft, and carry the consent rule as prose since the durable valve is being deleted. The routing half is NOT dispatched yet: the 30 command/SKILL surfaces are GENERATED from 5 skeletons in templates/routing/ by generate-routing-surfaces.js (TOPICS at :78), so that half is "delete 2 skeletons, rewrite 3, regenerate" rather than 30 hand edits — and it waits on the extraction so the finalize skeleton describes the door that actually ships.
 
 - item: Draft the [Unreleased] CHANGELOG entry for the campaign, naming the accepted losses so they are not discovered later as surprises.
   status: in-flight
