@@ -10834,13 +10834,27 @@ function testClaimFinalizeSinkChainCompletes() {
     // Set up the worktree branch that sink-merge needs to FF-merge.
     const wtPath = sResult.worktree_path;
     const branchName = sResult.branch || ('workflow/issue-280001');
-    // We need a feature commit on the branch before sink-merge can FF.
-    // The worktree is on the feature branch already (provisioned by claim).
-    // If worktree not provisioned (NATIVE=1 offline), fall back to in-repo branch.
-    const commitRepo = (wtPath && fs.existsSync(wtPath)) ? wtPath : tmp;
+    // We need a feature commit ON THE FEATURE BRANCH before sink-merge can FF. When claim
+    // provisioned a worktree it is already on that branch; when it did not (the offline shape this
+    // fixture actually takes), the main root is on `main`, and the old fallback committed straight
+    // to main. That made the merge a no-op and every downstream claim about it vacuous — the
+    // scenario reported status:merged for a merge that had nothing to do. Check the branch out
+    // explicitly in that case, and put the root back on main afterwards so the sink starts from the
+    // posture it expects.
+    const usingWorktree = !!(wtPath && fs.existsSync(wtPath));
+    const commitRepo = usingWorktree ? wtPath : tmp;
+    if (!usingWorktree) G.git(tmp, ['checkout', branchName], { encoding: 'utf8' });
     fs.writeFileSync(path.join(commitRepo, 'feature-280001.txt'), 'ac1 test\n');
     G.git(commitRepo, ['add', 'feature-280001.txt'], { encoding: 'utf8' });
     G.git(commitRepo, ['commit', '-m', 'feat: ac1 test for issue 280001'], { encoding: 'utf8' });
+    // Captured before the sink runs: a successful sink deletes the branch ref, so the SHA is what
+    // survives to be checked for ancestry afterwards.
+    const featureSha = G.git(commitRepo, ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    if (!usingWorktree) G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
+    // The precondition that makes the merge assertions non-vacuous: the feature commit is NOT yet
+    // on main, so "it is on main afterwards" is a fact the sink has to establish.
+    assert(G.git(tmp, ['merge-base', '--is-ancestor', featureSha, 'main'], { encoding: 'utf8' }).status !== 0,
+      'precondition: the feature commit must NOT already be on main before the sink runs, or the merge assertions below prove nothing');
 
     const smResult = spawnSync(process.execPath, [
       sinkMergeScript,
@@ -10859,6 +10873,22 @@ function testClaimFinalizeSinkChainCompletes() {
     const smParsed = JSON.parse(smLines[smLines.length - 1]);
     assert(smParsed.status === 'merged',
       'sink-merge must emit status:merged, got: ' + JSON.stringify(smParsed));
+
+    // …and the merge is a GIT FACT, not a word in the envelope. `status: merged` is the sink's own
+    // account of itself, and this campaign has four separate mutation proofs that a sink can
+    // publish, or fail to publish, while still emitting a perfectly good message about it — one of
+    // them taken right here, by skipping the fast-forward and watching this scenario stay green
+    // until the fixture above was fixed.
+    //
+    // Checked against the commit SHA captured BEFORE the sink ran, not against the branch NAME: a
+    // successful sink deletes the feature branch ref, so `--is-ancestor <name> main` fails on a
+    // perfectly good merge. That is a property of the assertion, not of the product — naming the
+    // ref would have made this pin unfalsifiable in the other direction.
+    assert(G.git(tmp, ['merge-base', '--is-ancestor', featureSha, 'main'], { encoding: 'utf8' }).status === 0,
+      'the feature commit ' + featureSha + ' must actually be an ancestor of main after status:merged (git ancestry, not the envelope word)');
+    assert(G.git(tmp, ['cat-file', '-e', 'main:feature-280001.txt'], { encoding: 'utf8' }).status === 0,
+      'the feature commit must actually be present at main after status:merged');
+
     const smReceipt = smParsed.closure_receipt;
     assert(smReceipt, 'sink-merge must emit closure_receipt');
     assert(!('claim_planner_attested' in smReceipt),

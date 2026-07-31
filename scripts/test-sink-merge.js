@@ -1688,7 +1688,11 @@ function runSinkWithGate(fx, extraArgs) {
       '(v): the branch content must NOT reach the default branch over red chains');
 
     // Clause 2 — typed, under its OWN name. This arm used to be laundered into "FF race: exhausted
-    // retries", which told the operator the wrong thing happened.
+    // retries", which told the operator the wrong thing happened. Same not-a-refusal pin as (s)/(t):
+    // a red suite is a verdict on the WORK, which is the class the sink no longer pronounces, so it
+    // must not reach a consumer wearing the token reserved for guards that refuse to destroy.
+    assert(out && out.result && out.result !== 'refuse',
+      '(v): a converted stop must not report itself as a refusal; got result=' + JSON.stringify(out && out.result));
     const f = findingOf(out, 'chains_red');
     assert(out && Array.isArray(out.findings), '(v): the envelope must carry findings[]; got ' + JSON.stringify(out));
     assert(f, '(v): findings[] must carry a chains_red finding; got ' + JSON.stringify(out && out.findings));
