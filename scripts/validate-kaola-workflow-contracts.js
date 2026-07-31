@@ -626,7 +626,7 @@ assert(!blockMatch[1].includes('docs-lookup'),
       const entry = sourceCheck.entries.find(candidate => candidate.role === role);
       assert(entry && entry.profileContract,
         edition + ' must expose generated reviewer identity for ' + role);
-      assert(entry.profileContract.behavior_contract_version === 2,
+      assert(entry.profileContract.behavior_contract_version === 3,
         edition + ' must bind behavior contract version 2 for ' + role);
       assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
         && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),

@@ -139,11 +139,10 @@ gone, and never re-add a field to satisfy a test.
 
 `node scripts/simulate-workflow-walkthrough.js` must exit 0. All four chains: `npm test`.
 
-Two tiers. `test:kaola-workflow:claude` is the **fast gate**: every cheap step at full coverage, but
-it **samples the walkthrough at a rotating 1/12 shard** and defers a few heavyweight suites. A green
-fast gate means *the slice that came up passed* — run the walkthrough at full scope before claiming a
-suite verified. `test:kaola-workflow:claude:full` runs everything and is **never mandated**, releases
-included; it is an opt-in diagnostic.
+Two tiers. `test:kaola-workflow:claude` is the **fast gate**: every cheap step at full coverage, but it
+**samples the walkthrough at a rotating 1/12 shard** and defers a few heavyweight suites — green means
+*the slice that came up passed*, so run the walkthrough at full scope before claiming a suite verified.
+`test:kaola-workflow:claude:full` runs everything, is **never mandated** (releases included), opt-in.
 
 ## Commands
 
@@ -174,16 +173,17 @@ architecture docs if structure changed · inline comments where public interface
 
 - Background hooks (subagent-dispatch-log) are advisory; do not re-run their checks redundantly.
 - Verify with the walkthrough suite before claiming workflow changes complete.
-- **Chain selection belongs to the producer.** `kaola-workflow-run-chains.js` diff-scopes it at
-  finalize: a non-edition-touching diff runs the `claude` chain alone; an edition-touching diff — or an
-  unresolved diff base — fails closed to all four. A release tag always requires the full, unwaived
-  four-chain receipt — bound at the tagged commit, or carried over release-prep-only commits.
-- **Prose changes propagate to generated surfaces.** The command and SKILL surfaces are rendered from
-  skeletons in `templates/routing/`; edit the skeleton and regenerate, never a rendered surface.
-  `node scripts/generate-routing-surfaces.js --check` prints the surface count and is wired into every chain.
-- **opencode and kimi are additive runtime editions**, not forges: not wired into `npm test`,
-  `edition-sync.js`, or `install.sh`. An edition-only diff triggers no four-chain obligation; run its
-  own suite instead.
+- **Chain selection belongs to the producer.** `kaola-workflow-run-chains.js` diff-scopes it at finalize:
+  a non-edition-touching diff runs the `claude` chain alone; an edition-touching diff, or an unresolved
+  diff base, fails closed to all four. A release tag always requires the full, unwaived four-chain
+  receipt — bound at the tagged commit, or carried over release-prep-only commits.
+- **Prose changes propagate to generated surfaces.** Command and SKILL surfaces render from skeletons in
+  `templates/routing/` — edit the skeleton and regenerate, never a rendered surface.
+  `node scripts/generate-routing-surfaces.js --check` prints the surface count and runs in every chain.
+- **opencode and kimi are additive runtime editions**, not forges: absent from `npm test`,
+  `edition-sync.js` and `install.sh`. An edition-only diff owes no four-chain run; run its own suite.
+- **A guard reads what ships, not what was authored**, and a threshold cannot see a rule beneath its bar.
+  Both corollaries, and the five observations that forced them, are in `docs/conventions.md`.
 
 ## Documentation Map
 

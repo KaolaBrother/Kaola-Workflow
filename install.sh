@@ -246,9 +246,9 @@ const installedIdentity = generator.behaviorIdentityFromCore(installed);
 if (sourceIdentity.role !== role || installedIdentity.role !== role) {
   throw new Error(`reviewer_role_mismatch: expected ${role}`);
 }
-if (sourceIdentity.behavior_contract_version !== 2
-    || installedIdentity.behavior_contract_version !== 2) {
-  throw new Error(`reviewer_contract_version_mismatch: expected 2 for ${role}`);
+if (sourceIdentity.behavior_contract_version !== 3
+    || installedIdentity.behavior_contract_version !== 3) {
+  throw new Error(`reviewer_contract_version_mismatch: expected 3 for ${role}`);
 }
 if (sourceIdentity.behavior_contract_hash !== installedIdentity.behavior_contract_hash
     || sourceIdentity.core !== installedIdentity.core) {

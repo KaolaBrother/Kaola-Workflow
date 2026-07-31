@@ -296,16 +296,18 @@ for (const file of canonCommands) {
 
 // ---------------------------------------------------------------------------
 // A14: model-prose consistency. opencode centralizes effort in opencode.json (no per-call
-// model=), so EVERY surviving `model=` mention must be the "do NOT / Never pass" guidance —
-// none of the Claude "pass model=" instructions, no doubled-commanda card artifacts. This
-// locks the transformCommandBody rewrites (badge + plan-run + review-fix + "You MUST pass").
+// model=), so EVERY surviving `model=` mention must be the "do NOT / Never pass" guidance.
+//
+// SCOPE, stated exactly. The universal over `model=` residue is NOT here — it is
+// assertNoBadgeResidue in sync-opencode-edition.js, which hard-errors the render on any surviving
+// mention (MODEL_MENTION is a bare /model=/, scanned over the whole surface, fences included).
+// What remains here are the wordings canonical STILL carries, checked against the tracked tree so
+// a rewrite that half-applies is caught by the suite as well as by the renderer. Two entries were
+// removed with their subject: "Pass `model=dispatch.model`" and "include the explicit `model=`
+// parameter" no longer appear in any canonical command, so both pinned a wording that is gone.
 // ---------------------------------------------------------------------------
 for (const file of canonCommands) {
   const content = read('.opencode/command/' + file);
-  assert(!/Pass `model=dispatch\.model`/.test(content),
-    'A14[' + file + ']: no "Pass model=dispatch.model" instruction (opencode resolves centrally)');
-  assert(!/include\s+the\s+explicit `model=` parameter/.test(content),
-    'A14[' + file + ']: no "include the explicit model= parameter" instruction');
   assert(!/MUST pass `model=|do not omit\s+the `model=` line/.test(content),
     'A14[' + file + ']: no "MUST pass model=" / "do not omit the model= line" instruction');
   assert(!/,,/.test(content),

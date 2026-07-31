@@ -2770,12 +2770,12 @@ function enableMultiAgentV2(homeRoot) {
   const cases = [
     {
       label: 'missing behavior contract version',
-      text: reviewer.replace(/^behavior_contract_version: 2\n/m, ''),
+      text: reviewer.replace(/^behavior_contract_version: 3\n/m, ''),
       code: 'reviewer_behavior_core_version_missing',
     },
     {
       label: 'unsupported behavior contract version',
-      text: reviewer.replace(/^behavior_contract_version: 2$/m, 'behavior_contract_version: 1'),
+      text: reviewer.replace(/^behavior_contract_version: 3$/m, 'behavior_contract_version: 1'),
       code: 'reviewer_contract_version_unsupported',
     },
     {
@@ -3096,7 +3096,7 @@ try {
     const row = claudeManifestLines.find(line => line.startsWith(role + '.md\t'));
     assert(row, 'Claude managed-agent manifest must carry ' + role);
     const columns = row.split('\t');
-    assert(columns.length === 5 && columns[2] === '2'
+    assert(columns.length === 5 && columns[2] === '3'
       && /^[0-9a-f]{64}$/.test(columns[3]) && /^[0-9a-f]{64}$/.test(columns[4]),
     'Claude managed-agent manifest must record installed sha, behavior version/hash, and resolved profile hash for ' + role);
   }

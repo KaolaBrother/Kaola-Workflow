@@ -279,6 +279,43 @@ are parity-checked by `validate-script-sync.js` `CONFIG_HOOKS_FAMILY` +
 path (`kaola-workflow-codex-compact-resume` → `kaola-{forge}-workflow-codex-compact-resume`);
 any other divergence reds the validation run.
 
+## Aiming a guard — what it reads, and how wide (#887)
+
+Five defects shipped past four green chains, a full-scope walkthrough, green edition suites and clean
+installs. Every one was found by a reading, none by a test failure, and in each case a guard was live,
+passing, and pointed at something that had moved. They share one shape: **the guard derived its
+coverage universe from the author side of the artifact, while the defect lived on the consumer side.**
+
+| Guard | Its subject | Why it could not see the defect |
+|---|---|---|
+| `test-agent-profile-parity` consensus | policy shared across ≥⌈2N/3⌉ of 11 profiles | test custody is shared by 2 roles — below the bar by construction, not by tuning |
+| reviewer contradiction check, token table, vocabulary ban | `contractText`, built from `sections[].lines` | section headings were in no scanned region, yet render as `## <heading>` to 12 surfaces |
+| opencode `A3` / kimi `K5-kinds` | the write/edit restriction axis | that axis had become unreachable; the live axis (`bash: deny`) was new and unguarded |
+| the retired-vocabulary cleanup | the authored contract | `node-id` lived in the generator's own render, which nothing read for vocabulary |
+| `test-route-reachability` | a universe derived from the edition tables | the forge term is the registry measuring itself — 12→8 surfaces, unchanged assertion count |
+
+Two rules follow, and they are the ones stated in `CLAUDE.md`:
+
+**A guard reads what ships, not what was authored.** The question worth asking of a content guard is
+not *what does it catch* but *what renders to a consumer that it never reads*. Scanning the authored
+source misses generator prose, and a scanned region is a choice whose complement is where the defect
+sits. Where a universe is derived from the artifact under test, partially anchored is not anchored:
+one **absolute** count belongs in a different file. `test-generate-routing-surfaces`'s `registry
+derives 18 surfaces` is that anchor for the routing registry, and it is mutation-proven — delete a
+forge from both edition tables and it fails at 18→12 while `test-route-reachability` stays green at
+an unchanged 325 assertions.
+
+**A threshold cannot see a rule beneath its bar.** A consensus derivation reports nothing that
+distinguishes *no such rule* from *below threshold*, so a small reciprocal obligation gets an explicit
+pin (`ROLE_PINS`), never a derivation. A derivation that reads its rule set from the corpus also lets
+a corpus-wide rewrite redefine the baseline — absolute pinned text is the only floor that survives a
+uniform inversion.
+
+What is deliberately **not** built is a generic anti-vacuity harness that reports enforcement-domain
+size alongside every result. Measured against the five observations above it catches one, and it is a
+mechanism justified by *"a guard might be aimed wrong"* — the shape this project's derivation rule
+rejects. The per-guard non-vacuity assertions that already exist stay; nothing generalizes them.
+
 ## Adding a role agent
 
 A new role agent is a fresh `agents/<name>.md` plus its three plugin `.toml` twins, registered

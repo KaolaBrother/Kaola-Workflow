@@ -575,7 +575,7 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     pluginRoot + ' profile source contract failed: ' + sourceCheck.errors.join('; '));
   for (const role of generator.ROLES) {
     const entry = sourceCheck.entries.find(candidate => candidate.role === role);
-    assert(entry && entry.profileContract && entry.profileContract.behavior_contract_version === 2,
+    assert(entry && entry.profileContract && entry.profileContract.behavior_contract_version === 3,
       pluginRoot + ' must expose reviewer contract version 2 for ' + role);
     assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
       && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),

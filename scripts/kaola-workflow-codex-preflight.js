@@ -92,7 +92,7 @@ const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
 const CODEX_REASONING_EFFORT = 'xhigh';
 const MANIFEST_SCHEMA_VERSION = 1;
 const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
-const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 2;
+const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 3;
 const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
 const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
   'name', 'description', 'nickname_candidates', 'developer_instructions',

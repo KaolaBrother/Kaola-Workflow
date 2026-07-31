@@ -116,12 +116,12 @@ for (const relativePath of [
   const identity = reviewerGenerator.behaviorIdentityFromCore(content);
   const topVersion = /^behavior_contract_version:\s*(\d+)$/m.exec(content);
   const topHash = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(content);
-  assert(topVersion && Number(topVersion[1]) === 2,
-    relativePath + ' must carry behavior_contract_version 2');
+  assert(topVersion && Number(topVersion[1]) === 3,
+    relativePath + ' must carry behavior_contract_version 3');
   assert(topHash && topHash[1] === identity.behavior_contract_hash,
     relativePath + ' top-level behavior hash must bind its normalized behavior core');
-  assert(identity.behavior_contract_version === 2,
-    relativePath + ' behavior core must carry contract version 2');
+  assert(identity.behavior_contract_version === 3,
+    relativePath + ' behavior core must carry contract version 3');
 }
 
 assertIncludes('docs/agents-source.md', pinnedCommit);

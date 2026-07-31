@@ -17,6 +17,9 @@
 
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
 const { GENERATED_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
+// ONE list, two consumers: the reviewer generator owns the retired-vocabulary ban and the routing
+// surfaces are held to the same bytes rather than to a second copy that could drift from it.
+const { RETIRED_VOCABULARY_BAN } = require('./generate-reviewer-profiles.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
 const fs = require('fs');
@@ -398,6 +401,28 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   for (const sp of clauseSplits(renderedAll)) console.error(`  FAIL: ${sp.detail}`);
   eq(clauseSplits(renderedAll).length, 0, 'the consent rule is ONE wording across all eighteen surfaces');
   eq(clauseSplits(committedAll).length, 0, 'the committed surfaces carry ONE wording of the consent rule');
+
+  // Retired ADR 0017 vocabulary, over the RENDER as well as the committed bytes. The same list
+  // already guards the twelve reviewer surfaces; it lived in exactly one generator, so the eighteen
+  // routing surfaces were the remaining render family with no scan at all. Two observed failures put
+  // it here rather than on the watch list: `node-id` reached twelve surfaces through a generator's
+  // own render (#885, authored-only scanning), and retired node/DAG wording shipped in the plugin
+  // manifests a user reads before installing (#882). Both are this family; only the manifests and
+  // the reviewer render were repaired. Scanning `renderedAll` is the half that matters — a skeleton
+  // is authored, but a token can also enter through a slot, a splice or a forge rename, and none of
+  // those exist until the surface is rendered. `committedAll` is scanned too so a tracked surface
+  // that drifted from its skeleton cannot carry one either.
+  const retiredHits = [];
+  for (const [key, text] of [...Object.entries(renderedAll), ...Object.entries(committedAll)]) {
+    const hit = text.match(RETIRED_VOCABULARY_BAN);
+    if (hit) retiredHits.push(`${key}: ${hit[0]}`);
+  }
+  for (const h of retiredHits) console.error(`  FAIL: retired vocabulary on a routing surface — ${h}`);
+  eq(retiredHits.length, 0, 'no routing surface renders or commits retired ADR 0017 vocabulary');
+  // Anti-vacuity: the scan must have had something to read. An empty render map would satisfy the
+  // assertion above without inspecting a byte.
+  eq(Object.keys(renderedAll).length + Object.keys(committedAll).length, 36,
+    'the retired-vocabulary scan covers all eighteen rendered AND all eighteen committed surfaces');
 
   // NEGATIVE (mutation proof): fork one surface's wording, and delete it from another. Without
   // these the two assertions above are only evidence that today's text happens to agree.
