@@ -80,6 +80,14 @@ A successor with no context reads the file top to bottom:
 That is the entire recovery procedure. If an `in-flight` item's work turns out to have completed
 after all, its `result` is recoverable from git and the item closes normally.
 
+**On re-dispatch vs. wait.** `dispatched` records what went out, not whether it is still running, and
+a successor usually cannot probe the liveness of a process it did not start. So the rule is: **look
+for the work, not for the worker.** If the output the dispatch promised has landed — the file
+exists, the commit is in git — close the item. If it has not, re-dispatch, unless you can positively
+show the dispatch is still alive. Re-dispatching read-only work costs a little time; waiting on a
+worker that died costs the run. This is why `dispatched` should name *where the output was to land*:
+that locator is what makes the check possible at all.
+
 ## What is not here
 
 There is no plan grammar, no freeze, no gate, no disjointness check, no fan-out cap, no serializer
