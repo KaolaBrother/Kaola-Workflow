@@ -56,11 +56,12 @@
   result: Landed in ea84673d. VERIFIED FROM OUTSIDE, not from an agent's report — neither agent ever reported, so the work was confirmed the way the resume rule says: look for the work, not the worker. `grep -n "require(.*plan-validator" scripts/kaola-workflow-claim.js scripts/kaola-workflow-run-chains.js` returns nothing, ~814 lines moved into the byte-identical anchor, and the 908-line scripts/test-finalize-door.js PASSES.
 
 - item: Delete the node executor and let its tests fall out (step 4). Tests are deleted with their mechanism, never repaired ahead of it. Also shrink the three enumerated name-lists in the same change.
-  status: in-flight
+  status: done
+  result: ALL FOUR CHAINS GREEN and the walkthrough passes at FULL scope (205 scenarios, 2,057 spawns) — not a sampled shard. Five late reds were found and fixed after the waves reported: nine suites still requiring deleted modules, test-oracle-kernel (trimmed to the atomic-write and canonicalizer primitives that outlive the DAG rather than deleted), the shard self-test reading an emptied production registry, docs/mission-list.md missing from the test-consumed band so a change to it could have skipped the chains, and CLAUDE.md breaching its own 200-line contract.
   dispatched: split on disjoint file sets. Subagent `demolish-scripts` (implementer, opus) owns the canonical script deletions, their per-edition twins, the dead 73% of adaptive-schema.js, the three enumerated name-lists, package.json and the currently-RED contract validators. Subagent `demolish-tests` (tdd-guide, opus) owns the delicate surgery — splitting simulate-workflow-walkthrough.js by triaged ordinal, extracting the release-check block out of a DAG function and re-pointing it at run-chains, and trimming claim-hardening / sink-merge / gap-sweep / run-chains plus the five edition walkthroughs.
 
 - item: Propagate to the four editions and the runtime prompt surfaces (step 5), including agents/*.md and the three hand-maintained plugins/*/agents/*.toml twins that no generator owns. Owner ruling 2026-07-31 — the command surface COLLAPSES TO THREE: /workflow-init, /workflow-next (which now creates and runs the mission list), /kaola-workflow-finalize. /kaola-workflow-adapt and /kaola-workflow-plan-run are deleted, and so is agents/workflow-planner.md; the vendored role agents survive as dispatchable tools.
-  status: in-flight
+  status: done
   dispatched: split in two. Subagent `agent-prompts` (implementer, opus) owned agents/*.md and the 48 hand-maintained plugins/*/agents/*.toml twins — delete workflow-planner, strip dead machinery from the other 14 roles, keep the craft, and carry the consent rule as prose since the durable valve is being deleted. The routing half is NOT dispatched yet: the 30 command/SKILL surfaces are GENERATED from 5 skeletons in templates/routing/ by generate-routing-surfaces.js (TOPICS at :78), so that half is "delete 2 skeletons, rewrite 3, regenerate" rather than 30 hand edits — and it waits on the extraction so the finalize skeleton describes the door that actually ships.
 
 - item: Draft the [Unreleased] CHANGELOG entry for the campaign, naming the accepted losses so they are not discovered later as surprises.
@@ -68,12 +69,15 @@
   dispatched: `changelog-draft` (killed mid-flight for the resume drill), then re-dispatched as `changelog-draft-2` after recovery from this file showed its output had not landed
   result: kaola-workflow/.origin/877/changelog-draft.md. Folded into CHANGELOG.md at step 6.
 
-- item: Strip the plan's shadow out of the surviving claim record — claim.js still writes ## Pending Gates and ## Planning Evidence (plan_hash / decision / risk / first_node_id / first_node_role) plus active_plan_hash and a normalization pass. Found by the docs agent asking rather than guessing. Removed, not retained as inert `none` constants: a record that names a mechanism which no longer exists is worse than no record, because a reader takes the field's presence as evidence the thing is real. Consequence for the state contract — plan_hash was the freshness key for a frozen plan and NOTHING replaces it; the mission list is not attested, not frozen and not machine-verified, and that absence is deliberate.
-  status: in-flight
-  dispatched: routed to `demolish-scripts` (owns claim.js) with the exact line numbers; `docs-technical` told to write the contract as it WILL be
+- item: DONE — strip the plan's shadow out of the surviving claim record — claim.js still writes ## Pending Gates and ## Planning Evidence (plan_hash / decision / risk / first_node_id / first_node_role) plus active_plan_hash and a normalization pass. Found by the docs agent asking rather than guessing. Removed, not retained as inert `none` constants: a record that names a mechanism which no longer exists is worse than no record, because a reader takes the field's presence as evidence the thing is real. Consequence for the state contract — plan_hash was the freshness key for a frozen plan and NOTHING replaces it; the mission list is not attested, not frozen and not machine-verified, and that absence is deliberate.
+  status: done
+  dispatched: routed to `claim-residue` with the exact line numbers
+  result: Removed, plus the epoch lineage block; the section renamed from ## Epoch Lineage to ## Claim Identity, since a heading naming a retired mechanism is the same defect one level up. A trap worth carrying: removing a state field from the WRITER alone was a no-op, because a field-order constant re-emitted it defaulted to 'none'. Check the field-order constant, not just the writer.
 
 - item: Rewrite CLAUDE.md to describe what ships and remove its ADR 0017 banner; update README, docs/api.md, architecture, conventions, the state contract and the doc index (step 6, last).
-  status: todo
+  status: done
+  dispatched: CLAUDE.md by self; the technical trio to `docs-technical`; README/conventions/index/CHANGELOG to `docs-readme`
+  result: CLAUDE.md rewritten at 199 lines with the banner gone — it existed only while the decision and the code disagreed. docs-readme corrected my brief: the SIX-surface rule is on the EDITION axis and is unchanged; what moved is 30 surfaces to 18. It also caught that the release checklist still named the deleted plan-validator for --release-check, which would have broken a release.
 
 - item: Independent verification before finalize — a Fable-model verifier reads the campaign against ADR 0017 and reports drift, over-reach, or a step claimed but not done.
   status: todo

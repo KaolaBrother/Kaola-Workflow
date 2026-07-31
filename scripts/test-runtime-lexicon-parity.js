@@ -181,7 +181,9 @@ const SURVEY_PATTERNS = Object.freeze([
 // What the floor uniquely guarded is a broken EXTRACTOR — a walk that finds no engine file, or
 // patterns that match nothing — passing green while enforcing nothing over an empty universe.
 // That failure has a ZERO signature, so guard zero. Zero is the one threshold that never needs
-// re-typing: it stays correct at 60 codes, at 6, and at 1.
+// re-typing: it stays correct at 60 codes, at 6, and at 1. Mutation-proved in both directions —
+// gutting every typed emit in the corpus, and neutering SNAKE in a copy of this script, each
+// produce `derivation_vacuous` rather than a green run.
 //
 // BLIND SPOT, stated next to the guard because that is where it belongs: a PARTIAL extraction.
 // One of the two EMIT_PATTERNS silently ceasing to match still yields a non-empty set and still
@@ -443,21 +445,17 @@ function main(argv) {
 
   // --- Derive the candidate universe. ---
   const { codes, engineFileCount } = deriveEmittedCodes(repo, EMIT_PATTERNS);
-  // Two distinct zero-signature breaks, reported separately because they route differently: an
-  // empty tree is a walk/path problem, an empty derivation over a real tree is a pattern problem.
-  if (engineFileCount === 0) {
-    failures.push({
-      kind: 'engine_tree_missing',
-      detail: 'the shared engine walk found NO scripts/kaola-workflow-*.js file — the tree moved, '
-        + 'the filename convention changed, or --repo points somewhere that is not a checkout; '
-        + 'refusing to pass vacuously over an empty universe',
-    });
-  } else if (codes.size === 0) {
+  // ONE branch, not two. A wholly-absent engine tree was going to get its own `engine_tree_missing`
+  // finding until it turned out to be unreachable: every path that removes the last
+  // scripts/kaola-workflow-*.js also removes what the opencode/kimi renderers require, so
+  // buildRuntimeIndex FATALs (exit 1) before this finding could be printed. A branch whose firing
+  // cannot be demonstrated is not a guard, so the file count rides the message instead.
+  if (codes.size === 0) {
     failures.push({
       kind: 'derivation_vacuous',
       detail: 'derived 0 typed codes from ' + engineFileCount + ' shared engine file(s) — either '
         + 'EMIT_PATTERNS no longer matches how this repo spells a typed emit, or the typed '
-        + 'vocabulary genuinely reached zero. Those are indistinguishable from here and the second '
+        + 'vocabulary genuinely reached zero. Those are indistinguishable from here, and the second '
         + 'means this oracle has no subject left, so a human decides: repair the patterns, or '
         + 'delete this guard. Refusing to pass vacuously either way',
     });

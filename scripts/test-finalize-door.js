@@ -197,7 +197,11 @@ function writeGreenChainMock(binDir) {
   return p;
 }
 
+// The finalize door IS an argv -> handler -> envelope -> exit-code contract, and both halves of
+// what these tests pin live at the process boundary: whether it exits non-zero, and what the
+// emitted envelope says. An in-process call could not observe the exit code at all.
 function runClaim(args, repo, ghMockPath, extraEnv) {
+  // spawn-class: cli-contract
   return spawnSync(process.execPath, [claimScript, ...args], {
     cwd: repo,
     encoding: 'utf8',
@@ -210,7 +214,12 @@ function runClaim(args, repo, ghMockPath, extraEnv) {
   });
 }
 
+// Same class, two uses: `--release-check` is a pure argv/envelope/exit-code verb (T5), and the
+// receipt-producing runs (T2/T3/T4/T7) must go through the real CLI because the artifact under
+// test is the one the PRODUCER stamps — a hand-built receipt would be the fixture agreeing with
+// itself instead of the producer and the gate agreeing with each other.
 function runChains(repo, args) {
+  // spawn-class: cli-contract
   return spawnSync(process.execPath, [runChainsScript, ...args], {
     cwd: repo,
     encoding: 'utf8',

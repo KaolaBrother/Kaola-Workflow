@@ -8,32 +8,27 @@
 // kernel THROUGH a consumer (open a node, freeze a plan, run the CLI) — this one asks only "does
 // the kernel keep its own promise?", with no consumer in the loop.
 //
-// Organized by the four grounds that make a capability mechanical:
+// Organized by the grounds that make a capability mechanical. TWO of the original four survive:
 //   U — unobservable      the fact lives in no file the agent can read (OS outcome, concurrent process)
 //   N — non-computable    the answer needs a function the agent cannot evaluate by reading (sha256,
 //                         canonical serialization)
-//   S — spec-wrong        the obvious derivation is a DIFFERENT function from the correct one, and
-//                         both look right
-//   I — irreversible-ordered   the record must outlive the agent that wrote it
 //
-// DELIBERATE NON-DUPLICATION. This suite covers only what no other suite covers. Verified against
-// the tree before writing; each section names what it skipped and where that coverage already lives:
+// The other two went with their subjects, not with their grounds. `S — spec-wrong` covered a
+// derivation inside the review/gate engine, and `I — irreversible-ordered` covered the ledger
+// chain; both engines are retired. The grounds themselves remain valid, so a future kernel
+// primitive that is spec-wrong or ordering-critical belongs back here under its old letter.
+//
+// DELIBERATE NON-DUPLICATION. This suite covers only what no other suite covers:
 //   - writeFileAtomicReplace single-process return semantics, the
 //     fsync(tmp)->rename->open(dir)->fsync(dir)->close(dir) ORDER, and the platform fail-soft are
 //     covered by test-claim-hardening.js (#353 / #685). Only the CONCURRENT-PROCESS observable and
 //     the replace-vs-truncate inode topology are added here.
-//   - acquireProjectLock / releaseProjectLock / isStaleLock test-and-set, dead-holder classification,
-//     no-auto-takeover and the genuine two-process race are covered by test-adaptive-node.js
-//     (T-585-*/T-595-*). Only the corrupt/empty-payload mtime classifier branch and the
-//     non-numeric-timestamp branch are added here.
-//   - the review/gate engine (deriveGateMode, deriveGateEffect, reduceReviewReceipts,
-//     deriveRepairDelta, assessFindingClosure, assessReviewProgress, compareValidationObligations)
-//     is ALREADY a direct, fixture-driven kernel corpus inside test-adaptive-node.js. It is not
-//     re-tested here; re-deriving those truth tables would manufacture duplication, not coverage.
-//     Section S therefore covers a spec-wrong derivation that corpus does NOT reach.
-//   - the ledger-chain family's end-to-end tamper behaviour is covered by test-ledger-chain-tamper.js
-//     THROUGH the adaptive-node wrapper and the validator resume seam. Section I pins the PURE kernel
-//     functions underneath it, including the typed-reason precedence and the re-forged-chain anchor.
+//   - the scheduler lock (acquireProjectLock / releaseProjectLock / isStaleLock), the review/gate
+//     engine and the ledger-chain family are all retired: their mechanisms are deleted from the
+//     kernel and the suites that drove them end-to-end went with them. Nothing here stands in for
+//     that coverage, because there is nothing left to cover. The failure class the lock
+//     generalises to — two honest live writers on one file — is on ADR 0017's watch list, sized
+//     but not built; if it is ever observed, its coverage starts here under U.
 //
 // Hand-rolled asserts + counter, repo style (no framework). Pure/CLI only: nothing is written inside
 // the repo tree, every $TMPDIR dir is removed in a finally, no network.
@@ -64,27 +59,10 @@ function throwsWith(fn, expectedMessage, msg) {
     msg + ' — expected throw ' + JSON.stringify(expectedMessage) + ', got '
       + (err === null ? 'no throw' : JSON.stringify(err.message)));
 }
-const clone = value => JSON.parse(JSON.stringify(value));
-
-// Stability + SENSITIVITY over a digest function. Sensitivity is the half with teeth: a digest that
-// does not move when a covered field moves is a digest that binds nothing.
-function digestContract(label, base, digestOf, mutations, stableForms) {
-  const baseline = digestOf(base);
-  check(typeof baseline === 'string' && /^[0-9a-f]{64}$/.test(baseline),
-    label + ': digest is 64 lowercase hex, got ' + JSON.stringify(baseline));
-  eq(digestOf(clone(base)), baseline, label + ' STABILITY: same input -> same digest');
-  for (const [name, reshape] of (stableForms || [])) {
-    const variant = clone(base);
-    reshape(variant);
-    eq(digestOf(variant), baseline, label + ' STABILITY: ' + name + ' must NOT change the digest');
-  }
-  for (const [name, mutate] of mutations) {
-    const variant = clone(base);
-    mutate(variant);
-    check(digestOf(variant) !== baseline,
-      label + ' SENSITIVITY: changing ' + name + ' MUST change the digest (it did not: ' + baseline + ')');
-  }
-}
+// `digestContract` / `clone` stood here: a stability-plus-sensitivity harness over a digest
+// function. Its only callers were the epoch-lineage and ledger-chain digests, both retired, so it
+// had become a helper nothing called. Deleted rather than left as scaffolding for a caller that
+// may never return — the pattern is three lines to rewrite if one does.
 
 // ===========================================================================
 // U — UNOBSERVABLE
