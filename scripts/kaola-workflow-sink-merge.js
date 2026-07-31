@@ -1753,7 +1753,8 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       if (testGate.result === 'red') {
         recordStopOnReceipt('post_rebase_tests', 'red');
         sinkEmit({
-          result: 'refuse',
+          result: 'report',
+          status: 'not_merged',
           reason: 'chains_red',
           step: 'merge',
           post_rebase_tests: 'red',
@@ -1777,7 +1778,8 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         if (ffOutcome.reason === 'chains_red') {
           recordStopOnReceipt('post_rebase_tests', 'red');
           sinkEmit({
-            result: 'refuse',
+            result: 'report',
+            status: 'not_merged',
             reason: 'chains_red',
             step: 'merge',
             post_rebase_tests: 'red',
@@ -2588,7 +2590,8 @@ function main() {
   let testGate = doRebase(args, alreadyUpToDate, mainRoot, defBranch);
   if (testGate.result === 'red') {
     sinkEmit({
-      result: 'refuse',
+      result: 'report',
+      status: 'not_merged',
       reason: 'chains_red',
       post_rebase_tests: 'red',
       branch: args.branch,
@@ -2606,7 +2609,8 @@ function main() {
     // into giveUp's "FF race: exhausted retries", reporting a red suite as a merge race.
     if (ffOutcome.reason === 'chains_red') {
       sinkEmit({
-        result: 'refuse',
+        result: 'report',
+        status: 'not_merged',
         reason: 'chains_red',
         post_rebase_tests: 'red',
         branch: args.branch,

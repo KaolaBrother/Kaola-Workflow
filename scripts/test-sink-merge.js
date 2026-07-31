@@ -1444,7 +1444,13 @@ function buildUnfinalizedBranchFixture(project, issue) {
     assert(catFileType(fx.tmpRoot, 'main:kaola-workflow/' + project + '/workflow-state.md') === null,
       '(s): live run state must NEVER reach the default branch');
 
-    // Clause 2 — typed, on the envelope, greppable by classification.
+    // Clause 2 — typed, on the envelope, greppable by classification. The result token must NOT read
+    // `refuse`: that is the one distinction a converted stop draws against a KEEP guard, and a
+    // consumer branching on `result === 'refuse'` is exactly who is misled if it regresses. Asserted
+    // as the negative rather than as `=== 'report'` so the vocabulary can be renamed without a false
+    // red, while a silent relapse to the refusal token still fails.
+    assert(out && out.result && out.result !== 'refuse',
+      '(s): a converted stop must not report itself as a refusal; got result=' + JSON.stringify(out && out.result));
     const f = findingOf(out, 'run_not_finalized');
     assert(out && Array.isArray(out.findings),
       '(s): the envelope must carry findings[]; got ' + JSON.stringify(out));
@@ -1520,7 +1526,11 @@ function buildWorkflowOnlyBranchFixture(project, issue) {
     assert(catFileType(fx.tmpRoot, 'main:kaola-workflow/archive/' + project + '/workflow-state.md') === null,
       '(t): the branch content must NOT be on the default branch');
 
-    // Clause 2 — typed, on the envelope, with the evidence the old refusal prose carried.
+    // Clause 2 — typed, on the envelope, with the evidence the old refusal prose carried. Same
+    // not-a-refusal pin as (s): a docs-only branch is a legitimate deliverable the sink declined to
+    // publish unasked, which is a report, and it must not read as a guard refusing to destroy.
+    assert(out && out.result && out.result !== 'refuse',
+      '(t): a converted stop must not report itself as a refusal; got result=' + JSON.stringify(out && out.result));
     const f = findingOf(out, 'no_implementation_changes');
     assert(out && Array.isArray(out.findings),
       '(t): the envelope must carry findings[]; got ' + JSON.stringify(out));

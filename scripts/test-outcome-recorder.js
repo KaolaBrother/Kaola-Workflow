@@ -131,7 +131,15 @@ function partA() {
 
 function partB() {
   const set = schema.PARENT_OWNED_SIDECARS;
-  ok(Array.isArray(set) && set.length >= 4, 'the sidecar set is a real list (' + set.length + ' members)');
+  // NON-VACUITY, not a census. A hand-typed member count is calibrated to the tree that typed it,
+  // so the next legitimate retirement turns it red for no property — and the only repair it admits
+  // is decrementing the integer, which teaches the reader to edit the pin instead of checking the
+  // claim. What actually has to hold is that the set did not silently become EMPTY: an empty set
+  // makes the membership rule below vacuous and tells the capture sweep it has nothing to exclude,
+  // which is the merge-conflict defect this set exists to cure. The members whose exclusion is
+  // load-bearing are pinned BY NAME below; a named pin goes red only when the thing it names is
+  // gone, and says which one — which is a true signal, not a stale count.
+  ok(Array.isArray(set) && set.length > 0, 'the sidecar set is a real, non-empty list (' + set.length + ' members)');
   ok(Object.isFrozen(set), 'the set is frozen — it is a kernel constant, not a mutable registry');
   deepEqual(set.slice().sort(), [...new Set(set)].sort(), 'no duplicate members');
 
@@ -149,8 +157,13 @@ function partB() {
     ok(schema.isParentOwnedSidecar(member), 'membership test agrees with the set: ' + member);
   }
 
+  // EVERY current member, named. Together these are the floor the count used to approximate: the
+  // set cannot silently shrink past them, and if one is legitimately retired its own pin dies with
+  // its mechanism rather than a bare integer going red somewhere else.
   ok(set.indexOf(OUTCOME_REL) >= 0, 'the outcome log is IN the set — the whole point of shipping it as a set');
   ok(set.indexOf('.cache/' + schema.NODE_TIMINGS_LOG_NAME) >= 0, 'the original hard-coded exclusion is still a member');
+  ok(set.indexOf('.cache/' + schema.DISPATCH_LOG_NAME) >= 0,
+    'the dispatch log is a member — its SubagentStart producer writes inside whichever leg the spawn ran in');
 
   // Not a member, and it must not become one by accident — a kernel record wrongly admitted here
   // is a record a sweep is told it may discard.
