@@ -8,6 +8,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 | #878 | Watch list: derived-but-never-observed mechanisms — do not build speculatively (ADR 0017) | open | — | REFERENCE ONLY — do not schedule. Consult when one of its failure classes is observed. Two rows now have their sizing in git history rather than in live code: the project scheduler lock (acquireProjectLock / probeLockLiveness, the 'two honest live writers' row) and the durable consent valve (the halt marker, its two journals and consentScopeDigest, the 'value call taken by the agent' row). Both were deleted with the node executor because what forced them to exist was the running-set scheduler and a plan-scoped halt; recover them from the commit before the ADR 0017 build if either class is ever observed. |
+| #880 | Delete the zero-consumer exports left in the Oracle Kernel after the ADR 0017 build | open | issue-880 | Audit every one of the kernel's 95 exports for consumers across canonical, the four editions, tests, templates, hooks and installers; delete what is dead, unexport what is only used internally, fix the two duplicate export keys and the orphaned comment blocks. All four kernel copies must stay byte-identical, and the contract-validator pins move with the deletion. |
 
 ## Rules
 
