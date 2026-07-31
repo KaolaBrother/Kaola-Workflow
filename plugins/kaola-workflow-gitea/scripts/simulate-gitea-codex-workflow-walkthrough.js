@@ -58,8 +58,8 @@ function run(script) {
   }
 }
 
-// M4 + M2 (#277): static source-text assertions — the gitea fork claim.js must contain the
-// run_posture derivation (M4) and the dispatch-attestation function (M2).
+// M4 (#277): static source-text assertion — the gitea fork claim.js must contain the run_posture
+// derivation.
 // (#284): Codex lifecycle hooks (SessionStart/PreToolUse/PostToolUse/SubagentStart including
 // dispatch-log) are now wired via config/hooks.json + install-codex-agent-profiles.js.
 const giteaClaimSrc = fs.readFileSync(
@@ -67,14 +67,19 @@ const giteaClaimSrc = fs.readFileSync(
 if (!giteaClaimSrc.includes('run_posture')) {
   throw new Error('M4 (#277): gitea-codex: kaola-gitea-workflow-claim.js must implement run_posture');
 }
-if (!giteaClaimSrc.includes('claim_planner_attested')) {
-  throw new Error('M2 (#277): gitea-codex: kaola-gitea-workflow-claim.js must implement claim_planner_attested (warn-first attestation)');
+// NARROWED (were the M2 #277 + n6 #653 presence guards). They required the port source to contain
+// claim_planner_attested (the warn-first attestation field) and ## Attestation (the
+// warning-persistence block). Both producers are retired with the planner-attestation chain, so
+// requiring them now would be requiring the retirement not to have happened — and re-adding a
+// field to satisfy a suite is the failure mode, not the fix. What survives is the direction a
+// retirement can still regress in: neither token may REAPPEAR in the port source.
+if (giteaClaimSrc.includes('claim_planner_attested')) {
+  throw new Error('gitea-codex: kaola-gitea-workflow-claim.js must NOT reintroduce the retired claim_planner_attested field');
 }
-// n6 (#653 finding A + D3, gitea-codex mirror): the ported claim.js must carry the attestation-
-// warning persistence + selection-evidence probe added by the root #653 mirror.
-if (!giteaClaimSrc.includes('## Attestation')) {
-  throw new Error('#653: gitea-codex: kaola-gitea-workflow-claim.js must implement attestation-warning persistence (## Attestation)');
+if (giteaClaimSrc.includes('## Attestation')) {
+  throw new Error('gitea-codex: kaola-gitea-workflow-claim.js must NOT reintroduce the retired ## Attestation persistence block');
 }
+// n6 (#653 finding D3, gitea-codex mirror): the selection-evidence probe is live and stays pinned.
 if (!giteaClaimSrc.includes('selection_evidence')) {
   throw new Error('#653: gitea-codex: kaola-gitea-workflow-claim.js must implement the selection_evidence probe');
 }

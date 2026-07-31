@@ -549,39 +549,26 @@ function testGiteaBundleClaimCreatesOneFolder() {
   console.log('testGiteaBundleClaimCreatesOneFolder: PASSED');
 }
 
-// #347: --attest-planner-spawn on the forge claim back-fills the planner dispatch-log line (the
-// #280 producer, ported here). Without the flag-parse + back-fill the line is never written and the
-// forge sink-merge attestation (#300 consumer) is structurally dead on this edition. Behavioral
-// proof: a startup claim WITH the flag writes a workflow-planner entry to dispatch-log.jsonl.
-function testGiteaPlannerAttestBackfill() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-attest-')));
-  const binDir = path.join(tmp, 'bin');
-  const logFile = path.join(tmp, 'tea-calls.log');
-  try {
-    _initGitRepo(tmp);
-    gtPlantRoadmapIssue(tmp, 42);
-    gtPlantRoadmapIssue(tmp, 47);
-    gtPlantRoadmapIssue(tmp, 53);
-    writeBundleTeaMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
-    const result = gtSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive', '--attest-planner-spawn'], tmp, binDir);
-    assert.strictEqual(result.status, 0, 'gitea #347: exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
-    const out = gtLastJson(result.stdout);
-    assert.strictEqual(out.claim, 'acquired', 'gitea #347: claim must be acquired');
-    const dispatchLog = path.join(tmp, 'kaola-workflow', 'bundle-42-47-53', '.cache', 'dispatch-log.jsonl');
-    assert.ok(fs.existsSync(dispatchLog), 'gitea #347: --attest-planner-spawn must create dispatch-log.jsonl at ' + dispatchLog);
-    const lines = fs.readFileSync(dispatchLog, 'utf8').split('\n').filter(Boolean);
-    const plannerLine = lines.find(l => { try { return JSON.parse(l).agent_type === 'workflow-planner'; } catch (_) { return false; } });
-    assert.ok(plannerLine, 'gitea #347: dispatch-log must carry a workflow-planner back-fill entry, got: ' + lines.join('|'));
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  console.log('testGiteaPlannerAttestBackfill: PASSED');
-}
+// DELETED: testGiteaPlannerAttestBackfill. It drove a bundle startup WITH --attest-planner-spawn
+// and asserted the back-fill wrote a workflow-planner entry into dispatch-log.jsonl. The mandatory
+// planner agent is gone and inline authoring is the design, so the gitea claim port retired the
+// whole producer chain with its canonical original — the flag parse, the back-fill writer, the
+// checkDispatchAttestations probe and the claim_planner_attested field. Nothing else shared the
+// fixture: the bundle claim itself is covered by testGiteaBundleClaimCreatesOneFolder above, on the
+// identical fixture minus the flag, so nothing is lost by deleting the whole scenario.
 
-// n6 (#653 finding A, gitea port): a non-empty ATTESTATION WARNING must not live only in stdout
-// JSON — cmdFinalize's persistAttestationToSummary transcribes it (and the two column-0 status
-// fields) into the archived finalization-summary.md, and appendClosureBlock's ## Closure block
-// carries the same fields. Mirrors root's testAttestationWarningPersistence modulo forge nouns.
-function testGiteaAttestationWarningPersistence() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-653-attest-')));
+// CONVERTED (was testGiteaAttestationWarningPersistence, the n6/#653 port): it seeded a role-only
+// dispatch-log and asserted the ATTESTATION WARNING landed verbatim in the archived
+// finalization-summary.md and the workflow-state.md ## Closure block. Every producer in that chain
+// is retired — the gitea claim port dropped checkDispatchAttestations, persistAttestationToSummary
+// and the claim_planner_attested field with their canonical originals — so asserting the field is
+// PRESENT is now asserting the retirement did not happen. Root's twin was DELETED outright; this
+// scenario stays alive because it is also this suite's closure-persistence exercise: finalize still
+// archives, the summary is still written, the ## Closure block still lands. Only the attestation
+// expectations flip, into the reappearance guards below — the direction a retirement can actually
+// regress in.
+function testGiteaClosurePersistence() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-653-closure-')));
   try {
     _initGitRepo(tmp);
     const project = 'issue-653gt';
@@ -596,45 +583,48 @@ function testGiteaAttestationWarningPersistence() {
     // This fixture jumps directly from claim state to finalize and intentionally
     // does not author an adaptive plan.
     seedAdaptiveFinalizeFixture(tmp, project);
-    // Seed .cache/dispatch-log.jsonl with ONLY a role entry (no workflow-planner entry) —
-    // the exact inline-bypass scenario the ATTESTATION WARNING exists to catch.
-    const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'tdd-guide', agent_id: 'test-seed', cwd: tmp }) + '\n');
+    // DELETED with its mechanism: the role-only dispatch-log seeding. It existed solely so the
+    // retired checkDispatchAttestations probe would find no workflow-planner entry and raise the
+    // warning; no consumer reads the log on this path any more, so seeding it would be fixture
+    // dressing for nobody.
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,
       env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
     });
     assert.strictEqual(result.status, 0,
-      'gitea #653 attestation persistence: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      'gitea closure persistence: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
-    assert.ok(lines.length > 0, 'gitea #653 attestation persistence: expected JSON output');
+    assert.ok(lines.length > 0, 'gitea closure persistence: expected JSON output');
     const out = JSON.parse(lines[lines.length - 1]);
-    assert.strictEqual(out.status, 'closed', 'gitea #653 attestation persistence: status must be closed, got ' + JSON.stringify(out.status));
+    assert.strictEqual(out.status, 'closed', 'gitea closure persistence: status must be closed, got ' + JSON.stringify(out.status));
     const receipt = out.closure_receipt;
-    assert.ok(receipt != null, 'gitea #653 attestation persistence: closure_receipt must be present');
-    assert.strictEqual(receipt.claim_planner_attested, 'missing',
-      'gitea #653 attestation persistence: claim_planner_attested must be missing, got ' + JSON.stringify(receipt.claim_planner_attested));
+    assert.ok(receipt != null, 'gitea closure persistence: closure_receipt must be present');
+    // DELETED: the `claim_planner_attested === 'missing'` pin. Nothing writes the field, so nothing
+    // can assert it. Kept, and now the whole of what this stanza measures: neither retired
+    // attestation field may REAPPEAR on any of the three persistence surfaces.
+    assert.ok(!('claim_planner_attested' in receipt),
+      'gitea closure persistence: the retired planner attestation field must not reappear on the closure receipt, got ' + JSON.stringify(Object.keys(receipt)));
+    assert.ok(!('finalize_contractor_attested' in receipt),
+      'gitea closure persistence: the retired finalize-seam attestation field must not reappear on the closure receipt, got ' + JSON.stringify(Object.keys(receipt)));
 
-    assert.ok(out.dest && fs.existsSync(out.dest), 'gitea #653 attestation persistence: archive dest must exist');
+    assert.ok(out.dest && fs.existsSync(out.dest), 'gitea closure persistence: archive dest must exist');
     const finSummaryPath = path.join(out.dest, 'finalization-summary.md');
     assert.ok(fs.existsSync(finSummaryPath),
-      'gitea #653 attestation persistence: archived finalization-summary.md must exist');
+      'gitea closure persistence: archived finalization-summary.md must exist');
     const finContent = fs.readFileSync(finSummaryPath, 'utf8');
-    assert.ok(/^claim_planner_attested:\s*missing\s*$/m.test(finContent),
-      'gitea #653 attestation persistence: finalization-summary.md must carry column-0 claim_planner_attested: missing, got: ' + finContent);
-    assert.ok(finContent.includes('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log'),
-      'gitea #653 attestation persistence: finalization-summary.md must carry the verbatim ATTESTATION WARNING, got: ' + finContent);
+    assert.ok(!/^claim_planner_attested:/m.test(finContent),
+      'gitea closure persistence: finalization-summary.md must not carry the retired claim_planner_attested field, got: ' + finContent);
+    assert.ok(!/^## Attestation$/m.test(finContent),
+      'gitea closure persistence: finalization-summary.md must not carry a retired ## Attestation block, got: ' + finContent);
 
     const stateContent = fs.readFileSync(path.join(out.dest, 'workflow-state.md'), 'utf8');
     assert.ok(/^## Closure$/m.test(stateContent),
-      'gitea #653 attestation persistence: archived workflow-state.md must carry ## Closure');
-    assert.ok(/^claim_planner_attested:\s*missing\s*$/m.test(stateContent),
-      'gitea #653 attestation persistence: archived workflow-state.md ## Closure block must carry claim_planner_attested: missing, got: ' + stateContent);
+      'gitea closure persistence: archived workflow-state.md must carry ## Closure');
+    assert.ok(!/^claim_planner_attested:/m.test(stateContent),
+      'gitea closure persistence: archived workflow-state.md ## Closure block must not carry the retired claim_planner_attested field, got: ' + stateContent);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  console.log('testGiteaAttestationWarningPersistence: PASSED');
+  console.log('testGiteaClosurePersistence: PASSED');
 }
 
 // n6 (#653 finding D3, gitea port): a selection-evidence.md docked pre-finalize (simulating the
@@ -899,8 +889,7 @@ testGiteaDispatchHookExists();
 
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGiteaBundleClaimCreatesOneFolder();
-testGiteaPlannerAttestBackfill();
-testGiteaAttestationWarningPersistence();
+testGiteaClosurePersistence();
 testGiteaSelectionEvidenceDocking();
 testGiteaBundleRefusalLeavesNoFolder();
 testGiteaBundleDuplicateIssueBlocking();

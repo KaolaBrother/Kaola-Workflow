@@ -416,9 +416,18 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'staging_g
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "reason: 'finalize_mirror_refused',");
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'if (!verdict.safe) {');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_transaction');
-// #347: the planner self-attest back-fill flag must be ported to the forge claim (the #280 producer
-// was canonical-only while #300 ported its consumer — without this pin the asymmetry is invisible).
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-planner-spawn');
+// Dispatch-log attestation is retired on the claim/author seam too. It asked whether a
+// `workflow-planner` subagent had been spawned before the plan was frozen; there is no planner
+// agent and no plan to freeze, and inline authoring is the design rather than the bypass the
+// detector watched for. The gitea claim port drops the whole producer chain with its canonical
+// original — pinned as an ABSENCE so a revival reds the chain. (The finalize-seam twin is swept
+// above; its retained --attest-contractor-spawn warn-and-ignore note keeps that flag LITERAL
+// legal, which is why that sweep pins identifiers only. The planner flag left no such note, so
+// its literal is swept here outright.)
+for (const gone of ['checkDispatchAttestations', 'persistAttestationToSummary',
+  'claim_planner_attested', 'attestPlannerSpawn', 'attest-planner-spawn', '## Attestation']) {
+  assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', gone);
+}
 
 
 // test-gitea-workflow-scripts.js must exercise operator_hint + route-findings + --summary.
@@ -635,7 +644,8 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "band && b
 // Each validator pins its OWN edition's ports only.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'closeIssueIdempotent');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'buildBranchName');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'checkDispatchAttestations');
+// checkDispatchAttestations left the shared set with the planner-attestation retirement; it is
+// now swept as an ABSENCE with the rest of that chain, above.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'isSharedInfra');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'isProtected');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'readRoadmapIssues');
