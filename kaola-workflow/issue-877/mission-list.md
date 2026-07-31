@@ -68,6 +68,10 @@
   dispatched: `changelog-draft` (killed mid-flight for the resume drill), then re-dispatched as `changelog-draft-2` after recovery from this file showed its output had not landed
   result: kaola-workflow/.origin/877/changelog-draft.md. Folded into CHANGELOG.md at step 6.
 
+- item: Strip the plan's shadow out of the surviving claim record — claim.js still writes ## Pending Gates and ## Planning Evidence (plan_hash / decision / risk / first_node_id / first_node_role) plus active_plan_hash and a normalization pass. Found by the docs agent asking rather than guessing. Removed, not retained as inert `none` constants: a record that names a mechanism which no longer exists is worse than no record, because a reader takes the field's presence as evidence the thing is real. Consequence for the state contract — plan_hash was the freshness key for a frozen plan and NOTHING replaces it; the mission list is not attested, not frozen and not machine-verified, and that absence is deliberate.
+  status: in-flight
+  dispatched: routed to `demolish-scripts` (owns claim.js) with the exact line numbers; `docs-technical` told to write the contract as it WILL be
+
 - item: Rewrite CLAUDE.md to describe what ships and remove its ADR 0017 banner; update README, docs/api.md, architecture, conventions, the state contract and the doc index (step 6, last).
   status: todo
 
