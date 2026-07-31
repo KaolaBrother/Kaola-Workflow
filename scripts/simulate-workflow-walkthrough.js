@@ -149,6 +149,14 @@ function candidateHashFor(root, project) {
   try { return schema.computeCodeTreeHash(root, project, schema.VALIDATION_TEST_CONSUMES) || ''; } catch (_) { return ''; }
 }
 
+// The adaptive routing command + skill, read from the kernel constants the WRITER uses rather than
+// spelled out here. Routing assertions below name these instead of a literal: a literal survived
+// long enough for `/kaola-workflow-plan-run` to be deleted out from under it, leaving pins that
+// named a command which no longer existed. The property is "routing is adaptive", never "the
+// command is spelled <x>".
+const { NEXT_COMMAND: ADAPTIVE_NEXT_COMMAND, NEXT_SKILL: ADAPTIVE_NEXT_SKILL } =
+  require('./kaola-workflow-adaptive-schema');
+
 // #816: cmdFinalize's Step-8a artifact mirror pushes the MAIN checkout's Finalization artifacts
 // into the linked worktree, so the main copy is the authoritative one at the gate. A fixture that
 // seeds both roots independently records a per-root candidate hash; align them the way a real run
@@ -316,8 +324,9 @@ function testKeepOpenArchiveStamp() {
     assert(st.includes('step: complete'), '#333: keep-open archived state must be complete');
     assert(st.includes('last_result: closed_keep_open'),
       '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
-    assert(!/next_command:.*kaola-workflow-plan-run/.test(st),
-      '#333: keep-open archived next_command must not advertise plan-run, got: ' + st);
+    assert(!st.includes('next_command: ' + ADAPTIVE_NEXT_COMMAND),
+      '#333: keep-open archived next_command must not advertise the live adaptive route ('
+        + ADAPTIVE_NEXT_COMMAND + '), got: ' + st);
     assert(st.includes('next_command: none (archived)'),
       '#333: keep-open archived next_command must be neutralized');
     // DELETED: "the archived plan_hash is refreshed from the final plan file". There is no plan
@@ -969,8 +978,10 @@ function testAdaptiveOnStartupAcquires() {
     assert(out.claim === 'acquired', 'adaptive startup must acquire, got: ' + JSON.stringify(out));
     const state = read(statePath(tmp, 'issue-905'));
     assert(state.includes('workflow_path: adaptive'), 'state must record workflow_path: adaptive');
-    assert(state.includes('next_command: /kaola-workflow-plan-run issue-905'), 'state must route to plan-run, got:\n' + state);
-    assert(state.includes('next_skill: kaola-workflow-plan-run issue-905'), 'state must route to plan-run skill');
+    assert(state.includes('next_command: ' + ADAPTIVE_NEXT_COMMAND + ' issue-905'),
+      'state must route to the adaptive executor (' + ADAPTIVE_NEXT_COMMAND + '), got:\n' + state);
+    assert(state.includes('next_skill: ' + ADAPTIVE_NEXT_SKILL + ' issue-905'),
+      'state must route to the adaptive skill (' + ADAPTIVE_NEXT_SKILL + '), got:\n' + state);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveOnStartupAcquires: PASSED');
 }
@@ -994,8 +1005,8 @@ function testAdaptiveResumeAfterFlipOff() {
     });
     const out = JSON.parse(runNode(claimScript, ['resume'], tmp).stdout);
     assert(out.resumed === true, 'in-flight adaptive must resume');
-    assert(out.next_command === '/kaola-workflow-plan-run issue-909',
-      'adaptive resume must emit plan-run (not phaseN), got: ' + out.next_command);
+    assert(out.next_command === ADAPTIVE_NEXT_COMMAND + ' issue-909',
+      'adaptive resume must emit the adaptive executor (not phaseN), got: ' + out.next_command);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveResumeAfterFlipOff: PASSED');
 }
@@ -9007,7 +9018,6 @@ function testPatchBranchGuards() {
 // Feature-detect signals (all absent until their owning node lands):
 //   CLAIM_SIGNAL      = typeof claim.legacySiblingWorktreePathFor === 'function'  (impl-claim, node 8)
 //   SINK_SIGNAL       = typeof require(sinkMergeScript).assertBranchHasNonWorkflowChanges === 'function'  (impl-sink-guard, node 2)
-//   PLAN_RUN_SIGNAL   = commands/kaola-workflow-plan-run.md contains 'ACTIVE_WORKTREE_PATH'  (impl-plan-run, node 3)
 
 // Lazy signal accessors (evaluated once per test call, not at module load).
 function claimSignal() {
@@ -9017,12 +9027,10 @@ function claimSignal() {
 function sinkSignal() {
   return typeof require(sinkMergeScript).assertBranchHasNonWorkflowChanges === 'function';
 }
-function planRunSignal() {
-  const planRunPath = path.join(repoRoot, 'commands', 'kaola-workflow-plan-run.md');
-  try {
-    return fs.readFileSync(planRunPath, 'utf8').includes('ACTIVE_WORKTREE_PATH');
-  } catch (_) { return false; }
-}
+// DELETED: planRunSignal(). It feature-detected `commands/kaola-workflow-plan-run.md`, a file this
+// campaign deleted, and its sole consumer (testPlanRunWiredForWorktree) is already gone. A signal
+// that can only ever answer false, read by nobody, is not a skip — it is dead weight that makes the
+// registry look larger than the coverage.
 
 // ── Strict (no feature-detect) — this node's own RED→GREEN ──────────────────
 
@@ -9429,11 +9437,6 @@ function testSinkAllowsMixedBranch() {
   }
   console.log('testSinkAllowsMixedBranch: PASSED');
 }
-
-// ── NEW: testPlanRunWiredForWorktree ─────────────────────────────────────────
-// D3 (governance): reads commands/kaola-workflow-plan-run.md; asserts ACTIVE_WORKTREE_PATH + Working directory
-// Signal = planRunSignal() → strict assert both present; else pass (pending impl-plan-run)
-
 
 
 // ---------------------------------------------------------------------------
@@ -10579,15 +10582,13 @@ function buildRegistry() {
   add('testAdaptiveWorktreeProvisionedE2E',               testAdaptiveWorktreeProvisionedE2E);
   add('testSinkReportsWorkflowOnlyBranch',                testSinkReportsWorkflowOnlyBranch);
   add('testSinkAllowsMixedBranch',                        testSinkAllowsMixedBranch);
-  add('testPlannerAttestFlagBackfillsDispatchLog',        testPlannerAttestFlagBackfillsDispatchLog);
-  add('testPlannerAttestFlagAbsentStaysMissing',          testPlannerAttestFlagAbsentStaysMissing);
+  add('testClaimFinalizeSinkChainCompletes',              testClaimFinalizeSinkChainCompletes);
   add('testDispatchLogHookWorktreeAware338',              testDispatchLogHookWorktreeAware338);
   add('testDispatchLogEmitsModelFields566',               testDispatchLogEmitsModelFields566);
   add('testDispatchLogResolverResolvesUnderOpencodeLayout567', testDispatchLogResolverResolvesUnderOpencodeLayout567);
   add('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568', testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568);
   add('testRetiredFinalizeAttestFlagIsInert816',          testRetiredFinalizeAttestFlagIsInert816);
   add('testInlineFinalizeSeamRaisesNoAttestationAlarm816', testInlineFinalizeSeamRaisesNoAttestationAlarm816);
-  add('testAttestationWarningPersistence',                testAttestationWarningPersistence);
   add('testSelectionEvidenceDocking',                     testSelectionEvidenceDocking);
   add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
   add('testFinalizeIncompleteNegativeControlAlreadyDone', testFinalizeIncompleteNegativeControlAlreadyDone);
@@ -10716,61 +10717,17 @@ async function main() {
   }
 }
 
-// ── attestation warning durable persistence — a non-empty ATTESTATION WARNING must land in the
-// archived finalization-summary.md and workflow-state.md ## Closure block, not just stdout JSON.
-// Seed a role-only dispatch-log (no workflow-planner entry) so the planner seam surfaces
-// the warning, finalize, then assert both archived artifacts carry it verbatim.
-function testAttestationWarningPersistence() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-')));
-  const kwRoot = tmp + '.kw';
-  try {
-    initGitRepo(tmp);
-    const binDir = path.join(tmp, 'bin');
-    writeGhShimForStartup(binDir);
-
-    const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653101'], tmp, binDir);
-    assert(sResult.claim === 'acquired', 'attestation persistence: startup must acquire');
-    const project = sResult.selected_project || 'issue-653101';
-    // This persistence fixture jumps directly from claim to finalize without an
-    // authored run, so seed a minimal frozen adaptive plan + passing gate.
-    seedAdaptiveFinalizeFixture(tmp, project);
-
-    // Seed dispatch-log with ONLY a role entry (no workflow-planner) — the inline-bypass
-    // scenario the ATTESTATION WARNING exists to catch.
-    const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'tdd-guide', agent_id: 'test-seed', cwd: tmp }) + '\n');
-
-    const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
-    assert(finResult.status === 'closed',
-      'attestation persistence: finalize must return status:closed, got: ' + JSON.stringify(finResult));
-    const finReceipt = finResult.closure_receipt;
-    assert(finReceipt && finReceipt.claim_planner_attested === 'missing',
-      'attestation persistence: seeded role-only dispatch-log must leave claim_planner_attested missing, got: ' +
-      JSON.stringify(finReceipt));
-
-    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
-    const summaryPath = path.join(archiveDir, 'finalization-summary.md');
-    assert(fs.existsSync(summaryPath), 'attestation persistence: archived finalization-summary.md must exist');
-    const summary = fs.readFileSync(summaryPath, 'utf8');
-    assert(/^claim_planner_attested: missing$/m.test(summary),
-      'attestation persistence: archived finalization-summary.md must carry column-0 claim_planner_attested: missing, got: ' + summary);
-    assert(summary.includes('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log'),
-      'attestation persistence: archived finalization-summary.md must carry the verbatim ATTESTATION WARNING, got: ' + summary);
-
-    const statePath = path.join(archiveDir, 'workflow-state.md');
-    const state = fs.readFileSync(statePath, 'utf8');
-    assert(/^## Closure$/m.test(state), 'attestation persistence: archived workflow-state.md must carry ## Closure block');
-    assert(/^claim_planner_attested: missing$/m.test(state),
-      'attestation persistence: archived workflow-state.md ## Closure block must carry claim_planner_attested, got: ' + state);
-
-    console.log('testAttestationWarningPersistence: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
-  }
-}
+// DELETED: testAttestationWarningPersistence. It seeded a role-only dispatch-log so the planner seam
+// would surface `ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log`, then
+// asserted that warning landed verbatim in the archived finalization-summary.md and the
+// workflow-state.md ## Closure block. Every producer in that chain is retired — the mandatory
+// planner agent is gone, inline authoring is the design, and claim.js dropped
+// checkDispatchAttestations, persistAttestationToSummary and the claim_planner_attested field. The
+// warning string now has no producer anywhere outside test sources.
+//
+// UNCOVERED: that a non-empty attestation warning is persisted durably rather than only printed to
+// stdout. The durable-persistence DISCIPLINE it demonstrated survives elsewhere (the ## Closure
+// block is still written and still asserted); what is gone is the one warning it carried.
 
 // n5 (#653 finding D3): selection-evidence probe. Case (a) seeds .cache/selection-evidence.md
 // pre-finalize (simulating the router's D2 docking) -> closure_receipt.selection_evidence must
@@ -10828,13 +10785,23 @@ function testSelectionEvidenceDocking() {
   }
 }
 
-// ── #280: AC1 — M1 planner back-fill + M2 sink-merge attestation check ──────
-// Drives a real startup claim WITH --attest-planner-spawn, verifies the back-fill
-// lands in dispatch-log.jsonl, then runs finalize and asserts claim_planner_attested===attested
-// in BOTH the finalize receipt and the sink-merge closure_receipt. The claim/author seam is the
-// ONLY attested seam — the finalize seam is orchestrator-owned and emits no attestation field.
-// The sink-merge assertion is the primary M2 regression check.
-function testPlannerAttestFlagBackfillsDispatchLog() {
+// ── the claim → finalize → sink chain completes end to end ──────────────────
+// NARROWED (was testPlannerAttestFlagBackfillsDispatchLog). It drove startup WITH
+// --attest-planner-spawn, asserted the back-fill wrote a workflow-planner entry into
+// dispatch-log.jsonl, and asserted claim_planner_attested === 'attested' on both the finalize and
+// the sink-merge receipts. The flag is retired from claim.js — passing it now refuses unknown_flag
+// with zero side effects — and the field has no producer, so all of that is gone.
+//
+// What is KEPT is a different assertion that merely shared the fixture: a real startup claim,
+// worktree provisioning, a feature commit, finalize reaching status:closed, and sink-merge reaching
+// status:merged. That chain is the only place in this suite where all three run against one another
+// for real, and it has nothing to do with attestation. Retaining it is not reshaping a pin around an
+// absent mechanism; deleting it would have thrown away live coverage that happened to be adjacent.
+//
+// UNCOVERED by the narrowing: that a planner dispatch is recorded in dispatch-log.jsonl and read
+// back as an attestation. Retired mechanism — the flag, the probe, the writer and the field are all
+// gone. The reappearance guards below are what survives.
+function testClaimFinalizeSinkChainCompletes() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-280-ac1-')));
   const kwRoot = tmp + '.kw';
   try {
@@ -10842,40 +10809,28 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
 
-    // Real startup claim WITH --attest-planner-spawn (M1 fix path)
     const sResult = runClaimOnlineLastJson(
-      ['startup', '--target-issue', '280001', '--attest-planner-spawn'],
+      ['startup', '--target-issue', '280001'],
       tmp, binDir
     );
-    assert(sResult.claim === 'acquired', 'M1 (#280): startup must acquire');
+    assert(sResult.claim === 'acquired', 'startup must acquire');
     const project = sResult.selected_project || 'issue-280001';
-    // This fixture exercises dispatch attestation and sink receipts, not the adaptive
-    // plan/Phase-5 gate. Declare the established plan-absent fast exemption explicitly.
+    // This fixture exercises the claim → finalize → sink chain, not the adaptive plan/Phase-5 gate.
+    // Declare the established plan-absent fast exemption explicitly.
     seedAdaptiveFinalizeFixture(tmp, project);
 
-    // The back-fill must have written to .cache/dispatch-log.jsonl
-    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(dispatchLog),
-      'M1 (#280): --attest-planner-spawn must create dispatch-log.jsonl at ' + dispatchLog);
-    const logContent = fs.readFileSync(dispatchLog, 'utf8');
-    const lines = logContent.split('\n').filter(Boolean);
-    const plannerLine = lines.find(l => { try { return JSON.parse(l).agent_type === 'workflow-planner'; } catch(_) { return false; } });
-    assert(plannerLine, 'M1 (#280): dispatch-log must contain a workflow-planner entry, got: ' + logContent);
-
-    // finalize — must see the planner line (archive-first check matches cmdFinalize behaviour)
     const finResult = runClaimOnlineLastJson(
       ['finalize', '--project', project],
       tmp, binDir
     );
-    assert(finResult.status === 'closed', 'M1 (#280): finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    assert(finResult.status === 'closed', 'finalize must return status:closed, got: ' + JSON.stringify(finResult));
     const finReceipt = finResult.closure_receipt;
-    assert(finReceipt, 'M1 (#280): finalize must emit closure_receipt');
-    assert(finReceipt.claim_planner_attested === 'attested',
-      'M1 (#280): finalize closure_receipt.claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
+    assert(finReceipt, 'finalize must emit closure_receipt');
+    assert(!('claim_planner_attested' in finReceipt),
+      'the retired planner attestation field must not reappear on the finalize receipt, got: ' + JSON.stringify(Object.keys(finReceipt)));
     assert(!('finalize_contractor_attested' in finReceipt),
       '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
 
-    // sink-merge — M2: must also check the archived dispatch-log (archive-first)
     // Set up the worktree branch that sink-merge needs to FF-merge.
     const wtPath = sResult.worktree_path;
     const branchName = sResult.branch || ('workflow/issue-280001');
@@ -10898,103 +10853,35 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
     });
     assert(smResult.status === 0,
-      'M2 (#280): sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
+      'sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
 
     const smLines = smResult.stdout.trim().split('\n').filter(l => l.trim());
     const smParsed = JSON.parse(smLines[smLines.length - 1]);
     assert(smParsed.status === 'merged',
-      'M2 (#280): sink-merge must emit status:merged, got: ' + JSON.stringify(smParsed));
+      'sink-merge must emit status:merged, got: ' + JSON.stringify(smParsed));
     const smReceipt = smParsed.closure_receipt;
-    assert(smReceipt, 'M2 (#280): sink-merge must emit closure_receipt');
-    assert(smReceipt.claim_planner_attested === 'attested',
-      'M2 (#280): sink-merge closure_receipt.claim_planner_attested must be attested, got: ' + smReceipt.claim_planner_attested);
+    assert(smReceipt, 'sink-merge must emit closure_receipt');
+    assert(!('claim_planner_attested' in smReceipt),
+      'the retired planner attestation field must not reappear on the sink-merge receipt, got: ' + JSON.stringify(Object.keys(smReceipt)));
     assert(!('finalize_contractor_attested' in smReceipt),
       '#816: the sink-merge receipt emits no finalize-seam attestation field, got: ' + JSON.stringify(Object.keys(smReceipt)));
 
-    console.log('testPlannerAttestFlagBackfillsDispatchLog: PASSED');
+    console.log('testClaimFinalizeSinkChainCompletes: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
   }
 }
 
-// ── #280: AC2 — no flag + no log → fields stay not-attested (inline-bypass guard) ──
-// Same startup WITHOUT --attest-planner-spawn, no dispatch-log written.
-// Both finalize and sink-merge receipts must have claim_planner_attested !== 'attested'
-// (may be 'missing' or 'failed' — we accept either to survive the M2 'missing' shift).
-function testPlannerAttestFlagAbsentStaysMissing() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-280-ac2-')));
-  const kwRoot = tmp + '.kw';
-  try {
-    initGitRepo(tmp);
-    const binDir = path.join(tmp, 'bin');
-    writeGhShimForStartup(binDir);
-
-    // Real startup WITHOUT the flag
-    const sResult = runClaimOnlineLastJson(
-      ['startup', '--target-issue', '280002'],
-      tmp, binDir
-    );
-    assert(sResult.claim === 'acquired', 'AC2 (#280): startup must acquire');
-    const project = sResult.selected_project || 'issue-280002';
-    // This receipt-attestation negative does not exercise adaptive planning or
-    // Phase 5. Declare the canonical plan-absent fast exemption explicitly.
-    seedAdaptiveFinalizeFixture(tmp, project);
-
-    // No dispatch-log must be written (no flag, no hook in test env)
-    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
-    assert(!fs.existsSync(dispatchLog),
-      'AC2 (#280): without --attest-planner-spawn, dispatch-log must NOT be created');
-
-    // finalize
-    const finResult = runClaimOnlineLastJson(
-      ['finalize', '--project', project],
-      tmp, binDir
-    );
-    assert(finResult.status === 'closed', 'AC2 (#280): finalize must return status:closed');
-    const finReceipt = finResult.closure_receipt;
-    assert(finReceipt, 'AC2 (#280): finalize must emit closure_receipt');
-    assert(finReceipt.claim_planner_attested !== 'attested',
-      'AC2 (#280): finalize closure_receipt.claim_planner_attested must NOT be attested (inline-bypass guard), got: ' + finReceipt.claim_planner_attested);
-    assert(!('finalize_contractor_attested' in finReceipt),
-      '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
-
-    // sink-merge
-    const wtPath = sResult.worktree_path;
-    const branchName = sResult.branch || 'workflow/issue-280002';
-    const commitRepo = (wtPath && fs.existsSync(wtPath)) ? wtPath : tmp;
-    fs.writeFileSync(path.join(commitRepo, 'feature-280002.txt'), 'ac2 test\n');
-    G.git(commitRepo, ['add', 'feature-280002.txt'], { encoding: 'utf8' });
-    G.git(commitRepo, ['commit', '-m', 'feat: ac2 test for issue 280002'], { encoding: 'utf8' });
-
-    const smResult = spawnSync(process.execPath, [
-      sinkMergeScript,
-      '--project', project,
-      '--branch', branchName,
-      '--issue', '280002'
-    ], {
-      cwd: commitRepo,
-      encoding: 'utf8',
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
-    });
-    assert(smResult.status === 0,
-      'AC2 (#280): sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
-
-    const smLines = smResult.stdout.trim().split('\n').filter(l => l.trim());
-    const smParsed = JSON.parse(smLines[smLines.length - 1]);
-    const smReceipt = smParsed.closure_receipt;
-    assert(smReceipt, 'AC2 (#280): sink-merge must emit closure_receipt');
-    assert(smReceipt.claim_planner_attested !== 'attested',
-      'AC2 (#280): sink-merge closure_receipt.claim_planner_attested must NOT be attested (no flag), got: ' + smReceipt.claim_planner_attested);
-    assert(!('finalize_contractor_attested' in smReceipt),
-      '#816: the sink-merge receipt emits no finalize-seam attestation field, got: ' + JSON.stringify(Object.keys(smReceipt)));
-
-    console.log('testPlannerAttestFlagAbsentStaysMissing: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
-  }
-}
+// DELETED: testPlannerAttestFlagAbsentStaysMissing. It ran the same startup WITHOUT
+// --attest-planner-spawn and asserted claim_planner_attested !== 'attested' on both the finalize and
+// the sink-merge receipts — the inline-bypass guard. The field has no producer and inline authoring
+// is now the design, so the guard has nothing left to guard: the thing it treated as suspect is what
+// the workflow does. Its surviving half — neither retired attestation field may reappear — is
+// asserted in testClaimFinalizeSinkChainCompletes above, on the same two receipts, so nothing is
+// lost by deleting the whole scenario rather than narrowing it as well.
+//
+// UNCOVERED: nothing that a live mechanism can violate.
 
 
 // ── #338 T3: dispatch-log hook is worktree-aware (dual-root capture) ──────────
@@ -11238,9 +11125,12 @@ function testRetiredFinalizeAttestFlagIsInert816() {
 }
 
 // ── #816: an inline finalize is the DESIGN, not a bypass ──
-// The planner WAS dispatched (its back-fill populates a dispatch-log) and the finalize seam runs
-// inline. The claim/author seam still attests; the finalize seam emits no field and no warning —
-// treating inline finalize as suspect is exactly the inversion this retires.
+// NARROWED: the two assertions that depended on a dispatched planner are gone — the
+// --attest-planner-spawn back-fill and `claim_planner_attested === 'attested'` — because the flag,
+// the probe and the field are all retired. The scenario's actual claim never depended on them and
+// is now stronger for it: an inline finalize completes (status:closed), carries NEITHER retired
+// attestation field, and raises NO alarm about having been run inline. Treating inline finalize as
+// suspect is the inversion this retires, and that is exactly what is still asserted.
 function testInlineFinalizeSeamRaisesNoAttestationAlarm816() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-fallback-')));
   const kwRoot = tmp + '.kw';
@@ -11251,13 +11141,11 @@ function testInlineFinalizeSeamRaisesNoAttestationAlarm816() {
 
     // Planner WAS dispatched (its back-fill writes a dispatch-log).
     const sResult = runClaimOnlineLastJson(
-      ['startup', '--target-issue', '338002', '--attest-planner-spawn'], tmp, binDir);
+      ['startup', '--target-issue', '338002'], tmp, binDir);
     assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
     const project = sResult.selected_project || 'issue-338002';
-    // Like T4, this attestation-only fixture never authors an adaptive plan.
+    // Like T4, this fixture never authors an adaptive plan.
     seedAdaptiveFinalizeFixture(tmp, project);
-    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(dispatchLog), '#338 T5: planner back-fill must create a dispatch-log');
 
     // finalize run inline by the orchestrator — the design, not a bypass.
     const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
@@ -11265,8 +11153,8 @@ function testInlineFinalizeSeamRaisesNoAttestationAlarm816() {
       '#816: an inline finalize must return status:closed, got: ' + JSON.stringify(finResult));
     const finReceipt = finResult.closure_receipt;
     assert(finReceipt, '#816: finalize must emit closure_receipt');
-    assert(finReceipt.claim_planner_attested === 'attested',
-      '#816: planner WAS dispatched → claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
+    assert(!('claim_planner_attested' in finReceipt),
+      'the retired planner attestation field must not reappear on an inline finalize receipt, got: ' + JSON.stringify(Object.keys(finReceipt)));
     assert(!('finalize_contractor_attested' in finReceipt),
       '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
     assert(Array.isArray(finReceipt.warnings) &&
