@@ -25,15 +25,14 @@ const DEFAULT_AGENT_MODELS = {
   'security-reviewer': 'opus',
   'doc-updater': 'sonnet',
   // The adversarial verifier falsifies ONE recorded claim against ONE named surface — a bounded,
-  // well-scoped read task — so its shipped tier is standard. A plan may raise it per node (the
+  // well-scoped read task — so its shipped tier is standard. A dispatch may raise it (the
   // post-G1 intent-verifier on a synthesizer's merge is raised that way); it is NOT a
   // reasoning-floor role.
   'adversarial-verifier': 'sonnet',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
   // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
-  // A plan may raise it per node; it is NOT a reasoning-floor role.
+  // A dispatch may raise it; it is NOT a reasoning-floor role.
   'metric-optimizer': 'sonnet',
-  'workflow-planner': 'opus',
   // #463 (write-overlap): the synthesizer resolves real write-leg merge conflicts BY INTENT — a
   // reasoning-class task. Its default is opus; a plan may RAISE but never LOWER this floor (see
   // REASONING_FLOOR_ROLES). The post-G1 intent-verifier (adversarial-verifier on a merge) is held to
@@ -46,7 +45,7 @@ const DEFAULT_AGENT_MODELS = {
 // path reasons about intent; a non-reasoning tier would compose bytes without understanding them.
 const REASONING_FLOOR_ROLES = new Set(['synthesizer']);
 // #610: the reasoning-class tier is `reasoning` (neutral), whose only legacy alias is `opus`. Accept
-// BOTH so a Claude-default `opus` AND a plan-authored `reasoning` tier satisfy the floor; `standard`/
+// BOTH so a Claude-default `opus` AND an explicit `reasoning` tier satisfy the floor; `standard`/
 // `sonnet` (or inherit) is non-reasoning → refuse. This mirrors the schema's normalizeTier() alias map
 // (kaola-workflow-adaptive-schema.js is the canonical source), but is inlined DELIBERATELY: the
 // subagent-dispatch-log hook copies THIS resolver standalone (no schema sibling on disk), so a require
@@ -221,7 +220,7 @@ function loadCodexSessionProof({ codexHome, threadId } = {}) {
 // #463 Slice 1 (AC14): ENFORCE the reasoning-class floor. For a REASONING_FLOOR_ROLES role, the
 // resolved model MUST be reasoning-class; a manifest/frontmatter override that LOWERS the floor — or an
 // explicit `inherit` (empty), which could resolve to a non-reasoning session model — is a typed refusal,
-// never a silent downgrade. A plan may RAISE but never LOWER the floor. Non-floor roles are unaffected.
+// never a silent downgrade. A dispatch may RAISE but never LOWER the floor. Non-floor roles are unaffected.
 // Returns { ok, role, model, floor } on pass; { ok:false, reason, role, model, floor, operator_hint }
 // on a violation. ENFORCEMENT is opt-in via resolveAgentModel({enforceFloor:true}) / the CLI
 // --enforce-floor flag, so the back-compat string-return contract is unchanged for existing callers;
@@ -288,16 +287,20 @@ function modelFromFile(agentName, agentDir) {
   }
 }
 
-// Resolution is a THREE-step chain, and this function owns the last two of them:
-//   plan column (the frozen plan's per-node tier, applied by the caller) -> frontmatter
-//   -> DEFAULT_AGENT_MODELS. There is no install-written model manifest and no
-//   install-time model axis; a file dropped in the agent dir cannot influence resolution.
+// Resolution is a TWO-step chain: frontmatter -> DEFAULT_AGENT_MODELS. There is no install-written
+// model manifest and no install-time model axis; a file dropped in the agent dir cannot influence
+// resolution.
+//
+// The chain used to have a THIRD step in front of these two — a per-node `model` cell the caller
+// read off the frozen plan and applied before asking this function. That cell is gone: an item on
+// the mission list carries no role and no model, and the orchestrator decides the tier at the
+// moment it dispatches. A caller may still pass an explicit model; it simply no longer comes from
+// a declaration made before the work was understood.
 //
 // FOR AN INSTALLED AGENT THE FRONTMATTER STEP NEVER FIRES. The installer rewrites every installed
 // agent's frontmatter to `model: inherit`, and step 1 skips `inherit` by design, so an installed
-// agent's chain is effectively:
-//   plan column -> DEFAULT_AGENT_MODELS -> inherit (empty).
-// The frontmatter step governs exactly one case: an ad-hoc dispatch pointed at the SOURCE tree
+// agent's chain is effectively DEFAULT_AGENT_MODELS -> inherit (empty). The frontmatter step
+// governs exactly one case: an ad-hoc dispatch pointed at the SOURCE tree
 // (`--agent-dir <repo>/agents`), where the frontmatter has not been neutralized. That is why
 // DEFAULT_AGENT_MODELS must stay byte-equal to the source frontmatter — the two are the same
 // declaration read from two directories, and only their agreement makes the tier install-invariant.

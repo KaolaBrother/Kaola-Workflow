@@ -137,9 +137,7 @@ const retired = [
   ['derive', 'session'].join('-'),
   ['verify', 'startup'].join('-'),
   ['can', 'hand' + 'off'].join('-'),
-  // #255: the bare 'handoff' token is no longer retired — it is the live name of the
-  // adaptive planner-to-first-node handoff (kaola-workflow-adaptive-handoff.js). Only the
-  // legacy session-lease 'can-handoff' compound stays retired (kept above).
+  // Only the legacy session-lease 'can-handoff' compound stays retired (kept above).
   ['startup', 'receipt'].join(' '),
   ['session', 'id'].join('_'),
   ['last', 'heart' + 'beat'].join('_'),
@@ -274,12 +272,6 @@ assertNotIncludes('templates/routing/next.skeleton.md', 'What You May Read');
 // found is reported. Pin the durable anchor and the report, at the machine end that emits them.
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_note');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_digest');
-assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'clarification_required');
-// The CHANNEL is pinned; the CAP is not, because there is no longer a cap. `round`/`prior_rounds`
-// ride the return as data and no threshold fires against them — a bound on how many times an agent
-// may ask a question is exactly the kind of harness this design retires. Retiring a token retires
-// its needle in the same diff, or the pin outlives the thing it was pinning.
-assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'prior_rounds');
 
 // issue #207: fast-overlap parity — trap-2 tolerant keep. The fast/full command surfaces are
 // retired, but the classifier RETAINS its defensive fast-summary.md `## Scope` reader (readers
@@ -292,7 +284,6 @@ assertIncludes('scripts/kaola-workflow-classifier.js', "'Scope'");
 assert(exists('scripts/kaola-workflow-active-folders.js'), 'active folder reader is missing');
 assert(exists('scripts/kaola-workflow-claim.js'), 'claim script is missing');
 assert(exists('scripts/kaola-workflow-classifier.js'), 'classifier script is missing');
-assert(exists('scripts/kaola-workflow-repair-state.js'), 'repair script is missing');
 assert(exists('scripts/kaola-workflow-sink-merge.js'), 'merge sink is missing');
 assert(exists('scripts/kaola-workflow-sink-pr.js'), 'PR sink is missing');
 assert(!exists('scripts/kaola-workflow-session-env.js'), 'session env hook script must be removed');
@@ -317,7 +308,6 @@ for (const file of [
   'scripts/kaola-workflow-claim.js',
   'scripts/kaola-workflow-active-folders.js',
   'scripts/kaola-workflow-classifier.js',
-  'scripts/kaola-workflow-repair-state.js',
   'scripts/kaola-workflow-sink-merge.js',
   'scripts/kaola-workflow-sink-pr.js',
   'hooks/hooks.json',
@@ -332,14 +322,9 @@ assertIncludes('hooks/hooks.json', 'compact-context');
 assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
-// #542: pin the parallel-writes DEFAULT-ON opt-OUT resolver so a future edit cannot silently drop
-// the seam that lets planner-proven-disjoint write frontiers co-open as isolated legs by default
-// (D-542-01).
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function parallelWritesDefaultOn');
-// #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors so a future edit cannot
-// silently drop the synthesizer reasoning floor, the policy field, or the PROTECTED set.
+// Token-pin the reasoning floor and the PROTECTED set. The third anchor of this trio was the
+// write-overlap policy field, and it is gone with the declared write sets it governed.
 assertIncludes('scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'WRITE_OVERLAP_POLICY_LEGAL');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'PROTECTED_BASENAMES');
 // #492: pin the shared write-set classification anchors so a forge classifier port (a forge-specific
 // SUPERSET, not a rename-normalized copy) cannot silently DROP a shared function. Body parity of the
@@ -521,7 +506,7 @@ assertIncludes('commands/kaola-workflow-finalize.md', '## Changed Paths');
 assertIncludes('commands/kaola-workflow-finalize.md', 'fails loudly if it would lose a file');
 // The retired executor vocabulary must not return on the finalize command.
 for (const gone of ['workflow-plan.md', 'Node Ledger', 'plan_hash', '--verdict-check',
-  '--gate-verify', '--barrier-check', '--resume-check', 'kaola-workflow-plan-validator.js']) {
+  '--gate-verify', '--barrier-check', '--resume-check', 'plan-validator']) {
   assertNotIncludes('commands/kaola-workflow-finalize.md', gone);
 }
 // assertBefore calls for 'commit -m "chore: finalize {project}"' and 'node "$CLAIM_JS" finalize'
@@ -679,57 +664,6 @@ if (process.env.KAOLA_WORKFLOW_OFFLINE !== '1' && exists('.git')) {
 
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough simulation passed');
 
-// issue #227: adaptive-path contract. Locks the selection/execution prose + the spine.
-assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan validator is missing');
-assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
-assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progress'); // #343 mid-gate reopen
-// #338: anti-drift pin — the finalize sink row is main-session-direct (not subagent-invoked).
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'main-session-direct');
-// #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
-// DEFINED via the kaola_script() resolver before its first use — an undefined handle is
-// MODULE_NOT_FOUND in a consumer plugin install (no local scripts dir). Pin the resolver + the
-// assignment so removing either regresses the chain.
-// #360: the consent-halt clear path is the script-owned `clear-halt` subcommand, not an agent
-// lockstep — pin its presence in the prose + the script so the prose mutation cannot return.
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
-// #434: repair-node subcommand + its output tokens (anti-laundering signal + orient
-// requires_redispatch field for absent-evidence detection). The discard verb that used to be pinned
-// alongside it is gone: the overflow verdict it existed to clear is a report now, so the only path
-// that unlinked a production file the agent had just written has no caller and no reason to exist.
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'repair-node'");
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'requires_redispatch');
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'baselineReused');
-// Issue 682: authoritative review transaction and agent-selected direct repair contract.
-for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
-  'repair_requires_replan', 'repair_limit_reached', "'--attempt-id'", 'uniqueMaximalReviewProducer']) {
-  assertIncludes('scripts/kaola-workflow-adaptive-node.js', token);
-}
-for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
-  assertIncludes('scripts/kaola-workflow-adaptive-schema.js', token);
-}
-// #683: the candidate-partition repair proof (P1-P5) + the append-only rebind ledger. These are the
-// fail-closed refusals that replace a whole-plan DISCARD when two gates fail simultaneously; a port that
-// silently drops one re-opens the dead-end.
-for (const token of ['candidate_residue_changed', 'candidate_slice_changed', 'candidate_delta_unattributed',
-  'rebind_base_rewrite_unsafe', 'rebind_limit_reached', 'rebind_replay_diverged',
-  'review_journal_schema_upgrade_required', 'effectiveProducerBinding', 'buildSyntheticBase',
-  'proveRebindAdmissible', 'reconcilePendingRebind', 'REVIEW_REPAIR_LIMIT']) {
-  assertIncludes('scripts/kaola-workflow-adaptive-node.js', token);
-}
-for (const token of ['candidate_declared', 'candidate_residue_digest', 'review_journal_rebind_malformed',
-  'review_journal_rebind_chain_invalid', 'REVIEW_REBIND_LIMIT', 'effectiveCandidate']) {
-  assertIncludes('scripts/kaola-workflow-adaptive-schema.js', token);
-}
-// #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
-// findings-route.json output + VERDICT_ROLES table must be present in the aggregators.
-assertIncludes('scripts/kaola-workflow-plan-validator.js', 'OPERATOR_HINT_REGISTRY');
-assertIncludes('scripts/kaola-workflow-commit-node.js', 'OPERATOR_HINT_REGISTRY');
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'OPERATOR_HINT_REGISTRY');
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'route-findings'");
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'--summary'");
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'findings-route.json'");
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'VERDICT_ROLES');
 // Every routed script call is `node "$KAOLA_SCRIPTS/…"`, and $KAOLA_SCRIPTS must be DEFINED via
 // the kaola_script() resolver before its first use — an undefined handle is MODULE_NOT_FOUND in a
 // consumer plugin install, which has no local scripts dir.
@@ -771,19 +705,8 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'staging_guard_foreign_archive
 assertIncludes('scripts/kaola-workflow-claim.js', 'staging_guard_multi_project');
 assertIncludes('scripts/kaola-workflow-claim.js', "'chore: finalize ' + args.project");
 assertIncludes('scripts/kaola-workflow-claim.js', 'finalize_transaction');
-// #353: durable-state writes must route through the crash-safe atomic replace (no torn
-// workflow-plan.md/workflow-state.md/active-batch.json). Pin the helper + its adoption.
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileAtomicReplace');
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-claim.js', 'writeFileAtomicReplace');
-// #354 (#353-rest): the two remaining workflow-state writers route through the atomic replace too.
-assertIncludes('scripts/kaola-workflow-repair-state.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-sink-pr.js', 'writeFileAtomicReplace');
-// #389 (#353/#354 completion): the two remaining bare durable writers route through the atomic
-// replace too — the plan-validator --freeze writer (plan_hash stamp + mid-run repair re-freeze
-// carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence writer.
-assertIncludes('scripts/kaola-workflow-plan-validator.js', 'writeFileAtomicReplace(planPath');
-assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'writeFileAtomicReplace(fpath');
 // #369: bundle all-or-nothing closure — sink-merge closes every member; finalize passes the set.
 assertIncludes('scripts/kaola-workflow-sink-merge.js', '--issue-numbers');
 assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_ISSUE_NUMBERS');
@@ -792,57 +715,20 @@ assertIncludes('scripts/kaola-workflow-closure-contract.js', 'remote-members-clo
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'isSinkMode');
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink-receipt.json');
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink_blocked');
-// #354: the single fence-aware section slicer is the one home for all `## Node Ledger` /
-// `## Required Agent Compliance` access; readers/writers route through it (no fence-blind indexOf).
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function locateSection');
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function spliceComplianceSection');
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'locateSection');
 assertIncludes('agents/implementer.md', 'smoke-integration');
-assertIncludes('agents/tdd-guide.md', 'evidence block contains BOTH literal tokens');
-assertManifestScript('kaola-workflow-plan-validator.js');   // #407: was install.sh literal
 // The `--enable-adaptive` flag is warn-ignored: accepted for back-compat and sets nothing. Pin the
 // notice so a regression that silently honors the flag (writes a field / branches on it) reds the chain.
 assertIncludes('install.sh', '--enable-adaptive has no effect');
-// #255: the adaptive-handoff script must be in the install allowlist (now the #407 manifest) for
-// every edition, or a manual (non-plugin) install omits it and the planner's `--project` handoff
-// invocation fails at `$HOME/.claude/.../scripts/`. Guards the 5.4.0 omission. (#407: manifest-sourced.)
-assertManifestScript('kaola-workflow-adaptive-handoff.js');
-assertManifestScript('kaola-gitlab-workflow-adaptive-handoff.js');
-assertManifestScript('kaola-gitea-workflow-adaptive-handoff.js');
-// #272: the adaptive-node aggregator must be in the install allowlist (#407 manifest) so a manual
-// (non-plugin) install ships the per-node lifecycle script alongside adaptive-handoff and the
-// plan-validator.
-assertManifestScript('kaola-workflow-adaptive-node.js');
-assertManifestScript('kaola-gitlab-workflow-adaptive-node.js');
-assertManifestScript('kaola-gitea-workflow-adaptive-node.js');
-// #266: Codex harness scripts (preflight, task-mirror, compact-resume) must be in the install
-// allowlist (#407 manifest). preflight is base-named (4-tree byte-identical); task-mirror is
-// base-named in github/codex, edition-named in gitlab/gitea; compact-resume is codex-only.
+// #266: Codex harness scripts (preflight, compact-resume) must be in the install allowlist
+// (#407 manifest). preflight is base-named (4-tree byte-identical); compact-resume is codex-only.
 assert(exists('scripts/kaola-workflow-codex-preflight.js'), '#266 codex preflight script missing from scripts/');
-assert(exists('scripts/kaola-workflow-task-mirror.js'), '#266 task-mirror script missing from scripts/');
 assertManifestScript('kaola-workflow-codex-preflight.js');
-assertManifestScript('kaola-workflow-task-mirror.js');
-assertManifestScript('kaola-gitlab-workflow-task-mirror.js');
-assertManifestScript('kaola-gitea-workflow-task-mirror.js');
-// classifier exports the adaptive primitives
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
-assertIncludes('scripts/kaola-workflow-classifier.js', 'disjointWriteSets');
-assertIncludes('scripts/kaola-workflow-classifier.js', 'readPlanNodes');
 // #725/#770: adaptive is the ONLY installed path — the `installed_paths` union /
 // `resolveInstalledPaths` resolver are retired, and (#770) so is the path SELECTOR itself: the
 // claim no longer gates on a requested path at all, and both resume surfaces emit the adaptive
 // executor unconditionally.
 assertIncludes('scripts/kaola-workflow-claim.js', 'PLAN_RUN_COMMAND');
-// the adaptive executor command literal lives in the shared schema anchor
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', '/kaola-workflow-plan-run');
-// repair-state recognizes + routes adaptive ahead of the phaseN ladder
-assertIncludes('scripts/kaola-workflow-repair-state.js', 'routeAdaptive');
-assertIncludes('scripts/kaola-workflow-repair-state.js', 'isAdaptiveWorkflowState');
-// the switch gates SELECTION only — it must be ABSENT from resume + well-formedness
-assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'enable_adaptive');
-assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'KAOLA_ENABLE_ADAPTIVE');
-assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'enable_adaptive');
-assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'KAOLA_ENABLE_ADAPTIVE');
 // finalize adaptive prerequisite (#283: phase6 renamed to finalize)
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
@@ -891,9 +777,6 @@ for (const reviewerBody of [
 // lists) were replaced by the manifest-derived sentence; reintroducing either bold-header list
 // reds the chain.
 
-// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
-assertIncludes('scripts/kaola-workflow-plan-validator.js', 'agent-registration gap');
-assertIncludes('scripts/kaola-workflow-plan-validator.js', 'forge-port ordering gap');
 
 // #340 derived parity guard (enumeration-free): uninstall.sh REQUIRED_AGENTS must match install.sh
 // exactly, or uninstalling orphans an installed managed agent. Both lists are extracted from the
@@ -974,23 +857,6 @@ assertManifestScript('kaola-workflow-validation-runner.js');
     'reduceRuns', 'buildValidationVector', 'runValidation', 'qualifyLocalReviewers']) {
     assert(typeof runner[name] === 'function', 'validation runner must export ' + name);
   }
-  const schema = require('./kaola-workflow-adaptive-schema.js');
-  for (const name of ['deriveGateMode', 'buildReviewContext', 'validateReviewEvidenceBinding',
-    'normalizeFindingSet', 'reduceReviewReceipts', 'compareValidationObligations',
-    'assessReviewProgress', 'validateReviewJournalV2']) {
-    assert(typeof schema[name] === 'function', 'adaptive schema must export reviewer-v2 API ' + name);
-  }
-  const validator = require('./kaola-workflow-plan-validator.js');
-  for (const name of ['resolvePlanContract', 'buildPlanView', 'validateSchema2ReviewPlan',
-    'verifyVerdictBlock']) {
-    assert(typeof validator[name] === 'function', 'plan validator must export reviewer-v2 API ' + name);
-  }
-  const lifecycle = require('./kaola-workflow-adaptive-node.js');
-  for (const name of ['buildDispatch', 'runRecordEvidence', 'runCloseNode', 'readReviewJournal',
-    'computeReviewCandidateDigest']) {
-    assert(typeof lifecycle[name] === 'function', 'adaptive lifecycle must export reviewer-v2 seam ' + name);
-  }
-  assertIncludes('scripts/kaola-workflow-repair-state.js', 'missing-or-stale-review-receipt');
 }
 
 assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-validation-runner.js'),

@@ -779,50 +779,17 @@ function repositoryIdentity(root) {
   }
 }
 
-// Capture claim identity and immutable Git root exactly once. The returned
-// scalar fields are persisted in workflow-state.md; the typed payloads remain
-// available to tests/replan callers but are not serialized as ad-hoc JSON.
+// Capture claim identity exactly once. The returned scalar fields are persisted in
+// workflow-state.md; the typed payload stays available to callers but is not serialized
+// as ad-hoc JSON. The claim-root base commit/tree observation stood here too — it existed
+// to anchor a re-plan epoch against the bytes the claim was authored over, and it went
+// with the epoch machinery. Claim identity is what survives: it answers whose claim this
+// is, which the durable claim record still needs.
 function buildClaimAnchors(root, data) {
   const anchorRoot = fs.realpathSync(data.worktree_path || root);
-  let objectFormat = '';
-  try {
-    objectFormat = execFileSync('git', ['-C', anchorRoot, 'rev-parse', '--show-object-format'], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
-    }).trim().toLowerCase();
-  } catch (_) {}
-  if (!objectFormat) objectFormat = 'sha1';
-  const objectLength = objectFormat === 'sha256' ? 64 : 40;
-  let commit;
-  let tree;
-  try {
-    // The claim root binds the immutable candidate observed at claim time.  Its
-    // branch field is the target identity, not a requirement that HEAD already
-    // be checked out on that future feature branch.
-    if (hasGitHistory(anchorRoot)) {
-      commit = execFileSync('git', ['-C', anchorRoot, 'rev-parse', 'HEAD'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-      }).trim().toLowerCase();
-      tree = execFileSync('git', ['-C', anchorRoot, 'rev-parse', 'HEAD^{tree}'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-      }).trim().toLowerCase();
-    } else {
-      // An initialized repository with no commits still has a canonical root:
-      // the all-zero commit sentinel plus Git's canonical empty-tree object.
-      execFileSync('git', ['-C', anchorRoot, 'rev-parse', '--git-dir'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-      });
-      commit = '0'.repeat(objectLength);
-      tree = execFileSync('git', ['-C', anchorRoot, 'hash-object', '-t', 'tree', '--stdin'], {
-        input: '', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']
-      }).trim().toLowerCase();
-    }
-  } catch (_) {
-    throw new Error('claim_root_unavailable');
-  }
   const issues = Array.isArray(data.issue_numbers) && data.issue_numbers.length
     ? data.issue_numbers : [data.issue_number];
   const identity = adaptiveSchema.buildClaimIdentity({
-    schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
     repository_id: repositoryIdentity(anchorRoot),
     issue_numbers: issues,
     primary_issue: data.issue_number,
@@ -833,36 +800,10 @@ function buildClaimAnchors(root, data) {
     claim_ts: data.claim_ts,
     session_marker: data.session_marker,
   });
-  const rootBase = adaptiveSchema.buildClaimRootBase({
-    schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
-    object_format: objectFormat,
-    commit,
-    tree,
-    branch: data.branch,
-  });
-  const lineage = adaptiveSchema.buildEpochLineage(identity, rootBase);
   return {
-    epoch_schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
     claim_repository_id: identity.repository_id,
-    claim_identity_digest: lineage.claim_identity_digest,
-    claim_root_object_format: rootBase.object_format,
-    claim_root_base_commit: rootBase.commit,
-    claim_root_base_tree: rootBase.tree,
-    claim_root_base_digest: lineage.claim_root_base_digest,
-    epoch_lineage_id: lineage.epoch_lineage_id,
-    plan_epoch: 1,
-    active_plan_hash: 'none',
-    inherited_frontier_digest: 'none',
-    inherited_frontier_classes: 'none',
-    automatic_review_replans: 0,
-    authorized_epoch_ceiling: adaptiveSchema.REVIEW_REPLAN_LIMIT,
-    case_b_exemption_consumed: false,
-    replan_status: 'none',
-    replan_transaction_id: 'none',
-    replan_phase: 'none',
-    active_snapshot_manifest_digest: 'none',
+    claim_identity_digest: adaptiveSchema.sha256Canonical(identity),
     claim_identity: identity,
-    claim_root_base: rootBase,
   };
 }
 
@@ -927,21 +868,11 @@ function writeState(root, data) {
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
-    '## Pending Gates',
-    '- workflow-plan',
-    '',
     '## Last Evidence',
     'phase_file: N/A',
     'cache_file: N/A',
     'last_command: startup',
     'last_result: ' + (data.last_result || 'folder_claimed'),
-    '',
-    '## Planning Evidence',
-    'plan_hash: none',
-    'decision: none',
-    'risk: none',
-    'first_node_id: none',
-    'first_node_role: none',
     '',
     '## Last Updated',
     new Date().toISOString(),
@@ -991,7 +922,7 @@ function writeState(root, data) {
     lines.push('closure_policy: ' + (data.closure_policy || 'all_or_nothing'));
   }
   let stateContent = lines.join('\n') + '\n';
-  stateContent = adaptiveSchema.writeEpochStateBlock(stateContent, claimAnchors);
+  stateContent = adaptiveSchema.writeClaimIdentityBlock(stateContent, claimAnchors);
   writeFile(stateFile(root, data.project), stateContent);
 }
 
@@ -2348,20 +2279,18 @@ function cmdResume() {
 
 // #333: terminal-stamp the workflow-state CONTENT for an archive. Pure string transform.
 // statusValue: 'closed' | 'abandoned' (abandoned keeps mid-run state by design — #324).
-// planDir: directory containing workflow-plan.md (live src BEFORE rename, or the archive
-//          dest for the cmdFinalize backstop). Used to refresh plan_hash.
 // opts.keepOpen: true on a keep-open partial-close archive (finalize --keep-open).
 // Idempotent (every transform is a line-anchored replace) — safe to re-apply on crash-resume.
-function stampTerminalState(content, statusValue, planDir, opts) {
+function stampTerminalState(content, statusValue, opts) {
   content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
   if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
   content = content.replace(/^step:\s*.*$/m, 'step: complete');
   if (!/^step:/m.test(content)) content += '\nstep: complete\n';
   if (statusValue !== 'closed') return content;   // discard/release keeps mid-run state (#324)
-  // #324: normalize the pre-run blocks that writeState seeded at claim time (## Pending Gates:
-  // - workflow-plan; last_command: startup / last_result: folder_claimed) so the archived state
-  // cannot read as self-contradictory terminal state (closed/complete yet "pending workflow-plan").
-  content = content.replace(/(^## Pending Gates\n)(?:[ \t]*-[ \t].*\n?)*/m, '$1- none\n');
+  // #324: normalize the pre-run evidence writeState seeded at claim time (last_command: startup /
+  // last_result: folder_claimed) so the archived state cannot read as self-contradictory terminal
+  // state. The `## Pending Gates` rewrite stood beside these; the block it normalized named the
+  // frozen plan, which no longer exists, so the claim no longer seeds it and nothing rewrites it.
   content = content.replace(/^last_command:\s*.*$/m, 'last_command: finalize');
   content = content.replace(/^last_result:\s*.*$/m,
     'last_result: ' + (opts && opts.keepOpen ? 'closed_keep_open' : 'closed'));
@@ -2638,8 +2567,8 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     archiveIssueNumber = parseInt(field(content, 'issue_number'), 10);
     archiveIssueNumbersRaw = (field(content, 'issue_numbers') || '').trim();
     content = removeLegacyStateBlocks(content);
-    // #333: status/step/#324-normalization/next_command/plan_hash/Last Updated all in one helper.
-    content = stampTerminalState(content, statusValue, src, opts);
+    // #333: status/step/#324-normalization/next_command/Last Updated all in one helper.
+    content = stampTerminalState(content, statusValue, opts);
     // Atomic (the module's own crash-safe writer): this is the LAST stamp of the terminal state
     // before the folder is renamed into archive/, so a torn write here is unrecoverable — a torn
     // workflow-state.md is silently skipped by readActiveFolders and the project goes invisible.
@@ -4022,7 +3951,7 @@ function cmdFinalize() {
           // repair a state file a crash left non-terminal — writing it non-atomically could tear the
           // very file it is repairing and hide the ARCHIVED project from readActiveFolders.
           writeFile(destState,
-            stampTerminalState(removeLegacyStateBlocks(raw), 'closed', destDir, { keepOpen: keepIssueOpen }));
+            stampTerminalState(removeLegacyStateBlocks(raw), 'closed', { keepOpen: keepIssueOpen }));
           archiveStateStamped = 'repaired';
         }
         // lets the ## Closure append + invariants + issue_number fallback see the dir

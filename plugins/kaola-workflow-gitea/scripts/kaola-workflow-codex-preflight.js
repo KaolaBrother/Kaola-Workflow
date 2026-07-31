@@ -15,18 +15,17 @@
 //       for every REQUIRED role, and NO retired/foreign [agents.*] inside the block.
 //   (c) no stale/retired Kaola profile files survive in the target dir (#332).
 //
-// REQUIRED role set = UNION of:
-//   (a) template roles from ../config/agents.toml (relative to this script, present
-//       in the 3 plugin trees; absent in the claude scripts/ tree — graceful degrade)
-//   (b) DELEGATED plan roles from --plan <path> (## Nodes role column), when supplied.
-//       The built-in, intentionally non-delegable roles (main-session-gate,
-//       finalize) carry no profile or template entry by design and are exempt (#716).
+// REQUIRED role set = the template roles from ../config/agents.toml (relative to this
+// script, present in the 3 plugin trees; absent in the claude scripts/ tree — graceful
+// degrade). The second half of that union — the DELEGATED roles read out of a frozen
+// plan's `## Nodes` role column — is gone with the plan: a run no longer declares which
+// roles it will dispatch before it dispatches them, so the template IS the required set.
 //
 // Auto-installs (re-runs install-codex-agent-profiles.js) when the ONLY problem
 // is a stale/missing/malformed managed block, profile file, or stale Kaola file
 // (safe, idempotent). Typed-refuses when conflicts exist outside the markers, the
-// installer is unavailable, a plan role is absent from the template, or the local
-// manifest carries an unsupported (future) schema_version.
+// installer is unavailable, or the local manifest carries an unsupported (future)
+// schema_version.
 //
 // --doctor mode is READ-ONLY (never runs the installer): it reports user, project,
 // and plugin-cache scope freshness with concrete per-scope repair commands. Plugin
@@ -39,7 +38,7 @@
 //
 // CLI:
 //   node kaola-workflow-codex-preflight.js --project-root <dir>
-//     [--plan <plan-path>] [--no-autofix] [--json]
+//     [--no-autofix] [--json]
 //   node kaola-workflow-codex-preflight.js --doctor [--project-root <dir>]
 //     [--home <dir>] [--json]
 //
@@ -83,13 +82,10 @@ const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',
-  'security-reviewer', 'adversarial-verifier', 'workflow-planner', 'synthesizer',
+  'security-reviewer', 'adversarial-verifier', 'synthesizer',
 ]);
-// The workflow-planner is dispatched outside the adaptive Node Ledger. Its
-// workflow/plan artifacts are the authoritative durable result, with an additional
-// cache mirror only when a caller supplies a seeded evidence file. All other profiles are DAG node
-// roles and must self-write the exact seeded cache artifact before returning a compact summary.
-const CODEX_ORCHESTRATION_ROLES = Object.freeze(['workflow-planner']);
+// The mandatory planner was the only orchestration role; it is gone with the plan it authored.
+const CODEX_ORCHESTRATION_ROLES = Object.freeze([]);
 const CODEX_STANDARD_MODEL = 'gpt-5.6-sol';
 const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
@@ -1631,7 +1627,6 @@ function projectTrustRequiredResult(projectRoot, trustLevel) {
 function parseArgs(argv) {
   const args = argv.slice(2);
   let projectRoot = null;
-  let planPath = null;
   let noAutofix = false;
   let json = false;
   let doctor = false;
@@ -1641,8 +1636,6 @@ function parseArgs(argv) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--project-root' && args[i + 1]) {
       projectRoot = args[++i];
-    } else if (args[i] === '--plan' && args[i + 1]) {
-      planPath = args[++i];
     } else if (args[i] === '--no-autofix') {
       noAutofix = true;
     } else if (args[i] === '--json') {
@@ -1658,7 +1651,7 @@ function parseArgs(argv) {
     }
   }
 
-  return { projectRoot, planPath, noAutofix, json, doctor, home, codexVersion };
+  return { projectRoot, noAutofix, json, doctor, home, codexVersion };
 }
 
 // ---------------------------------------------------------------------------
@@ -1717,24 +1710,11 @@ function validateProfileText(text, role, expectedMeta = null) {
   } else if (instrMatch[1].trim() === '') {
     reasons.push("'developer_instructions' body is blank");
   } else {
-    if (!instrMatch[1].includes('FULL')) {
-      reasons.push("developer_instructions missing FULL durable-result contract");
-    }
-    if (!instrMatch[1].includes('compact orchestrator summary')) {
-      reasons.push("developer_instructions missing compact orchestrator summary contract");
-    }
-    if (CODEX_ORCHESTRATION_ROLES.includes(role)) {
-      if (!instrMatch[1].includes('durable full result')) {
-        reasons.push("orchestration-role developer_instructions missing canonical durable full result contract");
-      }
-    } else {
-      if (!instrMatch[1].includes('dispatch.evidence_file')) {
-        reasons.push("node-role developer_instructions missing durable dispatch.evidence_file contract");
-      }
-      if (!instrMatch[1].includes('evidence-binding')) {
-        reasons.push("node-role developer_instructions missing evidence-binding preservation contract");
-      }
-    }
+    // The FULL / compact-summary / dispatch.evidence_file / evidence-binding rules stood here.
+    // All four were halves of the DAG's per-node evidence contract — a seeded `.cache/{node-id}.md`
+    // path handed to a role at dispatch, and a nonce binding the file to the open that minted it.
+    // Neither exists under a mission list: the orchestrator decides at dispatch time where a result
+    // should land, so a profile cannot be required to promise a path nobody has chosen yet.
   }
 
   reasons.push(...reviewerProfileContract(text, role).reasons);
@@ -1915,70 +1895,6 @@ function readTemplateRoles(scriptDir) {
   }
   return { roles, entries, content, error: null, sourceErrors };
 }
-
-// ---------------------------------------------------------------------------
-// Plan role parsing — reads ## Nodes table from the frozen plan (inline regex only).
-// Column layout: | id | role | depends_on | ...
-// Returns string[] of unique roles (empty if --plan not supplied or table absent).
-// ---------------------------------------------------------------------------
-function readPlanRoles(planPath) {
-  if (!planPath) return [];
-  let content;
-  try {
-    content = fs.readFileSync(planPath, 'utf8');
-  } catch {
-    return [];
-  }
-
-  const roles = [];
-  // Find the ## Nodes heading
-  const nodesHeadRe = /^##\s+Nodes\s*$/m;
-  const headMatch = content.match(nodesHeadRe);
-  if (!headMatch) return [];
-
-  const afterHead = content.slice(headMatch.index + headMatch[0].length);
-  // Next ## heading terminates the section
-  const nextH2 = afterHead.search(/^##\s/m);
-  const section = nextH2 < 0 ? afterHead : afterHead.slice(0, nextH2);
-
-  // Table rows: | id | role | ...
-  // Skip the header row (contains "id") and the separator row (contains ---)
-  const rowRe = /^\|([^|]+)\|([^|]+)\|/gm;
-  let row;
-  while ((row = rowRe.exec(section)) !== null) {
-    const idCell = row[1].trim();
-    const roleCell = row[2].trim();
-    // Skip header and separator rows
-    if (idCell === 'id' || /^[-: ]+$/.test(idCell)) continue;
-    if (roleCell && !/^[-: ]+$/.test(roleCell)) {
-      const role = roleCell.trim();
-      if (role && !roles.includes(role)) {
-        roles.push(role);
-      }
-    }
-  }
-  return roles;
-}
-
-// ---------------------------------------------------------------------------
-// #716/#800: built-in, intentionally non-delegable workflow roles. A frozen plan's
-// ## Nodes table may list them (the gates and the finalize sink run in the main
-// session, never as delegated subagents; a spine `expansion-point` never dispatches
-// at all — the executor's expansion transaction composes its interior at open time),
-// so they have no Codex profile and no config/agents.toml entry BY DESIGN. They are
-// exempt from the template/profile availability checks in runPreflight; every other
-// (delegated) plan role stays fail-closed (role_not_in_template / profiles_missing).
-//
-// This list MUST equal the kernel's own built-in role set (the adaptive node script's
-// RESERVED_EXPANSION_UNIT_ROLES). This file is deliberately standalone — Node builtins
-// only, no kernel require — so the parity pin lives in the test suite instead
-// (scripts/test-install-model-rendering.js).
-// ---------------------------------------------------------------------------
-const PLAN_BUILTIN_NON_DELEGABLE_ROLES = Object.freeze([
-  'main-session-gate',
-  'finalize',
-  'expansion-point',
-]);
 
 // ---------------------------------------------------------------------------
 // Profile check: assert .codex/agents/kaola-workflow/<role>.toml exists for all roles.
@@ -2596,7 +2512,6 @@ function unsupportedManifestResult({
 function runPreflight(opts) {
   const {
     projectRoot,
-    planPath,
     noAutofix,
     scriptDir,
     home,
@@ -2645,32 +2560,8 @@ function runPreflight(opts) {
     };
   }
 
-  // --- Read plan roles ---
-  const planRoles = readPlanRoles(planPath);
-  // #716: built-in non-delegable roles are exempt from the template/profile
-  // availability checks; delegated plan roles stay fail-closed.
-  const delegatedPlanRoles = planRoles.filter(r => !PLAN_BUILTIN_NON_DELEGABLE_ROLES.includes(r));
-
-  // --- Check delegated plan roles against template ---
-  const rolesNotInTemplate = delegatedPlanRoles.filter(r => !templateRoles.includes(r));
-  if (rolesNotInTemplate.length > 0) {
-    return {
-      exitCode: 3,
-      result: {
-        status: 'role_not_in_template',
-        missing_roles: rolesNotInTemplate,
-        stale: true,
-        repair: 'Update kaola-workflow to a version that includes the required roles, then re-install agent profiles.',
-        safe_autofix: false,
-      },
-    };
-  }
-
-  // --- Build REQUIRED role set: union of template + delegated plan roles ---
+  // --- REQUIRED role set: the template, whole. Nothing declares roles ahead of dispatch. ---
   const requiredRoles = [...templateRoles];
-  for (const r of delegatedPlanRoles) {
-    if (!requiredRoles.includes(r)) requiredRoles.push(r);
-  }
 
   // Codex derives the project root from the persisted global
   // `project_root_markers`, then considers every .codex layer root -> cwd. Trust
@@ -2899,9 +2790,7 @@ function runPreflight(opts) {
     });
   }
 
-  // --- Delegated plan roles: union members not in the template profile dir (missing-only) ---
-  const { missingRoles: missingPlanProfiles } = checkProfiles(agentsDir, delegatedPlanRoles);
-  const missingProfiles = [...new Set([...scope.missingProfiles, ...missingPlanProfiles])];
+  const missingProfiles = [...new Set(scope.missingProfiles)];
   const missingFromBlock = requiredRoles.filter(r => !scope.rolesInBlock.includes(r));
 
   const installerForRepair = findInstaller(sourceScriptDir);
@@ -4015,7 +3904,7 @@ function runDoctor(opts) {
 // CLI entry point
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  const { projectRoot: rawRoot, planPath, noAutofix, json, doctor, home: rawHome, codexVersion } = parseArgs(process.argv);
+  const { projectRoot: rawRoot, noAutofix, json, doctor, home: rawHome, codexVersion } = parseArgs(process.argv);
   const resolvedRoot = rawRoot ? path.resolve(rawRoot) : process.cwd();
   const resolvedHome = rawHome ? path.resolve(rawHome) : os.homedir();
   const scriptDir = __dirname;
@@ -4068,7 +3957,6 @@ if (require.main === module) {
 
   const { exitCode, result } = runPreflight({
     projectRoot: resolvedRoot,
-    planPath: planPath ? path.resolve(planPath) : null,
     noAutofix,
     scriptDir,
     home: resolvedHome,
@@ -4105,8 +3993,6 @@ module.exports = {
   runPreflight,
   runDoctor,
   readTemplateRoles,
-  readPlanRoles,
-  PLAN_BUILTIN_NON_DELEGABLE_ROLES,
   checkManagedBlock,
   checkProfiles,
   validateProfileText,

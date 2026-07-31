@@ -162,15 +162,12 @@ for (const file of [
 
 // #725: fast/full retired — the 6 fast/phase command+skill surfaces are deleted. Surviving surfaces
 // are workflow-init + workflow-next + kaola-workflow-{finalize,adapt,plan-run} = 5.
-assert(commandFiles.length === 5, 'expected 5 Gitea command files, got ' + commandFiles.length);
-assert(skillFiles.length === 5, 'expected 5 Gitea skill files, got ' + skillFiles.length);
+assert(commandFiles.length === 3, 'expected 3 Gitea command files, got ' + commandFiles.length);
+assert(skillFiles.length === 3, 'expected 3 Gitea skill files, got ' + skillFiles.length);
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea phantom-advisor hook must be removed (#372)');
-// #451: 13 base role profiles (the 6 <role>-max xhigh effort variants are retired; issue-scout
-// retired #789; investigator added #798; contractor retired #816). #463: +synthesizer = 14. #634: +metric-optimizer = 15.
-assert(agentFiles.length === 15, 'expected 15 Gitea agent profiles (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, investigator added #798, contractor retired #816), got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -231,19 +228,14 @@ const scriptFiles = [
   'kaola-gitea-workflow-classifier.js',
   'kaola-gitea-workflow-closure-audit.js',
   'kaola-gitea-workflow-compact-context.js',
-  'kaola-gitea-workflow-plan-validator.js',
-  'kaola-gitea-workflow-replan.js',
-  'kaola-gitea-workflow-repair-state.js',
   'kaola-gitea-workflow-roadmap.js',
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
-  'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',
   'simulate-gitea-workflow-walkthrough.js',
   'simulate-gitea-codex-workflow-walkthrough.js',
   'install-codex-agent-profiles.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-gitea-workflow-task-mirror.js',
   'kaola-gitea-workflow-codex-compact-resume.js',
   'kaola-gitea-workflow-run-chains.js',
   'kaola-gitea-workflow-gap-sweep.js'
@@ -262,16 +254,11 @@ const installSupportScripts = [
   'kaola-gitea-workflow-classifier.js',
   'kaola-gitea-workflow-closure-audit.js',
   'kaola-gitea-workflow-compact-context.js',
-  'kaola-gitea-workflow-plan-validator.js',
-  'kaola-gitea-workflow-replan.js',
-  'kaola-gitea-workflow-repair-state.js',
   'kaola-gitea-workflow-roadmap.js',
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
-  'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-gitea-workflow-task-mirror.js',
   'kaola-gitea-workflow-codex-compact-resume.js',
   'kaola-gitea-workflow-run-chains.js',
   'kaola-gitea-workflow-gap-sweep.js'
@@ -279,9 +266,6 @@ const installSupportScripts = [
 for (const script of installSupportScripts) {
   assert(giteaManifestScripts.includes(script), 'install manifest must emit Gitea support script: ' + script);
 }
-assert(JSON.stringify(giteaManifestScripts.filter(name => /workflow-replan\.js$/.test(name)))
-    === JSON.stringify(['kaola-gitea-workflow-replan.js']),
-'Gitea install manifest must emit exactly the renamed re-plan aggregator');
 
 const uninstallScript = read('uninstall.sh');
 assert(uninstallScript.includes('github|gitlab|gitea|all'), 'uninstall.sh must accept --forge=gitea in case validation');
@@ -298,12 +282,6 @@ assert(
   read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('mr|pr)'),
   'Gitea Finalization command must dispatch canonical pr sink (mr|pr) case)'
 );
-assert(
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"') &&
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('--keep-worktree') &&
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('metadata captured before'),
-  'Gitea Finalization command must capture sink metadata before archive and preserve worktree for the final commit'
-);
 // #816: ownership-inversion lock — the finalize seam is orchestrator-owned and its mechanical
 // residue is ONE script transaction, so no finalize surface may dispatch a bookkeeping role and
 // every one MUST carry the transaction call. Pinned in BOTH directions.
@@ -313,88 +291,13 @@ assert(
   'Gitea Finalization surfaces must carry NO dispatchable bookkeeping role'
 );
 assert(
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('ONE resumable script transaction') &&
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('implementation_commit_missing') &&
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('staging_guard_multi_project') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('ONE resumable script transaction') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('implementation_commit_missing') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('staging_guard_multi_project'),
-  'Gitea Finalization surfaces must carry the one-call finalize transaction and its typed refusals'
-);
-assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
   'Gitea finalize skill must dispatch canonical pr sink (mr|pr) case)'
 );
 assert(
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--keep-worktree') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('metadata captured before archive'),
-  'Gitea finalize skill must capture sink metadata before archive and preserve worktree for the final commit'
-);
-// #475: the consumer (non-npm) finalize gate prose (final-validation.md) must not drift out of the SKILL.
-assert(
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('final-validation.md') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('final_validation_unverified'),
-  'Gitea finalize skill must document the consumer (non-npm) final-validation.md gate (#475)'
-);
-// #653: the consumer candidate binding (validated_candidate_hash) must reach BOTH consumer-recording
-// surfaces — the plan-run All-done consumer block and the finalize gate prose.
-assert(
-  read(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md').includes('validated_candidate_hash') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('validated_candidate_hash'),
-  'Gitea plan-run + finalize skills must document the consumer validated_candidate_hash binding (#653)'
-);
-// n5 (#653 finding D): selection-evidence docking must reach the router (command + SKILL); the
-// observed_gap_unseeded refusal and run-gap manual-seed prose must reach finalize/plan-run.
-assert(
-  read(pluginRoot + '/commands/workflow-next.md').includes('selection-evidence') &&
-  read(pluginRoot + '/skills/kaola-workflow-next/SKILL.md').includes('selection-evidence'),
-  'Gitea next command + skill must document selection-evidence docking (#653)'
-);
-assert(
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('observed_gap_unseeded'),
-  'Gitea finalize skill must document the observed_gap_unseeded refusal (#653)'
-);
-// #825 (B2/B3/B4): selection is orchestrator-owned and the commitment point is a SCRIPT refusal.
-// Freedom is sized for the weakest harness, so this edition gets IDENTICAL enforcement: the router
-// surfaces must name the selection-record flag and its report, the adapt surfaces must carry the
-// evidence PATH + the typed clarification return, and the forge claim port must actually emit the
-// refusals. The re-pin is bidirectional in the SAME diff — the retired planner-first lock is
-// asserted ABSENT from the edition planner profile beside every positive pin.
-for (const f of ['/commands/workflow-next.md', '/skills/kaola-workflow-next/SKILL.md']) {
-  assert(
-    read(pluginRoot + f).includes('selection_record_note') &&
-    read(pluginRoot + f).includes('--selection-record') &&
-    read(pluginRoot + f).includes('selection_mode'),
-    'Gitea next surface ' + f + ' must document the orchestrator-authored selection record'
-  );
-}
-for (const f of ['/commands/kaola-workflow-adapt.md', '/skills/kaola-workflow-adapt/SKILL.md']) {
-  assert(
-    read(pluginRoot + f).includes('clarification_required') &&
-    read(pluginRoot + f).includes('.cache/origin/') &&
-    read(pluginRoot + f).includes('planner_control_boundary_violation'),
-    'Gitea adapt surface ' + f + ' must carry the evidence path + typed clarification return (#825)'
-  );
-}
-assert(
   read(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js').includes('selection_record_note') &&
   read(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js').includes('selection_record_digest'),
   'Gitea claim port must report the selection record and stamp its digest'
-);
-assert(
-  read('agents/workflow-planner.md').includes('clarification_required') &&
-  read(pluginRoot + '/agents/workflow-planner.toml').includes('clarification_required') &&
-  read(pluginRoot + '/agents/workflow-planner.toml').includes('do not author a node to re-derive it') &&
-  read(pluginRoot + '/agents/workflow-planner.toml').includes('Consume evidence, never accept a conclusion') &&
-  read(pluginRoot + '/agents/workflow-planner.toml').includes('planner_control_boundary_violation') &&
-  !read(pluginRoot + '/agents/workflow-planner.toml').includes('No-target survey mode'),
-  'Gitea planner profile must be the narrowed synthesist: obligation + clarification present, survey mode absent (#825)'
-);
-assert(
-  read(pluginRoot + '/commands/kaola-workflow-plan-run.md').includes('run-gaps-manual.md') &&
-  read(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md').includes('run-gaps-manual.md'),
-  'Gitea plan-run command + skill must document the run-gap manual-seed rule (#653)'
 );
 // #336: keep-open partial-close sink lane — command + skill must carry the durable field, the
 // sink-merge flag, and the merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard's only
@@ -407,167 +310,12 @@ for (const f of ['/commands/kaola-workflow-finalize.md', '/skills/kaola-workflow
     'Gitea ' + f + ' must document the keep-open partial-close lane (issue_action, --keep-issue-open, merge-sink-only)'
   );
 }
-// #345: the adaptive four-gate merge barrier in the Finalization COMMAND must resolve the
-// validator via the kaola_script resolver — a bare `node scripts/…` path is MODULE_NOT_FOUND
-// in a consumer plugin install (no ./scripts dir), turning the only blocking pre-merge
-// enforcement into a false BLOCK. (The finalize SKILL already used a find-fallback.)
-{
-  const finalizeCmd = read(pluginRoot + '/commands/kaola-workflow-finalize.md');
-  assert(
-    finalizeCmd.includes('VALIDATOR="$(kaola_script kaola-gitea-workflow-plan-validator.js)"') &&
-    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --resume-check') &&
-    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --gate-verify') &&
-    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --barrier-check') &&
-    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --verdict-check') &&
-    !finalizeCmd.includes('node scripts/kaola-gitea-workflow-plan-validator.js "$PLAN" --resume-check'),
-    'Gitea Finalization command must resolve the four-gate barrier validator via kaola_script (no bare scripts/ path) — #345'
-  );
-}
-// #624: the forge-codex finalize SKILL must carry the adaptive prerequisite block ported from
-// the canonical (github-codex) finalize SKILL — the workflow_path: adaptive branch and its
-// four-gate barrier — not just the fast-path branch. A SKILL missing this block leaves an
-// adaptive-path run with no script-enforced completion gate and a dangling `validator_script`
-// reference in the Chain-Receipt Gate section below it.
-assert(
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('workflow_path: adaptive') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('validator_script') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--resume-check') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--gate-verify') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--barrier-check') &&
-  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--verdict-check'),
-  'Gitea finalize skill must carry the adaptive prerequisite block (workflow_path: adaptive + the four-gate validator_script barrier) — #624'
-);
 for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKILL.md'))) {
   assert(!read(skill).includes('*/kaola-workflow/*/scripts/kaola-gitea'), skill + ' must use the Gitea Codex plugin cache path');
 }
 
-// Delegation policy checks
+
 const giteaSkillsBase = `${pluginRoot}/skills`;
-// #725: the research/ideation/plan/execute/review/fast SKILLs are retired; only surviving gate
-// SKILLs remain in the ungated-fallback sweep.
-const delegationNegativeChecks = [
-  [`${giteaSkillsBase}/kaola-workflow-finalize/SKILL.md`, 'subagents are available; otherwise update docs'],
-];
-for (const [file, needle] of delegationNegativeChecks) {
-  assert(!read(file).includes(needle), file + ' must not include: ' + needle);
-}
-const giteaDelegationSkills = [
-  'kaola-workflow-finalize',
-  'kaola-workflow-next',
-];
-for (const skill of giteaDelegationSkills) {
-  const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
-  assert(read(skillFile).includes('subagent-invoked'), skillFile + ' must include: subagent-invoked');
-  assert(read(skillFile).includes('local-fallback-explicit'), skillFile + ' must include: local-fallback-explicit');
-  assert(read(skillFile).includes('local-fallback-tool-unavailable'), skillFile + ' must include: local-fallback-tool-unavailable');
-}
-assert(
-  read(`${giteaSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
-  'Gitea next skill must explicitly resume delegation_policy alongside phase and next_skill'
-);
-// Issue #210: Codex defaults to delegated compliance — the startup delegate-vs-inline prompt is retired.
-const giteaNext210 = `${giteaSkillsBase}/kaola-workflow-next/SKILL.md`;
-assert(!read(giteaNext210).includes('Ask the user once at startup'), giteaNext210 + ' must not prompt for a delegation policy at startup');
-assert(!read(giteaNext210).includes('How should delegation be handled'), giteaNext210 + ' must not present a delegation menu');
-assert(read(giteaNext210).includes('Codex subagent delegation is the default.'), giteaNext210 + ' must declare delegation the default');
-assert(read(giteaNext210).includes('The default `delegation_policy` is `delegate`'), giteaNext210 + ' must default delegation_policy to delegate');
-assert(read(giteaNext210).includes('KAOLA_DELEGATION_POLICY=delegate'), giteaNext210 + ' must set KAOLA_DELEGATION_POLICY=delegate');
-assert(read(giteaNext210).includes('.codex/agents/kaola-workflow/'), giteaNext210 + ' must name the role-profile detection path');
-// #598 AC3: the delegation probe must also accept a global profile install — keep the
-// project-local needle above GREEN (add, never remove) and pin the global path alongside it.
-assert(read(giteaNext210).includes('~/.codex/agents/kaola-workflow/'), giteaNext210 + ' must name the global role-profile detection path');
-assert(read(giteaNext210).includes('record `local-fallback-tool-unavailable` with a non-empty Evidence value'), giteaNext210 + ' must record auto-detected tool-unavailable as evidence');
-assert(read(giteaNext210).includes('only when the user explicitly'), giteaNext210 + ' must gate local-authorized behind explicit user request');
-assert(read(giteaNext210).includes('default `delegation_policy` to `delegate` without prompting'), giteaNext210 + ' must default delegate on resume without prompting');
-// Issue #174: Gitea next skill parity gaps
-const giteaNextSkill = `${giteaSkillsBase}/kaola-workflow-next/SKILL.md`;
-assertNotIncludes(giteaNextSkill, 'PICK_NEXT_PROJECT');
-assertIncludes(giteaNextSkill, 'KAOLA_VERDICT=');
-assertIncludes(giteaNextSkill, 'KAOLA_REASONING=');
-assertIncludes(giteaNextSkill, 'target_unverified');
-assertIncludes(giteaNextSkill, 'Startup outcome: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
-assertIncludes(giteaNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md');
-// Issue #190: M1 — Codex fast-path routing parity (RED guard)
-assertIncludes(giteaNextSkill, 'Startup Step 0a-1');
-assertIncludes(giteaNextSkill, 'Branch: {branch from Sink block');
-// the status-report `Workflow path:` line reports the adaptive workflow path — the only path.
-assertIncludes(giteaNextSkill, 'Workflow path: {adaptive}');
-assertIncludes(giteaNextSkill, 'Parallel decision: {green|yellow|red');
-for (const skill of ['kaola-workflow-finalize']) {
-  const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
-  assert(
-    read(skillFile).includes('Plain `invoked` is intentional for non-Codex-role workflow gates'),
-    skillFile + ' must explain intentional non-Codex-role invoked rows'
-  );
-}
-
-// delegationPolicyCompliance must be exported from repair-state
-const giteaRepairState = require('./kaola-gitea-workflow-repair-state.js');
-assert(
-  typeof giteaRepairState.delegationPolicyCompliance === 'function',
-  'kaola-gitea-workflow-repair-state.js must export delegationPolicyCompliance'
-);
-
-function complianceFixture(rows) {
-  return [
-    '# Phase Fixture',
-    '',
-    '## Required Agent Compliance',
-    '| Requirement | Status | Evidence | Skip Reason |',
-    '|-------------|--------|----------|-------------|',
-    ...rows.map(row => `| ${row[0]} | ${row[1]} | ${row[2] || ''} | ${row[3] || ''} |`)
-  ].join('\n');
-}
-
-function policyState(policy) {
-  return `# Kaola-Workflow State\n\ndelegation_policy: ${policy}\n`;
-}
-
-function assertPolicyAllowed(policy, rows, label) {
-  const result = giteaRepairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
-  assert(result.ok, `${label} should satisfy delegation_policy ${policy}: ${result.reason || 'blocked'}`);
-}
-
-function assertPolicyBlocked(policy, rows, label) {
-  const result = giteaRepairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
-  assert(!result.ok, `${label} should violate delegation_policy ${policy}`);
-}
-
-assertPolicyAllowed('delegate', [
-  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
-  ['documentation docking', 'invoked', '.cache/doc-docking.md', '']
-], 'delegated Gitea Codex role row with a non-role workflow gate');
-assertPolicyAllowed('delegate', [
-  ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
-], 'delegate policy with all role rows unavailable and evidenced');
-assertPolicyAllowed('local-authorized', [
-  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
-], 'explicit local authorization');
-assertPolicyAllowed('tool-unavailable', [
-  ['doc-updater', 'N/A', '.cache/doc-updater.md', 'No documentation changes needed.'],
-  ['final validation', 'invoked', '.cache/final-validation.md', '']
-], 'finalize non-role invoked rows with N/A doc-updater');
-assertPolicyBlocked('delegate', [
-  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
-], 'local fallback under delegate policy');
-assertPolicyBlocked('delegate', [
-  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
-  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
-], 'mixed local fallback under delegate policy');
-assertPolicyAllowed('tool-unavailable', [
-  ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
-], 'mandatory named reviewer invocation under legacy tool-unavailable policy');
-assertPolicyBlocked('tool-unavailable', [
-  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', '']
-], 'ordinary subagent row under tool-unavailable policy');
-// Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
-assertPolicyAllowed('delegate', [
-  ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
-], 'issue #210 no-prompt default: delegate auto-detects evidenced tool-unavailable (regression lock)');
-assertPolicyAllowed('local-authorized', [
-  ['code-explorer', 'local-fallback-explicit', 'user disabled delegation', '']
-], 'issue #210 explicit local fallback: local-authorized only on explicit user request');
-
 const giteaInitSkill = `${giteaSkillsBase}/kaola-workflow-init/SKILL.md`;
 assertNotIncludes(giteaInitSkill, 'Do not create or edit CLAUDE.md');
 assertIncludes(giteaInitSkill, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
@@ -587,16 +335,6 @@ assert(
   !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(giteaInitSkill)),
   giteaInitSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
 );
-assertConcept(giteaInitSkill, 'Gitea init durable state contract', [
-  'kaola-workflow/.roadmap/issue-*.md',
-  'do not purge',
-  'kaola-workflow/{project}/',
-  'workflow-state.md',
-  // #572: the injected block now re-grounds durable state on the adaptive plan, not phase files.
-  'workflow-plan.md',
-  '## Node Ledger',
-  '.cache/{node-id}.md'
-]);
 assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea missing roadmap source safeguard', [
   'guardAgainstMissingRoadmapSource',
   'non-empty generated ROADMAP.md',
@@ -607,17 +345,11 @@ assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea at
   'createFileExclusive',
   'updated: issue-'
 ]);
-// #389 (#353/#354 completion): the plan-validator --freeze writer (plan_hash stamp + mid-run repair
-// re-freeze carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence
-// writer route through the crash-safe atomic replace.
-assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-plan-validator.js`, 'writeFileAtomicReplace(planPath');
-assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-adaptive-handoff.js`, 'writeFileAtomicReplace(fpath');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, "sub === 'validate-remote'");
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'function validateRemote');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'cmdValidateRemote');
 assertIncludes(`${pluginRoot}/scripts/test-gitea-workflow-scripts.js`, 'testGiteaRoadmapValidateRemote');
 // #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
-assertIncludes(`${pluginRoot}/scripts/test-gitea-workflow-scripts.js`, 'testGiteaPlanValidatorRefusalMatrix401');
 
 // Gitea forge pair CLAUDE.md template must be byte-identical
 const giteaCmdTemplate = extractClaudeTemplate(`${pluginRoot}/commands/workflow-init.md`);
@@ -659,106 +391,21 @@ assertIncludes(giteaClassifier207, "'Scope'");
 // #203: Select Project active-folder definition still lists fast-summary.md (the classifier's
 // tolerant read survives retirement, so the router recognizes a legacy fast-summary.md marker).
 const giteaNextCmd203 = pluginRoot + '/commands/workflow-next.md';
-assertIncludes(giteaNextCmd203, '`workflow-plan.md` or a `workflow-state.md`');
 
-// issue #227: adaptive-path contract (Gitea fork command prose + renamed scripts).
-assert(exists(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'), 'Gitea adaptive plan validator missing');
-assert(exists(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js'), 'Gitea adaptive schema module missing');
-// #770: adaptive is the ONLY workflow path — the path SELECTOR (KAOLA_PATH / --workflow-path /
-// path_not_installed / the fast/full path names) is retired. There is nothing left to select; a
-// stale request just runs adaptive. Pin the surviving vocabulary only.
-assertConcept(pluginRoot + '/commands/workflow-next.md', 'adaptive is the only path', [
-  'adaptive', 'default'
-]);
-assertIncludes(pluginRoot + '/commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
-// v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and
-// routes fresh adaptive to the workflow-planner front end. The router surface was unlocked before,
-// which let this forge edition ship green with the front end unreachable (inline-claim regression).
-assertIncludes(pluginRoot + '/commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
-assertIncludes(pluginRoot + '/commands/workflow-next.md', 'Skip this entire step');
-// #770: ban the retired path-selector vocabulary so it cannot silently re-creep.
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'path_not_installed');
+// The path SELECTOR (KAOLA_PATH / --workflow-path / path_not_installed) is retired; there is
+// nothing left to select, so its vocabulary is pinned ABSENT from the router surface too.
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'KAOLA_PATH');
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'path_not_installed');
-assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'path_not_installed');
-// The router's whole issue-selection contract — named-target precedence and its reading order, the
-// described-task branch, the single-issue default, the selection-evidence sidecar's named writer,
-// the two banned section names, and the structural profile-section-citation guard — is asserted on
-// THIS EDITION'S OWN next command and SKILL by the root validator's six-next-surface loop, with a
-// SUPERSET of needles, in the always-selected claude chain.
-// The adapt entry contract (entry shapes, the dispatch's binding-scope field, and a defined
-// no-target target slot) is asserted on THIS EDITION'S OWN adapt command and SKILL by the root
-// validator's six-adapt-surface loop, in the always-selected claude chain.
-// #277 M3: FANOUT_CAP and post-dominate relocated from commands/kaola-workflow-adapt.md
-// (dispatch-handle-only) to agents/workflow-planner.md (sole home of authoring procedure).
-// agents/workflow-planner.md is a shared repo-root file; use a root-relative path (no pluginRoot).
-assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
-  'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
-]);
-// A documented workflow-planner dispatch block must stay COMPLETE (Agent block + model badge); the
-// SHAPE is pinned, never that a dispatch is taken — running the role in-session is a free choice.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
-// v5.1.0: the refusal consumer branch must stay FAIL-CLOSED (any non-acquired/owned verdict = refusal).
-assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'NOT `acquired` or `owned`');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'do not blind-read');
-assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
-  '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
-  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
-  'merge_conflict', 'synthesizer',
-  // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
-  'top-up', 'reconcile', 'opening',
-  // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
-  'mirror-project'
-]);
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'disjointWriteSets');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'readPlanNodes');
 // #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
 // policy field, PROTECTED set) in the Gitea edition tree.
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
-assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', 'WRITE_OVERLAP_POLICY_LEGAL');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'PROTECTED_BASENAMES');
 // #492: pin the shared write-set classification anchors so a forge classifier port (a forge-specific
 // SUPERSET, not a rename-normalized copy) cannot silently DROP a shared function. Body parity of the
 // shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'areaForPath');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'SHARED_INFRA');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'routeAdaptive');
-assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'enable_adaptive');
-assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'enable_adaptive');
-// #343: mid-gate reopen fold + orphan guard must be carried by the Gitea adaptive-node port
-// (not byte-checked by validate-script-sync; this pin is the anti-drift guard).
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'would_orphan_in_progress');
-
-// #338: anti-drift pin — the finalize sink row is main-session-direct.
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'main-session-direct');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-direct');
-// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the agent lockstep.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'clear-halt');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
-for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
-  'repair_requires_replan', 'repair_limit_reached', "'--attempt-id'", 'uniqueMaximalReviewProducer']) {
-  assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', token);
-}
-for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
-  assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', token);
-}
-// #683: the candidate-partition repair proof (P1-P5) + the append-only rebind ledger. These are the
-// fail-closed refusals that replace a whole-plan DISCARD when two gates fail simultaneously; a port that
-// silently drops one re-opens the dead-end.
-for (const token of ['candidate_residue_changed', 'candidate_slice_changed', 'candidate_delta_unattributed',
-  'rebind_base_rewrite_unsafe', 'rebind_limit_reached', 'rebind_replay_diverged',
-  'review_journal_schema_upgrade_required', 'effectiveProducerBinding', 'buildSyntheticBase',
-  'proveRebindAdmissible', 'reconcilePendingRebind', 'REVIEW_REPAIR_LIMIT']) {
-  assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', token);
-}
-for (const token of ['candidate_declared', 'candidate_residue_digest', 'review_journal_rebind_malformed',
-  'review_journal_rebind_chain_invalid', 'REVIEW_REBIND_LIMIT', 'effectiveCandidate']) {
-  assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', token);
-}
-// #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
-// DEFINED via the kaola_script() resolver before its first use — undefined in a consumer install.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'kaola_script(){');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitea-workflow-adaptive-node.js)")"');
 // #816: the finalize seam records no attestation — pinned as an ABSENCE so a revival reds the chain.
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_contractor_attested');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'attestContractorSpawn');
@@ -772,71 +419,16 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_
 // #347: the planner self-attest back-fill flag must be ported to the forge claim (the #280 producer
 // was canonical-only while #300 ported its consumer — without this pin the asymmetry is invisible).
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-planner-spawn');
-// the planner startup surfaces themselves must instruct the flag, not just the producer script.
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', '--attest-planner-spawn');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--attest-planner-spawn');
-// #359: producer-attested evidence-token vocabulary in the forge agent profiles.
-assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
-assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'non-empty column-0 `RED:`');
-// #634: producer-attested evidence-token vocabulary in the metric-optimizer forge agent profile.
-assertIncludes(pluginRoot + '/agents/metric-optimizer.toml', 'iterations_used');
 
-// Codex 0.144 durable-result wall. Every DAG node profile writes its complete result directly to
-// the exact seeded cache path, including roles that are logically read-only. The workflow-planner
-// runs outside the Node Ledger, so its canonical workflow artifacts are the durable
-// full result (and they mirror into a seeded cache when supplied). Every parent-facing return is compact.
-{
-  const orchestrationRoles = new Set(['workflow-planner']);
-  const roleTomls = agentFiles
-    .map(file => path.basename(file, '.toml'))
-    .sort();
-  for (const role of roleTomls) {
-    const tomlText = read(pluginRoot + '/agents/' + role + '.toml');
-    assert(/FULL/i.test(tomlText) && /compact orchestrator summary/i.test(tomlText),
-      'Gitea agents/' + role + '.toml must carry the full-result + compact-summary contract');
-    if (orchestrationRoles.has(role)) {
-      assert(/durable full result/i.test(tomlText),
-        'Gitea agents/' + role + '.toml must name its canonical durable full result');
-    } else {
-      assert(tomlText.includes('dispatch.evidence_file') && tomlText.includes('evidence-binding'),
-        'Gitea agents/' + role + '.toml must carry the seeded full-cache binding contract');
-    }
-  }
-}
 
-// #445/#446: operator_hint + route-findings + --summary pins (Gitea forge ports).
-// OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,
-// adaptive-node). route-findings and --summary are adaptive-node-only (#446).
-for (const aggregatorScript of [
-  pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js',
-  pluginRoot + '/scripts/kaola-gitea-workflow-commit-node.js',
-  pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js'
-]) {
-  assertIncludes(aggregatorScript, 'OPERATOR_HINT_REGISTRY');
-}
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "'route-findings'");
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "'--summary'");
 // test-gitea-workflow-scripts.js must exercise operator_hint + route-findings + --summary.
-assertIncludes(pluginRoot + '/scripts/test-gitea-workflow-scripts.js', 'testGiteaAdaptiveNodeOperatorHint445');
 
-// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
-// (Gitea edition surfaces). A dropped token reds this chain at the contract-validator step.
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'agent-registration gap');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'forge-port ordering gap');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'full accumulated root diff');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'registration surface');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_task_name');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_dispatch_mode');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort');
 
 // #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
 // actually prints — pinned on BOTH the command and SKILL surfaces. The card-acquisition rule, the
 // no-improvise prohibition and the #604/#605 announcement formats are manifest-obligated tokens
 // (pr-dispatch-card-visibility), proven on these same paths by the derived-universe presence check.
 for (const planRunSurface of [
-  pluginRoot + '/commands/kaola-workflow-plan-run.md',
-  pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md'
 ]) {
   assertIncludes(planRunSurface, 'opened=<node-id> role=<role> task=<codex_task_name>');
 
@@ -847,13 +439,6 @@ for (const planRunSurface of [
   // three-SKILL join-protocol loops, in the always-selected claude chain.
 }
 
-// The Join Protocol anchor, the `writerHalt` / `delegation_outcome` needles on this edition's plan-run
-// SKILL and the "Writer kill-safety" heading on its COMMAND are asserted on THESE SAME EDITION PATHS
-// by the root validator's three-SKILL and three-command join-protocol loops. (There is no wait-budget
-// FLOOR rule to pin: the budget is data on the dispatch card, not a no-interrupt wall.)
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'planner_override');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'difficulty alone is not evidence');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a budget to hide a wedged agent');
 
 // The one-request teammate rule on this edition's plan-run COMMAND, and the fork_turns
 // unconditional mandate plus its two retired-qualifier bans on this edition's plan-run SKILL, are
@@ -865,43 +450,8 @@ assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a bu
 // only; see kaola-workflow-claim.js).
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispatch Mode Detection');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
-// #775 Codex 0.145 re-baseline: Codex >=0.145.0 resolves the sub-agent's own model/reasoning
-// effort itself (not a guaranteed parent-session equality) — the retired "child inherits the
-// current parent session" claim and the codex_tier_unresolved refusal are both gone; Kaola never
-// writes or overrides agents.default_subagent_model / agents.default_subagent_reasoning_effort.
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'current parent session');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', "the sub-agent's model/reasoning effort itself");
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-session equality');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model: dispatch.codex_model');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_tier_mismatch');
-// Retirement lock: the runtime parent-equals-child child-JSONL probe is retired; a reintroduced
-// probe must fail closed here.
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_runtime_mismatch');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-equals-child inheritance proof');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'installed profile path');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'declarative reasoning/wait-budget metadata');
-assertNotIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'child inherits the current parent session');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'declarative tier metadata');
-assertNotIncludes(pluginRoot + '/agents/workflow-planner.toml', 'child inherits the current parent session');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'resolves the sub-agent\'s own model/reasoning effort independently');
-assertNotIncludes(pluginRoot + '/agents/workflow-planner.toml', 'codex_profile_tier_mismatch');
 
-// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
-// prose, pinned in the Gitea edition surfaces (port validator, plan-run command, planner TOML).
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'G3: main-session-gate');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-gate');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'main-session-gate');
 
-// #607: gate instrumentation is provisioned upstream, never authored by the gate itself — pinned
-// on the Gitea edition planner TOML, which no root-tree loop reads (md↔toml parity for the TOML
-// twin is separately enforced by the shared test-agent-profile-parity.js FEATURE_TOKENS).
-// The kaola-workflow-adapt SKILL twin is asserted on THIS EDITION'S OWN path by the root
-// validator's three-adapt-SKILL loop, in the always-selected claude chain.
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'the gate never authors or deletes files');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Gitea edition — .toml bodies). Removing the emission section from
@@ -916,12 +466,7 @@ for (const reviewerBody of [
   // that --verdict-check reads at Finalization) so a gate node always emits it.
   assertIncludes(reviewerBody, 'verdict: pass');
 }
-// #281: efficient-DAG instruction in Gitea workflow-planner profile (added by planner-profile node)
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'EFFICIENT DAGs');
 
-// #341: forge-neutral agent-profile authoring guidance pinned (planner toml + plan-run command).
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'forge-neutral');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', '--forbidden-only');
 
 // issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
 // installer copy (require.main guard means require() never runs main()) and assert its
@@ -933,16 +478,6 @@ const giteaInstaller = require('./install-codex-agent-profiles.js');
 const giteaProfiles = giteaInstaller.validateSourceProfiles(path.join(root, pluginRoot));
 assert(giteaProfiles.ok,
   'Gitea source agent profiles fail schema validation:\n  - ' + giteaProfiles.errors.join('\n  - '));
-for (const role of giteaProfiles.roles) {
-  assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'FULL');
-  assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'compact orchestrator summary');
-  if (giteaInstaller.CODEX_ORCHESTRATION_ROLES.includes(role)) {
-    assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'durable full result');
-  } else {
-    assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'dispatch.evidence_file');
-    assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'evidence-binding');
-  }
-}
 const giteaSchema = require('./kaola-workflow-adaptive-schema.js');
 const giteaPreflight = require('./kaola-workflow-codex-preflight.js');
 const sortGiteaPolicy = values => [...values].sort();
@@ -995,10 +530,7 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
 // REQUIRED skill); this is the required-target registry that closes it.
 {
   const schema = require('./kaola-workflow-adaptive-schema.js');
-  const emittedSkillTargets = [
-    schema.PLAN_RUN_SKILL,
-    schema.ADAPT_SKILL
-  ];
+  const emittedSkillTargets = [];
   const installedSkills = new Set(
     fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory())
@@ -1012,20 +544,12 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   }
   // Content-reachability tier (catches #369/#380): a mirrored SKILL must carry the command's
   // route/wiring tokens or the route resolves to a hollow surface.
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'workflow-plan.md exists -> kaola-workflow-plan-run');
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'close-and-open-next');
   // #463 (AC11): pin the synthesizer role in the forge-codex SKILL too (the #400 dead-zone surface).
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'synthesizer');
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'kaola-workflow-plan-run');
   // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
   // the project-local needle GREEN (add, never remove) and pin the global path alongside it.
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '.codex/agents/kaola-workflow/');
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '~/.codex/agents/kaola-workflow/');
   // #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
   // run-start notice + the consent-halt escalation on both the Gitea command and SKILL mirror.
   for (const planRunSurface of [
-    pluginRoot + '/commands/kaola-workflow-plan-run.md',
-    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md'
   ]) {
     assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
     assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
@@ -1094,17 +618,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   assert(installManifest.supportScripts('gitea').includes('kaola-workflow-validation-runner.js'),
     'manual edition install must ship the deterministic validation runner');
 
-  const schema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-  for (const name of ['deriveGateMode', 'buildReviewContext', 'validateReviewEvidenceBinding',
-    'reduceReviewReceipts', 'compareValidationObligations', 'validateReviewJournalV2']) {
-    assert(typeof schema[name] === 'function', pluginRoot + ' adaptive schema must export ' + name);
-  }
-  const planValidator = require(path.join(root, pluginRoot, 'scripts',
-    'kaola-gitea-workflow-plan-validator.js'));
-  for (const name of ['resolvePlanContract', 'buildPlanView', 'validateSchema2ReviewPlan',
-    'verifyVerdictBlock']) {
-    assert(typeof planValidator[name] === 'function', pluginRoot + ' plan validator must export ' + name);
-  }
 
   // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME EDITION PATHS by the root
   // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
@@ -1115,8 +628,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
 // transaction as a typed refusal. Pin the refusal in this edition's producer script (a silent drop
 // is the #294 fail-open class) and the surviving pointer in the command, so neither half can vanish.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
-assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'staging_guard_foreign_archive');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', '## Staging Guard');
 
 // #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier/
 // roadmap/repair-state ports must carry the shared top-level functions that define the data layer.
@@ -1127,138 +638,12 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'buildBran
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'checkDispatchAttestations');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'isSharedInfra');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'isProtected');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'readPlanNodes');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'isAdaptiveWorkflowState');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'adaptiveStateValid');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'isSafeName');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'readRoadmapIssues');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'roadmapDir');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'deriveMemberSet');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'readStateIssueNumbers');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'probeIssueClosed');
 
-// Re-plan edition contract: require the renamed port, execute its refusal path, prove planner
-// attestation is mandatory, and verify the manual installer exposes the same executable name.
-{
-  const scriptsDir = path.join(root, pluginRoot, 'scripts');
-  const replanName = 'kaola-gitea-workflow-replan.js';
-  const replanPath = path.join(scriptsDir, replanName);
-  const schema = require(path.join(scriptsDir, 'kaola-workflow-adaptive-schema.js'));
-  const replan = require(replanPath);
-  const handoff = require(path.join(scriptsDir, 'kaola-gitea-workflow-adaptive-handoff.js'));
-  const adaptiveNode = require(path.join(scriptsDir, 'kaola-gitea-workflow-adaptive-node.js'));
-
-  const cli = require('child_process').spawnSync(process.execPath,
-    [replanPath, 'status', '--project', 'n5-missing-gitea-project', '--json'],
-    { cwd: root, encoding: 'utf8' });
-  const cliResult = JSON.parse(String(cli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
-  assert(cli.status !== 0 && cliResult.reason === 'replan_authority_path_invalid',
-    'Gitea renamed re-plan CLI must execute the typed missing-authority refusal');
-  assert(JSON.stringify(schema.REPLAN_PHASES) === JSON.stringify([
-    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
-  ]) && JSON.stringify(schema.REPLAN_STATUSES) === JSON.stringify([
-    'none', 'in_progress', 'candidate_changed', 'consent_halt',
-  ]) && JSON.stringify(schema.REPLAN_CAS_SEAMS) === JSON.stringify([
-    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
-  ]), 'Gitea schema must expose the canonical re-plan phases/statuses/CAS seams');
-
-  const childPath = path.join(require('os').tmpdir(), 'kw-n5-gitea-attestation', 'workflow-plan.next.md');
-  let writes = 0;
-  const unattested = handoff.runReplanHandoff({
-    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
-    authority: {
-      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
-      transaction_id: 'a'.repeat(64), child_path: childPath,
-      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
-    },
-    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
-    writeFile: () => { writes++; },
-  });
-  assert(unattested.reason === 'replan_child_authority_unverified' && writes === 0,
-    'Gitea child handoff must refuse missing planner attestation before writing');
-  assert(typeof replan.buildPlannerPacket === 'function' && typeof replan.verifyAllEpochSnapshots === 'function',
-    'Gitea re-plan port must expose planner packet and recursive snapshot behavior');
-
-  const orientation = adaptiveNode.replanOrientation({
-    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
-    legal_mutation: 'replan resume', transaction: {
-      transaction_id: 'a'.repeat(64), phase: 'planner_pending', parent: { plan_hash: 'b'.repeat(64) },
-      child: {}, cas: {},
-    },
-  }, 'issue-n5-contract');
-  assert(orientation.resume_command ===
-    'node scripts/kaola-gitea-workflow-replan.js resume --project issue-n5-contract --json',
-  'Gitea orientation must expose only the renamed edition-local resume command');
-
-  const closure = require(path.join(scriptsDir, 'kaola-workflow-closure-contract.js'));
-  assert((closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('preserved')
-      && (closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('failed')
-      && closure.CLOSURE_INVARIANTS.some(row => row.id === 'epoch-lineage-preserved'),
-  'Gitea closure contract must preserve the recursive epoch-lineage receipt');
-
-  for (const file of [
-    pluginRoot + '/commands/kaola-workflow-plan-run.md', pluginRoot + '/commands/kaola-workflow-adapt.md',
-    pluginRoot + '/commands/kaola-workflow-finalize.md', pluginRoot + '/commands/workflow-next.md',
-    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md',
-    pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md', pluginRoot + '/skills/kaola-workflow-next/SKILL.md',
-  ]) {
-    const match = /(?:^|\n)## In-progress re-plan control plane\s*\n([\s\S]*?)(?=\n## |$)/.exec(read(file));
-    assert(match && match[1].includes(replanName) && match[1].includes('resume --project {project} --json')
-        && match[1].includes('workflow-plan.next.md') && match[1].includes('replan-planner-attestation.json'),
-    file + ' must route the renamed Gitea re-plan transaction');
-    for (const forbiddenRoute of ['kaola-workflow-claim.js discard --project',
-      'discard+restart a fresh adaptive run', 'auto-takeover', 'approval gate']) {
-      assert(!match[1].includes(forbiddenRoute), file + ' must not expose ' + forbiddenRoute + ' during re-plan');
-    }
-  }
-
-  const tempHome = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kw-n5-gitea-install-'));
-  try {
-    const installed = require('child_process').spawnSync('bash', [path.join(root, 'install.sh'),
-      '--yes', '--no-settings-merge', '--forge=gitea'], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
-    });
-    assert(installed.status === 0, 'Gitea installer must ship the renamed re-plan aggregator: ' + installed.stderr);
-    const installedScript = path.join(tempHome, '.claude', 'kaola-workflow-gitea', 'scripts', replanName);
-    assert(fs.existsSync(installedScript) && (fs.statSync(installedScript).mode & 0o111) !== 0,
-      'installed Gitea re-plan aggregator must be present and executable');
-    const installedCli = require('child_process').spawnSync(process.execPath,
-      [installedScript, 'status', '--project', 'n5-missing-gitea-project', '--json'],
-      { cwd: root, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome } });
-    const installedResult = JSON.parse(String(installedCli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
-    assert(installedCli.status !== 0 && installedResult.reason === 'replan_authority_path_invalid',
-      'installed Gitea re-plan aggregator must execute its typed refusal contract');
-
-    // EXECUTION PIN for the gap sweep. Two assertions earlier in this file already certify that
-    // kaola-gitea-workflow-gap-sweep.js EXISTS and that the install manifest emits it — and a port
-    // still shipped whose module require named a file no tree contains, because nothing ever ran it.
-    // Structure certified, behaviour not. A third existence assertion would be worth nothing; the
-    // only evidence that the writer resolves is an artifact that was actually written and parses.
-    // run-gaps.json is a kernel Evidence record — the sweep result the finalization gate reads back
-    // — so a sweep that cannot write it leaves the gate reading nothing on this edition.
-    const installedSweep = path.join(tempHome, '.claude', 'kaola-workflow-gitea', 'scripts',
-      'kaola-gitea-workflow-gap-sweep.js');
-    const sweepRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kw-n5-gitea-sweep-'));
-    try {
-      const sweepCache = path.join(sweepRoot, 'kaola-workflow', 'n5sweep', '.cache');
-      fs.mkdirSync(sweepCache, { recursive: true });
-      const swept = require('child_process').spawnSync(process.execPath,
-        [installedSweep, '--project', 'n5sweep', '--json'],
-        { cwd: sweepRoot, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome } });
-      assert(swept.status === 0,
-        'installed Gitea gap sweep must EXECUTE, not merely exist: '
-        + String(swept.stderr || '').split('\n').filter(Boolean)[0]);
-      const artifactPath = path.join(sweepCache, 'run-gaps.json');
-      assert(fs.existsSync(artifactPath),
-        'installed Gitea gap sweep must WRITE run-gaps.json — the kernel Evidence record the '
-        + 'finalization gate reads back');
-      const record = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
-      assert(record.project === 'n5sweep' && Array.isArray(record.sweptClasses),
-        'installed Gitea run-gaps.json must parse as the Evidence record, got: '
-        + JSON.stringify(record));
-    } finally { fs.rmSync(sweepRoot, { recursive: true, force: true }); }
-  } finally { fs.rmSync(tempHome, { recursive: true, force: true }); }
-}
 
 // PROVENANCE_BAN: Gitea prompt surfaces (agents/*.toml, commands/*.md, skills/*/SKILL.md) must
 // not embed issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations,

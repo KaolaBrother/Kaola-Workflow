@@ -31,10 +31,6 @@ const CLOSURE_RECEIPT_FIELDS = {
   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
   branch_removed: ['removed', 'kept', 'failed'],
-  // Claim-scoped epoch proof survives closure recursively. `absent` is the
-  // truthful legacy lane; `preserved` includes a verified canonical schema-2
-  // planless epoch or recursively verified manifest/index proof files.
-  epoch_lineage_preserved: ['preserved', 'absent', 'failed'],
   // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking. The
   // CLAIM/AUTHOR seam is the only attested seam: the finalize seam is orchestrator-owned by
   // design, so it emits no attestation field. A LEGACY receipt carrying the retired
@@ -101,7 +97,6 @@ const CLOSURE_INVARIANTS = [
   { id: 'remote-members-closed', description: 'For a bundle (issue_numbers), every member is closed; none remains in failed_issue_closures or open_issues while online.' },
   { id: 'in-progress-label-removed', description: 'The remote issue does not have workflow:in-progress after closure.' },
   { id: 'branch-worktree-resolved', description: 'Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.' },
-  { id: 'epoch-lineage-preserved', description: 'Every claim-scoped epoch snapshot and lineage receipt is recursively preserved and digest-verified in the archive.' },
   // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking.
   { id: 'claim-planner-attested', description: 'A workflow-planner subagent spawn is recorded in the dispatch log (.cache/dispatch-log.jsonl) BEFORE the plan was frozen.' },
   { id: 'roadmap-residue-clean', description: 'No .roadmap/issue-N.md source survives in any tree after closure.' },
@@ -121,7 +116,6 @@ function emptyReceipt(project, issueNumber) {
     claim_label_removed: 'failed',
     worktree_removed: 'failed',
     branch_removed: 'failed',
-    epoch_lineage_preserved: 'failed',
     // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking.
     claim_planner_attested: 'failed',
     warnings: [],

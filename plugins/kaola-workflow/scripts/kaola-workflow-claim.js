@@ -779,50 +779,17 @@ function repositoryIdentity(root) {
   }
 }
 
-// Capture claim identity and immutable Git root exactly once. The returned
-// scalar fields are persisted in workflow-state.md; the typed payloads remain
-// available to tests/replan callers but are not serialized as ad-hoc JSON.
+// Capture claim identity exactly once. The returned scalar fields are persisted in
+// workflow-state.md; the typed payload stays available to callers but is not serialized
+// as ad-hoc JSON. The claim-root base commit/tree observation stood here too — it existed
+// to anchor a re-plan epoch against the bytes the claim was authored over, and it went
+// with the epoch machinery. Claim identity is what survives: it answers whose claim this
+// is, which the durable claim record still needs.
 function buildClaimAnchors(root, data) {
   const anchorRoot = fs.realpathSync(data.worktree_path || root);
-  let objectFormat = '';
-  try {
-    objectFormat = execFileSync('git', ['-C', anchorRoot, 'rev-parse', '--show-object-format'], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
-    }).trim().toLowerCase();
-  } catch (_) {}
-  if (!objectFormat) objectFormat = 'sha1';
-  const objectLength = objectFormat === 'sha256' ? 64 : 40;
-  let commit;
-  let tree;
-  try {
-    // The claim root binds the immutable candidate observed at claim time.  Its
-    // branch field is the target identity, not a requirement that HEAD already
-    // be checked out on that future feature branch.
-    if (hasGitHistory(anchorRoot)) {
-      commit = execFileSync('git', ['-C', anchorRoot, 'rev-parse', 'HEAD'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-      }).trim().toLowerCase();
-      tree = execFileSync('git', ['-C', anchorRoot, 'rev-parse', 'HEAD^{tree}'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-      }).trim().toLowerCase();
-    } else {
-      // An initialized repository with no commits still has a canonical root:
-      // the all-zero commit sentinel plus Git's canonical empty-tree object.
-      execFileSync('git', ['-C', anchorRoot, 'rev-parse', '--git-dir'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-      });
-      commit = '0'.repeat(objectLength);
-      tree = execFileSync('git', ['-C', anchorRoot, 'hash-object', '-t', 'tree', '--stdin'], {
-        input: '', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']
-      }).trim().toLowerCase();
-    }
-  } catch (_) {
-    throw new Error('claim_root_unavailable');
-  }
   const issues = Array.isArray(data.issue_numbers) && data.issue_numbers.length
     ? data.issue_numbers : [data.issue_number];
   const identity = adaptiveSchema.buildClaimIdentity({
-    schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
     repository_id: repositoryIdentity(anchorRoot),
     issue_numbers: issues,
     primary_issue: data.issue_number,
@@ -833,36 +800,10 @@ function buildClaimAnchors(root, data) {
     claim_ts: data.claim_ts,
     session_marker: data.session_marker,
   });
-  const rootBase = adaptiveSchema.buildClaimRootBase({
-    schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
-    object_format: objectFormat,
-    commit,
-    tree,
-    branch: data.branch,
-  });
-  const lineage = adaptiveSchema.buildEpochLineage(identity, rootBase);
   return {
-    epoch_schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
     claim_repository_id: identity.repository_id,
-    claim_identity_digest: lineage.claim_identity_digest,
-    claim_root_object_format: rootBase.object_format,
-    claim_root_base_commit: rootBase.commit,
-    claim_root_base_tree: rootBase.tree,
-    claim_root_base_digest: lineage.claim_root_base_digest,
-    epoch_lineage_id: lineage.epoch_lineage_id,
-    plan_epoch: 1,
-    active_plan_hash: 'none',
-    inherited_frontier_digest: 'none',
-    inherited_frontier_classes: 'none',
-    automatic_review_replans: 0,
-    authorized_epoch_ceiling: adaptiveSchema.REVIEW_REPLAN_LIMIT,
-    case_b_exemption_consumed: false,
-    replan_status: 'none',
-    replan_transaction_id: 'none',
-    replan_phase: 'none',
-    active_snapshot_manifest_digest: 'none',
+    claim_identity_digest: adaptiveSchema.sha256Canonical(identity),
     claim_identity: identity,
-    claim_root_base: rootBase,
   };
 }
 
@@ -927,21 +868,11 @@ function writeState(root, data) {
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
-    '## Pending Gates',
-    '- workflow-plan',
-    '',
     '## Last Evidence',
     'phase_file: N/A',
     'cache_file: N/A',
     'last_command: startup',
     'last_result: ' + (data.last_result || 'folder_claimed'),
-    '',
-    '## Planning Evidence',
-    'plan_hash: none',
-    'decision: none',
-    'risk: none',
-    'first_node_id: none',
-    'first_node_role: none',
     '',
     '## Last Updated',
     new Date().toISOString(),
@@ -991,7 +922,7 @@ function writeState(root, data) {
     lines.push('closure_policy: ' + (data.closure_policy || 'all_or_nothing'));
   }
   let stateContent = lines.join('\n') + '\n';
-  stateContent = adaptiveSchema.writeEpochStateBlock(stateContent, claimAnchors);
+  stateContent = adaptiveSchema.writeClaimIdentityBlock(stateContent, claimAnchors);
   writeFile(stateFile(root, data.project), stateContent);
 }
 
@@ -2180,8 +2111,9 @@ function reconcileNextCommand(root, folder) {
   try {
     content = fs.readFileSync(path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md'), 'utf8');
   } catch (_) {}
-  const planExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
-  const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || planExists;
+  const recordExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.MISSION_LIST_FILE))
+    || fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
+  const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || recordExists;
   if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
   return folder.next_command || resumeFallbackCommand(root, folder);
 }
@@ -2347,34 +2279,24 @@ function cmdResume() {
 
 // #333: terminal-stamp the workflow-state CONTENT for an archive. Pure string transform.
 // statusValue: 'closed' | 'abandoned' (abandoned keeps mid-run state by design — #324).
-// planDir: directory containing workflow-plan.md (live src BEFORE rename, or the archive
-//          dest for the cmdFinalize backstop). Used to refresh plan_hash.
 // opts.keepOpen: true on a keep-open partial-close archive (finalize --keep-open).
 // Idempotent (every transform is a line-anchored replace) — safe to re-apply on crash-resume.
-function stampTerminalState(content, statusValue, planDir, opts) {
+function stampTerminalState(content, statusValue, opts) {
   content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
   if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
   content = content.replace(/^step:\s*.*$/m, 'step: complete');
   if (!/^step:/m.test(content)) content += '\nstep: complete\n';
   if (statusValue !== 'closed') return content;   // discard/release keeps mid-run state (#324)
-  // #324: normalize the pre-run blocks that writeState seeded at claim time (## Pending Gates:
-  // - workflow-plan; last_command: startup / last_result: folder_claimed) so the archived state
-  // cannot read as self-contradictory terminal state (closed/complete yet "pending workflow-plan").
-  content = content.replace(/(^## Pending Gates\n)(?:[ \t]*-[ \t].*\n?)*/m, '$1- none\n');
+  // #324: normalize the pre-run evidence writeState seeded at claim time (last_command: startup /
+  // last_result: folder_claimed) so the archived state cannot read as self-contradictory terminal
+  // state. The `## Pending Gates` rewrite stood beside these; the block it normalized named the
+  // frozen plan, which no longer exists, so the claim no longer seeds it and nothing rewrites it.
   content = content.replace(/^last_command:\s*.*$/m, 'last_command: finalize');
   content = content.replace(/^last_result:\s*.*$/m,
     'last_result: ' + (opts && opts.keepOpen ? 'closed_keep_open' : 'closed'));
   // #333: an archived state must not advertise an active resume command.
   content = content.replace(/^next_command:\s*.*$/m, 'next_command: none (archived)');
   content = content.replace(/^next_skill:\s*.*$/m, 'next_skill: none (archived)');
-  // #333: refresh Planning Evidence plan_hash from the FINAL workflow-plan.md (a mid-run
-  // re-freeze re-stamps only the plan file's <!-- plan_hash --> comment; the state keeps the
-  // freeze-time hash). No-ops for non-adaptive projects (no plan file / no plan_hash line).
-  try {
-    const planContent = fs.readFileSync(path.join(planDir, adaptiveSchema.PLAN_FILE), 'utf8');
-    const hm = planContent.match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
-    if (hm) content = content.replace(/^plan_hash:\s*[0-9a-f]{64}\s*$/m, 'plan_hash: ' + hm[1]);
-  } catch (_) {}
   // #333: refresh the ## Last Updated line to the archive timestamp.
   content = content.replace(/(^## Last Updated\n)[^\n]*/m, '$1' + new Date().toISOString());
   return content;
@@ -2621,69 +2543,6 @@ function sanitizeBarrierTag(name) {
   return String(name).replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
-// E2 owns epoch semantics; lifecycle consumers compose both exported views so
-// a planned/current-authority tamper can never pass merely because its snapshot
-// sequence remains intact. The same helper is used before archive and again on
-// the archived destination/closure receipt.
-// `opts.deferReasons` (see verifyCurrentEpochAuthority) is passed ONLY by a caller that
-// intends to downgrade those exact reasons. It changes nothing for every other caller.
-function verifyArchiveEpochAuthority(projectPath, opts) {
-  let replan;
-  let current;
-  let snapshots;
-  try {
-    replan = require('./kaola-workflow-replan');
-    current = replan.verifyCurrentEpochAuthority(projectPath,
-      opts && opts.deferReasons ? { deferReasons: opts.deferReasons } : undefined);
-    // The snapshot tier ALSO runs when the current tier failed only on deferred reasons.
-    // Gating it on `current.ok` alone meant a deferrable first failure silently skipped the
-    // WHOLE snapshot ladder — staging residue, an unreadable/relocated `.cache/epochs`, a
-    // digest mismatch — none of which the caller ever agreed to downgrade.
-    snapshots = current && (current.ok === true || current.deferrable_only === true)
-      ? replan.verifyAllEpochSnapshots(projectPath) : null;
-  } catch (error) {
-    return { ok: false, reason: 'snapshot_verifier_unavailable', detail: error.message };
-  }
-  if (!current || (current.ok !== true && current.deferrable_only !== true)) {
-    return current || { ok: false, reason: 'current_epoch_authority_invalid' };
-  }
-  // A snapshot-tier failure is never deferrable, so it outranks the deferred current-tier
-  // failures and is what the caller must see.
-  if (!snapshots || snapshots.ok !== true) return snapshots || { ok: false, reason: 'snapshot_authority_invalid' };
-  if (current.ok !== true) return current;
-  return { ok: true, current, snapshots };
-}
-
-// #735: the RUN-STATE PROGRESS half of the archive authority. These reasons are the only
-// ones the composed check emits about artifacts a run PRODUCES as it executes — the mutable
-// `## Node Ledger` progress table and the derived `workflow-tasks.json` mirror. Every OTHER
-// reason it can emit is about the epoch envelope, the immutable frozen plan, the replan
-// transaction, or the snapshot tree, and stays fail-closed for every archive.
-//
-// A `closed` archive is the input to archiveEpochLineagePreserved, whose `preserved`
-// token asserts on the closure receipt that the lineage really was intact — so for a
-// closure the progress artifacts remain load-bearing and this set is NOT consulted.
-//
-// An `abandoned` archive asserts nothing of the sort: it is stamped `abandoned`, lands at
-// `archive/<project>.discarded-<ts>`, and produces no closure receipt and no lineage
-// token. Demanding progress artifacts there made discard structurally unavailable to
-// exactly the projects most in need of it. That is ABSENT or INCOMPLETE run product on a
-// project the user has explicitly asked to abandon, not evidence of tampering, and the
-// refusal was total: no worktree, branch, or claim-label cleanup was attempted either. The
-// reason is recorded on the result as `authority_downgraded` and surfaced by the caller
-// rather than silently dropped.
-//
-// #833: the two `state_compliance_*` entries are gone with the codes themselves. Two of the
-// three shapes that motivated this downgrade were compliance-table shapes (a runtime that did
-// not pre-seed the section; a mid-run section carrying the legacy row-per-closed-node partial
-// set) — neither can occur now that the table is derived rather than stored, so those discards
-// simply succeed instead of succeeding-with-a-downgrade-note.
-const ABANDON_DOWNGRADABLE_AUTHORITY_REASONS = new Set([
-  'state_ledger_authority_invalid',
-  'state_ledger_progress_invalid',
-  'state_task_mirror_mismatch',
-]);
-
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
@@ -2692,27 +2551,6 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   // before even terminal-state stamping, so the live source remains untouched.
   if (process.env.KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL === '1') {
     return { archived: false, reason: 'archive_forced_refusal' };
-  }
-  // #755: the downgradable set is handed to the verifier as a DEFERRAL policy rather than
-  // applied to whatever reason came back first. The verifier finishes the whole ladder —
-  // every later tier included — and reports every failure it met, so the downgrade decision
-  // below sees the complete picture instead of only the first tier that happened to fail.
-  const snapshots = verifyArchiveEpochAuthority(src, statusValue === 'abandoned'
-    ? { deferReasons: ABANDON_DOWNGRADABLE_AUTHORITY_REASONS } : undefined);
-  // #735: an ABANDON downgrades a run-state-progress authority failure to a recorded note;
-  // every other reason, and every `closed` archive, still refuses before any mutation.
-  let authorityDowngraded = null;
-  if (!snapshots.ok) {
-    const reason = snapshots.reason || snapshots.detail || 'snapshot_invalid';
-    // `deferrable_only` is the whole-ladder verdict: it is set ONLY when every tier ran and
-    // every failure met was one this call authorized deferring. A first-failure reason-set
-    // test here (what this used to be) could not distinguish "the only faults are
-    // downgradable" from "a downgradable fault happened to be checked first".
-    if (statusValue !== 'abandoned' || snapshots.deferrable_only !== true) {
-      return { skipped: undefined, archived: false, archive_incomplete: true,
-        missing: [], snapshot_error: reason };
-    }
-    authorityDowngraded = reason;
   }
   // The #707 pre-flight evidence floor stood here: it asked the `## Node Ledger` which evidence
   // files the run had recorded, and refused when the folder about to be archived no longer held
@@ -2729,8 +2567,8 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     archiveIssueNumber = parseInt(field(content, 'issue_number'), 10);
     archiveIssueNumbersRaw = (field(content, 'issue_numbers') || '').trim();
     content = removeLegacyStateBlocks(content);
-    // #333: status/step/#324-normalization/next_command/plan_hash/Last Updated all in one helper.
-    content = stampTerminalState(content, statusValue, src, opts);
+    // #333: status/step/#324-normalization/next_command/Last Updated all in one helper.
+    content = stampTerminalState(content, statusValue, opts);
     // Atomic (the module's own crash-safe writer): this is the LAST stamp of the terminal state
     // before the folder is renamed into archive/, so a torn write here is unrecoverable — a torn
     // workflow-state.md is silently skipped by readActiveFolders and the project goes invisible.
@@ -2885,9 +2723,6 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     roadmap_regenerated: roadmapRegenerated,
     roadmap_sources_removed: removedSources,
     roadmap_staged_reconciled: stagedReconciled,
-    // #735: present ONLY when an abandon proceeded past a run-state-progress authority
-    // failure, so the outcome is never silently laundered as a fully-verified archive.
-    ...(authorityDowngraded ? { authority_downgraded: authorityDowngraded } : {}),
   };
 }
 
@@ -3101,20 +2936,6 @@ function commitDiscardArchive(result, project, baseBranch, opts) {
   }
 }
 
-// Translate an explicitly successful archive into the closure receipt's
-// lineage token.  The token is never inferred from `archived:true` alone: the
-// archived destination is recursively re-verified first, matching finalize.
-function archiveEpochLineagePreserved(result) {
-  if (!closureContract.archiveSucceeded(result)) return 'failed';
-  if (!result.dest) return 'absent';
-  const epochCheck = verifyArchiveEpochAuthority(result.dest);
-  if (!epochCheck.ok) return 'failed';
-  let schema2 = false;
-  try { schema2 = field(fs.readFileSync(path.join(result.dest, 'workflow-state.md'), 'utf8'),
-    'epoch_schema_version') === '2'; } catch (_) {}
-  return fs.existsSync(path.join(result.dest, '.cache', 'epochs')) || schema2 ? 'preserved' : 'absent';
-}
-
 // #617: opts.implRef/opts.sinkTarget let a merge-lane caller (sink-merge — the seam that
 // performs the real merge + close) wire the remote-closed-after-publish invariant declared in
 // kaola-workflow-closure-contract.js but never evaluated anywhere. When supplied, verifies the
@@ -3126,18 +2947,6 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
   const violations = [];
   const issueNumber = receipt.issue_number;
   const abandoned = receipt && receipt.archive === 'abandoned';
-  // Some closure transports (notably the merge sink) construct their final
-  // receipt after cmdFinalize has already archived the project. Rebind the
-  // seeded failure token to a fresh recursive verification of that archive so
-  // those callers neither report a false lineage failure nor trust a copied
-  // success token. A malformed/missing archive remains `failed` and therefore
-  // still trips the invariant below.
-  if (receipt && archiveDest && (receipt.archive === 'closed' || abandoned)) {
-    receipt.epoch_lineage_preserved = archiveEpochLineagePreserved({
-      archived: fs.existsSync(archiveDest),
-      dest: archiveDest,
-    });
-  }
   // #328: for a bundle project, loop roadmap-source-absent + roadmap-mirror-clean checks
   // over ALL members; fall back to scalar issue_number for single-issue (AC#1 unchanged).
   const memberNumbers = Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length
@@ -3232,10 +3041,6 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
   if (receipt.worktree_removed === 'failed' || receipt.branch_removed === 'failed') {
     const invBw = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'branch-worktree-resolved'; });
     violations.push({ id: 'branch-worktree-resolved', description: invBw ? invBw.description : 'worktree or branch removal failed during closure' });
-  }
-  if (receipt.epoch_lineage_preserved === 'failed') {
-    const invEpoch = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'epoch-lineage-preserved'; });
-    violations.push({ id: 'epoch-lineage-preserved', description: invEpoch ? invEpoch.description : 'epoch lineage was not preserved' });
   }
   // #369 remote-members-closed: for a bundle, every member must be closed. A member left in
   // failed_issue_closures or open_issues (recorded while online) flags this WARN-FIRST-but-VISIBLE
@@ -3457,15 +3262,15 @@ function mirrorFinalizationArtifacts(root, project) {
     };
   }
   if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', ledger_compare: 'not_needed', mirrored_paths: [] };
-  // Ledger-regression guard (fail-open on a first sync — the compare module owns that semantics).
-  let ledgerCompare = 'skipped_no_plan';
-  const srcPlan = path.join(srcDir, adaptiveSchema.PLAN_FILE);
-  if (fs.existsSync(srcPlan)) {
+  // Record-regression guard (fail-open on a first sync — the compare module owns that semantics).
+  let ledgerCompare = 'skipped_no_record';
+  const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
+  if (fs.existsSync(srcRecord)) {
     try {
       const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
       let destText = null;
-      try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.PLAN_FILE), 'utf8'); } catch (_) {}
-      const verdict = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText);
+      try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
+      const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
       if (!verdict.safe) {
         // #837 — the script performs the worktree→main sync itself. Merge-copy (worktree wins) so
         // main-only Finalization artifacts the orchestrator just authored survive, then re-compare
@@ -3481,7 +3286,7 @@ function mirrorFinalizationArtifacts(root, project) {
         }
         let after = null;
         if (!syncFailure) {
-          try { after = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText); }
+          try { after = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText); }
           catch (e) { syncFailure = String((e && e.message) || e).slice(0, 400); }
         }
         if (syncFailure || !after || !after.safe) {
@@ -3489,8 +3294,8 @@ function mirrorFinalizationArtifacts(root, project) {
             refused: true,
             inner_reason: 'mirror_sync_failed',
             detail: 'the transaction could not sync the worktree project folder up into the main '
-              + 'checkout (main copy carries ' + verdict.sourceComplete + ' complete node(s); the '
-              + 'worktree ledger carries ' + verdict.destComplete + ')'
+              + 'checkout (main copy records ' + verdict.sourceComplete + ' done item(s); the '
+              + 'worktree copy records ' + verdict.destComplete + ')'
               + (syncFailure ? ': ' + syncFailure : '')
           };
         }
@@ -3664,13 +3469,13 @@ function probeFinalizeMirror(root, project) {
     return { state: 'skipped_post_archive', mainRoot };
   }
   if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot };
-  const srcPlan = path.join(srcDir, adaptiveSchema.PLAN_FILE);
-  if (!fs.existsSync(srcPlan)) return { state: 'ready', mainRoot };
+  const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
+  if (!fs.existsSync(srcRecord)) return { state: 'ready', mainRoot };
   try {
     const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
     let destText = null;
-    try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.PLAN_FILE), 'utf8'); } catch (_) {}
-    const verdict = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText);
+    try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
+    const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
     if (verdict.safe) return { state: 'ready', mainRoot };
     // A pending worktree→main sync is machinery-repairable, so it is REPORTED as state, never as an
     // operator-owed precondition — unless the destination is provably unwritable, in which case the
@@ -3678,7 +3483,7 @@ function probeFinalizeMirror(root, project) {
     let writable = true;
     try {
       fs.accessSync(srcDir, fs.constants.W_OK);
-      if (fs.existsSync(srcPlan)) fs.accessSync(srcPlan, fs.constants.W_OK);
+      if (fs.existsSync(srcRecord)) fs.accessSync(srcRecord, fs.constants.W_OK);
     } catch (_) { writable = false; }
     return { state: writable ? 'sync_required' : 'sync_failed', mainRoot };
   } catch (e) {
@@ -3996,44 +3801,6 @@ function cmdFinalize() {
     }, 1);
     return;
   }
-  // Re-plan fencing is a pre-side-effect finalization gate. A partial epoch
-  // transition may be resumed only by the transaction authority; archive,
-  // issue, branch, and worktree mutation remain forbidden until it commits and
-  // every durable parent snapshot re-verifies.
-  {
-    const authorityDir = finalizeAuthorityDir;
-    const authorityState = authorityDir ? path.join(authorityDir, 'workflow-state.md') : null;
-    const txPath = authorityDir
-      ? path.join(authorityDir, '.cache', adaptiveSchema.REPLAN_TRANSACTION_NAME) : null;
-    let stateContent = '';
-    let transaction = null;
-    if (authorityDir) {
-      try { stateContent = fs.readFileSync(authorityState, 'utf8'); } catch (_) {}
-      try { transaction = JSON.parse(fs.readFileSync(txPath, 'utf8')); }
-      catch (_) { transaction = txPath && fs.existsSync(txPath) ? {} : null; }
-      const fence = adaptiveSchema.readReplanFence(stateContent, transaction);
-      if (!fence.ok || fence.fenced) {
-        // #847-I: report the exit the FENCE resolved, never a default. The `||` that used to sit
-        // here fired on precisely the arms carrying no exit, and named `replan resume` — the one
-        // verb the validation arm REJECTS, so the operator arrived at a second refusal carrying
-        // the code they started with. Silence sends them looking; a wrong verb sends them nowhere
-        // and costs a round trip to learn it. Every arm names its own exit now, so there is
-        // nothing left for a default to cover.
-        output({ result: 'refuse', reason: fence.reason || 'replan_in_progress',
-          phase: fence.phase || null, transaction_id: fence.transaction_id || null,
-          legal_mutation: fence.legal_mutation || null });
-        process.exitCode = 1;
-        return;
-      }
-      const snapshots = verifyArchiveEpochAuthority(authorityDir);
-      if (!snapshots.ok) {
-        output({ result: 'refuse', reason: 'replan_snapshot_incomplete',
-          detail: snapshots.reason || snapshots.detail || null });
-        process.exitCode = 1;
-        return;
-      }
-    }
-  }
   // #336: keep-open terminal mode — explicit flag OR the durable ## Sink issue_action field.
   // State-field derivation makes the durable record the source of truth (a caller that
   // forgets the flag cannot silently close-mode the run); the flag covers the crash-resume case
@@ -4184,7 +3951,7 @@ function cmdFinalize() {
           // repair a state file a crash left non-terminal — writing it non-atomically could tear the
           // very file it is repairing and hide the ARCHIVED project from readActiveFolders.
           writeFile(destState,
-            stampTerminalState(removeLegacyStateBlocks(raw), 'closed', destDir, { keepOpen: keepIssueOpen }));
+            stampTerminalState(removeLegacyStateBlocks(raw), 'closed', { keepOpen: keepIssueOpen }));
           archiveStateStamped = 'repaired';
         }
         // lets the ## Closure append + invariants + issue_number fallback see the dir
@@ -4416,7 +4183,6 @@ function cmdFinalize() {
     // suppressed (it is the EXPECTED happy-path output here; sink-merge fires it truthfully later).
     close_disposition: closePendingFinalize ? 'close_pending' : undefined
   });
-  closureReceipt.epoch_lineage_preserved = archiveEpochLineagePreserved(result);
   // #416: attach probe_degraded AFTER buildClosureReceipt (the builder filters by
   // CLOSURE_RECEIPT_FIELDS; probe_degraded is not in the schema yet, so attach post-build).
   if (probeDegraded) closureReceipt.probe_degraded = true;
@@ -5639,7 +5405,6 @@ function cmdWatchPr() {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
-        epoch_lineage_preserved: archiveEpochLineagePreserved(archiveResult),
         remote_issue_closed: mergedRemoteToken,
         claim_label_removed: claimLabelStatus,
         worktree_removed: worktreeRemoved,
@@ -5720,7 +5485,6 @@ function cmdWatchPr() {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
-        epoch_lineage_preserved: archiveEpochLineagePreserved(archiveResult),
         remote_issue_closed: 'skipped_offline',
         claim_label_removed: claimLabelStatus2,
         worktree_removed: worktreeRemoved,

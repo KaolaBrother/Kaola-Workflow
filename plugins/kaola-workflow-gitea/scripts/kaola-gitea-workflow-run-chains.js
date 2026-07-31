@@ -913,7 +913,7 @@ async function main(argv) {
         'Runs the four test chains (claude, codex, gitlab, gitea) and writes a chain receipt.\n' +
         'Exit 0 when all non-waived chains pass; non-zero otherwise.\n' +
         '\n' +
-        'Receipt path (#546): plan-validator --finalize-check reads <plan-dir>/.cache/chain-receipt.json.\n' +
+        'Receipt path (#546): the finalize gate reads <plan-dir>/.cache/chain-receipt.json.\n' +
         '  --project issue-N  -> kaola-workflow/issue-N/.cache/chain-receipt.json (resolved at the git top-level)\n' +
         '  --plan plan-path   -> <dir-of-plan>/.cache/chain-receipt.json (the exact plan-dir the validator derives)\n' +
         '  --output path      -> explicit override; default is <cwd>/.cache/chain-receipt.json\n' +
@@ -975,9 +975,8 @@ async function main(argv) {
   const recordOutcome = (envelope) => {
     try {
       if (!outcomeProjectDir) return;
-      const recorder = require('./kaola-gitea-workflow-adaptive-node.js');
-      recorder.appendOutcomeRecord(path.join(outcomeProjectDir, '.cache'),
-        recorder.buildOutcomeRecord({
+      adaptiveSchema.appendOutcomeRecord(path.join(outcomeProjectDir, '.cache'),
+        adaptiveSchema.buildOutcomeRecord({
           script: 'run-chains',
           op: 'run-chains',
           project: path.basename(outcomeProjectDir),

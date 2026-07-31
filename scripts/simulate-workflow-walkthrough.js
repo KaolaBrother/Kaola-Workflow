@@ -246,10 +246,9 @@ function testFinalize(tmp) {
   assert(archivedState.includes('step: complete'), 'finalize should mark archived state complete');
   assert(!archivedState.includes(retiredBlock), 'finalize should remove legacy lease blocks before archive');
   assert(!archivedState.includes(retiredSessionField), 'finalize should remove legacy session fields before archive');
-  // #324: closure normalization of the pre-run blocks writeState seeded at startup.
-  assert(!/## Pending Gates\n[\s\S]*?(?:phase1-research|workflow-plan|fast-summary)/.test(archivedState),
-    '#324: archived state Pending Gates must not retain a pre-run gate after closure, got: ' + archivedState);
-  assert(archivedState.includes('- none'), '#324: Pending Gates normalized to "- none" at closure');
+  // #324: closure normalization of the pre-run evidence writeState seeded at startup. The
+  // `## Pending Gates` half of this pin went with the block: the claim no longer seeds a gate
+  // list naming a frozen plan, so there is nothing left to normalize at closure.
   assert(!archivedState.includes('last_command: startup'), '#324: archived state must not keep last_command: startup after closure');
   assert(archivedState.includes('last_command: finalize'), '#324: archived state last_command normalized to finalize');
   assert(archivedState.includes('last_result: closed'), '#324: archived state last_result normalized to closed');
@@ -315,7 +314,6 @@ function testKeepOpenArchiveStamp() {
     const st = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'));
     assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
     assert(st.includes('step: complete'), '#333: keep-open archived state must be complete');
-    assert(st.includes('- none'), '#333: keep-open archived Pending Gates normalized to "- none"');
     assert(st.includes('last_result: closed_keep_open'),
       '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
     assert(!/next_command:.*kaola-workflow-plan-run/.test(st),
@@ -364,7 +362,6 @@ function testManualArchiveBackstop() {
       'phase: adaptive', 'workflow_path: adaptive', 'step: start',
       'next_command: /kaola-workflow-plan-run issue-210',
       'next_skill: kaola-workflow-plan-run issue-210', '',
-      '## Pending Gates', '- workflow-plan', '',
       '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
       '## Last Updated', '2020-01-01T00:00:00.000Z', '',
       '## Sink', 'branch: workflow/issue-210', 'issue_number: 210', 'sink: merge', ''
@@ -6836,19 +6833,10 @@ function testSinkMergeEmitsClosureReceipt() {
     });
     fs.writeFileSync(path.join(archiveStateDir, 'workflow-state.md'), [
       '# Kaola-Workflow State', '', '## Project', 'name: issue-164r',
-      'status: closed', 'step: complete', '', '## Planning Evidence',
-      'plan_hash: none', 'decision: none', 'first_node_id: none',
-      'first_node_role: none', '', '## Epoch Lineage',
-      'epoch_schema_version: ' + anchors164r.epoch_schema_version,
+      'status: closed', 'step: complete', '', '## Claim Identity',
       'claim_repository_id: ' + anchors164r.claim_repository_id,
-      'claim_identity_digest: ' + anchors164r.claim_identity_digest,
-      'claim_root_object_format: ' + anchors164r.claim_root_object_format,
-      'claim_root_base_commit: ' + anchors164r.claim_root_base_commit,
-      'claim_root_base_tree: ' + anchors164r.claim_root_base_tree,
-      'claim_root_base_digest: ' + anchors164r.claim_root_base_digest,
-      'epoch_lineage_id: ' + anchors164r.epoch_lineage_id,
-      'plan_epoch: 1', 'active_plan_hash: none',
-      'active_snapshot_manifest_digest: none', '', '## Sink',
+      'claim_identity_digest: ' + anchors164r.claim_identity_digest, '',
+      '## Sink',
       'issue_number: 164', 'branch: workflow/issue-164r', 'sink: merge', '',
     ].join('\n'));
 
@@ -7491,7 +7479,6 @@ function testBundleFinalizeAllOpenCloseIsPending() {
       '## Project', 'name: ' + project, 'status: active', '',
       '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
       'step: complete', 'next_command: /kaola-workflow-finalize ' + project, '',
-      '## Pending Gates', '- none', '',
       '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
       '## Last Updated', new Date().toISOString(), '',
       '## Sink', 'branch: workflow/' + project,
@@ -10019,8 +10006,8 @@ function testPlanlessAndPlannedInitialAuthority699() {
   try {
     initGitRepo(tmp);
     plantRoadmapIssue(tmp, 6992, '');
-    // startup writes the epoch-1 claim authority tuple into workflow-state.md and EXITS; later
-    // CLI processes in this scenario re-read that record from disk and their verdict is asserted.
+    // startup writes the claim record into workflow-state.md and EXITS; later CLI processes in
+    // this scenario re-read that record from disk and their verdict is asserted.
     // spawn-class: durable-handoff
     const claimed = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '6992'], {
       cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
@@ -10044,8 +10031,8 @@ function testPlanlessAndPlannedInitialAuthority699() {
       try {
         initGitRepo(root);
         plantRoadmapIssue(root, issue, '');
-        // The shared planless fixture: this process writes the canonical epoch-1 authority record and
-        // exits, and the caller process below reconstructs the claim from that record alone.
+        // The shared planless fixture: this process writes the claim record and exits, and the
+        // caller process below reconstructs the claim from that record alone.
         // spawn-class: durable-handoff
         const startup = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', String(issue)], {
           cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
@@ -10054,11 +10041,10 @@ function testPlanlessAndPlannedInitialAuthority699() {
         assert(startup.status === 0, '#699 ' + name + ' planless fixture claims successfully: '
           + startup.stderr + startup.stdout);
         const callerProject = 'issue-' + issue;
-        const before = fs.readFileSync(statePath(root, callerProject), 'utf8');
-        assert(/^plan_epoch: 1$/m.test(before) && /^active_plan_hash: none$/m.test(before)
-          && /^plan_hash: none$/m.test(before) && /^first_node_id: none$/m.test(before)
-          && /^first_node_role: none$/m.test(before),
-        '#699 ' + name + ' caller receives the canonical planless epoch-1 tuple');
+        // DELETED: "the caller receives the canonical planless epoch-1 tuple" — `plan_epoch`,
+        // `active_plan_hash`, `plan_hash`, `first_node_id` and `first_node_role`. The claim no
+        // longer writes any of them; what the caller reconstructs from disk is the claim identity,
+        // and the assertions below measure that it succeeds in doing so.
         run(root, callerProject);
         assert(!fs.existsSync(path.join(root, 'kaola-workflow', callerProject)),
           '#699 ' + name + ' removes the live project only after successful planless archive');
@@ -10187,8 +10173,10 @@ function testArchiveCallersFailClosed699() {
 }
 
 // #699: OFFLINE dominates both native worktree and in-place branch creation for
-// single/bundle claims, and initialized repositories with no commits retain a
-// cryptographic zero-commit/canonical-empty-tree root.
+// single/bundle claims — including in an initialized repository with no commits, where the claim
+// still succeeds. DELETED: the zero-commit/canonical-empty-tree root assertions. The claim root
+// base existed to anchor a re-plan epoch and is not written any more; what the no-history rows
+// still measure is that such a repository can be claimed at all.
 function testOfflineNoHistoryClaimRoot699() {
   const cases = [
     { name: 'single-history-native1', history: true, native: '1', args: ['--target-issue', '7001'], issues: [7001] },
@@ -10219,14 +10207,8 @@ function testOfflineNoHistoryClaimRoot699() {
         '#699 offline ' + row.name + ' leaves no native worktree');
       const targetRef = G.git(root, ['show-ref', '--verify', '--quiet', 'refs/heads/workflow/' + project]);
       assert(targetRef.status !== 0, '#699 offline ' + row.name + ' creates no feature branch');
-      assert(/^claim_root_base_digest: [0-9a-f]{64}$/m.test(state),
-        '#699 offline ' + row.name + ' persists a fail-closed root digest');
-      if (!row.history) {
-        const empty = G.git(root, ['hash-object', '-t', 'tree', '--stdin'], { input: '', encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } }).stdout.trim();
-        assert(/^claim_root_base_commit: 0{40}$/m.test(state)
-          && new RegExp('^claim_root_base_tree: ' + empty + '$', 'm').test(state),
-          '#699 no-history ' + row.name + ' persists the exact zero/empty tuple');
-      }
+      assert(/^claim_identity_digest: [0-9a-f]{64}$/m.test(state),
+        '#699 offline ' + row.name + ' persists a claim identity digest');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
   console.log('testOfflineNoHistoryClaimRoot699: PASSED');
@@ -11691,7 +11673,6 @@ function testBundleFinalizeRoadmapCleanup() {
       '## Project', 'name: ' + project, 'status: active', '',
       '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
       'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-      '## Pending Gates', '- none', '',
       '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
       '## Last Updated', new Date().toISOString(), '',
       '## Sink', 'branch: workflow/' + project,
@@ -12016,7 +11997,6 @@ function testFinalizeClosesIssueBundleMembers() {
       '## Project', 'name: ' + project, 'status: active', '',
       '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
       'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-      '## Pending Gates', '- none', '',
       '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
       '## Last Updated', new Date().toISOString(), '',
       '## Sink', 'branch: workflow/' + project,

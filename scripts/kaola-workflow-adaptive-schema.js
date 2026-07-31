@@ -315,38 +315,20 @@ function modelDisplay(tier) {
   };
 }
 
-// Claim-scoped epoch lineage and re-plan transaction contract. These helpers
-// stay forge-neutral and side-effect-free so every edition hashes and guards
-// the same bytes. Filesystem/Git observation lives in the replan/claim scripts;
-// this module owns only normalization, validation, and digest domains.
-const EPOCH_SCHEMA_VERSION = 2;
-// Schema 1 is a read-only compatibility receipt. New writers emit schema 2,
-// whose predecessor/source receipts make every epoch transition recursively
-// verifiable after the active transaction rotates.
-const REVIEW_REPLAN_LIMIT = 2;
-const EPOCH_STATE_FIELD_ORDER = Object.freeze([
-  'epoch_schema_version',
+// Claim identity. Forge-neutral and side-effect-free so every edition hashes the same
+// bytes; filesystem/Git observation lives in the claim script, and this module owns only
+// normalization and the digest domain.
+//
+// This was the epoch-lineage contract: it also anchored the claim root's commit/tree, the
+// active plan hash, the inherited frontier, the re-plan transaction and the replan ceiling.
+// Every one of those named a mechanism the mission list retires, so they are gone rather than
+// written as inert `none` — a record that still names something which no longer exists reads to
+// a later reader as evidence the thing is real. What survives is the answer to "whose claim is
+// this", which the durable claim record still needs.
+const CLAIM_IDENTITY_FIELD_ORDER = Object.freeze([
   'claim_repository_id',
   'claim_identity_digest',
-  'claim_root_object_format',
-  'claim_root_base_commit',
-  'claim_root_base_tree',
-  'claim_root_base_digest',
-  'epoch_lineage_id',
-  'plan_epoch',
-  'active_plan_hash',
-  'inherited_frontier_digest',
-  'inherited_frontier_classes',
-  'automatic_review_replans',
-  'authorized_epoch_ceiling',
-  'case_b_exemption_consumed',
-  'replan_status',
-  'replan_transaction_id',
-  'replan_phase',
-  'active_snapshot_manifest_digest',
 ]);
-const HEX64_RE = /^[0-9a-f]{64}$/i;
-const OBJECT_ID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -418,9 +400,6 @@ function normalizeIssueNumbers(values) {
 
 function buildClaimIdentity(input) {
   if (!isPlainObject(input)) throw new Error('claim_identity_invalid');
-  if (input.schema_version != null && input.schema_version !== EPOCH_SCHEMA_VERSION) {
-    throw new Error('claim_identity_schema_invalid');
-  }
   const issueNumbers = normalizeIssueNumbers(input.issue_numbers);
   const primaryIssue = Number(input.primary_issue);
   if (!Number.isSafeInteger(primaryIssue) || !issueNumbers.includes(primaryIssue)) {
@@ -431,7 +410,6 @@ function buildClaimIdentity(input) {
   const worktreePath = nonEmptyString(input.worktree_path, 'claim_worktree_path_invalid');
   if (!require('path').isAbsolute(worktreePath)) throw new Error('claim_worktree_path_invalid');
   return {
-    schema_version: EPOCH_SCHEMA_VERSION,
     repository_id: nonEmptyString(input.repository_id, 'claim_repository_id_invalid'),
     issue_numbers: issueNumbers,
     primary_issue: primaryIssue,
@@ -444,52 +422,8 @@ function buildClaimIdentity(input) {
   };
 }
 
-function buildClaimRootBase(input) {
-  if (!isPlainObject(input)) throw new Error('claim_root_base_invalid');
-  if (input.schema_version != null && input.schema_version !== EPOCH_SCHEMA_VERSION) {
-    throw new Error('claim_root_schema_invalid');
-  }
-  const objectFormat = String(input.object_format || '').toLowerCase();
-  if (!['sha1', 'sha256'].includes(objectFormat)) throw new Error('claim_root_object_format_invalid');
-  const commit = String(input.commit || '').toLowerCase();
-  const tree = String(input.tree || '').toLowerCase();
-  const objectLength = objectFormat === 'sha1' ? 40 : 64;
-  const re = new RegExp('^[0-9a-f]{' + objectLength + '}$');
-  if (!re.test(commit) || !re.test(tree)) throw new Error('claim_root_object_id_invalid');
-  return {
-    schema_version: EPOCH_SCHEMA_VERSION,
-    object_format: objectFormat,
-    commit,
-    tree,
-    branch: nonEmptyString(input.branch, 'claim_root_branch_invalid'),
-  };
-}
-
-function buildEpochLineage(identityInput, rootInput) {
-  const claim_identity = buildClaimIdentity(identityInput);
-  const claim_root_base = buildClaimRootBase(rootInput);
-  const claim_identity_digest = sha256Canonical(claim_identity);
-  const claim_root_base_digest = sha256Canonical(claim_root_base);
-  const epoch_lineage_id = sha256Canonical({
-    schema_version: EPOCH_SCHEMA_VERSION,
-    claim_identity_digest,
-    claim_root_base_digest,
-  });
-  return {
-    claim_identity,
-    claim_identity_digest,
-    claim_root_base,
-    claim_root_base_digest,
-    epoch_lineage_id,
-  };
-}
-
-// #699: the canonical scalar epoch envelope shared by current-state and
-// recursive-snapshot authority readers. A schema-2 state is not identified by
-// field width alone: its lineage id is the canonical digest of the persisted
-// claim-identity/root digests. Keep this pure so every destructive consumer can
-// compose the same typed refusal through its shared verifier instead of
-// reimplementing partial presence checks.
+// Flat `key: value` reader over workflow-state.md. Heading-blind by design: the claim record
+// is a small set of scalars and every consumer wants the value, not the section it sits in.
 function parseStateFields(content) {
   const out = Object.create(null);
   for (const line of String(content || '').split(/\r?\n/)) {
@@ -499,20 +433,20 @@ function parseStateFields(content) {
   return out;
 }
 
-function writeEpochStateBlock(content, values) {
+function writeClaimIdentityBlock(content, values) {
   const original = String(content || '');
   const current = parseStateFields(original);
   const merged = Object.assign({}, current, values || {});
-  // Epoch fields have one canonical home. Strip duplicate scalar lines from
-  // legacy/adversarial sections before inserting the authoritative block so a
-  // later duplicate cannot override the cache/transaction fence parser.
-  const epochKeys = new Set(EPOCH_STATE_FIELD_ORDER);
+  // Claim-identity fields have one canonical home. Strip duplicate scalar lines from
+  // legacy/adversarial sections before inserting the authoritative block so a later
+  // duplicate cannot override what a reader takes for the claim's identity.
+  const identityKeys = new Set(CLAIM_IDENTITY_FIELD_ORDER);
   const text = original.split(/\r?\n/).filter(line => {
     const match = /^([A-Za-z][A-Za-z0-9_]*):/.exec(line);
-    return !match || !epochKeys.has(match[1]);
+    return !match || !identityKeys.has(match[1]);
   }).join('\n');
-  const lines = ['## Epoch Lineage'];
-  for (const key of EPOCH_STATE_FIELD_ORDER) {
+  const lines = ['## Claim Identity'];
+  for (const key of CLAIM_IDENTITY_FIELD_ORDER) {
     let value = merged[key];
     if (value === undefined || value === null || value === '') value = 'none';
     if (Array.isArray(value)) value = value.length ? value.join(',') : 'none';
@@ -520,7 +454,7 @@ function writeEpochStateBlock(content, values) {
     lines.push(key + ': ' + value);
   }
   const block = lines.join('\n') + '\n';
-  const heading = /^## Epoch Lineage[ \t]*$/m;
+  const heading = /^## Claim Identity[ \t]*$/m;
   const match = heading.exec(text);
   if (match) {
     const next = /^## [^\n]+$/gm;
@@ -2163,9 +2097,7 @@ module.exports = {
   effortForProvider,
   mapTier,
   dispatchEffortOpencode,
-  EPOCH_SCHEMA_VERSION,
-  REVIEW_REPLAN_LIMIT,
-  EPOCH_STATE_FIELD_ORDER,
+  CLAIM_IDENTITY_FIELD_ORDER,
   isPlainObject,
   canonicalJson,
   sha256Hex,
@@ -2173,10 +2105,8 @@ module.exports = {
   // #777 — ledger tamper-evidence hash chain
   normalizeIssueNumbers,
   buildClaimIdentity,
-  buildClaimRootBase,
-  buildEpochLineage,
   parseStateFields,
-  writeEpochStateBlock,
+  writeClaimIdentityBlock,
   parseValidatedCandidateHash,
   parseRecordedVerdict,
   // #761: the OPTIONAL expansion_id binding on a review-journal attempt (a re-review names WHICH

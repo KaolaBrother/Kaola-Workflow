@@ -58,14 +58,11 @@ const active = require('./kaola-gitlab-workflow-active-folders');
 const classifier = require('./kaola-gitlab-workflow-classifier');
 const claim = require('./kaola-gitlab-workflow-claim');
 const roadmap = require('./kaola-gitlab-workflow-roadmap');
-const repair = require('./kaola-gitlab-workflow-repair-state');
-const planValidator = require('./kaola-gitlab-workflow-plan-validator');
 
 const claimScript = path.join(__dirname, 'kaola-gitlab-workflow-claim.js');
 const roadmapScript = path.join(__dirname, 'kaola-gitlab-workflow-roadmap.js');
 const classifierScript = path.join(__dirname, 'kaola-gitlab-workflow-classifier.js');
 const closureAuditScript = path.join(__dirname, 'kaola-gitlab-workflow-closure-audit.js');
-const planValidatorScript = path.join(__dirname, 'kaola-gitlab-workflow-plan-validator.js');
 
 function withForge(stubs, fn) {
   const originals = {};
@@ -135,79 +132,6 @@ function writeState(root, project, issueIid, extra) {
   return dir;
 }
 
-// #725: the retired fast N/A gate let a plan-absent finalize succeed by marking the state
-// `workflow_path: fast`. Post-retirement that shortcut is illegal (finalize refuses
-// adaptive_plan_missing), so this fixture seeds the minimum an authored adaptive run leaves behind
-// — a frozen adaptive plan (all nodes complete) + a gate-passing consumer final-validation.md — so
-// finalize's adaptive `--finalize-check` proceeds to the archive/closure behavior the fixture asserts.
-function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
-  const dir = path.join(fixtureRoot, 'kaola-workflow', project);
-  fs.mkdirSync(dir, { recursive: true });
-  const planPath = path.join(dir, 'workflow-plan.md');
-  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
-  const nodesTable = paths.length ? [
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
-    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
-    '| n4 | finalize | n3 | — | 1 | sequence |',
-  ] : [
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | finalize | n1 | — | 1 | sequence |',
-  ];
-  const ledgerRows = paths.length
-    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
-    : ['| n1 | complete |', '| n2 | complete |'];
-  const complianceRows = paths.length ? [
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
-    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
-    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
-  ] : [
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
-  ];
-  const tasks = paths.length ? [
-    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
-    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-  ] : [
-    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-  ];
-  const planBody = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    ...nodesTable, '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
-    ...ledgerRows, '',
-    '## Required Agent Compliance', '',
-    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
-    ...complianceRows, ''
-  ].join('\n');
-  const planHash = planValidator.computePlanHash(planBody);
-  fs.writeFileSync(planPath, '<!-- plan_hash: ' + planHash + ' -->\n\n' + planBody);
-  const glVal = (a) => spawnSync(process.execPath, [planValidatorScript, ...a], { cwd: fixtureRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  let finalHash = '';
-  try { finalHash = JSON.parse(glVal([planPath, '--freeze', '--json']).stdout).planHash || ''; } catch (_) {}
-  const sFile = path.join(dir, 'workflow-state.md');
-  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
-    const s = fs.readFileSync(sFile, 'utf8')
-      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
-      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
-      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
-      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
-    fs.writeFileSync(sFile, s);
-    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
-  }
-  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
-  let cand = '';
-  try { cand = JSON.parse(glVal([planPath, '--candidate-hash', '--json']).stdout).validated_candidate_hash || ''; } catch (_) {}
-  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
-    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
-}
 
 function trustCodexProject(homeRoot, projectRoot) {
   const configPath = path.join(homeRoot, '.codex', 'config.toml');
@@ -1236,9 +1160,6 @@ withForge({
     result = G.git(root, ['worktree', 'add', '-b', 'workflow/gitlab-issue-71', '--', wtFinalize, 'HEAD'], { encoding: 'utf8' });
     assert.strictEqual(result.status, 0, result.stderr);
     writeState(root, 'finalize-project', 71, 'worktree_path: ' + wtFinalize);
-    // This fixture validates worktree retention and archive movement, not the
-    // adaptive gate itself, so it seeds a gate-passing adaptive plan before finalize.
-    seedAdaptiveFinalizeFixture(root, 'finalize-project');
     runNode([claimScript, 'finalize', '--project', 'finalize-project', '--keep-worktree'], root);
     assert(fs.existsSync(wtFinalize), 'GitLab keep-worktree finalize should preserve worktree for final commit');
     assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'finalize-project')), 'GitLab keep-worktree finalize should archive active folder');
@@ -1548,86 +1469,6 @@ withForge({
   }
 }
 
-// --- Task B: Gap 5 — repair() terminal-complete detection (numbered-phase forward
-// reconstruction retired with the full path; terminal finalization detection survives) ---
-{
-  // valid + complete
-  const root = tempRoot('kw-gl-repair-complete-');
-  try {
-    const dir = writeState(root, 'complete-project', 83);
-    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n');
-    const result = repair.repair('complete-project', root);
-    assert.strictEqual(result.repaired, false);
-    assert.strictEqual(result.complete, true);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-// --- Task B: Gap 5 — stateContent ownership block + last_result rename ---
-{
-  const route4 = {
-    root: '/tmp',
-    phaseFile: '/tmp/phase4-tdd.md',
-    project: 'gap5-project',
-    phase: 4,
-    phaseName: 'TDD',
-    step: 'implement',
-    task: 'write tests',
-    nextCommand: '/kaola-workflow-phase4 gap5-project',
-    nextSkill: 'kaola-workflow-execute gap5-project',
-    pendingGates: []
-  };
-  const out4 = repair.stateContent(route4, '');
-  assert(out4.includes('## Ownership Rules'), 'Gap5/phase4: output should include ## Ownership Rules section');
-  assert(out4.includes('implementation_owner: tdd-guide'), 'Gap5/phase4: implementation_owner should be tdd-guide');
-  assert(out4.includes('fix_owner: tdd-guide or build-error-resolver'), 'Gap5/phase4: fix_owner should be tdd-guide or build-error-resolver');
-  assert(out4.includes('inline_emergency_fallback_authorized: no'), 'Gap5/phase4: inline_emergency_fallback_authorized should be no');
-  assert(out4.includes('last_result: state_repaired_from_artifacts'), 'Gap5/phase4: last_result should be state_repaired_from_artifacts');
-}
-
-{
-  const route2 = {
-    root: '/tmp',
-    phaseFile: '/tmp/phase2-research.md',
-    project: 'gap5-project',
-    phase: 2,
-    phaseName: 'Research',
-    step: 'gather',
-    task: 'read docs',
-    nextCommand: '/kaola-workflow-phase2 gap5-project',
-    nextSkill: 'kaola-workflow-research gap5-project',
-    pendingGates: []
-  };
-  const out2 = repair.stateContent(route2, '');
-  assert(out2.includes('implementation_owner: N/A'), 'Gap5/phase2: implementation_owner should be N/A');
-  assert(out2.includes('fix_owner: N/A'), 'Gap5/phase2: fix_owner should be N/A');
-}
-
-{
-  const routePos = {
-    root: '/tmp',
-    phaseFile: '/tmp/phase3-plan.md',
-    project: 'gap5-project',
-    phase: 3,
-    phaseName: 'Plan',
-    step: 'plan',
-    task: 'write plan',
-    nextCommand: '/kaola-workflow-phase3 gap5-project',
-    nextSkill: 'kaola-workflow-plan gap5-project',
-    pendingGates: []
-  };
-  const outPos = repair.stateContent(routePos, '');
-  const idxPending = outPos.indexOf('## Pending Gates');
-  const idxOwnership = outPos.indexOf('## Ownership Rules');
-  const idxEvidence = outPos.indexOf('## Last Evidence');
-  assert(idxOwnership >= 0, 'Gap5/position: ## Ownership Rules must be present');
-  assert(idxPending >= 0, 'Gap5/position: ## Pending Gates must be present');
-  assert(idxEvidence >= 0, 'Gap5/position: ## Last Evidence must be present');
-  assert(idxOwnership > idxPending, 'Gap5/position: ## Ownership Rules must appear after ## Pending Gates');
-  assert(idxOwnership < idxEvidence, 'Gap5/position: ## Ownership Rules must appear before ## Last Evidence');
-}
-
 // Fix 2a: classifyIssue parallel_mode bypass
 {
   const tempHome = tempRoot('kw-gl-ciy-bypass-');
@@ -1765,9 +1606,6 @@ withForge({
   }
 }
 
-// #725: the Issue #107 phase4-progress → Finalization reconstruction tests are retired with the
-// numbered full path — repair-state no longer forward-reconstructs numbered phases (it reconstructs
-// only adaptive projects from workflow-plan.md, else a clean "no adaptive plan available" refusal).
 
 function testStaleWorktreeCheck() {
   // Helper: initGitRepo adapted for a fresh isolated tmp each sub-case
@@ -1916,6 +1754,11 @@ function testStaleWorktreeCheck() {
 
 const gitlabPluginRoot = path.resolve(__dirname, '..');
 const installProfilesScript = path.join(gitlabPluginRoot, 'scripts', 'install-codex-agent-profiles.js');
+// Derived from the plugin's own roster rather than pinned as an integer. The installer's contract is
+// "install exactly the roster it ships", so measuring the roster is the assertion; a hard-coded count
+// only turns every roster change into a false red in a file that has nothing to do with the roster.
+const GL_ROSTER_TOMLS = fs.readdirSync(path.join(gitlabPluginRoot, 'agents'))
+  .filter(f => f.endsWith('.toml')).sort();
 
 function runInstallProfiles(target, extraEnv, extraArgs) {
   const args = (extraArgs && extraArgs.length) ? extraArgs : [];
@@ -2074,13 +1917,11 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('[agents.code-explorer]'), 'fresh install should include managed [agents.*] entries');
     // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
     // this dir, so count TOML entries only (raw readdir includes the manifest dotfile).
-    // #451: 13 base role profiles (the <role>-max effort variants are retired; issue-scout
-    // retired #789; investigator added #798; contractor retired #816).
-    const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
+        const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      15,
-      'should install 15 agent TOML files (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, investigator added #798, contractor retired #816)'
+      GL_ROSTER_TOMLS.length,
+      'the installer must place exactly the roster the plugin ships'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
@@ -3466,36 +3307,23 @@ testGitlabLegacyWorktreeCleanupDryRun();
 // ---------------------------------------------------------------------------
 
 const gitlabPreflightScript     = path.join(gitlabPluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-const gitlabTaskMirrorScript    = path.join(gitlabPluginRoot, 'scripts', 'kaola-gitlab-workflow-task-mirror.js');
 const gitlabCompactResumeScript = path.join(gitlabPluginRoot, 'scripts', 'kaola-gitlab-workflow-codex-compact-resume.js');
 
-// Shared frozen plan fixture (consistent across editions)
-const GITLAB_FIXTURE_PLAN_HASH = 'f59d3465f4ca7584eba5f7d04446bf2914e019ba1aa4511c5a25f4e65a80497e';
-const GITLAB_FIXTURE_PLAN = [
-  '# Workflow Plan',
-  `<!-- plan_hash: ${GITLAB_FIXTURE_PLAN_HASH} -->`,
+// Shared mission-list fixture (consistent across editions)
+const GITLAB_FIXTURE_MISSION_LIST = [
+  '# Retire the node executor and land the mission list',
   '',
-  '## Meta',
-  'labels: enhancement',
+  '- item: extract what is load-bearing before the host dies',
+  '  status: done',
+  '  dispatched: extract subagent, output to the shared kernel',
+  '  result: scripts/kaola-workflow-adaptive-schema.js',
   '',
-  '## Nodes',
+  '- item: delete the node executor and re-wire everything that names it',
+  '  status: in-flight',
+  '  dispatched: demolish subagent, deletions land across scripts/ and plugins/',
   '',
-  '| id | role | depends_on | declared_write_set | cardinality | shape |',
-  '|---|---|---|---|---|---|',
-  '| explore | code-explorer | — | — | 1 | sequence |',
-  '| impl | implementer | explore | src/x.js | 1 | sequence |',
-  '| gate | code-reviewer | impl | — | 1 | sequence |',
-  '| done | finalize | gate | — | 1 | sequence |',
-  '',
-  '## Node Ledger',
-  '',
-  '| id | status |',
-  '|---|---|',
-  '| explore | complete |',
-  '| impl | in_progress |',
-  '| gate | pending |',
-  '| done | n/a |',
-  'consent_halt: pending',
+  '- item: rewrite the routing surfaces',
+  '  status: todo',
   ''
 ].join('\n');
 
@@ -3507,7 +3335,7 @@ function testGitlabPreflight266() {
   const hEnvGl = { ...process.env, HOME: emptyHomeGl, USERPROFILE: emptyHomeGl };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-preflight-'));
   try {
-    // Install all 15 profiles into the fixture (13 base + synthesizer #463 + metric-optimizer #634; issue-scout retired #789, investigator added #798, contractor retired #816)
+    // Install every shipped profile into the fixture.
     const installResult = spawnSync(process.execPath, [installProfilesScript, root], {
       cwd: gitlabPluginRoot, encoding: 'utf8'
     });
@@ -3627,7 +3455,7 @@ function testGitlabPreflight266() {
           'explicitRequestOnly', '#775 gl effort INSIDE the [agents] table is not a valid TOML root key -> ignored');
 
         fs.writeFileSync(configPath, origConfig);
-        const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
+        const staleConfig = origConfig.replace('[agents.planner]', '[agents.STALE-planner]');
         fs.writeFileSync(configPath, staleConfig);
 
     const staleResult = spawnSync(process.execPath,
@@ -3638,8 +3466,8 @@ function testGitlabPreflight266() {
     const staleJson = JSON.parse(staleResult.stdout);
     assert.strictEqual(staleJson.status, 'config_stale',
       '#266 gl case1: must return config_stale, got ' + staleJson.status);
-    assert.ok(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('workflow-planner'),
-      '#266 gl case1: missing_roles must include workflow-planner, got ' + JSON.stringify(staleJson.missing_roles));
+    assert.ok(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('planner'),
+      '#266 gl case1: missing_roles must include planner, got ' + JSON.stringify(staleJson.missing_roles));
 
     // --- Case 1 GREEN (autofix): ---
     const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-preflight-autofix-'));
@@ -3668,7 +3496,7 @@ function testGitlabPreflight266() {
     fs.writeFileSync(configPath, origConfig);
 
     // --- Case 2 RED: remove a profile toml file → profiles_missing ---
-    const wpToml = path.join(root, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml');
+    const wpToml = path.join(root, '.codex', 'agents', 'kaola-workflow', 'planner.toml');
     const savedToml = fs.readFileSync(wpToml);
     fs.unlinkSync(wpToml);
 
@@ -3680,8 +3508,8 @@ function testGitlabPreflight266() {
     const missingJson = JSON.parse(missingResult.stdout);
     assert.strictEqual(missingJson.status, 'profiles_missing',
       '#266 gl case2: must return profiles_missing, got ' + missingJson.status);
-    assert.ok(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('workflow-planner'),
-      '#266 gl case2: missing_roles must include workflow-planner');
+    assert.ok(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('planner'),
+      '#266 gl case2: missing_roles must include planner');
 
     // Restore toml
     fs.writeFileSync(wpToml, savedToml);
@@ -3838,7 +3666,7 @@ function testGitlabPreflight571() {
     });
     assert.strictEqual(setupC.status, 0, '#571 gl test(c): setup install must exit 0');
     fs.unlinkSync(
-      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml'));
+      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'planner.toml'));
 
     const emptyProject571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571c-proj-'));
     try {
@@ -3864,8 +3692,8 @@ function testGitlabPreflight571() {
     assert.strictEqual(globalFlagInstall.status, 0,
       '#571 gl test(a2): --global flag install must exit 0: ' + globalFlagInstall.stderr);
     assert.ok(
-      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml')),
-      '#571 gl test(a2): --global flag must write workflow-planner.toml to tempHome/.codex');
+      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'planner.toml')),
+      '#571 gl test(a2): --global flag must write planner.toml to tempHome/.codex');
   } finally {
     fs.rmSync(tempHome571flag, { recursive: true, force: true });
   }
@@ -3883,13 +3711,13 @@ function gitlabListTomls(dir) {
 function testInstallSchemaPruneManifest332Gitlab() {
   const manifestBase = '.kaola-managed-profiles.json';
 
-  // AC3: fresh install — exactly 15 tomls (13 base + synthesizer #463 + metric-optimizer #634; issue-scout retired #789, investigator added #798, contractor retired #816), no docs-lookup, name on each, manifest, sentinel.
+  // AC3: fresh install — exactly the shipped roster, no docs-lookup, name on each, manifest, sentinel.
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-install-fresh-'));
   try {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = gitlabListTomls(agentsDir);
-    assert.strictEqual(tomls.length, 15, '#463 gl AC: fresh install must place 15 *.toml (13 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789, investigator added #798, contractor retired #816)');
+    assert.deepStrictEqual(tomls, GL_ROSTER_TOMLS, '#332 gl AC3: fresh install must place exactly the roster the plugin ships');
     assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gl AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -3898,7 +3726,7 @@ function testInstallSchemaPruneManifest332Gitlab() {
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gl AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, 15, '#463 gl AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
+    assert.strictEqual(manifest.roles.length, GL_ROSTER_TOMLS.length, '#332 gl AC3: manifest must list every shipped role');
     for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(gitlabPluginRoot, 'agents', file));
@@ -4103,81 +3931,6 @@ function testGitlabPreflight332() {
   }
 }
 
-// Case 3: task-mirror regeneration (gitlab edition)
-function testGitlabTaskMirror266() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-taskmirror-'));
-  try {
-    const projectName = 'issue-266-mirror';
-    const projDir = path.join(root, 'kaola-workflow', projectName);
-    fs.mkdirSync(projDir, { recursive: true });
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), GITLAB_FIXTURE_PLAN);
-
-    const NOW = '2026-06-07T12:00:00.000Z';
-
-    // --- GREEN: run task-mirror → produces correct JSON ---
-    const r1 = spawnSync(process.execPath,
-      [gitlabTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
-      { cwd: root, encoding: 'utf8' });
-    assert.strictEqual(r1.status, 0,
-      '#266 gl case3: task-mirror must exit 0, got ' + r1.status + '\n' + r1.stderr);
-    const mirror1 = JSON.parse(r1.stdout);
-    assert.strictEqual(mirror1.source_plan_hash, GITLAB_FIXTURE_PLAN_HASH,
-      '#266 gl case3: source_plan_hash mismatch, got ' + mirror1.source_plan_hash);
-    assert.ok(Array.isArray(mirror1.tasks) && mirror1.tasks.length === 4,
-      '#266 gl case3: expected 4 tasks, got ' + mirror1.tasks.length);
-    assert.strictEqual(mirror1.last_synced_from_ledger, NOW,
-      '#266 gl case3: last_synced_from_ledger mismatch, got ' + mirror1.last_synced_from_ledger);
-
-    // --- Verify all 4 ledger→status mappings ---
-    const byId = Object.fromEntries(mirror1.tasks.map(t => [t.id, t]));
-    assert.ok(byId.explore.status === 'completed' && byId.explore.ledger_status === 'complete',
-      '#266 gl case3: explore mapping wrong, got ' + JSON.stringify(byId.explore));
-    assert.ok(byId.impl.status === 'in_progress' && byId.impl.ledger_status === 'in_progress',
-      '#266 gl case3: impl mapping wrong, got ' + JSON.stringify(byId.impl));
-    assert.ok(byId.gate.status === 'pending' && byId.gate.ledger_status === 'pending',
-      '#266 gl case3: gate mapping wrong, got ' + JSON.stringify(byId.gate));
-    assert.ok(byId.done.status === 'completed' && byId.done.ledger_status === 'n/a',
-      '#266 gl case3: done (n/a) mapping wrong, got ' + JSON.stringify(byId.done));
-
-    // --- Determinism: same --now ⇒ identical output ---
-    const r2 = spawnSync(process.execPath,
-      [gitlabTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
-      { cwd: root, encoding: 'utf8' });
-    assert.strictEqual(r1.stdout, r2.stdout,
-      '#266 gl case3 det: two runs must produce identical stdout');
-
-    // --- RED discriminator: unfrozen plan → non-zero exit ---
-    const unfrozenPlan = GITLAB_FIXTURE_PLAN.replace(
-      `<!-- plan_hash: ${GITLAB_FIXTURE_PLAN_HASH} -->`, '');
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), unfrozenPlan);
-    const rUnfrozen = spawnSync(process.execPath,
-      [gitlabTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
-      { cwd: root, encoding: 'utf8' });
-    assert.notStrictEqual(rUnfrozen.status, 0,
-      '#266 gl case3 RED: unfrozen plan must cause non-zero exit, got ' + rUnfrozen.status);
-
-    // --- Stale-hash regeneration ---
-    const FAKE_HASH = 'a'.repeat(64);
-    const staleHashPlan = GITLAB_FIXTURE_PLAN.replace(
-      `<!-- plan_hash: ${GITLAB_FIXTURE_PLAN_HASH} -->`,
-      `<!-- plan_hash: ${FAKE_HASH} -->`);
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), staleHashPlan);
-    const rStale = spawnSync(process.execPath,
-      [gitlabTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
-      { cwd: root, encoding: 'utf8' });
-    assert.strictEqual(rStale.status, 0,
-      '#266 gl case3 stale-hash: must exit 0, got ' + rStale.status + '\n' + rStale.stderr);
-    const mirrorStale = JSON.parse(rStale.stdout);
-    assert.strictEqual(mirrorStale.source_plan_hash, FAKE_HASH,
-      '#266 gl case3 stale-hash: output hash must reflect new plan_hash');
-    assert.notStrictEqual(mirrorStale.source_plan_hash, GITLAB_FIXTURE_PLAN_HASH,
-      '#266 gl case3 stale-hash: stale mirror must NOT carry old hash');
-
-    console.log('testGitlabTaskMirror266 (#266 case 3): PASSED');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
 
 // Case 4: compact/resume packet (gitlab edition)
 function testGitlabCompactResume266() {
@@ -4195,72 +3948,62 @@ function testGitlabCompactResume266() {
       '## Sink',
       'branch: workflow/issue-266',
       'issue_number: 266',
-      'next_command: /kaola-workflow-plan-run',
+      'next_command: /kaola-workflow-next',
       'next_skill: kaola-workflow-next',
       ''
     ].join('\n'));
 
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), GITLAB_FIXTURE_PLAN);
-
-    const tasksJson = JSON.stringify({
-      source_plan_hash: GITLAB_FIXTURE_PLAN_HASH,
-      tasks: [
-        { id: 'explore', role: 'code-explorer', status: 'completed', ledger_status: 'complete' },
-        { id: 'impl',    role: 'implementer',   status: 'in_progress', ledger_status: 'in_progress' },
-        { id: 'gate',    role: 'code-reviewer', status: 'pending',    ledger_status: 'pending' },
-        { id: 'done',    role: 'finalize',       status: 'completed',  ledger_status: 'n/a' }
-      ],
-      last_synced_from_ledger: '2026-06-07T12:00:00.000Z'
-    }, null, 2) + '\n';
-    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'), tasksJson);
+    fs.writeFileSync(path.join(projDir, 'mission-list.md'), GITLAB_FIXTURE_MISSION_LIST);
 
     const input = JSON.stringify({ cwd: root });
 
-    // --- GREEN: run compact-resume → deterministic 7-line packet ---
+    // --- GREEN: run compact-resume → deterministic 6-line packet ---
     const r1 = spawnSync(process.execPath, [gitlabCompactResumeScript],
       { input, encoding: 'utf8' });
     assert.strictEqual(r1.status, 0,
       '#266 gl case4: compact-resume must exit 0, got ' + r1.status + '\n' + r1.stderr);
     const lines1 = r1.stdout.trim().split('\n');
-    assert.strictEqual(lines1.length, 7,
-      '#266 gl case4: packet must have 7 lines, got ' + lines1.length + '\n' + r1.stdout);
+    assert.strictEqual(lines1.length, 6,
+      '#266 gl case4: packet must have 6 lines, got ' + lines1.length + '\n' + r1.stdout);
 
     assert.strictEqual(lines1[0], 'Kaola-Workflow compact resume:',
       '#266 gl case4: line[0] must be header, got ' + lines1[0]);
     assert.ok(lines1[1].includes('issue-266-compact'),
       '#266 gl case4: active project must include project name, got ' + lines1[1]);
-    assert.ok(lines1[3].includes('impl') && lines1[3].includes('implementer'),
-      '#266 gl case4: in-progress node must show impl+role, got ' + lines1[3]);
-    assert.ok(lines1[4].includes('gate'),
-      '#266 gl case4: pending gates must include gate, got ' + lines1[4]);
-    assert.ok(lines1[5].includes('consent_halt=pending'),
-      '#266 gl case4: consent-halt must show pending, got ' + lines1[5]);
-    assert.ok(lines1[6].includes('completed: 2') && lines1[6].includes('in_progress: 1'),
-      '#266 gl case4: task mirror must show correct counts, got ' + lines1[6]);
-
-    // --- #334 case4b: a pending main-session-gate must appear in the pending-gates packet line.
-    // Separate root + small fixture (NOT GITLAB_FIXTURE_PLAN, whose hash is asserted elsewhere).
-    // RED before the GATE_VERDICT_ROLES edit: the role was not in the set → the line read 'none'.
-    { const root334 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-334-compact-'));
-      try {
-        const pj = 'issue-334-vgate';
-        const pd = path.join(root334, 'kaola-workflow', pj);
-        fs.mkdirSync(pd, { recursive: true });
-        fs.writeFileSync(path.join(pd, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + pj, 'status: active', '', '## Sink', 'branch: workflow/issue-334', 'issue_number: 334', 'next_command: /kaola-workflow-plan-run', 'next_skill: kaola-workflow-next', ''].join('\n'));
-        fs.writeFileSync(path.join(pd, 'workflow-plan.md'), ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |', ''].join('\n'));
-        const r334 = spawnSync(process.execPath, [gitlabCompactResumeScript], { input: JSON.stringify({ cwd: root334 }), encoding: 'utf8' });
-        assert.strictEqual(r334.status, 0, '#334 gl case4b: compact-resume must exit 0, got ' + r334.status + '\n' + r334.stderr);
-        const gateLine = r334.stdout.trim().split('\n').find(l => l.startsWith('pending gates:'));
-        assert.ok(gateLine && /\bvgate\b/.test(gateLine),
-          '#334 gl case4b: a pending main-session-gate (vgate) must appear in the pending-gates line, got: ' + gateLine);
-      } finally { fs.rmSync(root334, { recursive: true, force: true }); }
-    }
+    // The goal is the mission list's H1 — the one thing a zero-context successor needs first.
+    assert.ok(lines1[2].includes('Retire the node executor'),
+      '#266 gl case4: goal line must carry the mission list H1, got ' + lines1[2]);
+    // In-flight items are the decision to make, so each must carry its dispatched locator:
+    // "look for the work, not the worker" needs somewhere to look.
+    assert.ok(lines1[4].includes('delete the node executor'),
+      '#266 gl case4: in-flight line must name the in-flight item, got ' + lines1[4]);
+    assert.ok(lines1[4].includes('dispatched:') && lines1[4].includes('demolish subagent'),
+      '#266 gl case4: in-flight line must carry the dispatched locator, got ' + lines1[4]);
+    assert.ok(!lines1[4].includes('extract subagent'),
+      '#266 gl case4: a done item must not appear on the in-flight line, got ' + lines1[4]);
+    assert.ok(lines1[5].includes('done: 1') && lines1[5].includes('in-flight: 1') && lines1[5].includes('todo: 1'),
+      '#266 gl case4: progress line must count every status, got ' + lines1[5]);
 
     // --- Determinism: two runs → identical stdout ---
     const r2 = spawnSync(process.execPath, [gitlabCompactResumeScript],
       { input, encoding: 'utf8' });
     assert.strictEqual(r1.stdout, r2.stdout,
       '#266 gl case4 det: two compact-resume runs must produce identical stdout');
+
+    // --- A claim with no mission list yet is a normal state, not an error: the file is a
+    // convention, not a precondition. The packet still resumes the claim.
+    fs.rmSync(path.join(projDir, 'mission-list.md'));
+    const rNoList = spawnSync(process.execPath, [gitlabCompactResumeScript],
+      { input, encoding: 'utf8' });
+    assert.strictEqual(rNoList.status, 0,
+      '#266 gl case4: a claim with no mission list must still exit 0, got ' + rNoList.status);
+    const linesNoList = rNoList.stdout.trim().split('\n');
+    assert.strictEqual(linesNoList.length, 6,
+      '#266 gl case4: packet shape must not depend on the mission list existing, got ' + linesNoList.length);
+    assert.ok(linesNoList[2].includes('unknown'),
+      '#266 gl case4: an absent mission list must read as an unknown goal, got ' + linesNoList[2]);
+    assert.ok(linesNoList[5].includes('done: 0') && linesNoList[5].includes('todo: 0'),
+      '#266 gl case4: an absent mission list must count zero items, got ' + linesNoList[5]);
 
     // --- RED discriminator: no workflow-state → empty stdout ---
     const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-compact-empty-'));
@@ -4281,47 +4024,6 @@ function testGitlabCompactResume266() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// #261 forge-parity: barrierCheck foreign-archive carveout (pure-fn, no git repo).
-// AC3: --barrier-check must REFUSE a foreign project's archive band while still
-// exempting the finalized project's own archive band (incl. .archived- suffix).
-// Ported from base scripts/test-commit-node.js Test 6 (forge-parity follow-up).
-// ---------------------------------------------------------------------------
-function testGitlabForeignArchiveBarrier261() {
-  const minimalPlan = [
-    '# Workflow Plan — issue #261', '', '## Meta', 'labels: refactor', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| impl | tdd-guide | — | scripts/kaola-gitlab-workflow-plan-validator.js | 1 | sequence |',
-    '| done | finalize | impl | — | 1 | sequence |', '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
-    '| impl | complete |', '| done | complete |', '',
-  ].join('\n');
-
-  // 6a: foreign archive REFUSED — a write to another project's archive band must be refused.
-  {
-    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-999/x.md'], { project: 'issue-261' });
-    assert.strictEqual(r.result, 'refuse', '#261 gl 6a: foreign archive write must be refused (RED→GREEN AC3)');
-    assert.ok(r.errors && r.errors.join(' ').toLowerCase().includes('foreign'), '#261 gl 6a: error message must mention FOREIGN');
-  }
-  // 6b: own archive PASSES — a write to the finalized project's own archive band must pass.
-  {
-    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-261/x.md'], { project: 'issue-261' });
-    assert.strictEqual(r.result, 'pass', '#261 gl 6b: own archive write must pass');
-  }
-  // 6c: suffix-tolerant — .archived-<timestamp> suffix on the own archive dir must still pass.
-  {
-    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-261.archived-2026-01-01T00-00-00/x.md'], { project: 'issue-261' });
-    assert.strictEqual(r.result, 'pass', '#261 gl 6c: own archive with .archived- suffix must pass');
-  }
-  // 6d: backward-compat — no project arg, non-archive workflow artifact must still pass.
-  {
-    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/p/workflow-plan.md'], {});
-    assert.strictEqual(r.result, 'pass', '#261 gl 6d: backward-compat — non-archive workflow artifact, no project, passes');
-  }
-  console.log('testGitlabForeignArchiveBarrier261 (#261 forge-parity): PASSED');
-}
 
 // ---------------------------------------------------------------------------
 // #339: closure roadmap-mirror-clean is row-anchored — a legitimate cross-
@@ -4390,213 +4092,8 @@ function testGitlabMirrorCleanCrossRef339() {
   }
 }
 
-// #338 (AC1): the finalize SINK node must be certified `main-session-direct`, not
-// `subagent-invoked` — the plan-run contract performs the sink bookkeeping inline, with no Agent
-// dispatch, so a `subagent-invoked` row would falsely certify a delegation that never happened.
-function testGitlabFinalizeRowMainDirect338() {
-  const adaptiveNode = require('./kaola-gitlab-workflow-adaptive-node');
-  const plan = [
-    '# Workflow Plan — gl-338',
-    '', '## Meta', 'labels: enhancement', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| impl | implementer | — | src/x.js | 1 | sequence |',
-    '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
-    '', '## Node Ledger', '',
-    '| id | status |', '|---|---|',
-    '| impl | complete |',
-    '| review | complete |',
-    '| done | in_progress |',
-    ''
-  ].join('\n') + '\n';
 
-  const cachePath = '/fake/kaola-workflow/gl-338/.cache/done.md';
-  const cacheContent = 'finalize bookkeeping: docs + state recorded.';
-  let planContent = plan;
-  const written = {};
 
-  const shellStub = function(scriptPath, args) {
-    const base = path.basename(scriptPath);
-    const argsArr = args || [];
-    if (base.includes('commit-node') && !argsArr.includes('--start')) {
-      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'done', overallOk: true,
-        selectorCheck: { isSelector: false, ok: true } };
-    }
-    if (base.includes('next-action')) {
-      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
-    }
-    return { exitCode: 1 };
-  };
-
-  const result = adaptiveNode.runCloseAndOpenNext({
-    planPath: '/fake/kaola-workflow/gl-338/workflow-plan.md',
-    statePath: '/fake/kaola-workflow/gl-338/workflow-state.md',
-    project: 'gl-338',
-    nodeId: 'done',
-    shell: shellStub,
-    readFile: (fpath) => {
-      if (fpath.endsWith('workflow-plan.md')) return planContent;
-      if (fpath === cachePath) return cacheContent;
-      throw new Error('ENOENT: ' + fpath);
-    },
-    writeFile: (fpath, content) => {
-      written[fpath] = content;
-      if (fpath.endsWith('workflow-plan.md')) planContent = content;
-    },
-    cacheExists: (fpath) => fpath === cachePath,
-  });
-
-  assert.strictEqual(result.result, 'ok', '#338 gl: finalize-sink close result===ok');
-  assert.strictEqual(result.allDone, true, '#338 gl: allDone===true after the sink closes');
-  const writtenPlan = written['/fake/kaola-workflow/gl-338/workflow-plan.md'];
-  assert.ok(writtenPlan !== undefined, '#338 gl: plan written');
-  assert.ok(!writtenPlan.includes('## Required Agent Compliance'),
-    '#338 gl: close writes NO ## Required Agent Compliance section (#833)');
-  const rendered338 = planValidator.renderAgentComplianceSection(writtenPlan);
-  assert.ok(rendered338.includes('| finalize (done) | main-session-direct |'),
-    '#338 gl: the finalize sink derives main-session-direct (role rule survives the subtraction)');
-  assert.ok(!rendered338.includes('| finalize (done) | subagent-invoked'),
-    '#338 gl: the finalize sink is NOT falsely certified subagent-invoked');
-  console.log('testGitlabFinalizeRowMainDirect338 (#338): PASSED');
-}
-
-// #341: forge-neutrality guard for agent-profile authoring. Three behaviors are locked:
-//   (AC2) the forbidden-token scan loop runs BEFORE any file-count assertion, so a forge
-//         leak is never masked by a stale agent/command/skill count (the #328 latent defect);
-//   (AC1) a standalone `--forbidden-only <file>...` mode lets a forge-touching node verify its
-//         own changed files (exit 1 on a forbidden token, exit 0 on a clean file) without ever
-//         reaching the count assertions; usage/unknown-flag fails closed (exit 2).
-// The forbidden fixture token is built by string concatenation because the validator's own
-// plugin-script scan forbids a literal `\bgh\b` in any .js file (this test included).
-// #445/#446: forge-edition exercises for operator_hint, route-findings subcommand, and
-// --summary flag on the GitLab adaptive-node port.
-//   (a) OPERATOR_HINT_REGISTRY is exported and has entries — the hint machinery is wired.
-//   (b) decorateOperatorHint stamps operator_hint on an actionable envelope.
-//   (c) route-findings subcommand is recognised — a missing --json fails closed but JSON,
-//       not an unknown-subcommand hard error. runNodeRaw is used because the exit is 1.
-//   (d) --summary flag collapses a refuse to a one-line "summary:" sentinel (not JSON).
-function testGitlabAdaptiveNodeOperatorHint445() {
-  const adaptiveNode = require('./kaola-gitlab-workflow-adaptive-node');
-
-  // (a) OPERATOR_HINT_REGISTRY must be a non-empty object exported from the gitlab port.
-  assert.ok(adaptiveNode.OPERATOR_HINT_REGISTRY && typeof adaptiveNode.OPERATOR_HINT_REGISTRY === 'object',
-    '#445 gl: OPERATOR_HINT_REGISTRY must be exported as an object');
-  assert.ok(Object.keys(adaptiveNode.OPERATOR_HINT_REGISTRY).length > 0,
-    '#445 gl: OPERATOR_HINT_REGISTRY must have at least one entry');
-
-  // (b) decorateOperatorHint must add operator_hint to an actionable refuse envelope.
-  const envelope = { result: 'refuse', reason: 'plan_missing' };
-  const decorated = adaptiveNode.decorateOperatorHint(envelope);
-  assert.ok(typeof decorated.operator_hint === 'string' && decorated.operator_hint.length > 0,
-    '#445 gl: decorateOperatorHint must stamp a non-empty operator_hint on a refuse envelope');
-
-  // (c) route-findings subcommand: missing --json refuses with a typed JSON error (not an
-  // unknown-subcommand crash). exit 1 is expected; stdout must be valid JSON with result: refuse.
-  const routeFindingsRaw = spawnSync(process.execPath, [
-    path.join(__dirname, 'kaola-gitlab-workflow-adaptive-node.js'),
-    'route-findings'
-  ], { encoding: 'utf8' });
-  assert.strictEqual(routeFindingsRaw.status, 1,
-    '#446 gl: route-findings without --json must exit 1 (not an unknown-subcommand crash)');
-  const routeFindingsParsed = JSON.parse(routeFindingsRaw.stdout.trim());
-  assert.strictEqual(routeFindingsParsed.result, 'refuse',
-    '#446 gl: route-findings without --json must emit a typed refuse result');
-
-  // (d) --summary flag: orient with a missing plan and --json --summary must emit a
-  // one-line "summary:" sentinel, not a full JSON envelope. #527: orient is documented
-  // read-only but materializes kaola-workflow/<project>/.cache/orient-envelope.json even
-  // for a nonexistent project. Run the spawn in a $TMPDIR-rooted cwd so that scratch dir
-  // lands in tmp (cleaned in the finally below), never leaking into the repo working tree.
-  const summaryRoot = tempRoot('kw-gl-orient-summary-');
-  try {
-    const summaryRaw = spawnSync(process.execPath, [
-      path.join(__dirname, 'kaola-gitlab-workflow-adaptive-node.js'),
-      'orient',
-      '--project', 'nonexistent-gl-445-test',
-      '--json',
-      '--summary'
-    ], { cwd: summaryRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-    const summaryOut = summaryRaw.stdout.trim();
-    assert.ok(summaryOut.startsWith('summary:'),
-      '#446 gl: --summary mode must emit a one-line "summary:" sentinel, got: ' + summaryOut);
-  } finally {
-    fs.rmSync(summaryRoot, { recursive: true, force: true });
-  }
-
-  console.log('testGitlabAdaptiveNodeOperatorHint445 (#445/#446): PASSED');
-}
-
-// #401 Part 1: a behavioral REFUSAL ANCHOR for the GitLab plan-validator port. The
-// forge walkthroughs exercise only --freeze happy paths, so a forge-side regression in
-// the #381/#382 write-set + model refusals would pass all four chains today (#347 drift
-// class). This drives the REAL forge plan-validator --json CLI over a refusal matrix and
-// asserts the typed refusal each time (runNodeRaw, NOT runNode — refusals exit 1), plus a
-// green anchor proving the matrix does not over-refuse a legitimate plan.
-function testGitlabPlanValidatorRefusalMatrix401() {
-  const root = tempRoot('kw-gl-planval-refuse-');
-  const planHeader = [
-    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', ''
-  ];
-  const sixCol = (writeSet) => planHeader.concat([
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| e | code-explorer | — | — | 1 | sequence |',
-    `| i | tdd-guide | e | ${writeSet} | 1 | sequence |`,
-    '| r | code-reviewer | i | — | 1 | sequence |',
-    '| d | finalize | r | — | 1 | sequence |', '',
-    '## Design', '', 'Decompose: e explores; i builds; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change. Done: review clears and validation passes.', ''
-  ]).join('\n');
-  // 7-col plan carrying an invalid model tier (haiku) on the first node.
-  const sevenColModel = planHeader.concat([
-    '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
-    '|---|---|---|---|---|---|---|',
-    '| e | code-explorer | — | — | 1 | sequence | haiku |',
-    '| i | tdd-guide | e | lib/x.js | 1 | sequence | — |',
-    '| r | code-reviewer | i | — | 1 | sequence | — |',
-    '| d | finalize | r | — | 1 | sequence | — |', ''
-  ]).join('\n');
-
-  const runJson = (planText) => {
-    const planPath = path.join(root, 'workflow-plan.md');
-    fs.writeFileSync(planPath, planText);
-    const r = runNodeRaw([planValidatorScript, planPath, '--json'], root);
-    return { status: r.status, parsed: JSON.parse(r.stdout) };
-  };
-
-  try {
-    // (a) directory-shaped write-set entry → refuse /directory-shaped/.
-    const dir = runJson(sixCol('src/'));
-    assert.strictEqual(dir.status, 1, '#401 gl: directory-shaped write-set must exit 1');
-    assert.strictEqual(dir.parsed.result, 'refuse', '#401 gl: directory-shaped must be a typed refusal');
-    assert.ok(/directory-shaped/.test(dir.parsed.errors.join('; ')),
-      '#401 gl: directory-shaped refusal message expected, got: ' + JSON.stringify(dir.parsed.errors));
-
-    // (b) path-traversal write-set entry → refuse /contains '..'/.
-    const trav = runJson(sixCol('src/../b.js'));
-    assert.strictEqual(trav.status, 1, "#401 gl: '..' write-set must exit 1");
-    assert.strictEqual(trav.parsed.result, 'refuse', "#401 gl: '..' must be a typed refusal");
-    assert.ok(/contains '\.\.'/.test(trav.parsed.errors.join('; ')),
-      "#401 gl: \"contains '..'\" refusal message expected, got: " + JSON.stringify(trav.parsed.errors));
-
-    // (c) invalid model tier (7-col) → refuse /model_invalid/.
-    const model = runJson(sevenColModel);
-    assert.strictEqual(model.status, 1, '#401 gl: invalid model tier must exit 1');
-    assert.strictEqual(model.parsed.result, 'refuse', '#401 gl: invalid model must be a typed refusal');
-    assert.ok(/model_invalid/.test(model.parsed.errors.join('; ')),
-      '#401 gl: model_invalid refusal message expected, got: ' + JSON.stringify(model.parsed.errors));
-
-    // green anchor: an exact-file plan must NOT be refused (no false-refusal regression).
-    const green = runJson(sixCol('lib/x.js'));
-    assert.strictEqual(green.status, 0, '#401 gl: a clean exact-file plan must exit 0 (no false refusal)');
-    assert.strictEqual(green.parsed.result, 'in-grammar',
-      '#401 gl: a clean exact-file plan must be in-grammar, got: ' + JSON.stringify(green.parsed.result));
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-  console.log('testGitlabPlanValidatorRefusalMatrix401 (#401): PASSED');
-}
 
 function testForbiddenOnly341() {
   const validatorScript = path.join(__dirname, 'validate-kaola-workflow-gitlab-contracts.js');
@@ -4606,10 +4103,12 @@ function testForbiddenOnly341() {
   // (AC2) order pin: the forbidden-token scan loop call must precede every count assertion.
   const scanIdx = idx('assertNoForbidden(file);');
   assert.ok(scanIdx !== -1, '#341 gl: validator must contain the assertNoForbidden(file); scan loop');
-  // Needles carry the `assert(` prefix so they match the real count assertions, not the
-  // `agentFiles.length === 13` substring inside the #341 scan-loop comment.
+  // Needles carry the `assert(` prefix so they match the real count assertions, not a
+  // `.length ===` substring inside the #341 scan-loop comment. The agent-profile count assertion
+  // is gone — the derived config/agents.toml parity guard covers agents/ enumeration-free — so the
+  // ordering property is pinned on the two surface counts that remain.
   for (const countNeedle of [
-    'assert(commandFiles.length ===', 'assert(skillFiles.length ===', 'assert(agentFiles.length ==='
+    'assert(commandFiles.length ===', 'assert(skillFiles.length ==='
   ]) {
     const countIdx = idx(countNeedle);
     assert.ok(countIdx !== -1, '#341 gl: validator must contain count assert ' + countNeedle);
@@ -4826,209 +4325,14 @@ function testGitlabBoundary2FetchRetry507() {
   console.log('testGitlabBoundary2FetchRetry507 (#507/#511/#519): PASSED');
 }
 
-function testGitlabReplanEditionContract699() {
-  const repoRoot = path.resolve(gitlabPluginRoot, '..', '..');
-  const replanScript = path.join(__dirname, 'kaola-gitlab-workflow-replan.js');
-  const adaptiveNodeScript = path.join(__dirname, 'kaola-gitlab-workflow-adaptive-node.js');
-  const handoffScript = path.join(__dirname, 'kaola-gitlab-workflow-adaptive-handoff.js');
-  const schema = require('./kaola-workflow-adaptive-schema');
-  const replan = require(replanScript);
-  const adaptiveNode = require(adaptiveNodeScript);
-  const handoff = require(handoffScript);
-  const manifest = require(path.join(repoRoot, 'scripts', 'kaola-workflow-install-manifest.js'));
-  const parseLast = run => JSON.parse(String(run.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
 
-  assert.deepStrictEqual(manifest.supportScripts('gitlab').filter(name => /workflow-replan\.js$/.test(name)),
-    ['kaola-gitlab-workflow-replan.js'],
-    'GitLab re-plan smoke: manifest must install exactly the renamed aggregator');
-  assert.deepStrictEqual(schema.REPLAN_PHASES,
-    ['prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed']);
-  assert.deepStrictEqual(schema.REPLAN_STATUSES,
-    ['none', 'in_progress', 'candidate_changed', 'consent_halt']);
-  assert.deepStrictEqual(schema.REPLAN_CAS_SEAMS,
-    ['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation']);
-
-  const missingCli = spawnSync(process.execPath,
-    [replanScript, 'status', '--project', 'n5-missing-gitlab-smoke', '--json'],
-    { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  assert.notStrictEqual(missingCli.status, 0);
-  assert.strictEqual(parseLast(missingCli).reason, 'replan_authority_path_invalid',
-    'GitLab re-plan smoke: renamed aggregator must execute its typed missing-authority refusal');
-
-  // R6-699-03: buildPlannerPacket reads transaction.snapshot.{authority_projection,authority_digest},
-  // so the fixture transaction must carry a real projection built the way prepareReplan does (via the
-  // exported buildSnapshotAuthorityProjection) and its canonical digest, not a hand-typed placeholder.
-  const n5Transaction = {
-    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
-    parent: {
-      claim_identity: { repository_id: 'repo', worktree_path: repoRoot },
-      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
-      plan_epoch: 1, plan_hash: '3'.repeat(64),
-      plan_digest: schema.sha256Hex(Buffer.from('n5-gitlab-plan')),
-      task_mirror_exact_digest: schema.sha256Hex(Buffer.from('n5-gitlab-task-mirror')),
-      ledger_digest: schema.sha256Hex(Buffer.from('n5-gitlab-ledger')),
-      state_authority_digest: schema.sha256Hex(Buffer.from('n5-gitlab-state-authority')),
-    },
-    epoch_lineage_id: '4'.repeat(64),
-    source: {
-      source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
-      source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
-      inherited_frontier_classes: ['code'], validation_obligations: [],
-      journal_digest: schema.sha256Hex(Buffer.from('n5-gitlab-journal')),
-    },
-    cas: { prepare: { candidate_digest: '6'.repeat(64), claim_root_base_digest: '2'.repeat(64),
-      inherited_frontier_digest: '7'.repeat(64) } },
-    budget: {
-      count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
-      case_b_proof: null, consent_ledger_digest: '9'.repeat(64),
-    },
-    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-n5' },
-  };
-  n5Transaction.snapshot = {
-    authority_projection: replan.buildSnapshotAuthorityProjection(n5Transaction),
-  };
-  n5Transaction.snapshot.authority_digest = schema.sha256Canonical(n5Transaction.snapshot.authority_projection);
-  const packet = replan.buildPlannerPacket({ project: 'issue-n5-gitlab' }, n5Transaction);
-  const packetKeys = new Set();
-  (function collect(value) {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) return value.forEach(collect);
-    for (const [key, child] of Object.entries(value)) { packetKeys.add(key); collect(child); }
-  })(packet);
-  for (const forbiddenKey of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
-    'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
-    assert(!packetKeys.has(forbiddenKey),
-      'GitLab re-plan smoke: planner packet must omit main-authored DAG key ' + forbiddenKey);
-  }
-  assert.strictEqual(packet.child_output_path, 'workflow-plan.next.md');
-
-  const childPath = path.join(os.tmpdir(), 'kw-n5-gitlab-attestation', 'workflow-plan.next.md');
-  let unattestedWrites = 0;
-  const unattested = handoff.runReplanHandoff({
-    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
-    authority: {
-      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
-      transaction_id: 'a'.repeat(64), child_path: childPath,
-      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
-    },
-    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
-    writeFile: () => { unattestedWrites++; },
-  });
-  assert.strictEqual(unattested.reason, 'replan_child_authority_unverified');
-  assert.strictEqual(unattestedWrites, 0,
-    'GitLab re-plan smoke: missing planner attestation must refuse before writing');
-
-  const orientation = adaptiveNode.replanOrientation({
-    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
-    legal_mutation: 'replan resume', transaction: {
-      transaction_id: 'a'.repeat(64), phase: 'planner_pending',
-      parent: { plan_hash: 'b'.repeat(64) }, child: {}, cas: {},
-    },
-  }, 'issue-n5-gitlab');
-  assert.strictEqual(orientation.resume_command,
-    'node scripts/kaola-gitlab-workflow-replan.js resume --project issue-n5-gitlab --json');
-
-  const fenceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-gitlab-fence-')));
-  try {
-    G.git(fenceRoot, ['init', '-q'], { encoding: 'utf8' });
-    const project = 'issue-n5-gitlab-fence';
-    const projectDir = path.join(fenceRoot, 'kaola-workflow', project);
-    const cacheDir = path.join(projectDir, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const stateBytes = Buffer.from([
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Epoch Lineage', 'replan_status: in_progress', 'replan_phase: planner_pending',
-      'replan_transaction_id: ' + 'c'.repeat(64), '',
-    ].join('\n'));
-    const planBytes = Buffer.from('# deliberately invalid frozen parent\n');
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), stateBytes);
-    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), planBytes);
-    fs.writeFileSync(path.join(cacheDir, 'replan-transaction.json'), '{}\n');
-    const beforeCache = new Map(fs.readdirSync(cacheDir).map(name =>
-      [name, fs.readFileSync(path.join(cacheDir, name))]));
-    const calls = [
-      [adaptiveNodeScript, ['open-next', '--project', project, '--json']],
-      [handoffScript, ['--project', project, '--json']],
-      [planValidatorScript, [path.join(projectDir, 'workflow-plan.md'), '--finalize-check', '--json']],
-      [claimScript, ['finalize', '--project', project, '--json']],
-    ];
-    for (const [script, args] of calls) {
-      const run = spawnSync(process.execPath, [script, ...args], {
-        cwd: fenceRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
-      });
-      assert.notStrictEqual(run.status, 0,
-        'GitLab re-plan smoke: half-transition must refuse ' + path.basename(script));
-      assert.strictEqual(parseLast(run).reason, 'replan_transaction_invalid');
-    }
-    assert(fs.readFileSync(path.join(projectDir, 'workflow-state.md')).equals(stateBytes));
-    assert(fs.readFileSync(path.join(projectDir, 'workflow-plan.md')).equals(planBytes));
-    assert.deepStrictEqual(fs.readdirSync(cacheDir).sort(), [...beforeCache.keys()].sort(),
-      'GitLab re-plan smoke: half-transition refusals must not add cache side effects');
-    for (const [name, bytes] of beforeCache) {
-      assert(fs.readFileSync(path.join(cacheDir, name)).equals(bytes),
-        'GitLab re-plan smoke: half-transition refusal mutated cache file ' + name);
-    }
-    assert(!fs.existsSync(path.join(cacheDir, 'scheduler.lock'))
-        && !fs.existsSync(path.join(cacheDir, 'orient-envelope.json'))
-        && !fs.existsSync(path.join(fenceRoot, 'kaola-workflow', 'archive')),
-    'GitLab re-plan smoke: scheduler/finalize fence must create no lock, envelope, or archive');
-  } finally { fs.rmSync(fenceRoot, { recursive: true, force: true }); }
-
-  const archiveRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-gitlab-archive-')));
-  try {
-    const project = 'issue-n5-gitlab-archive';
-    const projectDir = path.join(archiveRoot, 'kaola-workflow', project);
-    const epochDir = path.join(projectDir, '.cache', 'epochs', '1');
-    const filesDir = path.join(epochDir, 'files', '.cache');
-    fs.mkdirSync(filesDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Sink', 'issue_number: 699', 'sink: merge', '',
-    ].join('\n'));
-    const rebindBytes = Buffer.from('{"attempts":[{"attempt_id":"review:1","rebind":[]}]}\n');
-    const rebindPath = path.join(filesDir, 'review-attempts.json');
-    fs.writeFileSync(rebindPath, rebindBytes);
-    const stat = fs.statSync(rebindPath);
-    const snapshot = {
-      schema_version: 1, parent_plan_epoch: 1, epoch_lineage_id: 'd'.repeat(64),
-      transaction_id: 'e'.repeat(64), claim_root_base_digest: 'f'.repeat(64),
-      files: [{ path: '.cache/review-attempts.json', size: stat.size,
-        mode: (stat.mode & 0o777).toString(8).padStart(3, '0'), digest: schema.sha256Hex(rebindBytes) }],
-    };
-    snapshot.manifest_self_digest = schema.snapshotManifestDigest(snapshot);
-    fs.writeFileSync(path.join(epochDir, 'manifest.json'), schema.canonicalJson(snapshot) + '\n');
-    // Fail-closed edition contract: a schema-1 manifest with no external-seal chain cannot
-    // digest-verify (a genuine schema-2 snapshot is only ever produced by the full replan
-    // lifecycle, exercised end to end in test-replan.js). The forge port must refuse this
-    // unverifiable epoch snapshot at BOTH the shared verifier and the archive preflight, and
-    // must never delete a live project whose epoch-snapshot authority does not verify.
-    const verified = replan.verifyAllEpochSnapshots(projectDir);
-    assert(!verified.ok && verified.reason === 'legacy_snapshot_binding_unsealed',
-      'GitLab re-plan smoke: an unsealed epoch snapshot must refuse digest verification, got ' + JSON.stringify(verified));
-    const archived = claim.archiveProjectDir(archiveRoot, project, 'closed');
-    assert(archived.archived !== true && archived.archive_incomplete === true
-      && archived.snapshot_error === 'legacy_snapshot_binding_unsealed',
-    'GitLab re-plan smoke: archive must refuse an unverifiable epoch snapshot before any delete, got ' + JSON.stringify(archived));
-    assert(fs.existsSync(projectDir) && !fs.existsSync(path.join(archiveRoot, 'kaola-workflow', 'archive')),
-      'GitLab re-plan smoke: a refused archive must preserve the live project and create no archive dir');
-  } finally { fs.rmSync(archiveRoot, { recursive: true, force: true }); }
-
-  console.log('testGitlabReplanEditionContract699: PASSED');
-}
-
-testGitlabReplanEditionContract699();
-testGitlabFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitlab();
 testGitlabPreflight266();
 testGitlabDispatchPosture598();
 testGitlabPreflight571();
 testGitlabPreflight332();
-testGitlabTaskMirror266();
 testGitlabCompactResume266();
-testGitlabForeignArchiveBarrier261();
 testGitlabMirrorCleanCrossRef339();
-testGitlabAdaptiveNodeOperatorHint445();
-testGitlabPlanValidatorRefusalMatrix401();
 testForbiddenOnly341();
 testGitlabBoundary2FetchRetry507();
 

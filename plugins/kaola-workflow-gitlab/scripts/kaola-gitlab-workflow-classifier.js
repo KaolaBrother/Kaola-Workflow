@@ -88,70 +88,6 @@ function isProtected(filePath) {
   return false;
 }
 
-// issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
-// into node objects (tolerant to column reorder; write set via parseWriteSetCell so root-level
-// and dot-leading paths are not silently dropped (audit A2/A2′); read-only carve-out applies).
-function readPlanNodes(planPath) {
-  let content = '';
-  try { content = fs.readFileSync(planPath, 'utf8'); } catch (_) { return []; }
-  const body = sectionBody(content, 'Nodes');
-  const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
-  if (rows.length < 2) return [];
-  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
-  const idx = name => header.indexOf(name);
-  const nodes = [];
-  for (let r = 1; r < rows.length; r++) {
-    const cells = rows[r].split('|').slice(1, -1).map(c => c.trim());
-    if (/^[-:\s]+$/.test(cells.join(''))) continue;
-    const get = n => (idx(n) >= 0 ? cells[idx(n)] : '') || '';
-    const id = get('id');
-    if (!id) continue;
-    nodes.push({
-      id,
-      role: get('role'),
-      dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
-      writeSet: parseWriteSetCell(get('declared_write_set')),
-      cardinality: get('cardinality'),
-      shape: get('shape'),
-      // #382: per-node model tier — parity with validator.parseNodes (absent/'—' => '').
-      model: (() => { const v = get('model'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
-    });
-  }
-  return nodes;
-}
-
-// issue #227 (adaptive path): N-way pairwise disjointness verdict over declared node
-// write sets, applied WITHIN one issue. Mirrors classify()'s direct verdict: exact-path
-// RED > non-shared coarse-area RED > shared-infra YELLOW > GREEN. PASS on empty sets.
-function disjointWriteSets(nodeWriteSets) {
-  const sets = (nodeWriteSets || []).map(s => (s instanceof Set ? s : new Set(s || [])));
-  for (let i = 0; i < sets.length; i++) {
-    for (let j = i + 1; j < sets.length; j++) {
-      const a = sets[i], b = sets[j];
-      if (a.size === 0 || b.size === 0) continue;
-      // #587: case-fold the cross-node exact-path + coarse-area compare so `Src/x.js` vs `src/x.js`
-      // (the SAME physical file on a case-insensitive FS) is not falsely proven disjoint.
-      const bLower = new Map();
-      for (const p of b) bLower.set(p.toLowerCase(), p);
-      for (const p of a) {
-        if (bLower.has(p.toLowerCase())) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
-      }
-      const areasB = new Set();
-      for (const p of b) areasB.add(areaForPath(p).toLowerCase());
-      let sharedHit = '';
-      for (const p of a) {
-        const area = areaForPath(p);
-        if (areasB.has(area.toLowerCase())) {
-          if (!SHARED_INFRA.has(area)) return { verdict: 'red', kind: 'coarse', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
-          if (!sharedHit) sharedHit = area;
-        }
-      }
-      if (sharedHit) return { verdict: 'yellow', kind: 'shared-infra', reasoning: 'shared-infra area "' + sharedHit + '" overlap between nodes ' + i + ' and ' + j };
-    }
-  }
-  return { verdict: 'green', kind: null, reasoning: 'node write sets are pairwise disjoint' };
-}
-
 function normalizeRepoPath(raw) {
   return String(raw || '')
     .replace(/^touches:/, '')
@@ -189,26 +125,6 @@ function extractFilePaths(text) {
     if (filePath.includes('/')) paths.add(filePath);
   }
   return paths;
-}
-
-// issue #227 audit fix (A2/A2′): parse a frozen plan's declared_write_set CELL structurally.
-// The cell is an author-declared, comma/space-separated path list — NOT free prose — so it must
-// be parsed structurally, not with the prose-oriented extractFilePaths() path-finder. That
-// finder requires a "/" AND a non-dot first segment, which SILENTLY DROPS root-level files
-// (Dockerfile, Makefile, secrets.yaml, build.env) and any dot-leading path (a "."-prefixed
-// CI or config directory). Those drops let code / secret / CI writes evade the G1/G2 gates. Here
-// every non-empty normalized token counts (fail-closed: an author who
-// declares a write is taken at their word). The empty / dash markers preserve the read-only
-// carve-out (no declared writes => trivially disjoint).
-function parseWriteSetCell(cell) {
-  const set = new Set();
-  const raw = String(cell || '').trim();
-  if (!raw || raw === '—' || raw === '-') return set;
-  for (const tok of raw.split(/[\s,]+/)) {
-    const p = normalizeRepoPath(tok);
-    if (p && p !== '—' && p !== '-') set.add(p);
-  }
-  return set;
 }
 
 function extractCoarseAreas(text) {
@@ -391,29 +307,11 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
         combined += '\n' + fastState.body;
       }
     } catch (_) {}
-    // issue #227 / #238: fold the adaptive plan's STRUCTURED write set in directly (it natively
-    // carries root-level + dot-leading paths) instead of stringifying it and re-extracting via the
-    // prose path-finder, which re-drops the root-level ones.
-    const structuredClaimed = new Set();
-    try {
-      for (const n of readPlanNodes(path.join(folder.project_dir, 'workflow-plan.md'))) {
-        for (const p of n.writeSet) structuredClaimed.add(p);
-      }
-    } catch (_) {}
-
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
     const claimedAreaLabels = parseAreaLabelsFromText(combined);
-    // #238: curated root (slashless) files — prose via the matcher, structured folded directly.
+    // #238: curated root (slashless) files, via the prose matcher.
     const claimedCuratedRoot = adaptiveSchema.extractCuratedRootPaths(combined);
-    for (const p of structuredClaimed) {
-      claimedPaths.add(p);
-      claimedAreas.add(areaForPath(p));
-      // curated-root overlap: store the CANONICAL name (case-folded) so it intersects the canonical
-      // candidate/prose sets — a raw add would fail open for a non-canonical-case declaration (#238 v3.21.0).
-      const canon = adaptiveSchema.canonicalCuratedRoot(p);
-      if (canon) claimedCuratedRoot.add(canon);
-    }
 
     if (!fs.existsSync(phase3)) anyClaimedAtPhaseLeTwo = true;
 
@@ -815,7 +713,6 @@ module.exports = {
   classifyIssue,
   extractCoarseAreas,
   extractFilePaths,
-  parseWriteSetCell,
   markdownFenceTransition,
   sectionBodyState,
   sectionBody,
@@ -825,8 +722,6 @@ module.exports = {
   PROTECTED_BASENAMES,
   PROTECTED_PATH_MARKERS,
   isProtected,
-  readPlanNodes,
-  disjointWriteSets,
   issueHasRemoteClaimNotes,
   issueHasWorkflowInProgressLabel,
   parseDependsOn,

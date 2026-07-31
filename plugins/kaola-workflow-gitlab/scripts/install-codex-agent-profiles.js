@@ -81,13 +81,14 @@ const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',
-  'security-reviewer', 'adversarial-verifier', 'workflow-planner', 'synthesizer',
+  'security-reviewer', 'adversarial-verifier', 'synthesizer',
 ]);
 // These roles run outside the adaptive Node Ledger. Their named workflow/plan/finalization
 // artifacts are the authoritative durable result; when a caller supplies a seeded evidence file,
 // the profile additionally mirrors its full packet there. Every other profile is a DAG node role
 // and therefore must self-write the exact seeded cache artifact before returning its compact summary.
-const CODEX_ORCHESTRATION_ROLES = Object.freeze(['workflow-planner']);
+// The mandatory planner was the only orchestration role; it is gone with the plan it authored.
+const CODEX_ORCHESTRATION_ROLES = Object.freeze([]);
 const CODEX_STANDARD_MODEL = 'gpt-5.6-sol';
 const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
@@ -737,24 +738,11 @@ function validateProfileText(text, role, expectedMeta = null) {
   } else if (instrMatch[1].trim() === '') {
     reasons.push("'developer_instructions' body is blank");
   } else {
-    if (!instrMatch[1].includes('FULL')) {
-      reasons.push("developer_instructions missing FULL durable-result contract");
-    }
-    if (!instrMatch[1].includes('compact orchestrator summary')) {
-      reasons.push("developer_instructions missing compact orchestrator summary contract");
-    }
-    if (CODEX_ORCHESTRATION_ROLES.includes(role)) {
-      if (!instrMatch[1].includes('durable full result')) {
-        reasons.push("orchestration-role developer_instructions missing canonical durable full result contract");
-      }
-    } else {
-      if (!instrMatch[1].includes('dispatch.evidence_file')) {
-        reasons.push("node-role developer_instructions missing durable dispatch.evidence_file contract");
-      }
-      if (!instrMatch[1].includes('evidence-binding')) {
-        reasons.push("node-role developer_instructions missing evidence-binding preservation contract");
-      }
-    }
+    // The FULL / compact-summary / dispatch.evidence_file / evidence-binding rules stood here.
+    // All four were halves of the DAG's per-node evidence contract — a seeded `.cache/{node-id}.md`
+    // path handed to a role at dispatch, and a nonce binding the file to the open that minted it.
+    // Neither exists under a mission list: the orchestrator decides at dispatch time where a result
+    // should land, so a profile cannot be required to promise a path nobody has chosen yet.
   }
 
   reasons.push(...reviewerProfileContract(text, role).reasons);

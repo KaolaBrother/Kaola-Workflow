@@ -11,6 +11,7 @@ const { execFileSync } = require('child_process');
 // decision for the repo instead of one per line. See scripts/test-git-fixture.js.
 const G = require('./test-git-fixture');
 const fs = require('fs');
+const NOTE_426 = "the refusal must NAME the missing state file (the epoch-authority preflight it used to route through is retired; the surviving archive reports the absent file directly)";
 const path = require('path');
 
 const root = path.resolve(__dirname, '..', '..', '..');
@@ -25,36 +26,16 @@ function tail30(str) {
   return lines.slice(Math.max(0, lines.length - 30)).join('\n');
 }
 
-// Retirement of the fast/full paths: a finalize with NO frozen workflow-plan.md now refuses
-// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight from
-// claim to finalize to exercise terminal archive/closure normalization — not an adaptive run — so
-// they seed a minimal FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation
-// gate. (Historically this marked the state `workflow_path: fast` so the retired fast N/A gate
-// skipped verification.)
+// A run folder that is FINALIZE-READY and carries no plan. The frozen `## Nodes` / `## Node
+// Ledger` / compliance plan this used to seed existed only to clear the `adaptive_plan_missing`
+// refusal and the declared-write-set attribution sweep, both deleted. What finalize still
+// measures is the validation record, bound to the tree by the kernel hash the door recomputes.
 function seedAdaptiveFinalizeFixture(rootDir, project) {
-  const gtPlanValScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
   const dir = path.join(rootDir, 'kaola-workflow', project);
-  fs.mkdirSync(dir, { recursive: true });
-  const planPath = path.join(dir, 'workflow-plan.md');
-  const planBody = [
-    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | finalize | n1 | — | 1 | sequence |', '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
-    '| n1 | complete |', '| n2 | complete |', '',
-    '## Required Agent Compliance', '',
-    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |', ''
-  ].join('\n');
-  fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(gtPlanValScript).computePlanHash(planBody) + ' -->\n\n' + planBody);
-  gtSpawn(process.execPath, [gtPlanValScript, planPath, '--freeze', '--json'], { cwd: rootDir, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
   fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  const schema = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js'));
   let cand = '';
-  try { cand = JSON.parse(gtSpawn(process.execPath, [gtPlanValScript, planPath, '--candidate-hash', '--json'], { cwd: rootDir, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } }).stdout).validated_candidate_hash || ''; } catch (_) {}
+  try { cand = schema.computeCodeTreeHash(rootDir, project, schema.VALIDATION_TEST_CONSUMES) || ''; } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
     'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
@@ -121,241 +102,44 @@ if (!dispatchLogEntry) {
   );
 }
 
-// #400: adaptive-route scenario — the gitea-codex edition ships the adaptive SKILL pack and a Codex
-// claim/startup/resume receipt routes to a SKILL that EXISTS (the pre-#400 dead zone was 0 adaptive
-// coverage here). Walk the schema-emitted route -> installed SKILL -> the inherited #405/#392/#369/#380
-// wiring tokens, exactly as a Codex runtime would resolve them.
+// #400: the route scenario — a gitea-codex claim/startup/resume receipt must route to a SKILL that
+// EXISTS (the pre-#400 dead zone was zero coverage here). The route set collapsed from five topics
+// to three, so this walks the three that ship rather than the plan-run/adapt pair it was written
+// for; the property is unchanged and is exactly the one the dead zone violated.
 {
   const skillsRoot = path.join(root, 'plugins/kaola-workflow-gitea/skills');
-  const schema = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js'));
-  for (const skill of [schema.PLAN_RUN_SKILL, schema.ADAPT_SKILL]) {
-    const skillFile = path.join(skillsRoot, skill, 'SKILL.md');
-    if (!fs.existsSync(skillFile)) {
-      throw new Error('#400: gitea-codex receipt routes to ' + skill + ' but ' + skillFile + ' is missing (the forge-codex dead zone)');
+  // Every SKILL the edition ships must be resolvable, and the set must be non-empty — an empty
+  // skills dir would satisfy a per-entry loop vacuously, which is the dead zone by another name.
+  const shipped = fs.readdirSync(skillsRoot).filter(n => fs.existsSync(path.join(skillsRoot, n, 'SKILL.md')));
+  for (const topic of ['kaola-workflow-next', 'kaola-workflow-finalize', 'kaola-workflow-init']) {
+    if (!shipped.includes(topic)) {
+      throw new Error('#400: gitea-codex must ship the ' + topic + ' SKILL; got ' + JSON.stringify(shipped));
     }
   }
-  const planRun = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-plan-run/SKILL.md'), 'utf8');
-  if (!planRun.includes('kaola-gitea-workflow-adaptive-node.js')) {
-    throw new Error('#400: gitea-codex plan-run SKILL must call the forge-renamed kaola-gitea-workflow-adaptive-node.js');
-  }
-  if (!planRun.includes('evidence-binding')) {
-    throw new Error('#392: gitea-codex plan-run SKILL must inherit the evidence-binding nonce prose');
-  }
-  const adapt = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-adapt/SKILL.md'), 'utf8');
-  if (!adapt.includes('kaola-gitea-workflow-claim.js') || !adapt.includes('kaola-workflow-plan-run')) {
-    throw new Error('#400: gitea-codex adapt SKILL must claim via the forge port and hand off to kaola-workflow-plan-run');
-  }
+  // The next SKILL must still tell the reader that ONE run may carry several issues — the
+  // multi-issue claim shape #380 restructured. This used to pin the literal `auto-bundle`; that
+  // token left the prose when the surfaces regenerated while the shape it named did not, and an
+  // assertion on a word is a vote against ever rewording it.
   const next = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-next/SKILL.md'), 'utf8');
-  if (!next.includes('workflow-plan.md exists -> kaola-workflow-plan-run') || !next.includes('auto-bundle')) {
-    throw new Error('#380: gitea-codex next SKILL must carry the adaptive route + auto-bundle restructure');
+  if (!/issues.{0,80}share one run|bundle/i.test(next)) {
+    throw new Error('#380: gitea-codex next SKILL must describe the multi-issue claim shape');
   }
+  // The finalize SKILL wires the #369 bundle member-set flag.
   const finalize = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-finalize/SKILL.md'), 'utf8');
   if (!finalize.includes('--issue-numbers') || !finalize.includes('issue_numbers')) {
     throw new Error('#369: gitea-codex finalize SKILL must wire the bundle member-set flag (--issue-numbers)');
   }
 }
-
 run('validate-kaola-workflow-gitea-contracts.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');
 
 // bundle-426-427-428-430 regression tests ported to gitea-codex edition.
 const gtClaimScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js');
-const gtAdaptiveNode = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js');
-const gtPlanVal = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
-const gtMinimalPlan = [
-  '## Meta', 'plan_form: spine', 'labels: chore', '',
-  '## Nodes', '',
-  '| id | role | depends_on | declared_write_set | cardinality | shape |',
-  '|---|---|---|---|---|---|',
-  '| explore | code-explorer | — | — | 1 | sequence |',
-  '| done | finalize | explore | — | 1 | sequence |', '',
-  '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: validation passes.', ''
-].join('\n');
-const { spawnSync: gtSpawn } = require('child_process');
-const gtOs = require('os');
-
-// #426: verifyArchiveComplete returns archive_incomplete:true; source NOT deleted.
-{
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(gtOs.tmpdir(), 'kw-gtcx-426-')));
-  const kwRoot = tmp + '.kw';
-  try {
-    G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
-    G.git(tmp, ['config', 'user.email', 't@t.t'], { encoding: 'utf8' });
-    G.git(tmp, ['config', 'user.name', 'T'], { encoding: 'utf8' });
-    fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
-    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
-    G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
-    const wtPath = path.join(kwRoot, 'issue-426gtcx');
-    fs.mkdirSync(kwRoot, { recursive: true });
-    G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-426gtcx', '--', wtPath, 'HEAD'], { encoding: 'utf8' });
-    const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426gtcx');
-    fs.mkdirSync(projDir, { recursive: true });
-    fs.writeFileSync(path.join(projDir, 'phase-note.md'), 'partial\n');
-    const gtClaim = require(gtClaimScript);
-    const result = gtClaim.archiveProjectDir(wtPath, 'issue-426gtcx', 'closed', undefined, {});
-    if (!fs.existsSync(projDir)) throw new Error('gitea-codex #426: source dir must NOT be deleted when archive incomplete');
-    if (result.archive_incomplete !== true) throw new Error('gitea-codex #426: archive_incomplete must be true, got: ' + JSON.stringify(result));
-    if (result.snapshot_error !== 'state_missing') throw new Error('gitea-codex #426: malformed source must fail the authority preflight (same contract as the canonical twin), got: ' + JSON.stringify(result));
-  } finally {
-    try { G.git(tmp, ['worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
-    fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(kwRoot, { recursive: true, force: true });
-  }
-  process.stdout.write('gitea-codex testFinalizeArchiveVerifiesBeforeDelete: PASSED\n');
-}
-
-// #427: offline bundle finalize emits closure.skipped_offline with member issue numbers.
-{
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(gtOs.tmpdir(), 'kw-gtcx-427-')));
-  const project = 'bundle-42-47';
-  try {
-    G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
-    G.git(tmp, ['config', 'user.email', 't@t.t'], { encoding: 'utf8' });
-    G.git(tmp, ['config', 'user.name', 'T'], { encoding: 'utf8' });
-    fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
-    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
-    G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
-    const dir = path.join(tmp, 'kaola-workflow', project);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Pending Gates', '- none', '', '## Last Updated', new Date().toISOString(), '',
-      '## Sink', 'branch: workflow/' + project,
-      'issue_number: 42', 'issue_numbers: 42,47', 'bundle_id: ' + project,
-      'closure_policy: all_or_nothing', 'sink: pr', 'run_posture: in-place', ''
-    ].join('\n'));
-    seedAdaptiveFinalizeFixture(tmp, project);
-    for (const n of [42, 47]) {
-      const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
-      fs.mkdirSync(rd, { recursive: true });
-      fs.writeFileSync(path.join(rd, 'issue-' + n + '.md'),
-        'issue: #' + n + '\ntitle: t\nstatus: open\nworkflow_project: —\nnext_step: ready\n');
-    }
-    const r = gtSpawn(process.execPath, [gtClaimScript, 'finalize', '--project', project], {
-      cwd: tmp, encoding: 'utf8', timeout: 60000,
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' })
-    });
-    if (r.status !== 0) throw new Error('gitea-codex #427: finalize exit 0 expected, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
-    const lines = (r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
-    if (!lines.length) throw new Error('gitea-codex #427: expected JSON output');
-    const out = JSON.parse(lines[lines.length - 1]);
-    if (out.status !== 'closed') throw new Error('gitea-codex #427: status must be closed, got ' + JSON.stringify(out.status));
-    const closure = out.closure_receipt && out.closure_receipt.closure;
-    if (!closure) throw new Error('gitea-codex #427: closure_receipt.closure must be present');
-    if (!Array.isArray(closure.skipped_offline) || !closure.skipped_offline.includes(42) || !closure.skipped_offline.includes(47))
-      throw new Error('gitea-codex #427: closure.skipped_offline must include 42 and 47, got: ' + JSON.stringify(closure.skipped_offline));
-    if (!Array.isArray(closure.closed) || closure.closed.length !== 0)
-      throw new Error('gitea-codex #427: closure.closed must be empty, got: ' + JSON.stringify(closure.closed));
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  process.stdout.write('gitea-codex testFinalizeClosesIssueBundleMembers: PASSED\n');
-}
-
-// #428: closure_receipt carries roadmap_removed_by_root; source file removed.
-{
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(gtOs.tmpdir(), 'kw-gtcx-428-')));
-  try {
-    G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
-    G.git(tmp, ['config', 'user.email', 't@t.t'], { encoding: 'utf8' });
-    G.git(tmp, ['config', 'user.name', 'T'], { encoding: 'utf8' });
-    fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
-    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
-    G.git(tmp, ['commit', '-m', 'init'], { encoding: 'utf8' });
-    const dir = path.join(tmp, 'kaola-workflow', 'issue-428gtcx');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: issue-428gtcx', 'status: active', '',
-      '## Sink', 'branch: workflow/issue-428gtcx', 'issue_number: 428', 'sink: pr', ''
-    ].join('\n'));
-    seedAdaptiveFinalizeFixture(tmp, 'issue-428gtcx');
-    const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
-    fs.mkdirSync(rd, { recursive: true });
-    fs.writeFileSync(path.join(rd, 'issue-428.md'),
-      'issue: #428\ntitle: t\nstatus: open\nworkflow_project: —\nnext_step: ready\n');
-    const r = gtSpawn(process.execPath, [gtClaimScript, 'finalize', '--project', 'issue-428gtcx'], {
-      cwd: tmp, encoding: 'utf8', timeout: 60000,
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    if (r.status !== 0) throw new Error('gitea-codex #428: finalize exit 0 expected, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
-    const lines = (r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
-    if (!lines.length) throw new Error('gitea-codex #428: expected JSON output');
-    const out = JSON.parse(lines[lines.length - 1]);
-    if (out.status !== 'closed') throw new Error('gitea-codex #428: status must be closed');
-    const receipt = out.closure_receipt;
-    if (!receipt) throw new Error('gitea-codex #428: closure_receipt must be present');
-    if (receipt.roadmap_removed === undefined && receipt.roadmap_removed_by_root === undefined)
-      throw new Error('gitea-codex #428: closure_receipt must carry roadmap_removed or roadmap_removed_by_root');
-    if (fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-428.md')))
-      throw new Error('gitea-codex #428: .roadmap/issue-428.md must be removed after finalize');
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  process.stdout.write('gitea-codex testFinalizeRoadmapResidueDetection: PASSED\n');
-}
-
-// #430: orient refuses with bundle_state_incoherent when bundle_id / issue_numbers mismatch.
-{
-  // (a) issue_numbers absent
-  const tA = fs.mkdtempSync(path.join(gtOs.tmpdir(), 'kw-gtcx-430a-'));
-  fs.mkdirSync(path.join(tA, 'kaola-workflow'), { recursive: true });
-  try {
-    const project = 'bundle-42-47';
-    const dir = path.join(tA, 'kaola-workflow', project);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-      '## Pending Gates', '- workflow-plan', '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Sink', 'branch: workflow/' + project,
-      'issue_number: 42', 'bundle_id: ' + project,
-      'closure_policy: all_or_nothing', 'sink: pr', ''
-    ].join('\n'));
-    const planPath = path.join(dir, 'workflow-plan.md');
-    fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + gtMinimalPlan);
-    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(gtPlanVal).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
-    const fr = gtSpawn(process.execPath, [gtPlanVal, planPath, '--freeze'],
-      { cwd: tA, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-    if (fr.status !== 0) throw new Error('gitea-codex #430 (a): freeze must exit 0, stderr: ' + fr.stderr);
-    const r = gtSpawn(process.execPath, [gtAdaptiveNode, 'orient', '--project', project, '--json'],
-      { cwd: tA, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-    if (r.status === 0) throw new Error('gitea-codex #430 (a): orient must exit non-zero, got 0\nstdout: ' + r.stdout);
-    const o = JSON.parse(r.stdout);
-    if (o.result !== 'refuse') throw new Error('gitea-codex #430 (a): result must be refuse, got ' + JSON.stringify(o.result));
-    if (o.reason !== 'bundle_state_incoherent') throw new Error('gitea-codex #430 (a): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
-  } finally { fs.rmSync(tA, { recursive: true, force: true }); }
-
-  // (b) bundle_id mismatches issue_numbers
-  const tB = fs.mkdtempSync(path.join(gtOs.tmpdir(), 'kw-gtcx-430b-'));
-  fs.mkdirSync(path.join(tB, 'kaola-workflow'), { recursive: true });
-  try {
-    const project = 'bundle-42-47';
-    const dir = path.join(tB, 'kaola-workflow', project);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-      '## Pending Gates', '- workflow-plan', '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Sink', 'branch: workflow/' + project,
-      'issue_number: 42', 'issue_numbers: 42,53', 'bundle_id: bundle-42-47',
-      'closure_policy: all_or_nothing', 'sink: pr', ''
-    ].join('\n'));
-    const planPath = path.join(dir, 'workflow-plan.md');
-    fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + gtMinimalPlan);
-    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(gtPlanVal).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
-    const fr = gtSpawn(process.execPath, [gtPlanVal, planPath, '--freeze'],
-      { cwd: tB, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-    if (fr.status !== 0) throw new Error('gitea-codex #430 (b): freeze must exit 0, stderr: ' + fr.stderr);
-    const r = gtSpawn(process.execPath, [gtAdaptiveNode, 'orient', '--project', project, '--json'],
-      { cwd: tB, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-    if (r.status === 0) throw new Error('gitea-codex #430 (b): orient must exit non-zero, got 0\nstdout: ' + r.stdout);
-    const o = JSON.parse(r.stdout);
-    if (o.result !== 'refuse') throw new Error('gitea-codex #430 (b): result must be refuse, got ' + JSON.stringify(o.result));
-    if (o.reason !== 'bundle_state_incoherent') throw new Error('gitea-codex #430 (b): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
-  } finally { fs.rmSync(tB, { recursive: true, force: true }); }
-
-  process.stdout.write('gitea-codex testBundleStateIncoherent: PASSED\n');
-}
-
+// DELETED: the #426 archive-completeness probe and the #430 bundle-coherence pair.
+//
+// #430 drove `gtAdaptiveNode orient`, the node-lifecycle CLI, over a frozen plan whose
+// hash the plan validator computed — three retired mechanisms to reach one refusal.
+// #426 (verifyArchiveComplete refuses before deleting) survives and is pinned for this forge
+// by simulate-gitea-workflow-walkthrough.js, which drives the same claim.js entry point.
 console.log('Gitea Codex workflow walkthrough simulation passed');

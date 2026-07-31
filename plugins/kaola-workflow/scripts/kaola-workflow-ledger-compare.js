@@ -1,52 +1,50 @@
 #!/usr/bin/env node
 'use strict';
 
-// issue #399: ledger-regression guard for the finalize transaction's Step-8a artifact mirror.
+// issue #399: record-regression guard for the finalize transaction's Step-8a artifact mirror.
 //
 // The Step-8a mirror `cp -R`s `kaola-workflow/{project}/.` from the main checkout into the
 // linked worktree right before archive. Run from the WRONG direction (cwd = main checkout with a
-// staler main copy), it clobbers a finished run's worktree ledger — resetting `complete` rows to
-// `pending` so the archive commits a pending-ledger plan (the 2026-06-11 audit reproduced this
-// live at v5.14.0). This guard compares the two `## Node Ledger` tables by COMPLETENESS and
-// refuses the copy when the main (source) copy is staler than the worktree (dest) copy.
+// staler main copy), it clobbers a finished run's record — resetting closed work back to open so
+// the archive commits an unfinished-looking run (the 2026-06-11 audit reproduced this live at
+// v5.14.0). This guard compares the two `mission-list.md` files by how much work each records as
+// DONE, and refuses the copy when the main (source) copy is staler than the worktree (dest) copy.
 //
-// FORGE-NEUTRAL: this file carries no `kaola-<forge>-workflow-` token, so it byte-copies to the
-// codex edition unchanged (COMMON_SCRIPTS + `npm run sync:editions`). It deliberately does NOT
-// import plan-validator's parseLedger — it owns a small self-contained `## Node Ledger` count so a
-// finalize-time guard never couples to the integrity reader.
+// THE PROPERTY IS THE POINT, NOT ITS DERIVATION. The question it answers — would this copy lose
+// work the destination already recorded? — is worktree management, and it outlives the node
+// executor whose `## Node Ledger` it used to count. What changed is only what it counts: the
+// `status: done` items of the one durable coordination record.
+//
+// FORGE-NEUTRAL: this file carries no `kaola-<forge>-workflow-` token, so it byte-copies to every
+// edition unchanged (BYTE_IDENTICAL_GROUPS + `npm run sync:editions`), and it owns its own tiny
+// parse so a finalize-time guard never couples to another reader.
 
 const fs = require('fs');
 
-// Count `| <id> | complete |` rows in the `## Node Ledger` table.
+// Count the items a mission list records as finished: `status: done` lines, at any indent (the
+// documented format indents item fields by two spaces under the `- item:` bullet, but a hand-edited
+// file legitimately varies). Own tiny parse, no dependency.
 //
-// Own 5-line section-scoped regex parse (NO plan-validator dependency): slice from the
-// `## Node Ledger` heading to the next `## ` heading, then count table rows whose SECOND
-// pipe-delimited cell is exactly `complete` (case-insensitive). Returns 0 when the section or
-// table is absent — the fail-open signal compareLedgers relies on for the legitimate first sync.
-function countComplete(planMdText) {
-  if (typeof planMdText !== 'string' || planMdText.length === 0) return 0;
-  const lines = planMdText.split('\n');
-  let inLedger = false;
+// Returns 0 when the file is empty or records nothing done — the fail-open signal compareLedgers
+// relies on for the legitimate first sync. It deliberately does NOT try to identify WHICH items
+// are done: the guard's question is comparative ("does the destination know about more finished
+// work than the source?"), and a count answers it without inventing a schema for a free-text field.
+function countComplete(missionListText) {
+  if (typeof missionListText !== 'string' || missionListText.length === 0) return 0;
   let count = 0;
-  for (const raw of lines) {
-    if (/^##[ \t]+Node Ledger[ \t]*$/.test(raw)) { inLedger = true; continue; }
-    if (inLedger && /^##[ \t]/.test(raw)) break; // next section ends the ledger table
-    if (!inLedger) continue;
-    const cells = raw.split('|');
-    // A real table row is `| c0 | c1 | ... |` → split yields ['', ' id ', ' status ', ..., ''].
-    if (cells.length < 3) continue;
-    if ((cells[2] || '').trim().toLowerCase() === 'complete') count++;
+  for (const raw of missionListText.split('\n')) {
+    if (/^[ \t]*(?:-[ \t]+)?status:[ \t]*done[ \t]*$/i.test(raw)) count++;
   }
   return count;
 }
 
 // Compare a SOURCE (main copy, about to be copied OUT) against a DEST (worktree copy, about to be
-// OVERWRITTEN). Refuse only when the dest is present AND strictly more complete than the source —
-// i.e. the copy would regress a finished worktree ledger back to a staler main one.
+// OVERWRITTEN). Refuse only when the dest is present AND records strictly more done work than the
+// source — i.e. the copy would regress a finished worktree record back to a staler main one.
 //
-// FAIL-OPEN (safe:true) when dest is absent/empty/has-no-ledger: that is the legitimate first sync
-// (the mirror pushing Finalization artifacts INTO a worktree that has no plan yet). Equal
-// completeness passes (STRICT >) so an idempotent re-run of the mirror is never refused.
+// FAIL-OPEN (safe:true) when dest is absent/empty/records nothing done: that is the legitimate
+// first sync (the mirror pushing Finalization artifacts INTO a worktree that has no record yet).
+// Equal counts pass (STRICT >) so an idempotent re-run of the mirror is never refused.
 function compareLedgers(srcText, destText) {
   const sourceComplete = countComplete(srcText || '');
   // Fail-open when there is no dest ledger to protect (absent/empty/no `## Node Ledger` table).
@@ -76,9 +74,9 @@ function main(argv) {
     else if (a === '--json') { asJson = true; }
     else if (a === '-h' || a === '--help') {
       process.stdout.write(
-        'Usage: kaola-workflow-ledger-compare.js --source <plan.md> --dest <plan.md> [--json]\n' +
+        'Usage: kaola-workflow-ledger-compare.js --source <mission-list.md> --dest <mission-list.md> [--json]\n' +
         '  exit 0  safe to copy source over dest (or fail-open first sync)\n' +
-        '  exit 3  unsafe: would_regress_complete_ledger (dest strictly more complete than source)\n' +
+        '  exit 3  unsafe: would_regress_complete_ledger (dest records strictly more done work)\n' +
         '  exit 1  usage error / source unreadable\n');
       return 0;
     } else {

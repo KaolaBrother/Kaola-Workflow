@@ -91,14 +91,15 @@ function main() {
 
   const lines = [
     'Kaola-Workflow compact resume:',
-    `- Read ${relativeState} first, then the frozen workflow-plan.md and its Node Ledger.`,
+    `- Read ${relativeState} first, then mission-list.md beside it.`,
     `- Project: ${project}`,
     `- Current phase: ${phase}`,
     `- Current step: ${step}`,
     `- Next command: ${nextCommand}`,
     `- Inline emergency fallback authorized: ${fallback}`,
-    '- If node execution or Finalization validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
-    '- If state and artifacts disagree, stop and reconstruct conservatively from the frozen workflow-plan.md.'
+    '- In mission-list.md the H1 is the goal; `done` items carry what is already known, `in-flight` items are the decision to make, `todo` items are what remains.',
+    '- If a dispatch or a validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
+    '- If state and the mission list disagree, reconcile from what is on disk before dispatching anything further.'
   ];
 
   process.stdout.write(`${lines.join('\n')}\n`);

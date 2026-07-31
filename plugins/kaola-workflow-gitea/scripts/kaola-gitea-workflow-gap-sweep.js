@@ -34,7 +34,6 @@
 //   KAOLA_GAP_ROOT=<dir>      Use <dir> as the repo root instead of process.cwd().
 //
 // Reason classes (closed enum):
-//   in_run_repair             nodeId with >1 open event in provenance-log.jsonl
 //   deferred_red_chain        chain in chain-receipt.json with accepted_red:true
 //   manual:<kebab-slug>       lines in .cache/run-gaps-manual.md (gap: <class> — <text>)
 //
@@ -66,31 +65,6 @@ function toKebab(str) {
 // ---------------------------------------------------------------------------
 // Scanner helpers
 // ---------------------------------------------------------------------------
-
-// Read provenance-log.jsonl and return in_run_repair items.
-// A nodeId with >1 open event = one item per unique nodeId; count = extra opens.
-function scanProvenance(cacheDir) {
-  const p = path.join(cacheDir, 'provenance-log.jsonl');
-  if (!fs.existsSync(p)) return [];
-  const raw = fs.readFileSync(p, 'utf8');
-  const openCounts = {};  // nodeId -> number of open events
-  for (const line of raw.split('\n')) {
-    const l = line.trim();
-    if (!l) continue;
-    let obj;
-    try { obj = JSON.parse(l); } catch (_) { continue; }
-    if (obj.event === 'open' && obj.nodeId) {
-      openCounts[obj.nodeId] = (openCounts[obj.nodeId] || 0) + 1;
-    }
-  }
-  const items = [];
-  for (const [nodeId, cnt] of Object.entries(openCounts)) {
-    if (cnt > 1) {
-      items.push({ reasonClass: 'in_run_repair', sample: nodeId, count: cnt - 1 });
-    }
-  }
-  return items;
-}
 
 // Read chain-receipt.json and return deferred_red_chain items.
 function scanChainReceipt(cacheDir) {
@@ -224,7 +198,6 @@ function runScan(opts) {
 
   // Scope guard: only read from this project's .cache.
   const raw = [
-    ...scanProvenance(cacheDir),
     ...scanChainReceipt(cacheDir),
     ...scanManual(cacheDir),
   ];

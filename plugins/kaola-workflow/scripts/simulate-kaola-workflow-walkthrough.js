@@ -45,6 +45,13 @@ fs.mkdirSync(path.join(kwSandboxHome, '.codex'), { recursive: true });
 fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[features.multi_agent_v2]\nenabled = true\n\n');
 
 const pluginRoot = path.resolve(__dirname, '..');
+// The role roster the plugin SHIPS, derived rather than typed. The installer's contract is
+// "place exactly this roster, no more and no less" — and because the source (plugins/*/agents/)
+// and the install target (.codex/agents/kaola-workflow/) are DIFFERENT locations, comparing the
+// two is a real assertion, not a tautology. A hand-typed integer here went stale the moment the
+// mandatory planner left the roster, and would go stale again on the next role change.
+const ROSTER_TOMLS = fs.readdirSync(path.join(pluginRoot, 'agents'))
+  .filter(f => f.endsWith('.toml')).sort();
 const repoRoot = path.resolve(pluginRoot, '..', '..');
 const claimScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-claim.js');
 const installProfilesScript = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
@@ -54,75 +61,21 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-// Retirement of the fast/full paths: a finalize with NO frozen workflow-plan.md now refuses
-// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight from
-// claim to finalize to exercise terminal archive/closure normalization — not an adaptive run — so
-// they seed a minimal FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation
-// gate. When the fixture commits real production files on the feature branch, pass those paths so a
-// tdd-guide node's declared write set attributes them for the finalize sweep. (Historically this
-// marked the state `workflow_path: fast` so the retired fast N/A gate skipped verification.)
-function seedAdaptiveFinalizeFixture(root, project, writeSet) {
+// A run folder that is FINALIZE-READY and carries no plan. Everything this used to seed — a
+// frozen `## Nodes` table, a `## Node Ledger`, a compliance table, a plan_hash bound into the
+// state, a derived task mirror — existed for two doors that are gone: the
+// `adaptive_plan_missing` refusal and the declared-write-set attribution sweep. What finalize
+// still measures is the validation record, and it must be BOUND to the tree, so the hash comes
+// from the same kernel function the door recomputes with.
+//
+// `writeSet` is retained and deliberately unused: it names the production paths each fixture
+// commits, which is still the clearest local documentation of what the branch carries.
+function seedAdaptiveFinalizeFixture(root, project, writeSet) {   // eslint-disable-line no-unused-vars
   const dir = path.join(root, 'kaola-workflow', project);
-  fs.mkdirSync(dir, { recursive: true });
-  const planPath = path.join(dir, 'workflow-plan.md');
-  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
-  const nodesTable = paths.length ? [
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
-    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
-    '| n4 | finalize | n3 | — | 1 | sequence |',
-  ] : [
-    '| n1 | code-explorer | — | — | 1 | sequence |',
-    '| n2 | finalize | n1 | — | 1 | sequence |',
-  ];
-  const ledgerRows = paths.length
-    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
-    : ['| n1 | complete |', '| n2 | complete |'];
-  const complianceRows = paths.length ? [
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
-    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
-    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
-  ] : [
-    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
-    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
-  ];
-  const tasks = paths.length ? [
-    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
-    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-  ] : [
-    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
-    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
-  ];
-  fs.writeFileSync(planPath, [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    ...nodesTable, '',
-    '## Node Ledger', '', '| id | status |', '|---|---|',
-    ...ledgerRows, '',
-    '## Required Agent Compliance', '',
-    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
-    ...complianceRows, ''
-  ].join('\n'));
-  let finalHash = '';
-  try { finalHash = JSON.parse(runVal([planPath, '--freeze', '--json'], root).stdout).planHash || ''; } catch (_) {}
-  const sFile = path.join(dir, 'workflow-state.md');
-  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
-    const s = fs.readFileSync(sFile, 'utf8')
-      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
-      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
-      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
-      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
-    fs.writeFileSync(sFile, s);
-    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
-  }
   fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  const schema = require(path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
   let cand = '';
-  try { cand = JSON.parse(runVal([planPath, '--candidate-hash', '--json'], root).stdout).validated_candidate_hash || ''; } catch (_) {}
+  try { cand = schema.computeCodeTreeHash(root, project, schema.VALIDATION_TEST_CONSUMES) || ''; } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
     'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
@@ -562,9 +515,21 @@ function testKeepOpenArchiveStamp333() {
   }
 }
 
-// AC2 (#284): compact-resume stdout is PLAIN TEXT, not a JSON envelope.
-// Extends testCodexCompactResume266: asserts the already-GREEN output is plain-text,
-// not wrapped in { "hookSpecificOutput": ... }.
+// AC2 (#284): compact-resume stdout is PLAIN TEXT, not a JSON envelope — and the packet it emits
+// is derived from the RUN RECORD.
+//
+// Two properties, one scenario, and only one of them moved. The #284 subject — plain text rather
+// than a `{ "hookSpecificOutput": ... }` envelope — is a runtime-shape property with no connection
+// to the record format, and survives the re-point untouched. The packet-CONTENT needles did move:
+// they used to read `in-progress node:` / `pending gates:` / `consent-halt markers:` / `task mirror:`
+// off a frozen plan, a `## Node Ledger` and a derived workflow-tasks.json. Those are gone; the
+// packet now comes from mission-list.md, and the assertions below are derived from the format in
+// docs/mission-list.md rather than from the script.
+//
+// The load-bearing one is the in-flight line WITH its dispatched locator. ADR 0017 sizes this whole
+// file to one observed failure — an orchestrator losing what was in flight — so a resume packet that
+// names an in-flight item but not where its work was to land would restate the problem the record
+// exists to solve.
 function testAC2CompactPlainStdout() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-compact-plain-'));
   try {
@@ -580,52 +545,65 @@ function testAC2CompactPlainStdout() {
       '## Sink',
       'branch: workflow/issue-284',
       'issue_number: 284',
-      'next_command: /kaola-workflow-plan-run',
-      'next_skill: kaola-workflow-next',
       ''
     ].join('\n'));
 
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), FIXTURE_PLAN);
-
-    const tasksJson = JSON.stringify({
-      source_plan_hash: FIXTURE_PLAN_HASH,
-      tasks: [
-        { id: 'explore', role: 'code-explorer', status: 'completed', ledger_status: 'complete' },
-        { id: 'impl', role: 'implementer', status: 'in_progress', ledger_status: 'in_progress' },
-        { id: 'gate', role: 'code-reviewer', status: 'pending', ledger_status: 'pending' },
-        { id: 'done', role: 'finalize', status: 'completed', ledger_status: 'n/a' }
-      ],
-      last_synced_from_ledger: '2026-06-09T00:00:00.000Z'
-    }, null, 2) + '\n';
-    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'), tasksJson);
+    // One item per status, so the packet cannot pass by reporting a single hard-coded shape.
+    fs.writeFileSync(path.join(projDir, 'mission-list.md'), [
+      '# Retire the node executor',
+      '',
+      '- item: strip the node lifecycle from the walkthrough',
+      '  status: done',
+      '  dispatched: tdd-guide',
+      '  result: 216 scenarios remain',
+      '',
+      '- item: re-point compact-resume at the mission list',
+      '  status: in-flight',
+      '  dispatched: demolish-scripts, output to plugins/*/scripts/*compact-resume.js',
+      '',
+      '- item: author behavioural coverage for the new packet',
+      '  status: todo',
+      ''
+    ].join('\n'));
 
     const input = JSON.stringify({ cwd: root });
     const r = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
     assert(r.status === 0, 'AC2: compact-resume must exit 0, got ' + r.status + '\n' + r.stderr);
 
-    // AC2 GREEN: output must NOT start with '{' (not a JSON object) and must NOT contain
-    // the Codex hookSpecificOutput envelope key.
-    // RED demonstration: if the script emitted a JSON envelope, the first char would be '{'.
+    // --- The #284 subject, unchanged: plain text, never a Codex JSON envelope. ---
     assert(!r.stdout.startsWith('{'),
       'AC2: compact-resume stdout must NOT be a JSON object (plain text expected), got: ' + r.stdout.slice(0, 80));
     assert(!r.stdout.includes('"hookSpecificOutput"'),
       'AC2: compact-resume stdout must NOT contain hookSpecificOutput envelope, got: ' + r.stdout.slice(0, 200));
 
-    // Assert the expected plain-text packet lines ARE present.
+    // --- Non-vacuity: a well-formed run must not produce an empty packet. This is the failure
+    // --- mode a wiring test is structurally blind to, so it is asserted before any content needle.
+    assert(r.stdout.trim().length > 0,
+      'AC2: a run with a readable mission list must emit a NON-EMPTY packet — silently emitting '
+      + 'nothing is the one failure the hook cannot report on its own');
+
     assert(r.stdout.includes('Kaola-Workflow compact resume:'),
       'AC2: packet must include the header line');
-    assert(r.stdout.includes('active project:'),
-      'AC2: packet must include active project line');
-    assert(r.stdout.includes('next skill/command:'),
-      'AC2: packet must include next skill/command line');
-    assert(r.stdout.includes('in-progress node:'),
-      'AC2: packet must include in-progress node line');
-    assert(r.stdout.includes('pending gates:'),
-      'AC2: packet must include pending gates line');
-    assert(r.stdout.includes('consent-halt markers:'),
-      'AC2: packet must include consent-halt markers line');
-    assert(r.stdout.includes('task mirror:'),
-      'AC2: packet must include task mirror line');
+    assert(r.stdout.includes('active project: ' + projectName),
+      'AC2: packet must name the active project, got: ' + r.stdout);
+
+    // --- The record-derived half, per docs/mission-list.md. ---
+    assert(r.stdout.includes('Retire the node executor'),
+      'AC2: the H1 is the goal and must reach the packet, got: ' + r.stdout);
+    assert(/in-flight:.*re-point compact-resume at the mission list/.test(r.stdout),
+      'AC2: the in-flight item is the decision a successor has to make and must be named, got: ' + r.stdout);
+    assert(/dispatched:.*demolish-scripts/.test(r.stdout),
+      'AC2: the in-flight item must carry its DISPATCHED locator — without it the packet restates '
+      + 'the loss the record exists to prevent, got: ' + r.stdout);
+    assert(/done: 1/.test(r.stdout) && /in-flight: 1/.test(r.stdout) && /todo: 1/.test(r.stdout),
+      'AC2: the packet must report the frontier counts (done/in-flight/todo), got: ' + r.stdout);
+
+    // --- Discrimination: the CLOSED item's prose must not be presented as the open decision.
+    // --- Without this, a packet that dumped the whole file verbatim would satisfy every needle above.
+    const inFlightLine = r.stdout.split('\n').find(l => l.startsWith('in-flight:')) || '';
+    assert(!inFlightLine.includes('strip the node lifecycle'),
+      'AC2: the in-flight line must carry the IN-FLIGHT item, not a done one — a verbatim dump of '
+      + 'the file would otherwise pass every assertion above; got: ' + inFlightLine);
 
     console.log('testAC2CompactPlainStdout (#284 AC2): PASSED');
   } finally {
@@ -968,277 +946,8 @@ const CODEX_PLAN = ['# Workflow Plan — issue #971', '', '## Meta', 'labels: en
   '## Node Ledger', '', '| id | status |', '|---|---|',
   '| ex | complete |', '| a | complete |', '| b | complete |', '| rv | complete |', '| done | complete |', ''].join('\n');
 
-function testCodexAdaptiveCuratedAndBarrier() {
-  // ---- #238 candidate-side curated normalization (punctuation must still route to yellow) ----
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-curated-'));
-    try {
-      plantFolder(tmp, 'curated-claimed', 330, null);
-      const planPath = path.join(tmp, 'kaola-workflow', 'curated-claimed', 'workflow-plan.md');
-      // #501: Dockerfile is now a sensitive surface requiring a G2 security-reviewer post-dominator.
-      fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| sec | security-reviewer | review | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |', ''].join('\n'));
-      assert(runVal([planPath, '--freeze'], tmp).status === 0, 'codex: freeze curated plan');
-      for (const [num, body] of [[331, 'body: edits the Dockerfile. also src/server.js'], [332, 'body: tweak ./Dockerfile and src/server.js'], [333, 'body: edits the dockerfile. also src/server.js']]) {
-        plantRoadmap(tmp, num, body);
-        const r = classifyOffline(tmp, num);
-        // 333 is lowercase "dockerfile." — case-insensitive curated match (v3.21.0).
-        assert(r.verdict === 'yellow' && /curated root file "Dockerfile"/.test(r.reasoning), 'codex #238: punctuated/case-insensitive curated overlap must be yellow ("' + body + '"), got ' + JSON.stringify(r));
-      }
-      // claimed-PROSE side (no frozen plan): a curated overlap declared only in prose is still yellow.
-      plantFolder(tmp, 'prose-claimed', 360, '# Phase 3\nWe will edit the Dockerfile.\n');
-      plantRoadmap(tmp, 361, 'body: also edits the Dockerfile and src/app.js');
-      assert(classifyOffline(tmp, 361).verdict === 'yellow', 'codex F9: claimed-prose curated overlap must be yellow');
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // green control needs ISOLATION (no other claimed project naming Dockerfile), or it would overlap.
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-curated-green-'));
-    try {
-      plantFolder(tmp, 'overblock-claimed', 350, null);
-      plantRoadmap(tmp, 351, 'body: edits the Dockerfile only, nothing else');
-      assert(classifyOffline(tmp, 351).verdict === 'green', 'codex F10: candidate-only curated vs phase<=2 claimed must stay green');
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- #239 per-node tree-diff barrier (over-attribution, --base reject, idempotent) ----
-  const mkRepo = () => {
-    const grepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-barrier-'));
-    initGitRepo(grepo);
-    const proj = path.join(grepo, 'kaola-workflow', 'issue-971'); fs.mkdirSync(proj, { recursive: true });
-    const planPath = path.join(proj, 'workflow-plan.md'); fs.writeFileSync(planPath, CODEX_PLAN);
-    assert(runVal([planPath, '--freeze'], grepo).status === 0, 'codex: freeze barrier plan');
-    git(['add', '-A'], grepo); git(['commit', '-m', 'plan'], grepo);
-    return { grepo, planPath };
-  };
-  const cu = g => { fs.rmSync(g, { recursive: true, force: true }); fs.rmSync(g + '-remote', { recursive: true, force: true }); };
-  const w = (g, rel, c) => { const p = path.join(g, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, c); };
-  // over-attribution: stray untracked at base must NOT be attributed to the node
-  { const { grepo, planPath } = mkRepo(); try {
-      w(grepo, 'stray/leftover.js', 's\n');
-      assert(runVal([planPath, '--record-base', '--node-id', 'a'], grepo).status === 0, 'codex: record-base a');
-      w(grepo, 'aaa/x.js', 'x\n');
-      const r = runVal([planPath, '--barrier-check', '--node-id', 'a', '--json'], grepo);
-      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass', 'codex #239: stray untracked must NOT be over-attributed, got ' + r.stdout);
-    } finally { cu(grepo); } }
-  // overflow into sibling lane must refuse
-  { const { grepo, planPath } = mkRepo(); try {
-      assert(runVal([planPath, '--record-base', '--node-id', 'a'], grepo).status === 0, 'codex: record-base a');
-      w(grepo, 'aaa/x.js', 'x\n'); w(grepo, 'bbb/y.js', 'y\n');
-      const r = runVal([planPath, '--barrier-check', '--node-id', 'a', '--json'], grepo);
-      assert(r.status === 1 && /bbb\/y\.js/.test(r.stdout), 'codex #239: overflow into sibling lane must refuse, got ' + r.stdout);
-    } finally { cu(grepo); } }
-  // --base rejected per-node + idempotent record-base
-  { const { grepo, planPath } = mkRepo(); try {
-      assert(runVal([planPath, '--record-base', '--node-id', 'a'], grepo).status === 0, 'codex: record-base a');
-      w(grepo, 'bbb/y.js', 'y\n');
-      const rb = runVal([planPath, '--barrier-check', '--node-id', 'a', '--base', 'HEAD', '--json'], grepo);
-      assert(rb.status === 1 && /--base/.test(rb.stdout), 'codex #239: --base must be rejected per-node, got ' + rb.stdout);
-      const rb2 = runVal([planPath, '--record-base', '--node-id', 'a', '--json'], grepo);
-      assert(rb2.status === 0 && JSON.parse(rb2.stdout).reused === true, 'codex #239: re-record must reuse the baseline, got ' + rb2.stdout);
-    } finally { cu(grepo); } }
-  // ---- #340 freeze-time write-set completeness (CODEX byte copy) ----
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-340-'));
-    try {
-      const planAt = (rows) => { const p = path.join(tmp, 'plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...rows, ''].join('\n')); return p; };
-      // A1-shaped: agent add omitting the surface, anchor planted -> refuse naming the surface.
-      fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
-      fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
-      let r = runVal([planAt([
-        '| scout | implementer | ex | agents/new-scout.md | 1 | sequence |',
-        '| ex | code-explorer | — | — | 1 | sequence |',
-        '| rv | code-reviewer | scout | — | 1 | sequence |',
-        '| done | finalize | rv | — | 1 | sequence |',
-      ]), '--json'], tmp);
-      let out = JSON.parse(r.stdout);
-      assert(out.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test((out.errors || []).join('\n')) && /agent-registration gap:.*uninstall\.sh/.test((out.errors || []).join('\n')),
-        'codex #340 A1: agent add omitting the surface must refuse naming validate-vendored-agents.js + uninstall.sh, got ' + r.stdout);
-      // A4-shaped: a port parallel to its root edit -> refuse (forge-port ordering gap; fs-free).
-      r = runVal([planAt([
-        '| ex | code-explorer | — | — | 1 | sequence |',
-        '| rootedit | tdd-guide | ex | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/' + 'scripts/kaola-workflow-claim.js | 1 | sequence |',
-        '| port | implementer | ex | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
-        '| rv | code-reviewer | rootedit,port | — | 1 | sequence |',
-        '| done | finalize | rv | — | 1 | sequence |',
-      ]), '--json'], tmp);
-      out = JSON.parse(r.stdout);
-      assert(out.result === 'refuse' && /forge-port ordering gap/.test((out.errors || []).join('\n')),
-        'codex #340 A4: a port parallel to its root edit must refuse with forge-port ordering gap, got ' + r.stdout);
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- #334 non-delegable main-session-gate (CODEX byte copy) ----
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-334-'));
-    try {
-      const g3Plan = (ledgerRows) => { const projDir = path.join(tmp, 'kaola-workflow', 'issue-334'); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true }); const p = path.join(projDir, 'workflow-plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', ...ledgerRows, ''].join('\n')); return { p, projDir }; };
-      // in-grammar control: a post-dominating main-session-gate freezes.
-      let r = runVal([g3Plan(['| impl | pending |', '| rv | pending |', '| vgate | pending |', '| done | pending |']).p, '--json'], tmp);
-      assert(JSON.parse(r.stdout).result === 'in-grammar', 'codex #334: post-dominating main-session-gate must be in-grammar, got ' + r.stdout);
-      // G3 freeze refusal: a side-branch gate (does not post-dominate impl) refuses /G3/.
-      { const p = path.join(tmp, 'g3side.md'); fs.writeFileSync(p, ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ex | code-explorer | — | — | 1 | sequence |', '| impl | implementer | ex | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | ex | — | 1 | sequence |', '| done | finalize | rv,vgate | — | 1 | sequence |', ''].join('\n'));
-        r = runVal([p, '--json'], tmp);
-        assert(JSON.parse(r.stdout).result === 'refuse' && /G3/.test((JSON.parse(r.stdout).errors || []).join(';')), 'codex #334: side-branch gate must refuse (G3), got ' + r.stdout); }
-      // --gate-verify: impl complete + gate PENDING -> exit 1 (the regression scenario).
-      assert(runVal([g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']).p, '--gate-verify', '--json'], tmp).status === 1, 'codex #334: --gate-verify exit 1 when gate pending');
-      // --gate-verify: gate n/a -> exit 1 (cannot be skipped).
-      assert(runVal([g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']).p, '--gate-verify', '--json'], tmp).status === 1, 'codex #334: --gate-verify exit 1 when gate n/a');
-      // pass control: gate complete + .cache verdicts -> --gate-verify AND --verdict-check exit 0.
-      { const { p, projDir } = g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']);
-        fs.writeFileSync(path.join(projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
-        fs.writeFileSync(path.join(projDir, '.cache', 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
-        assert(runVal([p, '--gate-verify', '--json'], tmp).status === 0, 'codex #334: --gate-verify exit 0 when gate complete + post-dominates');
-        assert(runVal([p, '--verdict-check', '--json'], tmp).status === 0, 'codex #334: --verdict-check exit 0 when gate records verdict: pass'); }
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- #509 (CODEX byte copy): --verdict-check is SCOPED to CHANGE-GATE adversarial-verifiers ----
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-509-'));
-    try {
-      const mkAv = (nodes, ledger, labels) => { const projDir = path.join(tmp, 'kaola-workflow', 'issue-509'); fs.rmSync(path.join(projDir, '.cache'), { recursive: true, force: true }); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true }); const p = path.join(projDir, 'workflow-plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: ' + (labels || 'question'), '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...nodes, '', '## Node Ledger', '', '| id | status |', '|---|---|', ...ledger, ''].join('\n')); return { p, projDir }; };
-      // (a-seq) investigation adversarial-verifier (post-dominates no code/sensitive) emitting refuted -> PASS (exit 0).
-      let av = mkAv(['| probe | code-explorer | — | — | 1 | sequence |', '| assume | knowledge-lookup | probe | — | 1 | sequence |', '| critique | adversarial-verifier | assume | — | 1 | sequence |', '| done | finalize | critique | — | 1 | sequence |'], ['| probe | complete |', '| assume | complete |', '| critique | complete |', '| done | complete |']);
-      fs.writeFileSync(path.join(av.projDir, '.cache', 'critique.md'), 'verdict: refuted\nfindings_blocking: 2\nwrong\n');
-      assert(runVal([av.p, '--verdict-check', '--json'], tmp).status === 0, 'codex #509(a-seq): investigation adversarial-verifier (no code/sensitive post-dominance) emitting refuted must PASS --verdict-check (exit 0)');
-      // (a-fanout) read-only majority-refute investigation fanout -> PASS (exit 0, exempt regardless of shape).
-      av = mkAv(['| assume | knowledge-lookup | — | — | 1 | sequence |', '| crit1 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| crit2 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| crit3 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| done | finalize | crit1,crit2,crit3 | — | 1 | sequence |'], ['| assume | complete |', '| crit1 | complete |', '| crit2 | complete |', '| crit3 | complete |', '| done | complete |']);
-      fs.writeFileSync(path.join(av.projDir, '.cache', 'adversarial-verifier-crit1.md'), 'verdict: refuted\nfindings_blocking: 1\n');
-      fs.writeFileSync(path.join(av.projDir, '.cache', 'adversarial-verifier-crit2.md'), 'verdict: refuted\nfindings_blocking: 1\n');
-      fs.writeFileSync(path.join(av.projDir, '.cache', 'adversarial-verifier-crit3.md'), 'verdict: pass\nfindings_blocking: 0\n');
-      assert(runVal([av.p, '--verdict-check', '--json'], tmp).status === 0, 'codex #509(a-fanout): read-only majority-refute investigation fanout must PASS --verdict-check (exit 0) — exemption keys on post-dominance, not shape');
-      // (b) CHANGE-GATE adversarial-verifier (post-dominates a code-producing impl) emitting refuted -> STILL BLOCK (exit 1).
-      av = mkAv(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| critique | adversarial-verifier | rv | — | 1 | sequence |', '| done | finalize | critique | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| critique | complete |', '| done | complete |'], 'feature');
-      fs.writeFileSync(path.join(av.projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
-      fs.writeFileSync(path.join(av.projDir, '.cache', 'critique.md'), 'verdict: refuted\nfindings_blocking: 3\nbroken\n');
-      assert(runVal([av.p, '--verdict-check', '--json'], tmp).status === 1, 'codex #509(b): a CHANGE-GATE adversarial-verifier (post-dominates code) emitting refuted must STILL BLOCK --verdict-check (exit 1) — the gate stays strong');
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  // ---- #501 (CODEX byte copy): high-blast-radius surfaces require the internal G2 security-reviewer ----
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-501-'));
-    try {
-      const mkSp = (writeSet, nodes) => { const p = path.join(tmp, 'sp.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...nodes, ''].join('\n')); return p; };
-      for (const sp of ['.env', '.env.local', 'Dockerfile', '.github/workflows/deploy.yml', '.gitlab-ci.yml']) {
-        // no security-reviewer -> refuse (G2).
-        let r = runVal([mkSp(sp, ['| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |']), '--json'], tmp);
-        assert(JSON.parse(r.stdout).result === 'refuse' && /G2/.test((JSON.parse(r.stdout).errors || []).join(';')), 'codex #501: sensitive surface "' + sp + '" with no security-reviewer must refuse (G2), got ' + r.stdout);
-        // CONTROL: with a security-reviewer post-dominator -> in-grammar.
-        r = runVal([mkSp(sp, ['| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| sec | security-reviewer | review | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |']), '--json'], tmp);
-        assert(JSON.parse(r.stdout).result === 'in-grammar', 'codex #501 CONTROL: sensitive surface "' + sp + '" WITH a security-reviewer must freeze green, got ' + r.stdout);
-      }
-      // NEG-CONTROL: lookalike benign paths must NOT be swept into G2.
-      const rn = runVal([mkSp('x', ['| impl | tdd-guide | — | src/environment.js, lib/Dockerfileutil.js | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |']), '--json'], tmp);
-      assert(JSON.parse(rn.stdout).result === 'in-grammar' && !/G2/.test((JSON.parse(rn.stdout).errors || []).join(';')), 'codex #501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2), got ' + rn.stdout);
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  console.log('Codex adaptive #238/#239 coverage: PASSED');
-}
 
-// #425/#431 (codex byte copy): ledger-header freeze-wall + generated-aggregator port-split
-// freeze-wall on the CODEX copy of the plan-validator. Exercises the byte-identical copy to
-// confirm the freeze-wall behaviors are present in the codex edition.
-function testCodexLedgerHeaderInvalid425() {
-  const pv = require(codexValidator);
-  const planBody = [
-    '# Plan', '',
-    '## Meta',
-    'plan_form: spine',
-    'plan_schema_version: 2',
-    'labels: chore',
-    'code_certifier: review',
-    'security_certifier: none',
-    'inherited_frontier_digest: none',
-    'inherited_frontier_classes: none',
-    'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
-    'validation_timeout_minutes: 5', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
-    '|---|---|---|---|---|---|---|---|---|---|',
-    '| impl | tdd-guide | — | lib/foo.js | 1 | sequence | — | — | — | — |',
-    '| review | code-reviewer | impl | — | 1 | sequence | review-change | code-tree | sequence | — |',
-    '| done | finalize | review | — | 1 | sequence | — | — | — | — |',
-    '',
-    '## Design', '', 'Decompose: impl builds lib/foo.js; review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', '',
-    '## Acceptance', '', 'A1: the declared write set lands the change the plan was frozen for.', 'A2: the recorded validation passes over the candidate.', '', '## Node Ledger', '',
-    '| node | status |',
-    '|---|---|',
-    '| impl | pending |',
-    '| review | pending |',
-    '| done | pending |',
-    '',
-  ].join('\n');
 
-  // (1) validatePlan must refuse with ledger_header_invalid.
-  const v = pv.validatePlan(planBody);
-  assert(v.result === 'refuse',
-    'codex #425: plan with `| node |` ledger header must refuse at freeze, got: ' + JSON.stringify(v.result));
-  assert(Array.isArray(v.errors) && v.errors.some(e => /ledger_header_invalid/.test(e)),
-    'codex #425: refusal errors must name ledger_header_invalid, got: ' + JSON.stringify(v.errors));
-
-  // (2) --repair via CLI: --freeze --repair must normalize and surface header_normalized:true.
-  const repairTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-425-'));
-  try {
-    const planPath = path.join(repairTmp, 'plan.md');
-    fs.writeFileSync(planPath, planBody);
-    const r = spawnSync(process.execPath, [codexValidator, planPath, '--freeze', '--repair', '--json'], {
-      cwd: repairTmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
-    });
-    assert(r.status === 0,
-      'codex #425: --freeze --repair must exit 0, got ' + r.status + ' stderr: ' + r.stderr);
-    const out = JSON.parse(r.stdout);
-    assert(out.result === 'in-grammar',
-      'codex #425: --freeze --repair must freeze to in-grammar, got: ' + JSON.stringify(out.result));
-    assert(out.header_normalized === true,
-      'codex #425: --freeze --repair must surface header_normalized:true, got: ' + JSON.stringify(out.header_normalized));
-  } finally { fs.rmSync(repairTmp, { recursive: true, force: true }); }
-
-  console.log('testCodexLedgerHeaderInvalid425: PASSED');
-}
-
-function testCodexGeneratedPortSplit431() {
-  // The codex copy of plan-validator loads `editionSync = null` (edition-sync.js is a root-only
-  // module not copied to plugin trees), so the generated_port_split check is intentionally inert
-  // in the codex validator. This test verifies the correct anchoring behaviour:
-  // (a) codex copy is inert (split plan passes — zero false positives in codex installs), and
-  // (b) the canonical root copy fires the split-wall (root is where edition-sync.js lives).
-  const codexPv = require(codexValidator);
-  const rootPv = require(path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js'));
-
-  const splitPlan = [
-    '# Plan', '',
-    '## Meta', 'plan_form: spine', 'labels: chore', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/' + 'scripts/kaola-workflow-plan-validator.js | 1 | sequence |',
-    '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| done | finalize | review | — | 1 | sequence |',
-    '',
-  ].join('\n');
-
-  // (a) codex copy is inert for generated_port_split: must NOT refuse on missing forge ports.
-  const codexResult = codexPv.validatePlan(splitPlan);
-  assert(!(Array.isArray(codexResult.errors) && codexResult.errors.some(e => /generated_port_split/.test(e))),
-    'codex #431 anchor: codex validator must NOT fire generated_port_split (inert in codex tree), got: ' + JSON.stringify(codexResult.errors));
-
-  // (b) canonical root copy fires the split-wall with repoRoot as the anchor.
-  const splitResult = rootPv.validatePlan(splitPlan, { root: repoRoot });
-  assert(splitResult.result === 'refuse',
-    'codex #431 root: split plan (canonical+codex only) must refuse via root validator, got: ' + JSON.stringify(splitResult.result));
-  assert(Array.isArray(splitResult.errors) && splitResult.errors.some(e => /generated_port_split/.test(e)),
-    'codex #431 root: root validator refusal must name generated_port_split, got: ' + JSON.stringify(splitResult.errors));
-
-  // (c) bundled plan (all 4 editions) must freeze in-grammar via root validator.
-  const bundledPlan = [
-    '# Plan', '',
-    '## Meta', 'plan_form: spine', 'labels: chore', '',
-    '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/' + 'scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
-    '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| done | finalize | review | — | 1 | sequence |',
-    '',
-    '## Design', '', 'Decompose: impl ports the aggregator across all four editions in one node (they must move together); review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', '',
-  ].join('\n');
-  const bundledResult = rootPv.validatePlan(bundledPlan, { root: repoRoot });
-  assert(bundledResult.result === 'in-grammar',
-    'codex #431 root: bundled plan (all 4 editions) must freeze in-grammar, got: ' + JSON.stringify(bundledResult.result));
-
-  console.log('testCodexGeneratedPortSplit431: PASSED');
-}
 
 // ---------------------------------------------------------------------------
 // AC-7 (#266): RED-first regression tests for the 3 new scripts.
@@ -1250,35 +959,6 @@ const preflightScript   = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex
 const taskMirrorScript  = path.join(pluginRoot, 'scripts', 'kaola-workflow-task-mirror.js');
 const compactResumeScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-compact-resume.js');
 
-// Shared frozen plan fixture (used by task-mirror + compact-resume tests)
-const FIXTURE_PLAN_HASH = 'f59d3465f4ca7584eba5f7d04446bf2914e019ba1aa4511c5a25f4e65a80497e';
-const FIXTURE_PLAN = [
-  '# Workflow Plan',
-  `<!-- plan_hash: ${FIXTURE_PLAN_HASH} -->`,
-  '',
-  '## Meta',
-  'labels: enhancement',
-  '',
-  '## Nodes',
-  '',
-  '| id | role | depends_on | declared_write_set | cardinality | shape |',
-  '|---|---|---|---|---|---|',
-  '| explore | code-explorer | — | — | 1 | sequence |',
-  '| impl | implementer | explore | src/x.js | 1 | sequence |',
-  '| gate | code-reviewer | impl | — | 1 | sequence |',
-  '| done | finalize | gate | — | 1 | sequence |',
-  '',
-  '## Node Ledger',
-  '',
-  '| id | status |',
-  '|---|---|',
-  '| explore | complete |',
-  '| impl | in_progress |',
-  '| gate | pending |',
-  '| done | n/a |',
-  'consent_halt: pending',
-  ''
-].join('\n');
 
 function runScript(scriptPath, args, opts) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
@@ -1405,8 +1085,13 @@ function testCodexPreflight266() {
           'explicitRequestOnly', '#775 effort INSIDE the [agents] table is not a valid TOML root key -> ignored');
 
         fs.writeFileSync(configPath, origConfig);
-        // Replace [agents.workflow-planner] inside the block — makes that role missing from block
-        const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
+        // Rename a managed role's table inside the block so that role goes missing from it. The
+        // vehicle used to be workflow-planner; that role is retired, so the rename silently matched
+        // nothing and the 'stale block' fixture was no longer stale. Any SHIPPED role proves the
+        // same thing — the assertion is about the block, not about which role is in it.
+        const staleConfig = origConfig.replace('[agents.implementer]', '[agents.STALE-implementer]');
+        assert(staleConfig !== origConfig,
+          '#266 case1 fixture: the stale-block rename must actually change the config (it names a role the install places)');
         fs.writeFileSync(configPath, staleConfig);
 
     const staleResult = runScript(preflightScript,
@@ -1416,8 +1101,8 @@ function testCodexPreflight266() {
     const staleJson = JSON.parse(staleResult.stdout);
     assert(staleJson.status === 'config_stale',
       '#266 case1: stale managed block must return status:config_stale, got ' + staleJson.status);
-    assert(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('workflow-planner'),
-      '#266 case1: missing_roles must include workflow-planner, got ' + JSON.stringify(staleJson.missing_roles));
+    assert(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('implementer'),
+      '#266 case1: missing_roles must name the role whose table went stale, got ' + JSON.stringify(staleJson.missing_roles));
 
     // --- Case 1 GREEN (autofix): without --no-autofix the installer repairs the block ---
     const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-preflight-autofix-'));
@@ -1446,7 +1131,7 @@ function testCodexPreflight266() {
     fs.writeFileSync(configPath, origConfig);
 
     // --- Case 2 RED: remove a profile toml file → profiles_missing ---
-    const wpToml = path.join(root266, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml');
+    const wpToml = path.join(root266, '.codex', 'agents', 'kaola-workflow', 'implementer.toml');
     const savedToml = fs.readFileSync(wpToml);
     fs.unlinkSync(wpToml);
 
@@ -1457,8 +1142,8 @@ function testCodexPreflight266() {
     const missingJson = JSON.parse(missingResult.stdout);
     assert(missingJson.status === 'profiles_missing',
       '#266 case2: missing profile toml must return status:profiles_missing, got ' + missingJson.status);
-    assert(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('workflow-planner'),
-      '#266 case2: missing_roles must include workflow-planner, got ' + JSON.stringify(missingJson.missing_roles));
+    assert(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('implementer'),
+      '#266 case2: missing_roles must name the role whose profile file is absent, got ' + JSON.stringify(missingJson.missing_roles));
 
     // Restore toml
     fs.writeFileSync(wpToml, savedToml);
@@ -1730,7 +1415,7 @@ function testCodexPreflight571() {
     assert(setupC.status === 0, '#571 test(c): setup install must exit 0: ' + setupC.stderr);
     // Delete one role toml → stale global; scopeIsFresh must return false.
     fs.unlinkSync(
-      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml'));
+      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'implementer.toml'));
 
     const emptyProject571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-571c-proj-'));
     try {
@@ -1756,8 +1441,8 @@ function testCodexPreflight571() {
     assert(globalFlagInstall.status === 0,
       '#571 test(a2): --global flag install must exit 0: ' + globalFlagInstall.stderr);
     assert(
-      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml')),
-      '#571 test(a2): --global flag must write workflow-planner.toml to tempHome/.codex/agents/kaola-workflow/');
+      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'implementer.toml')),
+      '#571 test(a2): --global flag must write a role profile to tempHome/.codex/agents/kaola-workflow/');
     assert(
       fs.existsSync(path.join(tempHome571flag, '.codex', 'config.toml')),
       '#571 test(a2): --global flag must write config.toml to tempHome/.codex');
@@ -1789,7 +1474,8 @@ function testInstallSchemaPruneManifest332() {
     const tomls = listTomls(agentsDir);
     // #451: 13 base role profiles (the <role>-max effort variants are retired; issue-scout
     // retired #789; investigator added #798; contractor retired #816).
-    assert(tomls.length === 15, '#463 AC: fresh install must place exactly 15 *.toml (13 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789, investigator added #798), got ' + tomls.length);
+    assert(tomls.length === ROSTER_TOMLS.length,
+      '#463 AC: the installer must place exactly the roster the plugin ships (' + ROSTER_TOMLS.length + '), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     const profilePolicy = require(installProfilesScript);
     for (const f of tomls) {
@@ -1807,10 +1493,11 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 15, '#463 AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
-    assert(manifest.files && Object.keys(manifest.files).length === 15
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === ROSTER_TOMLS.length,
+      '#463 AC: manifest must list the same roles the install placed (' + ROSTER_TOMLS.length + '), got ' + (manifest.roles || []).length);
+    assert(manifest.files && Object.keys(manifest.files).length === ROSTER_TOMLS.length
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
-      '#463 AC: manifest.files must carry 15 sha256 entries (13 base + synthesizer + metric-optimizer)');
+      '#463 AC: manifest.files must carry one sha256 entry per shipped role (' + ROSTER_TOMLS.length + ')');
     for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(pluginRoot, 'agents', file));
@@ -2101,210 +1788,7 @@ function testCodexPreflight332() {
   }
 }
 
-// Case 3: task-mirror regeneration
-function testCodexTaskMirror266() {
-  const root266m = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-taskmirror-'));
-  try {
-    const projectName = 'issue-266-mirror';
-    const projDir = path.join(root266m, 'kaola-workflow', projectName);
-    fs.mkdirSync(projDir, { recursive: true });
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), FIXTURE_PLAN);
 
-    const NOW = '2026-06-07T12:00:00.000Z';
-
-    // --- GREEN: run task-mirror → produces correct JSON ---
-    const r1 = runScript(taskMirrorScript,
-      ['--project', projectName, '--now', NOW, '--json'],
-      { cwd: root266m });
-    assert(r1.status === 0,
-      '#266 case3: task-mirror must exit 0, got ' + r1.status + '\n' + r1.stderr);
-    const mirror1 = JSON.parse(r1.stdout);
-    assert(mirror1.source_plan_hash === FIXTURE_PLAN_HASH,
-      '#266 case3: source_plan_hash mismatch, got ' + mirror1.source_plan_hash);
-    assert(Array.isArray(mirror1.tasks) && mirror1.tasks.length === 4,
-      '#266 case3: expected 4 tasks, got ' + mirror1.tasks.length);
-    assert(mirror1.last_synced_from_ledger === NOW,
-      '#266 case3: last_synced_from_ledger mismatch, got ' + mirror1.last_synced_from_ledger);
-
-    // --- Verify ledger→status mappings (all 4) ---
-    const byId = Object.fromEntries(mirror1.tasks.map(t => [t.id, t]));
-    assert(byId.explore.status === 'completed' && byId.explore.ledger_status === 'complete',
-      '#266 case3: explore must be completed/complete, got ' + JSON.stringify(byId.explore));
-    assert(byId.impl.status === 'in_progress' && byId.impl.ledger_status === 'in_progress',
-      '#266 case3: impl must be in_progress/in_progress, got ' + JSON.stringify(byId.impl));
-    assert(byId.gate.status === 'pending' && byId.gate.ledger_status === 'pending',
-      '#266 case3: gate must be pending/pending, got ' + JSON.stringify(byId.gate));
-    // n/a → completed with ledger_status "n/a"
-    assert(byId.done.status === 'completed' && byId.done.ledger_status === 'n/a',
-      '#266 case3: done (n/a) must be completed with ledger_status n/a, got ' + JSON.stringify(byId.done));
-
-    // --- Determinism: same --now ⇒ identical output ---
-    const r2 = runScript(taskMirrorScript,
-      ['--project', projectName, '--now', NOW, '--json'],
-      { cwd: root266m });
-    assert(r2.status === 0, '#266 case3 det: second run must exit 0');
-    assert(r1.stdout === r2.stdout,
-      '#266 case3 det: two runs with same --now must produce identical stdout');
-
-    // --- RED discriminator: wrong/missing hash → plan_not_frozen → non-zero exit ---
-    const unfrozenPlan = FIXTURE_PLAN.replace(
-      `<!-- plan_hash: ${FIXTURE_PLAN_HASH} -->`, '');
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), unfrozenPlan);
-    const rUnfrozen = runScript(taskMirrorScript,
-      ['--project', projectName, '--now', NOW, '--json'],
-      { cwd: root266m });
-    assert(rUnfrozen.status !== 0,
-      '#266 case3 RED: unfrozen plan must cause non-zero exit, got ' + rUnfrozen.status);
-
-    // --- Stale-hash regeneration: changing plan_hash forces new source_plan_hash in output ---
-    const FAKE_HASH = 'a'.repeat(64);
-    const staleHashPlan = FIXTURE_PLAN.replace(
-      `<!-- plan_hash: ${FIXTURE_PLAN_HASH} -->`,
-      `<!-- plan_hash: ${FAKE_HASH} -->`);
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), staleHashPlan);
-    const rStale = runScript(taskMirrorScript,
-      ['--project', projectName, '--now', NOW, '--json'],
-      { cwd: root266m });
-    assert(rStale.status === 0, '#266 case3 stale-hash: must exit 0, got ' + rStale.status + '\n' + rStale.stderr);
-    const mirrorStale = JSON.parse(rStale.stdout);
-    assert(mirrorStale.source_plan_hash === FAKE_HASH,
-      '#266 case3 stale-hash: output hash must reflect new plan_hash, got ' + mirrorStale.source_plan_hash);
-    assert(mirrorStale.source_plan_hash !== FIXTURE_PLAN_HASH,
-      '#266 case3 stale-hash: stale mirror must NOT carry the old hash');
-
-    console.log('testCodexTaskMirror266 (#266 case 3): PASSED');
-  } finally {
-    fs.rmSync(root266m, { recursive: true, force: true });
-  }
-}
-
-// Case 4: compact/resume packet
-function testCodexCompactResume266() {
-  const root266c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-compact-'));
-  try {
-    const projectName = 'issue-266-compact';
-    const projDir = path.join(root266c, 'kaola-workflow', projectName);
-    fs.mkdirSync(projDir, { recursive: true });
-
-    // workflow-state.md
-    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
-      '# State', '',
-      '## Project',
-      'name: issue-266-compact',
-      'status: active', '',
-      '## Sink',
-      'branch: workflow/issue-266',
-      'issue_number: 266',
-      'next_command: /kaola-workflow-plan-run',
-      'next_skill: kaola-workflow-next',
-      ''
-    ].join('\n'));
-
-    // workflow-plan.md (with in-progress node + pending gate + consent_halt)
-    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), FIXTURE_PLAN);
-
-    // workflow-tasks.json
-    const tasksJson = JSON.stringify({
-      source_plan_hash: FIXTURE_PLAN_HASH,
-      tasks: [
-        { id: 'explore', role: 'code-explorer', status: 'completed', ledger_status: 'complete' },
-        { id: 'impl',    role: 'implementer',   status: 'in_progress', ledger_status: 'in_progress' },
-        { id: 'gate',    role: 'code-reviewer', status: 'pending',    ledger_status: 'pending' },
-        { id: 'done',    role: 'finalize',       status: 'completed',  ledger_status: 'n/a' }
-      ],
-      last_synced_from_ledger: '2026-06-07T12:00:00.000Z'
-    }, null, 2) + '\n';
-    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'), tasksJson);
-
-    const input = JSON.stringify({ cwd: root266c });
-
-    // --- GREEN: run compact-resume → deterministic 7-line packet ---
-    const r1 = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
-    assert(r1.status === 0,
-      '#266 case4: compact-resume must exit 0, got ' + r1.status + '\n' + r1.stderr);
-    const lines1 = r1.stdout.trim().split('\n');
-    assert(lines1.length === 7,
-      '#266 case4: packet must have 7 lines, got ' + lines1.length + '\n' + r1.stdout);
-
-    // Section 1: header
-    assert(lines1[0] === 'Kaola-Workflow compact resume:',
-      '#266 case4: line[0] must be header, got ' + lines1[0]);
-    // Section 2: active project
-    assert(lines1[1].startsWith('active project:'),
-      '#266 case4: line[1] must be active project, got ' + lines1[1]);
-    assert(lines1[1].includes('issue-266-compact'),
-      '#266 case4: active project must include project name, got ' + lines1[1]);
-    // Section 3: next skill/command
-    assert(lines1[2].startsWith('next skill/command:'),
-      '#266 case4: line[2] must be next skill/command, got ' + lines1[2]);
-    // Section 4: in-progress node
-    assert(lines1[3].startsWith('in-progress node:'),
-      '#266 case4: line[3] must be in-progress node, got ' + lines1[3]);
-    assert(lines1[3].includes('impl'),
-      '#266 case4: in-progress node must include impl, got ' + lines1[3]);
-    assert(lines1[3].includes('implementer'),
-      '#266 case4: in-progress node must include role, got ' + lines1[3]);
-    // Section 5: pending gates (gate node has role code-reviewer which IS a gate-verdict role)
-    assert(lines1[4].startsWith('pending gates:'),
-      '#266 case4: line[4] must be pending gates, got ' + lines1[4]);
-    assert(lines1[4].includes('gate'),
-      '#266 case4: pending gates must include gate node, got ' + lines1[4]);
-    // Section 6: consent-halt markers
-    assert(lines1[5].startsWith('consent-halt markers:'),
-      '#266 case4: line[5] must be consent-halt markers, got ' + lines1[5]);
-    assert(lines1[5].includes('consent_halt=pending'),
-      '#266 case4: consent-halt must show pending, got ' + lines1[5]);
-    // Section 7: task-mirror summary
-    assert(lines1[6].startsWith('task mirror:'),
-      '#266 case4: line[6] must be task mirror, got ' + lines1[6]);
-    assert(lines1[6].includes('completed: 2'),
-      '#266 case4: task mirror must show completed:2, got ' + lines1[6]);
-    assert(lines1[6].includes('in_progress: 1'),
-      '#266 case4: task mirror must show in_progress:1, got ' + lines1[6]);
-    assert(lines1[6].includes('pending: 1'),
-      '#266 case4: task mirror must show pending:1, got ' + lines1[6]);
-
-    // --- #334 case4b: a pending main-session-gate must appear in the pending-gates packet line.
-    // Separate root + small fixture (NOT FIXTURE_PLAN, whose hash is asserted elsewhere). RED before
-    // the GATE_VERDICT_ROLES edit: the role was not in the set → the line read 'none'.
-    { const root334 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-334-compact-'));
-      try {
-        const pj = 'issue-334-vgate';
-        const pd = path.join(root334, 'kaola-workflow', pj);
-        fs.mkdirSync(pd, { recursive: true });
-        fs.writeFileSync(path.join(pd, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + pj, 'status: active', '', '## Sink', 'branch: workflow/issue-334', 'issue_number: 334', 'next_command: /kaola-workflow-plan-run', 'next_skill: kaola-workflow-next', ''].join('\n'));
-        fs.writeFileSync(path.join(pd, 'workflow-plan.md'), ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |', ''].join('\n'));
-        const r334 = runScript(compactResumeScript, [], { input: JSON.stringify({ cwd: root334 }), encoding: 'utf8' });
-        assert(r334.status === 0, '#334 case4b: compact-resume must exit 0, got ' + r334.status + '\n' + r334.stderr);
-        const gateLine = r334.stdout.trim().split('\n').find(l => l.startsWith('pending gates:'));
-        assert(gateLine && /\bvgate\b/.test(gateLine),
-          '#334 case4b: a pending main-session-gate (vgate) must appear in the pending-gates line, got: ' + gateLine);
-      } finally { fs.rmSync(root334, { recursive: true, force: true }); }
-    }
-
-    // --- Determinism: two runs → identical stdout ---
-    const r2 = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
-    assert(r1.stdout === r2.stdout,
-      '#266 case4 det: two compact-resume runs must produce identical stdout');
-
-    // --- RED discriminator: no workflow-state → no output (empty stdout) ---
-    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-compact-empty-'));
-    try {
-      // No kaola-workflow/ dir at all → script returns silently (no output, exit 0)
-      const rEmpty = runScript(compactResumeScript, [],
-        { input: JSON.stringify({ cwd: emptyRoot }), encoding: 'utf8' });
-      assert(rEmpty.status === 0, '#266 case4 RED: empty root must exit 0, got ' + rEmpty.status);
-      assert(rEmpty.stdout.trim() === '',
-        '#266 case4 RED: no workflow dir must produce no output, got: ' + rEmpty.stdout);
-    } finally {
-      fs.rmSync(emptyRoot, { recursive: true, force: true });
-    }
-
-    console.log('testCodexCompactResume266 (#266 case 4): PASSED');
-  } finally {
-    fs.rmSync(root266c, { recursive: true, force: true });
-  }
-}
 
 function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-active-folders-'));
@@ -2382,16 +1866,11 @@ function main() {
 
     testInstallProfilesFeaturesTableHandling();
     testInstallSchemaPruneManifest332();
-    testCodexAdaptiveCuratedAndBarrier();
-    testCodexLedgerHeaderInvalid425();
-    testCodexGeneratedPortSplit431();
     testCodexPreflight266();
     testCodexDispatchPosture598();
     testCodexMultiAgentV2Bounds611();
     testCodexPreflight571();
     testCodexPreflight332();
-    testCodexTaskMirror266();
-    testCodexCompactResume266();
     testAC1HooksJson();
     testUpdateHooksHardening325();
     test409StableHomeSurvivesDirDeletion();   // #409
@@ -2405,9 +1884,6 @@ function main() {
     testCodexFinalizeClosesIssueBundleMembers();      // #427
     testCodexBundleFinalizeAllOpenCloseIsPending();   // #508
     testCodexFinalizeRoadmapResidueDetection();       // #428
-    testCodexBundleStateIncoherent();                 // #430
-    testCodexBundle424432433NodeSeeding();            // #424/#432/#433 n9-walkthrough
-    testCodexReplanEditionContract699();
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
@@ -2445,7 +1921,7 @@ function testCodexFinalizeArchiveVerifiesBeforeDelete() {
       'codex #426 verify-before-delete: archiveProjectDir must return archive_incomplete:true, got: ' + JSON.stringify(result)
     );
     assert(
-      result.snapshot_error === 'state_missing',
+      Array.isArray(result.missing) && result.missing.includes('workflow-state.md'),
       'codex #426 verify-before-delete: malformed source must fail the authority preflight (same contract as the canonical twin), got: ' + JSON.stringify(result)
     );
     console.log('testCodexFinalizeArchiveVerifiesBeforeDelete: PASSED');
@@ -2631,406 +2107,7 @@ function testCodexFinalizeRoadmapResidueDetection() {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
-// ---------------------------------------------------------------------------
-// #430: orient subcommand refuses with bundle_state_incoherent when bundle_id
-// is present but issue_numbers is absent or mismatches the bundle_id.
-// Uses the codex-edition adaptive-node script (same as root).
-// ---------------------------------------------------------------------------
-function testCodexBundleStateIncoherent() {
-  const codexAdaptiveNode = path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-node.js');
-  const codexPlanVal = path.join(pluginRoot, 'scripts', 'kaola-workflow-plan-validator.js');
 
-  // (a) bundle_id present, issue_numbers absent.
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-430a-'));
-    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
-    try {
-      const project = 'bundle-42-47';
-      const dir = path.join(tmp, 'kaola-workflow', project);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
-        '# Kaola-Workflow State', '',
-        '## Project', 'name: ' + project, 'status: active', '',
-        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-        '## Pending Gates', '- workflow-plan', '',
-        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-        '## Sink', 'branch: workflow/' + project,
-        'issue_number: 42',
-        'bundle_id: ' + project,   // NO issue_numbers line
-        'closure_policy: all_or_nothing', 'sink: merge', ''
-      ].join('\n'));
-      // Freeze a minimal plan for orient.
-      const planPath = path.join(dir, 'workflow-plan.md');
-      fs.writeFileSync(planPath, [
-        '# Workflow Plan — ' + project, '',
-        '## Meta', 'labels: chore', '',
-        '## Nodes', '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape |',
-        '|---|---|---|---|---|---|',
-        '| explore | code-explorer | — | — | 1 | sequence |',
-        '| done | finalize | explore | — | 1 | sequence |', ''
-      ].join('\n'));
-      stampVerifiedLegacyCodexPlan(planPath);
-      const fr = spawnSync(process.execPath, [codexPlanVal, planPath, '--freeze'],
-        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-      assert(fr.status === 0, 'codex #430 (a): plan freeze must exit 0, stderr: ' + fr.stderr);
 
-      const r = spawnSync(process.execPath, [codexAdaptiveNode, 'orient', '--project', project, '--json'],
-        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-      assert(r.status !== 0,
-        'codex #430 (a): orient must exit non-zero when bundle_id present but issue_numbers absent, got ' + r.status);
-      const o = JSON.parse(r.stdout);
-      assert(o.result === 'refuse', 'codex #430 (a): result must be refuse, got ' + JSON.stringify(o.result));
-      assert(o.reason === 'bundle_state_incoherent',
-        'codex #430 (a): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-
-  // (b) bundle_id mismatches issue_numbers.
-  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-430b-'));
-    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
-    try {
-      const project = 'bundle-42-47';
-      const dir = path.join(tmp, 'kaola-workflow', project);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
-        '# Kaola-Workflow State', '',
-        '## Project', 'name: ' + project, 'status: active', '',
-        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-        '## Pending Gates', '- workflow-plan', '',
-        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-        '## Sink', 'branch: workflow/' + project,
-        'issue_number: 42',
-        'issue_numbers: 42,53',      // says 42,53 → expected bundle-42-53
-        'bundle_id: bundle-42-47',   // MISMATCH
-        'closure_policy: all_or_nothing', 'sink: merge', ''
-      ].join('\n'));
-      const planPath = path.join(dir, 'workflow-plan.md');
-      fs.writeFileSync(planPath, [
-        '# Workflow Plan — ' + project, '',
-        '## Meta', 'labels: chore', '',
-        '## Nodes', '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape |',
-        '|---|---|---|---|---|---|',
-        '| explore | code-explorer | — | — | 1 | sequence |',
-        '| done | finalize | explore | — | 1 | sequence |', ''
-      ].join('\n'));
-      stampVerifiedLegacyCodexPlan(planPath);
-      const fr = spawnSync(process.execPath, [codexPlanVal, planPath, '--freeze'],
-        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-      assert(fr.status === 0, 'codex #430 (b): plan freeze must exit 0, stderr: ' + fr.stderr);
-
-      const r = spawnSync(process.execPath, [codexAdaptiveNode, 'orient', '--project', project, '--json'],
-        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-      assert(r.status !== 0,
-        'codex #430 (b): orient must exit non-zero when bundle_id mismatches issue_numbers, got ' + r.status);
-      const o = JSON.parse(r.stdout);
-      assert(o.result === 'refuse', 'codex #430 (b): result must be refuse, got ' + JSON.stringify(o.result));
-      assert(o.reason === 'bundle_state_incoherent',
-        'codex #430 (b): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-
-  console.log('testCodexBundleStateIncoherent: PASSED');
-}
-
-// ---------------------------------------------------------------------------
-// bundle #424/#432/#433 n4-node-evidence + n9-walkthrough (codex edition):
-// evidence seeding (D-433-01 §2) and doc-updater .md-target barrier (D-424-01 allowband).
-// Mirrors scripts/ testBundle424432433NodeSeeding with codex edition substitutions.
-// ---------------------------------------------------------------------------
-function testCodexBundle424432433NodeSeeding() {
-  const pvScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-plan-validator.js');
-  const nodeScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-node.js');
-  const pv = require(pvScript);
-
-  // --- scenario 7: doc-updater .md targets (pure barrierCheck) -------
-  {
-    const PLAN_DOC = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
-      '| doc | doc-updater | — | docs/guide.md, README.md | 1 | sequence |',
-      '| done | finalize | doc | — | 1 | sequence |', '',
-      '## Node Ledger', '', '| id | status |', '|---|---|',
-      '| doc | in_progress |', '| done | pending |', ''].join('\n');
-
-    // (7a) declared docs/guide.md + README.md are in the allowband → barrier must PASS.
-    const r7a = pv.barrierCheck(PLAN_DOC, ['docs/guide.md', 'README.md'], { nodeId: 'doc' });
-    assert(r7a.result === 'pass',
-      'codex #424 (7a): doc-updater writing declared docs/guide.md + README.md must pass the barrier (allowband), got ' + JSON.stringify(r7a));
-
-    // (7b) undeclared docs/ depth still in allowband → pass.
-    const r7b = pv.barrierCheck(PLAN_DOC, ['docs/arch/design.md'], { nodeId: 'doc' });
-    assert(r7b.result === 'pass',
-      'codex #424 (7b): undeclared docs/arch/design.md (allowband) must pass the barrier, got ' + JSON.stringify(r7b));
-
-    // (7c) behavioral agents/*.md OUTSIDE allowband → write_set_overflow.
-    const r7c = pv.barrierCheck(PLAN_DOC, ['agents/workflow-planner.md'], { nodeId: 'doc' });
-    assert(r7c.result === 'refuse' && r7c.reason === 'write_set_overflow',
-      'codex #424 (7c): agents/*.md outside allowband must refuse write_set_overflow, got ' + JSON.stringify(r7c));
-  }
-
-  // --- scenario 6: evidence seeding via open-next CLI (requires a real git repo) ----
-  {
-    const SEED_PLAN = ['# Workflow Plan — issue #433-seed-cx', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
-      '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
-      '| rv | code-reviewer | n1 | — | 1 | sequence |',
-      '| done | finalize | rv | — | 1 | sequence |', '',
-      '## Node Ledger', '', '| id | status |', '|---|---|',
-      '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
-
-    const grepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-433seed-'));
-    initGitRepo(grepo);
-    git(['checkout', '-b', 'workflow/issue-433-seed-cx'], grepo);
-    const proj = path.join(grepo, 'kaola-workflow', 'issue-433-seed-cx');
-    fs.mkdirSync(proj, { recursive: true });
-    const planPath = path.join(proj, 'workflow-plan.md');
-    fs.writeFileSync(planPath, SEED_PLAN);
-    stampVerifiedLegacyCodexPlan(planPath);
-    const fz = spawnSync(process.execPath, [pvScript, planPath, '--freeze'],
-      { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-    assert(fz.status === 0, 'codex #433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
-    git(['add', '-A'], grepo);
-    git(['commit', '-m', 'frozen plan'], grepo);
-    const cacheDir = path.join(proj, '.cache');
-
-    try {
-      // (6a) open-next seeds .cache/n1.md with the evidence-binding header + role stubs.
-      const on = spawnSync(process.execPath,
-        [nodeScript, 'open-next', '--project', 'issue-433-seed-cx', '--json'],
-        { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-      assert(on.status === 0, 'codex #433 (6a): open-next must exit 0, got ' + on.status + '\nstderr: ' + on.stderr + '\nstdout: ' + on.stdout);
-      const onOut = JSON.parse(on.stdout);
-      assert(onOut.result === 'ok', 'codex #433 (6a): open-next result must be ok, got ' + JSON.stringify(onOut));
-      assert(onOut.opened && onOut.opened.id === 'n1', 'codex #433 (6a): opened.id must be n1, got ' + JSON.stringify(onOut.opened));
-
-      // (6b) The seeded evidence file must exist with the expected binding line.
-      const evidencePath = path.join(cacheDir, 'n1.md');
-      assert(fs.existsSync(evidencePath), 'codex #433 (6b): open-next must create .cache/n1.md');
-      const evidenceContent = fs.readFileSync(evidencePath, 'utf8');
-      const firstLine = evidenceContent.split('\n')[0];
-      assert(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
-        'codex #433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
-
-      // (6c) tdd-guide role stubs follow CUSTODY: the seed carries BOTH `RED` and its `red_baseline`
-      // receipt, and must NOT carry `GREEN` — GREEN authority is gate-side, and asserting its ABSENCE
-      // is what keeps the seed from quietly re-acquiring the retired self-grading token.
-      assert(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
-        'codex #433 (6c): tdd-guide stub must contain RED token');
-      assert(/^red_baseline: /m.test(evidenceContent) || /^<!-- red_baseline/.test(evidenceContent),
-        'codex #433 (6c): tdd-guide stub must contain the red_baseline receipt token');
-      assert(!/^GREEN\b/m.test(evidenceContent) && !/^<!-- GREEN/m.test(evidenceContent),
-        'codex #433 (6c): tdd-guide stub must NOT seed a GREEN token');
-
-      // (6d) JSON response carries evidence_file + required_tokens.
-      assert(onOut.opened.evidence_file === '.cache/n1.md',
-        'codex #433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
-      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED')
-        && onOut.opened.required_tokens.includes('red_baseline')
-        && !onOut.opened.required_tokens.includes('GREEN'),
-        'codex #433 (6d): required_tokens must be the custody set for tdd-guide — RED + red_baseline, no GREEN, got '
-          + JSON.stringify(onOut.opened.required_tokens));
-
-      // (6e) Crash-resume: a second open-next must not overwrite the evidence file.
-      const contentBefore = fs.readFileSync(evidencePath, 'utf8');
-      spawnSync(process.execPath,
-        [nodeScript, 'open-next', '--project', 'issue-433-seed-cx', '--json'],
-        { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-      const contentAfter = fs.readFileSync(evidencePath, 'utf8');
-      assert(contentBefore === contentAfter,
-        'codex #433 (6e): crash-resume open-next must NOT overwrite the seeded evidence file');
-    } finally {
-      fs.rmSync(grepo, { recursive: true, force: true });
-      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
-    }
-  }
-
-  console.log('testCodexBundle424432433NodeSeeding: PASSED');
-}
-
-function testCodexReplanEditionContract699() {
-  const scriptsDir = path.join(pluginRoot, 'scripts');
-  const replanScript = path.join(scriptsDir, 'kaola-workflow-replan.js');
-  const adaptiveNodeScript = path.join(scriptsDir, 'kaola-workflow-adaptive-node.js');
-  const handoffScript = path.join(scriptsDir, 'kaola-workflow-adaptive-handoff.js');
-  const validatorScript = path.join(scriptsDir, 'kaola-workflow-plan-validator.js');
-  const schema = require(path.join(scriptsDir, 'kaola-workflow-adaptive-schema.js'));
-  const replan = require(replanScript);
-  const adaptiveNode = require(adaptiveNodeScript);
-  const handoff = require(handoffScript);
-  const claim = require(claimScript);
-  const manifest = require(path.join(scriptsDir, 'kaola-workflow-install-manifest.js'));
-
-  assert(JSON.stringify(manifest.supportScripts('github').filter(name => /workflow-replan\.js$/.test(name)))
-      === JSON.stringify(['kaola-workflow-replan.js']),
-  'Codex re-plan smoke: manifest must install exactly the canonical aggregator');
-  assert(JSON.stringify(schema.REPLAN_PHASES) === JSON.stringify([
-    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
-  ]) && JSON.stringify(schema.REPLAN_STATUSES) === JSON.stringify([
-    'none', 'in_progress', 'candidate_changed', 'consent_halt',
-  ]) && JSON.stringify(schema.REPLAN_CAS_SEAMS) === JSON.stringify([
-    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
-  ]), 'Codex re-plan smoke: schema vocabulary must be canonical');
-
-  const missingCli = spawnSync(process.execPath,
-    [replanScript, 'status', '--project', 'n5-missing-codex-smoke', '--json'],
-    { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  const missingResult = JSON.parse(String(missingCli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
-  assert(missingCli.status !== 0 && missingResult.reason === 'replan_authority_path_invalid',
-    'Codex re-plan smoke: packaged aggregator must execute its typed missing-authority refusal');
-
-  const packet = replan.buildPlannerPacket({ project: 'issue-n5-codex' }, {
-    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
-    parent: {
-      claim_identity: { repository_id: 'repo', worktree_path: repoRoot },
-      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
-      plan_epoch: 1, plan_hash: '3'.repeat(64),
-    },
-    epoch_lineage_id: '4'.repeat(64),
-    snapshot: {
-      authority_projection: { entry_cas: { candidate_digest: '6'.repeat(64) } },
-      authority_digest: 'b'.repeat(64),
-    },
-    source: {
-      source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
-      source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
-      inherited_frontier_classes: ['code'], validation_obligations: [],
-    },
-    cas: { prepare: { candidate_digest: '6'.repeat(64), inherited_frontier_digest: '7'.repeat(64) } },
-    budget: {
-      count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
-      case_b_proof: null, consent_ledger_digest: '9'.repeat(64),
-    },
-    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-n5' },
-  });
-  const packetKeys = new Set();
-  (function collect(value) {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) return value.forEach(collect);
-    for (const [key, child] of Object.entries(value)) { packetKeys.add(key); collect(child); }
-  })(packet);
-  for (const forbiddenKey of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
-    'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
-    assert(!packetKeys.has(forbiddenKey),
-      'Codex re-plan smoke: planner packet must omit main-authored DAG key ' + forbiddenKey);
-  }
-  assert(packet.child_output_path === 'workflow-plan.next.md',
-    'Codex re-plan smoke: planner packet must bind the exact child path');
-
-  const childPath = path.join(os.tmpdir(), 'kw-n5-codex-attestation', 'workflow-plan.next.md');
-  let unattestedWrites = 0;
-  const unattested = handoff.runReplanHandoff({
-    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
-    authority: {
-      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
-      transaction_id: 'a'.repeat(64), child_path: childPath,
-      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
-    },
-    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
-    writeFile: () => { unattestedWrites++; },
-  });
-  assert(unattested.reason === 'replan_child_authority_unverified' && unattestedWrites === 0,
-    'Codex re-plan smoke: missing planner attestation must refuse before writing');
-
-  const orientation = adaptiveNode.replanOrientation({
-    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
-    legal_mutation: 'replan resume', transaction: {
-      transaction_id: 'a'.repeat(64), phase: 'planner_pending',
-      parent: { plan_hash: 'b'.repeat(64) }, child: {}, cas: {},
-    },
-  }, 'issue-n5-codex');
-  assert(orientation.resume_command ===
-    'node scripts/kaola-workflow-replan.js resume --project issue-n5-codex --json',
-  'Codex re-plan smoke: orientation must expose only the canonical resume command');
-
-  const fenceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-codex-fence-')));
-  try {
-    G.git(fenceRoot, ['init', '-q'], { encoding: 'utf8' });
-    const project = 'issue-n5-codex-fence';
-    const projectDir = path.join(fenceRoot, 'kaola-workflow', project);
-    const cacheDir = path.join(projectDir, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const stateBytes = Buffer.from([
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Epoch Lineage', 'replan_status: in_progress', 'replan_phase: planner_pending',
-      'replan_transaction_id: ' + 'c'.repeat(64), '',
-    ].join('\n'));
-    const planBytes = Buffer.from('# deliberately invalid frozen parent\n');
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), stateBytes);
-    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), planBytes);
-    fs.writeFileSync(path.join(cacheDir, 'replan-transaction.json'), '{}\n');
-    const beforeCache = new Map(fs.readdirSync(cacheDir).map(name =>
-      [name, fs.readFileSync(path.join(cacheDir, name))]));
-    const calls = [
-      [adaptiveNodeScript, ['open-next', '--project', project, '--json']],
-      [handoffScript, ['--project', project, '--json']],
-      [validatorScript, [path.join(projectDir, 'workflow-plan.md'), '--finalize-check', '--json']],
-      [claimScript, ['finalize', '--project', project, '--json']],
-    ];
-    for (const [script, args] of calls) {
-      const run = spawnSync(process.execPath, [script, ...args], {
-        cwd: fenceRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
-      });
-      const out = JSON.parse(String(run.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
-      assert(run.status !== 0 && out.reason === 'replan_transaction_invalid',
-        'Codex re-plan smoke: half-transition must fence ' + path.basename(script) + ', got ' + JSON.stringify(out));
-    }
-    assert(fs.readFileSync(path.join(projectDir, 'workflow-state.md')).equals(stateBytes)
-        && fs.readFileSync(path.join(projectDir, 'workflow-plan.md')).equals(planBytes),
-    'Codex re-plan smoke: scheduler/finalize refusals must preserve parent state and plan bytes');
-    assert(JSON.stringify(fs.readdirSync(cacheDir).sort()) === JSON.stringify([...beforeCache.keys()].sort()),
-      'Codex re-plan smoke: half-transition refusals must not add cache side effects');
-    for (const [name, bytes] of beforeCache) {
-      assert(fs.readFileSync(path.join(cacheDir, name)).equals(bytes),
-        'Codex re-plan smoke: half-transition refusal mutated cache file ' + name);
-    }
-    assert(!fs.existsSync(path.join(cacheDir, 'scheduler.lock'))
-        && !fs.existsSync(path.join(cacheDir, 'orient-envelope.json'))
-        && !fs.existsSync(path.join(fenceRoot, 'kaola-workflow', 'archive')),
-    'Codex re-plan smoke: scheduler/finalize fence must create no lock, envelope, or archive');
-  } finally { fs.rmSync(fenceRoot, { recursive: true, force: true }); }
-
-  const archiveRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-codex-archive-')));
-  try {
-    const project = 'issue-n5-codex-archive';
-    const projectDir = path.join(archiveRoot, 'kaola-workflow', project);
-    const epochDir = path.join(projectDir, '.cache', 'epochs', '1');
-    const filesDir = path.join(epochDir, 'files', '.cache');
-    fs.mkdirSync(filesDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
-      '## Sink', 'issue_number: 699', 'sink: merge', '',
-    ].join('\n'));
-    const rebindBytes = Buffer.from('{"attempts":[{"attempt_id":"review:1","rebind":[]}]}\n');
-    const rebindPath = path.join(filesDir, 'review-attempts.json');
-    fs.writeFileSync(rebindPath, rebindBytes);
-    const stat = fs.statSync(rebindPath);
-    const snapshot = {
-      schema_version: 1, parent_plan_epoch: 1, epoch_lineage_id: 'd'.repeat(64),
-      transaction_id: 'e'.repeat(64), claim_root_base_digest: 'f'.repeat(64),
-      files: [{ path: '.cache/review-attempts.json', size: stat.size,
-        mode: (stat.mode & 0o777).toString(8).padStart(3, '0'), digest: schema.sha256Hex(rebindBytes) }],
-    };
-    snapshot.manifest_self_digest = schema.snapshotManifestDigest(snapshot);
-    fs.writeFileSync(path.join(epochDir, 'manifest.json'), schema.canonicalJson(snapshot) + '\n');
-    // Fail-closed edition contract: a schema-1 manifest with no external-seal chain cannot
-    // digest-verify (a genuine schema-2 snapshot is only ever produced by the full replan
-    // lifecycle, exercised end to end in test-replan.js). The codex twin must refuse this
-    // unverifiable epoch snapshot at BOTH the shared verifier and the archive preflight, and
-    // must never delete a live project whose epoch-snapshot authority does not verify.
-    const verified = replan.verifyAllEpochSnapshots(projectDir);
-    assert(!verified.ok && verified.reason === 'legacy_snapshot_binding_unsealed',
-      'Codex re-plan smoke: an unsealed epoch snapshot must refuse digest verification, got ' + JSON.stringify(verified));
-    const archived = claim.archiveProjectDir(archiveRoot, project, 'closed');
-    assert(archived.archived !== true && archived.archive_incomplete === true
-      && archived.snapshot_error === 'legacy_snapshot_binding_unsealed',
-    'Codex re-plan smoke: archive must refuse an unverifiable epoch snapshot before any delete, got ' + JSON.stringify(archived));
-    assert(fs.existsSync(projectDir) && !fs.existsSync(path.join(archiveRoot, 'kaola-workflow', 'archive')),
-      'Codex re-plan smoke: a refused archive must preserve the live project and create no archive dir');
-  } finally { fs.rmSync(archiveRoot, { recursive: true, force: true }); }
-
-  console.log('testCodexReplanEditionContract699: PASSED');
-}
 
 main();
