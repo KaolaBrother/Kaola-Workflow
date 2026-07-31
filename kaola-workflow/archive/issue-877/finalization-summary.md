@@ -79,3 +79,7 @@ the divergence class reds an edition chain instead of hiding.
 - #878 (the watch list) stays open by design — reference only, do not schedule.
 
 ## Status: ARCHIVED AFTER FINAL GIT GATE
+
+## Sink Findings
+
+post_rebase_tests: skipped
