@@ -13,8 +13,8 @@
 //       resumes and completes without a spurious cross-run reinit (skips the done steps).
 //   (c) #700 — a sole-archiver sink with a pre-existing UNSUFFIXED archive/<project>/ dir: the
 //       collision-suffixed archive/<project>.archived-<ts>/ is COMMITTED (with the roadmap-source
-//       removal + regenerated ROADMAP.md), the ## Closure + ## Attestation blocks are persisted, and
-//       no dirty main checkout remains after status:sinked.
+//       removal + regenerated ROADMAP.md), the ## Closure block is persisted, and no dirty main
+//       checkout remains after status:sinked.
 //   (d) #700/#694 — journal disposal covers the collision-suffixed archive path.
 //   (e) #705 — a keep-open SOLE-archiver sink RETAINS the kept-open issue's roadmap source: the
 //       source survives at HEAD, the regenerated ROADMAP.md still lists the (still-open) issue, the
@@ -49,6 +49,18 @@
 //   (q) #832 — receipt honesty: on a consumer whose .gitignore covers kaola-workflow/archive, git
 //       REFUSES the archive pathspec, so archive_commit must record 'skipped_gitignored' — the
 //       keep-worktree flow's unconditional stepDone() reports "done" for an operation git refused.
+//   (r) the workflow-only branch verdict became a MEASUREMENT: assertBranchHasNonWorkflowChanges
+//       returns a typed finding instead of throwing, carries a way forward, announces itself on
+//       stderr, and keeps every skip arm that made it safe (no false positive on a mixed branch, no
+//       fabricated finding when the base or the diff is unavailable).
+//   (s)/(t) the settled conversion contract, end to end on the legacy entry point: a converted
+//       verdict STOPS the sink without merging. An unfinalized run (s) and a branch carrying no
+//       implementation (t) each emit their typed finding on the envelope, exit non-success, and
+//       leave the default branch — local and remote — exactly where they found it.
+//   (u)/(v) the post-rebase witness, in BOTH directions: a GREEN measurement is written down
+//       (receipt + a durable post_rebase_tests line at HEAD) instead of scrolling past unrecorded,
+//       and RED stops the sink at the publication door with a chains_red finding on the envelope,
+//       the measurement on the surviving journal, and the merge step left NOT done.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -212,10 +224,49 @@ function runSink(fx, extraArgs, extraEnv) {
   });
 }
 
+// The LEGACY (non---sink) entry point. It is where the two branch-shape preconditions live, so it
+// is the only way to drive them end to end.
+function runSinkLegacy(fx, extraArgs, extraEnv) {
+  const args = [sinkMergeScript, '--branch', fx.branch, '--project', fx.projectName, '--json'].concat(extraArgs || []);
+  // The measured properties are the process's OWN exit code and its emitted envelope, and the
+  // preconditions under test run in main() before any exported seam — there is nothing to call
+  // in-process that would carry either.
+  // spawn-class: cli-contract
+  return spawnSync(process.execPath, args, {
+    cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,
+    env: Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      KAOLA_WORKFLOW_SKIP_TESTGATE: '1',
+      KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js'),
+    }, extraEnv || {}),
+  });
+}
+
 function lastJson(result) {
   const ls = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
   if (!ls.length) return null;
   try { return JSON.parse(ls[ls.length - 1]); } catch (_) { return null; }
+}
+// Pull one typed finding off an emitted envelope. Returns null when the envelope has no findings at
+// all, which is a DIFFERENT failure from "the wrong classification" and must read differently.
+function findingOf(out, classification) {
+  if (!out || !Array.isArray(out.findings)) return null;
+  return out.findings.find(f => f && f.classification === classification) || null;
+}
+// "Nothing was merged and nothing was published" as a git fact rather than as a claim in a message.
+// Every clause is checked because they fail independently: a sink can advance the local default
+// branch without pushing, push without closing, or close without merging.
+function assertNothingPublished(fx, label, opts) {
+  const o = opts || {};
+  const mainAfter = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+  const remoteAfter = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+  assert(mainAfter === o.mainBefore, label + ': the local default branch must NOT advance; ' + o.mainBefore + ' -> ' + mainAfter);
+  assert(remoteAfter === o.remoteBefore, label + ': origin/main must NOT advance; ' + o.remoteBefore + ' -> ' + remoteAfter);
+  assert(git(fx.tmpRoot, ['merge-base', '--is-ancestor', fx.branch, 'main']).status !== 0,
+    label + ': the feature branch must NOT be an ancestor of the default branch (nothing merged)');
+  const calls = readLog(fx.logFile);
+  assert(!calls.some(c => c.startsWith('close:')),
+    label + ': no issue may be closed over unpublished work; calls=' + JSON.stringify(calls));
 }
 function readLog(logFile) { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean); } catch (_) { return []; } }
 function catFileType(cwd, ref) {
@@ -253,6 +304,16 @@ function suffixedArchiveRel(tmpRoot, project) {
     assert(result.status === 0, '#700 c: sink exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     assert(out && out.status === 'sinked', '#700 c: status must be sinked; got ' + JSON.stringify(out && out.status));
 
+    // The other half of the reporting conversion, and the one that is easy to lose: a run that found
+    // NOTHING must emit exactly what it emitted before findings existed. sinkEmit attaches `findings`
+    // only when the array is non-empty, so the key must be ABSENT here — not present-and-empty. A
+    // consumer that branches on `'findings' in out` is the reason this is a presence test rather than
+    // a length test. This scenario is the flagship clean sink, so it is where the null case belongs.
+    assert(out && !('findings' in out),
+      '#700 c: a sink that found nothing must not carry a findings key at all; got ' + JSON.stringify(out && out.findings));
+    assert(!/sink-merge: FINDING/.test(result.stderr || ''),
+      '#700 c: a sink that found nothing must write no FINDING line to stderr; stderr:\n' + result.stderr);
+
     // The archive dest carried through the receipt must be the collision-SUFFIXED path.
     const receipt = out && out.receipt;
     assert(receipt && typeof receipt.archive_dest === 'string' && /kaola-workflow\/archive\/issue-70001\.archived-/.test(receipt.archive_dest),
@@ -265,11 +326,17 @@ function suffixedArchiveRel(tmpRoot, project) {
     assert(catFileType(fx.tmpRoot, 'HEAD:' + archRel) === 'tree',
       '#700 c: the collision-suffixed archive must be committed at HEAD (a tree object)');
 
-    // ## Closure + ## Attestation persisted (and committed).
+    // ## Closure persisted (and committed).
+    //
+    // DELETED alongside it: the companion `## Attestation` assertion. It pinned
+    // persistSinkClosureMetadata calling claim.js's persistAttestationToSummary over a receipt
+    // filled by checkDispatchAttestations, and claim.js retired BOTH exports — so the block has no
+    // producer left anywhere in the tree. UNCOVERED as a result: that a sole-archiver sink records
+    // whether the claim/author seam was actually dispatched (claim_planner_attested) rather than run
+    // inline. That is not a gap in this suite's coverage of a live mechanism; it is a mechanism that
+    // no longer exists, and re-adding the pin would only re-assert the crash the retirement fixed.
     const stateAtHead = showAtHead(fx.tmpRoot, archRel + '/workflow-state.md');
     assert(stateAtHead && /^## Closure$/m.test(stateAtHead), '#700 c: archived workflow-state.md must carry a ## Closure block at HEAD');
-    const summaryAtHead = showAtHead(fx.tmpRoot, archRel + '/finalization-summary.md');
-    assert(summaryAtHead && /^## Attestation$/m.test(summaryAtHead), '#700 c: archived finalization-summary.md must carry a ## Attestation block at HEAD');
 
     // roadmap-source removal + regenerated mirror committed (issue no longer active).
     assert(catFileType(fx.tmpRoot, 'HEAD:kaola-workflow/.roadmap/issue-' + issue + '.md') === null,
@@ -1143,6 +1210,509 @@ function buildGitignoredArchiveSinkFixture(project, issue) {
       '#832 q: the on-disk archive must survive an honest skipped_gitignored');
   } finally {
     cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (r) the R3 conversion
+//
+// "This branch carries no implementation" used to be a bare `throw new Error('sink-merge refused:
+// …')`. It is a judgement about the work — a docs-only or roadmap-only branch is a legitimate
+// deliverable — so it converted into a MEASUREMENT that reports.
+//
+// The conversion is only real if the report is at least as informative as the refusal was, so the
+// arms below pin all four halves of it and not merely "it stopped throwing":
+//   1. the measurement still MEASURES — the same workflow-only branch is still detected;
+//   2. it is TYPED — a classification a caller can branch on, plus the evidence (which files) that
+//      the refusal's prose used to carry;
+//   3. it carries a WAY FORWARD — an operator_hint naming a sanctioned next move, which is the one
+//      thing a report owes that a refusal does not;
+//   4. it ANNOUNCES itself on stderr, so a run watched live is not silently different.
+// …and the skip arms are pinned in the same breath, because a measurement that fires on a branch
+// carrying real implementation, or that fabricates a finding when it could not measure, is worse
+// than the refusal it replaced.
+//
+// Driven by direct in-process calls on the exported helper (as the walkthrough's older arms do):
+// the envelope/durability half needs the whole transaction, but WHAT IS MEASURED is decided here,
+// and here it can be pinned without a rebase, a push or a forge.
+(function testWorkflowOnlyBranchReportsInsteadOfRefusing() {
+  console.log('Test (r): a workflow-only branch yields a typed no_implementation_changes FINDING with a way forward — never a throw — and the skip arms stay silent');
+  const { assertBranchHasNonWorkflowChanges } = require(sinkMergeScript);
+
+  // Call the helper with stderr captured, so the announcement half is observable and the suite's own
+  // output stays clean. Returns { value, threw, err, stderr }.
+  function measure(root, branch, defBranch) {
+    const chunks = [];
+    const realWrite = process.stderr.write;
+    process.stderr.write = function (chunk) { chunks.push(String(chunk)); return true; };
+    let value = null; let threw = false; let err = null;
+    try { value = assertBranchHasNonWorkflowChanges(root, branch, defBranch); }
+    catch (e) { threw = true; err = e; }
+    finally { process.stderr.write = realWrite; }
+    return { value, threw, err, stderr: chunks.join('') };
+  }
+
+  // --- arm 1: workflow-only branch → a typed finding, not a throw.
+  {
+    const tmp = fs.realpathSync(makeTmpRoot());
+    const remotePath = initGitRepoWithBareRemote(tmp);
+    try {
+      git(tmp, ['checkout', '-b', 'workflow/issue-87701']);
+      const arch = path.join(tmp, 'kaola-workflow', 'archive', 'issue-87701');
+      fs.mkdirSync(path.join(arch, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(arch, 'workflow-state.md'), 'status: closed\n');
+      fs.writeFileSync(path.join(arch, '.cache', 'n1.md'), 'verdict: pass\n');
+      git(tmp, ['add', '-A']);
+      git(tmp, ['commit', '-m', 'chore: archive only, no implementation']);
+
+      const m = measure(tmp, 'workflow/issue-87701', 'main');
+      assert(!m.threw, '(r) 1: the workflow-only measurement must NOT throw; threw: ' + (m.err && m.err.message));
+      const f = m.value;
+      assert(f && f.classification === 'no_implementation_changes',
+        '(r) 1: must return a no_implementation_changes finding; got ' + JSON.stringify(f));
+      // Typed AND evidenced: the refusal's prose listed the offending files, so the finding must too
+      // — as a machine-readable array, not only inside the sentence.
+      assert(f && Array.isArray(f.workflow_only_files)
+        && f.workflow_only_files.includes('kaola-workflow/archive/issue-87701/workflow-state.md')
+        && f.workflow_only_files.includes('kaola-workflow/archive/issue-87701/.cache/n1.md'),
+        '(r) 1: the finding must carry the measured workflow-only file list; got ' + JSON.stringify(f && f.workflow_only_files));
+      assert(f && f.branch === 'workflow/issue-87701' && f.base_ref === 'origin/main',
+        '(r) 1: the finding must name what it measured against; got branch=' + JSON.stringify(f && f.branch)
+          + ' base_ref=' + JSON.stringify(f && f.base_ref));
+      assert(f && Array.isArray(f.detail) && f.detail.length > 0 && /kaola-workflow/.test(f.detail.join(' ')),
+        '(r) 1: detail must be a non-empty array naming the workflow artifacts; got ' + JSON.stringify(f && f.detail));
+      // The way forward is the whole difference between a report and a refusal. A finding whose hint
+      // is empty is a refusal wearing a report's shape.
+      assert(f && typeof f.operator_hint === 'string' && f.operator_hint.trim().length > 0,
+        '(r) 1: the finding must name a sanctioned way forward in operator_hint; got ' + JSON.stringify(f && f.operator_hint));
+      assert(f && /re-run the sink/i.test(f.operator_hint),
+        '(r) 1: operator_hint must tell the operator how to proceed, not merely restate the problem; got ' + JSON.stringify(f && f.operator_hint));
+      // …and it says so out loud, immediately, under the classification a caller greps for.
+      assert(/^sink-merge: FINDING no_implementation_changes:/m.test(m.stderr),
+        '(r) 1: the finding must announce itself on stderr under its classification; got:\n' + m.stderr);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // --- arm 2: a branch carrying real implementation → silent. The no-false-positive arm: a
+  // measurement that fires here would report every ordinary sink.
+  {
+    const tmp = fs.realpathSync(makeTmpRoot());
+    const remotePath = initGitRepoWithBareRemote(tmp);
+    try {
+      git(tmp, ['checkout', '-b', 'workflow/issue-87702']);
+      fs.writeFileSync(path.join(tmp, 'impl-87702.txt'), 'implementation\n');
+      fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-87702'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-87702', 'workflow-state.md'), 'status: closed\n');
+      git(tmp, ['add', '-A']);
+      git(tmp, ['commit', '-m', 'feat: impl + archived workflow artifacts']);
+
+      const m = measure(tmp, 'workflow/issue-87702', 'main');
+      assert(!m.threw, '(r) 2: a branch with implementation must not throw; threw: ' + (m.err && m.err.message));
+      assert(m.value === null, '(r) 2: a branch with implementation must record NO finding; got ' + JSON.stringify(m.value));
+      assert(!/FINDING/.test(m.stderr), '(r) 2: nothing may be announced for a branch with implementation; got:\n' + m.stderr);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // --- arm 3: no resolvable base → silent. "Cannot judge, do not report" is the posture the refusal
+  // had and the conversion must keep: a repo with no origin/<defBranch> yields no diff to reason
+  // over, and inventing a finding there would report every remote-less repo as empty.
+  {
+    const tmp = fs.realpathSync(makeTmpRoot());
+    try {
+      G.git(tmp, ['init', '-b', 'main'], { encoding: 'utf8' });
+      G.git(tmp, ['config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+      G.git(tmp, ['config', 'user.name', 'Test User'], { encoding: 'utf8' });
+      fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
+      git(tmp, ['add', '-A']);
+      git(tmp, ['commit', '-m', 'init']);
+      git(tmp, ['checkout', '-b', 'workflow/issue-87703']);
+      fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-87703'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-87703', 'workflow-state.md'), 'status: closed\n');
+      git(tmp, ['add', '-A']);
+      git(tmp, ['commit', '-m', 'chore: archive only, no remote to diff against']);
+      // Precondition: the base genuinely does not resolve, so arm 3 is measuring what it claims to.
+      assert(git(tmp, ['rev-parse', '--verify', 'origin/main']).status !== 0,
+        '(r) 3: precondition — origin/main must NOT resolve in this fixture');
+
+      const m = measure(tmp, 'workflow/issue-87703', 'main');
+      assert(!m.threw, '(r) 3: an unresolvable base must not throw; threw: ' + (m.err && m.err.message));
+      assert(m.value === null, '(r) 3: an unresolvable base must record NO finding; got ' + JSON.stringify(m.value));
+      assert(!/FINDING/.test(m.stderr), '(r) 3: nothing may be announced when the base cannot be resolved; got:\n' + m.stderr);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // --- arm 4: a branch identical to the base → silent. An empty diff is not "workflow-only"; it is
+  // the already-up-to-date / fast-forward case, which the merge logic owns.
+  {
+    const tmp = fs.realpathSync(makeTmpRoot());
+    const remotePath = initGitRepoWithBareRemote(tmp);
+    try {
+      git(tmp, ['checkout', '-b', 'workflow/issue-87704']);
+      const m = measure(tmp, 'workflow/issue-87704', 'main');
+      assert(!m.threw, '(r) 4: an empty diff must not throw; threw: ' + (m.err && m.err.message));
+      assert(m.value === null, '(r) 4: a branch with NO changes at all must record no finding (that is the FF case, not an empty deliverable); got ' + JSON.stringify(m.value));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+})();
+
+// --------------------------------------------------------------------------- (s)/(t) stop, report
+//
+// THE SETTLED CONTRACT, and the reason these two exist. A converted verdict does not become
+// "merge anyway and report" — it becomes "measure, report, and STOP WITHOUT MERGING". Stopping is
+// not a softer refusal; it is what keeps every option open (fix and re-run, file a pull request,
+// or decide to publish knowingly), where merging forecloses all of them. So CONVERT changes the
+// vocabulary and adds a way forward; it never changes whether the sink stops.
+//
+// Four clauses, all four asserted, because three of them passing is how the regression below
+// shipped:
+//   1. NOTHING MERGED and nothing published — checked as git facts, not as a sentence in a message;
+//   2. the typed finding is on the emitted envelope under `findings[]`;
+//   3. the exit is non-success, so an output-blind caller still stops;
+//   4. the finding survives the process — durably where the run's record lives, or (for a
+//      precondition that stops before any checkout, where no run record exists on disk to write
+//      into) on the envelope that IS the record.
+//
+// Both preconditions live on the LEGACY entry point, and both used to `throw`. The conversion made
+// them return a finding, and at the time of writing BOTH call sites discard that return — so the
+// sink measures, announces the problem, and then merges and publishes anyway. Clause 1 is what
+// catches that, and clause 1 is precisely the clause a "did it report?" test would not have.
+
+// Legacy-path fixture whose branch carries a LIVE run folder (the run was never finalized) PLUS a
+// real implementation file — the impl file keeps the workflow-only measurement silent, so this
+// scenario pins one finding and not two.
+function buildUnfinalizedBranchFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  // The signature of an unfinalized run: workflow-state.md still COMMITTED on the branch tip.
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState(project, issue, new Date().toISOString()));
+  fs.writeFileSync(path.join(tmpRoot, 'IMPL-' + issue + '.txt'), 'real implementation\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: implementation, run never finalized']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project };
+}
+
+(function testUnfinalizedRunStopsWithoutPublishing() {
+  console.log('Test (s): a branch whose run was never finalized must STOP the sink — a run_not_finalized finding on the envelope, non-success exit, and the default branch untouched');
+  const project = 'issue-87705';
+  const issue = 87705;
+  const fx = buildUnfinalizedBranchFixture(project, issue);
+  try {
+    const mainBefore = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+    // Precondition — the live run state really is on the branch tip, so the measurement has
+    // something to find and a green here cannot be vacuous.
+    assert(catFileType(fx.tmpRoot, fx.branch + ':kaola-workflow/' + project + '/workflow-state.md') === 'blob',
+      '(s): precondition — the branch tip must carry a live workflow-state.md');
+
+    const result = runSinkLegacy(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // Clause 1 — the one that matters, and the one a report-shaped test would miss. Publishing a
+    // branch whose run never finalized commits live run state onto the mainline; that is the harm
+    // the original throw prevented, and conversion must not have cost it.
+    assertNothingPublished(fx, '(s)', { mainBefore, remoteBefore });
+    assert(catFileType(fx.tmpRoot, 'main:IMPL-' + issue + '.txt') === null,
+      '(s): the branch content must NOT be on the default branch');
+    assert(catFileType(fx.tmpRoot, 'main:kaola-workflow/' + project + '/workflow-state.md') === null,
+      '(s): live run state must NEVER reach the default branch');
+
+    // Clause 2 — typed, on the envelope, greppable by classification.
+    const f = findingOf(out, 'run_not_finalized');
+    assert(out && Array.isArray(out.findings),
+      '(s): the envelope must carry findings[]; got ' + JSON.stringify(out));
+    assert(f, '(s): findings[] must carry a run_not_finalized finding; got '
+      + JSON.stringify(out && out.findings));
+    assert(f && typeof f.operator_hint === 'string' && f.operator_hint.trim().length > 0,
+      '(s): the finding must name a way forward; got ' + JSON.stringify(f && f.operator_hint));
+
+    // Clause 3 — an output-blind caller (a shell `if`, a CI step, a wrapper that reads only the
+    // exit code) must still stop. This is transport, not a verdict.
+    assert(result.status !== 0, '(s): a stop must exit non-success; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    // Clause 4 — the finding outlives the process. This precondition stops before any checkout, so
+    // there is no run record on disk to write into (the live folder is on the branch, the archive
+    // does not exist) and the emitted envelope IS the durable record. Asserted as "recoverable",
+    // not as "some particular file exists", so a later change that gives it a file is not a
+    // failure — but a stop that leaves the finding NOWHERE is.
+    assert(/^sink-merge: FINDING run_not_finalized:/m.test(result.stderr || '') && f,
+      '(s): the finding must survive the process — announced on stderr and carried on the envelope; stderr:\n' + result.stderr);
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// Legacy-path fixture whose branch carries ONLY kaola-workflow/** — an archived run folder and
+// nothing else. The folder is ARCHIVED (not live) so the unfinalized-run measurement stays silent
+// and this scenario pins one finding and not two.
+function buildWorkflowOnlyBranchFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const archDir = path.join(tmpRoot, 'kaola-workflow', 'archive', project);
+  fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(archDir, 'workflow-state.md'), 'status: closed\nissue_number: ' + issue + '\n');
+  fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization Summary\n\nARCHIVED\n');
+  fs.writeFileSync(path.join(archDir, '.cache', 'n1.md'), 'verdict: pass\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'chore: archive only, no implementation']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project };
+}
+
+(function testWorkflowOnlyBranchStopsWithoutPublishing() {
+  console.log('Test (t): a branch carrying no implementation must STOP the sink — a no_implementation_changes finding on the envelope, non-success exit, and the default branch untouched');
+  const project = 'issue-87706';
+  const issue = 87706;
+  const fx = buildWorkflowOnlyBranchFixture(project, issue);
+  try {
+    const mainBefore = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    const result = runSinkLegacy(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // Clause 1 — an empty branch is very often a run that lost its implementation commit. Publishing
+    // it forecloses ever noticing; stopping costs one re-run.
+    assertNothingPublished(fx, '(t)', { mainBefore, remoteBefore });
+    assert(catFileType(fx.tmpRoot, 'main:kaola-workflow/archive/' + project + '/workflow-state.md') === null,
+      '(t): the branch content must NOT be on the default branch');
+
+    // Clause 2 — typed, on the envelope, with the evidence the old refusal prose carried.
+    const f = findingOf(out, 'no_implementation_changes');
+    assert(out && Array.isArray(out.findings),
+      '(t): the envelope must carry findings[]; got ' + JSON.stringify(out));
+    assert(f, '(t): findings[] must carry a no_implementation_changes finding; got '
+      + JSON.stringify(out && out.findings));
+    assert(f && Array.isArray(f.workflow_only_files) && f.workflow_only_files.length === 3,
+      '(t): the finding must carry the measured file list; got ' + JSON.stringify(f && f.workflow_only_files));
+
+    // Clause 3.
+    assert(result.status !== 0, '(t): a stop must exit non-success; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    // Clause 4 — same reasoning as (s): the stop happens before any checkout, so the envelope plus
+    // the stderr announcement are the record that outlives the process.
+    assert(/^sink-merge: FINDING no_implementation_changes:/m.test(result.stderr || '') && f,
+      '(t): the finding must survive the process — announced on stderr and carried on the envelope; stderr:\n' + result.stderr);
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (u)/(v) the witness
+//
+// The post-rebase validation gate is the third converted verdict and the only one that runs a
+// suite. It used to `execFileSync('npm', ['test'])` and let the throw kill the sink, so on RED the
+// one measurement bound to the exact bytes about to be published died as an untyped stack trace,
+// and on GREEN — under `stdio: 'inherit'` — it scrolled past and left no trace at all. "The chains
+// were green over the merged content" was not a fact anyone could recover afterwards.
+//
+// Both directions are pinned, because a witness that only leaves a mark when it fails is not a
+// witness. (u) is the green record; (v) is the red stop.
+//
+// Making the gate actually RUN takes two things the other fixtures deliberately avoid: the test-gate
+// skip hook OFF, and a base that has MOVED (the gate only ever ran after a rebase, which is why "a
+// red suite blocks the sink" was never true of a branch already on top of the default branch). So
+// the fixture advances origin/<default> under the branch, and carries a package.json whose
+// `test:kaola-workflow:*` script makes resolveChains classify it as a self-host repo.
+function buildPostRebaseGateFixture(project, issue, opts) {
+  opts = opts || {};
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  // main: roadmap + the package.json that makes this a self-host (npm-edition) repo. `test` is what
+  // the gate shells; the `test:kaola-workflow:claude` key is only there so resolveChains does not
+  // classify the fixture as a consumer repo and skip the measurement entirely.
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  fs.writeFileSync(path.join(tmpRoot, 'package.json'), JSON.stringify({
+    name: 'sink-gate-fixture', version: '1.0.0', private: true,
+    scripts: { test: 'exit ' + (opts.testExit != null ? opts.testExit : 0), 'test:kaola-workflow:claude': 'exit 0' },
+  }, null, 2) + '\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap + npm-edition package.json']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  // feature branch: the live folder (sole-archiver) + a deliverable.
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState(project, issue, new Date().toISOString()));
+  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: deliverable + live state']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  // ADVANCE origin/<default> under the branch, from a separate clone, so the sink's up-to-date check
+  // resolves false and the rebase — and therefore the gate — actually happens. Without this the gate
+  // is skipped and both scenarios below would pass vacuously.
+  const advanceDir = tmpRoot + '-advance';
+  G.raw(['clone', remotePath, advanceDir], { encoding: 'utf8' });
+  git(advanceDir, ['config', 'user.email', 'test@example.com']);
+  git(advanceDir, ['config', 'user.name', 'Test User']);
+  fs.writeFileSync(path.join(advanceDir, 'OTHER-LANE.txt'), 'another lane landed first\n');
+  git(advanceDir, ['add', '-A']);
+  git(advanceDir, ['commit', '-m', 'feat: another lane']);
+  git(advanceDir, ['push', 'origin', 'main']);
+  git(tmpRoot, ['fetch', 'origin']);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project, advanceDir };
+}
+
+function cleanupGateFixture(fx) {
+  cleanup(fx);
+  try { fs.rmSync(fx.advanceDir, { recursive: true, force: true }); } catch (_) {}
+}
+
+// The gate must RUN, so the skip hook is off. Everything else matches runSink.
+function runSinkWithGate(fx, extraArgs) {
+  return runSink(fx, extraArgs, { KAOLA_WORKFLOW_SKIP_TESTGATE: '0' });
+}
+
+(function testGreenPostRebaseWitnessIsRecorded() {
+  console.log('Test (u): a GREEN post-rebase measurement must be written down — receipt.post_rebase_tests and a durable post_rebase_tests line, not merely a suite that scrolled past');
+  const project = 'issue-87707';
+  const issue = 87707;
+  const fx = buildPostRebaseGateFixture(project, issue, { testExit: 0 });
+  try {
+    // Precondition — the base really did move, so the gate really does run. A green here with an
+    // up-to-date base would prove nothing at all.
+    assert(git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim() !== git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim(),
+      '(u): precondition — origin/main must be AHEAD of local main so the rebase (and the gate) happens');
+
+    const result = runSinkWithGate(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '(u): a green gate must not stop the sink; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-2000));
+    assert(out && out.status === 'sinked', '(u): status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // The measurement was TAKEN and says so — 'green', never 'skipped'. `skipped` here would mean
+    // the fixture failed to make the gate run, which is the one way this scenario could lie.
+    const receipt = (out && out.receipt) || {};
+    assert(receipt.post_rebase_tests === 'green',
+      '(u): the receipt must record the green measurement; got ' + JSON.stringify(receipt.post_rebase_tests)
+        + '\nfull receipt: ' + JSON.stringify(receipt));
+
+    // …and it OUTLIVES the run. The journal is disposed on a successful sink, so the archived
+    // summary is the only thing left that can answer "were the chains green over what was
+    // published?". Asserted at HEAD, not just on disk: an uncommitted answer does not survive a
+    // fresh clone.
+    const archRel = receipt.archive_dest || suffixedArchiveRel(fx.tmpRoot, project) || ('kaola-workflow/archive/' + project);
+    const summaryAtHead = showAtHead(fx.tmpRoot, archRel + '/finalization-summary.md');
+    assert(summaryAtHead && /^## Sink Findings$/m.test(summaryAtHead),
+      '(u): the archived finalization-summary.md must carry a ## Sink Findings section at HEAD; got:\n' + summaryAtHead);
+    assert(summaryAtHead && /^post_rebase_tests: green$/m.test(summaryAtHead),
+      '(u): the GREEN measurement must be durably recorded, not only the red one; got:\n' + summaryAtHead);
+  } finally {
+    cleanupGateFixture(fx);
+  }
+})();
+
+(function testRedPostRebaseChainsStopTheSink() {
+  console.log('Test (v): RED post-rebase chains must STOP the sink — a chains_red finding on the envelope, nothing merged or published, and the measurement durable on the surviving journal');
+  const project = 'issue-87708';
+  const issue = 87708;
+  const fx = buildPostRebaseGateFixture(project, issue, { testExit: 7 });
+  try {
+    const mainBefore = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    const result = runSinkWithGate(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // Clause 1 — the publication door. Red chains over the content being published is exactly the
+    // case where merging anyway is worst, and it is the case the old throw covered by accident.
+    assertNothingPublished(fx, '(v)', { mainBefore, remoteBefore });
+    assert(catFileType(fx.tmpRoot, 'main:DELIVERABLE.txt') === null,
+      '(v): the branch content must NOT reach the default branch over red chains');
+
+    // Clause 2 — typed, under its OWN name. This arm used to be laundered into "FF race: exhausted
+    // retries", which told the operator the wrong thing happened.
+    const f = findingOf(out, 'chains_red');
+    assert(out && Array.isArray(out.findings), '(v): the envelope must carry findings[]; got ' + JSON.stringify(out));
+    assert(f, '(v): findings[] must carry a chains_red finding; got ' + JSON.stringify(out && out.findings));
+    assert(f && f.npm_test_exit_code === 7,
+      '(v): the finding must carry the exit code it measured, not just "non-zero"; got ' + JSON.stringify(f && f.npm_test_exit_code));
+    assert(f && typeof f.operator_hint === 'string' && f.operator_hint.trim().length > 0,
+      '(v): the finding must name a way forward; got ' + JSON.stringify(f && f.operator_hint));
+    assert(out && out.post_rebase_tests === 'red',
+      '(v): the envelope must name the measurement that stopped the sink; got ' + JSON.stringify(out && out.post_rebase_tests));
+
+    // Clause 3.
+    assert(result.status !== 0, '(v): a stop must exit non-success; got ' + result.status);
+
+    // Clause 4 — durable. This stop happens INSIDE the transaction, so unlike (s)/(t) there is a
+    // journal to carry it, and a resumed successor that never saw stdout must still learn both the
+    // verdict and the finding behind it. The merge step must also be left NOT done, or the re-run
+    // resumes past the thing that stopped it.
+    const journal = path.join(fx.tmpRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json');
+    const archJournal = path.join(fx.tmpRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json');
+    const journalPath = fs.existsSync(journal) ? journal : (fs.existsSync(archJournal) ? archJournal : null);
+    assert(journalPath, '(v): the sink journal must survive the stop so a resume can read it; looked at '
+      + journal + ' and ' + archJournal);
+    if (journalPath) {
+      let saved = null;
+      try { saved = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch (e) { saved = null; }
+      assert(saved && saved.post_rebase_tests === 'red',
+        '(v): the journal must record the red measurement; got ' + JSON.stringify(saved && saved.post_rebase_tests));
+      assert(saved && Array.isArray(saved.findings) && saved.findings.some(x => x && x.classification === 'chains_red'),
+        '(v): the journal must carry the chains_red finding itself, not only the verdict; got ' + JSON.stringify(saved && saved.findings));
+      assert(saved && saved.steps && saved.steps.merge !== 'done',
+        '(v): the merge step must be left NOT done so a re-run resumes at the stop; got ' + JSON.stringify(saved && saved.steps));
+    }
+  } finally {
+    cleanupGateFixture(fx);
   }
 })();
 

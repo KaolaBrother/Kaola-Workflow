@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary, persistExpansionRollupToSummary } = require('./kaola-gitea-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock } = require('./kaola-gitea-workflow-claim');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitea-workflow-run-chains');
@@ -16,15 +16,19 @@ const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
-// THE SINK REPORTS; THE ORCHESTRATOR OWNS THE OUTCOME. A verdict the sink used to refuse on is now
-// a typed FINDING — the measurement is unchanged, and what the caller does with it is what changed.
-// What still refuses is a different class: a guard against DESTROYING or CORRUPTING (a dirty
-// worktree about to be force-removed, a push that did not land, an archive that would lose a file,
-// an unrecognized flag) judges nothing about the work, so it is not a verdict and does not convert.
-// Every finding lands in THREE places — stderr, `findings[]` on the envelope, and durably in
-// `## Sink Findings` (finalization-summary.md, carried by the archive commit) plus the in-flight
-// sink-receipt.json — because emitting a verdict and dropping the state the refusal was freezing is
-// a deletion, not a conversion. Shape follows adaptive-schema's evaluateChainReceipt finding.
+// THE SINK REPORTS; THE ORCHESTRATOR OWNS THE OUTCOME — AND REPORTING MEANS STOPPING. A converted
+// site does NOT merge and report; it STOPS WITHOUT MERGING. That is the opposite of a softer
+// refusal: stopping leaves every option open (fix and re-run, file a pull request instead, record a
+// decision), while merging forecloses all of them. Four properties at every converted site:
+//   1. the measurement completes and the finding is recorded DURABLY — a named field on the sink
+//      receipt under --sink (the journal survives precisely because the run did not succeed), a
+//      typed envelope on the legacy path, which has no journal;
+//   2. the sink STOPS, nothing merged and nothing published;
+//   3. the exit stays non-success — transport for an output-blind consumer, not a verdict;
+//   4. a sanctioned proceed-path is named in the finding's operator_hint.
+// A KEEP site loses only property 4: proceeding past a dirty worktree, a failed push or an
+// incomplete archive destroys something, so there is no proceed-path to offer.
+// Shape follows adaptive-schema's evaluateChainReceipt finding.
 const sinkFindings = [];
 
 function recordSinkFinding(classification, detail, operatorHint, payload) {
@@ -64,14 +68,16 @@ function resolveRunRecordDir(mainRoot, project, archiveDestRel) {
 // The durable half — same file, same presence-guarded / swallow-on-error discipline as the
 // `## Validation`, `## Changed Paths` and `## Attestation` sections the finalize report writes
 // there. Returns the absolute path written, or null when there was nothing to write.
-function persistSinkFindingsToSummary(destDir) {
-  if (!sinkFindings.length || !destDir) return null;
+function persistSinkFindingsToSummary(destDir, postRebaseTests) {
+  if (!destDir) return null;
+  if (!sinkFindings.length && !postRebaseTests) return null;
   try {
     const p = path.join(destDir, 'finalization-summary.md');
     let s = '';
     try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
     if (/^## Sink Findings$/m.test(s)) return null; // idempotent across a crash-resumed re-entry
     const lines = ['## Sink Findings', ''];
+    if (postRebaseTests) lines.push('post_rebase_tests: ' + postRebaseTests, '');
     for (const f of sinkFindings) {
       lines.push('classification: ' + f.classification);
       for (const d of f.detail || []) lines.push('', d);
@@ -254,15 +260,23 @@ function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
   } catch (_) {
     committed = false;
   }
-  if (committed) {
-    throw new Error(
-      'sink-merge refused: kaola-workflow/' + project + '/workflow-state.md still exists on branch HEAD.\n' +
-      'Run finalize before sink-merge, then recommit. Two remediation paths:\n' +
-      '  Path A (worktree available): cd <worktree> && node <claim.js> finalize --project ' + project + ' --keep-worktree\n' +
-      '    then git add kaola-workflow/ && git commit -m "chore: archive ' + project + '" on the feature branch\n' +
-      '  Path B (worktree gone): git rm -r kaola-workflow/' + project + '/ on the feature branch, commit, then re-run sink-merge'
-    );
-  }
+  // CONVERTED: whether an unfinalized run folder should block publication judges the state of the
+  // work, not a destruction risk. The sink still STOPS — publishing a branch whose run never
+  // finalized would commit live run state onto the mainline — but the answer is now typed, durable
+  // and carries the two remediations that have always existed. Returns the finding, or null.
+  if (!committed) return null;
+  return recordSinkFinding(
+    'run_not_finalized',
+    ['kaola-workflow/' + project + '/workflow-state.md still exists on branch ' + (branch || 'HEAD')
+      + ' — this run was never finalized, so the branch still carries live run state. '
+      + 'Nothing was merged and nothing was pushed.'],
+    'Run finalize before sink-merge, then recommit. Two remediations, either of which lets '
+      + 'the sink resume unchanged. '
+      + 'Path A (worktree available): cd <worktree> && node <claim.js> finalize --project ' + project
+      + ' --keep-worktree, then git add kaola-workflow/ && git commit -m "chore: archive ' + project
+      + '" on the feature branch. Path B (worktree gone): git rm -r kaola-workflow/' + project
+      + '/ on the feature branch, commit, then re-run sink-merge.',
+    { project, branch: branch || null, live_state_path: gitPath });
 }
 
 // #346: refuse — with ZERO mutation — when the linked worktree that has `branch` checked out
@@ -357,10 +371,12 @@ function assertBranchHasNonWorkflowChanges(mainRoot, branch, defBranch) {
   return recordSinkFinding(
     'no_implementation_changes',
     ['branch ' + branch + ' carries no implementation changes beyond ' + baseRef
-      + ' — every changed file is a kaola-workflow/** workflow artifact: ' + files.join(', ')],
-    'If this branch is meant to deliver implementation, add the real changed files to the final '
-      + 'commit and re-run the sink. If it is deliberately a docs/roadmap-only change, this is '
-      + 'the expected shape and nothing needs doing — the sink proceeded either way.',
+      + ' — every changed file is a kaola-workflow/** workflow artifact: ' + files.join(', ')
+      + '. Nothing was merged and nothing was pushed.'],
+    'If the branch was meant to deliver implementation, its final commit is missing: add the real '
+      + 'changed files and re-run the sink. If it is deliberately a docs/roadmap-only change, that '
+      + 'is a legitimate deliverable and the route for it is a pull request — run sink-pr for this '
+      + 'branch, which stages the content for review rather than publishing it.',
     { branch, base_ref: baseRef, workflow_only_files: files });
 }
 
@@ -464,24 +480,30 @@ const MAX_AUTOMERGE_RETRIES = 3;
 // RUNS over the same tree with the same exit code read; a red result is reported as a `chains_red`
 // finding and the sink proceeds. Returns the finding, or null when green / not runnable.
 function runTestGate(mainRoot) {
-  if (OFFLINE || SKIP_TESTGATE) return null;
+  if (OFFLINE || SKIP_TESTGATE) return { result: 'skipped', finding: null };
   let pkgRoot = mainRoot;
   try { pkgRoot = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || mainRoot; } catch (_) { pkgRoot = mainRoot; }
   const res = resolveChains(pkgRoot);
-  if (res && res.error) return null; // consumer repo — no npm edition chains; nothing to run.
+  if (res && res.error) return { result: 'skipped', finding: null }; // consumer repo — no chains.
   try {
     execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
   } catch (e) {
-    return recordSinkFinding(
-      'chains_red',
-      ['`npm test` exited ' + ((e && e.status) != null ? e.status : 'non-zero')
-        + ' over the rebased tree at ' + mainRoot
-        + ' — this repo\'s own chains are RED on the content being published.'],
-      'Fix the red chains and re-run the sink, or publish knowingly. Nothing was stopped: the '
-        + 'sink reported the result and continued, and you own whether this content should land.',
-      { npm_test_exit_code: (e && e.status) != null ? e.status : null });
+    const exitCode = (e && e.status) != null ? e.status : null;
+    return {
+      result: 'red',
+      finding: recordSinkFinding(
+        'chains_red',
+        ['`npm test` exited ' + (exitCode != null ? exitCode : 'non-zero')
+          + ' over the rebased tree at ' + mainRoot
+          + ' — this repo\'s own chains are RED on the content that would be published. '
+          + 'Nothing was merged and nothing was pushed.'],
+        'Two ways forward, both sanctioned: fix the red chains and re-run the sink, which resumes '
+          + 'where it stopped; or run sink-pr for this branch instead, staging the content for '
+          + 'review rather than publishing it. The branch is untouched either way.',
+        { npm_test_exit_code: exitCode })
+    };
   }
-  return null;
+  return { result: 'green', finding: null };
 }
 
 function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {
@@ -502,41 +524,40 @@ function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {
         '  Note: Step 0 already removed the linked worktree (often your cwd); resolve in ' + mainRoot + '.'
       );
     }
-    runTestGate(mainRoot);
+    return runTestGate(mainRoot);
   }
+  // No rebase, so no post-rebase measurement exists. This has always been the common case — the
+  // gate only ever ran when the base had moved — so "a red suite blocks the merge" was never true
+  // of a sink whose branch was already on top of the default branch.
+  return { result: 'skipped', finding: null };
 }
 
-// Returns { merged: true }, or { merged: false, reason } naming WHICH way the loop ended:
-//   'non_fast_forward' — the fast-forward kept failing. CONVERTED: a reported outcome, not a
-//     refusal — the ordinary consequence of another lane merging first, and the resolutions
-//     (rebase and retry, resynchronize, or file a PR instead) belong to the orchestrator.
-//   'rebase_conflict'  — a real content conflict re-rebasing onto the advanced base. A genuine
-//     operational failure that stays loud, unchanged: a true conflict is never auto-resolved.
+// Returns { merged, reason, testGate } naming WHICH way the loop ended — three distinct classes:
+//   'non_fast_forward' — the fast-forward kept failing. Not a CONVERT: nothing about the work was
+//     judged. It still STOPS with a non-success exit, and still emits a TYPED envelope, because an
+//     output-blind consumer cannot act on a bare exit code — and its resolutions are real.
+//   'rebase_conflict'  — a real content conflict re-rebasing onto the advanced base. Stops bare.
+//   'chains_red'       — the re-taken post-rebase measurement came back red. CONVERTED, and it
+//     surfaces under its OWN name: this arm used to return false into giveUp, which then printed
+//     "FF race: exhausted retries" — a red suite reported as a merge race.
 function ffMergeLoop(args, mainRoot, defBranch) {
   let retries = 0;
   let forcedFailCount = 0;
+  let testGate = { result: 'skipped', finding: null };
   const giveUp = (reason) => {
-    process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
-    try { execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' }); } catch (_) {}
-    if (reason === 'non_fast_forward') {
-      recordSinkFinding(
-        'non_fast_forward',
-        ['branch ' + args.branch + ' did not fast-forward onto ' + defBranch + ' after '
-          + MAX_AUTOMERGE_RETRIES + ' attempts — ' + defBranch + ' advanced under the merge and the '
-          + 'fast-forward could not be re-established. ' + defBranch + ' was NOT advanced and no issue was closed.'],
-        'You own the outcome, and three resolutions are all legitimate: rebase onto the updated '
-          + defBranch + ' and re-run the sink (the normal answer when another lane merged first); '
-          + 'resynchronize whatever diverged and re-run so the transaction resumes; or file a pull '
-          + 'request instead, which stages the content for review rather than publishing it.',
-        { branch: args.branch, default_branch: defBranch, attempts: MAX_AUTOMERGE_RETRIES });
+    // Only the genuine race prints the race message. A converted stop names what it found.
+    if (reason !== 'chains_red') {
+      process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
     }
-    return { merged: false, reason };
+    try { execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' }); } catch (_) {}
+    return { merged: false, reason, testGate };
   };
   // #350: re-fetch + re-rebase the feature branch onto the updated origin tip before retrying — the
   // only race that makes an FF fail is origin/<defBranch> advancing after the initial rebase, and
   // the pre-#350 loop retried the IDENTICAL ff-only merge without re-rebasing (dead weight).
+  // Returns a reason string when the loop must end, or null to keep going.
   const reRebaseFeature = () => {
-    if (OFFLINE) return true;
+    if (OFFLINE) return null;
     try {
       execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
@@ -547,12 +568,12 @@ function ffMergeLoop(args, mainRoot, defBranch) {
       process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n' +
         '  Note: the linked worktree was already removed (Step 0); resolve in ' + mainRoot + ' (now on branch ' + args.branch + ').\n' +
         '  After resolving, run: git push --force-with-lease origin ' + args.branch + '\n');
-      return false;
+      return 'rebase_conflict';
     }
-    // The base moved, so the witness is re-taken over the new content. A red result is recorded as
-    // a finding and the merge keeps going: the chains judge the work, not this loop.
-    runTestGate(mainRoot);
-    return true;
+    // The base moved, so the witness is re-taken over the new content. Red ends the loop under its
+    // own name — never laundered into the race message above.
+    testGate = runTestGate(mainRoot);
+    return testGate.result === 'red' ? 'chains_red' : null;
   };
   let raceHookFired = false;
   while (true) {
@@ -572,22 +593,24 @@ function ffMergeLoop(args, mainRoot, defBranch) {
       retries++;
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
       if (retries >= MAX_AUTOMERGE_RETRIES) return giveUp('non_fast_forward');
-      if (!reRebaseFeature()) return giveUp('rebase_conflict');
+      const endReason = reRebaseFeature();
+      if (endReason) return giveUp(endReason);
       continue;
     }
     try {
       execFileSync('git', ['-C', mainRoot, 'merge', '--ff-only', '--', args.branch], { encoding: 'utf8' });
-      return { merged: true };
+      return { merged: true, testGate };
     } catch (_) {
       retries++;
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
       if (retries >= MAX_AUTOMERGE_RETRIES) return giveUp('non_fast_forward');
-      if (!reRebaseFeature()) return giveUp('rebase_conflict');
+      const endReason = reRebaseFeature();
+      if (endReason) return giveUp(endReason);
     }
   }
 }
 
-function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
+function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebaseTests) {
   // #617: capture the feature branch's commit SHA now, before Step 9 below deletes the branch
   // ref — this is "the recorded implementation commit" the remote-closed-after-publish invariant
   // (wired into checkClosureInvariants below) verifies is an ancestor of defBranch before the
@@ -600,8 +623,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
   // committed BEFORE the push below, so the same push publishes the finding and the sink does not
   // leave the default branch dirty. No findings → no file, no commit: a run that found nothing is
   // byte-unchanged.
-  if (sinkFindings.length) {
-    const findingsPath = persistSinkFindingsToSummary(resolveRunRecordDir(mainRoot, args.project, null));
+  const recordable = postRebaseTests && postRebaseTests !== 'skipped' ? postRebaseTests : null;
+  if (recordable || sinkFindings.length) {
+    const findingsPath = persistSinkFindingsToSummary(
+      resolveRunRecordDir(mainRoot, args.project, null), recordable);
     if (findingsPath) {
       const rel = path.relative(mainRoot, findingsPath).split(path.sep).join('/');
       try {
@@ -796,14 +821,9 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     worktree_removed: worktreeRemoved,
     branch_removed: branchRemoved
   });
-  // M2 (#280 port #300): WARN-FIRST dispatch attestation check, archive-first (matching cmdFinalize).
-  // cmdFinalize archives .cache/ before sink-merge runs, so the live path is absent;
-  // check archive candidate first, then live as fallback. emptyReceipt 'failed' defaults
-  // are overwritten here so a real dispatch-log (with both lines) yields 'attested'.
-  checkDispatchAttestations([
-    path.join(archiveDest, '.cache'),
-    path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
-  ], receipt);
+  // The dispatch-attestation probe is gone with the mechanism it read: claim.js no longer exports
+  // checkDispatchAttestations. Calling a retired export was not a stale comment — it threw AFTER the
+  // merge had landed, so the sink advanced the default branch and then died reporting exit 1.
   // #369: post-attach the bundle per-member buckets BEFORE the invariant check.
   if (bundleBuckets) {
     receipt.closed_issues = bundleBuckets.closed_issues;
@@ -951,9 +971,28 @@ function runDirectMerge(args, opts) {
   }
   const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
   assert(!status, 'Worktree must be clean before direct merge sink runs');
-  assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
+  const liveFolderFinding = assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
+  if (liveFolderFinding) {
+    sinkEmit({
+      result: 'refuse', reason: 'run_not_finalized',
+      branch: args.branch, project: args.project,
+      detail: liveFolderFinding.detail[0],
+    }, 1);
+    return { exitCode: 1 };
+  }
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
-  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch, defBranch);
+  if (!OFFLINE) {
+    const emptyBranchFinding = assertBranchHasNonWorkflowChanges(mainRoot, args.branch, defBranch);
+    if (emptyBranchFinding) {
+      sinkEmit({
+        result: 'refuse', reason: 'no_implementation_changes',
+        branch: args.branch, default_branch: defBranch,
+        workflow_only_files: emptyBranchFinding.workflow_only_files,
+        detail: emptyBranchFinding.detail[0],
+      }, 1);
+      return { exitCode: 1 };
+    }
+  }
   assertWorktreeClean(mainRoot, args.branch);
 
   // Step 3 — Remove the worktree (only now that every precondition passed) so the branch can be
@@ -981,28 +1020,49 @@ function runDirectMerge(args, opts) {
     alreadyUpToDate = true;
   }
 
-  doRebase(args, alreadyUpToDate, mainRoot, defBranch);
+  // The post-rebase measurement, taken before the fast-forward so a red result stops with nothing
+  // merged. This path has no step journal, so the typed envelope is the durable record.
+  let testGate = doRebase(args, alreadyUpToDate, mainRoot, defBranch);
+  if (testGate.result === 'red') {
+    sinkEmit({
+      result: 'refuse', reason: 'chains_red', post_rebase_tests: 'red',
+      branch: args.branch, default_branch: defBranch,
+      detail: 'the post-rebase chains are RED over ' + args.branch + '. Nothing was merged into '
+        + defBranch + ', nothing was pushed, and no issue was closed.',
+    }, 1);
+    return { exitCode: 1 };
+  }
 
   const ffOutcome = ffMergeLoop(args, mainRoot, defBranch);
+  if (ffOutcome.testGate && ffOutcome.testGate.result !== 'skipped') testGate = ffOutcome.testGate;
   if (!ffOutcome.merged) {
-    // A merge that did not fast-forward is a reported outcome, not a refusal — the same shape the
-    // --sink transaction emits. `not_merged` is terminal for a factual reason: postMergeCleanup
-    // pushes and closes, and neither is truthful over a merge that did not happen. A
-    // rebase_conflict keeps its unchanged loud failure (bare exit 2).
+    // chains_red is the CONVERTED arm and surfaces under its own name — it used to be laundered
+    // into giveUp's "FF race: exhausted retries", reporting a red suite as a merge race.
+    if (ffOutcome.reason === 'chains_red') {
+      sinkEmit({
+        result: 'refuse', reason: 'chains_red', post_rebase_tests: 'red',
+        branch: args.branch, default_branch: defBranch,
+        detail: 'the chains went RED on the re-rebased tree during fast-forward recovery. This is a '
+          + 'red suite, NOT a merge race. Nothing was merged or pushed.',
+      }, 1);
+      return { exitCode: 1 };
+    }
     if (ffOutcome.reason === 'non_fast_forward') {
       sinkEmit({
-        result: 'report',
-        status: 'not_merged',
-        reason: 'non_fast_forward',
-        branch: args.branch,
-        default_branch: defBranch,
-        detail: 'branch ' + args.branch + ' did not fast-forward onto ' + defBranch + '. Nothing was published and no issue was closed. You own the outcome — rebase and re-run, resynchronize and re-run, or file a pull request instead.',
-      });
+        result: 'report', status: 'not_merged', reason: 'non_fast_forward',
+        branch: args.branch, default_branch: defBranch,
+        detail: 'branch ' + args.branch + ' did not fast-forward onto ' + defBranch + ' after '
+          + MAX_AUTOMERGE_RETRIES + ' attempts. Nothing was merged, nothing was pushed and no issue was '
+          + 'closed. Rebase onto the updated ' + defBranch + ' and re-run the sink, resynchronize and '
+          + 're-run, or run sink-pr instead.',
+      }, 2);
+      return { exitCode: 2 };
     }
+    // rebase_conflict stops bare: a true content conflict is never auto-resolved.
     return { exitCode: 2 };
   }
 
-  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch);
+  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, testGate.result);
   // #619(1): postMergeCleanup can now also return { exitCode: 1 } (a failed-close sink_incomplete
   // refusal) alongside the pre-existing { exitCode: 3 } (merge-impossible fallback) — generalize
   // from the exact-3 check to any returned exitCode.
@@ -1281,16 +1341,19 @@ function lingeringLaneGroupRefusal(mainRoot, project) {
     const members = (lg && Array.isArray(lg.members)) ? lg.members : [];
     if (lg && members.length > 0) {
       const legCount = (lg.legs && typeof lg.legs === 'object') ? Object.keys(lg.legs).length : 0;
-      return {
-        ok: false,
-        reason: 'lingering_lane_group',
-        detail: 'running-set.json (' + rsPath + ') still carries a lane_group "' + (lg.group_id || '(unknown)') +
+      const finding = recordSinkFinding(
+        'lingering_lane_group',
+        ['running-set.json (' + rsPath + ') still carries a lane_group "' + (lg.group_id || '(unknown)') +
           '" with ' + members.length + ' member(s) and ' + legCount + ' leg(s). A clean write-parallel group ' +
           'completion DELETES the lane_group key; a residual key means the group never ran its synthesizer + ' +
           'group barrier (the #552 crash-window desync), so surviving legs\' committed work is NOT on the feature ' +
           'branch. Refusing to sink — main must not advance with code missing. Run reconcile-running-set, resume ' +
-          'the adaptive run so the last member synthesizes + merges all legs, then re-run --sink.',
-      };
+          'the adaptive run so the last member synthesizes + merges all legs, then re-run --sink.'],
+        'Run reconcile-running-set, resume the adaptive run so the last member synthesizes and merges '
+          + 'every leg, then re-run the sink — it resumes where it stopped. If the legs are genuinely '
+          + 'unrecoverable, run sink-pr instead so the partial content is staged for review.',
+        { lane_group_id: lg.group_id || null, members: members.length, legs: legCount, running_set_path: rsPath });
+      return { ok: false, reason: 'lingering_lane_group', detail: finding.detail[0], finding };
     }
   }
   return null;
@@ -1413,24 +1476,14 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
   if (!dest) return;
   try {
     const keepOpen = deriveSinkKeepOpen(mainRoot, args, sinkReceipt);
-    const closureReceipt = buildClosureReceipt(args.project, args.issue != null ? args.issue : null, {
-      archive: 'closed',
-      roadmap_source_removed: archiveResult.roadmap_source_removed,
-      roadmap_regenerated: archiveResult.roadmap_regenerated,
-    });
-    checkDispatchAttestations([
-      path.join(dest, '.cache'),
-      path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
-    ], closureReceipt);
-    persistAttestationToSummary(dest, closureReceipt);
-    // #763: the per-run expansion-efficiency rollup line — same SOLE-archiver reasoning as above.
-    persistExpansionRollupToSummary(dest);
+    // The ## Attestation block and the ## Expansion Rollup line are gone with the mechanisms
+    // behind them (claim.js retired both writers); a call to a retired export throws, here on the
+    // sole-archiver path, after the merge has already landed.
     appendClosureBlock(dest, {
       issueDisposition: keepOpen ? 'kept-open' : 'close-pending',
       claimLabelRemoved: 'close-pending',
       worktreeRemoved: 'removed',
       closureInvariants: 'pending',
-      claimPlannerAttested: closureReceipt.claim_planner_attested
     });
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;
@@ -1448,6 +1501,19 @@ function runSinkTransaction(args, mainRoot, defBranch) {
   // record: a run that stops before the archive commit leaves it on disk, so a resumed successor
   // reads what this attempt found without ever having seen stdout.
   const stampFindings = () => { if (sinkFindings.length) receipt.findings = sinkFindings; };
+
+  // THE DURABLE HALF OF A CONVERTED STOP. A converted site stops with nothing merged, so the
+  // receipt journal — which survives precisely BECAUSE the run did not reach terminal success — is
+  // where its finding belongs. #518: the first disk write is deferred past the merge-step checkout
+  // for a new-cycle reinit, so a stop before that point reaches the caller on the envelope only,
+  // which is the legacy path's durability model anyway.
+  const recordStopOnReceipt = (field, value) => {
+    if (field) receipt[field] = value;
+    receipt.updated_at = new Date().toISOString();
+    stampFindings();
+    if (newCycle && receipt.steps.merge !== 'done') return false;
+    try { writeSinkReceipt(receiptPath, receipt); return true; } catch (_) { return false; }
+  };
   const stepDone = (step) => {
     receipt.steps[step] = 'done'; receipt.updated_at = new Date().toISOString();
     stampFindings();
@@ -1480,6 +1546,13 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       args.issueNumbers = memberSet.members; args.member_source = memberSet.source;
       const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
       if (!preResult.ok) {
+        // sink_blocked and worktree_dirty KEEP — proceeding destroys the user's own uncommitted
+        // work, so no proceed-path exists. lingering_lane_group is CONVERTED: it judges the state
+        // of the work, so it carries a typed finding and a named field on the receipt, while still
+        // stopping, because publishing legs that never merged is the silent loss it exists to catch.
+        if (preResult.reason === 'lingering_lane_group') {
+          recordStopOnReceipt('lane_group_stop', preResult.finding ? preResult.finding.lane_group_id || 'unknown' : 'unknown');
+        }
         sinkEmit({ result: 'refuse', reason: preResult.reason || 'sink_blocked', ...(preResult.foreign_dirt ? { foreign_dirt: preResult.foreign_dirt } : {}), detail: preResult.detail }, 1); return;
       }
       if (preResult.stashRef) receipt.stash_ref = preResult.stashRef;
@@ -1556,29 +1629,57 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         alreadyUpToDate = (mergeBase === originHead);
       } catch (_) { alreadyUpToDate = true; }
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-      doRebase(args, alreadyUpToDate, mainRoot, defBranch);
+      // The post-rebase measurement. Red STOPS the sink here, before the fast-forward: nothing is
+      // merged or published, and the merge step stays NOT done so a re-run after a fix resumes
+      // exactly here — the same terminal state the old throw produced, now typed and durable.
+      let testGate = doRebase(args, alreadyUpToDate, mainRoot, defBranch);
+      if (testGate.result === 'red') {
+        recordStopOnReceipt('post_rebase_tests', 'red');
+        sinkEmit({
+          result: 'refuse', reason: 'chains_red', step: 'merge', post_rebase_tests: 'red',
+          branch: args.branch, default_branch: defBranch,
+          detail: 'the post-rebase chains are RED over ' + args.branch + '. Nothing was merged into '
+            + defBranch + ', nothing was pushed, and no issue was closed; the merge step is left NOT done '
+            + 'so a re-run resumes here once the chains are green.',
+        }, 1);
+        return;
+      }
       const ffOutcome = ffMergeLoop(args, mainRoot, defBranch);
+      if (ffOutcome.testGate && ffOutcome.testGate.result !== 'skipped') testGate = ffOutcome.testGate;
       if (!ffOutcome.merged) {
-        // A merge that did not fast-forward is a REPORTED OUTCOME, not a refusal. `not_merged` is
-        // terminal for a factual reason: push_main and closure both have the landed merge as a
-        // precondition, so proceeding would publish a merge that does not exist and close issues
-        // over unpublished work. The merge step is left NOT done so a re-run resumes here, and the
-        // surviving journal carries the finding without the archive commit this attempt never
-        // reached. A rebase_conflict keeps its unchanged loud failure.
         receipt.merge = ffOutcome.reason;
-        receipt.updated_at = new Date().toISOString();
-        stampFindings();
-        writeSinkReceipt(receiptPath, receipt);
+        // chains_red is the CONVERTED arm and must surface under its own name: it used to return
+        // false into giveUp, which printed "FF race: exhausted retries" — the sink naming the wrong
+        // cause, not merely the wrong wording.
+        if (ffOutcome.reason === 'chains_red') {
+          recordStopOnReceipt('post_rebase_tests', 'red');
+          sinkEmit({
+            result: 'refuse', reason: 'chains_red', step: 'merge', post_rebase_tests: 'red',
+            branch: args.branch, default_branch: defBranch,
+            detail: 'the chains went RED on the re-rebased tree during fast-forward recovery. This is '
+              + 'a red suite, NOT a merge race. Nothing was merged or pushed; the merge step is left '
+              + 'NOT done so a re-run resumes here.',
+          }, 1);
+          return;
+        }
+        recordStopOnReceipt(null, null);
         if (ffOutcome.reason === 'non_fast_forward') {
+          // Typed envelope: a bare exit code is not actionable for an output-blind consumer. Not a
+          // CONVERT — nothing about the work was judged — but the resolutions are real and named.
           sinkEmit({
             result: 'report', status: 'not_merged', reason: 'non_fast_forward', step: 'merge',
             branch: args.branch, default_branch: defBranch,
-            detail: 'branch ' + args.branch + ' did not fast-forward onto ' + defBranch + '. Nothing was published and no issue was closed; the merge step is left NOT done so a re-run resumes here. You own the outcome — rebase and re-run, resynchronize and re-run, or file a pull request instead.',
+            detail: 'branch ' + args.branch + ' did not fast-forward onto ' + defBranch + ' after '
+              + MAX_AUTOMERGE_RETRIES + ' attempts. Nothing was merged, nothing was pushed and no issue '
+              + 'was closed; the merge step is left NOT done so a re-run resumes here. Rebase onto the '
+              + 'updated ' + defBranch + ' and re-run the sink, resynchronize and re-run, or run sink-pr instead.',
           }, 2);
           return;
         }
+        // rebase_conflict stops bare: a true content conflict is never auto-resolved.
         process.stderr.write('sink-merge --sink: FF merge failed\n'); process.exitCode = 2; return;
       }
+      receipt.post_rebase_tests = testGate.result;
       // Land the staged worktree-only content now that checkout has resolved whether the branch
       // itself tracks kaola-workflow/<project>/. #707: per-FILE union — a checkout-resolved
       // (branch-tracked) file is authoritative and is never overwritten, but a file that exists
@@ -1658,7 +1759,8 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // stages the archive, so `## Sink Findings` rides the sink's own commit and survives a fresh
       // clone. Every converted finding is taken at or before the merge step, so the record is
       // complete by now. Covers both archiver postures (sole-archiver dest, keep-worktree archive).
-      persistSinkFindingsToSummary(resolveRunRecordDir(mainRoot, args.project, receipt.archive_dest));
+      persistSinkFindingsToSummary(resolveRunRecordDir(mainRoot, args.project, receipt.archive_dest),
+        receipt.post_rebase_tests || null);
       stepDone('finalize'); continue;
     }
     if (step === 'stash_restore') {

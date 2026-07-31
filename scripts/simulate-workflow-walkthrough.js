@@ -5774,18 +5774,19 @@ function testFinalizeCleansRoadmapEntry() {
       finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,
       'receipt: closure_invariants.ok must be true, got ' + JSON.stringify(finalizeResult.closure_invariants)
     );
-    // M2 (#277): the warn-first attestation field must be present; no dispatch-log in the offline
-    // test so it is 'missing', but closure_invariants.ok must still be true (warn-first contract).
+    // DELETED: the two `claim_planner_attested` assertions. The mandatory planner agent is gone and
+    // inline authoring is the design, so claim.js retired the whole producer chain — the
+    // --attest-planner-spawn flag, checkDispatchAttestations, persistAttestationToSummary, and the
+    // receipt field itself. Nothing writes the field, so nothing can assert it.
+    //
+    // Kept below, and now the whole of what this stanza measures: neither retired attestation field
+    // may REAPPEAR. That is the direction a retirement can actually regress in, and it is the half
+    // that survives the mechanism.
     assert(
-      finalizeResult.closure_receipt && 'claim_planner_attested' in finalizeResult.closure_receipt,
-      'M2 (#277): closure_receipt must have claim_planner_attested field'
+      finalizeResult.closure_receipt && !('claim_planner_attested' in finalizeResult.closure_receipt),
+      'the retired planner attestation field must not reappear on the closure receipt, got '
+        + JSON.stringify(finalizeResult.closure_receipt && Object.keys(finalizeResult.closure_receipt))
     );
-    assert(
-      finalizeResult.closure_receipt.claim_planner_attested === 'missing' ||
-      finalizeResult.closure_receipt.claim_planner_attested === 'attested',
-      'M2 (#277): claim_planner_attested must be missing or attested, got ' + finalizeResult.closure_receipt.claim_planner_attested
-    );
-    // #816: the finalize seam is orchestrator-owned — it emits no attestation field at all.
     assert(
       finalizeResult.closure_receipt && !('finalize_contractor_attested' in finalizeResult.closure_receipt),
       '#816: closure_receipt must NOT carry a retired finalize-seam attestation field'
@@ -6955,11 +6956,13 @@ function testWatchPrMergedClosureReceipt() {
       result.cleanups[0].closure_invariants,
       'cleanups[0] must have closure_invariants, got: ' + JSON.stringify(cleanup)
     );
-    // #286 Fix 2: checkDispatchAttestations must run on watch-pr MERGED receipt.
-    // With no dispatch-log producer in the fixture, post-fix value is 'missing' (not stale 'failed').
+    // DELETED: `receipt.claim_planner_attested === 'missing'`, which pinned checkDispatchAttestations
+    // running on the watch-pr MERGED receipt. That probe was retired from claim.js with the rest of
+    // the attestation chain, so the field has no producer. What is kept is the reappearance guard for
+    // BOTH retired fields — the only half of this that a live mechanism can still violate.
     assert(
-      receipt.claim_planner_attested === 'missing',
-      'watch-pr MERGED receipt.claim_planner_attested must be missing after attestation check, got: ' + receipt.claim_planner_attested
+      !('claim_planner_attested' in receipt),
+      'watch-pr MERGED receipt must NOT carry the retired planner attestation field, got: ' + JSON.stringify(Object.keys(receipt))
     );
     assert(
       !('finalize_contractor_attested' in receipt),
@@ -9327,18 +9330,21 @@ function testAdaptiveWorktreeProvisionedE2E() {
 }
 
 
-// ── NEW: testSinkRefusesWorkflowOnlyBranch ───────────────────────────────────
-// AC7: sink-merge MUST exit 1 when the branch diff vs origin/main is all kaola-workflow/**
-// Signal = sinkSignal() → assert exit 1 with refusal message
-// Else    → assert today's behavior (allow — exit 0) so it's green now
+// ── testSinkReportsWorkflowOnlyBranch ────────────────────────────────────────
+// The workflow-only branch check is a MEASUREMENT that reports; it is not a throw.
+//
+// RE-POINTED (was testSinkRefusesWorkflowOnlyBranch, which asserted the helper THREW). "This branch
+// carries no implementation" is a judgement about the work — a docs-only or roadmap-only branch is a
+// legitimate deliverable — so it converted into a typed finding carrying a route forward, and the
+// caller decides. What did NOT change is that the sink stops: the conversion moved the vocabulary,
+// never the outcome, and the end-to-end half of that (nothing merged, nothing pushed, no issue
+// closed, non-success exit) is pinned in test-sink-merge.js. This arm pins the measurement itself.
 
-function testSinkRefusesWorkflowOnlyBranch() {
-  // AC7 (#264): the assertBranchHasNonWorkflowChanges helper must throw when the branch diff vs
-  // origin/main is entirely kaola-workflow/**. We invoke the helper directly (bypassing the
-  // OFFLINE gate and gh/push machinery) so the assertion is unambiguous.
-  // Signal = sinkSignal() → strict assert helper throws; else skip (green).
+function testSinkReportsWorkflowOnlyBranch() {
+  // Invoke the helper directly (bypassing the OFFLINE gate and gh/push machinery) so what is being
+  // measured is unambiguous. Signal = sinkSignal(); else skip (green).
   if (!sinkSignal()) {
-    console.log('testSinkRefusesWorkflowOnlyBranch: SKIPPED (impl-sink-guard pending)');
+    console.log('testSinkReportsWorkflowOnlyBranch: SKIPPED (impl-sink-guard pending)');
     return;
   }
   const { assertBranchHasNonWorkflowChanges } = require(sinkMergeScript);
@@ -9354,24 +9360,32 @@ function testSinkRefusesWorkflowOnlyBranch() {
     G.git(tmp, ['add', 'kaola-workflow/'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'chore: archive issue 911 (workflow-only, no impl)'], { encoding: 'utf8' });
 
-    // Direct call: must throw (branch is workflow-only)
+    // Direct call: must RETURN a typed finding, and must not throw.
     let threw = false;
     let thrownMsg = '';
+    let finding = null;
     try {
-      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-911', 'main');
+      finding = assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-911', 'main');
     } catch (e) {
       threw = true;
       thrownMsg = e && e.message ? e.message : String(e);
     }
-    assert(threw,
-      'AC7: assertBranchHasNonWorkflowChanges must throw for a workflow-only branch');
-    assert(/kaola-workflow|workflow-only|no implementation/i.test(thrownMsg),
-      'refusal message must mention kaola-workflow or workflow-only, got: ' + thrownMsg);
+    assert(!threw,
+      'the workflow-only measurement must not throw; threw: ' + thrownMsg);
+    assert(finding && finding.classification === 'no_implementation_changes',
+      'a workflow-only branch must yield a no_implementation_changes finding, got: ' + JSON.stringify(finding));
+    // The evidence the old refusal prose carried, now machine-readable.
+    assert(finding && Array.isArray(finding.workflow_only_files)
+      && finding.workflow_only_files.includes('kaola-workflow/archive/issue-911/workflow-state.md'),
+      'the finding must carry the measured workflow-only file list, got: ' + JSON.stringify(finding && finding.workflow_only_files));
+    // The route forward is what a report owes and a refusal does not.
+    assert(finding && typeof finding.operator_hint === 'string' && finding.operator_hint.trim().length > 0,
+      'the finding must name a way forward in operator_hint, got: ' + JSON.stringify(finding && finding.operator_hint));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(tmp + '-remote', { recursive: true, force: true }); } catch (_) {}
   }
-  console.log('testSinkRefusesWorkflowOnlyBranch: PASSED');
+  console.log('testSinkReportsWorkflowOnlyBranch: PASSED');
 }
 
 // ── NEW: testSinkAllowsMixedBranch ───────────────────────────────────────────
@@ -10563,7 +10577,7 @@ function buildRegistry() {
   add('testLegacyWorktreeCleanupDryRun',                  testLegacyWorktreeCleanupDryRun);
   add('testLegacyWorktreeCleanupDirtySkip',               testLegacyWorktreeCleanupDirtySkip);
   add('testAdaptiveWorktreeProvisionedE2E',               testAdaptiveWorktreeProvisionedE2E);
-  add('testSinkRefusesWorkflowOnlyBranch',                testSinkRefusesWorkflowOnlyBranch);
+  add('testSinkReportsWorkflowOnlyBranch',                testSinkReportsWorkflowOnlyBranch);
   add('testSinkAllowsMixedBranch',                        testSinkAllowsMixedBranch);
   add('testPlannerAttestFlagBackfillsDispatchLog',        testPlannerAttestFlagBackfillsDispatchLog);
   add('testPlannerAttestFlagAbsentStaysMissing',          testPlannerAttestFlagAbsentStaysMissing);

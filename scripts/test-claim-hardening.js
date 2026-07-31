@@ -33,7 +33,7 @@ process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
 const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag } = require('./kaola-workflow-claim.js');
-const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
+const { writeFileAtomicReplace, NEXT_COMMAND } = require('./kaola-workflow-adaptive-schema.js');
 // Git FIXTURE arrangement routes through the shared library — one process-boundary
 // decision for the repo instead of one per line. See scripts/test-git-fixture.js.
 const G = require('./test-git-fixture');
@@ -1104,8 +1104,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#770(b): a stale KAOLA_PATH must leave NO trace — the persisted workflow_path is the constant adaptive, never an echo of the request, got:\n' + state5381);
     assert(!/^workflow_path: fast$/m.test(state5381),
       '#770(b): the retired path name must not appear anywhere in durable state, got:\n' + state5381);
-    assert(/^next_command: \/kaola-workflow-plan-run issue-5381$/m.test(state5381),
-      '#770(b): routing must be unconditionally adaptive despite the stale KAOLA_PATH value, got:\n' + state5381);
+    // The property is "routing is unconditionally adaptive", not "the adaptive command is spelled
+    // <x>". Read the spelling from the schema constant the writer itself uses: this pin survived a
+    // literal `/kaola-workflow-plan-run` long enough for the command to be DELETED out from under
+    // it, and a pin that names a command which no longer exists tests nothing.
+    assert(new RegExp('^next_command: ' + NEXT_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' issue-5381$', 'm').test(state5381),
+      '#770(b): routing must be unconditionally adaptive despite the stale KAOLA_PATH value — expected next_command: '
+        + NEXT_COMMAND + ' issue-5381, got:\n' + state5381);
   }
 
   // (d) #770: --workflow-path full (a retired path name) is silently ignored — ACQUIRES via
@@ -1648,7 +1653,22 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   // and still classifies that case `chains_stale`; what is gone is the refusal that followed the
   // classification. Finalize now completes and hands the finding to the orchestrator.
 
-  // --- T7: attestation inversion — the contractor field/warning are gone, legacy is tolerated ---
+  // --- T7: attestation retirement — the fields/warning are gone, legacy is tolerated ------------
+  //
+  // DELETED here: `assert(receipt && 'claim_planner_attested' in receipt, 'the planner seam
+  // attestation is deliberately KEPT')`. That label was true when the contractor attestation was
+  // retired and the PLANNER one survived it; it is not true any more. The mandatory planner agent
+  // is gone and inline authoring is the design, so claim.js retired the whole producer chain —
+  // checkDispatchAttestations, persistAttestationToSummary, and the receipt field itself. A pin is
+  // deleted with its mechanism, not reshaped around its absence.
+  //
+  // UNCOVERED as a result: that a closure receipt records whether the claim/author seam was
+  // DISPATCHED rather than run inline by the main session. Nothing measures that any more, on any
+  // surface. It is a retired mechanism, not a hole in this suite.
+  //
+  // What survives and is still asserted below: the contractor field never reappears, no contractor
+  // warning is emitted, and the archived summary never carries the retired field — the negative
+  // half, which is what stops a retirement from silently un-retiring.
   {
     const fx = mk816('issue-816i');
     try {
@@ -1658,8 +1678,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       assert(receipt && !('finalize_contractor_attested' in receipt),
         '#816(T7): the closure receipt must no longer carry finalize_contractor_attested, got '
         + JSON.stringify(receipt && Object.keys(receipt)));
-      assert(receipt && 'claim_planner_attested' in receipt,
-        '#816(T7): the planner seam attestation is deliberately KEPT');
+      assert(receipt && !('claim_planner_attested' in receipt),
+        '#816(T7): the retired planner attestation field must not reappear on the closure receipt, got '
+        + JSON.stringify(receipt && Object.keys(receipt)));
       const warnings = (receipt && receipt.warnings) || [];
       assert(!warnings.some(w => /contractor/i.test(String(w))),
         '#816(T7): no contractor ATTESTATION WARNING may be emitted, got ' + JSON.stringify(warnings));
