@@ -179,6 +179,31 @@ the mission-list design refuses.
    it is inadmissible by the same standard that retired correction 1. Several #871 conversions lean
    on it; whoever executes them should know its status.
 
+## Build sequence
+
+**The ordering principle is the design's own: build the replacement and observe it working BEFORE
+deleting anything.** Deleting first would make every intermediate state unshippable and would remove
+the machinery whose behaviour the new file still has to reproduce.
+
+1. **Write the file format and the four fields.** The whole mechanism; no script. Deliverable: a
+   written convention plus one real file. Nothing is deleted in this step.
+2. **Run a real session on it, end to end** — decompose, dispatch, close, resume after an interrupted
+   dispatch. **This step gates every deletion below it.** Additive discipline applies to the migration
+   itself: the DAG stays until the replacement is observed carrying a run.
+3. **Extract what is load-bearing for something other than node execution**, before the host dies —
+   the finalize door currently runs through the plan-validator's whole-plan attribution sweep and must
+   be re-pointed at the recorded per-item locators; the guard prologue is where the consent path
+   physically lives; nonce minting sits inside the node-open choreography; and `adaptive-schema.js` is
+   the cross-edition drift anchor, so surviving constants must keep living in that one byte-identical
+   file.
+4. **Delete the node executor and let its tests fall out** — see *What is retired*. Tests are deleted
+   with their mechanism, never repaired ahead of it.
+5. **Propagate to the four editions and the runtime surfaces.** The DAG is described in prompt
+   surfaces, not only in code, including `agents/*.md` and its three hand-maintained
+   `plugins/*/agents/*.toml` twins, which no generator owns.
+6. **Documentation last.** Rewrite `CLAUDE.md` to describe what ships and **remove its ADR 0017
+   banner** — the banner exists only while the decision and the code disagree.
+
 ## Method note: derive additively, because subtraction preserves
 
 Three separate passes of this discussion produced a design that kept a mechanism, each time with a
