@@ -303,7 +303,10 @@ function assert(condition, message) {
   // -- 6T-b (AC1 RED half, PER-NODE scope): an UNDECLARED test write overflows.
   {
     const r = bc(PLAN_813, ['test/login.test.js', 'test/rogue.test.js'], { nodeId: 't1' });
-    assert(r.result === 'refuse', '6T-b: an UNDECLARED test write must refuse at the per-node barrier, got ' + JSON.stringify(r));
+    // The per-node barrier REPORTS the overflow (`answer`, no mutation) rather than refusing it; the
+    // attribution itself — which path is out of the set — is what this case is pinning and is unchanged.
+    assert(r.result === 'answer' && r.mutation_performed === false,
+      '6T-b: an UNDECLARED test write is ATTRIBUTED and reported at the per-node barrier, got ' + JSON.stringify(r));
     assert(r.reason === 'write_set_overflow', '6T-b: the EXISTING overflow family (no fifth family), got ' + r.reason);
     assert(r.outOfAllow.includes('test/rogue.test.js'), '6T-b: the out-of-allow test path is NAMED in outOfAllow, got ' + JSON.stringify(r.outOfAllow));
     assert(r.sensitiveHits.length === 0, '6T-b: attribution refuses without dragging the test path into sensitivity');
@@ -311,7 +314,7 @@ function assert(condition, message) {
   // -- 6T-c: a node writing a SIBLING's declared test lane is its own per-node overflow.
   {
     const r = bc(PLAN_813, ['spec/orphan.spec.ts'], { nodeId: 't1' });
-    assert(r.result === 'refuse' && r.outOfAllow.includes('spec/orphan.spec.ts'),
+    assert(r.result === 'answer' && r.outOfAllow.includes('spec/orphan.spec.ts'),
       '6T-c: a sibling-lane test write is a per-node overflow, got ' + JSON.stringify(r));
   }
   // -- 6T-d (LANE-GROUP scope): the union allowlist covers declared test paths; a stray does not.
@@ -319,8 +322,8 @@ function assert(condition, message) {
     const ok = bc(PLAN_813, ['test/login.test.js', 'src/app.js'], { groupMembers: ['t1', 't2'] });
     assert(ok.result === 'pass', '6T-d: the group union allows each member\'s DECLARED test path, got ' + JSON.stringify(ok));
     const bad = bc(PLAN_813, ['test/login.test.js', 'src/app.js', 'tests/stray.js'], { groupMembers: ['t1', 't2'] });
-    assert(bad.result === 'refuse' && bad.reason === 'write_set_overflow' && bad.outOfAllow.includes('tests/stray.js'),
-      '6T-d: an undeclared test write refuses in LANE-GROUP scope (the laundering lane closes), got ' + JSON.stringify(bad));
+    assert(bad.result === 'answer' && bad.reason === 'write_set_overflow' && bad.outOfAllow.includes('tests/stray.js'),
+      '6T-d: an undeclared test write is ATTRIBUTED in LANE-GROUP scope (the laundering lane stays closed — the path is named), got ' + JSON.stringify(bad));
   }
   // -- 6T-e (WHOLE-PLAN scope): the plan-wide union likewise ranges over test paths.
   {
@@ -410,7 +413,11 @@ function assert(condition, message) {
       'node-undeclared-tests-dir': PASS_NULL,
       'node-undeclared-__tests__': PASS_NULL,
       'node-undeclared-spec-name': PASS_NULL,
-      'node-production-control': '{"result":"refuse","reason":"write_set_overflow","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
+      // PER-NODE scope reports the overflow (`answer`) instead of refusing it. The toggle's contract is
+      // to restore prior ATTRIBUTION behaviour — which fields name which paths — not to freeze the
+      // verdict TOKEN, which this campaign changed independently of the toggle. Every attribution field
+      // below is byte-identical to the pre-#813 capture; only `result` moved.
+      'node-production-control': '{"result":"answer","reason":"write_set_overflow","errors":["actual writes outside the declared allowlist (src/stray.js) — overflow beyond the frozen write set"],"sensitiveHits":[],"outOfAllow":["src/stray.js"],"foreignArchiveHits":[],"unattributed":[]}',
       'node-dirgrant-test': PASS_NULL,
       'group-declared-test': PASS_NULL,
       'group-undeclared-test': PASS_NULL,
@@ -429,7 +436,7 @@ function assert(condition, message) {
 
     // The toggle's contract is to restore prior ATTRIBUTION behaviour, not to freeze operator_hint
     // PROSE — the hint is regenerated at emit time from OPERATOR_HINT_REGISTRY (D-445-01) and is free
-    // to reword (e.g. write_set_overflow now names BOTH revert-overflow and amend-surface) without
+    // to reword (e.g. write_set_overflow now names amend-surface as its cure) without
     // that being an attribution regression. So the byte-identity comparison below is scoped to the
     // DECISION fields the toggle actually governs; a dedicated substring check further down covers
     // hint content without re-freezing its prose (full hint-presence coverage also lives independently
@@ -460,8 +467,8 @@ function assert(condition, message) {
     for (const key of ['node-production-control', 'plan-production-control']) {
       const entry = CORPUS.find((c) => c[0] === key);
       const r = withToggle('0', () => planValidator.barrierCheck(entry[1], entry[2], entry[3]));
-      assert(r.operator_hint && r.operator_hint.includes('revert-overflow'),
-        '6T-i-1b hint [' + key + ']: operator_hint still names revert-overflow, got ' + JSON.stringify(r.operator_hint));
+      assert(r.operator_hint && r.operator_hint.includes('amend-surface'),
+        '6T-i-1b hint [' + key + ']: operator_hint still names its recovery primitive, got ' + JSON.stringify(r.operator_hint));
     }
 
     // (i-2) NON-VACUITY: with the toggle at its shipped default the corpus MUST diverge from the
@@ -782,7 +789,7 @@ function assert(condition, message) {
     // GB-PURE-b: a cross-lane stray in NEITHER set → rank-4 unattributed_write overflow refuse.
     {
       const r = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js', 'z.js'], { groupMembers: ['A', 'B'] });
-      assert(r.result === 'refuse', 'GB-PURE-b: cross-lane stray z.js refuses under group union');
+      assert(r.result === 'answer', 'GB-PURE-b: cross-lane stray z.js is reported under group union');
       assert(r.reason === 'write_set_overflow', 'GB-PURE-b: reason is the EXISTING write_set_overflow (no NEW reason code), got ' + r.reason);
       assert(Array.isArray(r.outOfAllow) && r.outOfAllow.includes('z.js'), 'GB-PURE-b: z.js named in outOfAllow');
       assert(r.errors.join(' ').includes('z.js'), 'GB-PURE-b: error text names z.js');
@@ -790,7 +797,7 @@ function assert(condition, message) {
     // GB-PURE-c: groupMembers is SUBSET-scoped — naming only [A] makes by.js out-of-allowlist.
     {
       const r = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js'], { groupMembers: ['A'] });
-      assert(r.result === 'refuse', 'GB-PURE-c: groupMembers:[A] only allows ax.js → by.js overflows');
+      assert(r.result === 'answer', 'GB-PURE-c: groupMembers:[A] only allows ax.js → by.js overflows');
       assert(r.outOfAllow.includes('by.js'), 'GB-PURE-c: by.js named out-of-allowlist for single-member group');
     }
     // GB-PURE-d (INV-6 flag-OFF byte-identity): absent groupMembers === whole-plan union behavior.
@@ -1204,9 +1211,9 @@ function assert(condition, message) {
     fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B wrote here\n');
     fs.writeFileSync(path.join(repoRoot, 'z.js'), '// nobody declared this\n');
     const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', groupId, '--json']);
-    assert(r.result === 'refuse', 'T-GB-2: cross-lane stray z.js → group barrier refuse, got ' + JSON.stringify(r));
-    assert(r.exitCode === 1, 'T-GB-2: exit 1 on refuse');
-    assert(r.errors.join(' ').includes('z.js'), 'T-GB-2: refusal text names z.js');
+    assert(r.result === 'answer', 'T-GB-2: cross-lane stray z.js → group barrier report, got ' + JSON.stringify(r));
+    assert(r.exitCode === 0 && r.mutation_performed === false, 'T-GB-2: exit 0, zero mutation, on a report');
+    assert(r.errors.join(' ').includes('z.js'), 'T-GB-2: report text names z.js');
     assert(r.reason === 'write_set_overflow' || r.reason === 'unattributed_write',
       'T-GB-2: reason is the EXISTING overflow/unattributed arm (NO new reason code), got ' + r.reason);
     assert(Array.isArray(r.outOfAllow) && r.outOfAllow.includes('z.js'), 'T-GB-2: z.js in outOfAllow');
@@ -1249,8 +1256,11 @@ function assert(condition, message) {
     const groupId = setupGroup(repoRoot, cacheDir, planPath);
     fs.writeFileSync(path.join(repoRoot, 'z.js'), '// undeclared stray\n');
     const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', groupId, '--json']);
-    assert(r.result === 'refuse' && r.exitCode === 1,
-      'T-GB-6 (mutation): a lone undeclared stray z.js MUST refuse — a vacuous/short-circuit pass is impossible');
+    // The verdict changed (report, not refuse) but the MUTATION property this case exists for did not:
+    // a short-circuited group barrier would emit a clean `pass` naming nothing, so `answer` + the named
+    // path is exactly as strong a witness that the barrier really ran.
+    assert(r.result === 'answer' && Array.isArray(r.outOfAllow) && r.outOfAllow.includes('z.js'),
+      'T-GB-6 (mutation): a lone undeclared stray z.js MUST be NAMED — a vacuous/short-circuit pass is impossible');
     cleanup(repoRoot);
   }
 }

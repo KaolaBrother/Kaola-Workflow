@@ -59,9 +59,25 @@ const CLOSURE_RECEIPT_FIELDS = {
   keep_open_requested: 'boolean',
   // #426: absolute path to main repo root this finalize operated against.
   anchored_root: 'string',
-  // #441: advisory goal-check field. 'satisfied' = AC verified; 'unsatisfied' = AC failed;
-  // 'absent' = no AC defined. null in emptyReceipt() (not yet evaluated). Non-blocking in v1.
-  goal_check: ['satisfied', 'unsatisfied', 'absent'],
+  // Advisory goal DECLARATION. Replaces the retired `goal_check`, whose enum
+  // ('satisfied' | 'unsatisfied' | 'absent') rendered a presence check as a verdict: the negative
+  // case was unreachable ("reserved for future use"), and — worse — the positive case named a
+  // check that exists nowhere in this workflow. The comment that stood here claimed 'satisfied'
+  // meant "AC verified"; nothing verifies acceptance criteria, so a run that achieved nothing
+  // wrote `goal_check: satisfied` into its terminal record whenever KAOLA_GOAL was set at all.
+  // These three fields say only what was inspected, and `unsatisfied` is gone WITH the enum rather
+  // than lingering as a value that could never be produced:
+  //   goal_declared        — a goal TEXT was found. Not a claim that it was achieved.
+  //   goal_declared_source — 'env' (KAOLA_GOAL) | 'plan' (a `goal:` line in ## Meta); null when
+  //                          none was declared, and null in emptyReceipt() until evaluated.
+  //   goal_declared_probed — the exact plan paths examined, in order, so the check is re-runnable
+  //                          by hand. Empty when KAOLA_GOAL answered before any file was opened.
+  // ARCHIVED receipts predating this change carry `goal_check`, and they are correct AS HISTORY —
+  // they record what the code of their day emitted. Do NOT migrate them, and do not "finish" this
+  // rename by editing an archived receipt or an archive fixture.
+  goal_declared: 'boolean',
+  goal_declared_source: ['env', 'plan'],
+  goal_declared_probed: 'string[]',
   // #653 (D3): advisory selection-evidence probe. 'present' = a selection-evidence.* file was
   // found under the project's .cache/ (the no-target survey's selection record, docked before
   // dispatching the executor); 'absent' = none found — expected for a user-named claim, which
@@ -109,8 +125,10 @@ function emptyReceipt(project, issueNumber) {
     // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking.
     claim_planner_attested: 'failed',
     warnings: [],
-    // #441: advisory goal-check — null until evaluated.
-    goal_check: null,
+    // Advisory goal declaration — null until evaluated (nothing inspected yet).
+    goal_declared: null,
+    goal_declared_source: null,
+    goal_declared_probed: null,
     // #653 (D3): advisory selection-evidence probe — null until evaluated.
     selection_evidence: null,
   };

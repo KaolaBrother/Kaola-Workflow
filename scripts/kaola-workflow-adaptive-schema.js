@@ -146,14 +146,19 @@ function dispatchEffort(model, sessionProof) {
   };
 }
 
-// The Codex join protocol's per-node WAIT BUDGET (minutes) — the floor a `running` delegated agent is
-// never interrupted before. Derived from the node's effort tier, the SAME normalized tier `dispatchEffort`
-// reads, so a legacy `opus`/`sonnet` cell resolves to the same budget as its neutral token. Reasoning-tier
-// nodes get the larger budget (deeper work runs longer), standard the smaller; an absent/blank/out-of-vocab
-// tier resolves to a CONCRETE role-default (never null) so every dispatch card carries a number — the
-// non-interrupt rule always has a floor. Values sit ABOVE the observed 10–30-minute runtime of substantive
-// role nodes so the budget replaces the improvised 2–7-minute impatience ceiling. A validated optional
-// per-node planner override may extend (never shorten) this tier-derived floor through the canonical cap.
+// The Codex join protocol's per-node WAIT BUDGET (minutes) — the planner's ESTIMATE of how long the
+// work takes, NOT a floor the orchestrator is held behind. A `running` agent interrupted well inside
+// its budget is usually just being interrupted; escalation after the budget expires is an ORDER
+// (ask → interrupt → reclaim) and nothing more, its rungs are not gated on each other, and no fixed
+// grace window is prescribed — how long to wait between them is the orchestrator's judgement.
+// Derived from the node's effort tier, the SAME normalized tier `dispatchEffort` reads, so a legacy
+// `opus`/`sonnet` cell resolves to the same budget as its neutral token. Reasoning-tier nodes get the
+// larger budget (deeper work runs longer), standard the smaller; an absent/blank/out-of-vocab tier
+// resolves to a CONCRETE role-default (never null) so every dispatch card carries a number. Values sit
+// ABOVE the observed 10–30-minute runtime of substantive role nodes so the estimate replaces the
+// improvised 2–7-minute impatience ceiling. A validated optional per-node planner override may extend
+// (never shorten) this tier-derived value through the canonical cap — that lower bound is the one
+// sense in which "floor" still applies here, and it bounds the OVERRIDE, never the interrupt.
 const WAIT_BUDGET_MINUTES = Object.freeze({ reasoning: 40, standard: 20 });
 const WAIT_BUDGET_MINUTES_DEFAULT = 20; // no tier resolves → concrete role-default (never null)
 const WAIT_BUDGET_MINUTES_CAP = 720;
@@ -1480,7 +1485,34 @@ function validateSnapshotManifestShape(manifest) {
 // 'ambiguous' (ask). Older (or absent) → 'stale' (resumable leftover / backward compat).
 // 24h is conservative: a run completes well within a day; an untouched 24h-old claim
 // is very likely abandoned. Byte-identical ×4 (the drift anchor).
+//
+// IT IS A GUESS, AND IT STAYS — as a LABELLED DEFAULT, not as a deletion. This threshold turns an
+// age into the categorical `lane_bucket: stale`, which is a verdict the age alone cannot support,
+// and the obvious repair is to emit the raw fields and delete the constant. That repair is worse
+// than the defect. It does not remove the guess; it MOVES it — out of a named, exported, documented
+// constant with a precedence table in `docs/workflow-state-contract.md`, and into an un-recorded
+// threshold each caller re-invents per call and records nowhere. Handing a reader a list it cannot
+// rank is not a tool; it is the refusal with the stop removed and the reasoning deleted.
+//
+// So the obligation on every consumer is BOTH: emit the inputs the verdict was computed from
+// (`claim_ts`, `session_marker`, the holder-probe result) AND this constant beside them, tagged with
+// LANE_STALENESS_PROVENANCE so a reader can see what was assumed, re-derive the verdict, or
+// substitute a better threshold. A default a reader can see and disagree with is strictly more
+// honest than either a bare category or a bare number.
 const LANE_STALENESS_MS = 86400000; // 24 hours in milliseconds
+
+// The provenance record for the guess above — what it is, where it came from, and what would
+// replace it. Exported so a consumer emits the SAME description rather than paraphrasing it into a
+// second, drifting one; `source` is what tells a reader the number was a shipped default and not a
+// measurement of this run.
+const LANE_STALENESS_PROVENANCE = Object.freeze({
+  threshold_ms: LANE_STALENESS_MS,
+  source: 'shipped_default',
+  kind: 'heuristic',
+  basis: 'a run completes well within a day, so an untouched 24h-old claim is very likely abandoned',
+  supersedable_by: 'a same-host holder probe (process.kill(pid, 0)), which is a measurement rather '
+    + 'than an age guess and is what the scheduler-lock path already uses',
+});
 
 // The shared, cross-edition intersection of workflow-state.md fields that every
 // active-folders parser (canonical + all forge ports) reads and surfaces on the
@@ -1607,6 +1639,103 @@ function stripDecoyConsentHalt(planContent) {
         + '(it is most likely copied in from an archived plan used as a skeleton).',
     },
   };
+}
+
+// ===========================================================================
+// THE CONSENT-HALT REGISTER (#871) — a halt that knows its own origin.
+//
+// The durable marker is ONE line, `consent_halt: pending`, sitting under `## Node Ledger`. It is
+// NODELESS and CLASSLESS: `write-halt` REQUIRES `--node-id`, and then throws it away into a
+// best-effort telemetry sidecar whose writer swallows every error. `orient` reports the whole thing
+// as a boolean. So one marker stood for every question anyone had ever asked, nothing on disk said
+// which node raised it or what was asked, and the only fence available was run-wide.
+//
+// That is why the fence could not be scoped, and why the record comes first. The register is an
+// append-only row per raise, beside the marker rather than instead of it:
+//
+//   { halt_id, node, reason, consent_class, raised_at, plan_digest, question, parked_at_raise,
+//     cleared_at }
+//
+// THE MARKER STAYS THE PRESENCE BIT. `readDurableConsentHalt` is untouched and every existing
+// consumer — the freeze decoy strip, orient, the four pins over it — reads exactly what it read
+// before. The register only answers the question the marker cannot: WHICH nodes this halt reaches.
+//
+// `question` is reserved and written null here. A human answering a fence needs the decision, its
+// alternatives, the evidence and what proceeds while it waits; assembling that is the asynchronous
+// mailbox's job, and a field this file filled in with a guess would be the filled-in lie. `plan_digest`
+// binds the row to the world-state the halt judged, so a later reader can tell whether the plan it
+// was raised over is still the plan in front of them.
+// ===========================================================================
+const HALT_REGISTER_NAME = 'consent-halts.json';
+const HALT_REGISTER_SCHEMA_VERSION = 1;
+
+// readHaltRegister(cacheDir, readFile) — TOTAL. Returns { schema_version, halts: [...] }, or null
+// when the file is absent, unreadable or not a well-formed register. NULL AND EMPTY ARE DIFFERENT
+// ANSWERS to every caller of this: null means "this run cannot tell you which nodes a standing halt
+// reaches", which must fail CLOSED to the run-wide park, and `{halts: []}` means "no halt is
+// recorded". Collapsing them would make an unreadable register look like a cleared one, which is a
+// fence failing open.
+function readHaltRegister(cacheDir, readFile) {
+  let raw;
+  try { raw = readFile(require('path').join(cacheDir, HALT_REGISTER_NAME)); }
+  catch (_) { return null; }
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (_) { return null; }
+  if (!isPlainObject(parsed) || !Array.isArray(parsed.halts)) return null;
+  return parsed;
+}
+
+// openHaltRows(register) — the rows a standing fence is made of: every row with no `cleared_at`.
+// Cleared rows are RETAINED (the register is append-only; a cleared halt is history a successor may
+// need), they simply stop parking anything.
+function openHaltRows(register) {
+  if (!register || !Array.isArray(register.halts)) return [];
+  return register.halts.filter(row => isPlainObject(row) && row.cleared_at == null);
+}
+
+// ---------------------------------------------------------------------------
+// dependentSubgraph(nodes, originIds) — {origins} ∪ descendants(origins), by forward reachability
+// over `dependsOn`.
+//
+// A halt at X parks X and everything that depends on X, transitively. Everything else keeps running.
+//
+// IT MUST BE GIVEN THE EXECUTION VIEW, NOT THE FREEZE VIEW. A composed expansion frontier rewrites
+// `dependsOn` on its expansion point, so a halt inside one has descendants that do not appear in the
+// frozen `## Nodes` table at all. Passing the spine-only parse here silently under-parks — the one
+// failure direction a fence may never have — so the caller composes the view first, exactly as the
+// gate-execution check already does for the same reason.
+//
+// An UNCOMPOSED expansion point downstream of the halt needs no special case even though it looks
+// like one: its units cannot be enumerated yet, but the point itself is a descendant and is parked,
+// and `expand-open` is fenced, so parking the point parks its whole future interior.
+//
+// TOTAL and cycle-safe (the visited set is the guard). An origin that is not in `nodes` contributes
+// only itself — the caller decides what an unresolvable origin means, and every caller in this repo
+// treats it as fail-closed to the whole plan rather than as an empty set.
+// ---------------------------------------------------------------------------
+function dependentSubgraph(nodes, originIds) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const origins = Array.isArray(originIds) ? originIds : [originIds];
+  const children = new Map(list.map(n => [n && n.id, []]));
+  for (const n of list) {
+    const deps = (n && Array.isArray(n.dependsOn)) ? n.dependsOn : [];
+    for (const d of deps) if (children.has(d)) children.get(d).push(n.id);
+  }
+  const out = new Set();
+  const stack = [];
+  for (const origin of origins) {
+    if (origin == null) continue;
+    if (out.has(origin)) continue;
+    out.add(origin);
+    stack.push(origin);
+  }
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const child of (children.get(cur) || [])) {
+      if (!out.has(child)) { out.add(child); stack.push(child); }
+    }
+  }
+  return out;
 }
 
 // #334: the NON-DELEGABLE main-session gate role. A first-class plan node that is NEVER
@@ -4023,30 +4152,83 @@ function _installSchedulerExitHook() {
   });
 }
 
-// isStaleLock(holder) — decide whether a lock's parsed payload belongs to a dead holder.
+// probeLockLiveness(holder, opts) — THE MEASUREMENT under the staleness verdict.
+//   → { stale, probe, signal_result, same_host, age_ms, staleness_threshold_ms }
+//
 //   same-host + valid pid: probe process.kill(pid, 0) — ESRCH → dead → stale; alive / EPERM → live.
-//   cross-host or missing/invalid pid: age fallback — ts older than LANE_STALENESS_MS → stale.
+//   cross-host or missing/invalid pid: age fallback — ts older than the threshold → stale.
 //   null / non-object / no usable ts → stale (a corrupt payload).
-// PURE REFUSAL CLASSIFIER: its verdict only selects the typed refusal reason (a stale holder refuses
-// distinctly from a live one so the operator hint can name the manual recovery). It can never affect an
-// acquire OUTCOME — no acquire path unlinks or takes over another process's lock on a stale verdict.
-function isStaleLock(holder) {
+//
+// Until #871 the boolean WAS the whole return value: the probe kind and the signal the same-host
+// call actually got were computed and thrown away, so a caller told "not stale" could not tell a
+// delivered signal 0 (the process is demonstrably running) from an EPERM the classifier reads as
+// live conservatively (the process exists but belongs to another user) — two very different facts
+// behind one `false`. That is the shape ADR 0016 names: the verdict kept, the measurement deleted.
+// The verdict is still computed here — nothing about the classification changed — but the inputs
+// now travel with it, which is what gives an exit-0 report something to say.
+//
+// LANE_STALENESS_MS rides out as `staleness_threshold_ms` BESIDE `age_ms` rather than being
+// deleted: a documented default a reader can see and disagree with is strictly better than a
+// threshold each caller re-invents per call and records nowhere.
+//
+// PURE CLASSIFIER: its verdict only selects the typed reason (a stale holder reports distinctly
+// from a live one so the operator hint can name the recovery). It can never affect an acquire
+// OUTCOME — no acquire path unlinks or takes over another process's lock on a stale verdict.
+function probeLockLiveness(holder, opts) {
   const os = require('os');
-  if (!holder || typeof holder !== 'object') return true;
-  const sameHost = holder.host && holder.host === os.hostname();
+  // #874 — the threshold travels WITH its provenance. `staleness_threshold_ms` alone is a bare
+  // number a reader cannot tell from a measurement; `staleness_threshold_source` says whether it is
+  // the shipped 24h default or a value this caller supplied, which is what makes the guess
+  // inspectable rather than merely present.
+  const overridden = !!(opts && Number.isFinite(opts.staleAfterMs));
+  const threshold = overridden ? opts.staleAfterMs : LANE_STALENESS_MS;
+  const thresholdSource = overridden ? 'caller_override' : LANE_STALENESS_PROVENANCE.source;
+  if (!holder || typeof holder !== 'object') {
+    return { stale: true, probe: 'no_payload', signal_result: null, same_host: null,
+      age_ms: null, staleness_threshold_ms: threshold, staleness_threshold_source: thresholdSource };
+  }
+  const sameHost = Boolean(holder.host && holder.host === os.hostname());
+  const ts = (typeof holder.ts === 'number') ? holder.ts : Date.parse(holder.ts);
+  const ageMs = Number.isFinite(ts) ? (Date.now() - ts) : null;
   if (sameHost && Number.isInteger(holder.pid) && holder.pid > 0) {
+    let signal = 'alive';
+    let stale = false;
     try {
-      process.kill(holder.pid, 0);
-      return false; // signal 0 delivered → the process is alive → live holder
+      process.kill(holder.pid, 0); // signal 0 delivered → the process is alive → live holder
     } catch (err) {
-      if (err && err.code === 'ESRCH') return true;  // no such process → dead → stale
-      return false; // EPERM (exists, owned by another user) or any other error → conservatively live
+      signal = (err && err.code) ? String(err.code) : 'unknown_error';
+      // ESRCH → no such process → dead → stale. EPERM (exists, owned by another user) or any
+      // other error → conservatively LIVE, and `signal_result` is what lets a reader see which.
+      stale = signal === 'ESRCH';
     }
+    // The same-host arm is a MEASUREMENT, not the age guess: the threshold is reported for
+    // completeness but did not decide anything here, and `probe` is what says so.
+    return { stale, probe: 'same_host_signal_0', signal_result: signal, same_host: true,
+      age_ms: ageMs, staleness_threshold_ms: threshold, staleness_threshold_source: thresholdSource };
   }
   // Cross-host or missing/invalid pid → age-based.
-  const ts = (typeof holder.ts === 'number') ? holder.ts : Date.parse(holder.ts);
-  if (!Number.isFinite(ts)) return true;
-  return (Date.now() - ts) > LANE_STALENESS_MS;
+  if (!Number.isFinite(ts)) {
+    return { stale: true, probe: 'unusable_timestamp', signal_result: null, same_host: sameHost,
+      age_ms: null, staleness_threshold_ms: threshold, staleness_threshold_source: thresholdSource };
+  }
+  // The cross-host arm is where the guess actually decides. It carries its own provenance so a
+  // reader can see that this verdict rests on a shipped default rather than on a probe.
+  return Object.assign({ stale: ageMs > threshold, probe: 'cross_host_age', signal_result: null,
+    same_host: sameHost, age_ms: ageMs, staleness_threshold_ms: threshold,
+    staleness_threshold_source: thresholdSource },
+  // The provenance block describes THE SHIPPED DEFAULT, so it is attached only when the shipped
+  // default is what decided. Attaching it beside a caller's own threshold would describe a number
+  // that did not decide anything — a complete, coherent and false record of where the verdict came
+  // from. When the caller supplied the threshold, `staleness_threshold_source: 'caller_override'`
+  // is the whole honest answer this file can give: it does not know that caller's reasoning.
+  overridden ? {} : { staleness_threshold_provenance: LANE_STALENESS_PROVENANCE });
+}
+
+// isStaleLock(holder) — the boolean projection of probeLockLiveness().stale. Behaviour-identical
+// to the classifier it replaced; kept as its own name because every caller that only needs the
+// verdict reads better without destructuring, and the pure-function contract is pinned.
+function isStaleLock(holder) {
+  return probeLockLiveness(holder).stale;
 }
 
 // acquireProjectLock(lockPath, { subcommand }) — O_EXCL claim; NEVER unlinks another process's lock.
@@ -4099,14 +4281,23 @@ function acquireProjectLock(lockPath, opts) {
   let holder = null;
   try { holder = JSON.parse(raw); } catch (_) { holder = null; }
   if (holder && typeof holder === 'object') {
-    return { ok: false, stale: isStaleLock(holder), holder };
+    // The liveness probe travels WITH the verdict (#871). `stale` is unchanged; `liveness` and
+    // `held_for_ms` are what a contention report has to say beyond "no".
+    const liveness = probeLockLiveness(holder);
+    return { ok: false, stale: liveness.stale, holder, liveness, held_for_ms: liveness.age_ms };
   }
   // Corrupt/empty payload — possibly a fresh lock caught between O_EXCL and its payload write. Classify
   // by the lockfile's mtime (this only SETS the refusal flavor, never a takeover): a just-created file
   // is NOT stale (protect the fresh holder mid-write); a truly old corrupt leftover IS stale.
   let mtimeMs = Date.now();
   try { mtimeMs = fs.statSync(lockPath).mtimeMs; } catch (_) {}
-  return { ok: false, stale: (Date.now() - mtimeMs) > LANE_STALENESS_MS, holder: null };
+  const mtimeAgeMs = Date.now() - mtimeMs;
+  const corruptStale = mtimeAgeMs > LANE_STALENESS_MS;
+  return { ok: false, stale: corruptStale, holder: null, held_for_ms: mtimeAgeMs,
+    liveness: { stale: corruptStale, probe: 'corrupt_payload_mtime', signal_result: null,
+      same_host: null, age_ms: mtimeAgeMs, staleness_threshold_ms: LANE_STALENESS_MS,
+      staleness_threshold_source: LANE_STALENESS_PROVENANCE.source,
+      staleness_threshold_provenance: LANE_STALENESS_PROVENANCE } };
 }
 
 // releaseProjectLock(lockPath) — unlink (swallow ENOENT) + clear the held-lock marker. Idempotent.
@@ -4281,6 +4472,43 @@ function emit(obj, opts) {
 
 function refuse(reason, extra) {
   return stampRefusalEnvelope(Object.assign({ result: 'refuse', reason: reason }, extra || {}));
+}
+
+// answer(reason, extra) — the exit-0 REPORT twin of refuse().
+//
+// Same token, same family, same locus, same route, same operator hint: the ONLY things that
+// change are `result` and, downstream of it, the exit code. `mutation_performed: false` is the
+// default because that is the bit the exit code stopped carrying — a caller that used to read
+// "non-zero, so the body did not run" now reads it off the envelope, structurally, in a field
+// no consumer has to infer. A site that DID mutate before it found the thing it is reporting
+// passes `mutation_performed: true` explicitly; the default never lies on its behalf.
+//
+// It goes through the same stamp as refuse() precisely because a report that dropped
+// `refusal_family` / `refusal_locus` / `refusal_route` / `condition` would be the conversion
+// deleting the measurement it exists to keep.
+// casLostAnswer(envelope) — flip a `kernel_cas_lost` REFUSAL into its exit-0 report, in place.
+//
+// The twin of answer(), for the sites that must be CONSTRUCTED as a refusal and converted a step
+// later. That is not a stylistic choice: the condition census indexes emission sites by constructor
+// shape and knows `refuse('<token>')`, so a site that reaches for `answer()` directly goes INVISIBLE
+// to it — and an invisible live token is reported as retired, which would delete its row from a
+// shrink-only ratchet on a false premise. Building with the constructor the instrument knows, and
+// converting at a boundary, keeps the measurement honest and costs nothing.
+//
+// Idempotent and TOTAL: a non-refuse envelope (including one already answered) passes through
+// untouched, and a token outside the family is left refusing — the re-plan FENCE included.
+function casLostAnswer(envelope) {
+  if (!isPlainObject(envelope) || envelope.result !== 'refuse') return envelope;
+  const classified = classifyRefusalCondition(envelope.condition || envelope.reason);
+  if (!classified || classified.family !== 'kernel_cas_lost') return envelope;
+  envelope.result = 'answer';
+  if (envelope.mutation_performed == null) envelope.mutation_performed = false;
+  return envelope;
+}
+
+function answer(reason, extra) {
+  return stampRefusalEnvelope(Object.assign(
+    { result: 'answer', reason: reason, mutation_performed: false }, extra || {}));
 }
 
 // ===========================================================================
@@ -4472,6 +4700,15 @@ const LOCK_KINDS = Object.freeze(['scheduler', 'replan_fence', 'project_claim'])
 // fields are normalized on write (R3) and reported as `normalized[]` on the OK envelope.
 // A replayed or copied binding is R4 evidence and lives in `kernel_integrity_broken`
 // with `kind: 'replay_binding'`, never here.
+//
+// #871 — `node_evidence` REPORTS rather than refuses. The family, the condition token, the
+// locus and the route are all unchanged; only `result` and the exit code moved. The check it
+// carries is an existence test on a file the checking script itself seeded at open, so its
+// parent-cache arm answers a question it already knew the answer to. What it still measures and
+// still emits: a silently-failed advisory seed, and — the arm that is not tautological at all —
+// a declared lane member whose LEG copy is missing while the parent seed exists by construction.
+// The anti-replay binding check (`evidence_unbound` / `evidence_stale`) is the real
+// discriminator and it keeps REFUSING, from `kernel_integrity_broken/replay_binding`.
 const EVIDENCE_RECORD_KINDS = Object.freeze(['node_evidence', 'final_fix_register']);
 const EVIDENCE_ROUTE_BY_RECORD_KIND = Object.freeze({
   node_evidence: inGrammar('adaptive-node', 'record-evidence', '--project <P> --node-id <N> --stdin --json'),
@@ -4499,11 +4736,18 @@ const SINK_UNATTRIBUTED_SUBTYPES = Object.freeze([
 // claims, now with ONE source. `legacy_token` reproduces today's bare-verb route string
 // byte-for-byte, so folding the table changes no emitted value.
 const SINK_FINDING_ROUTE_BY_SUBTYPE = Object.freeze({
-  write_set_overflow: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
-  write_set_granularity: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
-  lockfile_write: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
-  mirror_write: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
-  count_bump: Object.freeze({ route: inGrammar('adaptive-node', 'revert-overflow', '--project <P> --node-id <N> --json'), legacy_token: 'revert-overflow' }),
+  // The overflow family and `unattributed_write` now share ONE cure, because with the discard verb
+  // gone they have one: ATTRIBUTE the paths onto a surface and re-review them. The discard route named
+  // a verb that unlinked a production file the agent had just written, and it was the only place in
+  // the workflow that destroyed unrecoverable content on the strength of a barrier verdict; the
+  // verdict is a report now, so nothing has to be discarded to proceed and the destructive primitive
+  // has no remaining caller. A run that genuinely wants the files gone deletes them by hand — a
+  // deliberate act by an agent that can see them, rather than a routed one.
+  write_set_overflow: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
+  write_set_granularity: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
+  lockfile_write: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
+  mirror_write: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
+  count_bump: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
   // Writes nobody declared: attribute them onto a surface and re-review, rather than discard.
   unattributed_write: Object.freeze({ route: inGrammar('adaptive-node', 'amend-surface', '--project <P> --node-id <expansion-point> --files "<paths>" --json'), legacy_token: 'amend-surface' }),
   // A sensitive surface with no reviewer gate: the legal cure is ADDING that gate, which
@@ -4687,8 +4931,12 @@ const REFUSAL_PAYLOAD_SCHEMAS = Object.freeze({
   kernel_lock_held: Object.freeze({
     discriminator: 'kind', values: LOCK_KINDS,
     enums: Object.freeze({}), secondary_discriminator: 'stale',
-    fields: Object.freeze(['kind', 'path', 'holder', 'stale', 'held_for_ms', 'occupying_project',
-      'occupying_issue', 'transaction_id', 'phase', 'legal_mutation', 'condition']),
+    // `held_for_ms` and `liveness` are produced by acquireProjectLock / probeLockLiveness
+    // (#871). `mutation_performed` rides every scheduler-arm report and says, structurally,
+    // what the exit code used to say by being non-zero.
+    fields: Object.freeze(['kind', 'path', 'holder', 'stale', 'held_for_ms', 'liveness',
+      'mutation_performed', 'occupying_project', 'occupying_issue', 'transaction_id', 'phase',
+      'legal_mutation', 'condition']),
   }),
   kernel_evidence_missing: Object.freeze({
     discriminator: 'record_kind', values: EVIDENCE_RECORD_KINDS,
@@ -5779,10 +6027,36 @@ function classifyRefusalCondition(condition) {
 // ---------------------------------------------------------------------------
 const REFUSAL_EMISSION_MODE = 'compat';
 
+// ---------------------------------------------------------------------------
+// ACTIONABLE_RESULTS / isActionableResult — the ONE predicate, in one place.
+//
+// This test was written out as the identical literal triple at three sites (the stamp below,
+// buildOutcomeRecord's family projection, and decorateOperatorHint in the adaptive-node
+// aggregator). Three copies of one rule is three places for it to drift, and the drift is
+// SILENT in the worst direction: a site that forgets a member stops stamping the family,
+// locus, route and condition, so the envelope still looks well-formed and simply carries
+// less truth. It is now one exported function and the aggregator imports it.
+//
+// `answer` is a member because an exit-0 REPORT still carries a finding. Under the substrate
+// design a converted site keeps every bit of what it measured and changes only the verdict and
+// the exit code — so the projection that makes the finding legible to a successor must follow
+// the finding, not the refusal. Dropping the stamp on `answer` would delete `refusal_family`,
+// `refusal_locus`, `refusal_route` and `condition` from exactly the envelopes the conversion
+// exists to make readable, which is a deletion wearing a conversion's name.
+//
+// Adding `answer` does NOT retro-stamp the claim surface's shipped `answer` envelopes: the
+// stamp derives its legacy token from `condition || reason`, and those envelopes carry neither
+// (they emit `status` / `verdict` / `reasoning`), so they early-return two lines below exactly
+// as they do today. That is a property this file already documents above, and it is pinned.
+// ---------------------------------------------------------------------------
+const ACTIONABLE_RESULTS = Object.freeze(['refuse', 'halt', 'warn', 'answer']);
+function isActionableResult(result) {
+  return typeof result === 'string' && ACTIONABLE_RESULTS.indexOf(result) >= 0;
+}
+
 function stampRefusalEnvelope(envelope) {
   if (!isPlainObject(envelope)) return envelope;
-  const actionable = envelope.result === 'refuse' || envelope.result === 'halt' || envelope.result === 'warn';
-  if (!actionable) return envelope;
+  if (!isActionableResult(envelope.result)) return envelope;
   const legacy = envelope.condition || envelope.reason;
   if (typeof legacy !== 'string' || !legacy) return envelope;
   if (envelope.condition == null) envelope.condition = legacy;
@@ -5796,9 +6070,20 @@ function stampRefusalEnvelope(envelope) {
   if (envelope.refusal_locus == null) envelope.refusal_locus = row.locus;
   // The payload the resolver reads is the envelope itself, widened by the classifier's
   // derived discriminator — so a call site that already carries the discriminator wins.
+  //
+  // #871 — AND THE DERIVED DISCRIMINATOR IS NOW WRITTEN BACK. It used to be folded into a local
+  // copy, used to pick the route, and dropped: every `kernel_cas_lost` envelope in the repo went
+  // out with no `record`, and every `kernel_lock_held` one with no `kind`, even though the payload
+  // schema declares those as the families' discriminators and the classifier had just computed
+  // them. A consumer was left to re-derive from the legacy token what the emitter already knew —
+  // the verdict (the route) kept, the measurement (which record class lost) deleted. Additive and
+  // idempotent on the same terms as every other field here: a caller that set it wins.
   const payload = Object.assign({}, classified.patch, envelope);
   for (const key of Object.keys(classified.patch)) {
-    if (envelope[key] == null) payload[key] = classified.patch[key];
+    if (envelope[key] == null) {
+      payload[key] = classified.patch[key];
+      envelope[key] = classified.patch[key];
+    }
   }
   // R4 is a property of the CELL, not of the family. A composite family that is
   // auto-remediable overall still holds cells that must never be repaired, so the flag is
@@ -6251,7 +6536,11 @@ function isParentOwnedSidecar(relPath) {
 const OUTCOME_LOG_SCHEMA_VERSION = 1;
 // The envelope `result` values this runtime emits. Anything else records as 'other' rather than
 // being dropped: an unrecognised result is itself a measurement.
-const OUTCOME_RESULTS = Object.freeze(['ok', 'refuse', 'halt', 'warn']);
+// `answer` is here because a converted site emits it at exit 0 while still carrying a finding.
+// Without the member every such outcome recorded as the string 'other' (:6281 below), which would
+// have made the conversion wave look, in the one durable log that measures outcomes, like a wave
+// of unrecognised results.
+const OUTCOME_RESULTS = Object.freeze(['ok', 'refuse', 'halt', 'warn', 'answer']);
 // How the emitted token related to the enumerated vocabulary, which is the P2 census metric:
 //   'family'       — it classified into one of the seven kernel families;
 //   'excluded'     — a rule deliberately states it is NOT in the vocabulary (advisory / tool
@@ -6283,7 +6572,8 @@ function buildOutcomeRecord(input) {
 
   // Only an ACTIONABLE outcome carries a family projection — the same predicate
   // stampRefusalEnvelope uses, so the recorder and the envelope agree by construction.
-  const actionable = result === 'refuse' || result === 'halt' || result === 'warn';
+  // It is now literally the same function rather than a second copy of the same three words.
+  const actionable = isActionableResult(result);
   const reason = str(envelope.reason);
   const condition = actionable ? (str(envelope.condition) || reason) : null;
 
@@ -6546,6 +6836,7 @@ function projectRelativeArtifactPath(absPath) {
 
 module.exports = {
   LANE_STALENESS_MS,
+  LANE_STALENESS_PROVENANCE,
   SHARED_STATE_FIELDS,
   PARKED_LANE_PREFIXES,
   parsePorcelainPaths,
@@ -6592,6 +6883,7 @@ module.exports = {
   acquireProjectLock,
   releaseProjectLock,
   isStaleLock,
+  probeLockLiveness,
   LOOP_CAP,
   TEST_THRASH_LIMIT,
   MERGE_CONFLICT_REPAIR_LIMIT,
@@ -6655,6 +6947,11 @@ module.exports = {
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
+  HALT_REGISTER_NAME,
+  HALT_REGISTER_SCHEMA_VERSION,
+  readHaltRegister,
+  openHaltRows,
+  dependentSubgraph,
   DECOY_CONSENT_HALT_WARNING,
   stripDecoyConsentHalt,
   MAIN_SESSION_GATE_ROLE,
@@ -6752,6 +7049,8 @@ module.exports = {
   spliceComplianceSection,
   emit,
   refuse,
+  answer,
+  casLostAnswer,
   // --- ADR 0013 Amendment A1 / M3: the ONE kernel refusal registry ---
   KERNEL_REFUSAL_VOCABULARY,
   KERNEL_REFUSAL_REGISTRY,
@@ -6790,6 +7089,10 @@ module.exports = {
   validateRefusalPayload,
   classifyRefusalCondition,
   stampRefusalEnvelope,
+  // The ONE actionable-result predicate. Exported so the adaptive-node aggregator's second
+  // stamping seam tests the same rule rather than keeping a third copy of it.
+  ACTIONABLE_RESULTS,
+  isActionableResult,
   deriveDeviationRoutes,
   composeOperatorHint,
   // The discharge owner projection (.cache/epoch-projections/): the ONE entry shape, its digest

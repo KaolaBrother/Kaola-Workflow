@@ -1050,11 +1050,11 @@ if (refusalFact) {
 // ===========================================================================
 
 const EXPECTED_DEVIATION_ROUTES = {
-  write_set_overflow: 'revert-overflow',
-  write_set_granularity: 'revert-overflow',
-  lockfile_write: 'revert-overflow',
-  mirror_write: 'revert-overflow',
-  count_bump: 'revert-overflow',
+  write_set_overflow: 'amend-surface',
+  write_set_granularity: 'amend-surface',
+  lockfile_write: 'amend-surface',
+  mirror_write: 'amend-surface',
+  count_bump: 'amend-surface',
   unattributed_write: 'amend-surface',
   sensitive_write_unreviewed: 'shape_refutation',
   final_fix_production_surface: 'shape_refutation',
@@ -1071,7 +1071,7 @@ const EXPECTED_DEVIATION_ROUTES = {
   assert(/const DEVIATION_ROUTES = reviewSchema\.deriveDeviationRoutes\(\)/.test(adaptiveNode),
     'FOLD: adaptive-node must DERIVE its deviation routes from the kernel, not hold an independent copy');
   const nodeExports = require('./kaola-workflow-adaptive-node');
-  assert(nodeExports.DEVIATION_ROUTES && nodeExports.DEVIATION_ROUTES.write_set_overflow === 'revert-overflow',
+  assert(nodeExports.DEVIATION_ROUTES && nodeExports.DEVIATION_ROUTES.write_set_overflow === 'amend-surface',
     'FOLD: the derived table must still be the one the aggregator exports');
 }
 
@@ -1940,7 +1940,7 @@ for (const cond of emitted) {
   const r4Row = { auto_remediable: false };
   assert(checkR4(r4Row, { verb: 'repair-node', script: 'adaptive-node', args: '' }).length > 0,
     'MUTATION: checkR4 must REJECT an R4 refusal routed to an auto-repair verb');
-  assert(checkR4(r4Row, { verb: 'revert-overflow', script: 'adaptive-node', args: '' }).length > 0,
+  assert(checkR4(r4Row, { verb: 'amend-surface', script: 'adaptive-node', args: '' }).length > 0,
     'MUTATION: checkR4 must REJECT an R4 refusal routed to a mutation verb');
   assert(checkR4(r4Row, { verb: 'orient', script: 'adaptive-node', args: '' }).length === 0,
     'MUTATION: checkR4 must ACCEPT an investigation verb');

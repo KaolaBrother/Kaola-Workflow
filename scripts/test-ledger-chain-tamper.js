@@ -316,7 +316,12 @@ function e2eHonestAndTamper() {
 
     // GENESIS via a real open-next.
     const open1 = lastJson(cli([adaptiveNodeScript, 'open-next', '--project', project, '--json'], tmp));
-    check(open1.result !== 'refuse', 'D1 open-next (genesis) honest, got ' + JSON.stringify(open1));
+    // `result === 'ok'`, NOT `!== 'refuse'`. The conversion wave gave this verb exit-0 `answer`
+    // arms (a held or stale scheduler lock, a missing ledger row), so "did not refuse" stopped
+    // meaning "succeeded" — it is now satisfied by a lock-held report that opened nothing.
+    // Mutation-measured: with open-next returning `answer` instead of `ok`, the whole suite stayed
+    // GREEN under the old form and reds under this one.
+    check(open1.result === 'ok', 'D1 open-next (genesis) honest, got ' + JSON.stringify(open1));
     check(fs.existsSync(journalPath), 'D1 journal appears after the first transition');
     check(schema.ledgerChainHeadFromContent(fs.readFileSync(planPath, 'utf8')) != null, 'D1 head stamped into the plan');
     let j = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
@@ -331,7 +336,7 @@ function e2eHonestAndTamper() {
     cli([adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], tmp,
       'evidence-binding: writer ' + open1.nonce + '\nRED: writer failed before impl\nred_baseline: ' + open1.nonce + '\n');
     const close1 = lastJson(cli([adaptiveNodeScript, 'close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
-    check(close1.result !== 'refuse' && close1.opened && close1.opened.id === 'reviewer',
+    check(close1.result === 'ok' && close1.opened && close1.opened.id === 'reviewer',
       'D3 honest close-and-open-next advances writer->reviewer, got ' + JSON.stringify(close1));
     check(lastJson(cli([validatorScript, planPath, '--resume-check', '--json'], tmp)).ok === true, 'D3 resume-check still green after advance');
 

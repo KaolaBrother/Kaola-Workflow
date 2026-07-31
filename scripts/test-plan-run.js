@@ -65,7 +65,7 @@ assert(!!fnMatch, 'canonical: kaola_script() one-liner must be extractable for b
   const guarded = (adaptive.match(/const REPLAN_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
   for (const op of ['open-next', 'open-ready', 'close-node', 'close-and-open-next',
     'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
-    'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
+    'reopen-node', 'repair-node', 'route-findings',
     'discard-speculative', 'mirror-project']) {
     assert(guarded.includes("'" + op + "'"), '#699 replan fence: guarded mutator set includes ' + op);
   }

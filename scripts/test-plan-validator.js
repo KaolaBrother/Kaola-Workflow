@@ -428,9 +428,30 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
 }
 
 // ---------------------------------------------------------------------------
-// T830-CLI-2: the --freeze-checked envelope the handoff's SPAWN-1 consumes collapses a refuse to
-//             the plan_invalid emit envelope — with the FULL typed text in errors (the planner's
-//             bounded repair loop absorbs it like any other plan_invalid).
+// T830-CLI-2: `--freeze-checked` is a pure REPORTER. It writes nothing, so an out-of-grammar plan
+//             is a finding rather than a stop: it answers at exit 0 and the planner's bounded
+//             repair loop runs off `in_grammar` exactly as it ran off the exit code.
+//
+//             THE ASSERTION MOVED FROM THE EXIT CODE TO THE PAYLOAD, deliberately. What must
+//             survive is the FULL typed text — the reason token, the operator hint and the verbatim
+//             error line the repair loop reads. A conversion that kept the exit code and dropped
+//             the text would be useless; one that dropped the text and kept the code would be the
+//             deletion this campaign exists to prevent. So the text is what is pinned, and
+//             `mutation_performed: false` is the bit the exit code stopped carrying.
+//
+//             T830-CLI-1 above is the CONTRAST and is deliberately left refusing: plain `--json`
+//             still exits 1 on the same plan. Only the reporter converted, so the two must not
+//             agree — asserted below.
+//
+//             MUTATION-PROVED against a full-repo scratch mirror (mirror control green either
+//             side):
+//               `--freeze-checked` back to refusing at exit 1 -> RED
+//                 "T830-CLI-2: --freeze-checked ANSWERS an out-of-grammar plan at exit 0 ...
+//                  got {"code":1,"result":"refuse"}"
+//               the reporter keeps the exit-0 answer but DROPS the typed text -> RED
+//                 "T830-CLI-2: the full typed text still rides in errors, got []"
+//             The second is the one that matters: converting the verdict while losing the message
+//             is the deletion this campaign exists to prevent, and only a payload assertion sees it.
 // ---------------------------------------------------------------------------
 {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw830-cli-'));
@@ -445,10 +466,44 @@ const OWN_TOKEN = 'kaola-workflow/archive/test-project/evidence.md';
     try { out = execFileSync('node', [VALIDATOR, planPath, '--freeze-checked', '--json'], { encoding: 'utf8' }); }
     catch (e) { code = e.status; out = e.stdout || ''; }
     const v = JSON.parse(out);
-    assert(code === 1 && v.result === 'refuse' && v.reason === 'plan_invalid'
-      && Array.isArray(v.errors) && v.errors.some(e => e.includes('validation_command') && e.includes('frontier')),
-      'T830-CLI-2: --freeze-checked refuses plan_invalid carrying the full typed text in errors, got '
-      + JSON.stringify({ code, result: v.result, reason: v.reason, errors: v.errors }));
+    assert(code === 0 && v.result === 'answer' && v.in_grammar === false,
+      'T830-CLI-2: --freeze-checked ANSWERS an out-of-grammar plan at exit 0, and `in_grammar: false` '
+      + 'is what the repair loop now branches on, got '
+      + JSON.stringify({ code, result: v.result, in_grammar: v.in_grammar }));
+
+    // THE TEXT IS THE POINT. The exit code stopped classifying; nothing else did. The reason token,
+    // the operator hint and the verbatim error line all survive the conversion, which is the whole
+    // difference between converting a refusal and deleting one.
+    assert(v.reason === 'child_frontier_unclosable',
+      'T830-CLI-2: the typed reason survives verbatim, got ' + JSON.stringify(v.reason));
+    assert(Array.isArray(v.errors) && v.errors.some(e => e.includes('validation_command') && e.includes('frontier')),
+      'T830-CLI-2: the full typed text still rides in errors, got ' + JSON.stringify(v.errors));
+    assert(typeof v.operator_hint === 'string' && v.operator_hint.length > 0,
+      'T830-CLI-2: and the operator hint survives, got ' + JSON.stringify(v.operator_hint));
+
+    // The load-bearing bits the exit code stopped carrying. `frozen: false` says the plan was not
+    // written; `mutation_performed: false` says so structurally, in the field every converted site
+    // emits. Without them an exit-0 answer is indistinguishable from a successful freeze.
+    assert(v.frozen === false && v.mutation_performed === false,
+      'T830-CLI-2: the reporter states it wrote nothing — frozen/mutation_performed are what a '
+      + 'caller reads now that exit 0 no longer implies success, got '
+      + JSON.stringify({ frozen: v.frozen, mutation_performed: v.mutation_performed }));
+
+    // THE CONTRAST. Only the REPORTER converted: plain `--json` on the SAME plan still refuses at
+    // exit 1 (T830-CLI-1 above). Stated here as one assertion so a future edit that converts both —
+    // or reverts this one — cannot leave the pair silently agreeing.
+    let plainOut = null, plainCode = 0;
+    // spawn-class: cli-contract
+    try { plainOut = execFileSync('node', [VALIDATOR, planPath, '--json'], { encoding: 'utf8' }); }
+    catch (e) { plainCode = e.status; plainOut = e.stdout || ''; }
+    const plain = JSON.parse(plainOut);
+    assert(plainCode === 1 && plain.result === 'refuse' && code === 0 && v.result === 'answer',
+      'T830-CLI-2: the reporter and the plain validate must NOT classify the same plan alike — '
+      + 'freeze-checked=' + JSON.stringify([code, v.result])
+      + ' plain=' + JSON.stringify([plainCode, plain.result]));
+    assert(plain.reason === v.reason,
+      'T830-CLI-2: ...while agreeing on the FINDING itself — the verdict diverged, the measurement '
+      + 'did not, got plain=' + JSON.stringify(plain.reason) + ' checked=' + JSON.stringify(v.reason));
   } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
 }
 

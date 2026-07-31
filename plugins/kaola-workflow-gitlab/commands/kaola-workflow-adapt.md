@@ -137,12 +137,15 @@ plan must CONCLUDE. A brief carrying a pre-authored `## Nodes` table, an `AUTHOR
 control boundary is unchanged, and it is exactly what keeps a synthesizer synthesizing.
 
 **`clarification_required`.** When the brief is genuinely under-determined the planner returns
-`{handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round}`
-instead of guessing. It is legal PRE-claim (nothing written) and post-claim/pre-freeze (claim held,
-plan unfrozen). ASK THE USER the question verbatim, append the answer to the selection record's
-`clarifications` field, and re-dispatch the planner with the answer in the brief. The channel is
-bounded at THREE round-trips; a fourth returns `clarification_exhausted` with a `stop_and_ask`
-posture — stop and take the design question to the user rather than looping.
+`{handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round,
+prior_rounds}` instead of guessing. It is legal PRE-claim (nothing written) and post-claim/pre-freeze
+(claim held, plan unfrozen). ASK THE USER the question verbatim, append the answer to the selection
+record's `clarifications` field, and re-dispatch the planner with the answer in the brief. The
+channel is UNBOUNDED and `round` / `prior_rounds` are data, not a limit — read them and judge: a
+question on its fourth pass is usually a design failure rather than a question, and taking it to the
+user whole is the better move, but that is your call and nothing enforces it. A call carrying no
+question at all is a malformed invocation, not a decision: it answers `clarification_malformed` at
+exit 0 — supply `--question` and re-run.
 
 ## Front end: claim + author (the `workflow-planner` role)
 
@@ -199,11 +202,13 @@ role/identity/brief exactly once; never author inline.
 
 <!-- PIN: claim-escalate -->
 - **Any `claim_verdict` NOT `acquired` or `owned`**: NO `workflow-state.md` was written.
-  Surface `claim_reasoning` and classify by `result`: `result: answer` (e.g. `no_target`,
-  `target_unverified`, `target_indeterminate`) → act on the fact (fix the argv, retry, go offline,
-  or claim a different target), but do not blind-read a missing state file; `result: consent`
-  (`dirty_tree_refused`) → ask the user the envelope's `ask` verbatim and act on the answer;
-  `result: refuse` (e.g. `target_occupied`, `claim: none` with no other reading) → **HARD STOP**,
+  Surface `claim_reasoning` and classify by `result` — a `target_set_X` classifies exactly like its
+  scalar twin `X`: `result: answer` (e.g. `no_target`, `target_unverified`, `target_indeterminate`,
+  `target_set_unavailable`, `target_set_unverified`) → act on the fact (fix the argv, retry, go
+  offline, or claim a different target), but do not blind-read a missing state file;
+  `result: consent` (`dirty_tree_refused`) → ask the user the envelope's `ask` verbatim and act on
+  the answer; `result: refuse` (e.g. `target_occupied`, `target_set_conflicts_active_work`,
+  `target_set_label_rollback_failed`, or `claim: none` with no other reading) → **HARD STOP**,
   fail closed; `result: escalate` (`target_set_indeterminate`) → **PAUSE and ASK THE USER** (retry,
   pick another target, go offline, or abort — this is not an adaptive-node write-halt; no
   plan/ledger exists yet).
@@ -218,9 +223,10 @@ lifecycle including the first). `decision:ask` is audit metadata only — it fre
 
 - **`handoff_status: ready_to_run`** → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even
   when `decision:ask`, no approval gate).
-- **`handoff_status: plan_invalid`** (validator refused; the plan never froze and `workflow-state.md` is
-  untouched — the one write is the `.cache/acceptance-anchor.json` audit record) → bounded **repair
-  loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite
+- **`handoff_status: plan_invalid`** (the plan is out of grammar; it never froze and
+  `workflow-state.md` is untouched — the one write is the `.cache/acceptance-anchor.json` audit
+  record). **This ANSWERS at exit 0** carrying `result: 'answer'` + `mutation_performed: false`, so
+  branch on `handoff_status`, never on the exit code → **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite
   the UNFROZEN plan. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to
   reach in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) or `## Acceptance`
   (the human-values statement of what done means, which is hard-fenced) — if in-grammar is unreachable
@@ -290,5 +296,6 @@ one-node-per-issue); `## Meta` carries a conservative union of labels. A bundle 
 finalization that closes every issue in `issue_numbers` (all-or-nothing), removes each
 `.roadmap/issue-N.md`, regenerates `ROADMAP.md` once, archives one bundle folder, and writes one
 closure receipt. On any typed bundle claim outcome that is not `acquired`/`owned` (the
-`target_set_*` codes claim.js emits), surface the code and STOP; do not retry with a
-different set.
+`target_set_*` codes claim.js emits), surface the code and classify it by `result` exactly as you
+would its scalar twin — an `answer` is a fact to act on, a `refuse` is a hard stop, and only the
+`refuse` half forbids retrying with a different set.

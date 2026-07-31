@@ -46,7 +46,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, DELEGATION_OUTCOME_DEFAULT, CAPABILITY_GAP_OUTCOME, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, isStaleLock, probeLockLiveness, LANE_STALENESS_MS, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, seamCheckpointDefaultOn, refuse, answer, casLostAnswer, WRITE_SET_OVERFLOW_SUBTYPES, WRITE_FAILED_ENVIRONMENT_ERRNOS, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, DELEGATION_OUTCOME_DEFAULT, CAPABILITY_GAP_OUTCOME, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot, NODE_TIMINGS_LOG_NAME, PROVENANCE_LOG_NAME, OUTCOME_LOG_NAME, PARENT_OWNED_SIDECARS, buildOutcomeRecord } = require('./kaola-workflow-adaptive-schema');
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
@@ -72,10 +72,11 @@ function allowedDomainOutcomes(role) {
 //
 // VOCABULARY CONTRACT (D-445-01 §3, binding):
 //   - the write_set_overflow family (write_set_overflow / write_set_granularity /
-//     lockfile_write / mirror_write / count_bump) references `revert-overflow`
-//     (and, where the out-of-set files may be preservable companion work,
-//     `amend-surface` alongside it), NEVER `drop-base` (the D-424-01 laundering
-//     anti-pattern).
+//     lockfile_write / mirror_write / count_bump) references `amend-surface` —
+//     attribute the out-of-set files onto a surface and re-review them — and NEVER
+//     `drop-base` (the D-424-01 laundering anti-pattern). It names no discard verb:
+//     the family is a REPORT at per-node and lane-group scope, so nothing has to be
+//     destroyed to proceed.
 //   - a crash-repair / reopen-writer situation references `repair-node` (the
 //     anti-laundering primitive that keeps the original baseline).
 //   - No forge-specific CLI token appears in any hint — the hints
@@ -98,7 +99,7 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   // #759: the expansion transaction writes the plan (record block + unit ledger rows), the baselines
   // and the running set — a mutating lifecycle command like every other opener.
   'expand-open', 'expand-close',
-  'reopen-node', 'revert-overflow', 'repair-node', 'route-findings', 'record-evidence',
+  'reopen-node', 'repair-node', 'route-findings', 'record-evidence',
   // The bounded re-anchor verb moves a lane-group member's barrier ref + rewrites its base file —
   // the same project-scoped .cache/ref mutation surface as repair-node, driven from the same
   // worktree authority.
@@ -121,7 +122,7 @@ const REPLAN_GUARDED_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
   'expand-open', 'expand-close',
-  'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
+  'reopen-node', 'repair-node', 'route-findings',
   'rebind-base',
   'discard-speculative', 'mirror-project', 'substitute-role',
   'final-fix-commit',
@@ -142,6 +143,13 @@ function lastReplanCas(transaction) {
 // had. This helper used to take two parameters while one call site passed three, so the field was
 // dropped silently on the pure-core seam; the CLI never saw it because it re-attaches `detail` by
 // hand a line later, which is the evidence the field is wanted rather than tolerated.
+// DELIBERATE CARVE-OUT (#871): `replan_in_progress` is a `kernel_lock_held` member and it does NOT
+// convert to an exit-0 answer with the rest of that family. It is a FENCE, not a lock. Two of its
+// emitters — the plan-validator's `--finalize-check` and cmdFinalize's own re-plan guard — are read
+// by callers that gate on a NONZERO EXIT, so converting it would let a finalize proceed while an
+// epoch transition is mid-flight: a silent correctness change, not a reporting change. The scheduler
+// lock says "someone else is writing, come back"; this says "an epoch transition is half-applied and
+// the only legal next moves are resume or abort". It belongs with the consent-fence work, not here.
 function replanOrientation(fence, project, extra) {
   const tx = fence && fence.transaction;
   const cas = lastReplanCas(tx);
@@ -185,8 +193,8 @@ function readProjectReplanFence(statePath, cacheDir, readFile) {
 
 // #605: the subcommands that flip ## Node Ledger ROW STATUS — exactly the set that refreshes the
 // derived run-progress mirror after a successful ledger write. A strict subset of the split-guarded
-// set (route-findings / revert-overflow / discard-speculative mutate .cache or file writes, not the
-// forward-progress ledger status, so they are excluded).
+// set (route-findings / discard-speculative mutate .cache or file writes, not the forward-progress
+// ledger status, so they are excluded).
 const LEDGER_MUTATING_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'reopen-node', 'repair-node', 'write-halt', 'clear-halt',
@@ -236,18 +244,31 @@ const OPERATOR_HINT_REGISTRY = {
   // --- guard prologue (#383/#387/#391b) ---
   plan_integrity_failed: (ctx) =>
     'The frozen plan failed --resume-check (' + (ctx.detail || 'plan_hash / structure tamper') + '). Re-freeze the plan via /kaola-workflow-adapt or restore the untampered workflow-plan.md before retrying.',
-  halt_pending: () =>
-    'A durable consent_halt: pending marker is set in the ## Node Ledger. Resolve the halt, then clear it: ' + ADAPTIVE_NODE_SCRIPT + ' clear-halt --project <P> --reason consent|security --json.',
+  halt_pending: (ctx) => {
+    const origins = Array.isArray(ctx.origin_nodes) ? ctx.origin_nodes.filter(Boolean) : [];
+    const scoped = ctx.scope_basis === 'dependent_subgraph';
+    return 'A durable consent_halt: pending marker is set in the ## Node Ledger'
+      + (origins.length ? ' (raised at ' + origins.join(', ') + ')' : '')
+      + '. ' + (scoped
+        ? 'This call is inside the halted node\'s dependent subgraph'
+          + (Array.isArray(ctx.parked_nodes) && ctx.parked_nodes.length
+            ? ' (parked: ' + ctx.parked_nodes.join(', ') + ')' : '')
+          + '; work outside it keeps running.'
+        : 'The halt could not be scoped to a subgraph (' + (ctx.scope_basis || 'unknown')
+          + '), so it parks the whole run — the safe direction when the origin is unknown.')
+      + ' Resolve the halt, then clear it: ' + ADAPTIVE_NODE_SCRIPT + ' clear-halt --project <P> --reason consent|security --json.';
+  },
   serial_node_live: (ctx) =>
     'A serial node is still in_progress (' + ((ctx.inProgress || []).join(', ') || 'see inProgress') + '). Close it (close-and-open-next) before fanning out.',
   scheduler_active: (ctx) =>
     'A running-set fan-out is live (' + ((ctx.runningSet || []).join(', ') || 'see runningSet') + '). Close its nodes (close-node) or run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before this command.',
   // #585: another scheduler invocation holds the project-scoped O_EXCL lock. Only ONE orchestrator may
-  // drive a project's scheduler at a time — contention is a non-blocking refuse (no spin-wait/queue).
+  // drive a project's scheduler at a time — contention is a non-blocking REPORT (no spin-wait/queue):
+  // exit 0, `acquired: false`, `mutation_performed: false`, and the holder + liveness measurement.
   scheduler_locked: (ctx) =>
     'Another scheduler command holds this project\'s lock'
     + (ctx.holder && ctx.holder.subcommand ? ' (' + ctx.holder.subcommand + (ctx.holder.pid ? ' pid ' + ctx.holder.pid : '') + ')' : '')
-    + '. Only one orchestrator may drive a project\'s scheduler at a time — wait for the in-flight command to finish, then retry. (A dead/crashed holder refuses separately as scheduler_lock_stale, whose recovery is the unlock verb.)',
+    + '. Nothing was mutated and ' + (ctx.did_not_run || 'the command') + ' did not run. Only one orchestrator may drive a project\'s scheduler at a time — wait for the in-flight command to finish, then retry. (A dead/crashed holder reports separately as scheduler_lock_stale, whose recovery is the unlock verb.)',
   // DELETED (rung-1 subtraction): scheduler_lock_held. It classifies to kernel_lock_held/scheduler,
   // whose derived hint renders MORE than the template did — the FACT names the holder's subcommand,
   // pid AND host and states LIVE from the payload, the WHY carries the "a lock is a claim on state,
@@ -275,15 +296,15 @@ const OPERATOR_HINT_REGISTRY = {
     return 'This project\'s scheduler lock is held by a DEAD/crashed holder ('
       + (h.subcommand || 'unknown subcommand') + ', pid ' + (h.pid != null ? h.pid : '?')
       + ' on ' + (h.host || 'unknown host') + ', since ' + since
-      + '). It is never reclaimed automatically. Verify no other orchestrator session is recovering this project, then remove it from ONE session only: '
+      + '). Nothing was mutated. It is never reclaimed automatically. Verify no other orchestrator session is recovering this project, then remove it from ONE session only: '
       + ADAPTIVE_NODE_SCRIPT + ' unlock --project <P> --holder ' + (Number.isInteger(h.pid) ? h.pid : 'none')
       + ' --json — then re-run the command.';
   },
-  // `unlock` refused because the lock is NOT the one the caller observed — it was released and
-  // re-claimed in between. Re-read, then target the pid the fresh refusal reports.
+  // `unlock` did not remove the lock because it is NOT the one the caller observed — it was released
+  // and re-claimed in between. Re-read, then target the pid the fresh report names.
   scheduler_lock_holder_mismatch: (ctx) =>
     'The scheduler lock is held by ' + (ctx.recorded_holder || 'a different holder') + ', not the '
-    + (ctx.requested_holder || '<pid>') + ' this unlock names — it was re-claimed after the refusal you are recovering from. Nothing was removed. Re-run the wedged command to read the CURRENT holder, then unlock that pid (or wait, if it is live).',
+    + (ctx.requested_holder || '<pid>') + ' this unlock names — it was re-claimed after the report you are recovering from. Nothing was removed. Re-run the wedged command to read the CURRENT holder, then unlock that pid (or wait, if it is live).',
   scheduler_unlock_failed: (ctx) =>
     'Could not remove the scheduler lock at ' + (ctx.lockPath || '.cache/scheduler.lock') + ' ('
     + (ctx.detail || 'filesystem fault') + '). The lock is untouched. Resolve the filesystem condition (permissions / read-only mount), then retry unlock.',
@@ -346,22 +367,24 @@ const OPERATOR_HINT_REGISTRY = {
   not_in_running_set: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' is not a live running-set member. discard-speculative targets an open speculative node; run orient to inspect the live set.',
 
-  // --- write-set overflow family (#424/#434 / D-434-01 §1) — ALWAYS revert-overflow, NEVER
-  //     drop-base. These are the narrowed barrier subtypes that can surface as a top-level reason
-  //     (e.g. when a caller drills the nested barrierCheck.reason out of a barrier_failed envelope). ---
-  // NAMED, not routed: the hint lists BOTH primitives and one line on when each fits, and nothing here
-  // selects between them — no branch, no gate, no reason code, no justifier. The orchestrator already
-  // owns the execution judgment; this only stops hiding the option that PRESERVES the out-of-set work.
+  // --- write-set overflow family (#424/#434 / D-434-01 §1) — these are the narrowed barrier subtypes
+  //     that can surface as a top-level reason (e.g. when a caller drills the nested
+  //     barrierCheck.reason out of a barrier envelope). ---
+  // At per-node and lane-group scope the family is a REPORT, not a refusal: the envelope carries the
+  // measured paths and the run continues. The hint therefore names the ATTRIBUTE-and-re-review cure,
+  // never a discard — the destructive primitive that used to sit here is gone, and a hint pointing at
+  // a verb the script no longer dispatches is a dead end wearing an instruction's uniform. Files the
+  // run genuinely wants gone are deleted by hand, deliberately, by an agent that can see them.
   write_set_overflow: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set (see actualPaths / outOfAllow on the envelope). The work is on the branch and the run continues; the paths are unattributed until you place them. To KEEP them, attribute + re-review: ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json. To drop them, delete them yourself before the pre-merge barrier, which still refuses an unattributed path.',
   write_set_granularity: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote at a coarser granularity than its declared set allows. Narrow the write set (re-freeze) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote at a coarser granularity than its declared set allows — a directory grant the exact-path barrier can never match. Enumerate the files and narrow the write set (re-freeze), or attribute them with ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json.',
   lockfile_write: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote an undeclared lockfile. Add the lockfile to its write set (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote an undeclared lockfile. Add the lockfile to its write set (plan-repair), attribute it with ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json, or restore it by hand if the change was incidental.',
   mirror_write: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote the cross-edition mirror anchor (adaptive-schema). Add it to the write set (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote the cross-edition mirror anchor (adaptive-schema). Add it to the write set (plan-repair) or attribute it with ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json — and confirm the other editions carry the same bytes.',
   count_bump: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' wrote a count-bump contract/test file not in its declared set. Swap the write set to include it (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote a count-bump contract/test file not in its declared set. Swap the write set to include it (plan-repair) or attribute it with ' + ADAPTIVE_NODE_SCRIPT + ' amend-surface --node-id <expansion-point> --files "<paths>" --project <P> --json.',
 
   // --- review-journal route fence: the three mismatch classes. projection_missing is the LEGACY
   //     shape (a discharge/journal pair recorded before the owner projection existed) and names the
@@ -385,7 +408,7 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- close paths (#272/#303/#348/#437) ---
   barrier_failed: (ctx) =>
-    'The per-node barrier rejected ' + (ctx.nodeId || '<id>') + ' (writes outside its declared set). Review the offending paths, then ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json, or repair-node the writer.',
+    'The per-node barrier rejected ' + (ctx.nodeId || '<id>') + '. An overflow is REPORTED at this scope, not rejected, so this is a sensitive write with no reviewer gate, a foreign-archive write, or a missing/mismatched baseline. Read barrierCheck.reason and barrierCheck.actualPaths on the envelope, then repair-node the writer or re-open it to re-record a baseline.',
   // #590: a close dead-ended because no barrier baseline was recorded for the node (a crash may have
   // interrupted a serial open before the baseline landed). Re-opening the node is idempotent and heals it.
   no_barrier_base: (ctx) =>
@@ -399,7 +422,7 @@ const OPERATOR_HINT_REGISTRY = {
   member_vacuity: (ctx) =>
     'Lane-group member ' + (ctx.nodeId || '<id>') + ' touched none of its declared files and declared no no_op: reason. Make the in-lane change or record a no_op: in evidence before closing.',
   group_barrier_failed: (ctx) =>
-    'The lane-group barrier rejected the union of members (group ' + (ctx.group_id || '<gid>') + '). Review the offending paths, then revert-overflow / repair-node the offending member before the last-member close.',
+    'The lane-group barrier rejected the union of members (group ' + (ctx.group_id || '<gid>') + '). An out-of-union write is REPORTED at group scope, not rejected, so this is a sensitive write with no reviewer gate, a foreign-archive write, a leg missing from the merge, or a broken group baseline. Read the envelope reason and paths, then repair-node the offending member before the last-member close.',
 
   // --- synthesizer / write-overlap escalation envelope (#463 Slice 5). merge_conflict is the TERMINAL
   //     escalation after MERGE_CONFLICT_REPAIR_LIMIT (K=3) repair attempts on a level's FIRST-detection
@@ -415,7 +438,9 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- evidence (#319/#359/#392) ---
   evidence_absent: (ctx) =>
-    'No evidence file for ' + (ctx.nodeId || '<id>') + ' (' + (ctx.role || 'role') + '). Have the role agent write ' + (ctx.evidence_file || '.cache/<node-id>.md') + ' with the required tokens, then re-run record-evidence --verify.',
+    'No evidence file for ' + (ctx.nodeId || '<id>') + ' (' + (ctx.role || 'role') + ')'
+    + (ctx.evidence_source === 'leg' ? ' — the LEG copy is missing, so the leg agent produced nothing (the parent seed exists by construction and is not what is read here)' : '')
+    + '. Nothing was mutated and the node did not advance. Have the role agent write ' + (ctx.evidence_file || '.cache/<node-id>.md') + ' with the required tokens, then re-run record-evidence --verify.',
   evidence_shape_failed: (ctx) => {
     const base = 'Evidence for ' + (ctx.nodeId || '<id>') + ' is missing a required token' + (ctx.missingTokenClass ? ' (' + ctx.missingTokenClass + ')' : '') + '. Add the missing token(s) — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.';
     // `red_baseline` is the ONE token class the operator must NOT simply paste in. The receipt
@@ -570,19 +595,17 @@ const OPERATOR_HINT_REGISTRY = {
   // whose derived hint states the same fact truthfully (a position-record write that did not take),
   // adds the failing path and errno from the payload, carries the half-applied-position WHY, and
   // routes to reconcile-running-set — a real verb where the template dead-ended on "inspect".
-  barrier_base_missing: (ctx) =>
-    'No barrier-base recorded for ' + (ctx.nodeId || '<id>') + '. Run open-next first so a baseline exists, then retry revert-overflow.',
-  barrier_base_empty: (ctx) =>
-    'The barrier-base for ' + (ctx.nodeId || '<id>') + ' is empty. Re-open the node to record a fresh baseline before revert-overflow.',
+  // DELETED (rung-1 subtraction) with the verb they belonged to: barrier_base_missing,
+  // barrier_base_empty, baseline_partition_unavailable, overflow_delete_failed. All four were failure
+  // modes of the destructive discard primitive — its baseline read and its unlink half. With the
+  // overflow verdict converted to a report there is nothing that must be discarded to proceed, so the
+  // primitive and those four ways it could fail are gone.
+  //
+  // `git_checkout_failed` STAYS: it has a second, independent emitter in discard-speculative, which
+  // restores a speculative READ member's declared paths to their baseline. That emitter is untouched
+  // by the overflow conversion, so deleting the template would orphan a live condition.
   git_checkout_failed: (ctx) =>
-    'Restoring the baseline-tracked out-of-allow paths for ' + (ctx.nodeId || '<id>') + ' failed at the git checkout seam (' + (ctx.detail || 'non-zero') + '). Nothing was deleted — the discard half runs only after the restore half lands. Resolve the working-tree state and retry revert-overflow.',
-  // The presence probe that splits outOfAllow into restore-from-baseline vs delete. It fails CLOSED:
-  // an unreadable baseline tree can never be guessed past, because guessing "absent" would DELETE a
-  // file the baseline still holds.
-  baseline_partition_unavailable: (ctx) =>
-    'Could not read the baseline tree ' + (ctx.baseSha ? String(ctx.baseSha).slice(0, 12) : '<baseSha>') + ' to decide which out-of-allow paths pre-existed (' + (ctx.detail || 'git ls-tree failed') + '). Nothing was reverted. Restore the git object store (a partial fetch / pruned commit is the usual cause), then retry revert-overflow.',
-  overflow_delete_failed: (ctx) =>
-    'Discarding the newly-created out-of-allow paths for ' + (ctx.nodeId || '<id>') + ' failed (' + (ctx.detail || 'non-zero') + '). The baseline-tracked paths were already restored; inspect the reported deletedPaths, clear the offending entry by hand, then retry revert-overflow.',
+    'Restoring the declared paths of ' + (ctx.nodeId || '<id>') + ' to their recorded baseline failed at the git checkout seam (' + (ctx.detail || 'non-zero') + '). Nothing else was changed — the baseline is still anchored. Resolve the working-tree state (an uncommitted conflicting edit is the usual cause) and retry the discard.',
   group_baseline_failed: (ctx) =>
     'Recording the lane-group baseline failed (group ' + (ctx.group_id || '<gid>') + '). Re-run open-ready; if it persists, reconcile the running set.',
 
@@ -708,7 +731,7 @@ const OPERATOR_HINT_REGISTRY = {
 // This is a STATIC property of committed source checked dynamically — it cannot fire in the field
 // unless the committed table itself disagrees with the committed number.
 // ---------------------------------------------------------------------------
-const OPERATOR_HINT_RUNG_CENSUS = 89;
+const OPERATOR_HINT_RUNG_CENSUS = 85;
 {
   const live = Object.keys(OPERATOR_HINT_REGISTRY).length;
   if (live !== OPERATOR_HINT_RUNG_CENSUS) {
@@ -741,7 +764,9 @@ const OPERATOR_HINT_RUNG_CENSUS = 89;
 // no independent copy, so the two cannot drift and a route can only be changed in one place.
 // The emitted values are unchanged — each kernel entry carries the bare verb token verbatim:
 //   out-of-set writes (write_set_overflow / _granularity / lockfile_write / mirror_write /
-//     count_bump)                    -> revert-overflow  (discard, re-land inside the set)
+//     count_bump)                    -> amend-surface    (attribute + re-review; the discard verb
+//                                       these five used to name is gone, and with it the only route
+//                                       in the table that destroyed content to clear a verdict)
 //   unattributed_write               -> amend-surface    (attribute + re-review, not discard)
 //   sensitive_write_unreviewed       -> shape_refutation (adding a reviewer gate is a spine change)
 //   final_fix_production_surface     -> shape_refutation (#826: no authority can certify it in-plan)
@@ -810,10 +835,10 @@ function getOperatorHint(reason, ctx) {
 // ---------------------------------------------------------------------------
 function decorateOperatorHint(envelope) {
   if (!envelope || typeof envelope !== 'object') return envelope;
-  const actionable = envelope.result === 'refuse'
-    || envelope.result === 'halt'
-    || envelope.result === 'warn';
-  if (!actionable) return envelope;
+  // The predicate is the kernel's, not a third local copy of the same three words. `answer` is a
+  // member: a converted site reports at exit 0 and still needs its route and hint, which are the
+  // only things telling a reader what to do about a finding that no longer stops them.
+  if (!reviewSchema.isActionableResult(envelope.result)) return envelope;
   if (!envelope.reason) return envelope;
   const route = DEVIATION_ROUTES[envelope.reason];
   if (route && !envelope.route) envelope.route = route;
@@ -1681,6 +1706,71 @@ function resolveClaimRootBase(opts, lineageKey) {
   return base;
 }
 
+// ---------------------------------------------------------------------------
+// THE CAS WITNESS — test 3, at the only two sites in this family where it actually bites (#871).
+//
+// A refusal freezes the world in the state that produced the finding. A report lets the caller
+// continue, and continuing can consume the witness. For nearly every compare-and-set in this repo
+// that is a non-event: the losing write is a ledger status transition whose whole content is
+// (id, target), or an epoch transition whose bytes are already durable in
+// `.cache/replan-transaction.json`. Nothing is lost by proceeding, so nothing is captured, and the
+// absence of a `witness` block on those reports is the honest answer rather than an omission.
+//
+// TWO SITES ARE DIFFERENT. `writeSchema2ReviewReceipt` and `persistReviewContext` hold the losing
+// write ONLY IN MEMORY — a canonical-JSON receipt / review context built this call and never
+// written, because a byte-different one was already on disk under the same content-addressed name.
+// Return `{ok:false}` there and the bytes go out of scope with the stack frame. Under a refusal
+// that was survivable: the run stopped and a human could re-derive them. Under a report the run
+// continues and they are gone, which is the exact deletion-wearing-a-conversion's-name this ADR
+// warns about.
+//
+// So the losing bytes are written to a content-addressed sidecar BEFORE the report is emitted, and
+// the report carries both digests. Content-addressing makes it idempotent (a retry writes the same
+// file) and makes the sidecar name itself the proof of what is inside it.
+//
+// IT IS NOT A PARENT-OWNED SIDECAR, and that is deliberate. Those are append-only telemetry no gate
+// reads and the leg-merge sweep deliberately drops. This is a RECORD; dropping it at a leg merge
+// would be evidence loss. It lives under `kaola-workflow/{project}/.cache/`, which is inside the
+// barrier's own invisible allowband, so writing it cannot make a node's diff look like an overflow.
+//
+// A FAILED CAPTURE IS REPORTED AS A FAILED CAPTURE. On any error the report carries
+// `witness_capture_failed` and NO `witness` key: an empty-but-present witness is the filled-in lie,
+// worse than an absent field, because the schema would then vouch for it.
+// ---------------------------------------------------------------------------
+const CAS_WITNESS_DIR = 'cas-lost';
+
+function captureCasWitness(opts, kind, targetPath, losingBytes, winningBytes) {
+  const fs = require('fs');
+  try {
+    const losing = String(losingBytes == null ? '' : losingBytes);
+    const losingDigest = sha256Hex(losing);
+    const dir = path.join(path.dirname(opts.planPath), '.cache', CAS_WITNESS_DIR);
+    const absolute = path.join(dir, losingDigest);
+    if (typeof opts.mkdirp === 'function') opts.mkdirp(dir);
+    else fs.mkdirSync(dir, { recursive: true });
+    let already = null;
+    try { already = opts.readFile(absolute); } catch (_) { already = null; }
+    if (already === null) opts.writeFile(absolute, losing);
+    return { ok: true, witness: {
+      kind,
+      path: targetPath,
+      losing_bytes_sha256: losingDigest,
+      losing_bytes_path: '.cache/' + CAS_WITNESS_DIR + '/' + losingDigest,
+      losing_bytes_length: losing.length,
+      winning_bytes_sha256: winningBytes == null ? null : sha256Hex(String(winningBytes)),
+    } };
+  } catch (error) {
+    return { ok: false, error: String((error && error.message) || error) };
+  }
+}
+
+// casWitnessFields(capture) — spread onto the report. Emits `witness` on a successful capture and
+// `witness_capture_failed` on a failed one; never both, never an empty `witness`.
+function casWitnessFields(capture) {
+  if (capture && capture.ok) return { witness: capture.witness };
+  return { witness_capture_failed: (capture && capture.error) || 'unknown' };
+}
+
 function persistReviewContext(opts, built) {
   const relative = '.cache/' + REVIEW_CONTEXT_DIR + '/' + built.context_hash + '.json';
   const absolute = path.join(path.dirname(opts.planPath), relative);
@@ -1690,7 +1780,13 @@ function persistReviewContext(opts, built) {
     else fs.mkdirSync(path.dirname(absolute), { recursive: true });
     const existing = (() => { try { return opts.readFile(absolute); } catch (_) { return null; } })();
     const bytes = built.bytes + '\n';
-    if (existing !== null && existing !== bytes) return { ok: false, reason: 'review_context_hash_collision' };
+    if (existing !== null && existing !== bytes) {
+      // TEST 3: `bytes` is the whole review context and exists only here. Capture before reporting.
+      return Object.assign({ ok: false, reason: 'review_context_hash_collision',
+        field: 'context_hash', expected: built.context_hash,
+        found: sha256Hex(String(existing)), path: relative },
+        casWitnessFields(captureCasWitness(opts, 'review_context', relative, bytes, existing)));
+    }
     if (existing === null) opts.writeFile(absolute, bytes);
     return { ok: true, absolute, relative };
   } catch (error) {
@@ -2218,8 +2314,13 @@ function buildReviewAnchorIndex(opts, context, candidateDigest, rawFindings, nod
 // token. A whitelist rather than a spread: the validator's OK return also carries the whole prepared
 // review (receipt, context, plan view), and spreading would make a refusal's shape depend on how far
 // validation happened to get. Absent fields are omitted, so every other refusal stays byte-identical.
+// #871 — `witness` / `witness_capture_failed` join the whitelist because a CAS report that keeps the
+// losing bytes and then drops the pointer to them at the close seam has captured nothing a caller can
+// reach. `field` / `expected` / `found` / `path` ride along for the same reason: they are the conflict
+// itself, computed at the losing write and previously discarded one frame later.
 const REVIEW_REFUSAL_DIAGNOSTIC_FIELDS = Object.freeze([
   'unroutable_findings', 'anchor_kinds', 'routable_anchor_kinds',
+  'witness', 'witness_capture_failed', 'field', 'expected', 'found', 'path',
 ]);
 function reviewRefusalDiagnostics(review) {
   const out = {};
@@ -2494,7 +2595,13 @@ function writeSchema2ReviewReceipt(opts, review) {
     if (typeof opts.mkdirp === 'function') opts.mkdirp(dir); else fs.mkdirSync(dir, { recursive: true });
     let existing = null;
     try { existing = opts.readFile(receiptPath); } catch (_) { existing = null; }
-    if (existing !== null && existing !== bytes) return { ok: false, reason: 'review_receipt_immutable' };
+    if (existing !== null && existing !== bytes) {
+      // TEST 3: `bytes` is the whole canonical receipt and exists only here. Capture before reporting.
+      return Object.assign({ ok: false, reason: 'review_receipt_immutable',
+        field: 'receipt_bytes', expected: sha256Hex(String(bytes)),
+        found: sha256Hex(String(existing)), path: receiptPath },
+        casWitnessFields(captureCasWitness(opts, 'review_receipt', receiptPath, bytes, existing)));
+    }
     if (existing === null) opts.writeFile(receiptPath, bytes);
     return { ok: true, receiptPath };
   } catch (error) {
@@ -2691,7 +2798,7 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
   // content.indexOf('\n## Node Ledger') so an upstream fenced decoy heading is skipped.
   const { start: ledgerIdx, next: afterLedger } = locateSection(content, LEDGER_HEADING);
   if (ledgerIdx < 0) {
-    return { content, changed: false, found: false, alreadyAtTarget: false };
+    return { content, changed: false, found: false, alreadyAtTarget: false, foundStatus: null };
   }
 
   // Slice the ledger section from its heading to the next ## heading (or EOF).
@@ -2701,7 +2808,7 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
 
   const rows = ledgerBlock.split('\n').filter(l => l.trim().startsWith('|'));
   if (rows.length < 2) {
-    return { content, changed: false, found: false, alreadyAtTarget: false };
+    return { content, changed: false, found: false, alreadyAtTarget: false, foundStatus: null };
   }
 
   const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
@@ -2726,12 +2833,16 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
         + "so editing that line in place does not break the frozen plan. `--freeze --repair` "
         + "normalizes it mechanically.",
     };
-    return { content, changed: false, found: false, alreadyAtTarget: false, diagnostic };
+    return { content, changed: false, found: false, alreadyAtTarget: false, foundStatus: null, diagnostic };
   }
 
   let found = false;
   let changed = false;
   let alreadyAtTarget = false;
+  // #871 — the status the row ACTUALLY carried. It was read here, compared, and dropped, so every
+  // caller that had to report a disallowed transition could name what it DEMANDED (`allowFrom`) and
+  // not what it FOUND, and had to re-read the ledger to say so. Carried out on the return now.
+  let foundStatus = null;
 
   const newLedgerBlock = ledgerBlock.replace(/\n(\|[^\n]+)/g, (match, row) => {
     const cells = row.split('|').slice(1, -1);
@@ -2740,6 +2851,7 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
 
     found = true;
     const currentStatus = (cells[stIdx] || '').trim().toLowerCase();
+    foundStatus = currentStatus;
 
     // Already at the target — idempotent no-op.
     if (currentStatus === newStatus) {
@@ -2763,24 +2875,191 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
   });
 
   if (!found) {
-    return { content, changed: false, found: false, alreadyAtTarget: false };
+    return { content, changed: false, found: false, alreadyAtTarget: false, foundStatus: null };
   }
 
   if (!changed && !alreadyAtTarget) {
     // Found but out-of-allowFrom and not at target — no mutation.
-    return { content, changed: false, found: true, alreadyAtTarget: false };
+    return { content, changed: false, found: true, alreadyAtTarget: false, foundStatus };
   }
 
   if (!changed) {
     // alreadyAtTarget — content is logically unchanged.
-    return { content, changed: false, found: true, alreadyAtTarget: true };
+    return { content, changed: false, found: true, alreadyAtTarget: true, foundStatus };
   }
 
   const newContent = afterLedger >= 0
     ? content.slice(0, ledgerIdx) + newLedgerBlock + content.slice(afterLedger)
     : content.slice(0, ledgerIdx) + newLedgerBlock;
 
-  return { content: newContent, changed: true, found: true, alreadyAtTarget: false };
+  return { content: newContent, changed: true, found: true, alreadyAtTarget: false, foundStatus };
+}
+
+// ---------------------------------------------------------------------------
+// ledgerCasReport(nodeId, spliceResult, target, allowFrom) — the shared payload for a ledger-row
+// compare-and-set that lost (#871).
+//
+// U3 is "no silent lost update: CAS, with the conflict RETURNED TO THE CALLER". It shipped as a
+// refusal, which returns the conflict's existence and not the conflict: every one of these sites
+// emitted `{reason, nodeId}` and nothing about the row it had just read. So a caller was told a
+// transition was disallowed and had to go back to the ledger to find out from WHAT — the classic
+// verdict-kept, measurement-deleted shape.
+//
+// The mutual exclusion is unchanged: none of these paths write. What changes is that "the write did
+// not happen" is `mutation_performed: false` instead of an exit code, and the conflict rides with
+// it — `field` (which cell), `expected` (the statuses the transition would accept), `found` (what
+// the row actually said), `target` (where it was going). `found` comes from spliceLedgerNode's
+// `foundStatus`, which the splice read and used to discard.
+//
+// TEST 3 IS DISCHARGED BY THE LEDGER ITSELF. The losing write here is a status transition whose
+// entire content is (id, target) — both known to the caller — and the winning value stays on disk in
+// the frozen plan's ## Node Ledger. Nothing is consumed by continuing, so there is no witness to
+// capture and none is fabricated.
+// ---------------------------------------------------------------------------
+function ledgerCasReport(nodeId, spliceResult, target, allowFrom) {
+  return {
+    nodeId,
+    node_id: nodeId,
+    record: 'ledger_row',
+    field: 'status',
+    expected: Array.isArray(allowFrom) ? allowFrom.slice() : [],
+    found: (spliceResult && spliceResult.foundStatus != null) ? spliceResult.foundStatus : null,
+    target,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE CONTENT LOCATOR — the per-node path set, by content, on the completion record.
+//
+// A `complete` ledger row used to be `| n1-detect | complete |` and nothing else, so
+// claimed-minus-present was not computable from the kernel for ANY node: a leg whose write was
+// clobbered by a sibling, lost with a discarded worktree, or stranded in a stash produced a tree in
+// which the recorded work simply was not present, and the ledger said yes. The barrier had the answer
+// the whole time — it tree-diffs a ref-anchored real commit against the landable worktree — and threw
+// it away. `closeLocatorFromBarrier` lifts that set off the barrier envelope; `renderWroteCell` and
+// `spliceLedgerWrote` put a readable form of it on the row.
+//
+// TWO SURFACES, ONE AUTHORITATIVE. The provenance `close` entry is the authoritative, exhaustive
+// record: it is written by the same code path, one call after the barrier that observed the diff, so
+// it is effect-triggered — the field saying what was written is written by the code that watched it
+// be written. The ledger cell is a DERIVED, capped, human-readable mirror for a zero-context reader.
+// When they disagree, provenance wins.
+//
+// The `wrote` cell is deliberately NOT covered by `ledger_chain_head`, whose digest is {id, status}.
+// A hand-edited cell is therefore invisible to the chain. That is a decision, not an oversight: the
+// locator is a MEASUREMENT and the obligation on it is honesty, not enforcement. Extending the chain
+// digest would invalidate every in-flight chain head to buy tamper-evidence over a field whose
+// authoritative copy already lives in an append-only journal.
+// ---------------------------------------------------------------------------
+const LEDGER_WROTE_COLUMN = 'wrote';
+const LEDGER_EMPTY_CELL = '—';
+// A finalize node's diff runs to dozens of paths and the ledger row is the READABLE surface, so the
+// cell is capped and the overflow is counted rather than dropped. The count always reconciles to the
+// full total, and the full list is in the provenance entry.
+const LEDGER_WROTE_CELL_CAP = 12;
+
+// Lift the measured locator off a barrier envelope — either commit-node's fused per-node shape
+// (payload nested under `barrierCheck`) or the group barrier's flat one. Returns null when the
+// envelope carries no measurement at all, so a caller with no locator writes NOTHING rather than
+// recording an empty measurement it never made.
+function closeLocatorFromBarrier(barrierOut) {
+  const bc = (barrierOut && barrierOut.barrierCheck) ? barrierOut.barrierCheck : barrierOut;
+  if (!bc || typeof bc !== 'object' || !Array.isArray(bc.actualPaths)) return null;
+  const locator = {
+    actual_paths: bc.actualPaths.map(p => String(p || '').trim()).filter(Boolean),
+    declared: Array.isArray(bc.declared) ? bc.declared.map(p => String(p || '').trim()).filter(Boolean) : [],
+  };
+  // The world-state the set was measured against. Without it the paths are an assertion; with it they
+  // are a receipt a stranger can replay.
+  if (bc.base) locator.base = String(bc.base);
+  return locator;
+}
+
+// Render the locator into one table cell — the DERIVED, readable half of the record (provenance holds
+// the exhaustive set).
+//
+// The run's own bookkeeping is dropped from the CELL only. Every close writes the barrier baseline,
+// the open token, the evidence file, the timings and outcome journals, the scheduler lock, the plan
+// and the task mirror, so measured verbatim a real row is ~9 constant `kaola-workflow/{project}/**`
+// paths ahead of the 1-2 that are the node's actual work — the cap would be spent on noise and the
+// column would answer "what did this node deliver" with the same nine strings on every row. The filter
+// is the BARRIER'S OWN exempt band (`/^kaola-workflow\//`, the paths it can never attribute against a
+// declared write set), not an invented one, so the cell and `declared` range over the same universe
+// and a reader comparing them in either direction is comparing like with like. A node that wrote
+// nothing but bookkeeping therefore renders `—`, which is the honest reading: it delivered no
+// attributable work — exactly the signal a bare `complete` row could not give.
+//
+// `—` for a measured-and-empty set — never a blank cell, which is indistinguishable from a row
+// written before this column existed. A path carrying a `|` cannot live in a markdown table cell, so
+// it is not rendered; it is still COUNTED in the `+K more` tail, so the cell's arithmetic always
+// reconciles to the attributable total and nothing vanishes silently.
+function renderWroteCell(paths) {
+  const all = (Array.isArray(paths) ? paths : []).map(p => String(p || '').trim()).filter(Boolean)
+    .filter(p => !/^kaola-workflow\//.test(p));
+  if (!all.length) return LEDGER_EMPTY_CELL;
+  const shown = all.filter(p => p.indexOf('|') < 0).slice(0, LEDGER_WROTE_CELL_CAP);
+  const remaining = all.length - shown.length;
+  if (!shown.length) return '+' + remaining + ' more';
+  return shown.join(', ') + (remaining > 0 ? ', +' + remaining + ' more' : '');
+}
+
+// Write one node's measured path set into its `## Node Ledger` row, creating the `wrote` column when
+// the plan predates it. The column is APPENDED at the end of the header — never inserted — because
+// the finalize worktree-regression guard parses the ledger POSITIONALLY (`cells[2]` is the status)
+// and an inserted column would make it count zero complete rows and fail OPEN, silently.
+//
+// A no-op when `paths` is not an array: no measurement, no cell. Rows that were never measured carry
+// `—`, which their own `status` cell disambiguates — `pending | —` reads as not-yet-run. The one
+// genuine ambiguity is a row that closed before this column shipped; the provenance log is the
+// authority there.
+function spliceLedgerWrote(content, nodeId, paths) {
+  if (!Array.isArray(paths)) return { content, changed: false };
+  const { start, next } = locateSection(content, LEDGER_HEADING);
+  if (start < 0) return { content, changed: false };
+  const block = next >= 0 ? content.slice(start, next) : content.slice(start);
+  const lines = block.split('\n');
+  const tableIdx = [];
+  for (let i = 0; i < lines.length; i++) if (lines[i].trim().startsWith('|')) tableIdx.push(i);
+  if (tableIdx.length < 2) return { content, changed: false };
+
+  const splitRow = line => line.split('|').slice(1, -1);
+  const header = splitRow(lines[tableIdx[0]]).map(c => c.trim().toLowerCase());
+  if (header.indexOf('id') < 0 || header.indexOf('status') < 0) return { content, changed: false };
+  const isRule = cells => cells.length > 0 && cells.every(c => /^[-:\s]*$/.test(c)) && cells.join('').indexOf('-') >= 0;
+
+  const out = lines.slice();
+  let wroteIdx = header.indexOf(LEDGER_WROTE_COLUMN);
+  if (wroteIdx < 0) {
+    wroteIdx = header.length;
+    for (const i of tableIdx) {
+      const cells = splitRow(out[i]);
+      if (i === tableIdx[0]) cells.push(' ' + LEDGER_WROTE_COLUMN + ' ');
+      else if (isRule(cells)) cells.push(' --- ');
+      else cells.push(' ' + LEDGER_EMPTY_CELL + ' ');
+      out[i] = '|' + cells.join('|') + '|';
+    }
+  }
+
+  const idIdx = header.indexOf('id');
+  let changed = false;
+  for (const i of tableIdx.slice(1)) {
+    const cells = splitRow(out[i]);
+    if (isRule(cells)) continue;
+    if ((cells[idIdx] || '').trim() !== nodeId) continue;
+    while (cells.length <= wroteIdx) cells.push(' ' + LEDGER_EMPTY_CELL + ' ');
+    cells[wroteIdx] = ' ' + renderWroteCell(paths) + ' ';
+    out[i] = '|' + cells.join('|') + '|';
+    changed = true;
+  }
+  // No row for this node ⇒ no measurement to record ⇒ do not introduce the column either. A column of
+  // nothing but `—` would announce a measurement the plan never took.
+  if (!changed) return { content, changed: false };
+
+  const newBlock = out.join('\n');
+  const newContent = next >= 0
+    ? content.slice(0, start) + newBlock + content.slice(next)
+    : content.slice(0, start) + newBlock;
+  return { content: newContent, changed: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -2820,7 +3099,13 @@ function readLedgerStatuses(content) {
 //
 // A legacy plan's stored section is left byte-for-byte untouched by every verb below.
 
-function appendCloseSidecarsOnce(opts, nodeId) {
+// `locator` is the measured content locator for THIS close — { actual_paths, declared, base } from
+// closeLocatorFromBarrier, or null/absent when no barrier envelope was available. It is merged into
+// the close provenance entry, which is the AUTHORITATIVE half of the record: the entry is appended by
+// this function one call after the barrier that measured the diff, in the same process, so the field
+// is effect-triggered rather than asserted. A caller with no measurement passes nothing and the entry
+// is byte-identical to the pre-locator shape — an absent field, never an empty one.
+function appendCloseSidecarsOnce(opts, nodeId, locator) {
   const planPath = opts.planPath;
   const readFile = opts.readFile;
   const cacheDir = path.join(path.dirname(planPath), '.cache');
@@ -2856,8 +3141,10 @@ function appendCloseSidecarsOnce(opts, nodeId) {
   // rides the per-node close entry this journal already writes. Emitted ONLY when the flag is set,
   // so every un-flagged close stays byte-identical and the derivation falls back to the role rule.
   if (!provenancePresent) {
-    appendProvenanceLog(planPath, 'close', nodeId, nonce,
-      opts.mainSessionDirect === true ? { main_session_direct: true } : undefined);
+    let extra;
+    if (opts.mainSessionDirect === true) extra = Object.assign(extra || {}, { main_session_direct: true });
+    if (locator && typeof locator === 'object') extra = Object.assign(extra || {}, locator);
+    appendProvenanceLog(planPath, 'close', nodeId, nonce, extra);
   }
 }
 
@@ -2985,8 +3272,47 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
   // barrier-base SHA prefix the role agent could ONLY have received from THIS dispatch), the evidence
   // MUST carry a `evidence-binding: <nodeId> <nonce>` header. A mismatched node id → evidence_unbound
   // (copied from a DIFFERENT node); a mismatched nonce → evidence_stale (copied / replayed from a
-  // PRIOR open of the same node). ABSENT expectedNonce → SKIP entirely (backward-compatible: the ~40
-  // existing 3-arg callers and any path with no recorded baseline pass exactly as before).
+  // PRIOR open of the same node). ABSENT expectedNonce → the header cannot be checked against
+  // anything, so the check is SKIPPED (backward-compatible: the ~40 existing 3-arg callers and any
+  // path with no recorded baseline behave exactly as before).
+  //
+  // #871 — BUT THE SKIP IS NOW REPORTED, because silence here was the campaign's own failure shape.
+  // The binding is the discriminator that SURVIVES the conversion of the tautological existence
+  // check: absence of the file reports, a foreign or replayed binding still refuses. A discriminator
+  // that silently no-ops whenever the nonce is missing is a guard failing open on exactly the state
+  // where evidence is least trustworthy — and, worse, its silence was byte-indistinguishable from
+  // "binding verified". That is complete, coherent and false: the one record shape an agent cannot
+  // route around, because its only substrate says everything is fine.
+  //
+  // It is REPORTED, not refused. Minting a stop here would put back a gate the design retires, and
+  // there is nothing for the agent to do about a baseline that was never recorded except record one
+  // — which `open-next` does idempotently. So the finding rides the advisory channel to the close
+  // envelope and `bindingChecked` rides the result, and a successor reading either can tell "this
+  // evidence was proved fresh" from "nobody could tell".
+  //
+  // DEFAULT ON, with no opt-in flag: the trigger is `expectedNodeId`, which every gate call site
+  // (both close paths and `--verify`) already passes and no legacy 3-arg caller does. An opt-in
+  // would be a flag someone forgets, and a forgotten flag here is silently unguarded.
+  if (!opts.expectedNonce && opts.expectedNodeId) {
+    if (Array.isArray(opts.advisories)) {
+      opts.advisories.push({
+        warning: 'evidence_binding_unverified',
+        detail: role + ' ' + nodeId + ' evidence was accepted WITHOUT its anti-replay binding being '
+          + 'checked: no barrier-base nonce is recorded for this open, so there is nothing to bind '
+          + 'the evidence-binding header against. A replayed or copied artifact would pass here. '
+          + 'Record a baseline (open-next is idempotent) and re-verify to close this gap.',
+        node_id: nodeId,
+        role: role,
+        binding_checked: false,
+        // `cause`, NOT `reason`. This advisory is not a refusal and must not mint a legacy condition
+        // token: the census counts any `reason: '<snake_case>'` as an emitted condition, so spelling
+        // it `reason` added a token with no routing surface, no validator, no suite and no doc
+        // reading it — a new hand-kept field on the very ratchet this campaign is driving to zero.
+        // The advisory's own identity is `warning` above; this names why the check could not run.
+        cause: 'no_recorded_baseline',
+      });
+    }
+  }
   if (opts.expectedNonce) {
     const m = content.match(/^evidence-binding:[ \t]*([^\s]+)[ \t]+([^\s]+)[ \t]*$/m);
     if (!m) {
@@ -3682,8 +4008,8 @@ function dispatchSummarySegments(result) {
 // — barrier-exempt via isWorkflowArtifactPath (/^kaola-workflow\//). But a role-agent subagent dispatched
 // INTO the worktree interprets a bare `.cache/<id>.md` relative to ITS cwd (the worktree root) and writes
 // <worktree>/.cache/<id>.md — which does NOT match /^kaola-workflow\// → the per-node barrier treats it as
-// a PRODUCTION write outside the declared allowlist → a false write_set_overflow with the evidence file as
-// the sole outOfAllow path (triage even proposes revert-overflow, which would DELETE the evidence).
+// a PRODUCTION write outside the declared allowlist → a false write_set_overflow naming the evidence file
+// as the sole outOfAllow path, which the triage then proposes attributing onto a surface.
 // Emitting the project-qualified path makes the subagent's literal-follow land in the exempt location.
 // On-disk seed/record/verify resolution is UNCHANGED — they join dirname(planPath); only this dispatch
 // HINT string is qualified. Falls back to the bare path when project is absent (legacy/offline).
@@ -3854,6 +4180,50 @@ function resolveEvidenceCachePath(planPath, nodeId, cacheExists, readFile, runni
   };
 }
 
+// ---------------------------------------------------------------------------
+// evidenceAbsenceReport — the MEASUREMENT under the `evidence_absent` verdict (#871).
+//
+// WHY THE VERDICT WENT AND THE MEASUREMENT STAYED. The parent-cache arm of this check is a
+// TAUTOLOGY: `seedEvidenceFile` writes `.cache/<node-id>.md` at every open, and the checker at
+// close is the same script — so "does the file I wrote still exist" carries no information about
+// whether the role agent did anything, and a node can pass it on a seed nobody ever filled in.
+// That is the complete-coherent-and-false shape, and stopping the caller over it buys nothing.
+//
+// TWO THINGS IT IS NOT A TAUTOLOGY ABOUT, and they are why this reports rather than disappears:
+//   1. `seedEvidenceFile` is ADVISORY and swallows its own failures, so absence is the only
+//      detector of a silently-failed seed.
+//   2. For a declared isolated-lane member the parent seed exists BY CONSTRUCTION and the leg copy
+//      does not, so `source: 'leg'` + absent means the leg agent produced nothing — a genuine
+//      discriminator. Dropping `source` would delete exactly that distinction.
+// The REAL discriminator — the `evidence-binding` nonce check for foreign / replayed evidence —
+// is a different family (`kernel_integrity_broken/replay_binding`) and is untouched here.
+//
+// TEST 3 IS DISCHARGED BY NOT ADVANCING. This report does not close the node: the ledger row stays
+// `in_progress`, the baseline nonce stays live, and the seed stays on disk, so nothing the finding
+// rests on is consumed by continuing. What changed is that the caller is told at exit 0, with the
+// measurement in hand, instead of being stopped by an exit code that said only "no".
+//
+// Every field is observed at the call, never assumed: `byte_length` and `binding` are null because
+// there is no file to measure (absence must not render as `0` or `[]`), and `tokens_present` is
+// OMITTED rather than emitted empty — an absent file has no token measurement, and an empty array
+// the schema vouches for is worse than a field that is not there.
+// ---------------------------------------------------------------------------
+function evidenceAbsenceReport(planPath, nodeId, role, resolved, readFile) {
+  let nonce = null;
+  try { nonce = readNonce(planPath, nodeId, readFile); } catch (_) { nonce = null; }
+  return {
+    expected_path: '.cache/' + nodeId + '.md',
+    resolved_path: (resolved && resolved.cachePath) || null,
+    source: (resolved && resolved.evidenceSource) || null,
+    present: false,
+    byte_length: null,
+    binding: null,
+    expected_binding: nonce ? ('evidence-binding: ' + nodeId + ' ' + nonce) : null,
+    baseline_nonce_recorded: Boolean(nonce),
+    required_tokens: deriveRequiredTokens(role),
+  };
+}
+
 // runVerifyEvidence(opts) (#444 / D-444-01 §4) — READ-ONLY mode of record-evidence.
 // Verifies an on-disk .cache/<node-id>.md WITHOUT stdin transit.
 // Reuses checkEvidenceShape (the same checker the close path uses) so --verify
@@ -3882,10 +4252,13 @@ function runVerifyEvidence(opts) {
     if (nodeInfo) role = nodeInfo.role;
   } catch (_) {}
 
-  // Evidence-absent check.
+  // Evidence-absent check. #871: an ANSWER at exit 0 — `--verify` asks a question and this is the
+  // answer to it. Nothing is mutated and nothing advances, so the state the old refusal froze is
+  // still exactly where it was; what the caller gains is the measurement instead of an exit code.
   if (!cacheExists(cachePath)) {
-    return { result: 'refuse', reason: 'evidence_absent', nodeId, role, evidence_file,
-      evidence_source: resolvedEvidence.evidenceSource };
+    return answer('evidence_absent', { nodeId, role, evidence_file,
+      evidence_source: resolvedEvidence.evidenceSource,
+      evidence: evidenceAbsenceReport(planPath, nodeId, role, resolvedEvidence, readFile) });
   }
 
   // Read evidence and nonce.
@@ -3905,8 +4278,9 @@ function runVerifyEvidence(opts) {
     reviewV2 = { ok: false, reason: 'review_evidence_validation_failed', detail: String(error && error.message || error) };
   }
   if (reviewV2 && !reviewV2.ok) {
-    return { result: 'refuse', reason: reviewV2.reason, detail: reviewV2.detail || null,
-      missingTokenClass: reviewV2.missingTokenClass || null, nodeId, role, evidence_file };
+    return relayTypedOutcome(reviewV2.reason, Object.assign({ detail: reviewV2.detail || null,
+      missingTokenClass: reviewV2.missingTokenClass || null, nodeId, role, evidence_file },
+      reviewRefusalDiagnostics(reviewV2)));
   }
   // The advisory collector is supplied by EVERY production caller, not just tests: a normalize the
   // operator never sees is strictly less than the refusal it replaced, so the channel has to be live
@@ -3918,8 +4292,15 @@ function runVerifyEvidence(opts) {
   });
 
   if (shapeCheck.ok) {
+    // #871 — `binding_checked` is a FIRST-CLASS field, not something a reader infers from the
+    // absence of an advisory. `--verify` is the surface an operator points at the question "is this
+    // evidence good?", and before this the answer to "was its anti-replay binding actually proved?"
+    // was unobtainable: a pass with a recorded nonce and a pass with no nonce at all emitted the
+    // identical envelope. `false` here means nobody could tell, which is a different fact from
+    // `true` and must not render as one.
     return { result: 'ok', nodeId, role, evidence_file,
       evidence_source: resolvedEvidence.evidenceSource,
+      binding_checked: Boolean(expectedNonce),
       ...(advisories.length ? { advisories } : {}) };
   }
 
@@ -6600,8 +6981,8 @@ function beginSchema2ReviewAttempt(opts, ctx, review, receipts, reduced) {
 
 function prepareSchema2ReviewClose(opts, ctx, review) {
   const persisted = writeSchema2ReviewReceipt(opts, review);
-  if (!persisted.ok) return { handled: true, result: { result: 'refuse', reason: persisted.reason,
-    detail: persisted.detail || null } };
+  if (!persisted.ok) return { handled: true, result: relayTypedOutcome(persisted.reason,
+    Object.assign({ detail: persisted.detail || null }, reviewRefusalDiagnostics(persisted))) };
   const group = readSchema2GroupReceipts(opts, review);
   if (!group.ok) {
     // A complete member of a logical group may close provisionally while the
@@ -6613,11 +6994,15 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
     let plan = opts.readFile(opts.planPath);
     const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
     if (!closed.changed && !closed.alreadyAtTarget) {
-      return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
+      return { handled: true, result: answer('close_transition_disallowed',
+        ledgerCasReport(ctx.nodeInfo.id, closed, 'complete', ['in_progress'])) };
     }
     if (closed.changed) plan = closed.content;
+    // The provisional close is still a close, so it carries the same measured locator the terminal
+    // close does — a `complete` row with no receipt is exactly the malformed claim this closes.
+    if (ctx.closeLocator) plan = spliceLedgerWrote(plan, ctx.nodeInfo.id, ctx.closeLocator.actual_paths).content;
     opts.writeFile(opts.planPath, plan);
-    appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
+    appendCloseSidecarsOnce(opts, ctx.nodeInfo.id, ctx.closeLocator);
     removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
     return { handled: true, result: { result: 'ok', closed: ctx.nodeInfo.id, provisional: true,
       contract_version: 2, review_context_hash: review.dispatch.review_context_hash,
@@ -6670,13 +7055,32 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
     taskMirror: refreshTaskMirror(opts.project, opts.shell) } };
 }
 
+// ---------------------------------------------------------------------------
+// relayTypedOutcome(reason, body) — the ONE relay for a typed outcome that a pure-core review /
+// journal helper produced and an envelope site is re-emitting (#871).
+//
+// These sites forward whatever token the helper returned, and that set spans several families: a
+// CAS that lost, a write that failed, a shape that did not validate. Only the CAS half converts, so
+// the fork is made by ASKING THE CLASSIFIER rather than by listing tokens at each site — a hand-kept
+// list at six relay points is six places to forget a token, and a forgotten token here silently
+// keeps a refusal that the design retired (or, worse in the other direction, converts one it did
+// not). The classifier is already the single source for the family, so it is the single source here.
+// ---------------------------------------------------------------------------
+function relayTypedOutcome(reason, body) {
+  const classified = reviewSchema.classifyRefusalCondition(reason);
+  if (classified && classified.family === 'kernel_cas_lost') return answer(reason, body);
+  return Object.assign({ result: 'refuse', reason }, body || {});
+}
+
 function prepareReviewClose(opts, ctx) {
   if (!ctx.nodeInfo || !VERDICT_ROLES.has(ctx.nodeInfo.role) || !planHashFromContent(ctx.planContent)) return null;
   if (ctx.schema2Review && ctx.schema2Review.review_gate) {
     return prepareSchema2ReviewClose(opts, ctx, ctx.schema2Review);
   }
   const begun = beginReviewAttempt(opts, ctx);
-  if (!begun.ok) return { handled: true, result: { result: 'refuse', reason: begun.reason, detail: begun.detail || null } };
+  if (!begun.ok) return { handled: true, result: relayTypedOutcome(begun.reason,
+    Object.assign({ detail: begun.detail || null }, reviewRefusalDiagnostics(begun),
+      begun.attempt_id ? { attempt_id: begun.attempt_id } : {})) };
   const attempt = begun.attempt;
   const gate = attempt.logical_gate;
   const statuses = readLedgerStatuses(opts.readFile(opts.planPath));
@@ -6703,12 +7107,15 @@ function prepareReviewClose(opts, ctx) {
       if (!last) {
         let plan = opts.readFile(opts.planPath);
         const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
-        if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
+        if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: answer('close_transition_disallowed',
+          ledgerCasReport(ctx.nodeInfo.id, closed, 'complete', ['in_progress'])) };
         if (closed.changed) plan = closed.content;
+        // The locator rides the plan write, so the row and its receipt land together.
+        if (ctx.closeLocator) plan = spliceLedgerWrote(plan, ctx.nodeInfo.id, ctx.closeLocator.actual_paths).content;
         // Plan first, then replay-safe sidecars, then running-set removal. A crash after
         // any prefix is completed by the unchanged retry without duplicating durable evidence.
         opts.writeFile(opts.planPath, plan);
-        appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
+        appendCloseSidecarsOnce(opts, ctx.nodeInfo.id, ctx.closeLocator);
         removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
         return { handled: true, result: { result: 'ok', closed: ctx.nodeInfo.id, provisional: true,
           attempt_id: attempt.attempt_id, lifecycle_settled: false,
@@ -7844,8 +8251,11 @@ function runRecordEvidence(opts) {
         && Array.isArray(attempt.receipts) && attempt.receipts.some(receipt =>
           receipt.node_id === nodeId && receipt.generation === currentNonce));
       if (immutableAttempt) {
-        return { result: 'refuse', reason: 'review_outcome_receipts_immutable', nodeId,
-          attempt_id: immutableAttempt.attempt_id };
+        // The losing write here is the caller's stdin, which is still on the caller's side of the
+        // pipe and is re-sendable — no in-memory-only witness, so none is fabricated.
+        return answer('review_outcome_receipts_immutable', { nodeId,
+          record: 'review_receipt', field: 'receipts', found: currentNonce,
+          attempt_id: immutableAttempt.attempt_id });
       }
     }
   }
@@ -7996,9 +8406,10 @@ function runCloseAndOpenNext(opts) {
     ? validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceContent)
     : { ok: true, review_gate: false };
   if (!schema2Review.ok) {
-    return { result: 'refuse', reason: schema2Review.reason, detail: schema2Review.detail || null,
+    return relayTypedOutcome(schema2Review.reason, {
+      detail: schema2Review.detail || null,
       missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
-      ...reviewRefusalDiagnostics(schema2Review) };
+      ...reviewRefusalDiagnostics(schema2Review) });
   }
   // See runRecordEvidence: the advisory collector is supplied on the SHIPPED path, not only by tests.
   const shapeAdvisories = [];
@@ -8017,9 +8428,7 @@ function runCloseAndOpenNext(opts) {
     const reason = shapeCheck.evidenceStale ? 'evidence_stale'
       : shapeCheck.evidenceUnbound ? 'evidence_unbound'
       : (absent ? 'evidence_absent' : 'evidence_shape_failed');
-    return {
-      result: 'refuse',
-      reason,
+    const body = {
       missingTokenClass: shapeCheck.missingTokenClass || null,
       nodeId,
       role,
@@ -8027,6 +8436,20 @@ function runCloseAndOpenNext(opts) {
       detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
       ...(shapeAdvisories.length ? { advisories: shapeAdvisories } : {}),
     };
+    // #871 — ABSENCE answers; the BINDING still refuses. `evidence_stale` / `evidence_unbound` are
+    // the anti-replay discriminator: a pasted prior-open artifact is well-formed, carries every
+    // required token, and is complete, coherent and false — the one shape an agent cannot route
+    // around, and the proof of the replay is destroyed by the very transition it would allow (the
+    // close flips the row to complete, the next open rotates the nonce). Those keep refusing, in
+    // their own family. Absence is the tautology and it reports.
+    if (reason === 'evidence_absent') {
+      return answer(reason, Object.assign(body, {
+        evidence_source: 'parent',
+        evidence: evidenceAbsenceReport(planPath, nodeId, role,
+          { cachePath, evidenceSource: 'parent' }, readFile),
+      }));
+    }
+    return Object.assign({ result: 'refuse', reason }, body);
   }
 
   // #403.4: a verdict-bearing gate role whose evidence carries a near-miss `Verdict:` line
@@ -8083,6 +8506,11 @@ function runCloseAndOpenNext(opts) {
     };
   }
 
+  // The barrier just measured, by content, exactly what this node wrote. Lift it here, one statement
+  // after the measurement, and carry it to BOTH close surfaces below — the authoritative provenance
+  // entry and the derived ledger cell. Null when the envelope carried no measurement.
+  const closeLocator = closeLocatorFromBarrier(barrierOut);
+
   // Selector validation is part of the close precondition. Compute the losing-arm fold without
   // writing so an invalid selector cannot leave a completed review or provisional journal attempt.
   const selectorCheck = barrierOut.selectorCheck || {};
@@ -8103,10 +8531,28 @@ function runCloseAndOpenNext(opts) {
 
   const reviewPrepared = prepareReviewClose(opts, {
     planContent, nodes, nodeInfo, evidenceContent, command: 'close-and-open-next',
-    schema2Review,
+    schema2Review, closeLocator,
   });
   if (reviewPrepared && reviewPrepared.handled) return reviewPrepared.result;
   if (reviewPrepared) reviewBegun = reviewPrepared.begun;
+
+  // The overflow REPORT rides the same advisory carrier as every other non-blocking finding, so it
+  // reaches EVERY post-close success return (they all spread `...(verdictWarn || {})`) without editing
+  // each one. Durability is already covered — the paths are in the close provenance entry and the
+  // ledger row — but a finding the orchestrator never sees is one it cannot act on, and the whole
+  // point of converting the refusal was to keep the measurement visible rather than to hide it behind
+  // an exit code that no longer changes.
+  if (closeLocator && barrierOut.barrierCheck && barrierOut.barrierCheck.result === 'answer') {
+    const bc = barrierOut.barrierCheck;
+    verdictWarn = Object.assign({}, verdictWarn || {}, {
+      write_set_report: {
+        reason: bc.reason, outOfAllow: bc.outOfAllow || [],
+        actual_paths: closeLocator.actual_paths, declared: closeLocator.declared,
+        base: closeLocator.base || null, mutation_performed: false,
+      },
+      operator_hint: bc.operator_hint || getOperatorHint(bc.reason, { nodeId }),
+    });
+  }
 
   // -- (c) Close: spliceLedgerNode -----------------------------------------
   // Re-read plan (baseline call in open-next may have written it).
@@ -8126,7 +8572,8 @@ function runCloseAndOpenNext(opts) {
     return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
   }
   if (!closeResult.changed && !closeResult.alreadyAtTarget) {
-    return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+    return answer('close_transition_disallowed',
+      ledgerCasReport(nodeId, closeResult, 'complete', ['in_progress']));
   }
   if (closeResult.changed) {
     currentPlan = closeResult.content;
@@ -8135,12 +8582,17 @@ function runCloseAndOpenNext(opts) {
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
 
+  // The locator rides the SAME plan write as the status flip, so a completion claim and the receipt
+  // backing it land atomically — a row can never read `complete` with the measurement absent because
+  // a crash split the two writes.
+  if (closeLocator) currentPlan = spliceLedgerWrote(currentPlan, nodeId, closeLocator.actual_paths).content;
+
   // Write the complete passing transition (gate + selector arms) before removing the
   // running member or settling the journal. A crash here remains fenced by the unsettled attempt.
   writeFile(planPath, currentPlan);
   if (selectorCheck.isSelector === true) reviewFailpoint(opts, 'selector_folded');
 
-  appendCloseSidecarsOnce(opts, nodeId);
+  appendCloseSidecarsOnce(opts, nodeId, closeLocator);
 
   // #317: the closed node → completed (every ok exit carries this).
   transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
@@ -8486,7 +8938,12 @@ function computeTriage(barrierOut, cacheDir, nodeId, readFile) {
     } else if (cls === 'mirror_write') {
       triage.proposed_repair = { kind: 'add_to_write_set', node: nodeId || '', paths: overflowPaths };
     } else if (cls === 'write_set_overflow' && overflowPaths.length) {
-      triage.proposed_repair = { kind: 'revert_overflow', node: nodeId || '', paths: overflowPaths };
+      // The proposal is to ATTRIBUTE the paths, never to discard them. It used to be `revert_overflow`
+      // — a proposal to unlink files that exist in no commit, no stash and no ref — and the triage that
+      // carried it was reached most often on review nodes, which declare no write set at all, so
+      // EVERY write they made read as overflow. A repair proposal that destroys unrecoverable work is
+      // not a repair.
+      triage.proposed_repair = { kind: 'amend_surface', node: nodeId || '', paths: overflowPaths };
     }
     // unclassified or no overflow paths → no proposed_repair
 
@@ -8697,6 +9154,94 @@ function syncConsentScope(cacheDir, statePath, readFile, writeFile) {
 // EXACTLY the question that was put. `standing_grant` is unconditional and boolean on every arm:
 // a valve that is silent about which of the two things it did cannot be audited.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// THE HALT REGISTER, WRITE SIDE + THE EXECUTION VIEW IT IS SCOPED OVER (#871).
+//
+// executionNodesForPlan(planPath, readFile) — the plan's nodes as the SCHEDULER sees them: the spine
+// parse with every recorded expansion frontier composed onto it, which is the same view the ready-set
+// derivation and the gate-execution check range over. Returns null on any failure to parse or
+// compose, and null is load-bearing: a caller that cannot see the graph must park the whole run
+// rather than park an under-computed subset. A plan with no expansion records composes to the
+// spine array itself, so nothing changes for the ordinary case.
+// ---------------------------------------------------------------------------
+function executionNodesForPlan(planPath, readFile) {
+  try {
+    const content = readFile(planPath);
+    const { parseNodes, expansionUnitNodes } = require('./kaola-gitlab-workflow-plan-validator');
+    const spineNodes = parseNodes(content);
+    if (!spineNodes || !spineNodes.length) return null;
+    const expansion = expansionUnitNodes(content, spineNodes);
+    if (!expansion || !expansion.units.length) return spineNodes;
+    return spineNodes
+      .map(n => (expansion.pointDeps.has(n.id)
+        ? Object.assign({}, n, { dependsOn: n.dependsOn.concat(expansion.pointDeps.get(n.id)) })
+        : n))
+      .concat(expansion.units);
+  } catch (_) { return null; }
+}
+
+// parkedAtRaise — the dependent subgraph as it stood when the halt was raised, recorded on the row
+// so a reader can see what the human was told this fence covered. It is a SNAPSHOT and named as
+// one: the live fence recomputes on every guarded call, because a re-expansion after the raise can
+// legitimately add descendants that did not exist at raise time.
+function parkedAtRaise(planPath, readFile, nodeId) {
+  if (!nodeId) return null;
+  const nodes = executionNodesForPlan(planPath, readFile);
+  if (!nodes) return null;
+  return [...reviewSchema.dependentSubgraph(nodes, [nodeId])].sort();
+}
+
+// appendHaltRegisterRow — append-only. Returns the written row, or null when the register could not
+// be written; the caller reports the null rather than inventing an id, and the read side treats an
+// unwritable/unreadable register as "cannot scope" and parks the whole run.
+function appendHaltRegisterRow(cacheDir, readFile, writeFile, row) {
+  try {
+    const registerPath = path.join(cacheDir, reviewSchema.HALT_REGISTER_NAME);
+    let register = reviewSchema.readHaltRegister(cacheDir, readFile);
+    if (!register) {
+      register = { schema_version: reviewSchema.HALT_REGISTER_SCHEMA_VERSION, halts: [] };
+    }
+    const raisedAt = new Date().toISOString();
+    const written = Object.assign({
+      halt_id: sha256Hex([row.node || 'none', row.reason, row.consent_class || 'none', raisedAt,
+        String(register.halts.length)].join(' ')).slice(0, 16),
+      raised_at: raisedAt,
+      // Reserved for the asynchronous human mailbox. A question a human can actually answer needs
+      // the decision, its alternatives, the evidence and what proceeds while it waits; none of that
+      // is available here, so the field is null rather than filled in with something plausible.
+      question: null,
+      cleared_at: null,
+    }, row);
+    register.halts.push(written);
+    if (typeof writeFile !== 'function') return null;
+    writeFile(registerPath, JSON.stringify(register, null, 2) + '\n');
+    return written;
+  } catch (_) { return null; }
+}
+
+// clearHaltRegisterRows — stamp every OPEN row cleared. Rows are never deleted: a cleared halt is
+// history a successor may need, and the append-only shape is what lets a later reader tell "this
+// question was answered" from "this question was never asked".
+//
+// This is not per-halt clearing, which is a different surface and a different issue. `clear-halt`
+// clears the marker for the whole project today; the register follows that exact semantics, because
+// a register still holding open rows after the marker came down would keep the fence standing after
+// a human took it down — the fence outliving its own answer.
+function clearHaltRegisterRows(cacheDir, readFile, writeFile) {
+  try {
+    const register = reviewSchema.readHaltRegister(cacheDir, readFile);
+    if (!register) return 0;
+    const open = reviewSchema.openHaltRows(register);
+    if (!open.length) return 0;
+    const clearedAt = new Date().toISOString();
+    for (const row of open) row.cleared_at = clearedAt;
+    if (typeof writeFile !== 'function') return 0;
+    writeFile(path.join(cacheDir, reviewSchema.HALT_REGISTER_NAME),
+      JSON.stringify(register, null, 2) + '\n');
+    return open.length;
+  } catch (_) { return 0; }
+}
+
 function runWriteHalt(opts) {
   const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut } = opts;
   const consentClass = opts.consentClass ? String(opts.consentClass).trim() : '';
@@ -8784,6 +9329,20 @@ function runWriteHalt(opts) {
   // #373: best-effort telemetry — the node halted.
   appendNodeTiming(planPath, nodeId, 'halted');
 
+  // #871 — THE REGISTER ROW. Until now the halting node's id survived ONLY in that best-effort
+  // telemetry line above, whose writer swallows every error, so the durable fence was nodeless: one
+  // classless marker stood for every question anyone had asked, and nothing on disk said which node
+  // raised it. A fence that cannot name its own origin cannot be scoped to that origin's dependents,
+  // which is why this row exists before any graph work does. The ledger marker is untouched and
+  // stays the presence bit; this is the identity beside it.
+  const haltRow = appendHaltRegisterRow(consentCacheDir, readFile, writeFile, {
+    node: nodeId || null,
+    reason,
+    consent_class: consentClass || null,
+    plan_digest: (() => { try { return sha256Hex(readFile(planPath)); } catch (_) { return null; } })(),
+    parked_at_raise: parkedAtRaise(planPath, readFile, nodeId || null),
+  });
+
   // Build markers list for output — one cause marker + the durable ledger marker.
   const markers = ['escalated_to_full:' + reason, 'consent_halt:pending'];
 
@@ -8819,6 +9378,12 @@ function runWriteHalt(opts) {
     // #846: unconditional, so a reader never has to infer "no standing grant" from an absent field.
     standing_grant: false,
     consent_class: consentClass || null,
+    // #871: the register row this raise appended, so the caller reads the halt's own identity off
+    // the same envelope that reports the raise. `null` when the register could not be written —
+    // absent rather than fabricated, and the fence then fails CLOSED to the run-wide park.
+    halt_id: haltRow ? haltRow.halt_id : null,
+    halt_record: haltRow || null,
+    parked: haltRow ? haltRow.parked_at_raise : null,
     // #445 (D-445-01 §2): a halt is an actionable outcome — surface the one-sentence operator
     // pointer at the top level even though the write itself succeeded (result: ok).
     operator_hint: getOperatorHint('halt_written', { nodeId, reason }),
@@ -8905,6 +9470,13 @@ function runClearHalt(opts) {
   // #373: best-effort telemetry — the halt was cleared.
   appendNodeTiming(planPath, 'clear-halt', 'halt_cleared');
 
+  // #871 — stamp every open register row cleared, in the same transaction that took the marker
+  // down. Not per-halt clearing (that is a different surface): this mirrors the marker's existing
+  // all-or-nothing semantics exactly. Skipping it would leave open rows behind a lowered marker,
+  // and the fence would go on parking a dependent subgraph after the human had already answered.
+  const haltRowsCleared = clearHaltRegisterRows(
+    path.join(path.dirname(planPath), '.cache'), readFile, writeFile);
+
   // #846 — the human's "yes" becomes a STANDING grant for exactly the class the PENDING halt
   // recorded. There is deliberately NO class flag on this verb: the grant is the answer to the
   // question that was actually put, so it is structurally impossible to widen it at clear time, and
@@ -8946,6 +9518,10 @@ function runClearHalt(opts) {
     halt: 'cleared',
     reason,
     standing_grant_recorded: standingGrantRecorded,
+    // #871: how many open register rows this clear stamped. 0 is a real answer (a halt raised by a
+    // runtime that predates the register, or an unwritable register) and is left visible rather
+    // than hidden — the guard reads the same register and parks the whole run when it cannot scope.
+    halt_rows_cleared: haltRowsCleared,
     taskMirror: refreshTaskMirror(project, shell),
   };
 }
@@ -9018,28 +9594,40 @@ function runUnlock(opts) {
   if (holder) {
     const recordedPid = Number.isInteger(holder.pid) ? String(holder.pid) : 'none';
     if (requested !== recordedPid) {
-      return { result: 'refuse', reason: 'scheduler_lock_holder_mismatch', lockPath, holder,
+      return answer('scheduler_lock_holder_mismatch', { lockPath, holder, unlocked: false,
         requested_holder: requested, recorded_holder: recordedPid,
-        detail: 'the lock is held by ' + recordedPid + ', not the ' + requested + ' this call names — it was re-claimed after the refusal you are recovering from' };
+        liveness: probeLockLiveness(holder),
+        detail: 'the lock is held by ' + recordedPid + ', not the ' + requested + ' this call names — it was re-claimed after the report you are recovering from' });
     }
-    if (!staleFn(holder)) {
-      return { result: 'refuse', reason: 'scheduler_lock_held', lockPath, holder, stale: false,
-        detail: 'the recorded holder is still LIVE — a running orchestrator\'s lock is never removed' };
+    // The injectable `isStale` seam still decides; the reported liveness block is labelled
+    // `injected` when it does, so the report can never carry a probe the verdict did not come from.
+    const liveness = opts.isStale
+      ? { stale: Boolean(staleFn(holder)), probe: 'injected', signal_result: null,
+          same_host: null, age_ms: null, staleness_threshold_ms: null }
+      : probeLockLiveness(holder);
+    if (!liveness.stale) {
+      return answer('scheduler_lock_held', { lockPath, holder, stale: false, unlocked: false,
+        liveness, held_for_ms: liveness.age_ms,
+        detail: 'the recorded holder is still LIVE — a running orchestrator\'s lock is never removed' });
     }
   } else {
     if (requested !== 'none') {
-      return { result: 'refuse', reason: 'scheduler_lock_holder_mismatch', lockPath, holder: null,
+      return answer('scheduler_lock_holder_mismatch', { lockPath, holder: null, unlocked: false,
         requested_holder: requested, recorded_holder: 'none',
-        detail: 'the lock payload is corrupt or carries no pid — target it with --holder none' };
+        detail: 'the lock payload is corrupt or carries no pid — target it with --holder none' });
     }
     // Corrupt/empty payload: classify by the lockfile's mtime, exactly as the acquire path does, so
     // a fresh lock caught between its O_EXCL create and its payload write is never removed.
     let mtimeMs = Date.now();
     try { mtimeMs = fsx.statSync(lockPath).mtimeMs; } catch (_) {}
     const window = Number.isFinite(opts.staleAfterMs) ? opts.staleAfterMs : LANE_STALENESS_MS;
-    if (!((Date.now() - mtimeMs) > window)) {
-      return { result: 'refuse', reason: 'scheduler_lock_held', lockPath, holder: null, stale: false,
-        detail: 'the lock payload is unparseable but the file is younger than the staleness window — it is most likely a fresh holder caught mid-write' };
+    const mtimeAgeMs = Date.now() - mtimeMs;
+    if (!(mtimeAgeMs > window)) {
+      return answer('scheduler_lock_held', { lockPath, holder: null, stale: false, unlocked: false,
+        held_for_ms: mtimeAgeMs,
+        liveness: { stale: false, probe: 'corrupt_payload_mtime', signal_result: null,
+          same_host: null, age_ms: mtimeAgeMs, staleness_threshold_ms: window },
+        detail: 'the lock payload is unparseable but the file is younger than the staleness window — it is most likely a fresh holder caught mid-write' });
     }
   }
 
@@ -9059,9 +9647,9 @@ function runUnlock(opts) {
   try { movedBytes = fsx.readFileSync(quarantine, 'utf8'); } catch (_) { movedBytes = null; }
   if (movedBytes !== rawBytes) {
     try { fsx.renameSync(quarantine, lockPath); } catch (_) {}
-    return { result: 'refuse', reason: 'scheduler_lock_holder_mismatch', lockPath, holder,
+    return answer('scheduler_lock_holder_mismatch', { lockPath, holder, unlocked: false,
       requested_holder: requested, recorded_holder: holder && Number.isInteger(holder.pid) ? String(holder.pid) : 'none',
-      detail: 'the lock payload changed between verification and removal — it was restored untouched' };
+      detail: 'the lock payload changed between verification and removal — it was restored untouched' });
   }
   try { fsx.unlinkSync(quarantine); } catch (_) {}
 
@@ -9245,7 +9833,9 @@ function runReopenNode(opts) {
   const reset = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
   if (!reset.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId };
   if (!reset.changed && !reset.alreadyAtTarget) {
-    return { result: 'refuse', reason: 'node_not_complete', nodeId, detail: 'only a complete node can be reopened for repair' };
+    return answer('node_not_complete', Object.assign(
+      ledgerCasReport(nodeId, reset, 'pending', ['complete']),
+      { detail: 'only a complete node can be reopened for repair' }));
   }
   planContent = reset.content;
 
@@ -9323,16 +9913,22 @@ function runReopenNode(opts) {
     // recorded verb that lands the same decision. Decided AT THE EMIT SITE, not from a static route
     // table: over a PUSHED sink the identical refusal must offer nothing (see finalizeDeviationRoute).
     const route = finalizeDeviationRoute(opts, planContent);
-    const out = {
-      result: 'refuse',
-      reason: 'would_orphan_in_progress',
+    // #871 — `blocking_rows` finally has a producer. The schema declared it for exactly this: the
+    // rows that hold the transition. It was being emitted all along under the local name
+    // `inProgress`, as bare ids with the status the caller then had to go and look up. Both ship:
+    // `inProgress` unchanged for every existing consumer, `blocking_rows` as the typed form.
+    const out = answer('would_orphan_in_progress', {
       nodeId,
+      node_id: nodeId,
+      record: 'ledger_row',
+      field: 'status',
       inProgress: orphans,
+      blocking_rows: orphans.map(id => ({ id, status: ledgerStatuses[id] })),
       detail: 'in_progress row(s) [' + orphans.join(', ') + '] are not post-dominating gates of '
         + nodeId + ' — reopening would leave an orphan multi-in_progress ledger',
       repair: 'close the listed node(s) via close-and-open-next (or reconcile/abort the batch) '
         + 'first, then re-run reopen-node',
-    };
+    });
     if (route) {
       out.route = route;
       out.operator_hint = getOperatorHint('would_orphan_in_progress', { nodeId, inProgress: orphans, route });
@@ -9350,17 +9946,19 @@ function runReopenNode(opts) {
   if (stranded.length) {
     // #826: same finalize-context fork as the orphan guard above — context-bound, never a table row.
     const route = finalizeDeviationRoute(opts, planContent);
-    const out = {
-      result: 'refuse',
-      reason: 'would_strand_completed_dependent',
+    const out = answer('would_strand_completed_dependent', {
       nodeId,
+      node_id: nodeId,
+      record: 'ledger_row',
+      field: 'status',
       stranded,
+      blocking_rows: stranded.map(id => ({ id, status: ledgerStatuses[id] })),
       detail: 'reopening ' + nodeId + ' would leave settled row(s) [' + stranded.join(', ')
         + '] above a dependency this reset moves to pending — a ledger shape every downstream authority '
         + 'rejects as state_ledger_progress_invalid',
       operator_hint: getOperatorHint('would_strand_completed_dependent',
         { nodeId, stranded, op: 'reopen', runFinished: runIsFinished(sink, ledgerStatuses) }),
-    };
+    });
     if (route) out.route = route;
     return out;
   }
@@ -9503,195 +10101,24 @@ function runReopenNode(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// runRevertOverflow (#434 / D-434-01) — reverts outOfAllow (overflow) writes to their
-// baseline state so the subsequent barrier-check passes.
+// DELETED: runRevertOverflow, gitPresentAtBase, removeOverflowPaths.
 //
-// Steps:
-//   (1) Shell commit-node --barrier-check --json (per-node) to read the current outOfAllow list.
-//   (2) PARTITION outOfAllow against the baseline tree: paths that EXIST at baseSha are restored
-//       via the gitCheckout seam; paths that do NOT exist there (newly-created undeclared files,
-//       which have no blob to restore) are DELETED via the removePaths seam.
-//   (3) Append a provenance log entry recording the revert.
-//   (4) Re-run barrier-check to confirm all overflows cleared.
+// The discard verb existed to clear a write_set_overflow REFUSAL: it read the node's barrier
+// baseline, partitioned the out-of-allow paths into "tracked at the baseline" and "created since",
+// restored the first half with `git checkout` and UNLINKED the second. That second half is the point
+// — a newly-created undeclared file exists in no commit, no stash and no ref, so deleting it destroyed
+// content that existed nowhere else, and since test writes became attributable it was the DOMINANT
+// overflow class. It was the only path in the workflow that removed a production file the agent had
+// just written.
 //
-// Seams (all injectable for tests; each falls back to real git/fs when not provided):
-//   opts.gitCheckout(barrierRoot, baseSha, filePaths) → {exitCode}
-//   opts.presentAtBase(barrierRoot, baseSha, filePaths) → string[]  (the subset tracked at baseSha)
-//   opts.removePaths(barrierRoot, filePaths) → {exitCode, removed[]}
-//
-// @param {object} opts
-//   planPath   {string}   path to workflow-plan.md
-//   project    {string}   project name
-//   nodeId     {string}   the in_progress node whose barrier overflowed
-//   shell      {function} (scriptPath, args[]) → {exitCode,...}  (commit-node)
-//   gitCheckout {function} (barrierRoot, sha, filePaths) → {exitCode}  (injectable seam)
-//   presentAtBase {function} (barrierRoot, sha, filePaths) → string[] (injectable seam)
-//   removePaths {function} (barrierRoot, filePaths) → {exitCode, removed[]} (injectable seam)
-//   readFile   {function} (path) → string
-//   writeFile  {function} (path, content) → void
-//   cacheExists {function} (path) → boolean
-//   appendLog  {function} (entry) → void  (optional; defaults to appendProvenanceLog)
+// It is gone because the verdict it cleared is gone: the per-node, lane-group and fused barriers
+// REPORT an overflow now, so nothing has to be discarded for a node to close. Read honestly, this is
+// a deletion of exercised working capability, not a tidy-up: it was never automatic (the CLI was its
+// only caller) but it did run — 5 invocations across 138 archived runs carrying 948 node closes, in
+// 3 incidents, 2 of them review nodes that declare no write set at all. There is NO replacement:
+// discarding an overflow is now a manual deletion by an agent that can see the files and the
+// measured path set on the envelope.
 // ---------------------------------------------------------------------------
-// presentAtBase — the default probe: ONE `git ls-tree` over the baseline commit restricted to the
-// overflow pathspecs, NUL-separated so a path with spaces/quotes survives. A path git does not list
-// is absent from the baseline tree; on any git fault the probe reports "unknown" (null) and the
-// caller refuses rather than guessing, because guessing "absent" would DELETE a file that exists at
-// the baseline and guessing "present" would re-raise the checkout failure this partition removes.
-function gitPresentAtBase(barrierRoot, baseSha, filePaths) {
-  const out = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', baseSha, '--', ...filePaths], {
-    cwd: barrierRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return String(out || '').split('\0').filter(Boolean);
-}
-
-// removeOverflowPaths — the default discard: unlink each newly-created overflow file. Only a REGULAR
-// file is removed (never a directory, never a symlink — an lstat mismatch is reported, not followed),
-// and an already-absent path is a no-op so the verb stays idempotent across a crashed retry.
-function removeOverflowPaths(barrierRoot, filePaths) {
-  const fs = require('fs');
-  const removed = [];
-  for (const rel of filePaths) {
-    const abs = path.resolve(barrierRoot, rel);
-    let stat = null;
-    try { stat = fs.lstatSync(abs); }
-    catch (error) {
-      if (error && error.code === 'ENOENT') continue; // already gone — idempotent
-      return { exitCode: 1, removed, detail: 'lstat ' + rel + ': ' + String(error.message || error) };
-    }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      return { exitCode: 1, removed, detail: rel + ' is not a regular file (refusing to remove)' };
-    }
-    try { fs.unlinkSync(abs); } catch (error) {
-      return { exitCode: 1, removed, detail: 'unlink ' + rel + ': ' + String(error.message || error) };
-    }
-    removed.push(rel);
-  }
-  return { exitCode: 0, removed };
-}
-function runRevertOverflow(opts) {
-  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
-  const gitCheckoutSeam = opts.gitCheckout || null;
-  const appendLogFn = opts.appendLog || null;
-
-  if (!nodeId) return { result: 'refuse', errors: ['--node-id required for revert-overflow'] };
-
-  // (1) Run per-node barrier-check to get outOfAllow list.
-  // #546 G10: commit-node's combineResults NESTS outOfAllow at barrierCheck.outOfAllow, so a
-  // top-level-only read sees undefined → [] → a false "barrier already clean" while the overflow
-  // files are still modified. Read BOTH the top-level and the nested path (mirrors computeTriage's
-  // dual-path read) so a nested overflow is still reverted.
-  const barrierResult = shell(commitNodePath, [planPath, '--node-id', nodeId, '--barrier-check', '--json']);
-  const rawOverflow = (barrierResult && (barrierResult.outOfAllow
-    || (barrierResult.barrierCheck && barrierResult.barrierCheck.outOfAllow))) || [];
-  const outOfAllow = Array.isArray(rawOverflow) ? rawOverflow : [];
-
-  if (!outOfAllow.length) {
-    // Nothing to revert — barrier already passes (or no overflow detected).
-    return { result: 'ok', revertedPaths: [], barrierClearedAfterRevert: true, detail: 'no outOfAllow paths — barrier is already clean' };
-  }
-
-  // (2) Read the barrier-base SHA for this node.
-  const cacheDir = path.join(path.dirname(planPath), '.cache');
-  const baseFile = path.join(cacheDir, 'barrier-base-' + sanitizeNodeId(nodeId));
-  let baseSha = null;
-  try {
-    const baseContent = readFile(baseFile);
-    baseSha = (baseContent || '').trim().split('\n')[0].trim();
-  } catch (_) {
-    return { result: 'refuse', reason: 'barrier_base_missing', nodeId, detail: 'cannot read barrier-base for ' + nodeId + ' — run open-next first' };
-  }
-  if (!baseSha) {
-    return { result: 'refuse', reason: 'barrier_base_empty', nodeId };
-  }
-
-  // Determine the barrier root (directory containing workflow-plan.md's project folder).
-  // The barrier root is the repo root (the git checkout from which paths are relative).
-  const barrierRoot = getRoot();
-
-  // (2) PARTITION outOfAllow against the baseline tree, then revert each half with the primitive
-  // that half actually admits.
-  //
-  // WHY THE PARTITION IS THE WHOLE VERB. `git checkout <baseSha> -- <path>` cannot restore a path
-  // that did not exist at baseSha: a NEWLY-CREATED undeclared file has no blob at the baseline, so
-  // git exits non-zero and — because every path travels in ONE invocation — the whole revert used to
-  // refuse `git_checkout_failed`, including for the siblings that would have reverted cleanly. Since
-  // test writes became attributable, newly-created files are the DOMINANT overflow class, so the
-  // discard primitive failed on exactly the case it is most often reached for, and the
-  // `unattributed_paths` route dead-ended where it is most reached.
-  //
-  // The two halves are NOT symmetric and are reported separately for that reason: `checkedOutPaths`
-  // restores content that already existed and is reversible from the baseline, while `deletedPaths`
-  // DESTROYS content that exists nowhere else. `revertedPaths` stays the union, in outOfAllow order,
-  // so every existing consumer of this envelope reads the same field it always did.
-  //
-  // The presence probe fails CLOSED: an unreadable baseline tree refuses rather than guessing, since
-  // guessing "absent" deletes a file the baseline still holds.
-  let presentSet;
-  try {
-    const probe = (opts.presentAtBase || gitPresentAtBase)(barrierRoot, baseSha, outOfAllow);
-    if (!Array.isArray(probe)) throw new Error('presentAtBase seam returned a non-array');
-    presentSet = new Set(probe.map(String));
-  } catch (e) {
-    return { result: 'refuse', reason: 'baseline_partition_unavailable', nodeId, outOfAllow, baseSha,
-      detail: String((e && e.message) || e) };
-  }
-  const checkedOutPaths = outOfAllow.filter(p => presentSet.has(p));
-  const deletedPaths = outOfAllow.filter(p => !presentSet.has(p));
-
-  // (2a) Restore the paths the baseline still holds.
-  if (checkedOutPaths.length) {
-    if (gitCheckoutSeam) {
-      const r = gitCheckoutSeam(barrierRoot, baseSha, checkedOutPaths);
-      if (r && r.exitCode !== 0) {
-        return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow,
-          checkedOutPaths, deletedPaths: [], detail: 'gitCheckout seam returned non-zero' };
-      }
-    } else {
-      try {
-        execFileSync('git', ['checkout', baseSha, '--', ...checkedOutPaths], {
-          cwd: barrierRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-        });
-      } catch (e) {
-        return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow,
-          checkedOutPaths, deletedPaths: [], detail: String(e.message || e) };
-      }
-    }
-  }
-
-  // (2b) Discard the paths the baseline never held. Ordered AFTER the checkout so a failed restore
-  // never destroys anything: the destructive half runs only once the reversible half has landed.
-  if (deletedPaths.length) {
-    const removal = (opts.removePaths || removeOverflowPaths)(barrierRoot, deletedPaths);
-    if (!removal || removal.exitCode !== 0) {
-      return { result: 'refuse', reason: 'overflow_delete_failed', nodeId, outOfAllow,
-        checkedOutPaths, deletedPaths: (removal && removal.removed) || [],
-        detail: (removal && removal.detail) || 'removePaths seam returned non-zero' };
-    }
-  }
-
-  const revertedPaths = outOfAllow.slice();
-
-  // (3) Append provenance log entry for the revert.
-  if (typeof appendLogFn === 'function') {
-    appendLogFn({ event: 'revert-overflow', nodeId, revertedPaths, checkedOutPaths, deletedPaths, baseSha });
-  } else {
-    appendProvenanceLog(planPath, 'revert-overflow', nodeId, baseSha ? baseSha.slice(0, 12) : null);
-  }
-
-  // (4) Re-run barrier-check to confirm cleared.
-  const barrierAfter = shell(commitNodePath, [planPath, '--node-id', nodeId, '--barrier-check', '--json']);
-  const barrierClearedAfterRevert = !!(barrierAfter && (barrierAfter.result === 'pass' || barrierAfter.exitCode === 0));
-
-  return {
-    result: 'ok',
-    revertedPaths,
-    checkedOutPaths,
-    deletedPaths,
-    baseSha: baseSha ? baseSha.slice(0, 12) : null,
-    barrierClearedAfterRevert,
-    barrierAfter,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // runRepairNode (#434 / D-434-01) — plan-repair for an in_progress writer whose
@@ -10194,8 +10621,8 @@ function runRebindBase(opts) {
   if (Array.isArray(attempt.rebind) && attempt.rebind.length) {
     const rec = reconcilePendingRebind(opts, attempt, journalState, nodeId, writerPaths, now);
     if (!rec.ok) {
-      return { result: 'refuse', reason: rec.reason, node_id: nodeId, attempt_id: attemptId,
-        ...(rec.detail ? { detail: rec.detail } : {}) };
+      return relayTypedOutcome(rec.reason, { node_id: nodeId, nodeId, attempt_id: attemptId,
+        ...(rec.detail ? { detail: rec.detail } : {}) });
     }
   }
   // R3a — identity: the on-disk barrier identity must equal the attempt's effective binding.
@@ -10607,8 +11034,8 @@ function runRepairNodeCore(opts) {
     // #739 + the replay-arm repair: a descendant REPLAY runs the SAME foreign-probe + rebind + barrier
     // replay as a direct repair — the owner's base is NOT exempt from truth. The partition is the cone:
     // the replay's own descendant-cone outputs legitimately read as "foreign" to the owner's (possibly
-    // leg-era) baseline, and those are the CONE RESET's business — reverted (the sanctioned
-    // revert-overflow path) or re-made under re-review when the cone re-runs, never a rebind. Only
+    // leg-era) baseline, and those are the CONE RESET's business — discarded by hand or re-made under
+    // re-review when the cone re-runs, never a rebind. Only
     // NON-cone foreign content (merged lane-group siblings that STAY) is the owner's-base truth the
     // rebind must absorb: P3 attributes it to its recorded owners, the synthetic base keeps the
     // owner's reviewed diff byte-identical, and the barrier then replays EXACT rather than poisoned.
@@ -10696,8 +11123,8 @@ function runRepairNodeCore(opts) {
           return { result: 'repair_requires_replan', reason: 'original_barrier_failed', producer_slice: proof.producer_slice, barrierProof };
         }
       }
-      // #739 else: the ONLY foreign content is the replay's own cone output — reverted (revert-overflow)
-      // or re-made when the reset cone re-runs, and re-certified by the whole-candidate re-review after
+      // #739 else: the ONLY foreign content is the replay's own cone output — discarded by hand or
+      // re-made when the reset cone re-runs, and re-certified by the whole-candidate re-review after
       // the cascade. No barrier replay is meaningful against the pre-reset tree (the cone's outputs
       // legitimately read as overflow against the owner's reused baseline), so none runs — the base
       // stays REUSED, byte-identical to the pre-#829 replay arm on this shape.
@@ -10742,12 +11169,18 @@ function runRepairNodeCore(opts) {
     && repairAttempt.repair.settled === false && repairAttempt.repair.selected_writer === nodeId);
   const resumingReopenedWriter = repairResuming && writerStatus === 'in_progress';
   if (writerStatus !== 'complete' && !resumingReopenedWriter) {
-    return {
-      result: 'refuse',
-      reason: 'node_not_complete',
+    // #871 — the ledger status is read directly here rather than through a splice, so `found` comes
+    // off `ledgerStatuses` and `expected` names what repair-node requires. Nothing is mutated.
+    return answer('node_not_complete', {
       nodeId,
+      node_id: nodeId,
+      record: 'ledger_row',
+      field: 'status',
+      expected: ['complete'],
+      found: writerStatus != null ? writerStatus : null,
+      target: 'in_progress',
       detail: 'repair-node requires the writer node to be complete (a reviewer must have flagged it); current status: ' + writerStatus,
-    };
+    });
   }
 
   // (2b) Safe-point check: at least one downstream gate-role node must be in_progress.
@@ -10873,14 +11306,16 @@ function runRepairNodeCore(opts) {
   if (orphans.length) {
     // #826: the repair family's twin of reopen-node's finalize-context fork — same context-bound rule.
     const route = finalizeDeviationRoute(opts, planContent);
-    const out = {
-      result: 'refuse',
-      reason: 'would_orphan_in_progress',
+    const out = answer('would_orphan_in_progress', {
       nodeId,
+      node_id: nodeId,
+      record: 'ledger_row',
+      field: 'status',
       inProgress: orphans,
+      blocking_rows: orphans.map(id => ({ id, status: ledgerStatuses[id] })),
       detail: 'in_progress row(s) [' + orphans.join(', ') + '] are not post-dominating gates of '
         + nodeId + ' — repair-node would leave an orphan multi-in_progress ledger',
-    };
+    });
     if (route) {
       out.route = route;
       out.operator_hint = getOperatorHint('would_orphan_in_progress', { nodeId, inProgress: orphans, route });
@@ -10919,11 +11354,13 @@ function runRepairNodeCore(opts) {
     gatesReset.concat(replayMode ? replayMode.descendants : []), desc);
   const stranded = resetPlan.stranded;
   if (stranded.length) {
-    return {
-      result: 'refuse',
-      reason: 'would_strand_completed_dependent',
+    return answer('would_strand_completed_dependent', {
       nodeId,
+      node_id: nodeId,
+      record: 'ledger_row',
+      field: 'status',
       stranded,
+      blocking_rows: stranded.map(id => ({ id, status: ledgerStatuses[id] })),
       detail: 'repairing ' + nodeId + ' would leave settled row(s) [' + stranded.join(', ')
         + '] above a dependency this reset moves to pending — a ledger shape every downstream authority '
         + 'rejects as state_ledger_progress_invalid',
@@ -10931,7 +11368,7 @@ function runRepairNodeCore(opts) {
         { nodeId, stranded, op: 'repair', runFinished: runIsFinished(uniqueSink, ledgerStatuses) }),
       // #826: context-bound finalize route (null outside finalize context / after the sink pushed).
       ...(finalizeDeviationRoute(opts, planContent) ? { route: reviewSchema.FINAL_FIX_SUBCOMMAND } : {}),
-    };
+    });
   }
   // Read-only descendants fold to pending alongside the gates (see planLedgerReset) — mirrors reopen-node.
   const readOnlyReset = resetPlan.readOnlyReset;
@@ -11454,8 +11891,8 @@ function persistRepairReplanSource(opts, result) {
       ? { resolveCommittedSourceAuthority: opts.resolveCommittedSourceAuthority } : {}),
     failpoint: name => reviewFailpoint(opts, name),
   });
-  if (!published.ok) return { result: 'refuse', reason: published.reason,
-    attempt_id: attemptId, ...(published.detail ? { detail: published.detail } : {}) };
+  if (!published.ok) return relayTypedOutcome(published.reason,
+    { attempt_id: attemptId, ...(published.detail ? { detail: published.detail } : {}) });
   reviewFailpoint(opts, 'after_replan_source_outcome');
   return Object.assign({}, result, { source_persisted: true, source_path: sourcePath,
     ...(published.rotated_from ? { rotated_from: published.rotated_from } : {}) });
@@ -11826,6 +12263,53 @@ function verifyLedgerChainForPlan(planPath, readFile) {
   return res.ok ? { ok: true } : { ok: false, reason: res.reason };
 }
 
+// ---------------------------------------------------------------------------
+// haltParkScope(planPath, readFile, nodeId) — does a standing consent halt park THIS call? (#871)
+//
+// → { parked: <bool>, payload: { halts, origin_nodes, parked_nodes, scope_basis } }
+//
+// `scope_basis` is on the envelope on purpose, and it is the honest half of this change: a reader
+// must be able to tell a fence that PROVED this node is a dependent of an open halt from one that
+// simply could not tell and defaulted to stopping. Those are different facts and the old boolean
+// marker could express neither.
+// ---------------------------------------------------------------------------
+function haltParkScope(planPath, readFile, nodeId) {
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const parkAll = (basis, extra) => ({ parked: true,
+    payload: Object.assign({ scope_basis: basis, parked_nodes: null }, extra || {}) });
+
+  // A frontier-wide verb acts on a SET, not a node. Filtering that set is scheduler work, not fence
+  // work; until it exists the fence covers the whole frontier, which over-parks and never under-parks.
+  if (nodeId == null) return parkAll('frontier_wide_verb');
+
+  const register = reviewSchema.readHaltRegister(cacheDir, readFile);
+  if (!register) return parkAll('register_unreadable');
+  const open = reviewSchema.openHaltRows(register);
+  // The marker stands but no open row explains it — a pre-register halt, or a register that lost
+  // its rows. Either way the origin is unknown and unknown parks everything.
+  if (!open.length) return parkAll('no_open_rows');
+  const origins = open.map(row => row.node);
+  if (origins.some(origin => !origin)) {
+    return parkAll('halt_origin_unresolved', { halts: open, origin_nodes: origins });
+  }
+
+  const nodes = executionNodesForPlan(planPath, readFile);
+  if (!nodes) return parkAll('execution_view_unavailable', { halts: open, origin_nodes: origins });
+  const known = new Set(nodes.map(n => n && n.id));
+  if (origins.some(origin => !known.has(origin))) {
+    return parkAll('halt_origin_not_in_plan', { halts: open, origin_nodes: origins });
+  }
+
+  // N concurrent halts park the UNION of their dependent subgraphs.
+  const parkedSet = reviewSchema.dependentSubgraph(nodes, origins);
+  const parkedNodes = [...parkedSet].sort();
+  return {
+    parked: parkedSet.has(nodeId),
+    payload: { scope_basis: 'dependent_subgraph', halts: open, origin_nodes: origins,
+      parked_nodes: parkedNodes },
+  };
+}
+
 function mutationGuardPrologue(opts, cfg) {
   const { planPath, shell, readFile, cacheExists } = opts;
   cfg = cfg || {};
@@ -11873,11 +12357,33 @@ function mutationGuardPrologue(opts, cfg) {
 
   // Layer 2 — durable consent-halt fence (#391b). A halt exists precisely to STOP work; a resume/loop
   // that skips orient must not sail through it. Read the plan ledger (fail-closed to '' → no halt).
+  //
+  // #871 — THE FENCE NEVER EXPIRES AND SILENCE IS NEVER CONSENT. Only its SCOPE shrank. A halt
+  // raised at X parks X and everything that depends on X; work in an unrelated part of the plan
+  // keeps running, and the answer arrives asynchronously for whoever is alive when it does. Nothing
+  // about lowering the fence changed: it comes down by `clear-halt` and by nothing else, which is
+  // the one refusal in this file that no conversion may touch.
+  //
+  // EVERY UNKNOWN FAILS CLOSED TO THE RUN-WIDE PARK, and the list is short and deliberate:
+  //   - a frontier-wide verb (no `--node-id` — open-ready, and the fused advance) parks wholesale.
+  //     It acts on a SET, and admitting the unparked members of that set is a filtering change
+  //     inside the scheduler rather than a fence change; over-parking is the safe direction and is
+  //     what this ships until that filtering exists.
+  //   - an unreadable or absent register — including every halt raised by a runtime that predates
+  //     it — cannot name an origin, so it parks everything, exactly as before.
+  //   - an open row with no `node` parks everything.
+  //   - a plan whose execution view will not compose parks everything: an under-computed descendant
+  //     set is the one failure direction a fence may never have.
   if (cfg.halt) {
     let planContent = '';
     try { planContent = readFile(planPath); } catch (_) {}
     if (readDurableConsentHalt(planContent)) {
-      return refuse('halt_pending', { detail: 'a durable consent_halt: pending marker is set in the ## Node Ledger — clear it (clear-halt) or resolve the halt before mutating' });
+      const scope = haltParkScope(planPath, readFile, opts.nodeId);
+      if (scope.parked) {
+        return refuse('halt_pending', Object.assign({
+          detail: 'a durable consent_halt: pending marker is set in the ## Node Ledger — clear it (clear-halt) or resolve the halt before mutating',
+        }, scope.payload));
+      }
     }
   }
 
@@ -13887,8 +14393,9 @@ function runCloseNode(opts) {
   // for a leg member under this read preference — stays clean through to the last-member octopus merge.
   const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
   const lg = (running0 && running0.lane_group) ? running0.lane_group : null;
-  const cachePath = resolveEvidenceCachePath(
-    planPath, nodeId, cacheExists, readFile, running0).cachePath;
+  const resolvedEvidence = resolveEvidenceCachePath(
+    planPath, nodeId, cacheExists, readFile, running0);
+  const cachePath = resolvedEvidence.cachePath;
 
   let evidenceContent = null;
   const evidencePresent = cacheExists ? cacheExists(cachePath) : (() => {
@@ -13904,9 +14411,10 @@ function runCloseNode(opts) {
     ? validateSchema2ReviewEvidence(opts, planContent0, nodeInfo, evidenceContent)
     : { ok: true, review_gate: false };
   if (!schema2Review.ok) {
-    return { result: 'refuse', reason: schema2Review.reason, detail: schema2Review.detail || null,
+    return relayTypedOutcome(schema2Review.reason, {
+      detail: schema2Review.detail || null,
       missingTokenClass: schema2Review.missingTokenClass || null, nodeId, role,
-      ...reviewRefusalDiagnostics(schema2Review) };
+      ...reviewRefusalDiagnostics(schema2Review) });
   }
   // See runRecordEvidence: the advisory collector is supplied on the SHIPPED path, not only by tests.
   const shapeAdvisories = [];
@@ -13919,15 +14427,24 @@ function runCloseNode(opts) {
     const reason = shapeCheck.evidenceStale ? 'evidence_stale'
       : shapeCheck.evidenceUnbound ? 'evidence_unbound'
       : (absent ? 'evidence_absent' : 'evidence_shape_failed');
-    return {
-      result: 'refuse',
-      reason,
+    const body = {
       missingTokenClass: shapeCheck.missingTokenClass || null,
       nodeId, role,
       expected: shapeCheck.expected || [],
       detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
       ...(shapeAdvisories.length ? { advisories: shapeAdvisories } : {}),
     };
+    // #871 — absence answers, the binding still refuses (see the twin in runCloseAndOpenNext).
+    // `evidence_source` matters MOST on this path: for a declared lane member the parent seed
+    // exists by construction and only the leg copy is missing, so `source: 'leg'` is the one place
+    // absence is not tautological at all — it means the leg agent produced nothing.
+    if (reason === 'evidence_absent') {
+      return answer(reason, Object.assign(body, {
+        evidence_source: resolvedEvidence.evidenceSource,
+        evidence: evidenceAbsenceReport(planPath, nodeId, role, resolvedEvidence, readFile),
+      }));
+    }
+    return Object.assign({ result: 'refuse', reason }, body);
   }
 
   // #403.4: non-blocking near-miss verdict warning (informational, per #328) — see runCloseAndOpenNext.
@@ -13994,6 +14511,10 @@ function runCloseNode(opts) {
     };
   }
 
+  // Lift the measured path set off the barrier envelope, one statement after the measurement — the
+  // same locator the fused close path records. (Mirror of runCloseAndOpenNext.)
+  const closeLocator = closeLocatorFromBarrier(barrierOut);
+
   const selectorCheck = barrierOut.selectorCheck || {};
   const selectorValidation = foldSelectorArms(planContent0, selectorCheck);
   if (!selectorValidation.ok) {
@@ -14002,10 +14523,28 @@ function runCloseNode(opts) {
 
   const reviewPrepared = prepareReviewClose(opts, {
     planContent: planContent0, nodes, nodeInfo, evidenceContent, command: 'close-node',
-    schema2Review,
+    schema2Review, closeLocator,
   });
   if (reviewPrepared && reviewPrepared.handled) return reviewPrepared.result;
   if (reviewPrepared) reviewBegun = reviewPrepared.begun;
+
+  // The overflow REPORT rides the same advisory carrier as every other non-blocking finding, so it
+  // reaches EVERY post-close success return (they all spread `...(verdictWarn || {})`) without editing
+  // each one. Durability is already covered — the paths are in the close provenance entry and the
+  // ledger row — but a finding the orchestrator never sees is one it cannot act on, and the whole
+  // point of converting the refusal was to keep the measurement visible rather than to hide it behind
+  // an exit code that no longer changes.
+  if (closeLocator && barrierOut.barrierCheck && barrierOut.barrierCheck.result === 'answer') {
+    const bc = barrierOut.barrierCheck;
+    verdictWarn = Object.assign({}, verdictWarn || {}, {
+      write_set_report: {
+        reason: bc.reason, outOfAllow: bc.outOfAllow || [],
+        actual_paths: closeLocator.actual_paths, declared: closeLocator.declared,
+        base: closeLocator.base || null, mutation_performed: false,
+      },
+      operator_hint: bc.operator_hint || getOperatorHint(bc.reason, { nodeId }),
+    });
+  }
 
   // -- (c) Close: ledger row in_progress -> complete (same #348 guard as close-and-open-next).
   let currentPlan = readFile(planPath);
@@ -14014,15 +14553,18 @@ function runCloseNode(opts) {
     return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
   }
   if (!closeResult.changed && !closeResult.alreadyAtTarget) {
-    return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+    return answer('close_transition_disallowed',
+      ledgerCasReport(nodeId, closeResult, 'complete', ['in_progress']));
   }
   if (closeResult.changed) currentPlan = closeResult.content;
 
   const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
   currentPlan = selectorFold.content;
+  // The locator rides the SAME plan write as the status flip (see runCloseAndOpenNext).
+  if (closeLocator) currentPlan = spliceLedgerWrote(currentPlan, nodeId, closeLocator.actual_paths).content;
   writeFile(planPath, currentPlan);
   if (selectorCheck.isSelector === true) reviewFailpoint(opts, 'selector_folded');
-  appendCloseSidecarsOnce(opts, nodeId);
+  appendCloseSidecarsOnce(opts, nodeId, closeLocator);
   transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
   transitions.push(...selectorFold.transitions);
 
@@ -14164,7 +14706,8 @@ function closeGroupMember(ctx) {
     const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
     if (!closeResult.found) return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
     if (!closeResult.changed && !closeResult.alreadyAtTarget) {
-      return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+      return answer('close_transition_disallowed',
+        ledgerCasReport(nodeId, closeResult, 'complete', ['in_progress']));
     }
     if (closeResult.changed) currentPlan = closeResult.content;
     // #833: the deferral used to be re-recorded as a `barrier: deferred_to_group` marker in a
@@ -14261,7 +14804,13 @@ function closeGroupMember(ctx) {
   } else {
     groupBarrier = shell(validatorPath, [planPath, '--group-barrier', '--group-id', lg.group_id, '--json']);
   }
-  if (groupBarrier.exitCode !== 0 || groupBarrier.result !== 'pass') {
+  // `answer` is the group barrier REPORTING an out-of-union write instead of refusing it: exit 0, no
+  // mutation, the measured paths on the envelope. It advances the close exactly like a pass — the
+  // finding rides the group barrier payload into the close record and survives to the pre-merge
+  // barrier, which still refuses an unattributed path. Only a genuine `refuse` (sensitive write with
+  // no reviewer, foreign archive, a leg missing from M, a broken group baseline) holds the close.
+  const groupBarrierBlocking = !(groupBarrier.result === 'pass' || groupBarrier.result === 'answer');
+  if (groupBarrier.exitCode !== 0 || groupBarrierBlocking) {
     // Typed refusal: NO ledger advance, lane_group untouched, group baseline retained. (A merge that
     // committed M before a union-barrier refuse leaves M on the branch — durable + recoverable; re-running
     // the synthesizer is idempotent, and the escape is repaired before the barrier can pass.)
@@ -14275,18 +14824,29 @@ function closeGroupMember(ctx) {
     };
   }
 
-  // Group barrier passed: close this member, clear lane_group, drop the group baseline.
+  // Group barrier passed (or reported): close this member, clear lane_group, drop the group baseline.
   let currentPlan = readFile(planPath);
   const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
   if (!closeResult.found) return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
   if (!closeResult.changed && !closeResult.alreadyAtTarget) {
-    return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+    return answer('close_transition_disallowed',
+      ledgerCasReport(nodeId, closeResult, 'complete', ['in_progress']));
   }
   if (closeResult.changed) currentPlan = closeResult.content;
+  // The group barrier measured the UNION over the whole lane group against the group baseline (or the
+  // merge commit), so the locator recorded on this last member's row is the group's set, not this
+  // member's alone. That is what was actually measured, and saying otherwise would be the invented
+  // number the record exists to avoid. The `base` field names the baseline it was measured against.
+  const groupLocator = closeLocatorFromBarrier(groupBarrier);
+  if (groupLocator) currentPlan = spliceLedgerWrote(currentPlan, nodeId, groupLocator.actual_paths).content;
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
-  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile),
-    opts.mainSessionDirect === true ? { main_session_direct: true } : undefined);
+  let groupCloseExtra;
+  if (opts.mainSessionDirect === true) groupCloseExtra = { main_session_direct: true };
+  // `scope` names WHICH set this is, so a reader never mistakes a lane-group union for one node's own
+  // writes. An absent scope is the per-node default.
+  if (groupLocator) groupCloseExtra = Object.assign(groupCloseExtra || {}, { scope: 'lane_group' }, groupLocator);
+  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile), groupCloseExtra);
   transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
 
   // Clear lane_group entirely + remove the member from running_set.nodes.
@@ -14364,13 +14924,34 @@ function classifyWriterReconcile(nodeId, bc) {
     return { node_id: nodeId, verdict: 'halt', reason: 'barrier_unavailable', outOfWriteSet: [] };
   }
   const outOfAllow = Array.isArray(bc.outOfAllow) ? bc.outOfAllow.slice() : [];
-  if (bc.result === 'refuse') {
+  // `answer` is the per-node barrier REPORTING a write-set overflow rather than refusing it. This
+  // classifier's verdict is NOT the barrier's, and it does not follow it here: reconcile is deciding
+  // whether to adopt the partial work of a writer that was KILLED, and out-of-declared-set paths from
+  // a dead writer are exactly the leaked-stray-edit hazard `halt` exists for. Reading `answer` as
+  // anything but the pre-conversion classification would silently change crash-recovery semantics as a
+  // side effect of an envelope change — and falling through to the token-unrecognized branch below
+  // would be worse still, relabelling a precisely-named finding as `barrier_unverifiable`.
+  if (bc.result === 'refuse' || bc.result === 'answer') {
     if (outOfAllow.length) {
       return { node_id: nodeId, verdict: 'halt', reason: bc.reason || 'write_set_overflow', outOfWriteSet: outOfAllow };
     }
     // No baseline recorded → the writer never wrote under tracking (crashed before it flipped/wrote);
     // there is nothing to reconcile, so adopt (vacuous) rather than wedge the common pending-crash path.
-    if (bc.reason === 'no_barrier_base') {
+    //
+    // #871 — MATCHED ON EITHER SPELLING, DELIBERATELY. This is the seam that decides whether a killed
+    // writer's partial work is adopted or the run wedges, and it is about to be fed by an envelope
+    // that is mid-conversion on the other side of the barrier. Today `--barrier-check` names the
+    // condition as `reason: 'no_barrier_base'`; the read-only `--base-freshness` reporter names the
+    // same fact as `findings: ['base_absent']`. Measured, both shapes exist in the tree right now.
+    // Keying on one alone makes this branch silently shape-dependent: if the converted envelope
+    // carried only `findings`, the `reason` test would miss and a vacuous adopt would fall through to
+    // the fail-closed halt below — turning the COMMON pending-crash path into a wedge as a side
+    // effect of an envelope change nobody thought was behavioural. Accepting either costs one
+    // clause and removes the coupling entirely. It cannot over-fire: the out-of-write-set halt is
+    // decided ABOVE this, so a report that also names stray paths never reaches here.
+    const baseAbsent = bc.reason === 'no_barrier_base'
+      || (Array.isArray(bc.findings) && bc.findings.indexOf('base_absent') >= 0);
+    if (baseAbsent) {
       return { node_id: nodeId, verdict: 'adopt', reason: 'no_baseline', outOfWriteSet: [] };
     }
     // Any other refusal (root/base integrity anomaly) is unresolvable here → fail-closed halt.
@@ -14707,10 +15288,11 @@ function runReconcileRunningSet(opts) {
   //           (the writer crashed before it wrote under tracking) — safe to keep / re-dispatch cleanly.
   //   halt  — changes touch paths OUTSIDE the declared set (the leaked-stray-edit hazard) OR the barrier is
   //           otherwise unresolvable (integrity anomaly / unavailable). NON-DESTRUCTIVE by design: reconcile
-  //           NEVER auto-deletes a production file (revert-overflow is destructive + consent-gated), so it
-  //           emits `halt` + the offending paths and hands the decision to the orchestrator/consent valve.
-  // `revert` stays in the typed vocabulary as the token the orchestrator MAY act on (via revert-overflow);
-  // reconcile itself only ever emits adopt|halt. Runs BEFORE the --drop-base loop below (which removes the
+  //           NEVER deletes a production file, so it emits `halt` + the offending paths and hands the
+  //           decision to the orchestrator/consent valve. Note the barrier now REPORTS an overflow rather
+  //           than refusing it; this verdict is reconcile's own and is unchanged — a dead writer's stray
+  //           edits are a different question from a live writer's close.
+  // Reconcile itself only ever emits adopt|halt. Runs BEFORE the --drop-base loop below (which removes the
   // baseline the diff needs). A read/gate member is never a writer → skipped. Fail-soft: a shell/parse error
   // yields a `halt` (fail-closed) verdict, never a throw.
   const writerReconciliation = [];
@@ -15220,9 +15802,15 @@ function runExpandOpen(opts) {
   const takenSan = new Map(nodes.map(n => [sanitizeNodeId(n.id), n.id]));
   for (const r of parsed.records) for (const u of r.units) { takenIds.add(u.id); takenSan.set(sanitizeNodeId(u.id), u.id); }
   for (const id of unitIds) {
-    if (takenIds.has(id)) return refuse('expansion_unit_id_collision', { node_id: nodeId, detail: 'derived unit id "' + id + '" already exists in this plan' });
+    // #871 — a derived unit id that is already taken is a CAS on the id namespace that lost. It
+    // reports: `field` names the namespace, `found` the id already holding it, and nothing is written.
+    if (takenIds.has(id)) return answer('expansion_unit_id_collision', { node_id: nodeId, nodeId,
+      record: 'ledger_row', field: 'unit_id', expected: [], found: id,
+      detail: 'derived unit id "' + id + '" already exists in this plan' });
     const san = sanitizeNodeId(id);
-    if (takenSan.has(san)) return refuse('expansion_unit_id_collision', { node_id: nodeId, detail: 'derived unit id "' + id + '" collides with "' + takenSan.get(san) + '" on the barrier key "' + san + '"' });
+    if (takenSan.has(san)) return answer('expansion_unit_id_collision', { node_id: nodeId, nodeId,
+      record: 'ledger_row', field: 'barrier_key', expected: [san], found: takenSan.get(san),
+      detail: 'derived unit id "' + id + '" collides with "' + takenSan.get(san) + '" on the barrier key "' + san + '"' });
     takenIds.add(id); takenSan.set(san, id);
   }
 
@@ -15522,9 +16110,20 @@ function runExpandClose(opts) {
   }
 
   const spliced = spliceLedgerNode(content, nodeId, 'complete', { allowFrom: ['pending', 'in_progress'] });
-  if (!spliced.found) return refuse('ledger_row_missing', { node_id: nodeId });
+  // CONSTRUCTED as refusals and converted one call later, deliberately — see schema.casLostAnswer.
+  // These two tokens have NO consumer anywhere (no routing surface, no validator, no suite, no doc),
+  // so they sit on the condition-consumer ratchet, and the ratchet's scanner indexes emission sites
+  // by constructor shape: `refuse('<token>')` it knows, a bare `answer('<token>')` it does not. Built
+  // the other way round these read as retired to the census while being emitted on every run, and
+  // the prescribed cure for a "retired" token is deleting its ratchet row — a false retirement made
+  // permanent. Same envelope either way; only the instrument can tell the difference, and it should.
+  if (!spliced.found) return casLostAnswer(refuse('ledger_row_missing', { node_id: nodeId, nodeId,
+    record: 'ledger_row', field: 'status', expected: ['pending', 'in_progress'], found: null,
+    target: 'complete' }));
   if (!spliced.changed && !spliced.alreadyAtTarget) {
-    return refuse('ledger_status_unexpected', { node_id: nodeId, detail: 'current status is "' + (ledger[nodeId] || 'unknown') + '"' });
+    return casLostAnswer(refuse('ledger_status_unexpected', Object.assign(
+      ledgerCasReport(nodeId, spliced, 'complete', ['pending', 'in_progress']),
+      { node_id: nodeId, detail: 'current status is "' + (ledger[nodeId] || 'unknown') + '"' })));
   }
   const stamp = (typeof now === 'function') ? now() : new Date().toISOString();
   const withDischarge = appendExpansionBlock(spliced.content,
@@ -16046,7 +16645,7 @@ function defaultSinkProgressProbe(opts, content) {
 // only the narrow allowband and `complete`-node declared write sets. On the planner's ordinary
 // all-concrete spine every sanctioned exit is closed BY CONSTRUCTION (`amend-surface` needs an
 // expansion-point row that shape lacks; `reopen-node` refuses over the live sink; re-plan needs a
-// FAILED review attempt when every review PASSED; `revert-overflow` discards a new file rather than attributing it). The
+// FAILED review attempt when every review PASSED). The
 // prescription manufactured the very refusal that blocked it.
 //
 // THE SHAPE OF THE FIX. ZERO regulation on HOW the fix is produced — inline for a trivial
@@ -17283,11 +17882,23 @@ function runRouteFindings(opts, project) {
   const outRel = '.cache/findings-route.json';
   const outPath = path.join(cacheDir, 'findings-route.json');
 
-  // 1. read the gate node's evidence.
+  // 1. read the gate node's evidence. #871: absent evidence ANSWERS at exit 0 — route-findings is
+  // read-only, writes no route file on this arm, and mutates nothing, so continuing consumes
+  // nothing the finding rests on.
   let evidence = '';
   try { evidence = readFile(evidencePath); }
   catch (_) {
-    return { result: 'refuse', reason: 'evidence_absent', nodeId, evidence_file: '.cache/' + nodeId + '.md' };
+    let routeRole = 'unknown';
+    try {
+      const rfNodes = parseNodesFromContent(readFile(planPath));
+      const rfNode = rfNodes.find(n => n.id === nodeId);
+      if (rfNode) routeRole = rfNode.role;
+    } catch (_) {}
+    return answer('evidence_absent', { nodeId, role: routeRole,
+      evidence_file: '.cache/' + nodeId + '.md',
+      evidence_source: 'parent',
+      evidence: evidenceAbsenceReport(planPath, nodeId, routeRole,
+        { cachePath: evidencePath, evidenceSource: 'parent' }, readFile) });
   }
 
   // 2-3. parse `finding:` lines into routing rows.
@@ -17664,15 +18275,29 @@ function main() {
   // scheduler subcommand body (exactly the worktree-split-guarded set), released in the finally below.
   // Two concurrent scheduler invocations on ONE project would otherwise both pass the advisory-only
   // in-memory coordination guard and lose updates via lockless whole-file read-modify-write (open-ready
-  // double-open; close-node whole-plan-rewrite clobber). Contention is a typed non-blocking refusal — one
-  // serial orchestrator is the designed model. A DEAD/crashed holder is NEVER auto-reclaimed (an
-  // unlink-based takeover double-acquires under concurrency — two takers holding the same stale decision
-  // each remove the other's fresh claim); it refuses with the DISTINCT scheduler_lock_stale reason whose
-  // operator hint names the single manual recovery (remove the lockfile from ONE session, then re-run) —
+  // double-open; close-node whole-plan-rewrite clobber). A DEAD/crashed holder is NEVER auto-reclaimed
+  // (an unlink-based takeover double-acquires under concurrency — two takers holding the same stale
+  // decision each remove the other's fresh claim); it reports the DISTINCT scheduler_lock_stale reason
+  // whose operator hint names the single recovery (the `unlock` verb, from ONE session, then re-run) —
   // so the lock never silently wedges the project while never risking a double-acquire. The read-only
   // subcommands (orient / mirror-project / record-evidence --verify) are NOT in the guarded set →
   // lock-free (byte-identical to pre-lock behavior; the serial single-orchestrator path acquires with
   // zero contention).
+  //
+  // #871 — CONTENTION IS AN ANSWER, NOT A REFUSAL. What is held here is a LOCK, not a lease: no
+  // expiry, no renewal, no recorded steal. The mutual exclusion is unchanged and the body still does
+  // not run; what changed is that "I did not run" is now a FIELD rather than an exit code, and the
+  // holder + liveness measurement rides out with it (`stale`, `held_for_ms`, `liveness{probe,
+  // signal_result, same_host, age_ms, staleness_threshold_ms}`) instead of being computed and thrown
+  // away one function earlier.
+  //
+  // THE CONTRACT THIS SHIPS WITH, and it is load-bearing: an exit-0 report with NO sanctioned way to
+  // take the lock would be strictly worse than the refusal it replaces — the mutation silently did not
+  // happen and the caller has nowhere to go. So the report always names its own exit. `acquired:false`
+  // + `mutation_performed:false` + `did_not_run` say the body was skipped; `retry_after` says what has
+  // to change first; and the route resolves to the verb that makes it change — `unlock` on the stale
+  // arm (holder-identity CAS, which `unlock` keeps and a real lease in a later issue will build on),
+  // an environment wait on the live arm. Run the named verb, then re-run the command.
   let schedulerLock = null;
   const schedulerLockRequired = SPLIT_GUARDED_SUBCOMMANDS.has(subcommand)
     && !(subcommand === 'record-evidence' && args.includes('--verify'));
@@ -17680,13 +18305,18 @@ function main() {
     const lockPath = path.join(cacheDir, SCHEDULER_LOCK_NAME);
     schedulerLock = acquireProjectLock(lockPath, { subcommand });
     if (!schedulerLock.ok) {
-      const out = decorateOperatorHint(refuse(schedulerLock.stale ? 'scheduler_lock_stale' : 'scheduler_locked', {
+      const out = decorateOperatorHint(answer(schedulerLock.stale ? 'scheduler_lock_stale' : 'scheduler_locked', {
         holder: schedulerLock.holder || null,
         lockPath,
+        stale: schedulerLock.stale,
+        held_for_ms: schedulerLock.held_for_ms != null ? schedulerLock.held_for_ms : null,
+        liveness: schedulerLock.liveness || null,
+        acquired: false,
+        did_not_run: subcommand,
+        retry_after: schedulerLock.stale ? 'unlock' : 'holder_exit',
       }));
       recordOutcome(out);
       process.stdout.write(JSON.stringify(out) + '\n');
-      process.exitCode = 1;
       return;
     }
   }
@@ -17940,14 +18570,6 @@ function main() {
         readdir: (d) => { try { return fs.readdirSync(d); } catch (_) { return []; } },
       });
     }
-  } else if (subcommand === 'revert-overflow') {
-    if (!nodeId) {
-      result = { result: 'refuse', errors: ['--node-id required for revert-overflow'] };
-    } else {
-      result = runRevertOverflow({
-        planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
-      });
-    }
   } else if (subcommand === 'repair-node') {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for repair-node'] };
@@ -18060,8 +18682,11 @@ function main() {
   // write itself fails CLOSED on an untrusted mainRoot (see writeRunProgressMirror) — a skipped mirror
   // is SILENT (no warn); only a genuine write FAILURE surfaces a `run_progress_mirror: "failed"` warn
   // field — never a refusal, never a nonzero exit; the barrier/close semantics are byte-unchanged.
+  // #871: `answer` joins `refuse` in the skip set for the same stated reason — a report did not
+  // mutate the ledger, so there is nothing to mirror. Leaving it out would have made the mirror
+  // fire on every converted arm, which is work on a path that by construction changed nothing.
   if (LEDGER_MUTATING_SUBCOMMANDS.has(subcommand)
-      && result && result.result !== 'refuse'
+      && result && result.result !== 'refuse' && result.result !== 'answer'
       && realRepoRoot !== mainRoot) {
     const mirrored = writeRunProgressMirror(mainRoot, project, planPath, readFile, subcommand, mainRootFromField);
     if (mirrored === false) result.run_progress_mirror = 'failed';
@@ -18090,6 +18715,16 @@ function main() {
   // was asked. Retiring a refusal CODE in favour of a route (R1/R3) does not make the arm succeed —
   // a caller reading exit 0 from `final-fix-commit` would be entitled to believe the fix was
   // recorded, and every caller written against this arm was written against non-zero.
+  //
+  // #871 — AND `answer` IS THE ANSWER TO THAT ARGUMENT, not an exception to it. The objection is
+  // sound and load-bearing: an exit code that stops meaning "the thing did not happen" is a caller
+  // silently misled. So the bit does not disappear, it MOVES ONTO THE ENVELOPE. An `answer` carries
+  // `mutation_performed: false` (and, at the sites where the distinction is finer, `acquired`,
+  // `unlocked`, `present`, `did_not_run`), which is strictly more than the exit code ever said —
+  // non-zero conflated "I refused", "I advise against", and "I could not". A caller that reads the
+  // field learns which; a caller that reads only the exit code was already being told the least
+  // useful version of the truth. `refuse` and `advise` are unchanged, and `final-fix-commit` — the
+  // arm this comment names — is not among the converted sites.
   if (result.result === 'refuse' || result.result === 'advise') {
     process.exitCode = 1;
   }
@@ -18126,6 +18761,11 @@ module.exports = {
   // today. Without the export the derivation is only assertable by re-reading source text.
   DEVIATION_ROUTES,
   spliceLedgerNode,
+  // The content-locator trio: lift the measured set off a barrier envelope, render one ledger cell,
+  // splice it into the row. Exported so each half is directly provable without driving a whole close.
+  closeLocatorFromBarrier,
+  renderWroteCell,
+  spliceLedgerWrote,
   readLedgerStatuses,
   // The same-kind, superset-proven dispatch swap + its record readers, exported for direct coverage
   // of the typed refusals and the plan/plan_hash byte-identity claim. The body classifier and its
@@ -18248,11 +18888,6 @@ module.exports = {
   runUnlock,
   runReopenNode,
   // #434 (D-434-01): repair primitives.
-  runRevertOverflow,
-  // Batch 0: the two default primitives behind revert-overflow's baseline partition, exported so
-  // the PRODUCTION path (not just the injected seams) is directly provable against a real repo.
-  gitPresentAtBase,
-  removeOverflowPaths,
   runRepairNode,
   // The bounded re-anchor verb + its lineage proof, and the commit-side candidate-triple twin the
   // reviewed-merged-parent identity check runs — exported for direct both-direction pins (the

@@ -344,9 +344,17 @@ try {
     }
     // The ledger is NOT hash-covered, so closing the child producer keeps plan_hash (and therefore
     // the state binding verifyAllEpochSnapshots asserts) intact.
+    //
+    // BOTH named certifiers close TOO, and that is a fixture correction rather than a convenience.
+    // `--finalize-check` now verifies gate EXECUTION, and a ledger that closes the producer while
+    // leaving its designated code and security certifiers `pending` is not a legal finalize state —
+    // no run could reach it. The fixture was encoding a bug: it asserted that a finalize sweep
+    // passes over an uncertified producer, which is exactly what gate execution exists to stop.
     const livePath = path.join(projectDir, 'workflow-plan.md');
     fs.writeFileSync(livePath, fs.readFileSync(livePath, 'utf8')
-      .replace('| child-impl | pending |', '| child-impl | complete |'));
+      .replace('| child-impl | pending |', '| child-impl | complete |')
+      .replace('| child-review | pending |', '| child-review | complete |')
+      .replace('| child-security | pending |', '| child-security | complete |'));
     return { root, project, projectDir, cacheDir, planPath: livePath };
   }
 
@@ -398,7 +406,7 @@ try {
 
   // #724 T4 (the security argument): a TAMPERED parent snapshot plan that widens the parent write set
   // to an attacker-chosen path must refuse `epoch_lineage_unverified` — never accept the path, and
-  // never mislabel it write_set_overflow (whose documented operator response, revert-overflow, would
+  // never mislabel it write_set_overflow (whose documented operator response, discarding the paths, would
   // destroy legitimate parent-epoch work).
   withFixture(fx => {
     const snapPlan = path.join(fx.cacheDir, 'epochs', '1', 'files', 'workflow-plan.md');
@@ -507,11 +515,69 @@ try {
     }
     fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'),
       'verdict: pass\nvalidated_candidate_hash: ' + h.json.validated_candidate_hash + '\n');
+    return h.json.validated_candidate_hash;
   };
+  // THE G4 CERTIFIER RECEIPTS. `--finalize-check` now verifies gate EXECUTION, which for a schema-2
+  // epoch means each named certifier must be `complete` AND carry a receipt bound to the CURRENT
+  // candidate. Without them this fixture asserts that a finalize sweep passes over an uncertified
+  // producer — a state no real run can reach.
+  //
+  // Every field is taken from the PRODUCTION resolvers (`resolveNamedCertifier` for the member set
+  // and the gate identity, `sha256Canonical` for its digest, the plan's own `## Meta` for the epoch
+  // anchors, and the candidate hash the fixture already computes). Reconstructing the identity
+  // object by hand here would make the receipt a stand-in for the thing under test: if the
+  // reconstruction drifted, the sweep would be validating my fabrication instead of a real receipt.
+  //
+  // MUTATION-PROVED that these receipts are CHECKED rather than rubber-stamped — three mutations of
+  // the fixture itself, each red at a DIFFERENT check, against a full-repo scratch mirror:
+  //   leave the security certifier pending (the pre-fix fixture)
+  //     -> "G4 security certifier execution ... must complete and cannot be pending or n/a"
+  //   bind the receipt to a STALE candidate digest
+  //     -> "G4 code certifier receipt ... lacks a current-candidate, role-specific sequence receipt"
+  //   give the receipt a blocking finding
+  //     -> "G4 code certifier reduction ... receipts do not produce a blocker-free approval"
+  // Three different checks means the receipt is being read, not merely counted.
+  const writeCertifierReceipts = (fx, candidateDigest) => {
+    const live = fs.readFileSync(fx.planPath, 'utf8');
+    const nodes = validator.parseNodes(live);
+    const meta = live.split('\n');
+    const metaValue = key => {
+      const hit = meta.find(l => l.startsWith(key + ':'));
+      return hit ? hit.slice(key.length + 1).trim() : '';
+    };
+    for (const [kind, field, role] of [
+      ['code', 'code_certifier', 'code-reviewer'],
+      ['security', 'security_certifier', 'security-reviewer'],
+    ]) {
+      const reference = metaValue(field);
+      if (!reference || reference === 'none') continue;
+      const resolved = validator.resolveNamedCertifier(nodes, reference, role);
+      if (!resolved) throw new Error('#753 fixture: ' + field + ' "' + reference + '" did not resolve');
+      const gateDigest = schema.sha256Canonical(resolved.identity);
+      for (const member of resolved.members) {
+        fs.writeFileSync(path.join(fx.cacheDir, member.id + '.md'), [
+          'evidence-binding: ' + member.id + ' fixture-' + member.id,
+          'verdict: pass',
+          'findings_blocking: 0',
+          'certifier_kind: ' + kind,
+          'certifier_aggregation: ' + resolved.aggregation,
+          'certifier_gate_digest: ' + gateDigest,
+          'certifier_epoch_lineage_id: ' + metaValue('epoch_lineage_id'),
+          'certifier_inherited_frontier_digest: ' + metaValue('inherited_frontier_digest'),
+          'certified_candidate_digest: ' + candidateDigest,
+        ].join('\n') + '\n');
+      }
+    }
+  };
+
   const finalizeCheck = fx => {
     alignChildAuthority(fx);
     commitAll(fx.root, 'fixture work');
-    recordAgentValidation(fx);
+    const candidateDigest = recordAgentValidation(fx);
+    // AFTER the candidate hash: the receipt binds to the tree as it stands at the sweep, so writing
+    // it earlier would bind a candidate that no longer exists. The receipts live under `.cache/**`,
+    // which the sweep treats as barrier-invisible, so writing them does not move the candidate.
+    writeCertifierReceipts(fx, candidateDigest);
     return val(fx.root, fx.planPath, ['--finalize-check', '--base', 'main', '--json']);
   };
 
@@ -523,7 +589,8 @@ try {
     assert(r.exitCode === 0 && r.json.result === 'pass',
       '#753 F1: a parent-epoch-declared, parent-complete write passes --finalize-check '
       + '(got ' + r.json.result + '/' + r.json.reason + ' unattributed='
-      + JSON.stringify(r.json.unattributed) + ')');
+      + JSON.stringify(r.json.unattributed) + ' unsatisfied='
+      + JSON.stringify(r.json.unsatisfied) + ')');
   });
 
   // #753 F2: a path declared by NOBODY in the lineage still refuses `unattributed_change` — the union

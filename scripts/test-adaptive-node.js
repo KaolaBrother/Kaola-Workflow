@@ -51,7 +51,6 @@ const {
   runVerifyEvidence,
   seedEvidenceFile,
   // #434: repair primitives
-  runRevertOverflow,
   runRepairNode,
   // #440: triage classifier
   computeTriage,
@@ -106,9 +105,6 @@ const {
   proveReanchorProvenance,
   candidateTripleForCommit,
   candidateTripleFromListing,
-  // Batch 0: the two default primitives behind revert-overflow's baseline partition.
-  gitPresentAtBase,
-  removeOverflowPaths,
 } = require('./kaola-workflow-adaptive-node');
 const {
   RUNNING_SET_NAME,
@@ -14580,7 +14576,10 @@ scenario(() => {
   });
 
   // SYNTH-UNION-ESCAPE (B1 belt-and-suspenders): a COMMITTED out-of-union path in M is caught by the
-  //   commit diff (write_set_overflow) — the union barrier rejects an escape even if it slipped a per-leg gate.
+  //   commit diff (write_set_overflow) — the union barrier NAMES an escape even if it slipped a per-leg
+  //   gate. The group barrier runs AFTER the synthesis merge, so refusing here could not have prevented
+  //   the both-apply the per-leg barrier still refuses; what matters is that the path is not silent, and
+  //   the pre-merge whole-plan barrier still refuses it before mainline.
   scenario(() => {
     const { repoRoot, legA, legB } = provisionedRepo();
     fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
@@ -14591,7 +14590,9 @@ scenario(() => {
     G.exec(repoRoot, ['merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q);
     const M = gitOut(repoRoot, ['rev-parse', 'HEAD']);
     const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
-    assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'SYNTH-UNION-ESCAPE: an out-of-union committed path in M refuses write_set_overflow, got ' + JSON.stringify(r));
+    assert(r.result === 'answer' && r.reason === 'write_set_overflow'
+      && Array.isArray(r.outOfAllow) && r.outOfAllow.indexOf('zz.js') >= 0,
+      'SYNTH-UNION-ESCAPE: an out-of-union committed path in M is NAMED write_set_overflow, got ' + JSON.stringify(r));
     cleanup(repoRoot);
   });
 
@@ -16969,265 +16970,10 @@ scenario(() => {
 }
 
 // ---------------------------------------------------------------------------
-// #434 Fixture (a) — revert-overflow: runRevertOverflow clears outOfAllow paths.
-// RED: fails because runRevertOverflow is not yet exported.
+// DELETED with the verb they judged: #434 Fixture (a) (runRevertOverflow clears outOfAllow) and
+// BATCH 0 PARTITION (the baseline-presence probe + the unlink primitive). The discard verb is gone,
+// so these are not pins that were relaxed — there is no behaviour left for them to describe.
 // ---------------------------------------------------------------------------
-scenario(() => {
-  const planNodes = [
-    '| impl | implementer | — | scripts/a.js | 1 | sequence |',
-    '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| finalize | finalize | review | — | 1 | sequence |',
-  ];
-  let planContent = makePlan([
-    '| impl | in_progress | |',
-    '| review | pending | |',
-    '| finalize | pending | |',
-  ], planNodes);
-
-  // Barrier check: impl overflowed — wrote scripts/b.js (not in write set).
-  // Fake a barrier result: pass on second call (after revert), fail on first.
-  let barrierCallCount = 0;
-  const reverted = [];
-  const provenanceEntries = [];
-
-  const result = runRevertOverflow({
-    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
-    project: 'test-project',
-    nodeId: 'impl',
-    // Shell seam: --barrier-check returns the overflow first, then passes after revert.
-    // #546 G10: commit-node's combineResults NESTS outOfAllow under barrierCheck — use that
-    // REALISTIC shape (not a top-level outOfAllow) so the test exercises the production path that
-    // a top-level-only read would mask as a false "barrier already clean".
-    shell: (scriptPath, args) => {
-      const base = path.basename(scriptPath);
-      if (base === 'kaola-workflow-commit-node.js') {
-        // Simulate barrier-check: first call overflowed, second call passes after revert.
-        barrierCallCount++;
-        if (barrierCallCount === 1) {
-          return { exitCode: 1, result: 'refuse', barrierCheck: { reason: 'write_set_overflow', outOfAllow: ['scripts/b.js'] } };
-        }
-        return { exitCode: 0, result: 'pass', barrierCheck: { reason: null, outOfAllow: [] } };
-      }
-      return { exitCode: 0, result: 'pass', barrierCheck: { reason: null, outOfAllow: [] } };
-    },
-    // gitCheckout seam: records reverted paths.
-    gitCheckout: (barrierRoot, sha, filePaths) => {
-      for (const p of filePaths) reverted.push(p);
-      return { exitCode: 0 };
-    },
-    // Batch 0: the partition probe. This fixture's overflow file EXISTS at the baseline, so the
-    // whole set routes to checkout — the original #434-a narrative, now stated rather than assumed.
-    presentAtBase: (barrierRoot, sha, filePaths) => filePaths.slice(),
-    readFile: (f) => {
-      if (f.endsWith('workflow-plan.md')) return planContent;
-      if (f.endsWith('barrier-base-impl')) return 'deadbeef1234567890ab\n';
-      throw new Error('ENOENT ' + f);
-    },
-    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
-    cacheExists: (f) => f.endsWith('barrier-base-impl'),
-    appendLog: (entry) => provenanceEntries.push(entry),
-  });
-
-  assert(result !== undefined, '#434-a RED: runRevertOverflow exported (would be undefined/throw if missing)');
-  assert(result && result.result === 'ok', '#434-a: revert-overflow returns ok, got ' + JSON.stringify(result));
-  assert(reverted.includes('scripts/b.js'), '#434-a: outOfAllow path scripts/b.js reverted');
-  assert(result.revertedPaths && result.revertedPaths.includes('scripts/b.js'),
-    '#434-a: result.revertedPaths includes scripts/b.js, got ' + JSON.stringify(result));
-  assert(result.barrierClearedAfterRevert === true,
-    '#434-a: barrierClearedAfterRevert true after revert, got ' + JSON.stringify(result));
-  assert(JSON.stringify(result.checkedOutPaths) === JSON.stringify(['scripts/b.js'])
-    && JSON.stringify(result.deletedPaths) === JSON.stringify([]),
-    '#434-a: a baseline-tracked overflow is reported as checked out, with an empty delete set, got ' + JSON.stringify(result));
-});
-
-// ---------------------------------------------------------------------------
-// BATCH 0 — revert-overflow partitions outOfAllow against the baseline tree.
-//
-// THE DEFECT THIS CLOSES. `git checkout <baseSha> -- <path>` cannot restore a path that did not
-// exist at baseSha, and every overflow path travelled in ONE invocation, so a single newly-created
-// undeclared file made the WHOLE revert refuse `git_checkout_failed` — including the siblings that
-// would have reverted cleanly. Newly-created files are the DOMINANT overflow class since test writes
-// became attributable, so the discard primitive failed on exactly the case it is most reached for,
-// and the `unattributed_paths` route dead-ended where it is most reached.
-//
-// WHAT IS PINNED, in both directions: the mixed GREEN arc (some restored, some deleted, both sets
-// reported separately); the pure-delete arc that used to be a hard refusal; the fail-CLOSED probe
-// (an unreadable baseline tree must never be guessed past, because guessing "absent" DELETES a file
-// the baseline still holds); and the ordering guarantee that a failed restore deletes nothing.
-// ---------------------------------------------------------------------------
-scenario(() => {
-  const planNodes = [
-    '| impl | implementer | — | scripts/a.js | 1 | sequence |',
-    '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| finalize | finalize | review | — | 1 | sequence |',
-  ];
-  const basePlan = () => makePlan([
-    '| impl | in_progress | |',
-    '| review | pending | |',
-    '| finalize | pending | |',
-  ], planNodes);
-
-  // A driver that runs runRevertOverflow over a declared overflow set with declared baseline
-  // membership, capturing exactly which primitive each path was handed to.
-  const drive = (overflow, presentAtBase, over) => {
-    let planContent = basePlan();
-    const checkedOut = [];
-    const removed = [];
-    let barrierCalls = 0;
-    const opts = Object.assign({
-      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
-      project: 'test-project',
-      nodeId: 'impl',
-      shell: (scriptPath, args) => {
-        if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') {
-          barrierCalls++;
-          if (barrierCalls === 1) {
-            return { exitCode: 1, result: 'refuse', barrierCheck: { reason: 'write_set_overflow', outOfAllow: overflow.slice() } };
-          }
-          return { exitCode: 0, result: 'pass', barrierCheck: { reason: null, outOfAllow: [] } };
-        }
-        return { exitCode: 0, result: 'pass' };
-      },
-      gitCheckout: (root, sha, filePaths) => { checkedOut.push(...filePaths); return { exitCode: 0 }; },
-      presentAtBase: () => presentAtBase.slice(),
-      removePaths: (root, filePaths) => { removed.push(...filePaths); return { exitCode: 0, removed: filePaths.slice() }; },
-      readFile: (f) => {
-        if (f.endsWith('workflow-plan.md')) return planContent;
-        if (f.endsWith('barrier-base-impl')) return 'deadbeef1234567890ab\n';
-        throw new Error('ENOENT ' + f);
-      },
-      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
-      cacheExists: (f) => f.endsWith('barrier-base-impl'),
-      appendLog: () => {},
-    }, over || {});
-    return { result: runRevertOverflow(opts), checkedOut, removed };
-  };
-
-  // (a) MIXED — one pre-existing file, one newly created. Pre-Batch-0 this refused outright.
-  {
-    const { result, checkedOut, removed } = drive(
-      ['scripts/b.js', 'scripts/new.js'], ['scripts/b.js']);
-    assert(result.result === 'ok',
-      'BATCH0-REVERT-a: a mixed overflow (one tracked, one new) succeeds instead of refusing, got ' + JSON.stringify(result));
-    assert(JSON.stringify(checkedOut) === JSON.stringify(['scripts/b.js']),
-      'BATCH0-REVERT-a: ONLY the baseline-tracked path is handed to git checkout, got ' + JSON.stringify(checkedOut));
-    assert(JSON.stringify(removed) === JSON.stringify(['scripts/new.js']),
-      'BATCH0-REVERT-a: ONLY the newly-created path is handed to the delete primitive, got ' + JSON.stringify(removed));
-    assert(JSON.stringify(result.checkedOutPaths) === JSON.stringify(['scripts/b.js'])
-      && JSON.stringify(result.deletedPaths) === JSON.stringify(['scripts/new.js']),
-      'BATCH0-REVERT-a: the two sets are REPORTED separately (restore is reversible, delete is not), got ' + JSON.stringify(result));
-    assert(JSON.stringify(result.revertedPaths) === JSON.stringify(['scripts/b.js', 'scripts/new.js']),
-      'BATCH0-REVERT-a: revertedPaths stays the union in outOfAllow order (existing consumers unbroken), got ' + JSON.stringify(result));
-  }
-
-  // (b) PURE DELETE — the dominant overflow class, and the exact case that used to dead-end.
-  {
-    const { result, checkedOut, removed } = drive(['scripts/new1.js', 'scripts/new2.js'], []);
-    assert(result.result === 'ok',
-      'BATCH0-REVERT-b: an all-newly-created overflow succeeds (the dead-end this batch removes), got ' + JSON.stringify(result));
-    assert(checkedOut.length === 0,
-      'BATCH0-REVERT-b: git checkout is not invoked at all when nothing pre-existed, got ' + JSON.stringify(checkedOut));
-    assert(JSON.stringify(removed) === JSON.stringify(['scripts/new1.js', 'scripts/new2.js']),
-      'BATCH0-REVERT-b: both new files are deleted, got ' + JSON.stringify(removed));
-    assert(result.barrierClearedAfterRevert === true,
-      'BATCH0-REVERT-b: the re-run barrier confirms the overflow cleared, got ' + JSON.stringify(result));
-  }
-
-  // (c) FAIL-CLOSED probe — an unreadable baseline tree refuses and touches NOTHING. Guessing
-  //     "absent" here would delete a file the baseline still holds.
-  {
-    const { result, checkedOut, removed } = drive(['scripts/b.js'], [], {
-      presentAtBase: () => { throw new Error('fatal: not a valid object name deadbeef'); },
-    });
-    assert(result.result === 'refuse' && result.reason === 'baseline_partition_unavailable',
-      'BATCH0-REVERT-c: an unreadable baseline tree refuses baseline_partition_unavailable, got ' + JSON.stringify(result));
-    assert(checkedOut.length === 0 && removed.length === 0,
-      'BATCH0-REVERT-c: nothing is restored and nothing is deleted on the fail-closed probe');
-    assert(getOperatorHint('baseline_partition_unavailable', result).length > 0,
-      'BATCH0-REVERT-c: the new refusal carries an operator hint');
-  }
-
-  // (d) ORDER — a failed restore must delete NOTHING. The destructive half runs only after the
-  //     reversible half has landed, so a half-applied revert can never destroy unrecoverable bytes.
-  {
-    const { result, checkedOut, removed } = drive(['scripts/b.js', 'scripts/new.js'], ['scripts/b.js'], {
-      gitCheckout: () => ({ exitCode: 1 }),
-    });
-    assert(result.result === 'refuse' && result.reason === 'git_checkout_failed',
-      'BATCH0-REVERT-d: a failed restore still refuses git_checkout_failed, got ' + JSON.stringify(result));
-    assert(removed.length === 0,
-      'BATCH0-REVERT-d: NOTHING was deleted when the restore half failed, got ' + JSON.stringify(removed));
-    assert(JSON.stringify(result.deletedPaths) === JSON.stringify([]),
-      'BATCH0-REVERT-d: the refusal reports an empty delete set, got ' + JSON.stringify(result));
-    assert(checkedOut.length === 0, 'BATCH0-REVERT-d: the failing seam recorded no successful restore');
-  }
-
-  // (e) A FAILED DELETE is its own typed refusal, and reports what it did manage to remove.
-  {
-    const { result } = drive(['scripts/new1.js', 'scripts/new2.js'], [], {
-      removePaths: () => ({ exitCode: 1, removed: ['scripts/new1.js'], detail: 'EACCES' }),
-    });
-    assert(result.result === 'refuse' && result.reason === 'overflow_delete_failed',
-      'BATCH0-REVERT-e: a failed delete refuses overflow_delete_failed, got ' + JSON.stringify(result));
-    assert(JSON.stringify(result.deletedPaths) === JSON.stringify(['scripts/new1.js']),
-      'BATCH0-REVERT-e: the refusal reports the partial removal so the operator knows the real state, got ' + JSON.stringify(result));
-  }
-});
-
-// ---------------------------------------------------------------------------
-// BATCH 0 — the two DEFAULT primitives, against a REAL git repository.
-//
-// The seam-driven scenarios above prove the partition LOGIC. They cannot prove the primitives the
-// production path actually uses, because they replace them. A partition whose probe misreports
-// membership deletes files the baseline still holds, so the defaults are exercised directly here.
-// ---------------------------------------------------------------------------
-scenario(() => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-batch0-partition-'));
-  try {
-    const g = (args) => execFixtureFileSync('git', ['-C', repoRoot, ...args],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']);
-    g(['config', 'commit.gpgsign', 'false']);
-    fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, 'scripts', 'tracked.js'), 'module.exports = 1;\n');
-    fs.writeFileSync(path.join(repoRoot, 'scripts', 'with space.js'), 'module.exports = 2;\n');
-    g(['add', '-A']); g(['commit', '-m', 'init']);
-    const baseSha = g(['rev-parse', 'HEAD']).trim();
-
-    // A newly-created undeclared file, plus an edit to a tracked one.
-    fs.writeFileSync(path.join(repoRoot, 'scripts', 'brand-new.js'), 'module.exports = 3;\n');
-    fs.writeFileSync(path.join(repoRoot, 'scripts', 'tracked.js'), 'module.exports = 99;\n');
-
-    const overflow = ['scripts/tracked.js', 'scripts/brand-new.js', 'scripts/with space.js'];
-    const present = gitPresentAtBase(repoRoot, baseSha, overflow);
-    assert(present.indexOf('scripts/tracked.js') >= 0 && present.indexOf('scripts/with space.js') >= 0,
-      'BATCH0-PARTITION: the real probe reports baseline-tracked paths as present (incl. one with a space), got ' + JSON.stringify(present));
-    assert(present.indexOf('scripts/brand-new.js') < 0,
-      'BATCH0-PARTITION: the real probe reports a newly-created file as ABSENT from the baseline, got ' + JSON.stringify(present));
-
-    const removal = removeOverflowPaths(repoRoot, ['scripts/brand-new.js']);
-    assert(removal.exitCode === 0 && JSON.stringify(removal.removed) === JSON.stringify(['scripts/brand-new.js']),
-      'BATCH0-PARTITION: the real delete primitive removes the new file, got ' + JSON.stringify(removal));
-    assert(!fs.existsSync(path.join(repoRoot, 'scripts', 'brand-new.js')),
-      'BATCH0-PARTITION: the new file is gone from the worktree');
-    // Idempotent: re-removing an already-absent path is a no-op, so a crashed retry converges.
-    const again = removeOverflowPaths(repoRoot, ['scripts/brand-new.js']);
-    assert(again.exitCode === 0 && again.removed.length === 0,
-      'BATCH0-PARTITION: removing an already-absent path is an idempotent no-op, got ' + JSON.stringify(again));
-    // A DIRECTORY is never followed — the primitive refuses rather than recursing.
-    fs.mkdirSync(path.join(repoRoot, 'scripts', 'adir'));
-    const dir = removeOverflowPaths(repoRoot, ['scripts/adir']);
-    assert(dir.exitCode !== 0 && fs.existsSync(path.join(repoRoot, 'scripts', 'adir')),
-      'BATCH0-PARTITION: a directory is refused, never recursively removed, got ' + JSON.stringify(dir));
-    // A bad baseline throws, which is what makes the caller fail CLOSED.
-    let threw = false;
-    try { gitPresentAtBase(repoRoot, '0000000000000000000000000000000000000000', ['scripts/tracked.js']); }
-    catch (_) { threw = true; }
-    assert(threw, 'BATCH0-PARTITION: an unresolvable baseline THROWS, so the caller refuses instead of guessing');
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
 
 // ---------------------------------------------------------------------------
 // #434 Fixture (b) — repair-node: runRepairNode reopens writer with ORIGINAL barrier-base.
@@ -17657,8 +17403,8 @@ scenario(() => {
     'T-440-A: triage.class === write_set_overflow, got ' + result440a.triage.class);
   assert(Array.isArray(result440a.triage.proposed_repair && result440a.triage.proposed_repair.paths),
     'T-440-A: proposed_repair.paths is an array');
-  assert(result440a.triage.proposed_repair.kind === 'revert_overflow',
-    'T-440-A: proposed_repair.kind === revert_overflow for write_set_overflow, got ' + result440a.triage.proposed_repair.kind);
+  assert(result440a.triage.proposed_repair.kind === 'amend_surface',
+    'T-440-A: proposed_repair.kind === amend_surface for write_set_overflow (ATTRIBUTE the paths — the discard proposal is retired with the verb), got ' + result440a.triage.proposed_repair.kind);
 });
 
 // ---------------------------------------------------------------------------
@@ -17825,7 +17571,7 @@ scenario(() => {
     { reason: 'barrier_failed',     ctx: { nodeId: 'impl-x' },           wantHintSubstring: 'impl-x' },
     { reason: 'evidence_absent',    ctx: { nodeId: 'n1', role: 'tdd-guide' }, wantHintSubstring: 'n1' },
     { reason: 'halt_pending',       ctx: {},                              wantHintSubstring: 'clear-halt' },
-    { reason: 'write_set_overflow', ctx: { nodeId: 'writer' },           wantHintSubstring: 'revert-overflow' },
+    { reason: 'write_set_overflow', ctx: { nodeId: 'writer' },           wantHintSubstring: 'amend-surface' },
     { reason: 'invalid_project',    ctx: { detail: 'must be issue-N' },  wantHintSubstring: 'issue-N' },
   ];
 
@@ -20188,14 +19934,19 @@ scenario(() => {
     g(['add', '-A']); g(['commit', '-m', 'init']);
     return { repoRoot, project, planPath, cacheDir };
   }
-  function runNode(repoRoot, subArgs, extraEnv) {
+  // `stdin` is the 4th parameter and it is load-bearing for the --stdin subcommands: without an
+  // `input` option execFileSync hands the child an EMPTY pipe, so a call that passes evidence text
+  // and no `stdin` is reading nothing. Passing it here is what lets a --stdin arm be driven for real.
+  function runNode(repoRoot, subArgs, extraEnv, stdin) {
     const env = Object.assign({}, process.env, extraEnv || {});
+    const opts = { cwd: repoRoot, encoding: 'utf8', env };
+    if (stdin !== undefined) opts.input = stdin;
     try {
       // The per-scenario vehicle for the adaptive-node CLI. Every scenario drives it as a CHAIN:
       // one process writes the ledger row, the barrier baseline and the .cache evidence and EXITS,
       // and the next re-derives the whole run state from those bytes with no shared heap.
       // spawn-class: durable-handoff
-      const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
+      const stdout = execFileSync('node', [NODE_CLI, ...subArgs], opts);
       let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...parsed };
     } catch (err) {
@@ -20250,18 +20001,36 @@ scenario(() => {
   }
   function raceTwo(repoRoot, argv1, argv2) { return raceN(repoRoot, [argv1, argv2]); }
 
-  // -- T-585-live-refuse: a LIVE holder's lock makes a guarded subcommand refuse scheduler_locked with
-  //    ZERO mutation. RED: the advisory-only pre-fix CLI ignores the inert lock and co-opens the frontier. --
+  // -- T-585-live-refuse: a LIVE holder's lock keeps a guarded subcommand's body from running, with
+  //    ZERO mutation. RED: the advisory-only pre-fix CLI ignores the inert lock and co-opens the frontier.
+  //
+  //    THE MUTUAL EXCLUSION IS THE SUBJECT; the exit code never was. Contention is now an ANSWER at
+  //    exit 0, so "the frontier was not opened" has to be read off the ENVELOPE — `acquired:false`,
+  //    `mutation_performed:false`, and `did_not_run` naming the subcommand that was skipped. Pinning
+  //    only the new exit would pin the one thing that carries no enforcement; these three fields plus
+  //    the untouched ledger / running-set / lockfile ARE the enforcement claim.
+  //
+  //    And the measurement rides out with it. The holder + liveness block is what the refusal computed
+  //    one function earlier and threw away; asserting it here is what stops a later "simplification"
+  //    from keeping the report and deleting the probe behind it. --
   {
     const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
     fs.writeFileSync(path.join(cacheDir, SCHEDULER_LOCK_NAME),
       JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }));
     const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
-    assert(r.result === 'refuse' && r.reason === 'scheduler_locked',
-      'T-585-live-refuse: open-ready refuses scheduler_locked under a live holder, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
-    assert(r.exitCode === 1, 'T-585-live-refuse: non-zero exit on contention');
-    assert(typeof r.operator_hint === 'string' && r.operator_hint.length > 0, 'T-585-live-refuse: typed operator_hint present');
-    assert(fs.existsSync(path.join(cacheDir, SCHEDULER_LOCK_NAME)), 'T-585-live-refuse: the live holder lock is NOT removed by the refused caller');
+    assert(r.result === 'answer' && r.reason === 'scheduler_locked' && r.exitCode === 0,
+      'T-585-live-refuse: open-ready under a live holder REPORTS scheduler_locked at exit 0 — the token survives the conversion, got ' + JSON.stringify({ result: r.result, reason: r.reason, exitCode: r.exitCode }));
+    assert(r.acquired === false && r.mutation_performed === false && r.did_not_run === 'open-ready',
+      'T-585-live-refuse: ...and the envelope says IN FIELDS what the exit code used to say — the body did not run, got ' + JSON.stringify({ acquired: r.acquired, mutation_performed: r.mutation_performed, did_not_run: r.did_not_run }));
+    assert(r.stale === false && r.liveness && r.liveness.stale === false && r.liveness.signal_result === 'alive'
+      && r.holder && r.holder.pid === process.pid,
+      'T-585-live-refuse: ...carrying the holder + liveness MEASUREMENT the refusal computed and discarded, got ' + JSON.stringify({ stale: r.stale, liveness: r.liveness, holder: r.holder }));
+    assert(r.retry_after === 'holder_exit' && r.refusal_family === 'kernel_lock_held'
+      && r.refusal_route && r.refusal_route.verb === 'environment',
+      'T-585-live-refuse: ...and the route is the environment WAIT, never the unlock verb — a live holder\'s lock is never taken, got ' + JSON.stringify({ retry_after: r.retry_after, refusal_family: r.refusal_family, refusal_route: r.refusal_route }));
+    assert(typeof r.operator_hint === 'string' && /did not run/.test(r.operator_hint),
+      'T-585-live-refuse: typed operator_hint states the body was skipped, got ' + JSON.stringify(r.operator_hint));
+    assert(fs.existsSync(path.join(cacheDir, SCHEDULER_LOCK_NAME)), 'T-585-live-refuse: the live holder lock is NOT removed by the reporting caller');
     const st = ledgerStatuses(planPath);
     assert(st.ra === 'pending' && st.rb === 'pending', 'T-585-live-refuse: ledger unchanged (no in_progress) — zero mutation');
     assert(readRS(cacheDir) === null, 'T-585-live-refuse: no running set written');
@@ -20269,19 +20038,53 @@ scenario(() => {
   }
 
   // record-evidence mutates the same project cache and therefore shares the scheduler lock.
+  //
+  // THE FIXTURE HAS TO BE ONE WHERE THE WRITE WOULD LAND, or the zero-write half measures nothing.
+  // Against a `pending` ra this call loses the evidence_generation CAS and writes nothing whether the
+  // lock exists or not — measured: with the lockfile removed entirely it still comes back
+  // `refuse`/`evidence_generation_stale` and never touches ra.md — so "the bytes are unchanged" held
+  // with the lock guard deleted. Opening the frontier first and binding the evidence to THIS open's
+  // recorded baseline makes it a call that succeeds on its own, which is what makes the unchanged
+  // bytes an observation ABOUT THE LOCK.
+  //
+  // #871: the arm now ANSWERS at exit 0, and an exit-0 report with no way to tell recorded from
+  // not-recorded would be strictly WORSE than the refusal it replaces. So this pins the discriminator
+  // in both directions — the report carries `did_not_run` / `mutation_performed:false` and NEITHER of
+  // the two fields the success envelope uses (`wrote`, `bytes`) — and then walks the named route: the
+  // live holder finishes, the identical submission lands. A report whose route dead-ends is the defect
+  // the conversion has to not have.
   {
     const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
-    fs.writeFileSync(path.join(cacheDir, 'barrier-base-ra'), 'dddddddddddd-rest\n');
+    const opened = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert(opened.result === 'ok' && Array.isArray(opened.opened) && opened.opened.length === 2,
+      'R1-LOCK precondition: the read frontier is co-open, so recording ra\'s evidence is a call that WOULD land, got ' + JSON.stringify({ result: opened.result, reason: opened.reason }));
+    const nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-ra'), 'utf8').trim().slice(0, 12);
+    const evidence = 'evidence-binding: ra ' + nonce + '\nfindings: none\n';
     const evidencePath = path.join(cacheDir, 'ra.md');
-    const before = fs.existsSync(evidencePath) ? fs.readFileSync(evidencePath, 'utf8') : null;
-    fs.writeFileSync(path.join(cacheDir, SCHEDULER_LOCK_NAME),
-      JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }));
-    const r = runNode(repoRoot, ['record-evidence', '--project', project, '--node-id', 'ra', '--stdin', '--json'], {},
-      'evidence-binding: ra dddddddddddd\nverdict: pass\nfindings_blocking: 0\n');
-    assert(r.result === 'refuse' && r.reason === 'scheduler_locked',
-      'R1-LOCK: record-evidence refuses under a live project-lock holder');
-    assert((fs.existsSync(evidencePath) ? fs.readFileSync(evidencePath, 'utf8') : null) === before,
-      'R1-LOCK: lock contention leaves evidence bytes unchanged');
+    const before = fs.readFileSync(evidencePath, 'utf8');
+    const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+    fs.writeFileSync(lockFile,
+      JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'close-node' }));
+    const r = runNode(repoRoot, ['record-evidence', '--project', project, '--node-id', 'ra', '--stdin', '--json'], {}, evidence);
+    assert(r.result === 'answer' && r.reason === 'scheduler_locked' && r.exitCode === 0,
+      'R1-LOCK: record-evidence under a live project-lock holder REPORTS scheduler_locked at exit 0, got ' + JSON.stringify({ result: r.result, reason: r.reason, exitCode: r.exitCode }));
+    assert(r.mutation_performed === false && r.acquired === false && r.did_not_run === 'record-evidence',
+      'R1-LOCK: ...and the envelope says in FIELDS that the recording did not happen, got ' + JSON.stringify({ mutation_performed: r.mutation_performed, acquired: r.acquired, did_not_run: r.did_not_run }));
+    assert(r.wrote === undefined && r.bytes === undefined,
+      'R1-LOCK: ...and carries NEITHER field the success envelope uses, so exit 0 can never be read as "recorded", got ' + JSON.stringify({ wrote: r.wrote, bytes: r.bytes }));
+    assert(fs.readFileSync(evidencePath, 'utf8') === before,
+      'R1-LOCK: lock contention leaves ra.md at the open-seeded bytes — nothing was recorded');
+    // FOLLOW THE ROUTE. `retry_after: holder_exit` / route verb `environment`: there is no unlock on a
+    // LIVE holder by design, so the sanctioned exit is the holder finishing and releasing its own lock.
+    assert(r.retry_after === 'holder_exit' && r.refusal_route && r.refusal_route.verb === 'environment'
+      && r.refusal_route.args && r.refusal_route.args.wait_on === process.pid,
+      'R1-LOCK: the route out is the environment wait, naming the live holder to wait on, got ' + JSON.stringify({ retry_after: r.retry_after, refusal_route: r.refusal_route }));
+    fs.unlinkSync(lockFile);
+    const ok = runNode(repoRoot, ['record-evidence', '--project', project, '--node-id', 'ra', '--stdin', '--json'], {}, evidence);
+    assert(ok.result === 'ok' && ok.exitCode === 0 && typeof ok.wrote === 'string' && ok.bytes > 0,
+      'R1-LOCK: ARRIVE GREEN — once the holder releases, the identical submission records, got ' + JSON.stringify({ result: ok.result, reason: ok.reason, wrote: ok.wrote, bytes: ok.bytes }));
+    assert(fs.readFileSync(evidencePath, 'utf8') === evidence,
+      'R1-LOCK: ...and the bytes on disk are the ones the caller submitted, so the report cost the write nothing but a retry');
     cleanup(repoRoot);
   }
 
@@ -20302,9 +20105,16 @@ scenario(() => {
     const stalePayload = JSON.stringify({ pid: deadPid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
     fs.writeFileSync(lockFile, stalePayload);
     const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
-    assert(r.result === 'refuse' && r.reason === 'scheduler_lock_stale',
-      'T-585-stale-refuse: dead-holder lock → typed scheduler_lock_stale refusal (no auto-takeover), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
-    assert(r.exitCode === 1, 'T-585-stale-refuse: non-zero exit on the stale refusal');
+    assert(r.result === 'answer' && r.reason === 'scheduler_lock_stale' && r.exitCode === 0,
+      'T-585-stale-refuse: dead-holder lock → the DISTINCT scheduler_lock_stale token, reported at exit 0 (still no auto-takeover), got ' + JSON.stringify({ result: r.result, reason: r.reason, exitCode: r.exitCode }));
+    assert(r.acquired === false && r.mutation_performed === false && r.did_not_run === 'open-ready',
+      'T-585-stale-refuse: the lock was NOT reclaimed and the body did not run — read off the envelope, not the exit, got ' + JSON.stringify({ acquired: r.acquired, mutation_performed: r.mutation_performed, did_not_run: r.did_not_run }));
+    assert(r.stale === true && r.liveness && r.liveness.stale === true && r.liveness.signal_result === 'ESRCH'
+      && r.liveness.same_host === true,
+      'T-585-stale-refuse: the DEAD verdict rides out as the probe that produced it, not as a bare label, got ' + JSON.stringify({ stale: r.stale, liveness: r.liveness }));
+    assert(r.retry_after === 'unlock' && r.refusal_family === 'kernel_lock_held'
+      && r.refusal_route && r.refusal_route.verb === 'unlock',
+      'T-585-stale-refuse: ...and THIS arm routes to the unlock verb (the live arm must not), got ' + JSON.stringify({ retry_after: r.retry_after, refusal_route: r.refusal_route }));
     assert(typeof r.operator_hint === 'string' && /unlock --project <P> --holder 2147483646 --json/.test(r.operator_hint),
       'T-585-stale-refuse: operator_hint routes to the unlock VERB carrying the exact dead holder pid, got ' + JSON.stringify(r.operator_hint));
     assert(!/rm "/.test(r.operator_hint),
@@ -20335,47 +20145,73 @@ scenario(() => {
     cleanup(repoRoot);
   }
 
-  // -- T-585-unlock-guards: the three refusals that keep `unlock` from reintroducing the
-  //    unlink-based double-acquire hazard the acquire path names. Each is ZERO-MUTATION: the
-  //    lockfile must be byte-identical afterwards, because a removal that "mostly" worked is
-  //    exactly the state that lets two holders coexist. --
+  // -- T-585-unlock-guards: the three guards that keep `unlock` from reintroducing the unlink-based
+  //    double-acquire hazard the acquire path names. Each is ZERO-MUTATION: the lockfile must be
+  //    byte-identical afterwards, because a removal that "mostly" worked is exactly the state that
+  //    lets two holders coexist.
+  //
+  //    #871 MOVED THE VERDICT, NOT THE GUARD. Every arm below now ANSWERS at exit 0, and every arm
+  //    still returns before the removal — only the fully-guarded path reaches the unlink. So the pin
+  //    is `unlocked === false` plus the byte-identical lockfile: THAT is what "a running
+  //    orchestrator's lock is never taken" means, and it is what a lazy conversion (delete the guard,
+  //    keep the exit) would break while an exit-code-only pin stayed green. The tokens are asserted
+  //    too, because the conversion preserves them and a report that dropped its own name would have
+  //    deleted the measurement. --
   {
     const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
     const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+    // A bare readFileSync THROWS when a guard is broken and the lockfile is actually gone, which
+    // aborts the scenario mid-way: the arms below the break never run, so a single regression hides
+    // the ones after it. Reading tolerantly turns exactly the same condition into a reported FAIL.
+    const lockBytes = () => { try { return fs.readFileSync(lockFile, 'utf8'); } catch (_) { return null; } };
 
     // (1) LIVE holder — the load-bearing guard. This process's own pid is provably alive.
     const livePayload = JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
     fs.writeFileSync(lockFile, livePayload);
     const live = runNode(repoRoot, ['unlock', '--project', project, '--holder', String(process.pid), '--json']);
-    assert(live.result === 'refuse' && live.reason === 'scheduler_lock_held' && live.exitCode === 1,
-      'T-585-unlock-guards: a LIVE holder refuses scheduler_lock_held — a running orchestrator\'s lock is never taken, got ' + JSON.stringify({ result: live.result, reason: live.reason }));
-    assert(fs.readFileSync(lockFile, 'utf8') === livePayload,
-      'T-585-unlock-guards: the live lockfile is byte-identical after the refusal (zero mutation)');
+    assert(live.unlocked === false && live.mutation_performed === false,
+      'T-585-unlock-guards: a LIVE holder\'s lock is never taken — unlock reports unlocked:false, got ' + JSON.stringify({ unlocked: live.unlocked, mutation_performed: live.mutation_performed }));
+    assert(live.result === 'answer' && live.reason === 'scheduler_lock_held' && live.exitCode === 0,
+      'T-585-unlock-guards: ...and it says so as an exit-0 report still carrying the scheduler_lock_held token, got ' + JSON.stringify({ result: live.result, reason: live.reason, exitCode: live.exitCode }));
+    assert(live.stale === false && live.liveness && live.liveness.stale === false
+      && live.liveness.signal_result === 'alive',
+      'T-585-unlock-guards: ...on the strength of the same live-holder PROBE the acquire path uses, reported not discarded, got ' + JSON.stringify(live.liveness));
+    assert(lockBytes() === livePayload,
+      'T-585-unlock-guards: the live lockfile is byte-identical afterwards (zero mutation)');
 
     // (2) HOLDER MISMATCH — the compare-and-set. The lock was re-claimed between the operator's
     //     read and this call, so the pid they name is no longer the pid on disk.
     const otherDead = JSON.stringify({ pid: 2147483645, host: os.hostname(), ts: Date.now(), subcommand: 'close-node' });
     fs.writeFileSync(lockFile, otherDead);
     const mism = runNode(repoRoot, ['unlock', '--project', project, '--holder', '2147483646', '--json']);
-    assert(mism.result === 'refuse' && mism.reason === 'scheduler_lock_holder_mismatch' && mism.exitCode === 1,
-      'T-585-unlock-guards: a re-claimed lock refuses scheduler_lock_holder_mismatch (CAS on holder identity), got ' + JSON.stringify({ result: mism.result, reason: mism.reason }));
+    assert(mism.unlocked === false && mism.mutation_performed === false,
+      'T-585-unlock-guards: a re-claimed lock is NOT removed — the CAS on holder identity holds, got ' + JSON.stringify({ unlocked: mism.unlocked, mutation_performed: mism.mutation_performed }));
+    assert(mism.result === 'answer' && mism.reason === 'scheduler_lock_holder_mismatch' && mism.exitCode === 0,
+      'T-585-unlock-guards: ...reported at exit 0 under the unchanged scheduler_lock_holder_mismatch token, got ' + JSON.stringify({ result: mism.result, reason: mism.reason, exitCode: mism.exitCode }));
     assert(mism.recorded_holder === '2147483645' && mism.requested_holder === '2147483646',
-      'T-585-unlock-guards: the mismatch refusal reports BOTH the recorded and requested holder, got ' + JSON.stringify(mism));
-    assert(fs.readFileSync(lockFile, 'utf8') === otherDead,
-      'T-585-unlock-guards: the re-claimed lockfile is byte-identical after the refusal (zero mutation)');
+      'T-585-unlock-guards: the mismatch report carries BOTH the recorded and requested holder, got ' + JSON.stringify(mism));
+    assert(lockBytes() === otherDead,
+      'T-585-unlock-guards: the re-claimed lockfile is byte-identical afterwards (zero mutation)');
 
     // (3) CORRUPT payload, FRESH file — the mid-write window. acquireProjectLock protects a lock
     //     caught between its O_EXCL create and its payload write; unlock protects it identically.
     fs.writeFileSync(lockFile, '{not json');
     const fresh = runNode(repoRoot, ['unlock', '--project', project, '--holder', 'none', '--json']);
-    assert(fresh.result === 'refuse' && fresh.reason === 'scheduler_lock_held' && fresh.exitCode === 1,
-      'T-585-unlock-guards: a corrupt but FRESH lockfile refuses — it is most likely a holder caught mid-write, got ' + JSON.stringify({ result: fresh.result, reason: fresh.reason }));
-    assert(fs.readFileSync(lockFile, 'utf8') === '{not json',
-      'T-585-unlock-guards: the fresh corrupt lockfile is byte-identical after the refusal');
-    // ... and a pid-shaped --holder against a corrupt payload refuses the CAS rather than guessing.
+    assert(fresh.unlocked === false && fresh.mutation_performed === false,
+      'T-585-unlock-guards: a corrupt but FRESH lockfile is NOT removed — it is most likely a holder caught mid-write, got ' + JSON.stringify({ unlocked: fresh.unlocked, mutation_performed: fresh.mutation_performed }));
+    assert(fresh.result === 'answer' && fresh.reason === 'scheduler_lock_held' && fresh.exitCode === 0,
+      'T-585-unlock-guards: ...reported at exit 0 under the unchanged scheduler_lock_held token, got ' + JSON.stringify({ result: fresh.result, reason: fresh.reason, exitCode: fresh.exitCode }));
+    assert(fresh.liveness && fresh.liveness.probe === 'corrupt_payload_mtime' && fresh.liveness.stale === false,
+      'T-585-unlock-guards: ...naming the mtime fallback it decided on, since there is no pid to probe, got ' + JSON.stringify(fresh.liveness));
+    assert(lockBytes() === '{not json',
+      'T-585-unlock-guards: the fresh corrupt lockfile is byte-identical afterwards');
+    // ... and a pid-shaped --holder against a corrupt payload declines the CAS rather than guessing.
     const wrongForm = runNode(repoRoot, ['unlock', '--project', project, '--holder', '1234', '--json']);
-    assert(wrongForm.result === 'refuse' && wrongForm.reason === 'scheduler_lock_holder_mismatch',
-      'T-585-unlock-guards: a corrupt payload cannot be targeted by pid — it refuses the CAS, got ' + JSON.stringify({ result: wrongForm.result, reason: wrongForm.reason }));
+    assert(wrongForm.unlocked === false && wrongForm.mutation_performed === false
+      && lockBytes() === '{not json',
+      'T-585-unlock-guards: a corrupt payload cannot be targeted by pid — nothing is removed, got ' + JSON.stringify({ unlocked: wrongForm.unlocked, mutation_performed: wrongForm.mutation_performed }));
+    assert(wrongForm.result === 'answer' && wrongForm.reason === 'scheduler_lock_holder_mismatch' && wrongForm.exitCode === 0,
+      'T-585-unlock-guards: ...as an exit-0 report keeping the CAS token, got ' + JSON.stringify({ result: wrongForm.result, reason: wrongForm.reason, exitCode: wrongForm.exitCode }));
 
     // (3b) GREEN ARC for the corrupt arm: once the file is genuinely OLD, `--holder none` clears it.
     const old = Date.now() - LANE_STALENESS_MS - 3600000;
@@ -20390,18 +20226,32 @@ scenario(() => {
     const bare = runNode(repoRoot, ['unlock', '--project', project, '--json']);
     assert(bare.result === 'refuse' && Array.isArray(bare.errors) && /--holder/.test(bare.errors[0]),
       'T-585-unlock-guards: unlock without --holder refuses — there is no untargeted removal, got ' + JSON.stringify(bare));
-    assert(fs.readFileSync(lockFile, 'utf8') === otherDead,
+    assert(lockBytes() === otherDead,
       'T-585-unlock-guards: the lockfile is byte-identical after the missing-argument refusal');
     cleanup(repoRoot);
   }
-  // -- age-based cross-host twin: an OLD-ts cross-host holder is ALSO a typed stale refusal (age fallback). --
+  // -- age-based cross-host twin: an OLD-ts cross-host holder carries the SAME typed stale token via
+  //    the age fallback — and is still never reclaimed. A pid on another host cannot be probed, so the
+  //    verdict comes from the clock; the report names which of the two it used, because "stale" from a
+  //    measurement and "stale" from a 24h guess are not the same fact to a zero-context reader. --
   {
-    const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
-    fs.writeFileSync(path.join(cacheDir, SCHEDULER_LOCK_NAME),
-      JSON.stringify({ pid: 4242, host: 'ghost-host-' + Math.random().toString(16).slice(2), ts: Date.now() - LANE_STALENESS_MS - 3600000, subcommand: 'open-ready' }));
+    const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
+    const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+    const agedPayload = JSON.stringify({ pid: 4242, host: 'ghost-host-' + Math.random().toString(16).slice(2), ts: Date.now() - LANE_STALENESS_MS - 3600000, subcommand: 'open-ready' });
+    fs.writeFileSync(lockFile, agedPayload);
     const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
-    assert(r.result === 'refuse' && r.reason === 'scheduler_lock_stale',
-      'T-585-stale-refuse(age): old cross-host holder → scheduler_lock_stale refusal, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.result === 'answer' && r.reason === 'scheduler_lock_stale' && r.exitCode === 0,
+      'T-585-stale-refuse(age): old cross-host holder → the same scheduler_lock_stale token, reported at exit 0, got ' + JSON.stringify({ result: r.result, reason: r.reason, exitCode: r.exitCode }));
+    let agedNow = null; try { agedNow = fs.readFileSync(lockFile, 'utf8'); } catch (_) { agedNow = null; }
+    assert(r.acquired === false && r.mutation_performed === false && r.did_not_run === 'open-ready'
+      && agedNow === agedPayload,
+      'T-585-stale-refuse(age): ...and the aged lock is STILL not reclaimed — byte-intact, body skipped, got ' + JSON.stringify({ acquired: r.acquired, mutation_performed: r.mutation_performed, did_not_run: r.did_not_run }));
+    assert(r.stale === true && r.liveness && r.liveness.probe === 'cross_host_age'
+      && r.liveness.same_host === false && r.liveness.signal_result === null,
+      'T-585-stale-refuse(age): ...and the report names the AGE fallback rather than a probe it could not run, got ' + JSON.stringify(r.liveness));
+    const st = ledgerStatuses(planPath);
+    assert(st.ra === 'pending' && st.rb === 'pending' && readRS(cacheDir) === null,
+      'T-585-stale-refuse(age): ledger and running set untouched — zero mutation');
     cleanup(repoRoot);
   }
 
@@ -20496,7 +20346,11 @@ scenario(() => {
       for (let i = 0; i < N; i++) argvs.push(['open-ready', '--project', project, '--json']);
       const rs = raceN(repoRoot, argvs);
       if (rs.length !== N || rs.some((r) => r && r.result === 'ok')) everAcquired = true;
-      if (!(rs.length === N && rs.every((r) => r && r.result === 'refuse' && r.reason === 'scheduler_lock_stale' && r.code === 1))) everWrongShape = true;
+      // THE VERDICT HALF. `acquired === false` is conjoined deliberately: with the exit code no longer
+      // carrying "I did not take the lock", the token alone would let a caller that DID acquire and
+      // then reported the old holder pass this arm.
+      if (!(rs.length === N && rs.every((r) => r && r.result === 'answer' && r.reason === 'scheduler_lock_stale'
+        && r.code === 0 && r.acquired === false && r.mutation_performed === false))) everWrongShape = true;
       let lockNow = null; try { lockNow = fs.readFileSync(lockFile, 'utf8'); } catch (_) { lockNow = null; }
       if (lockNow !== stalePayload) everLockMutated = true;
       const st = ledgerStatuses(planPath);
@@ -20507,7 +20361,7 @@ scenario(() => {
     assert(everAcquired === false,
       'T-585-stale-race: ZERO acquisitions across ' + N + ' concurrent callers vs a stale lock in every trial (no code path succeeds against an existing lockfile)');
     assert(everWrongShape === false,
-      'T-585-stale-race: ALL ' + N + ' concurrent callers refuse scheduler_lock_stale (exit 1) in every trial');
+      'T-585-stale-race: ALL ' + N + ' concurrent callers report scheduler_lock_stale with acquired:false (exit 0) in every trial');
     assert(everLockMutated === false,
       'T-585-stale-race: the planted stale lockfile survives byte-identical in every trial (no non-holder unlink ever)');
     assert(everLedgerMutated === false,
@@ -30280,7 +30134,7 @@ scenario(() => {
 // The mapping is DERIVED from the barrier reason precedence the plan validator already owns, so
 // the two can never drift:
 //   write_set_overflow | write_set_granularity | lockfile_write | mirror_write | count_bump
-//                              -> revert-overflow   (discard the out-of-set writes)
+//                              -> amend-surface     (attribute the out-of-set writes + re-review)
 //   unattributed_write         -> amend-surface     (attribute + re-review them instead)
 //   sensitive_write_unreviewed -> shape_refutation  (the legal cure is ADDING a security-reviewer
 //                                                    gate, which is a spine change, not a node fix)
@@ -30291,11 +30145,11 @@ scenario(() => {
 // ===========================================================================
 scenario(() => {
   const routed = [
-    { reason: 'write_set_overflow', route: 'revert-overflow' },
-    { reason: 'write_set_granularity', route: 'revert-overflow' },
-    { reason: 'lockfile_write', route: 'revert-overflow' },
-    { reason: 'mirror_write', route: 'revert-overflow' },
-    { reason: 'count_bump', route: 'revert-overflow' },
+    { reason: 'write_set_overflow', route: 'amend-surface' },
+    { reason: 'write_set_granularity', route: 'amend-surface' },
+    { reason: 'lockfile_write', route: 'amend-surface' },
+    { reason: 'mirror_write', route: 'amend-surface' },
+    { reason: 'count_bump', route: 'amend-surface' },
     { reason: 'unattributed_write', route: 'amend-surface' },
     { reason: 'sensitive_write_unreviewed', route: 'shape_refutation' },
   ];
@@ -30309,7 +30163,7 @@ scenario(() => {
   }
 
   // NEGATIVE 1 — foreign_archive has no legal verb: writing another run's archive is never
-  // curable by revert-overflow, amend-surface, or a reshape. It must carry NO route.
+  // curable by amend-surface or a reshape. It must carry NO route.
   const archive = decorateOperatorHint({ result: 'refuse', reason: 'foreign_archive', nodeId: 'w1' });
   assert(archive.route === undefined,
     '#838-ROUTE: foreign_archive names no legal verb and must carry NO route, got '
@@ -30613,7 +30467,7 @@ scenario(() => {
 // sets. On the planner's ordinary all-concrete spine every sanctioned exit is closed BY
 // CONSTRUCTION (`amend-surface` wants an expansion-point row that shape has none of;
 // `reopen-node` refuses `would_orphan_in_progress` over the live sink; re-plan wants a FAILED
-// review attempt when every review PASSED; `revert-overflow` discards a new file rather than attributing it). The
+// review attempt when every review PASSED). The
 // prescription manufactures the very refusal that blocks it.
 //
 // THE SHAPE OF THE FIX. Zero regulation on HOW the fix is produced (inline, or dispatched to
@@ -31044,7 +30898,10 @@ scenario(() => {
   scenario(() => {
     const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
     const r = finalFix826(fx, fixEntry826(fx));
-    assert(r.result !== 'refuse',
+    // POSITIVE, not merely not-refuse. `result !== 'refuse'` is satisfied by anything at all — an
+    // absent field, a typo'd token, a crash that emitted no envelope — so it can be vacated by a
+    // change it was written to catch. The claim is that the arm reaches the ADVISE verdict.
+    assert(r.result === 'advise',
       '#826-ADV1: a sink that is not live is an ADVISE, not a refusal — R1 admits a refusal only at '
       + 'L1/L2/A3 and a wrong-verb-for-state condition is none of them, got '
       + JSON.stringify({ result: r.result, exitCode: r.exitCode, reason: r.reason }));
@@ -31239,8 +31096,9 @@ scenario(() => {
   scenario(() => {
     const fx = makeFinalFixRepo826({ sinkStatus: 'pending', extraFiles: [APPARATUS_FILE_826] });
     const advised = finalFix826(fx, fixEntry826(fx));
-    assert(advised.result !== 'refuse',
-      '#826-ADV8 precondition: the pending-sink call advises rather than refuses, got '
+    assert(advised.result === 'advise',
+      '#826-ADV8 precondition: the pending-sink call reaches the ADVISE verdict (asserted positively — '
+      + 'a not-refuse precondition would let the arc start from any envelope at all), got '
       + JSON.stringify({ result: advised.result, reason: advised.reason }));
     assert(readRegister826(fx) === null, '#826-ADV8 precondition: nothing was recorded by the advise');
     setLedger826(fx.planPath, 'finalize', 'in_progress');

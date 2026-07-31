@@ -311,8 +311,9 @@ the `backlog_empty` verdict rather than recommending occupied work.
 ### Bundle Selection Rules
 
 **Default: single issue.** Bundle only when the issues are open, unclaimed, share a scope signal, and
-their write areas fit one adaptive DAG. The ceiling is `KAOLA_BUNDLE_MAX_ISSUES` (default 8) and the
-claim enforces it.
+their write areas fit one adaptive DAG. Bundle size is SHAPE, and shape is yours to decide: nothing
+caps it. A bundle wider than 8 issues acquires like any other and the claim envelope carries a
+`bundle_size_note` naming the count and the recommended shape — advice that changes no outcome.
 
 If you pass over the frontier issue, say which one and why in `selection_priority_basis`, and list it
 in `selection_rejected`. An unexplained substitution is the failure mode; an explained one is a
@@ -478,16 +479,22 @@ fi
 
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
 `verdict: no_target`, the agent must select a target and re-run. <!-- PIN: claim-escalate -->
-When startup does not acquire, read the `reasoning` field and classify by `result`:
+When startup does not acquire, read the `reasoning` field and classify by `result`. The bundle lane
+carries no separate vocabulary: a `target_set_X` classifies and exits exactly like its scalar twin
+`X`, because it reports the same fact about a set that `X` reports about one issue.
 - `result: answer` (`no_target`, `target_ambiguity`, `user_target_blocked`, `user_target_red`,
-  `target_unavailable`, `target_unverified`, `target_indeterminate`): nothing was written and the
-  claim did not happen. Act on the fact — fix the argv, retry, go offline, or re-state the reason
-  and claim a different target. Do not blind-read a missing state file.
+  `target_unavailable`, `target_unverified`, `target_indeterminate`, and the bundle twins
+  `target_set_empty`, `target_set_invalid_token`, `target_set_red`, `target_set_unavailable`,
+  `target_set_unverified`): nothing was written and the claim did not happen. Act on the fact — fix
+  the argv, retry, go offline, or re-state the reason and claim a different target. Do not
+  blind-read a missing state file.
 - `result: consent` (`dirty_tree_refused`): the subject is the user's own uncommitted work. **ASK
   THE USER the `ask` on the envelope verbatim** and act on the answer (commit, stash, or worktree).
-- `result: refuse` (`target_occupied`, `user_target_closed`, `target_set_*` other than the
-  indeterminate one): **HARD STOP** — the determinate RED is final; do
-  not blind-proceed to a different issue without explicit user direction.
+- `result: refuse` (`target_occupied`, `user_target_closed`, and their bundle twins
+  `target_set_conflicts_active_work`, `target_set_has_closed_issue`; plus
+  `target_set_label_rollback_failed`, the one code where a claim label outlived the answer and
+  needs manual cleanup — its `partial` names what was applied): **HARD STOP** — the determinate
+  RED is final; do not blind-proceed to a different issue without explicit user direction.
 - `result: escalate` (`target_set_indeterminate`): the bundle classifier
   subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
   pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;

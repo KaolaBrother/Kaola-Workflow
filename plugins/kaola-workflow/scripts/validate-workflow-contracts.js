@@ -377,7 +377,11 @@ assertNotIncludes('agents/workflow-planner.md', 'selects a bundle jointly with h
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_note');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_digest');
 assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'clarification_required');
-assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'CLARIFICATION_ROUND_CAP');
+// The CHANNEL is pinned; the CAP is not, because there is no longer a cap. `round`/`prior_rounds`
+// ride the return as data and no threshold fires against them — a bound on how many times an agent
+// may ask a question is exactly the kind of harness this design retires. Retiring a token retires
+// its needle in the same diff, or the pin outlives the thing it was pinning.
+assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'prior_rounds');
 assertIncludes('scripts/kaola-workflow-claim.js', 'probeSelectionEvidence');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection-evidence.md');
 
@@ -789,9 +793,10 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
 // lockstep — pin its presence in the prose + the script so the prose mutation cannot return.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'clear-halt');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
-// #434: revert-overflow + repair-node subcommands + their output tokens (anti-laundering signal +
-// orient requires_redispatch field for absent-evidence detection).
-assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'revert-overflow'");
+// #434: repair-node subcommand + its output tokens (anti-laundering signal + orient
+// requires_redispatch field for absent-evidence detection). The discard verb that used to be pinned
+// alongside it is gone: the overflow verdict it existed to clear is a report now, so the only path
+// that unlinked a production file the agent had just written has no caller and no reason to exist.
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'repair-node'");
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'requires_redispatch');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'baselineReused');

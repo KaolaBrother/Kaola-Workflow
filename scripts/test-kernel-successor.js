@@ -300,35 +300,134 @@ function part1_killLandsInsideTheWindow() {
   const verdict = JSON.parse(check.stdout);
   equal(verdict.ok, true, 'the surviving Plan record still passes --resume-check: its hash covers intact bytes');
 
-  return run;
+  // `dead` travels to PART 2 so the holder the report names can be checked against the pid this
+  // vehicle actually killed. Without it, PART 2 could only assert that SOME holder was reported.
+  return { run, dead };
 }
 
 // ===========================================================================
-// PART 2 — the crash refusal carries a LIVE exit, and it is the only thing between the
-// successor and the run.
+// PART 2 — the crashed holder is REPORTED, and the report carries a LIVE exit.
 //
 // This is the route contract met at a real crash rather than at a synthesized one. The dead
 // process held the scheduler lock; nothing reclaims it. The successor is entitled to know both
 // that it is blocked and how to get through, and the recorded route is FOLLOWED here — the verb
-// is read out of the refusal payload, never hard-coded, so a route that named a dead verb would
-// fail this suite exactly the way a wedge would.
+// is read out of the payload, never hard-coded, so a route that named a dead verb would fail this
+// suite exactly the way a wedge would.
+//
+// THE CONVERSION THIS PART NOW PINS. Contention became an exit-0 report (`result: 'answer'`)
+// instead of a stop. The mutual exclusion did not change and the body still does not run — what
+// changed is that "I did not run" moved OUT of the exit code and INTO fields. That makes the
+// fields load-bearing in a way they were not when a non-zero exit carried the same news, so every
+// one of them is checked BY CONTENT here:
+//
+//   * did the body run?      `acquired` / `mutation_performed` / `did_not_run`, cross-checked
+//                            against the LEDGER ON DISK — the envelope's claim is verified against
+//                            the world, not taken at its word.
+//   * who is holding it?     `holder.pid` must equal the pid the vehicle actually killed. A
+//                            presence check would accept `{}`; identity cannot be faked.
+//   * is the holder gone?    the liveness measurement, including the fact that staleness was
+//                            concluded from the SIGNAL PROBE and not from the clock.
+//   * how do I get through?  a runnable verb — not a terminal class — that is FOLLOWED, and whose
+//                            holder-identity CAS proves the reported pid is not decoration.
 // ===========================================================================
 
-function part2_theRefusalRoutes(run) {
-  const refused = successor(run, ['open-next', '--project', run.project, '--json']);
-  equal(refused.out.result, 'refuse', 'the successor is blocked by the crashed holder, not silently wrong');
-  equal(refused.out.reason, 'scheduler_lock_stale', 'and it is told exactly what is holding it');
-  equal(refused.out.refusal_locus, 'L1', 'a crashed kernel-write holder is an L1 condition');
-  equal(refused.out.refusal_family, 'kernel_lock_held', 'carried as a family code, not a bespoke one');
-  ok(refused.out.refusal_route && typeof refused.out.refusal_route.verb === 'string',
-    'the refusal carries a typed machine-readable route, not only prose');
+function part2_theRefusalRoutes(crashed) {
+  const { run, dead } = crashed;
+  const killedPid = dead.kills[0].pid;
+
+  const blocked = successor(run, ['open-next', '--project', run.project, '--json']);
+
+  // The conversion itself. Exit 0 and `answer` are the property, so they are asserted as the two
+  // separate facts they are: a non-zero exit with an `answer` envelope, or exit 0 with a `refuse`
+  // envelope, are both incoherent states this would catch.
+  equal(blocked.status, 0, 'a crashed holder does not stop the successor: it reports at exit 0');
+  equal(blocked.out.result, 'answer',
+    'and reports it as an ANSWER — the successor is told it is blocked, rather than being stopped');
+  equal(blocked.out.reason, 'scheduler_lock_stale', 'and it is told exactly what is holding it');
+  equal(blocked.out.condition, 'scheduler_lock_stale',
+    'the legacy condition token rides out with the report, so converting the verdict did not make the site invisible');
+  equal(blocked.out.refusal_locus, 'L1', 'a crashed kernel-write holder is still located at L1');
+  equal(blocked.out.refusal_family, 'kernel_lock_held', 'carried as a family code, not a bespoke one');
+  equal(blocked.out.kind, 'scheduler',
+    'discriminated within the family, which is what resolves the route: the family alone routes nowhere');
+
+  // WHAT THE EXIT CODE STOPPED CARRYING. Before the conversion, non-zero WAS the statement that
+  // the body did not run. Now it is three fields — and they are checked against the disk, because
+  // an envelope that says `mutation_performed: false` over a mutation that happened is exactly the
+  // complete-coherent-and-false record a successor cannot route around.
+  equal(blocked.out.acquired, false, 'the report says the lock was not acquired');
+  equal(blocked.out.mutation_performed, false, 'and that nothing was mutated');
+  equal(blocked.out.did_not_run, 'open-next',
+    'naming the subcommand that was skipped, so the successor knows WHAT to re-run and not merely that something failed');
+  ok(!ledgerOf(run.projectDir).includes('| impl | in_progress |'),
+    'and the LEDGER ON DISK agrees with that claim: the guarded body genuinely did not run, so the exit-0 report is not a lie the successor would have no move against');
+
+  // WHO holds it, by identity. This is the assertion a presence check cannot make: the pid in the
+  // report is the pid this suite's vehicle killed, so the holder block is a measurement of the
+  // real crashed process rather than a placeholder shaped like one.
+  equal(blocked.out.holder.pid, killedPid,
+    'the reported holder IS the process the vehicle killed — holder identity by content, which `holder != null` would never catch');
+  equal(blocked.out.holder.subcommand, 'open-next',
+    'and it records what the dead holder was doing, so a successor can tell a crashed open from a crashed close');
+  equal(blocked.out.holder.host, os.hostname(),
+    'and where it was running — without a host a pid is not an identity across machines');
+  ok(Number.isInteger(blocked.out.holder.ts) && blocked.out.holder.ts > 0
+    && blocked.out.holder.ts <= Date.now(),
+    'and when it claimed, as a real epoch stamp rather than a rendered string');
+  ok(blocked.out.lockPath.startsWith(run.projectDir + path.sep) && fs.existsSync(blocked.out.lockPath),
+    'the reported lockPath is this project\'s real, existing lockfile — the report points at the thing it describes');
+
+  // IS THE HOLDER GONE — the liveness measurement the conversion kept. The load-bearing pin is the
+  // last one: the holder is FAR younger than the staleness threshold, yet `stale` is true. So the
+  // stale verdict came from probing the pid, not from a clock crossing a constant — which is the
+  // difference between a measurement and the guess a 24h threshold would have made for it.
+  equal(blocked.out.stale, true, 'the report classifies the holder as stale');
+  equal(blocked.out.liveness.stale, true, 'and the liveness block agrees with the top-level field');
+  equal(blocked.out.liveness.probe, 'same_host_signal_0',
+    'naming the probe it actually ran, so a successor can weigh the verdict instead of trusting it');
+  equal(blocked.out.liveness.signal_result, 'ESRCH',
+    'and its measured result: the holder pid genuinely does not exist any more');
+  equal(blocked.out.liveness.same_host, true, 'and that the probe was meaningful — the pid was probeable from here');
+  ok(blocked.out.liveness.age_ms < blocked.out.liveness.staleness_threshold_ms,
+    'the holder is far YOUNGER than the staleness threshold (' + blocked.out.liveness.age_ms + 'ms of '
+    + blocked.out.liveness.staleness_threshold_ms + 'ms) yet is reported stale — the verdict came from the probe, never from the clock');
+  ok(Number.isFinite(blocked.out.held_for_ms) && blocked.out.held_for_ms >= 0
+    && blocked.out.held_for_ms === blocked.out.liveness.age_ms,
+    'and the two durations the report carries are the same measurement, not two independent clocks that can disagree');
+
+  // HOW TO GET THROUGH. An exit-0 report with no sanctioned exit is strictly worse than the stop
+  // it replaced, so the exit is checked before it is followed: a runnable verb, not `environment`
+  // (which on a provably-dead holder would tell the successor to wait for a process that is never
+  // coming back), and `retry_after` naming the same exit as the route rather than a second opinion.
+  const route = blocked.out.refusal_route;
+  ok(route && typeof route.verb === 'string' && route.verb.length > 0,
+    'the report carries a typed machine-readable route, not only prose');
+  ok(route.verb !== 'environment' && route.verb !== 'consent',
+    'and the route is a VERB the successor can run, not a terminal class — a dead holder that routes to `environment` is a wedge with a label on it');
+  equal(route.script, 'adaptive-node', 'named as a script id, which is what makes the route forge-neutral');
+  equal(blocked.out.retry_after, route.verb,
+    'and `retry_after` names the same exit as the route — two fields for one fact must not be able to disagree');
+  ok(blocked.out.operator_hint.includes(String(killedPid)) && blocked.out.operator_hint.includes(route.verb),
+    'the human-readable hint carries the same pid and verb as the machine fields, so the two renderings cannot drift apart');
+
+  // The reported holder identity is load-bearing, not decoration: the route verb CASes on it and
+  // declines to clear a lock held by anyone else. Without this, `holder` could be any value at all
+  // and the recovery would still work — which would make every assertion above cosmetic.
+  const wrongPid = String(killedPid + 1);
+  const refusedSteal = successor(run, [route.verb, '--project', run.project, '--holder', wrongPid, '--json']);
+  equal(refusedSteal.out.unlocked, false,
+    'unlocking with the WRONG holder pid removes nothing — the reported identity is what authorizes the clear');
+  equal(refusedSteal.out.reason, 'scheduler_lock_holder_mismatch', 'and says so as a typed condition');
+  ok(fs.existsSync(blocked.out.lockPath), 'and the lockfile really is still there after the declined steal');
 
   // Follow it. A route is a claim that this verb gets you unstuck; the claim is tested.
-  const route = refused.out.refusal_route;
-  const holder = String(refused.out.holder.pid);
+  const holder = String(blocked.out.holder.pid);
   const cleared = successor(run, [route.verb, '--project', run.project, '--holder', holder, '--json']);
   equal(cleared.status, 0, 'the recorded route verb `' + route.verb + '` exists and runs');
   equal(cleared.out.result, 'ok', 'the recorded route verb clears the condition it names');
+  equal(cleared.out.requested_holder, holder, 'clearing the holder the report named, not whatever it found');
+  equal(cleared.out.holder.pid, killedPid, 'and the lock it removed was the dead holder\'s, by identity');
+  ok(!fs.existsSync(blocked.out.lockPath), 'the lockfile the report pointed at is gone');
 
   const resumed = successor(run, ['open-next', '--project', run.project, '--json']);
   equal(resumed.out.result, 'ok', 'and the run advances once the route is followed — the exit is real, not a label');
@@ -469,7 +568,32 @@ function part5_mutationProof(green) {
     'the successor is refused at the evidence gate, which is where the lost record was consumed');
   equal(mutated.recorded.out.reason, 'evidence_generation_stale',
     'and told which fact it can no longer establish');
-  equal(mutated.closed.out.result, 'refuse', 'the close is refused too — the loss is not routed around');
+  // The close is CONVERTED: it reports at exit 0 instead of stopping. The original assertion here
+  // pinned `result: 'refuse'`, which read the verdict — and the verdict is precisely what the
+  // substrate design deletes. What that assertion was actually protecting is the claim in its own
+  // message: *the loss is not routed around*. That is a statement about EFFECT, so it is pinned as
+  // one. `!mutated.advanced` above already proves the run did not progress; these prove the close
+  // itself neither wrote anything nor quietly forgot what went missing.
+  equal(mutated.closed.status, 0, 'the converted close reports rather than stopping');
+  equal(mutated.closed.out.result, 'answer', 'and it reports as an answer, not a verdict');
+  equal(mutated.closed.out.mutation_performed, false,
+    'THE LOSS IS NOT ROUTED AROUND: the close wrote nothing. Exit 0 is a report about the world, not permission to change it');
+
+  // The deleted record is named BY CONTENT in the report, so a successor learns which record is
+  // gone rather than merely that something is wrong. This is the half a bare verdict never carried.
+  equal(mutated.closed.out.evidence.baseline_nonce_recorded, false,
+    'the report names the missing baseline directly, so the successor can identify the lost record');
+  const lossAdvisory = (mutated.closed.out.advisories || [])
+    .find(a => a && a.warning === 'evidence_binding_unverified');
+  ok(lossAdvisory, 'the anti-replay gap opened by the deletion is REPORTED, not silently swallowed');
+  equal(lossAdvisory.cause, 'no_recorded_baseline',
+    'and it attributes the gap to the deleted baseline specifically, not to a generic failure');
+  equal(lossAdvisory.binding_checked, false,
+    'stating plainly that the binding was NOT checked — an unchecked binding must never read as a passed one');
+
+  // The route still runs. A report that leaves the successor stuck is a refusal with worse manners.
+  ok(mutated.closed.out.refusal_route && typeof mutated.closed.out.refusal_route.verb === 'string',
+    'and the report still carries a typed machine-readable route out');
 
   // The failure is the MISSING RECORD, not a forgotten secret: the nonce was read off the record
   // BEFORE deleting it and handed to the successor anyway, and the successor still cannot proceed
@@ -562,6 +686,7 @@ function part6_theEntitlementHolds() {
 function main() {
   const crashed = part1_killLandsInsideTheWindow();
   part2_theRefusalRoutes(crashed);
+  // PART 3+ build their own fixtures; `crashed.run` is spent by the time PART 2 returns.
   part3_resumeFromRecordsAlone();
   const green = part4_midTransitionResumes();
   part5_mutationProof(green);

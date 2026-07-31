@@ -527,11 +527,20 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     assert(cnt >= 3, '#495(b-bundle): retry fired to max attempts — counter=' + cnt + ' (expected >=3)');
   }
 
-  // --- (c) determinate GENUINE-negative non-zero NOT retried (bundle path — result:refuse) ---
-  // #519 RECONCILE: the axis is now stderr-error-CLASS, not exit code. This pin must use a
-  // GENUINE-negative stderr (a real 404 "Could not resolve to an Issue") so it stays determinate-
-  // refuse under the corrected taxonomy. A generic exit-1 with no signature ALSO refuses (unrecognized
-  // → refuse), but a genuine 404 makes the intent explicit and proves the genuine arm stays refuse.
+  // --- (c) determinate GENUINE-negative non-zero NOT retried (bundle path — result:answer) ---
+  // #519 RECONCILE: the axis is stderr-error-CLASS, not exit code. This pin uses a GENUINE-negative
+  // stderr (a real 404 "Could not resolve to an Issue") so it stays DETERMINATE under the corrected
+  // taxonomy — that half is unchanged and is what the retry counter below still proves.
+  //
+  // WHAT CHANGED, deliberately: the determinate arm now ANSWERS at exit 0 instead of refusing.
+  // `target_set_unavailable` twins the scalar `target_unavailable`, which has always answered, and
+  // a `target_set_X` classifies and exits exactly like its twin. The earlier call — determinate →
+  // refuse → fail closed — is OVERRIDDEN, not disputed: it was correct while a stop was the only
+  // way to make a caller notice, and nothing was ever written on this path, so the fact is one the
+  // caller acts on rather than one it must halt for. The DETERMINACY distinction that gives this
+  // block its name is untouched: a transient stderr still escalates and still retries (the (b) and
+  // (d) blocks either side of this one), and only the verdict attached to the determinate answer
+  // moved. Confusing "no retry" with "hard stop" is exactly what the twin rule separates.
   {
     const counterFile = path.join(tmpMockDir, 'counter-c-bundle.txt');
     fs.writeFileSync(counterFile, '0');
@@ -548,8 +557,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
     assert(r.json && (r.json.status === 'target_set_unavailable' || r.json.status === 'target_set_red'),
       '#495(c-bundle): genuine-negative non-zero → target_set_unavailable or target_set_red (got status=' + (r.json && r.json.status) + ')');
-    assert(r.json && r.json.result === 'refuse',
-      '#495(c-bundle): genuine-negative non-zero → result:refuse (got result=' + (r.json && r.json.result) + ')');
+    assert(r.json && r.json.result === 'answer',
+      '#495(c-bundle): genuine-negative non-zero → result:answer, like the scalar twin (got result=' + (r.json && r.json.result) + ')');
+    assert(r.code === 0,
+      '#495(c-bundle): and it ANSWERS at exit 0 — the exit code follows `result`, so a demoted result '
+      + 'that still exited 1 would be the asymmetry the twin rule removes (got code=' + r.code + ')');
+    assert(r.json && r.json.claim === 'none',
+      '#495(c-bundle): `claim: none` is what says the claim did not happen (got claim=' + (r.json && r.json.claim) + ')');
     assert(cnt === 1, '#495(c-bundle): determinate genuine NOT retried — counter=' + cnt + ' (expected 1)');
   }
 
@@ -822,9 +836,42 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(tmpB2Dir, { recursive: true, force: true });
 }
 
-// --- #503: resume_ambiguous refusal when multiple active folders, no --project --------
-// TDD RED: before fix, resume with no --project + two active folders silently returns folder[0].
-// TDD GREEN: after fix, emits { resumed: false, reason: 'resume_ambiguous', candidates: [...] } + exit 1.
+// --- #503: resume_ambiguous when multiple active folders and no --project -------------
+// The original defect stands and is still pinned: resume with no --project and two active folders
+// must NOT silently return folder[0]. What changed is the verb, deliberately.
+//
+// It is now an ANSWER at exit 0 (`result: 'answer'`, `mutation_performed: false`). A question
+// answered with a stop is a stop that answered nothing: the caller is not blocked on a value call
+// or on a destroyed record, it simply has to say which project it meant — and the envelope now
+// carries everything it needs to say so. `resumed: false` and `mutation_performed: false` are what
+// report that nothing happened; the exit code no longer carries that meaning here.
+//
+// SO THE LOAD-BEARING PIN IS NO LONGER THE EXIT CODE — it is that the payload is USABLE. Below,
+// one of the emitted `resume_with` commands is executed verbatim and must resume that project.
+// The exact key set of `candidate_detail` is deliberately NOT pinned: it is diagnostic breadth
+// that will churn, and pinning it would make every future field addition a red.
+//
+// MUTATION LOG (both this pin and #495(c-bundle) above). Each was un-wired in
+// `kaola-workflow-claim.js` against a scratch mirror of the repository — `git checkout --` is
+// unusable while several agents hold uncommitted work here — and observed RED, with a clean
+// mirror control (811 assertions, 0 failures) before and after. Verbatim casualties:
+//
+//   resume_ambiguous back to result:'refuse'
+//     "#503(A): ambiguous resume must carry result:answer (got "refuse")"
+//   resume_ambiguous back to exit 1
+//     "#503(A): ambiguous resume ANSWERS at exit 0 (got code=1, ...)"
+//   every candidate handed the SAME resume_with (folder[0])
+//     "#503(A-choose): each entry carries its OWN resume command ... (got "resume --project
+//     issue-63 --json")" AND "running the offered command resumes THAT project (got
+//     {"resumed":true,"project":"issue-63",...})"
+//   resume_with drops its --project flag while still naming its own project
+//     "#503(A-choose): running the offered command resumes THAT project ... (got
+//     {"resumed":false,...,"reason":"resume_ambiguous",...})"
+//     — the STRING checks survive this one and only the EXECUTION arm dies, which is the
+//     evidence that running the offered command is doing work the shape checks cannot.
+//   target_set_unavailable loses its twin and refuses
+//     "#495(c-bundle): genuine-negative non-zero → result:answer, like the scalar twin (got
+//     result=refuse)" AND "and it ANSWERS at exit 0 ... (got code=1)"
 {
   const { execFileSync } = require('child_process');
   const CLAIM = path.join(__dirname, 'kaola-workflow-claim.js');
@@ -870,18 +917,69 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.writeFileSync(path.join(proj65, 'workflow-state.md'),
     'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-plan-run issue-65\n');
 
-  // Scenario A (ambiguous): two active folders + no --project → must refuse with reason: resume_ambiguous.
+  // Scenario A (ambiguous): two active folders + no --project → answers with reason: resume_ambiguous.
   const rAmb = runResume([], repo503);
-  assert(rAmb.code === 1,
-    '#503(A): ambiguous resume must exit 1 (got code=' + rAmb.code + ', json=' + JSON.stringify(rAmb.json) + ')');
+  assert(rAmb.code === 0,
+    '#503(A): ambiguous resume ANSWERS at exit 0 (got code=' + rAmb.code + ', json=' + JSON.stringify(rAmb.json) + ')');
+  assert(rAmb.json && rAmb.json.result === 'answer',
+    '#503(A): ambiguous resume must carry result:answer (got ' + JSON.stringify(rAmb.json && rAmb.json.result) + ')');
   assert(rAmb.json && rAmb.json.reason === 'resume_ambiguous',
     '#503(A): ambiguous resume must emit reason:resume_ambiguous (got ' + JSON.stringify(rAmb.json) + ')');
+
+  // THE ORIGINAL DEFECT, still pinned. The exit code moved; the thing #503 was about did not.
+  // `resumed:false` + `mutation_performed:false` are now what report that nothing was picked, and
+  // they carry that meaning at exit 0 — so an implementation that quietly resumed folder[0] and
+  // exited 0 is still red here.
+  assert(rAmb.json && rAmb.json.resumed === false,
+    '#503(A): the ambiguous answer must NOT silently resume one of them (got resumed='
+      + JSON.stringify(rAmb.json && rAmb.json.resumed) + ')');
+  assert(rAmb.json && rAmb.json.mutation_performed === false,
+    '#503(A): and it must say so structurally — mutation_performed:false is the bit the exit code '
+      + 'stopped carrying (got ' + JSON.stringify(rAmb.json && rAmb.json.mutation_performed) + ')');
+  assert(rAmb.json && rAmb.json.project == null,
+    '#503(A): an ambiguous answer resolves to NO project (got ' + JSON.stringify(rAmb.json && rAmb.json.project) + ')');
+
   assert(rAmb.json && Array.isArray(rAmb.json.candidates) && rAmb.json.candidates.length === 2,
     '#503(A): ambiguous resume must list both candidates (got ' + JSON.stringify(rAmb.json) + ')');
   assert(rAmb.json && rAmb.json.candidates && rAmb.json.candidates.includes('issue-63'),
     '#503(A): candidates must include issue-63 (got ' + JSON.stringify(rAmb.json) + ')');
   assert(rAmb.json && rAmb.json.candidates && rAmb.json.candidates.includes('issue-65'),
     '#503(A): candidates must include issue-65 (got ' + JSON.stringify(rAmb.json) + ')');
+
+  // --- #503(A-choose): the payload is USABLE, which is what an answer owes that a stop did not.
+  //
+  // A report replaces a refusal only if the caller can act on it. So this drives the act: take the
+  // command the envelope printed for ONE named candidate and run it verbatim. Nothing here pins
+  // the key set of `candidate_detail` — only that each entry identifies its own project and hands
+  // back a command that resolves to THAT project.
+  const detail = rAmb.json && rAmb.json.candidate_detail;
+  assert(Array.isArray(detail) && detail.length === rAmb.json.candidates.length,
+    '#503(A-choose): candidate_detail must cover every candidate (got '
+      + JSON.stringify(detail && detail.length) + ' for ' + rAmb.json.candidates.length + ' candidates)');
+  if (Array.isArray(detail)) {
+    for (const d of detail) {
+      assert(d && typeof d.project === 'string' && rAmb.json.candidates.includes(d.project),
+        '#503(A-choose): each entry names one of the candidates (got ' + JSON.stringify(d && d.project) + ')');
+      assert(d && typeof d.resume_with === 'string' && d.resume_with.includes(d.project),
+        '#503(A-choose): each entry carries its OWN resume command — a single shared hint would make '
+          + 'the caller re-derive the choice (got ' + JSON.stringify(d && d.resume_with) + ')');
+    }
+    // Execute one of them. `issue-65` is deliberately NOT folder[0], so a resume that ignored the
+    // argument and fell back to the first folder resolves to issue-63 and is red.
+    const chosen = detail.find(d => d.project === 'issue-65');
+    assert(chosen != null, '#503(A-choose): the envelope offers issue-65 as a choice');
+    if (chosen) {
+      const argv = chosen.resume_with.trim().split(/\s+/);
+      assert(argv[0] === 'resume',
+        '#503(A-choose): resume_with names the subcommand it belongs to (got ' + JSON.stringify(chosen.resume_with) + ')');
+      const rChosen = runResume(argv.slice(1), repo503);
+      assert(rChosen.code === 0,
+        '#503(A-choose): the offered command must WORK (got code=' + rChosen.code + ', json=' + JSON.stringify(rChosen.json) + ')');
+      assert(rChosen.json && rChosen.json.resumed === true && rChosen.json.project === 'issue-65',
+        '#503(A-choose): running the offered command resumes THAT project — this is the whole '
+          + 'justification for answering instead of stopping (got ' + JSON.stringify(rChosen.json) + ')');
+    }
+  }
 
   // Scenario B (single folder back-compat): remove issue-65, resume with no --project → resumes issue-63.
   fs.rmSync(proj65, { recursive: true, force: true });

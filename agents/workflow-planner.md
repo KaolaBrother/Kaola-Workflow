@@ -360,11 +360,14 @@ node <adaptive-handoff.js> --clarification-required --question "<one concrete qu
 It joins the escalate family (`result: 'escalate'`), touches no filesystem path, and is legal both
 PRE-claim (nothing written yet) and post-claim/pre-freeze (claim held, plan unfrozen). The
 orchestrator asks the user, appends the answer to the selection record's `clarifications`, and
-re-dispatches you with the answer in the brief. The channel is **bounded at three round-trips**:
-past the cap the return degrades to `clarification_exhausted` with a `stop_and_ask` posture, because
-a fourth ask is a design failure rather than a question. An empty question fails closed to that same
-posture. Cite the evidence paths you are unsure about in `--context-refs`; ask about the SHAPE you
-must author, never about which issue to work on — that was settled before you were dispatched.
+re-dispatches you with the answer in the brief. The channel is **unbounded**: `round` and
+`prior_rounds` ride the return as DATA, and no threshold is enforced against them. Read the counter
+and judge — a question still open on its fourth pass is usually a design failure rather than a
+question, and taking the whole design to the user beats another round — but that is your judgment,
+not a limit. A call with no question is a malformed invocation rather than a decision, and answers
+`clarification_malformed` at exit 0. Cite the evidence paths you are unsure about in
+`--context-refs`; ask about the SHAPE you must author, never about which issue to work on — that was
+settled before you were dispatched.
 
 The pre-claim `backlog_empty` and `selection_indeterminate` verdicts stay in the vocabulary but are
 the ORCHESTRATOR's to emit, before you are dispatched at all; they never appear in your return set.
@@ -488,17 +491,19 @@ structured object, no extra prose:
   orchestrator routes to `/kaola-workflow-plan-run {project}` even on `decision:ask`. The size note
   is ADVICE about the shape of the set you selected, never a limit: nothing caps a bundle, and
   forwarding it is the only way the advice reaches the orchestrator on a no-target claim.
-- **`plan_invalid`** — the validator refused; nothing froze/wrote. Return
-  `{handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict}` verbatim; the
-  orchestrator drives repair.
+- **`plan_invalid`** — the plan is out of grammar; nothing froze/wrote. Return
+  `{handoff_status:'plan_invalid', result:'answer', mutation_performed:false, errors,
+  validator_verdict}` verbatim, **at exit 0** — it is a finding you hand back, not a stop; the
+  orchestrator drives repair off it. The one member that still refuses at exit 1 is
+  `reason: 'acceptance_repair_fenced'`, a human-values fence that routes through the consent valve.
 - **Claim not acquired** — no state written. Return `claim_verdict` + `claim_reasoning` verbatim,
   including any `selection_record_note`: that note names what the claim found in place of a usable
   record, NOT that the claim proceeded — on this return nothing was written at all. Re-authoring
   the record is the orchestrator's call.
 - **`clarification_required`** — the brief is under-determined. Return
-  `{handoff_status:'clarification_required', result:'escalate', question, context_refs, round}`
-  verbatim (see § Origin inputs); nothing authored beyond what was already claimed. Bounded at three
-  round-trips, after which the same call returns `clarification_exhausted` / `stop_and_ask`.
+  `{handoff_status:'clarification_required', result:'escalate', question, context_refs, round,
+  prior_rounds}` verbatim (see § Origin inputs); nothing authored beyond what was already claimed.
+  Unbounded — the round counter is data you read, never a limit that fires.
 - **`planner_control_boundary_violation`** — the dispatch prompt carried a mandatory/pre-authored
   `## Nodes` table, an `AUTHOR EXACTLY`, or a `do not redesign` outside the unfrozen-plan repair loop.
   Return the typed refusal verbatim; nothing authored. The orchestrator must re-dispatch with a clean

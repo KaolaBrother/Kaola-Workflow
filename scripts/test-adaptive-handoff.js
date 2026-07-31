@@ -2382,8 +2382,44 @@ const FWW_WARNING = {
 // R3 — G4 common-certifier wall shares the runner's test-consumed-prose classification.
 // A downstream doc-updater that mutates test-consumed prose (README.md, or a plan-declared
 // validation_test_consumes path) AFTER the designated code certifier is a code-relevant producer:
-// G4 must refuse the topology because the certifier does not cover it. An inert doc (docs/decisions/**)
-// remains non-code and freezes green. Driven in-process through the real validatePlan.
+// the certifier does not cover it. An inert doc (docs/decisions/**) remains non-code.
+// Driven in-process through the real validatePlan.
+//
+// THE VERDICT IS RETIRED; THE MEASUREMENT IS NOT. G4's coverage reasons no longer push into
+// `errors` — they ride out as a `warnings` entry (`named_certifier_uncovered`, check `G4`, the
+// uncovered node ids, and the same `g4_common_certifier_uncovered` detail text). The freeze wall
+// stopped refusing the topology; the finalize-time gate-execution check is what actually stops an
+// uncertified producer from reaching mainline.
+//
+// TWO CONSEQUENCES FOR THIS BLOCK, and the second is the one that mattered:
+//
+//   1. The uncovered arms assert on `warnings`, not on `errors`. They no longer assert
+//      `result === 'refuse'` for G4's sake — this fixture DOES still refuse, but for an unrelated
+//      reason (it authors no `## Design`), so a `refuse` assertion here was never evidence about
+//      G4 at all. It is dropped rather than left as a coincidence that reads like a check.
+//
+//   2. THE GREEN CONTROL WENT VACUOUS. It asserted `!errors.some(/g4_.../)`, and G4 left `errors`
+//      entirely — so it could no longer fail for any input, including one where G4 fires. It now
+//      asserts the absence of the WARNING, which is where the finding actually lives.
+//
+// The otherwise-legal fixture below is new and pins the half that the early-refuse arms cannot:
+// the advisory rides the IN-GRAMMAR return too. The validator assembles advisories once and
+// spreads them across all five exits precisely because they used to be built inside the last one,
+// so a plan tripping any earlier wall lost them silently.
+//
+// MUTATION-PROVED against a full-repo scratch mirror (control green either side):
+//   G4 coverage back into `errors`            -> RED "a downstream doc-updater ... REPORTS
+//                                                uncovered, got {"result":"refuse"}"
+//   the advisory set stops riding every exit  -> RED "the REAL computed frontier_without_writer
+//                                                advisory rides the child_frozen emission, got undefined"
+//   an inert doc misclassified as code        -> RED "R3 G4 green control: an inert doc
+//                                                (docs/decisions/**) ... got {"result":"refuse",
+//                                                "warnings":[{"warning":"named_certifier_uncovered"...}]}"
+//
+// THE THIRD MUTATION IS THE PROOF THAT THE CONTROL WAS BROKEN. Driven in isolation on that same
+// mutant: G4 FIRES on the inert doc, the OLD `!errors.some(/g4_/)` control PASSES, and the new
+// `!warnings` control FAILS. The old form could not fail for any input once the token left
+// `errors` — a guard that survived its own subject moving out from under it.
 // ---------------------------------------------------------------------------
 {
   const validator = require('./kaola-workflow-plan-validator');
@@ -2412,24 +2448,65 @@ const FWW_WARNING = {
     '| writer | pending |', '| reviewer | pending |', '| docs | pending |', '| finalize | pending |', '',
   ].join('\n') + '\n';
 
+  // g4Warning — the finding, wherever it now lives. Returns the matching `warnings` entry or null.
+  const g4Warning = (v, nodeId) => (v.warnings || []).find(w =>
+    w && w.warning === 'named_certifier_uncovered' && w.check === 'G4'
+    && Array.isArray(w.nodes) && w.nodes.includes(nodeId)) || null;
+
   const builtinConsumed = validator.validatePlan(g4Plan('README.md'), { forFreeze: true });
-  assert(builtinConsumed.result === 'refuse'
-    && Array.isArray(builtinConsumed.errors)
-    && builtinConsumed.errors.some(e => /g4_common_certifier_uncovered/.test(e) && /docs/.test(e)),
-    'R3 G4: a downstream doc-updater writing built-in test-consumed prose (README.md) refuses uncovered, got '
-      + JSON.stringify({ result: builtinConsumed.result, errors: builtinConsumed.errors }));
+  const builtinWarning = g4Warning(builtinConsumed, 'docs');
+  assert(builtinWarning != null,
+    'R3 G4: a downstream doc-updater writing built-in test-consumed prose (README.md) REPORTS uncovered, got '
+      + JSON.stringify({ result: builtinConsumed.result, warnings: builtinConsumed.warnings }));
+  assert(/g4_common_certifier_uncovered/.test(String(builtinWarning && builtinWarning.detail)),
+    'R3 G4: and the converted warning keeps the SAME typed detail text the error carried — the '
+    + 'verdict moved, the measurement did not, got ' + JSON.stringify(builtinWarning && builtinWarning.detail));
+  assert(!(builtinConsumed.errors || []).some(e => /g4_common_certifier_uncovered/.test(e)),
+    'R3 G4: ...and it is NO LONGER an error — the freeze wall stopped refusing the topology, got '
+      + JSON.stringify(builtinConsumed.errors));
 
   const customConsumed = validator.validatePlan(
     g4Plan('notes/custom.md', ['validation_test_consumes: notes/custom.md']), { forFreeze: true });
-  assert(customConsumed.result === 'refuse'
-    && customConsumed.errors.some(e => /g4_common_certifier_uncovered/.test(e) && /docs/.test(e)),
-    'R3 G4: a plan-declared validation_test_consumes prose path is code-relevant and refuses uncovered, got '
-      + JSON.stringify({ result: customConsumed.result, errors: customConsumed.errors }));
+  assert(g4Warning(customConsumed, 'docs') != null,
+    'R3 G4: a plan-declared validation_test_consumes prose path is code-relevant and REPORTS uncovered, got '
+      + JSON.stringify({ result: customConsumed.result, warnings: customConsumed.warnings }));
 
+  // GREEN CONTROL, repaired. This asserted `!errors.some(/g4_.../)` and G4 left `errors` entirely,
+  // so it could not fail for ANY input — it would have passed with the warning firing. The absence
+  // now has to be asserted where the finding actually lives.
   const inertDoc = validator.validatePlan(g4Plan('docs/decisions/D-000-01.md'), { forFreeze: true });
-  assert(!(inertDoc.errors || []).some(e => /g4_common_certifier_uncovered/.test(e)),
+  assert(g4Warning(inertDoc, 'docs') == null,
     'R3 G4 green control: an inert doc (docs/decisions/**) is not a code producer and G4 stays covered, got '
-      + JSON.stringify({ result: inertDoc.result, errors: inertDoc.errors }));
+      + JSON.stringify({ result: inertDoc.result, warnings: inertDoc.warnings }));
+
+  // THE ADVISORY RIDES THE IN-GRAMMAR RETURN TOO. The three fixtures above all refuse for an
+  // unrelated reason (`## Design` is absent), so on their own they only prove the warning survives
+  // an EARLY exit. Advisories used to be assembled inside the last exit, so a plan tripping any
+  // earlier wall lost them; a converted verdict riding that channel makes the loss consequential —
+  // "the plan also has no reviewer" would vanish exactly when the plan is being repaired.
+  {
+    const legal = (docPath) => g4Plan(docPath).replace('## Node Ledger', [
+      '## Design', '',
+      'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering. Done means validation passes.',
+      '', '## Acceptance', '', 'A1: the declared write set lands the change the issue asked for.',
+      'A2: the recorded validation_command passes over the candidate.', '',
+      '## Node Ledger',
+    ].join('\n'));
+
+    const inGrammar = validator.validatePlan(legal('README.md'), { forFreeze: true });
+    assert(!(inGrammar.errors || []).length,
+      'R3 G4 in-grammar: NON-VACUITY — the otherwise-legal fixture must clear every wall, so the '
+      + 'assertion below is about the SUCCESS path, got ' + JSON.stringify(inGrammar.errors));
+    assert(g4Warning(inGrammar, 'docs') != null,
+      'R3 G4 in-grammar: the uncovered-certifier finding survives on a plan that freezes GREEN — a '
+      + 'converted verdict that only appeared on a refusing return would be invisible exactly when '
+      + 'the plan is otherwise shippable, got ' + JSON.stringify(inGrammar.warnings));
+
+    const inGrammarInert = validator.validatePlan(legal('docs/decisions/D-000-01.md'), { forFreeze: true });
+    assert(g4Warning(inGrammarInert, 'docs') == null,
+      'R3 G4 in-grammar control: and an inert doc raises nothing on that same success path, got '
+        + JSON.stringify(inGrammarInert.warnings));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3740,27 +3817,144 @@ const FWW_WARNING = {
 // is exactly why the builder and its CLI must touch NO fs at all: they are the one return that can
 // fire before a project folder exists.
 //
-// The channel is BOUNDED at 3 round-trips (owner decision, 2026-07-27). Past the cap the return
-// degrades to the stop+ask posture rather than looping: a 4th ask is a design failure, not a
-// question. The cap is a module constant so the orchestrator surfaces and the profiles read ONE
-// number, and an empty/absent question fails CLOSED to the same posture (a channel that cannot
-// name its question cannot be answered).
+// THE CAP IS DELETED; THE COUNTER SURVIVES AS DATA. A cap is a bound, and a bound against an agent
+// looping is the harness-era move this design retires — nothing about round 4 is different in kind
+// from round 3, and a system that stops asking has not stopped needing the answer. `round` and
+// `prior_rounds` still ride the envelope so a reader can SEE how many round-trips a question has
+// taken and decide for itself; what is gone is the verdict that decided on its behalf.
 //
-// RED (pre-impl): neither clarificationRequired nor CLARIFICATION_ROUND_CAP is exported, and the
-// CLI has no --clarification-required flag (it falls through to the usage/plan_invalid path).
+// An empty question is a different animal and did NOT convert: it is a MALFORMED CALL rather than a
+// decision, so it answers `clarification_malformed` at exit 0 instead of escalating a stop the
+// caller never asked for.
+//
+// SO THE ASSERTIONS BELOW ARE A PROPERTY OVER THE EXIT RULE, not N token pins. `handoffExitCode`,
+// `stampHandoffOutcome` and `HANDOFF_CONSENT_REASONS` are exported precisely so the rule can be
+// driven as a rule: exit 1 is reserved for a human fence and for the escalate family, and
+// everything else answers. N pins would have to be rewritten one at a time the next time a status
+// converts; a property does not, and it catches the status nobody thought to pin.
+//
+// MUTATION-PROVED against a full-repo scratch mirror (control green either side):
+//   the escalate family stops exiting 1  -> RED "exit rule — the escalate family: expected exit 1,
+//                                           got 0"
+//   the stamp overwrites a caller's own
+//     mutation_performed                 -> RED "a site that DID mutate ... keeps its own
+//                                           mutation_performed"
+//   the round cap grows back             -> RED "round 4 is still a clarification_required ...
+//                                           got "clarification_exhausted""
+//   an empty question escalates again    -> RED "it answers and states that nothing was written"
+//   the human fence leaves the set       -> RED at 3 assertions (see below)
+//
+// ONE MUTATION SURVIVED THE FIRST TIME, and the reason generalises. Dropping
+// `acceptance_repair_fenced` from `HANDOFF_CONSENT_REASONS` left every rule assertion GREEN,
+// because the matrix read its fence token OUT OF THE SET UNDER TEST — substituting a different
+// member merely changed the input, and the rule still held over it. A property whose inputs are
+// derived from its own subject cannot see the subject change. The membership is now pinned BY NAME
+// beside the property, and that mutation is red at three assertions.
 // ---------------------------------------------------------------------------
 {
   const handoff825 = require('./kaola-workflow-adaptive-handoff');
   const { spawnSync: spawnS825 } = require('child_process');
   const HANDOFF825 = path.join(__dirname, 'kaola-workflow-adaptive-handoff.js');
 
-  // --- (1) the bound is a NAMED export, not a magic number buried in a branch ---
-  assert(handoff825.CLARIFICATION_ROUND_CAP === 3,
-    'T-825(1): CLARIFICATION_ROUND_CAP must be the exported constant 3 (owner-settled bound), got '
-      + JSON.stringify(handoff825.CLARIFICATION_ROUND_CAP));
+  // --- (1) THE EXIT RULE, as a property. -------------------------------------------------------
+  //
+  // Stated independently of the implementation and then DRIVEN against it, so this is a
+  // comparison rather than a restatement: exit 1 iff the envelope is a consent-reason fence or a
+  // member of the escalate family, EXCEPT that `ready_to_run` always exits 0.
+  assert(typeof handoff825.handoffExitCode === 'function'
+    && typeof handoff825.stampHandoffOutcome === 'function'
+    && handoff825.HANDOFF_CONSENT_REASONS instanceof Set,
+    'T-825(1): the exit rule is exported as a rule — handoffExitCode/stampHandoffOutcome/'
+    + 'HANDOFF_CONSENT_REASONS — so it can be pinned as one property instead of per token, got '
+    + JSON.stringify({ exit: typeof handoff825.handoffExitCode,
+      stamp: typeof handoff825.stampHandoffOutcome,
+      reasons: Object.prototype.toString.call(handoff825.HANDOFF_CONSENT_REASONS) }));
+
+  assert(handoff825.CLARIFICATION_ROUND_CAP === undefined,
+    'T-825(1): CLARIFICATION_ROUND_CAP is DELETED — a bound against an agent looping is the '
+    + 'harness-era move this design retires, and a surviving export would keep the orchestrator '
+    + 'surfaces reading a number nothing enforces, got '
+    + JSON.stringify(handoff825.CLARIFICATION_ROUND_CAP));
   assert(typeof handoff825.clarificationRequired === 'function',
     'T-825(1): clarificationRequired must be exported as a pure verdict builder, got '
       + typeof handoff825.clarificationRequired);
+
+  {
+    // THE MEMBERSHIP IS PINNED BY NAME, and this is the one place a token pin is right.
+    //
+    // Everything else here is a property over the rule, deliberately — but a property whose input
+    // is READ OUT of the set under test cannot see the set change. Measured: dropping
+    // `acceptance_repair_fenced` and substituting another token left every rule assertion GREEN,
+    // because the matrix simply asked about whichever member was there. The rule was intact and
+    // the fence was gone.
+    //
+    // Which token is the human fence is a VALUE decision, not an implementation detail: a fence an
+    // agent may clear is not a fence, so silently converting this one would retroactively void
+    // every consent decision the system has recorded. That identity is worth naming.
+    assert(handoff825.HANDOFF_CONSENT_REASONS.has('acceptance_repair_fenced'),
+      'T-825(1): `acceptance_repair_fenced` MUST remain a consent reason — it is the human-values '
+      + 'fence, and it rides `handoff_status: plan_invalid`, so dropping it from this set converts '
+      + 'it into an ordinary exit-0 finding by accident, got '
+      + JSON.stringify([...handoff825.HANDOFF_CONSENT_REASONS]));
+
+    const consentReason = 'acceptance_repair_fenced';
+    assert(handoff825.HANDOFF_CONSENT_REASONS.size >= 1,
+      'T-825(1): NON-VACUITY — the consent-reason set is non-empty, got '
+        + JSON.stringify([...handoff825.HANDOFF_CONSENT_REASONS]));
+
+    // A matrix spanning the rule's three inputs: the status, the `result` family, and the reason.
+    // Each row states the EXPECTED exit independently; the assertion is the comparison.
+    const MATRIX = [
+      // [label, envelope, expected exit]
+      ['ready_to_run', { handoff_status: 'ready_to_run', result: 'ok' }, 0],
+      ['a plan_invalid finding', { handoff_status: 'plan_invalid', result: 'refuse', reason: 'nodes_unparseable' }, 0],
+      ['a clarification_malformed answer', { handoff_status: 'clarification_malformed', result: 'answer' }, 0],
+      ['an unnamed non-ready status', { handoff_status: 'child_frozen', result: 'refuse' }, 0],
+      ['the escalate family', { handoff_status: 'clarification_required', result: 'escalate' }, 1],
+      ['a survey escalation', { handoff_status: 'survey_verdict', result: 'escalate', reason: 'backlog_empty' }, 1],
+      ['THE HUMAN FENCE', { handoff_status: 'plan_invalid', result: 'refuse', reason: consentReason }, 1],
+      ['a non-object', null, 1],
+    ];
+    for (const [label, envelope, expected] of MATRIX) {
+      assert(handoff825.handoffExitCode(envelope) === expected,
+        'T-825(1) exit rule — ' + label + ': expected exit ' + expected + ', got '
+          + handoff825.handoffExitCode(envelope) + ' for ' + JSON.stringify(envelope));
+    }
+
+    // THE ROW THAT MATTERS MOST, said again as a claim rather than as a table entry. The fence is
+    // selected by REASON, never by status: it rides `handoff_status: 'plan_invalid'` for legacy
+    // reasons, and converting it by accident because it shares a status with an ordinary finding is
+    // the single most damaging thing this change could do.
+    const fenced = { handoff_status: 'plan_invalid', result: 'refuse', reason: consentReason };
+    const ordinary = { handoff_status: 'plan_invalid', result: 'refuse', reason: 'nodes_unparseable' };
+    assert(handoff825.handoffExitCode(fenced) === 1 && handoff825.handoffExitCode(ordinary) === 0,
+      'T-825(1): the human fence is selected by REASON, not by status — two `plan_invalid` '
+      + 'envelopes must exit differently, got fenced=' + handoff825.handoffExitCode(fenced)
+      + ' ordinary=' + handoff825.handoffExitCode(ordinary));
+
+    // THE ENVELOPE HALF AGREES WITH THE EXIT HALF, by construction rather than by coincidence.
+    // Anything that answers is stamped `answer` + `mutation_performed: false`; anything that stops
+    // keeps its own token untouched.
+    for (const [label, envelope] of MATRIX.filter(([, e]) => e)) {
+      const stamped = handoff825.stampHandoffOutcome(JSON.parse(JSON.stringify(envelope)));
+      if (handoff825.handoffExitCode(envelope) === 0 && envelope.handoff_status !== 'ready_to_run') {
+        assert(stamped.result === 'answer' && stamped.mutation_performed === false,
+          'T-825(1) stamp — ' + label + ': an exit-0 non-ready return is stamped answer + '
+          + 'mutation_performed:false, got ' + JSON.stringify(stamped));
+      } else {
+        assert(stamped.result === envelope.result,
+          'T-825(1) stamp — ' + label + ': a stopping (or ready) return keeps its own token, got '
+            + JSON.stringify(stamped));
+      }
+    }
+
+    // A CALLER THAT ALREADY STATED IT WINS — the stamp supplies a default, never a rewrite.
+    const preset = handoff825.stampHandoffOutcome(
+      { handoff_status: 'plan_invalid', result: 'refuse', reason: 'nodes_unparseable', mutation_performed: true });
+    assert(preset.mutation_performed === true,
+      'T-825(1): a site that DID mutate before it found the thing it reports keeps its own '
+      + 'mutation_performed — the default never lies on its behalf, got ' + JSON.stringify(preset));
+  }
 
   // --- (2) rounds 1..3 build the typed escalate return ---
   if (typeof handoff825.clarificationRequired === 'function') {
@@ -3787,23 +3981,58 @@ const FWW_WARNING = {
           + JSON.stringify(v && v.round));
     }
 
-    // --- (3) past the cap the channel degrades to stop+ask, it does NOT keep asking ---
+    // --- (3) THE COUNTER IS DATA, NOT A BOUND. A high round is still a question. --------------
+    //
+    // The cap is deleted, so a 4th and a 9th ask build the SAME typed return a 1st does — the
+    // number rides out for a reader to judge. `clarification_exhausted` is gone entirely: a system
+    // that stops asking has not stopped needing the answer, and the round count is the honest way
+    // to say "this has taken four tries" without deciding what that means.
     for (const round of [4, 9]) {
       const v = handoff825.clarificationRequired('one more thing?', ['a.md'], round);
-      assert(v && v.handoff_status === 'clarification_exhausted',
-        'T-825(3): round ' + round + ' (> cap) must degrade to clarification_exhausted, got '
-          + JSON.stringify(v && v.handoff_status));
-      assert(v && v.result === 'escalate' && v.posture === 'stop_and_ask',
-        'T-825(3): the exhausted return must carry the stop+ask posture, got ' + JSON.stringify(v));
-      assert(v && v.cap === 3,
-        'T-825(3): the exhausted return must name the cap it hit, got ' + JSON.stringify(v && v.cap));
+      assert(v && v.handoff_status === 'clarification_required',
+        'T-825(3): round ' + round + ' is still a clarification_required — the cap that used to '
+        + 'degrade it is deleted, got ' + JSON.stringify(v && v.handoff_status));
+      assert(v && v.result === 'escalate',
+        'T-825(3): and it stays in the ESCALATE family, so it still exits 1 as a consent route, got '
+          + JSON.stringify(v && v.result));
+      assert(v && v.round === round,
+        'T-825(3): the round rides out AS DATA so a reader can see how many trips this took, got '
+          + JSON.stringify(v && v.round));
+      assert(v && v.cap === undefined && v.posture === undefined,
+        'T-825(3): and no verdict is attached to it — a `cap` or a `posture` field would be the '
+        + 'deleted bound growing back, got ' + JSON.stringify({ cap: v && v.cap, posture: v && v.posture }));
+      assert(handoff825.handoffExitCode(v) === 1,
+        'T-825(3): a consent escalation is the one legal mid-run stop and still exits 1, got '
+          + handoff825.handoffExitCode(v));
     }
 
-    // --- (4) fail CLOSED: a channel with no question degrades to stop+ask, never a bare ask ---
+    // --- (4) AN EMPTY QUESTION IS A MALFORMED CALL, not a decision. ---------------------------
+    //
+    // It did NOT convert into a stop: a channel that cannot name its question has not asked
+    // anything, so escalating it would raise a consent route the caller never requested. It
+    // ANSWERS at exit 0 and says structurally that nothing was written.
     for (const bad of ['', '   ', null, undefined]) {
       const v = handoff825.clarificationRequired(bad, ['a.md'], 1);
-      assert(v && v.handoff_status === 'clarification_exhausted' && v.posture === 'stop_and_ask',
-        'T-825(4): an empty/absent question must fail closed to stop+ask, got ' + JSON.stringify(v));
+      assert(v && v.handoff_status === 'clarification_malformed',
+        'T-825(4): an empty/absent question is a MALFORMED CALL, not a stop, got ' + JSON.stringify(v));
+      assert(v && v.result === 'answer' && v.mutation_performed === false,
+        'T-825(4): it answers and states that nothing was written, got ' + JSON.stringify(v));
+      assert(handoff825.handoffExitCode(v) === 0,
+        'T-825(4): ...and the exit code agrees with the envelope, got ' + handoff825.handoffExitCode(v));
+    }
+
+    // THE CONTRAST, in one place: a real question and an empty one must NOT classify alike. Both
+    // arms above pass independently even if the two collapsed onto the same shape, so the
+    // distinction is asserted directly.
+    {
+      const asked = handoff825.clarificationRequired('a real question?', ['a.md'], 1);
+      const empty = handoff825.clarificationRequired('   ', ['a.md'], 1);
+      assert(asked.handoff_status !== empty.handoff_status
+        && handoff825.handoffExitCode(asked) !== handoff825.handoffExitCode(empty),
+        'T-825(4): asking and failing-to-ask are different events — a question escalates (exit 1), '
+        + 'a malformed call answers (exit 0), got asked='
+        + JSON.stringify([asked.handoff_status, handoff825.handoffExitCode(asked)])
+        + ' empty=' + JSON.stringify([empty.handoff_status, handoff825.handoffExitCode(empty)]));
     }
 
     // --- (5) an absent/garbage round is treated as round 1 (never as "already exhausted") ---
@@ -3843,19 +4072,46 @@ const FWW_WARNING = {
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 
-  // --- (7) CLI past the cap → clarification_exhausted / stop_and_ask, still zero-write ---
+  // --- (7) CLI: a high round is still a question, and a malformed one still answers. ----------
+  //
+  // The process boundary is where the exit rule actually reaches a caller, so both halves are
+  // driven through it rather than inferred from the builder: a 4th round escalates at exit 1, and
+  // an empty question answers at exit 0. Both still write NOTHING — this verb is legal pre-claim,
+  // when no project folder exists at all.
   {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-825-clarify-cap-'));
     try {
+      // spawn-class: cli-contract
       const r = spawnS825(process.execPath, [HANDOFF825, '--clarification-required',
         '--question', 'a fourth time?', '--round', '4', '--json'], { cwd: tmp, encoding: 'utf8' });
       let out = null; try { out = JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) {}
-      assert(r.status === 1 && out && out.handoff_status === 'clarification_exhausted'
-        && out.posture === 'stop_and_ask',
-        'T-825(7): a 4th round on the CLI must emit clarification_exhausted/stop_and_ask, got '
+      assert(r.status === 1 && out && out.handoff_status === 'clarification_required'
+        && out.result === 'escalate' && out.round === 4,
+        'T-825(7): a 4th round on the CLI is still a clarification_required escalation carrying its '
+        + 'round as data — the cap that degraded it is deleted, got '
           + JSON.stringify(out) + ' status=' + r.status);
+      assert(out && out.posture === undefined && out.cap === undefined,
+        'T-825(7): and it attaches no verdict to the count, got '
+          + JSON.stringify({ posture: out && out.posture, cap: out && out.cap }));
       assert(fs.readdirSync(tmp).length === 0,
-        'T-825(7): the exhausted CLI still writes nothing');
+        'T-825(7): the high-round CLI still writes nothing');
+
+      // spawn-class: cli-contract
+      const bad = spawnS825(process.execPath, [HANDOFF825, '--clarification-required',
+        '--question', '   ', '--json'], { cwd: tmp, encoding: 'utf8' });
+      let badOut = null; try { badOut = JSON.parse(String(bad.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(bad.status === 0 && badOut && badOut.handoff_status === 'clarification_malformed'
+        && badOut.result === 'answer' && badOut.mutation_performed === false,
+        'T-825(7): an empty question on the CLI ANSWERS at exit 0 — a malformed call must not raise '
+        + 'a consent route the caller never asked for, got ' + JSON.stringify(badOut) + ' status=' + bad.status);
+      assert(fs.readdirSync(tmp).length === 0,
+        'T-825(7): and the malformed CLI writes nothing either');
+
+      // THE CONTRAST AT THE PROCESS BOUNDARY. The two must not agree, or the exit code has stopped
+      // separating "I am asking you" from "I could not form a question".
+      assert(r.status !== bad.status,
+        'T-825(7): asking and failing-to-ask must reach a caller differently — got both at exit '
+          + r.status);
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 

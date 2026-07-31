@@ -110,7 +110,7 @@ Then **enter the worktree** — every adaptive lifecycle call below runs from th
 
 **Worktree-cwd contract:** the mutating lifecycle subcommands (`open-next` / `open-ready` /
 `record-evidence --stdin` / `close-and-open-next` / `close-node` / `reconcile-running-set` /
-`write-halt` / `clear-halt` / `reopen-node` / `revert-overflow` / `repair-node` / `route-findings`)
+`write-halt` / `clear-halt` / `reopen-node` / `repair-node` / `route-findings`)
 resolve the project folder — `workflow-plan.md`, the `## Node Ledger`, `.cache/{node-id}.md` evidence,
 and the barrier baselines — **cwd-relative**. Run them ALL from the worktree so durable state lands
 where the role agents write. Running one from the main repo root while a worktree is linked refuses
@@ -401,14 +401,15 @@ request for the deliverable, then wait — a second ask before the first answer 
 duplicate deliveries.
 
 **Wait budget, escalation, and writer kill-safety.** Every dispatch card carries
-`dispatch.wait_budget_minutes`; a still-working teammate is never interrupted or re-nudged before it
-expires, then the bounded escalation ladder runs — one `SendMessage` for the deliverable, a ~5-minute
-grace window, reclaim as the LAST resort — recording a typed `delegation_outcome`. **Writer
+`dispatch.wait_budget_minutes` — the planner's estimate of how long the work takes, so a teammate
+interrupted well inside it is usually just being interrupted. After it expires, escalation keeps its
+ORDER and nothing else: ask via `SendMessage` for the bounded deliverable, interrupt second, reclaim
+last, judging the wait between rungs yourself. Record a typed `delegation_outcome`. **Writer
 kill-safety:** after reclaiming ANY writer, run `reconcile-running-set` — a `writerHalt: true` NAMES
 out-of-set paths a departing writer left behind. Re-opening the node re-anchors its baseline and
 hides them from that node's barrier, but not from the sink, which diffs the whole claim against every
-declared write set: resolve them now (`revert-overflow`, `repair-node`, or a consent halt) or explain
-them there. Full mechanics in the card below.
+declared write set: place them now (`amend-surface`, `repair-node`, a deliberate deletion, or a
+consent halt) or explain them there. Full mechanics in the card below.
 
 <!-- CARD: join-protocol -->
 The Codex-runtime version of this same protocol (`spawn_agent`/`wait_agent`/`close_agent`
@@ -559,7 +560,8 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
 - `merge_conflict` (write-overlap): a write-leg level whose FIRST-detection refusal —
   `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
   bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.
-  Repair each first by its own recovery (re-dispatch the leg · `revert-overflow` · a reasoning-class
+  Repair each first by its own recovery (re-dispatch the leg · attribute or delete the out-of-lane
+  write · a reasoning-class
   reasoning-floor `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
   the K-th failure escalate via `write-halt --reason merge_conflict`. Routed exactly like `test_thrash`
   (a schema constant the orchestrator applies — NO script counter on the adaptive path); the
@@ -650,11 +652,23 @@ the recomputed frontier, draining toward `allDone` WITHOUT operator prompting. C
 a small bound (e.g. 3 consecutive `frontier_blocked` cycles with no progress) before escalating with
 stop+ask — a blocked-but-not-done frontier must never silently stall the run.
 
-**Surface the narrowed barrier reason VERBATIM.** On a `barrier_failed` / `close-node`
-refusal the ACTIONABLE narrowed reason (`write_set_overflow` / `write_set_granularity` /
-`lockfile_write` / …) and the offending paths are now on the top-level `reason` / `outOfAllow`
-fields. Surface them VERBATIM — print the full `reason` / `operator_hint` / `outOfAllow` — never
-route the refusal through a lossy JSON-summary helper that truncates it.
+**Surface what the barrier MEASURED, verbatim.** Every close carries a content locator: the
+barrier's `barrierCheck` payload names `actualPaths` (exactly the files this node wrote, by content,
+against the `base` it measured from) and `declared` (what its write set allowed). Read BOTH — a node
+whose `actualPaths` is empty delivered nothing, however its ledger row reads, and a declared path
+missing from `actualPaths` is work the record claims and the tree does not have.
+
+A write-set overflow is a REPORT, not a refusal: `barrierCheck.result` is `answer`, the exit code is
+0, `mutation_performed` is false, and the run continues with the out-of-set paths named in
+`outOfAllow`. The close envelope carries the same finding as `write_set_report`
+(`{reason, outOfAllow, actual_paths, declared, base, mutation_performed:false}`) on an otherwise
+successful `result: ok`, so a successful close still tells you it happened. Place the paths
+(`amend-surface` to attribute + re-review, or delete them deliberately) before the pre-merge barrier,
+which still refuses an unattributed path. On a `barrier_failed` /
+`close-node` refusal — a sensitive write with no reviewer gate, a foreign-archive write, or a broken
+baseline — the narrowed `reason` and the offending paths are on the top-level `reason` / `outOfAllow`
+fields. Surface all of it VERBATIM — print the full `reason` / `operator_hint` / `outOfAllow` /
+`actualPaths` — never route it through a lossy JSON-summary helper that truncates it.
 
 <!-- CARD: repair-routing -->
 **Authoritative failed-review repair protocol.** `review_failed` is a settled failed transaction.
@@ -700,7 +714,7 @@ same command.
 
 On barrier refusal / `route-findings` result: `docs/plan-run-cards/repair-routing.md`
 (covers `write_set_granularity` / `write_set_overflow` / `sensitive_write_unreviewed` /
-`foreign_archive` / `unattributed_write`; `revert-overflow` vs `repair-node`; `halt for consent`;
+`foreign_archive` / `unattributed_write`; `amend-surface` vs `repair-node`; `halt for consent`;
 `write-halt --reason consent`; `escalated_to_full: consent` / `escalated_to_full: security`;
 `triage` / `proposed_repair` object; plan-repair via `--freeze`; `--forbidden-only` check)
 

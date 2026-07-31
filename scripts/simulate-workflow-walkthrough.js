@@ -1435,6 +1435,55 @@ function validatePlanFixture(tmp, nodesRows, labels) {
   ]).concat(nodesRows).concat(['']).concat(design).join('\n'));
   return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
 }
+
+// ---------------------------------------------------------------------------
+// How every post-dominance pin in this file reads its subject.
+//
+// The freeze wall no longer REFUSES over an uncovered gate. It computes the same post-dominance
+// measurement it always did, emits ONE named advisory per check carrying the gate role and the exact
+// node(s) left unwalled, and freezes. Two consequences, and the second is the dangerous one:
+//
+//   1. A pin that reads `result` has lost its subject — it must read the WARNING.
+//   2. Every CONTROL that read `result === 'in-grammar'` has gone VACUOUS, because `in-grammar` is
+//      now true on BOTH sides of every refuse/control pair. A pair whose two halves agree proves
+//      nothing at all, and it goes on passing while it proves nothing.
+//
+// So: assert the warning by token + gate_role + the NODE BY NAME, and assert its ABSENCE on the
+// control, read out of the same collection. Never by warning COUNT — a check that quietly stopped
+// ranging over the node under test would leave the list non-empty while saying nothing about the
+// leak the fixture was built to create.
+//
+// Keeping the computation is the load-bearing half of the conversion: a missing reviewer over a
+// code-producing node produces no error, no red and no stall at runtime. It produces a merge.
+// ---------------------------------------------------------------------------
+function gateWarnings(verdict, token) {
+  const warnings = (verdict && Array.isArray(verdict.warnings)) ? verdict.warnings : [];
+  return warnings.filter(w => w && w.warning === token);
+}
+// FILTER, never FIND. One check emits a SEPARATE advisory per uncovered node — SPINE-5 over two
+// expansion points emits two `expansion_review_uncovered` rows — so `find` would grade the first
+// row against a different node's name and report the wrong subject as missing. Measured: it did.
+function gateWarning(verdict, token, nodeId) {
+  const rows = gateWarnings(verdict, token);
+  if (nodeId === undefined) return rows[0] || null;
+  return rows.find(w => Array.isArray(w.nodes) && w.nodes.indexOf(nodeId) !== -1) || null;
+}
+function assertGateLeak(verdict, token, role, nodeId, label) {
+  const w = gateWarning(verdict, token, nodeId);
+  assert(!!w && w.gate_role === role,
+    label + ': the leak is still MEASURED — ' + token + ' must name ' + role + ' over node '
+    + nodeId + ', got warnings=' + JSON.stringify(verdict && verdict.warnings));
+  assert(verdict && verdict.result === 'in-grammar',
+    label + ': ...while the freeze no longer refuses over it (the verdict was deleted, the '
+    + 'measurement kept), got ' + JSON.stringify({ result: verdict && verdict.result, reason: verdict && verdict.reason }));
+}
+function assertNoGateLeak(verdict, token, label) {
+  assert(verdict && verdict.result === 'in-grammar' && gateWarnings(verdict, token).length === 0,
+    label + ': this plan must produce NO ' + token + ' — the control half of the pair is the '
+    + 'warning\'s absence now that `result` agrees on both sides, got warnings='
+    + JSON.stringify(verdict && verdict.warnings) + ' result=' + JSON.stringify(verdict && verdict.result));
+}
+
 function testAdaptiveValidatorGovernance() {
   const tmp = adaptiveTmp('validator-gov');
   try {
@@ -1457,14 +1506,15 @@ function testAdaptiveValidatorGovernance() {
     ], []);
     assert(v.result === 'in-grammar' && v.decision === 'ask', 'write-role fan-out must ask, got: ' + JSON.stringify(v));
 
-    // post-dominance leak (doc-updater side branch) -> typed refusal
+    // post-dominance leak (doc-updater side branch): neither path to the sink crosses the reviewer,
+    // so `impl` is unwalled. Now reported as data rather than refused.
     v = validatePlanFixture(tmp, [
       '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| doc | doc-updater | impl | — | 1 | sequence |',
       '| done | finalize | review,doc | — | 1 | sequence |',
     ], []);
-    assert(v.result === 'refuse', 'post-dominance leak must refuse, got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'impl', 'post-dominance leak');
 
     // non-disjoint write-role fan-out -> typed refusal (demotion)
     v = validatePlanFixture(tmp, [
@@ -1476,13 +1526,14 @@ function testAdaptiveValidatorGovernance() {
     ], []);
     assert(v.result === 'refuse', 'non-disjoint fan-out must refuse, got: ' + JSON.stringify(v));
 
-    // sensitive label without security-reviewer -> typed refusal (G2)
+    // sensitive label without security-reviewer -> G2 reported over the sensitive node
     v = validatePlanFixture(tmp, [
       '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], ['security']);
-    assert(v.result === 'refuse', 'sensitive plan without security-reviewer must refuse (G2), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_sensitive_nodes', 'security-reviewer', 'impl',
+      'sensitive plan without security-reviewer (G2)');
 
     // read-only fan-out (adversarial-verifier skeptics) -> auto-run (not clamped to 1, zero blast radius)
     v = validatePlanFixture(tmp, [
@@ -1508,7 +1559,8 @@ function testAdaptiveValidatorGovernance() {
       '| doc | doc-updater | impl | — | 1 | sequence |',
       '| done | finalize | doc | — | 1 | sequence |',
     ], []);
-    assert(v.result === 'refuse' && /G1/.test((v.errors||[]).join(';')), 'implementer without code-reviewer post-dominance must refuse (G1), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'impl',
+      'implementer without code-reviewer post-dominance (G1)');
 
     // #334: in-grammar control — explore→impl→review→vgate(main-session-gate)→done auto-runs.
     v = validatePlanFixture(tmp, [
@@ -1519,6 +1571,7 @@ function testAdaptiveValidatorGovernance() {
       '| done | finalize | vgate | — | 1 | sequence |',
     ], []);
     assert(v.result === 'in-grammar' && v.decision === 'auto-run', '#334: a main-session-gate post-dominating code must be in-grammar+auto-run, got: ' + JSON.stringify(v));
+    assertNoGateLeak(v, 'main_session_gate_uncovered', '#334 control: gate on the spine');
 
     // #334 G3: a main-session-gate on a SIDE branch (does not post-dominate the implementer) → refuse /G3/.
     v = validatePlanFixture(tmp, [
@@ -1528,7 +1581,8 @@ function testAdaptiveValidatorGovernance() {
       '| vgate | main-session-gate | explore | — | 1 | sequence |',
       '| done | finalize | review,vgate | — | 1 | sequence |',
     ], []);
-    assert(v.result === 'refuse' && /G3/.test((v.errors||[]).join(';')), '#334: a side-branch main-session-gate must refuse (G3), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'main_session_gate_uncovered', 'main-session-gate', 'impl',
+      '#334: a side-branch main-session-gate (G3)');
 
     // #334: a main-session-gate with a declared write set → read-only refusal.
     v = validatePlanFixture(tmp, [
@@ -1612,11 +1666,14 @@ function testAdaptiveValidatorGovernance() {
       assert(refreeze.result === 'refuse' && /directory-shaped/.test((refreeze.errors||[]).join(';')),
         '#381: the same legacy content must REFUSE at --freeze, got: ' + JSON.stringify(refreeze));
 
-      // #381 (exact-barrier semantics PRESERVED): the barrier still refuses a real file write
-      // against a `src/` directory declaration — the fix lives at freeze, NOT by teaching the
-      // barrier to prefix-match (explicit non-goal).
+      // #381 (exact-barrier semantics PRESERVED): the barrier still does NOT prefix-match a real file
+      // write against a `src/` directory declaration — the fix lives at freeze, NOT by teaching the
+      // barrier to prefix-match (explicit non-goal). The per-node scope now REPORTS the finding
+      // (`answer`) rather than refusing it; what this case pins is the attribution — `src/foo.js` must
+      // land in outOfAllow, never be silently absorbed by the `src/` token.
       const bc = pv.barrierCheck(frozenLegacy, ['src/foo.js'], { nodeId: 'impl' });
-      assert(bc && bc.result === 'refuse', '#381: barrierCheck still refuses src/foo.js vs a src/ declaration (exact semantics preserved), got: ' + JSON.stringify(bc));
+      assert(bc && bc.result === 'answer' && Array.isArray(bc.outOfAllow) && bc.outOfAllow.indexOf('src/foo.js') >= 0,
+        '#381: barrierCheck still refuses to prefix-match src/foo.js against a src/ declaration — the path stays in outOfAllow (exact semantics preserved), got: ' + JSON.stringify(bc));
     }
 
     // #382: optional per-node `model` column ({opus|sonnet}). Build 7-col plans (the column is the
@@ -2184,6 +2241,10 @@ function testMetricOptimizerContract() {
     // zero gate-plumbing (metric-optimizer ∈ IMPLEMENT_ROLES ⇒ producesCode ⇒ G1/G3 fire for free).
     let v = optPlan(optBlock('opt'), validNodes);
     assert(v.result === 'in-grammar', 'AC1: a well-formed optimize plan must freeze in-grammar, got: ' + JSON.stringify(v));
+    // The control half of BOTH pairs below. `in-grammar` alone stopped separating them once the two
+    // gate verdicts became advisories, so the covered plan must be shown to emit neither warning.
+    assertNoGateLeak(v, 'unreviewed_code_nodes', 'AC1 control: a fully gated optimize plan');
+    assertNoGateLeak(v, 'unreproduced_metric_nodes', 'AC1 control: a fully gated optimize plan');
     v = optPlan(optBlock('opt'), [
       '| explore | code-explorer | — | — | 1 | sequence | — | — |',
       '| opt | metric-optimizer | explore | src/hot.js | 1 | sequence | standard | 60 |',
@@ -2199,7 +2260,8 @@ function testMetricOptimizerContract() {
       '| adv | adversarial-verifier | opt | — | 1 | sequence |',
       '| done | finalize | adv | — | 1 | sequence |',
     ]);
-    assert(v.result === 'refuse' && /G1/.test(errs(v)), 'AC1: an optimize node without code-reviewer post-dominance must refuse G1, got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'opt',
+      'AC1: an optimize node without code-reviewer post-dominance (G1 inherited for free)');
 
     // OPT-1 — 1:1 metric-optimizer ↔ optimize block.
     //   (a) an optimize node with NO block refuses.
@@ -2244,7 +2306,8 @@ function testMetricOptimizerContract() {
       '| review | code-reviewer | opt | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ]);
-    assert(v.result === 'refuse' && /OPT-5/.test(errs(v)), 'OPT-5: an optimize node reaching the sink without a post-dominating adversarial-verifier must refuse, got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreproduced_metric_nodes', 'adversarial-verifier', 'opt',
+      'OPT-5: an optimize node reaching the sink without a post-dominating adversarial-verifier');
 
     // OPT-6 — regression_gate resolves non-empty (explicit, or inherited from Meta validation_command).
     v = optPlan(optBlock('opt', { regression_gate: null }), validNodes); // no explicit gate, no Meta validation_command
@@ -2397,13 +2460,16 @@ function testMetricOptimizerContract() {
       const bc = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'opt', '--json'], grepo);
       assert(bc.status === 0 && JSON.parse(bc.stdout).result === 'pass',
         'AC5: after ≥3 commit/revert cycles + an unchanged declared write set, the per-node net-diff barrier must pass, got status ' + bc.status + ' ' + bc.stdout);
-      // control: a net write OUTSIDE the declared set (an intermediate commit that escaped the lane) refuses.
+      // control: a net write OUTSIDE the declared set (an intermediate commit that escaped the lane) is
+      // ATTRIBUTED. The per-node scope reports rather than refuses, so the discriminator is the named
+      // path, not the exit code — without this control the pass above could be a vacuous barrier.
       fs.writeFileSync(path.join(grepo, 'src', 'stray.js'), 'escaped\n');
       G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
       G.git(grepo, ['commit', '-m', 'stray out-of-lane write'], { encoding: 'utf8' });
       const bc2 = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'opt', '--json'], grepo);
-      assert(bc2.status === 1 && /stray\.js/.test(bc2.stdout),
-        'AC5 control: a net out-of-lane write must still refuse (the barrier attributes the net diff, not the commit count), got status ' + bc2.status + ' ' + bc2.stdout);
+      const bc2j = JSON.parse(bc2.stdout);
+      assert(bc2j.result === 'answer' && (bc2j.outOfAllow || []).indexOf('src/stray.js') >= 0,
+        'AC5 control: a net out-of-lane write must still be ATTRIBUTED (the barrier measures the net diff, not the commit count), got status ' + bc2.status + ' ' + bc2.stdout);
     } finally { fs.rmSync(grepo, { recursive: true, force: true }); fs.rmSync(grepo + '-remote', { recursive: true, force: true }); }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testMetricOptimizerContract: PASSED');
@@ -2743,7 +2809,7 @@ function testAdaptiveGateBarrierEnforcement() {
       '| done | finalize | review | — | 1 | sequence |', ''].join('\n');
     const granFrozen = '<!-- plan_hash: ' + planValidator.computePlanHash(granPlan) + ' -->\n' + granPlan;
     const granR = planValidator.barrierCheck(granFrozen, ['src/a.js', 'src/b.js'], { nodeId: 'impl' });
-    assert(granR.result === 'refuse' && granR.reason === 'write_set_granularity',
+    assert(granR.result === 'answer' && granR.reason === 'write_set_granularity',
       '#404: outOfAllow all strict-subtree of own bare dir token "src/" => reason:write_set_granularity, got ' + JSON.stringify(granR));
     // bare (no-trailing-slash) directory token form is also covered (normalized to `tok + "/"`).
     const granBarePlan = granPlan.replace('| src/ |', '| src |');
@@ -2753,7 +2819,7 @@ function testAdaptiveGateBarrierEnforcement() {
     // a FOREIGN (non-subtree) write present in the set keeps it plain write_set_overflow — the
     // discriminator the granularity mutation would break (it would mis-classify this as granularity).
     const granForeign = planValidator.barrierCheck(granFrozen, ['src/a.js', 'lib/foreign.js'], { nodeId: 'impl' });
-    assert(granForeign.result === 'refuse' && granForeign.reason === 'write_set_overflow',
+    assert(granForeign.result === 'answer' && granForeign.reason === 'write_set_overflow',
       '#404 discriminator: a foreign (non-subtree) write present => reason:write_set_overflow, not granularity, got ' + JSON.stringify(granForeign));
 
     // --- --gate-verify CLI exit codes.
@@ -2982,8 +3048,10 @@ function testAdaptivePerInstanceBarrier() {
   try {
     // --- PURE: per-node allowlist = the node's OWN declared write set (vs union for whole-plan).
     const plan = mkPlan();
-    assert(planValidator.barrierCheck(plan, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' }).result === 'refuse',
-      '#239: node a writing into sibling b lane (bbb/y.js) must refuse (own-lane allowlist)');
+    const ownLane239 = planValidator.barrierCheck(plan, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' });
+    assert(ownLane239.result === 'answer' && (ownLane239.outOfAllow || []).indexOf('bbb/y.js') >= 0,
+      '#239: node a writing into sibling b lane (bbb/y.js) must be ATTRIBUTED to a (own-lane allowlist, '
+      + 'which the whole-plan union below cannot see), got ' + JSON.stringify(ownLane239));
     assert(planValidator.barrierCheck(plan, ['aaa/x.js'], { nodeId: 'a' }).result === 'pass',
       '#239 control: node a writing only its own lane must pass');
     assert(planValidator.barrierCheck(plan, ['aaa/x.js', 'bbb/y.js'], {}).result === 'pass',
@@ -3008,9 +3076,11 @@ function testAdaptivePerInstanceBarrier() {
       fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true }); fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
       fs.mkdirSync(path.join(grepo, 'bbb'), { recursive: true }); fs.writeFileSync(path.join(grepo, 'bbb', 'y.js'), 'y\n');
       let r = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'a', '--json'], grepo);
-      assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
-        '#239 CLI: node a overflowing into b lane must refuse, got status ' + r.status + ' ' + r.stdout);
-      assert(/bbb\/y\.js/.test(r.stdout), '#239: the refusal must name the out-of-lane write, got ' + r.stdout);
+      // Per-node scope REPORTS the overflow: the per-instance attribution (a writing into b's lane is
+      // a's overflow, which the whole-plan union could never see) is what this pins, not the verdict.
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'answer',
+        '#239 CLI: node a overflowing into b lane must be attributed to a, got status ' + r.status + ' ' + r.stdout);
+      assert(/bbb\/y\.js/.test(r.stdout), '#239: the report must name the out-of-lane write, got ' + r.stdout);
       // control: drop the overflow; only the own-lane write remains -> pass.
       fs.rmSync(path.join(grepo, 'bbb', 'y.js'));
       r = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'a', '--json'], grepo);
@@ -3114,8 +3184,8 @@ function testAdaptivePerInstanceBarrierHardening() {
       G.git(grepo, ['add', '-A'], { encoding: 'utf8' });
       G.git(grepo, ['commit', '-m', 'oops'], { encoding: 'utf8' });
       const r = bc(planPath, 'a', grepo);
-      assert(r.status === 1 && /ccc\/z\.js/.test(r.stdout),
-        'v3.21.0 (3): a COMMITTED out-of-lane write must still refuse, got ' + r.stdout);
+      assert(JSON.parse(r.stdout).result === 'answer' && /ccc\/z\.js/.test(r.stdout),
+        'v3.21.0 (3): a COMMITTED out-of-lane write must still be NAMED (tree-diff sees tracked changes too), got ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   // (4) per-node SENSITIVITY teeth (finding 5): an actual sensitive write on a plan with no
@@ -3136,8 +3206,24 @@ function testAdaptivePerInstanceBarrierHardening() {
       assert(rec(planPath, 'a', grepo).status === 0, '(5) record-base a');
       w(grepo, 'bbb/y.js', 'y\n');
       const r = bc(planPath, 'a', grepo, ['--base', 'HEAD']);
-      assert(r.status === 1 && /--base/.test(r.stdout),
-        'v3.21.0 (5): --base must be rejected with --node-id (cannot neuter the per-node gate), got ' + r.stdout);
+      // --base with --node-id used to be a usage REFUSAL, and the comment that rejected it named
+      // exactly one harm: honoring `--base HEAD` after the node committed "would empty the diff and
+      // neuter the gate". That is a claim about the check's VERDICT, so the verdict is what got
+      // deleted — but the harm it named is a property, and the property is what is pinned here.
+      // Re-armed to assert the gate is NOT neutered, which is strictly stronger than asserting the
+      // caller got a usage error: it measures the outcome the refusal was only ever predicting.
+      const o = JSON.parse(r.stdout.trim().split('\n').pop());
+      assert(r.status === 0 && o.result === 'answer',
+        'v3.21.0 (5): --base with --node-id now answers instead of refusing, got status ' + r.status + ' ' + o.result);
+      assert(o.reason === 'write_set_overflow' && o.outOfAllow.includes('bbb/y.js'),
+        'v3.21.0 (5): THE GATE IS NOT NEUTERED — the overflow into bbb is still detected despite '
+        + '--base HEAD, got ' + JSON.stringify({ reason: o.reason, outOfAllow: o.outOfAllow }));
+      // Why it survives: the authoritative measurement is made against the RECORDED baseline, which
+      // a caller cannot move. Asserting the two bases DIFFER is what proves the caller's value was
+      // not silently adopted — equal bases would satisfy every assertion above and mean the opposite.
+      assert(o.caller_base && o.caller_base.requested === 'HEAD' && o.caller_base.resolved !== o.base,
+        'v3.21.0 (5): the caller base is a SECOND labelled view, not the authoritative one, got '
+        + JSON.stringify({ base: o.base, caller_base: o.caller_base && o.caller_base.resolved }));
     } finally { cleanup(grepo); } }
 
   // (6) record-base is IDEMPOTENT (critic-2): a re-dispatch must REUSE the original baseline, so a
@@ -3151,8 +3237,8 @@ function testAdaptivePerInstanceBarrierHardening() {
         'v3.21.0 (6): a second --record-base must REUSE the baseline (resume-safe), got ' + rb2.stdout);
       w(grepo, 'aaa/x.js', 'x\n');
       const r = bc(planPath, 'a', grepo);
-      assert(r.status === 1 && /bbb\/y\.js/.test(r.stdout),
-        'v3.21.0 (6): re-record must NOT launder a crashed attempt\'s overflow, got ' + r.stdout);
+      assert(JSON.parse(r.stdout).result === 'answer' && /bbb\/y\.js/.test(r.stdout),
+        'v3.21.0 (6): re-record must NOT launder a crashed attempt\'s overflow — the path stays NAMED, got ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   // (7) --record-base requires --node-id (finding 11).
@@ -3196,8 +3282,8 @@ function testAdaptivePerInstanceBarrierHardening() {
       w(grepo, 'aaa/x.js', 'x\n');                             // own lane
       w(grepo, 'bbb/y.js', 'orig\noverflow\n');                // modify tracked-but-gitignored SIBLING lane
       const r = bc(planPath, 'a', grepo);
-      assert(r.status === 1 && /bbb\/y\.js/.test(r.stdout),
-        'v3.21.0 (9): a tracked-but-gitignored out-of-lane modification (landable) must refuse, got ' + r.stdout);
+      assert(JSON.parse(r.stdout).result === 'answer' && /bbb\/y\.js/.test(r.stdout),
+        'v3.21.0 (9): a tracked-but-gitignored out-of-lane modification is LANDABLE and must still be NAMED (the snapshot reads the index, not the ignore rules), got ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   // (10) gc-survival (re-gate #3): the recorded base is ref-anchored (refs/kaola-workflow/barrier/...),
@@ -3279,8 +3365,9 @@ function testBundle424432433ValidatorGates() {
     '| impl | in_progress |', '| rv | pending |', '| done | pending |', ''].join('\n');
   {
     const r = pv.barrierCheck(PLAN_MD, ['agents/workflow-planner.md'], { nodeId: 'impl' });
-    assert(r && r.result === 'refuse' && r.reason === 'write_set_overflow',
-      '#424 (1): an undeclared behavioral agents/*.md OUTSIDE the allowband must refuse write_set_overflow, got ' + JSON.stringify(r));
+    assert(r && r.result === 'answer' && r.reason === 'write_set_overflow'
+      && (r.outOfAllow || []).indexOf('agents/workflow-planner.md') >= 0,
+      '#424 (1): an undeclared behavioral agents/*.md OUTSIDE the allowband is PRODUCTION and must be attributed write_set_overflow, got ' + JSON.stringify(r));
   }
   // --- #424 (2) IN-band undeclared .md passes: repo-root CHANGELOG.md + docs/** are invisible.
   {
@@ -3292,8 +3379,8 @@ function testBundle424432433ValidatorGates() {
       '#424 (2): an undeclared repo-root README.md is in the allowband and must pass');
     // boundary: a NESTED non-root README.md is OUTSIDE the band.
     const nested = pv.barrierCheck(PLAN_MD, ['plugins/kaola-workflow/README.md'], { nodeId: 'impl' });
-    assert(nested.result === 'refuse',
-      '#424 (2 boundary): a nested non-root README.md is OUTSIDE the band and must refuse, got ' + JSON.stringify(nested));
+    assert(nested.result === 'answer' && (nested.outOfAllow || []).indexOf('plugins/kaola-workflow/README.md') >= 0,
+      '#424 (2 boundary): a nested non-root README.md is OUTSIDE the band — it is PRODUCTION and must be attributed, not waved through, got ' + JSON.stringify(nested));
   }
   // --- #424 isBarrierInvisible exported predicate (the shared source for the finalize sweep).
   {
@@ -3493,8 +3580,21 @@ function testBundle424432433ValidatorGates() {
   { const { grepo, planPath } = mkRepo({ a: 'in_progress', rv: 'pending', done: 'pending' });
     try {
       const dr = runNode(planValidatorScript, [planPath, '--drop-base', '--node-id', 'a', '--json'], grepo);
-      assert(dr.status === 1 && JSON.parse(dr.stdout).reason === 'drop_base_window_open',
-        '#424 (3): --drop-base on an in_progress node must refuse drop_base_window_open, got status ' + dr.status + ' ' + dr.stdout);
+      const d = JSON.parse(dr.stdout);
+      assert(dr.status === 0 && d.result === 'answer' && d.reason === 'drop_base_window_open',
+        '#424 (3): --drop-base mid-window now ANSWERS instead of refusing, got status ' + dr.status + ' ' + dr.stdout);
+      // `mutation_performed: true`, and it must be true: the drop is the caller's REQUESTED effect
+      // and it happened. A converted site that reported `false` here to look harmless would be the
+      // same class of lie the conversion exists to remove.
+      assert(d.mutation_performed === true,
+        '#424 (3): the drop actually happened and says so, got ' + JSON.stringify(d.mutation_performed));
+      // THE TEST-3 OBLIGATION: a refusal that becomes a report must durably capture what it was
+      // freezing. What this one froze was "you are destroying a baseline while the window is OPEN",
+      // so the report carries the ledger status observed AT the drop. Without this the conversion
+      // would be a deletion — exit 0 and nothing recorded about why it used to matter.
+      assert(d.ledger_status_at_drop === 'in_progress',
+        '#424 (3): the report records the open window it was destroying, got '
+        + JSON.stringify(d.ledger_status_at_drop));
     } finally { cleanup(grepo); } }
 
   // --- #424 (4) DROP-BASE on a PENDING node is allowed (pre-open is the only legal window).
@@ -4161,8 +4261,9 @@ function testBundle424432433NodeSeeding() {
     // (7c) MUTATION guard: a behavioral .md OUTSIDE the allowband (agents/workflow-planner.md) written
     // by the doc node must REFUSE — confirms the allowband is a narrow gate, not a blanket pass.
     const r7c = pv.barrierCheck(PLAN_DOC, ['agents/workflow-planner.md'], { nodeId: 'doc' });
-    assert(r7c.result === 'refuse' && r7c.reason === 'write_set_overflow',
-      '#424 (7c): doc-updater writing an out-of-band agents/*.md must refuse write_set_overflow, got ' + JSON.stringify(r7c));
+    assert(r7c.result === 'answer' && r7c.reason === 'write_set_overflow'
+      && (r7c.outOfAllow || []).indexOf('agents/workflow-planner.md') >= 0,
+      '#424 (7c): doc-updater writing an out-of-band agents/*.md must be attributed write_set_overflow, got ' + JSON.stringify(r7c));
   }
 
   // --- scenario 6: evidence seeding via open-next CLI (requires a git repo) -------------------
@@ -4396,16 +4497,27 @@ function testAdaptiveTier2Composition() {
 
     // Governance edge case: the SAME two gates as PARALLEL sibling branches (each reaching
     // the sink independently) is a post-dominance LEAK — neither gate post-dominates impl
-    // (each path crosses only one). The validator must refuse it. This is the multi-gate
-    // analogue of the doc-updater side-branch leak.
+    // (each path crosses only one). This is the multi-gate analogue of the doc-updater
+    // side-branch leak.
+    //
+    // THE VERDICT MOVED; THE MEASUREMENT DID NOT. The freeze no longer refuses over it — the leak
+    // rides out as named advisory DATA instead. Keeping the computation is the load-bearing half:
+    // a missing reviewer over a code-producing node produces no error, no red and no stall at
+    // runtime, it produces a MERGE, so cutting the computation along with the refusal would have
+    // made the harm invisible rather than merely unenforced.
+    //
+    // Pinned by the NODE and the gate role, never by the warning count: a check that quietly stopped
+    // ranging over `impl` would leave the list non-empty while saying nothing about this leak.
     v = validatePlanFixture(tmp, [
       '| impl | tdd-guide | — | auth/login.js | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| sec | security-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review,sec | — | 1 | sequence |',
     ], ['security']);
-    assert(v.result === 'refuse',
-      'tier2: parallel reviewer branches are a post-dominance leak and must refuse, got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'impl',
+      'tier2: parallel reviewer branches leave impl unwalled (G1)');
+    assertGateLeak(v, 'unreviewed_sensitive_nodes', 'security-reviewer', 'impl',
+      'tier2: ...and the sensitive-node wall reports the same leak (G2)');
 
     // multi-modal-sweep: read-only fan-out of code-explorer (3 modalities) -> planner merge
     // -> sequential impl -> review -> sink. Read-only fan-out is zero blast radius => auto-run.
@@ -4456,24 +4568,35 @@ function testAdaptiveTier2Composition() {
     // REGRESSION (adversarial review): code routed through doc-updater must NOT dodge G1.
     // A non-implement write role writing a non-docs file is a code-producing node and needs
     // code-reviewer post-dominance.
+    //
+    // BOTH HALVES OF THIS PAIR MOVED, and the negative half is the one that could have gone silently
+    // vacuous. `result` is now `in-grammar` for the leak AND for the docs-only plan, so it no longer
+    // discriminates anything; the contrast lives entirely in whether `unreviewed_code_nodes` is
+    // present. Read from the same collection in both directions, or the pair proves nothing.
     v = validatePlanFixture(tmp, [
       '| n1 | doc-updater | — | src/server.js | 1 | sequence |',
       '| done | finalize | n1 | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse', 'tier2 regression: doc-updater writing code must require code-reviewer (G1), got: ' + JSON.stringify(v));
-    // ...but a docs-only doc-updater stays in the trivial band (no code review required).
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'n1',
+      'tier2 regression: doc-updater writing code is still classified code-producing (G1)');
+    // ...but a docs-only doc-updater stays in the trivial band (no code review required), and the
+    // proof of that is the ABSENCE of the same warning — not a `result` both cases now share.
     v = validatePlanFixture(tmp, [
       '| n1 | doc-updater | — | docs/guide.md | 1 | sequence |',
       '| done | finalize | n1 | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'in-grammar', 'tier2 regression: docs-only doc-updater stays trivial, got: ' + JSON.stringify(v));
+    assertNoGateLeak(v, 'unreviewed_code_nodes', 'tier2 regression: docs-only doc-updater stays trivial');
     // REGRESSION: a sensitive LABEL must not LOOSEN G2 — a sensitive non-implement node must
-    // still require security-reviewer (the target set is a union, not a replacement).
+    // still require security-reviewer (the target set is a union, not a replacement). So BOTH walls
+    // must report: dropping either one is the loosening this pin exists to catch.
     v = validatePlanFixture(tmp, [
       '| n1 | doc-updater | — | auth/handler.js | 1 | sequence |',
       '| done | finalize | n1 | — | 1 | sequence |',
     ], ['auth']);
-    assert(v.result === 'refuse', 'tier2 regression: sensitive doc-updater must require security-reviewer even under a sensitive label (G2 union), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_sensitive_nodes', 'security-reviewer', 'n1',
+      'tier2 regression: a sensitive doc-updater under a sensitive label (G2 union)');
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'n1',
+      'tier2 regression: ...and the G1 wall reports it too — the target set is a union, so a sensitive label must not consume the code-review obligation');
 
     // REGRESSION: plan_hash covers ## Meta labels — tampering labels after freeze must fail resume-check.
     const planValidator = require(planValidatorScript);
@@ -4509,8 +4632,11 @@ function testAdaptiveAuditFixes() {
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| done | finalize | explore | src/app.js | 1 | sequence |',
     ], ['feature']);
-    assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
-      'A1: code on the finalize sink must refuse (G1), got: ' + JSON.stringify(v));
+    // The sink cannot be post-dominated by anything, so code declared ON it is unwalled by
+    // construction — and the warning names the SINK, which is what makes this fixture's claim
+    // (code cannot hide on the terminal node) checkable rather than incidental.
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'done',
+      'A1: code on the finalize sink (G1)');
     // A1 control: a finalize node doing docs/state bookkeeping (CHANGELOG.md) stays in-grammar.
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
@@ -4519,22 +4645,23 @@ function testAdaptiveAuditFixes() {
       '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
     ], ['feature']);
     assert(v.result === 'in-grammar', 'A1 control: finalize docs write must stay in-grammar, got: ' + JSON.stringify(v));
+    assertNoGateLeak(v, 'unreviewed_code_nodes', 'A1 control: finalize docs write');
 
     // A2: a slashless root-level file (Dockerfile) on a write role is code and must require G1.
     v = validatePlanFixture(tmp, [
       '| n1 | doc-updater | — | Dockerfile | 1 | sequence |',
       '| done | finalize | n1 | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
-      'A2: slashless root file must be captured and require code-reviewer (G1), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'n1',
+      'A2: a slashless root file must be captured as code (G1)');
 
     // A2′: a dot-leading path with slashes (.github/workflows/deploy.yml) must also be captured.
     v = validatePlanFixture(tmp, [
       '| n1 | doc-updater | — | .github/workflows/deploy.yml | 1 | sequence |',
       '| done | finalize | n1 | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
-      'A2′: dot-leading path must be captured and require code-reviewer (G1), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_code_nodes', 'code-reviewer', 'n1',
+      'A2′: a dot-leading path must be captured as code (G1)');
 
     // --- #501: high-blast-radius surfaces are SENSITIVE and require the internal G2 security-reviewer
     // post-dominator (pattern-list extension only; triggers the EXISTING internal gate, NO CI/CD prose,
@@ -4547,8 +4674,8 @@ function testAdaptiveAuditFixes() {
         '| review | code-reviewer | impl | — | 1 | sequence |',
         '| done | finalize | review | — | 1 | sequence |',
       ], ['chore']);
-      assert(v.result === 'refuse' && /G2/.test((v.errors || []).join(';')),
-        '#501: a node writing the sensitive surface "' + sp + '" with no security-reviewer post-dominator must refuse (G2), got: ' + JSON.stringify(v));
+      assertGateLeak(v, 'unreviewed_sensitive_nodes', 'security-reviewer', 'impl',
+        '#501: the sensitive surface "' + sp + '" with no security-reviewer post-dominator');
       // CONTROL: the same sensitive path WITH a security-reviewer post-dominator freezes green.
       v = validatePlanFixture(tmp, [
         '| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |',
@@ -4556,8 +4683,11 @@ function testAdaptiveAuditFixes() {
         '| sec | security-reviewer | review | — | 1 | sequence |',
         '| done | finalize | sec | — | 1 | sequence |',
       ], ['chore']);
-      assert(v.result === 'in-grammar',
-        '#501 CONTROL: the sensitive surface "' + sp + '" WITH a security-reviewer post-dominator must freeze green, got: ' + JSON.stringify(v));
+      // THE PAIR'S WHOLE VALUE IS HERE. `in-grammar` is now true for the uncovered plan too, so
+      // without the warning's absence this loop would pass identically whether or not `sp` is
+      // classified sensitive at all — the pattern-list extension would be unpinned.
+      assertNoGateLeak(v, 'unreviewed_sensitive_nodes',
+        '#501 CONTROL: "' + sp + '" WITH a security-reviewer post-dominator');
     }
     // #501 NEG-CONTROL: lookalike benign paths must NOT be swept into G2 (anchors are precise) — no
     // false positives. environment.js / Dockerfileutil.js / a docs .github-notes.md are ordinary code/docs.
@@ -4566,8 +4696,8 @@ function testAdaptiveAuditFixes() {
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'in-grammar' && !/G2/.test((v.errors || []).join(';')),
-      '#501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2), got: ' + JSON.stringify(v));
+    assertNoGateLeak(v, 'unreviewed_sensitive_nodes',
+      '#501 NEG-CONTROL: benign environment.js / Dockerfileutil.js are not sensitive');
 
     // A2: a cohesive write-role node may declare a large exact-file set (> 6) and freeze
     // in-grammar — the per-node FILE_CEILING was retired (#453); other write-safety walls still apply.
@@ -4580,19 +4710,35 @@ function testAdaptiveAuditFixes() {
       'A2: a large cohesive write-role node (12 files) must freeze in-grammar after FILE_CEILING removal, got: ' + JSON.stringify(v));
 
     // B1: a decoy `labels:` line OUTSIDE ## Meta (not covered by plan_hash) must not override the
-    // real labels and drop G2. Label-only-sensitive plan with no security-reviewer must refuse.
-    const decoyPlan = [
-      '# Plan', '', 'labels: chore', '', '## Meta', 'plan_form: spine', '', 'labels: security', '',
+    // real labels and drop G2.
+    //
+    // THE FIXTURE NOW CARRIES A `## Design`, and that is a repair, not decoration. Without it the
+    // plan refused `design_missing` — so after the conversion this pin still saw `result: 'refuse'`
+    // while never reaching the wall it was written for, and a naive `result === 'refuse'` repair
+    // would have left it GREEN and validating the wrong wall entirely. With the section present it
+    // reaches G2, and G2 is then read where it now lives.
+    const decoyDesign = ['## Design', '',
+      'Decompose the spine into concrete role nodes; the sequence edges are real data dependencies (S1). Done means the review gate clears and validation passes.', ''];
+    const decoyNodes = [
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
       '| n1 | tdd-guide | — | src/handler.js | 1 | sequence |',
       '| rv | code-reviewer | n1 | — | 1 | sequence |',
       '| done | finalize | rv | — | 1 | sequence |', ''
-    ].join('\n');
+    ];
+    const decoyPlan = ['# Plan', '', 'labels: chore', '', '## Meta', 'plan_form: spine', '', 'labels: security', '']
+      .concat(decoyNodes).concat(decoyDesign).join('\n');
     const dv = planValidator.validatePlan(decoyPlan, { root: tmp });
-    assert(dv.result === 'refuse' && /G2/.test((dv.errors || []).join(';')),
-      'B1: decoy labels line outside ## Meta must not drop G2, got: ' + JSON.stringify(dv));
+    assertGateLeak(dv, 'unreviewed_sensitive_nodes', 'security-reviewer', 'n1',
+      'B1: a decoy labels line outside ## Meta must not drop G2');
+    // ...and the OTHER side of the claim, which the old single-sided pin never made: when ## Meta
+    // genuinely says `chore`, the same plan is not sensitive. Both halves, or "must not drop G2"
+    // is untested against a validator that flags everything.
+    const honestPlan = ['# Plan', '', 'labels: security', '', '## Meta', 'plan_form: spine', '', 'labels: chore', '']
+      .concat(decoyNodes).concat(decoyDesign).join('\n');
+    assertNoGateLeak(planValidator.validatePlan(honestPlan, { root: tmp }), 'unreviewed_sensitive_nodes',
+      'B1 control: the labels ## Meta really declares are the ones that count');
 
     // B2/B3: a fenced `## ` line inside ## Nodes must not hide an appended node from the validator
     // (it shares the fence-aware reader with the executor) — the hidden node makes a second sink.
@@ -4698,8 +4844,8 @@ function testAdaptiveCheapWinFixes() {
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse' && /G2/.test((v.errors || []).join(';')),
-      'B5: fs/ write without security-reviewer must refuse (G2 sensitivity), got: ' + JSON.stringify(v));
+    assertGateLeak(v, 'unreviewed_sensitive_nodes', 'security-reviewer', 'impl',
+      'B5: an fs/ write with no security-reviewer post-dominator (G2 sensitivity)');
     v = validatePlanFixture(tmp, [
       '| impl | tdd-guide | — | fs/handler.js | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -4708,6 +4854,7 @@ function testAdaptiveCheapWinFixes() {
     ], ['chore']);
     assert(v.result === 'in-grammar' && v.decision === 'ask' && v.risk && v.risk.sensitivity === true,
       'B5: fs/ write with security-reviewer must be in-grammar + ask (sensitivity), got: ' + JSON.stringify(v));
+    assertNoGateLeak(v, 'unreviewed_sensitive_nodes', 'B5 control: fs/ write WITH a security-reviewer');
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| impl | tdd-guide | explore | src/refs/x.js | 1 | sequence |',
@@ -4716,6 +4863,7 @@ function testAdaptiveCheapWinFixes() {
     ], ['chore']);
     assert(v.result === 'in-grammar' && v.decision === 'auto-run' && v.risk && v.risk.sensitivity === false,
       'B5 control: src/refs/ must not over-match fs/ and must stay auto-run, got: ' + JSON.stringify(v));
+    assertNoGateLeak(v, 'unreviewed_sensitive_nodes', 'B5 NEG-CONTROL: src/refs/ does not over-match fs/');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveCheapWinFixes: PASSED');
 }
@@ -14133,6 +14281,7 @@ function testAdaptiveSelectComposition() {
       ], ['enhancement']);
       assert(v.result === 'in-grammar',
         'G1d VALID: gate depending on ALL arms must be in-grammar, got: ' + JSON.stringify(v));
+      assertNoGateLeak(v, 'unreviewed_code_nodes', 'G1d VALID: gate depends on every arm');
     }
 
     // G1d NEGATIVE — gate post-dominates only SOME arms (arm-a but not arm-b via done):
@@ -14146,10 +14295,16 @@ function testAdaptiveSelectComposition() {
         '| review | code-reviewer | arm-a | — | 1 | sequence | — |',
         '| done | finalize | review,arm-b | — | 1 | sequence | — |',
       ], ['enhancement']);
-      assert(r.result === 'refuse',
-        'G1d NEGATIVE: gate missing arm-b must refuse, got: ' + JSON.stringify(r));
-      assert(Array.isArray(r.errors) && r.errors.some(e => /does not post-dominate/.test(e)),
-        'G1d NEGATIVE: refusal must cite post-dominance failure (not an unrelated error), got: ' + JSON.stringify(r));
+      // Pinned to arm-b BY NAME: the whole point of this fixture is that the covered arm (arm-a) is
+      // fine and the uncovered one is not, so a report that named the wrong arm — or no arm — would
+      // be indistinguishable from a correct one under any count- or presence-based check.
+      assertGateLeak(r, 'unreviewed_code_nodes', 'code-reviewer', 'arm-b',
+        'G1d NEGATIVE: a gate post-dominating only SOME select arms');
+      // `(… || {}).detail` deliberately: when the row is missing this must REPORT, not throw — a
+      // throw here would abort the scenario and hide every arm below it.
+      assert(/does not post-dominate/.test((gateWarning(r, 'unreviewed_code_nodes', 'arm-b') || {}).detail || ''),
+        'G1d NEGATIVE: the report must still cite post-dominance (not some unrelated cause), got: '
+        + JSON.stringify(gateWarning(r, 'unreviewed_code_nodes', 'arm-b')));
     }
 
     // G2 — two INDEPENDENT select() groups with DIFFERENT group names (select(fix) and
@@ -14520,8 +14675,22 @@ function testAdaptiveHandoffAskFreezesNotApproval() {
 }
 
 // ---------------------------------------------------------------------------
-// testAdaptiveHandoffRefuseNoMutation — out-of-grammar plan (post-dominance leak).
+// testAdaptiveHandoffRefuseNoMutation — out-of-grammar plan.
 // Snapshot bytes first. Assert plan_invalid, exit≠0, NO mutation of any kind.
+//
+// THE SUBJECT IS THE ZERO-WRITE GUARANTEE, not the fixture. A `plan_invalid` handoff must leave the
+// plan byte-identical, `## Planning Evidence` absent, no barrier baseline and no roadmap entry —
+// because the freeze is the publication boundary from the planless epoch-1 state to the planned one,
+// and a half-applied one is the state a successor cannot resume from.
+//
+// The fixture MOVED, deliberately. It used to be a post-dominance leak (a doc-updater side-branch not
+// dominated by code-reviewer), and post-dominance no longer refuses: it is measured and reported as
+// `unreviewed_code_nodes` advisory data, so that plan now FREEZES. Keeping it here would have left
+// every assertion below testing a successful freeze — the exact "fix the exit code, delete the
+// zero-write claim" failure. It is now the pairwise-disjointness wall, which is core to the four-shape
+// grammar and cannot be reported-instead-of-refused without the fan-out shape losing its meaning.
+// If a later change converts `plan_invalid` itself, re-point this fixture again; do not relax the
+// mutation assertions to accommodate a freeze that happened.
 // ---------------------------------------------------------------------------
 function testAdaptiveHandoffRefuseNoMutation() {
   const tmp = adaptiveTmp('handoff-refuse');
@@ -14530,16 +14699,17 @@ function testAdaptiveHandoffRefuseNoMutation() {
     const projectDir = path.join(tmp, 'kaola-workflow', projectName);
     fs.mkdirSync(projectDir, { recursive: true });
 
-    // Post-dominance leak: doc-updater side-branches the main flow (not dominated by code-reviewer).
+    // Out of grammar: a fan-out group whose two legs declare the SAME path — the write sets are not
+    // pairwise disjoint, so the shape is not a legal fan-out.
     const planText = makeHandoffPlan([
-      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
-      '| review | code-reviewer | impl | — | 1 | sequence |',
-      '| doc | doc-updater | impl | — | 1 | sequence |',
-      '| done | finalize | review,doc | — | 1 | sequence |',
+      '| impl-a | tdd-guide | — | lib/foo.js | 1 | fanout(impl) |',
+      '| impl-b | tdd-guide | — | lib/foo.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | impl-a,impl-b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
     ], [
-      '| impl | pending |',
+      '| impl-a | pending |',
+      '| impl-b | pending |',
       '| review | pending |',
-      '| doc | pending |',
       '| done | pending |',
     ]);
     const planPath = path.join(projectDir, 'workflow-plan.md');
@@ -14553,39 +14723,48 @@ function testAdaptiveHandoffRefuseNoMutation() {
 
     const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
 
-    // Must exit non-zero (plan_invalid).
-    assert(r.status !== 0,
-      'refuse handoff must exit non-zero, got exit ' + r.status + '\nstdout: ' + r.stdout);
+    // THE EXIT CODE IS NO LONGER THE SIGNAL — it is exit 0 now, and the "nothing happened" bit rides
+    // the envelope instead. So this asserts the envelope AND, below, the bytes: with no non-zero exit
+    // in the way, the zero-write assertions are the only thing standing between a rejected plan and a
+    // half-published epoch, which is exactly why they are the half that must not be relaxed.
+    assert(r.status === 0,
+      'an out-of-grammar plan is REPORTED at exit 0, got exit ' + r.status + '\nstdout: ' + r.stdout);
 
     const result = JSON.parse(r.stdout);
     assert(result.handoff_status === 'plan_invalid',
       'must be plan_invalid, got: ' + JSON.stringify(result));
-    assert(result.result === 'refuse',
-      'result must be refuse, got: ' + result.result);
+    assert(result.result === 'answer' && result.mutation_performed === false,
+      'result must be an answer that states the freeze did not happen, got: ' + JSON.stringify({ result: result.result, mutation_performed: result.mutation_performed }));
     assert(Array.isArray(result.errors) && result.errors.length > 0,
       'errors must be non-empty, got: ' + JSON.stringify(result.errors));
     assert(result.validator_verdict !== undefined && result.validator_verdict !== null,
       'validator_verdict must be present (non-null), got: ' + JSON.stringify(result));
-    // Lock: refuse must come from the validator (not the precondition / state-missing path).
-    assert(result.validator_verdict && result.validator_verdict.result === 'refuse',
-      'must refuse at the validator (not the precondition), got: ' + JSON.stringify(result.validator_verdict));
+    // Lock: the verdict must come from the VALIDATOR (not the precondition / state-missing path), and
+    // it must be the out-of-grammar one — `in_grammar:false` + `frozen:false` are the two fields that
+    // say so structurally, where the token alone would not distinguish a report from a pass.
+    assert(result.validator_verdict && result.validator_verdict.result === 'answer'
+      && result.validator_verdict.reason === 'plan_invalid'
+      && result.validator_verdict.in_grammar === false
+      && result.validator_verdict.frozen === false
+      && result.validator_verdict.mutation_performed === false,
+      'the validator must be the one reporting out-of-grammar, and must say it did not freeze, got: ' + JSON.stringify(result.validator_verdict));
 
     // Plan must be byte-identical (no plan_hash written, no mutation).
     const planBytesAfter = fs.readFileSync(planPath);
     assert(planBytesBefore.equals(planBytesAfter),
-      'plan must be byte-identical after refuse (no mutation)');
+      'plan must be byte-identical after the out-of-grammar report (no mutation)');
 
     // No ## Planning Evidence in state.
     const stateContent = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
     assert(!stateContent.includes('## Planning Evidence'),
-      'workflow-state.md must NOT have ## Planning Evidence after refuse');
+      'workflow-state.md must NOT have ## Planning Evidence after the out-of-grammar report');
 
     // No .cache/barrier-base-* baseline written.
     const cacheDir = path.join(projectDir, '.cache');
     const hasBarrierBase = fs.existsSync(cacheDir) &&
       fs.readdirSync(cacheDir).some(f => f.startsWith('barrier-base-'));
     assert(!hasBarrierBase,
-      '.cache/barrier-base-* must NOT exist after refuse');
+      '.cache/barrier-base-* must NOT exist after the out-of-grammar report');
 
     // No .roadmap/issue-* written.
     const roadmapDir = path.join(tmp, 'kaola-workflow', '.roadmap');
@@ -14634,12 +14813,21 @@ function testAdaptiveHandoffLegacyClaimRefusesFreeze() {
     G.git(tmp, ['commit', '-m', 'legacy-claim fixture'], { encoding: 'utf8' });
 
     const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
-    assert(r.status !== 0,
-      'legacy-claim handoff must exit non-zero, got exit ' + r.status + '\nstdout: ' + r.stdout);
+    // A non-zero exit on a FINDING made "I did not freeze, and here is why" indistinguishable at the
+    // process boundary from a human fence. The reader here is the orchestrator that dispatched the
+    // planner: it holds full context, the draft is on disk and re-validatable forever, and nothing
+    // was written — so the finding answers at exit 0 and the repair loop runs off `handoff_status`.
+    // The two arms of this test are therefore no longer separated by exit code; they are separated
+    // by `handoff_status`, which is asserted on BOTH arms so neither can drift into the other.
+    assert(r.status === 0,
+      'legacy-claim handoff reports at exit 0, got exit ' + r.status + '\nstdout: ' + r.stdout);
     const result = JSON.parse(r.stdout);
-    assert(result.handoff_status === 'plan_invalid' && result.result === 'refuse'
+    assert(result.handoff_status === 'plan_invalid' && result.result === 'answer'
       && result.reason === 'legacy_claim_upgrade_required',
-    'legacy-claim handoff must refuse with reason legacy_claim_upgrade_required, got: ' + JSON.stringify(result));
+    'legacy-claim handoff must ANSWER with reason legacy_claim_upgrade_required, got: ' + JSON.stringify(result));
+    assert(result.mutation_performed === false,
+      'and must say plainly that it wrote nothing — the bit the exit code stopped carrying, got '
+      + JSON.stringify(result.mutation_performed));
     assert(Array.isArray(result.errors) && result.errors.some(e => /release/.test(e) && /claim/.test(e)),
       'legacy-claim refusal must name release + re-claim recovery, got: ' + JSON.stringify(result.errors));
 
@@ -14903,11 +15091,20 @@ function testFreezeCheckedGovernanceAckStale() {
     // SPAWN 2 with a STALE (wrong) ack hash → refuse governance_ack_stale, NO write.
     const wrong = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
     const fz = runNode(planValidatorScript, [planPath, '--freeze', '--governance-ack', wrong, '--json'], grepo);
-    assert(fz.status === 1, '#408: a stale --governance-ack must exit 1, got ' + fz.status + ' ' + fz.stdout);
+    assert(fz.status === 0, '#408: a stale --governance-ack now REPORTS at exit 0, got ' + fz.status + ' ' + fz.stdout);
     const out = JSON.parse(fz.stdout);
-    assert(out.result === 'refuse' && out.reason === 'governance_ack_stale',
-      '#408: a stale --governance-ack must refuse governance_ack_stale, got ' + JSON.stringify(out));
-    assert(out.frozen === false, '#408: a stale ack must NOT freeze');
+    assert(out.result === 'answer' && out.reason === 'governance_ack_stale',
+      '#408: a stale --governance-ack must ANSWER governance_ack_stale, got ' + JSON.stringify(out));
+    assert(out.frozen === false && out.mutation_performed === false,
+      '#408: a stale ack must NOT freeze and must say so, got ' + JSON.stringify({ frozen: out.frozen, mutation_performed: out.mutation_performed }));
+    // The report names WHICH record disagreed and BY WHAT — the measurement the refusal used to
+    // freeze. `expected !== found` is asserted rather than merely present: two equal hashes would
+    // satisfy a presence check while describing a conflict that did not happen.
+    assert(out.governance_ack_conflict === true && out.record === 'governance_ack' && out.field === 'plan_hash',
+      '#408: the report identifies the disagreeing record and field, got ' + JSON.stringify(out));
+    assert(out.expected === wrong && typeof out.found === 'string' && out.found !== out.expected,
+      '#408: and carries both hashes so a reader can re-derive the conflict, got '
+      + JSON.stringify({ expected: out.expected, found: out.found }));
     assert(fs.readFileSync(planPath, 'utf8') === before,
       '#408: a stale --governance-ack must leave the plan UNWRITTEN (no torn freeze)');
     // CONTROL: the MATCHING ack hash freezes (proves the refusal is the ack check, not a broken freeze).
@@ -15026,14 +15223,18 @@ function testAdaptiveHandoffDecisionIdConflict() {
 
     const planBytesBefore = fs.readFileSync(planPath);
 
-    // Arm 1: stale id → typed refusal pre-freeze, no mutation.
+    // Arm 1: stale id → typed REPORT pre-freeze, no mutation. The finding is unchanged; what moved
+    // is that it no longer wears a stop's uniform at the process boundary. `handoff_status` is the
+    // discriminator the repair loop runs off, so it — not the exit code — is what is pinned.
     const r1 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
-    assert(r1.status !== 0,
-      'decision-id conflict handoff must exit non-zero, got ' + r1.status + '\nstdout: ' + r1.stdout);
+    assert(r1.status === 0,
+      'decision-id conflict handoff reports at exit 0, got ' + r1.status + '\nstdout: ' + r1.stdout);
     const result1 = JSON.parse(r1.stdout);
     assert(result1.handoff_status === 'plan_invalid',
       'must be plan_invalid on stale decision id, got: ' + JSON.stringify(result1));
-    assert(result1.result === 'refuse', 'result must be refuse, got: ' + result1.result);
+    assert(result1.result === 'answer', 'result must be answer, got: ' + result1.result);
+    assert(result1.mutation_performed === false,
+      'and must state that nothing was written, got ' + JSON.stringify(result1.mutation_performed));
     assert(Array.isArray(result1.errors) && (result1.errors[0] || '').includes('decision_id_conflict'),
       'errors[0] must include decision_id_conflict, got: ' + JSON.stringify(result1.errors));
     assert((result1.errors[0] || '').includes('docs/decisions/D-210-01-prior-decision.md'),
@@ -16490,10 +16691,8 @@ function testMixedRepairReplayJournal748() {
     assert(implRec.status === 0,
       '#748 the reopened replay owner records the evidence it was reopened to produce: ' + implRec.stdout + implRec.stderr);
     // The replay REUSES the owner's original baseline, so the descendant's now-discarded output sits
-    // outside the owner's declared write set. That is the sanctioned revert-overflow path, not a wedge.
-    const overflow = json(runNode(adaptiveNodeScript, ['revert-overflow', '--project', project, '--node-id', 'impl', '--json'], tmp));
-    assert(overflow.result === 'ok',
-      '#748 the replayed cone output reverts through the sanctioned overflow path: ' + JSON.stringify(overflow));
+    // outside the owner's declared write set. The per-node barrier REPORTS that rather than refusing it,
+    // so the close proceeds and the paths ride the close record — no discard verb, and no wedge.
     const closeImpl2 = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'impl', '--json'], tmp));
     assert(closeImpl2.opened && closeImpl2.opened.id === 'tail', '#748 the reset cone re-opens at tail: ' + JSON.stringify(closeImpl2));
     fs.writeFileSync(path.join(tmp, 'lib', 'tail.js'), 'module.exports = 3;\n');
@@ -16536,8 +16735,14 @@ function testReplanRuntimeFence699() {
       runNode(handoffScript, ['--project', project, '--json'], tmp),
       runNode(planValidatorScript, [path.join(projectDir, 'workflow-plan.md'), '--finalize-check', '--json'], tmp),
     ];
-    for (const result of calls) {
-      assert(result.status !== 0, '#699 split-brain fence refuses every runtime surface');
+    const surfaceNames = ['adaptive-node open-next', 'adaptive-node orient', 'adaptive-handoff', 'plan-validator --finalize-check'];
+    for (let ci = 0; ci < calls.length; ci++) {
+      const result = calls[ci];
+      // Name the surface. "every runtime surface" told a reader that one of four broke and not
+      // which — and a fence that survives on three surfaces and not the fourth is precisely the
+      // failure this test exists to catch, so the message has to carry the discriminator.
+      assert(result.status !== 0, '#699 split-brain fence must refuse on surface "' + surfaceNames[ci]
+        + '", got exit ' + result.status + '\nstdout: ' + result.stdout);
       const out = parseLast(result);
       assert(out.reason === 'replan_transaction_invalid',
         '#699 split-brain fence has precedence over plan/ledger/finalize validation, got ' + JSON.stringify(out));
@@ -17431,7 +17636,8 @@ function testReviewerContractV2Conformance() {
       + JSON.stringify(failedAttempt805 && failedAttempt805.route_candidates));
     // …and the writer whose row this finding lands on is already COMPLETE — the precondition of the
     // whole dead end (a gate finding raised after its producer closed).
-    assert(/^\| writer \| complete \|$/m.test(fs.readFileSync(planPath, 'utf8')),
+    // Trailing-column tolerant: the ledger row gained a `wrote` content-locator column after `status`.
+    assert(/^\| writer \| complete \|/m.test(fs.readFileSync(planPath, 'utf8')),
       '#805 PRECONDITION: the finding\'s writer is COMPLETE at repair time');
     const repair = json(runNode(adaptiveNodeScript,
       ['repair-node', '--project', project, '--attempt-id', discoveryClose.attempt_id,
@@ -17684,17 +17890,35 @@ function testSpinePlanFormFreeze758() {
       '#758 (b): a spine plan carrying expansion records must still resume-check green: ' + rc2.stdout + rc2.stderr);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 
-  // (c) the two acceptance refusals, both inside the existing `plan_invalid` family.
-  refuses(SPINE_PLAN_758
+  // (c) the two acceptance checks. SPINE-5 rides the same post-dominance mechanism as G1/G2/G3, so
+  // it converted with them: the expansion point left unwalled is REPORTED, by name, and the plan
+  // freezes. `refuses` is kept below for the sink case, which is core grammar and still refuses —
+  // splitting them is deliberate, because one shared helper asserting `result === 'refuse'` for both
+  // would force the sink case to be loosened to accommodate the converted one.
+  const uncovered = (content, label, expansionId) => {
+    const r = validator.validatePlan(content, { root: repoRoot });
+    assertGateLeak(r, 'expansion_review_uncovered', 'code-reviewer', expansionId, '#758 ' + label);
+    assert(new RegExp('SPINE-5: code-reviewer does not post-dominate expansion point ' + expansionId)
+      .test((gateWarning(r, 'expansion_review_uncovered', expansionId) || {}).detail || ''),
+    '#758 ' + label + ': the report must still cite the SPINE-5 post-dominance rule for '
+      + expansionId + ', got ' + JSON.stringify(gateWarning(r, 'expansion_review_uncovered', expansionId)));
+    return r;
+  };
+  uncovered(SPINE_PLAN_758
     .replace(/\| wall \| code-reviewer \| m2 \|[^\n]*\n/, '')
     .replace('| done | finalize | wall |', '| done | finalize | m2 |'),
-  'missing review wall', 'SPINE-5: code-reviewer does not post-dominate expansion point m1');
+  'missing review wall', 'm1');
   // A wall that EXISTS but does not post-dominate the tail expansion is the same violation — the
   // rule is post-dominance (the G1/G2/G3 mechanism), not mere presence.
-  refuses(SPINE_PLAN_758
+  uncovered(SPINE_PLAN_758
     .replace('| wall | code-reviewer | m2 |', '| wall | code-reviewer | m1 |')
     .replace('| done | finalize | wall |', '| done | finalize | wall, m2 |'),
-  'review wall not post-dominating', 'SPINE-5: code-reviewer does not post-dominate expansion point m2');
+  'review wall not post-dominating', 'm2');
+  // CONTROL: the unmodified spine walls both expansions, so neither is reported. Without this the
+  // two checks above could not tell a validator that flags every expansion point from one that
+  // measures post-dominance.
+  assertNoGateLeak(validator.validatePlan(SPINE_PLAN_758, { root: repoRoot }),
+    'expansion_review_uncovered', '#758 control: the unmodified spine walls both expansions');
   refuses(SPINE_PLAN_758
     .replace('| done | finalize | wall | — | 1 | sequence | — | — | — | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |\n| stray | doc-updater | probe | docs/stray.md | 1 | sequence | — | — | — | — |'),
@@ -18010,7 +18234,7 @@ function testExpansionTransaction759() {
     const i = readPlan().indexOf('## Expansion Records');
     return i < 0 ? '' : readPlan().slice(i);
   };
-  const ledgerIds = () => (readPlan().match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])
+  const ledgerIds = () => (readPlan().match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|/gm) || [])
     .map(l => l.split('|')[1].trim());
 
   // APPEND-ONLY WATCHER: every observation must have the previous one as a byte PREFIX (the records
@@ -18354,7 +18578,7 @@ function testExpansionTransaction759() {
       assert(recSec(after).indexOf(recSec(before).replace(/\s+$/, '')) === 0,
         '#759 (b): roll-forward must APPEND to the records channel, never rewrite it.\n  before:\n'
         + recSec(before) + '\n  after:\n' + recSec(after));
-      const rowIds = t => (t.match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])
+      const rowIds = t => (t.match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|/gm) || [])
         .map(l => l.split('|')[1].trim());
       assert(JSON.stringify(rowIds(before)) === JSON.stringify(rowIds(after)),
         '#759 (b): roll-forward must not add, drop or reorder a ledger ROW (only status cells move), got '
@@ -19027,7 +19251,7 @@ function testReExpandCascade761() {
   };
   const ledgerOf = (planPath) => {
     const out = {};
-    for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+    for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|/gm) || [])) {
       const c = l.split('|'); out[c[1].trim()] = c[2].trim();
     }
     return out;
@@ -19332,7 +19556,7 @@ function testSerializationInversion760() {
     // ---- #813 (the loophole this fixture used to depend on, now proven CLOSED): a stray TEST file
     //      that no unit declared is attributable exactly like a stray production file, so it refuses
     //      at w1's OWN per-leg barrier before any ledger advance. Removing it lets the close proceed —
-    //      the existing revert-overflow choreography, no new refusal family, no new subcommand. ----
+    //      the existing overflow choreography, no new refusal family, no new subcommand. ----
     const strayTest = path.join(legRoot('m1-r1-w1'), 'lib', 'stray.test.js');
     fs.writeFileSync(strayTest, '// undeclared test file\n');
     {
@@ -21625,10 +21849,15 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
+      // `review` post-dominates the code writer. It is fixture scaffolding, not the subject: this
+      // test measures whether --base SCOPES the attribution sweep, and finalize now also runs the
+      // G1 gate-execution check, so a plan with an unreviewed code node fails for a reason that has
+      // nothing to do with --base. Satisfying the gate keeps the test measuring its own variable.
       '| impl | implementer | — | bbb/y.js | 1 | sequence |',
-      '| done | finalize | impl | — | 1 | sequence |', '',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |', '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
-      '| impl | complete |', '| done | complete |', ''
+      '| impl | complete |', '| review | complete |', '| done | complete |', ''
     ].join('\n'));
     // CONSUMER-mode gate (no package.json with test:kaola-workflow:*): final-validation.md.
     // #653: bound to the current candidate (code commits land before seedProject; later mutations
@@ -22431,7 +22660,7 @@ function testDeclaredNotWalled762() {
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: ' + name + '\nbranch: workflow/' + name + '\n');
     const ledgerOf = () => {
       const out = {};
-      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|/gm) || [])) {
         const c = l.split('|'); out[c[1].trim()] = c[2].trim();
       }
       return out;
@@ -22496,8 +22725,9 @@ function testDeclaredNotWalled762() {
 
     // Whole-plan only — the per-node barrier ignores amendments (a per-node overflow is its own overflow).
     const bPerNode = validator.barrierCheck(mkPlan('complete', AMEND), ['scripts/companion.js'], { project: 'issue-762', nodeId: 'n1' });
-    assert(bPerNode.result === 'refuse' && bPerNode.reason === 'write_set_overflow',
-      '#762 (a): the PER-NODE barrier does not attribute point-level amendments, got ' + bPerNode.result + ' ' + bPerNode.reason);
+    assert(bPerNode.result === 'answer' && bPerNode.reason === 'write_set_overflow'
+      && (bPerNode.outOfAllow || []).join() === 'scripts/companion.js',
+      '#762 (a): the PER-NODE barrier does not attribute point-level amendments — the path stays out-of-allow, got ' + bPerNode.result + ' ' + bPerNode.reason);
 
     // HARD ANCHOR 3 — the foreign_archive / sensitive_write_unreviewed precedence families are intact:
     // a sensitive write on a no-security-reviewer plan still outranks any amendment.
@@ -22697,10 +22927,10 @@ function testDeclaredNotWalled762() {
   }
 
   // ---- (#792) REACHABLE, NOT ROUTED. The transaction above was production-unreachable BY INSTRUCTION:
-  //      every instructed recovery from `write_set_overflow` named `revert-overflow` — the primitive that
-  //      DISCARDS exactly the companion work amend-surface exists to preserve — and no operator hint,
-  //      card or surface mentioned the preserve half at all. The fix is to NAME it, not to route it: the
-  //      hint lists both primitives and one line on when each fits, and nothing selects between them.
+  //      every instructed recovery from `write_set_overflow` named a DISCARD primitive that threw away
+  //      exactly the companion work amend-surface exists to preserve, and no operator hint, card or
+  //      surface mentioned the preserve half at all. That discard verb is retired now, so amend-surface
+  //      is the named cure; the fix was to NAME it, not to route it, and nothing selects for the agent.
   //
   //      This case is the reachability proof and it never hand-authors the command. It reproduces the
   //      real wedge, reads the hint the PRODUCTION refusal emits, EXTRACTS the amend-surface invocation
@@ -22728,13 +22958,13 @@ function testDeclaredNotWalled762() {
       // (1) REACHABILITY — the emitted hint names BOTH primitives, so the preserve option is no longer
       //     hidden. Same obligation on the per-node close path's own registry.
       const hint = String(bWedge.operator_hint || '');
-      assert(/revert-overflow/.test(hint) && /amend-surface/.test(hint),
-        '#792: the write_set_overflow hint must name BOTH the discard primitive and the preserve '
-        + 'primitive — an operator who is only told about revert-overflow will discard companion work '
-        + 'it was supposed to keep. Got: ' + JSON.stringify(hint));
+      assert(/amend-surface/.test(hint),
+        '#792: the write_set_overflow hint must name the PRESERVE primitive — an operator who is not '
+        + 'told about amend-surface will throw away companion work it was supposed to keep. Got: '
+        + JSON.stringify(hint));
       const nodeHint = String(adaptiveNode.getOperatorHint('write_set_overflow', { nodeId: 'n4' }));
-      assert(/revert-overflow/.test(nodeHint) && /amend-surface/.test(nodeHint),
-        '#792: the per-node close path emits its own write_set_overflow hint and owes the same pair, got '
+      assert(/amend-surface/.test(nodeHint),
+        '#792: the per-node close path emits its own write_set_overflow hint and owes the same cure, got '
         + JSON.stringify(nodeHint));
       // NOT ROUTED: naming both is the whole change — nothing decides for the agent.
       assert(!/\bmust run\b|\brequired\b/i.test(hint),
@@ -22759,7 +22989,7 @@ function testDeclaredNotWalled762() {
         '#792: the hinted path routes the owner + its wall to RE-REVIEW, got ' + JSON.stringify(ledgerOf()));
 
       // (3) …and the preserved work actually lands: re-discharge the point, and the barrier CLEARS the
-      //     file revert-overflow would have thrown away, while an unamended write still refuses.
+      //     file the retired discard primitive would have thrown away, while an unamended write still refuses.
       // The hint's bare invocation composes the DEFAULT fixer unit (`implementer` over the attributed
       // files), so its evidence carries the implementer token classes AND the upstream-consumption echo
       // the production close demands — another way this case exercises the hinted path rather than a
@@ -22888,7 +23118,7 @@ function testReExpansionEpochTransition756() {
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-756a\nbranch: workflow/issue-756a\n');
     const ledgerOf = () => {
       const out = {};
-      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|/gm) || [])) {
         const c = l.split('|'); out[c[1].trim()] = c[2].trim();
       }
       return out;

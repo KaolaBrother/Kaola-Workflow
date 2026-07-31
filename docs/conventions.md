@@ -62,16 +62,18 @@ call — the orchestrator owns a join/lifecycle discipline for what happens afte
 timeout/nudge/reclaim decision is never left to model improvisation:
 
 - **Wait budget.** Every dispatch card carries `dispatch.wait_budget_minutes` (tier-derived —
-  `reasoning`→40, `standard`→20, role-default→20 — always a concrete number, never absent). **A
-  `running` agent is never interrupted before its wait budget elapses.**
+  `reasoning`→40, `standard`→20, role-default→20 — always a concrete number, never absent). It is
+  the planner's ESTIMATE of how long the work takes, not a floor the orchestrator is held behind: a
+  `running` agent interrupted well inside it is usually just being interrupted.
 - **Evidence-grounded override.** An optional frozen node override may only extend the effective
   tier floor through 720 minutes. Author it only from concrete issue, command, benchmark, or
   preflight duration evidence, and record the evidence plus expected runtime in the node brief;
   task difficulty alone and an attempt to mask a wedge are not evidence.
-- **Escalation ladder, not impatience-kill.** Only after the wait budget expires: (1) demand the
-  bounded deliverable now (`followup_task` / an equivalent nudge); (2) after a grace window with no
-  response, interrupt (recoverable, not a kill) and ask once more for partial evidence; (3) reclaim
-  the node — the documented LAST resort, never the first move.
+- **Escalation is an ORDER, not a gate.** After the wait budget expires: (1) ask for the bounded
+  deliverable now (`followup_task` / an equivalent nudge); (2) interrupt (recoverable, not a kill)
+  and ask once more for partial evidence; (3) reclaim the node — the expensive option, reached for
+  last. The rungs are not gated on each other and no fixed grace window is prescribed; how long to
+  wait between them is the orchestrator's judgement.
 - **Typed delegation outcomes.** Every delegation records a closed-vocabulary `delegation_outcome`
   in the node's evidence (`completed | returned_partial | interrupted_unresponsive |
   interrupted_obsolete`, absent ⇒ `completed`) — never a free-text "it stalled so I did it myself".
@@ -429,7 +431,7 @@ Every typed refusal/halt/warn envelope emitted by the three aggregators (`adapti
 
 **Vocabulary rules (binding for all three aggregators and all four editions):**
 
-- The `write_set_overflow` family (including `write_set_granularity`, `lockfile_write`, `mirror_write`, `count_bump`) MUST reference `revert-overflow` — NEVER `drop-base` (`drop-base` is the laundering anti-pattern locked by D-424-01).
+- The `write_set_overflow` family (including `write_set_granularity`, `lockfile_write`, `mirror_write`, `count_bump`) MUST reference `amend-surface` — attribute the out-of-set paths and re-review them — and NEVER `drop-base` (`drop-base` is the laundering anti-pattern locked by D-424-01). It names no discard verb: the family is a REPORT at per-node and lane-group scope, so nothing has to be destroyed to proceed.
 - A crash-repair / reopen-writer hint MUST reference `repair-node` (the anti-laundering primitive that preserves the original baseline).
 - NO hint string contains a forge CLI token (`gh` / `glab` / `tea`) — hints name `node scripts/…` workflow commands only; they are forge-neutral and ship byte-aligned in all four editions.
 
@@ -528,7 +530,7 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
   |---|---|
   | `resume.md` | Crash/interrupt resume — `--resume-check`, reconcile-running-set, baseline re-open |
   | `governance.md` | Planner freeze/governance-ack handshake, `governance_ack_stale`, risk-assessment |
-  | `repair-routing.md` | `route-findings` consumption (D-446-01), `revert-overflow` / `repair-node` choice, plan-repair via `--freeze` |
+  | `repair-routing.md` | `route-findings` consumption (D-446-01), `amend-surface` / `repair-node` choice, plan-repair via `--freeze` |
   | `reopen-complete-node.md` | Reopening a `complete` writer — `repair-node` vs `reopen-node`, baseline-reuse rules, the reopen-needs-allDone trap |
   | `frontier-batch.md` | Parallel frontier fan-out — the running-set scheduler (`open-ready` / `close-node` / `reconcile-running-set`); default-on disjoint write co-open in isolated legs (D-542-01), serial-degrade only for write sets that are not provably exact-file-disjoint, or a failed worktree-support probe |
   | `speculative-open.md` | Speculative open (`speculative_open_policy: consent`) — `open-ready --speculative-consent` / `discard-speculative`, read and write graduation |
@@ -669,9 +671,9 @@ When a `write_set_overflow` barrier failure is raised — either at close time (
 - `mirror_write` — the overflowing path is a byte-identical mirror target (e.g. a codex-synced script port).
 - `count_bump` — the overflowing path contains a validator count assertion affected by the change.
 
-A path matching none of these stays plain `write_set_overflow`. The classification table lives in `kaola-workflow-adaptive-schema.js` (byte-identical across all four editions — never a forge token). The `barrier_failed` close and the `write-halt` escalation carry the SAME `triage` shape; callers classify one structure regardless of channel, never by string-matching the reason field. For the overflow family, `proposed_repair` is a structured `{ kind, node, paths }` object using the #434 sanctioned-repair-primitives vocabulary (`write_set_swap`, `add_to_write_set`, `revert_overflow`, `repair_node`). For `sensitive_write_unreviewed` or `foreign_archive` classes, no `proposed_repair` is offered. The diagnosis is threaded — `write-halt --triage-json <barrierOut>` consumes the `barrierOut` envelope the close already returns; `barrierCheck` in `plan-validator.js` remains the single source of the offending-paths arrays and is never re-run. See `docs/decisions/D-440-01.md`.
+A path matching none of these stays plain `write_set_overflow`. The classification table lives in `kaola-workflow-adaptive-schema.js` (byte-identical across all four editions — never a forge token). The `barrier_failed` close and the `write-halt` escalation carry the SAME `triage` shape; callers classify one structure regardless of channel, never by string-matching the reason field. For the overflow family, `proposed_repair` is a structured `{ kind, node, paths }` object using the #434 sanctioned-repair-primitives vocabulary (`write_set_swap`, `add_to_write_set`, `amend_surface`, `repair_node`). For `sensitive_write_unreviewed` or `foreign_archive` classes, no `proposed_repair` is offered. The diagnosis is threaded — `write-halt --triage-json <barrierOut>` consumes the `barrierOut` envelope the close already returns; `barrierCheck` in `plan-validator.js` remains the single source of the offending-paths arrays and is never re-run. See `docs/decisions/D-440-01.md`.
 
-## Goal-conditioned bundles — `KAOLA_GOAL` and `goal_check` (#441)
+## Goal-conditioned bundles — `KAOLA_GOAL` and `goal_declared` (#441, #874)
 
 Plans may include an optional `goal: <text>` prose line in `## Meta`. Key properties:
 
@@ -679,7 +681,7 @@ Plans may include an optional `goal: <text>` prose line in `## Meta`. Key proper
 - **Hash-covered for free** — `computePlanHash` already hashes the entire `## Meta` body, so the `goal:` line is covered with no code change. Tampering the goal after freeze trips `plan_hash_mismatch` on `--resume-check`.
 - **Operator entry** — `KAOLA_GOAL` is the operator-side env var for the goal text. Because subagent shells do NOT inherit env vars across the spawn boundary, the goal text ALSO travels in the `workflow-planner` dispatch prompt — the orchestrator owns placing it there.
 - **No-target selection integration** — in no-target mode, `workflow-planner` reads the goal as clustering context and surfaces a `goal_alignment` note in its selection. Goal alignment narrows which issues cluster together; it does not relax the D-430-01 bundle-coherence / target-set-integrity guards.
-- **Advisory attestation** — `cmdFinalize` in `kaola-workflow-claim.js` writes `goal_check: satisfied|unsatisfied|absent` into the closure receipt. In v1 this is informational metadata only and does NOT block claim or finalize. Flip-to-blocking is deferred to the #429 follow-up. See `docs/decisions/D-441-01.md`.
+- **Advisory declaration, never satisfaction** — `cmdFinalize` in `kaola-workflow-claim.js` writes `goal_declared: true|false` into the closure receipt, with `goal_declared_source` (`env`|`plan`|null) and `goal_declared_probed` (the exact plan paths examined). It records only that a goal was DECLARED; **nothing in this workflow checks whether a goal was achieved**, so nothing may read these fields as success. This is informational metadata and does NOT block claim or finalize. It replaces the retired `goal_check: satisfied|unsatisfied|absent`, whose negative case was unreachable and whose `satisfied` was documented as "AC verified" while no acceptance-criteria check existed anywhere — driven, it wrote `satisfied` for `KAOLA_GOAL="cure cancer"` on a run that achieved nothing. Archived receipts still carry `goal_check` and are correct as history; never edit one to finish the rename. See `docs/decisions/D-441-01.md` (status: superseded) and `docs/api.md` § Goal Declaration.
 
 ## Chain receipt is the only valid greenness evidence (#432)
 

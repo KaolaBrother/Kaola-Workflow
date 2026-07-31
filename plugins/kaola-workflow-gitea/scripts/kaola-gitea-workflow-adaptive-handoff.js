@@ -259,10 +259,14 @@ function surveyVerdict(status, reasoning) {
 // exactly why the builder and its CLI touch NO filesystem at all — they are the one return that can
 // fire before a project folder exists.
 //
-// The channel is BOUNDED at three round-trips. Past the cap the return degrades to the stop+ask
-// posture rather than looping: a fourth ask is a design failure, not a question. An empty or absent
-// question fails CLOSED to the same posture — a channel that cannot name its question cannot be
-// answered. Pure verdict-builder: builds the shape only, touches nothing.
+// The channel is UNBOUNDED. It carried a three-round cap whose fourth ask degraded to a stop+ask
+// posture; the cap is gone, because a bound against an agent looping is a harness against a failure
+// mode the agent can see for itself. `round` and `prior_rounds` survive as DATA on the return — a
+// reader can weigh a question still open on its fourth pass without a threshold deciding for them.
+// An empty or absent question is the one shape that is not a decision at all: a channel that cannot
+// name its question cannot be answered, so it reports `clarification_malformed` at exit 0 rather
+// than escalating a stop nobody asked for. Pure verdict-builder: builds the shape only, touches
+// nothing.
 // ---------------------------------------------------------------------------
 // #825 (B2): the orchestrator-authored selection record the claim persisted at Gate 1. Read-only,
 // best-effort — Planning Evidence REPORTS the selection, it does not re-gate it (the claim already
@@ -284,7 +288,111 @@ function originSelectionValue(value) {
   return flat.length ? flat : '—';
 }
 
-const CLARIFICATION_ROUND_CAP = 3;
+// ---------------------------------------------------------------------------
+// planningEvidenceAdvisoryLines — project the freeze's named advisory set onto durable
+// `## Planning Evidence` lines.
+//
+// WHY THIS EXISTS. `warnings` is the freeze's advisory transport, and it no longer carries only
+// cosmetic notes: the post-dominance question rides it as DATA now that its freeze-time verdict is
+// gone (`unreviewed_code_nodes`, `named_certifier_uncovered` and their siblings). A missing reviewer
+// over a code-producing node raises no error, no red and no stall — it produces a merge — so a
+// measurement that lives only on this process's stdout is deleted the moment the process exits. The
+// advisory set therefore lands in the same durable block as `plan_hash`, where a zero-context
+// successor reads which node ids nobody reviewed instead of taking the plan's silence for coverage.
+//
+// THE LOCATOR, NOT A COUNT. `nodes` is emitted verbatim and never truncated or counted:
+// `unreviewed_code_nodes: … nodes=impl, scripts` is actionable where `nodes=2` is not. `detail` rides
+// LAST on its line and carries the locators the structured fields do not (the G4 `reference=` naming
+// which `## Meta` certifier field is uncovered lives only there).
+//
+// ABSENCE RENDERS AS NO LINE. A freeze with no advisory contributes no `advisory_*` key at all,
+// rather than an empty or `none`-valued one: a blank value would read as "checked, nothing found"
+// when the only honest reading of a blank is "not recorded". Within a line an absent FIELD renders as
+// the repo's absence token `—` (via originSelectionValue), never as blank.
+//
+// ONE LINE PER OCCURRENCE, UNIQUE KEY. A flat `key: value` block is silently last-wins to any reader,
+// and two advisories can legitimately share a token (`named_certifier_uncovered` for both the code
+// and the security certifier; `expansion_review_uncovered` once per expansion point × review class).
+// Repeats therefore take an ordinal suffix — `advisory_<token>`, `advisory_<token>_2`, … — so a
+// prefix grep still finds every occurrence and no occurrence overwrites another.
+// ---------------------------------------------------------------------------
+function planningEvidenceAdvisoryLines(advisories) {
+  const seen = new Map();
+  const lines = [];
+  for (const advisory of (Array.isArray(advisories) ? advisories : [])) {
+    if (!advisory || typeof advisory !== 'object') continue;
+    const token = String(advisory.warning || '').trim() || 'unnamed_advisory';
+    const ordinal = (seen.get(token) || 0) + 1;
+    seen.set(token, ordinal);
+    const nodes = Array.isArray(advisory.nodes)
+      ? advisory.nodes.map(id => String(id).trim()).filter(Boolean).join(', ')
+      : advisory.nodes;
+    lines.push('advisory_' + token + (ordinal > 1 ? '_' + ordinal : '') + ': '
+      + 'check=' + originSelectionValue(advisory.check)
+      + ' gate_role=' + originSelectionValue(advisory.gate_role)
+      + ' nodes=' + originSelectionValue(nodes)
+      + ' detail=' + originSelectionValue(advisory.detail));
+  }
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// THE HANDOFF'S EXIT RULE, IN ONE PLACE.
+//
+// One rule used to cover every non-`ready_to_run` status: exit 1. That made a *finding* — "I did not
+// freeze, and here is exactly why" — indistinguishable at the process boundary from a human fence,
+// and a non-zero exit on a finding is the archetypal tool-wearing-a-gate's-uniform. The reader of a
+// `plan_invalid` answer is the orchestrator that dispatched the planner: it holds full context, the
+// draft plan is on disk and re-validatable forever, and nothing was written — so there is no witness
+// to freeze and nobody the finding is hidden from. It answers at exit 0 and the bounded repair loop
+// runs off `handoff_status` exactly as it does today.
+//
+// TWO FAMILIES KEEP EXIT 1, and both are the same kind of thing rather than exceptions:
+//   * `acceptance_repair_fenced` — a human-values fence. Changing what "done" means routes through
+//     the consent valve, never through repair. It rides `handoff_status: 'plan_invalid'` for legacy
+//     reasons, so it is selected by REASON, not by status; converting it by accident because it
+//     shares a status is the single most damaging thing this change could do.
+//   * the `escalate` family (`clarification_required`, `survey_verdict`'s indeterminate shapes) —
+//     a consent-route escalation is the one legal mid-run stop, and it always was.
+const HANDOFF_CONSENT_REASONS = new Set(['acceptance_repair_fenced']);
+// A THIRD family keeps exit 1, and it is the same kind of thing as the two above rather than a
+// special case: an INTEGRITY fence. A split-brain / corrupt re-plan transaction is not a finding
+// about a draft plan — the durable transaction record itself disagrees with the world, and the
+// three OTHER runtime surfaces that read the same condition (`adaptive-node open-next`,
+// `adaptive-node orient`, `plan-validator --finalize-check`) all refuse it. A rule that holds on
+// three surfaces and not the fourth is not one rule, and the fourth is the one a planner dispatch
+// goes through. It is selected by REASON for exactly the reason stated above: it rides a
+// non-`ready_to_run` status and would otherwise be converted by sharing that status.
+//
+// `replan_in_progress` is deliberately NOT a member. An ordinary in-flight re-plan is a report —
+// that carve-out is intentional and must survive this one.
+const HANDOFF_INTEGRITY_REASONS = new Set(['replan_transaction_invalid']);
+function handoffExitCode(result) {
+  if (!result || typeof result !== 'object') return 1;
+  if (result.handoff_status === 'ready_to_run') return 0;
+  if (HANDOFF_CONSENT_REASONS.has(result.reason)) return 1;
+  if (HANDOFF_INTEGRITY_REASONS.has(result.reason)) return 1;
+  if (result.result === 'escalate') return 1;
+  return 0;
+}
+// The envelope half of the same rule. `answer` is the shipped exit-0 report token, and
+// `mutation_performed` is the load-bearing bit the exit code stops carrying — defaulted to false
+// here because the overwhelming majority of these returns precede any write, and set explicitly to
+// true at the four sites that run AFTER the freeze. A site that already stated it wins.
+function stampHandoffOutcome(result) {
+  if (!result || typeof result !== 'object') return result;
+  if (handoffExitCode(result) === 0 && result.handoff_status !== 'ready_to_run') {
+    if (result.result === 'refuse') result.result = 'answer';
+    if (result.mutation_performed == null) result.mutation_performed = false;
+  }
+  return result;
+}
+
+// The clarification CHANNEL survives; the CAP does not. A cap is a bound, and a bound against an
+// agent looping is the harness-era move this design retires — the counter is the useful half and it
+// stays, as data, so a reader can see how many rounds a question has taken. An empty question is a
+// different animal: it is a MALFORMED CALL, not a decision, and it answers at exit 0 rather than
+// escalating a stop the caller never actually asked for.
 function clarificationRequired(question, contextRefs, round) {
   const refs = Array.isArray(contextRefs)
     ? contextRefs.map(String)
@@ -292,19 +400,15 @@ function clarificationRequired(question, contextRefs, round) {
   const n = Number(round);
   const resolvedRound = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
   const asked = typeof question === 'string' ? question : (question == null ? '' : String(question));
-  if (asked.trim() === '' || resolvedRound > CLARIFICATION_ROUND_CAP) {
+  if (asked.trim() === '') {
     return {
-      handoff_status: 'clarification_exhausted',
-      result: 'escalate',
-      posture: 'stop_and_ask',
+      handoff_status: 'clarification_malformed',
+      result: 'answer',
+      mutation_performed: false,
       round: resolvedRound,
-      cap: CLARIFICATION_ROUND_CAP,
       question: asked,
       context_refs: refs,
-      reasoning: asked.trim() === ''
-        ? 'clarification requested with no question — failing closed to the stop+ask posture'
-        : 'clarification round ' + resolvedRound + ' exceeds the cap of ' + CLARIFICATION_ROUND_CAP
-          + ' — stop and ask the user directly instead of looping',
+      reasoning: 'clarification requested with no question — nothing to ask; supply --question and re-run',
     };
   }
   return {
@@ -313,7 +417,9 @@ function clarificationRequired(question, contextRefs, round) {
     question: asked,
     context_refs: refs,
     round: resolvedRound,
-    cap: CLARIFICATION_ROUND_CAP,
+    // The counter, kept as data. It names how many rounds this question has taken and nothing else —
+    // no threshold is enforced against it, and a round past the old cap is answered like any other.
+    prior_rounds: resolvedRound - 1,
   };
 }
 
@@ -984,6 +1090,10 @@ function runHandoff(opts) {
     return {
       handoff_status: 'plan_invalid',
       result: 'refuse',
+      // PAST THE FREEZE. Everything from here on runs with plan_hash already stamped, so the honest
+      // bit is `true` — a successor reading this answer must know the plan on disk is frozen, or it
+      // will re-dispatch a repair that plan_hash_mismatch then refuses.
+      mutation_performed: true,
       errors: ['resume-check failed (infra): folded resumeOk!==true'],
       validator_verdict: freezeResult,
     };
@@ -1007,6 +1117,7 @@ function runHandoff(opts) {
     return {
       handoff_status: 'plan_invalid',
       result: 'refuse',
+      mutation_performed: true,   // past the freeze — see the resumeOk return above
       errors: ['cannot re-read plan after freeze'],
       validator_verdict: null,
     };
@@ -1017,6 +1128,7 @@ function runHandoff(opts) {
     return {
       handoff_status: 'plan_invalid',
       result: 'refuse',
+      mutation_performed: true,   // past the freeze — see the resumeOk return above
       errors: nextAction.errors || ['next-action returned refuse'],
       validator_verdict: null,
     };
@@ -1033,6 +1145,7 @@ function runHandoff(opts) {
     return {
       handoff_status: 'plan_invalid',
       result: 'refuse',
+      mutation_performed: true,   // past the freeze — see the resumeOk return above
       errors: ['next-action returned no first node (plan may be complete already)'],
       validator_verdict: null,
     };
@@ -1103,6 +1216,15 @@ function runHandoff(opts) {
       + ' antichains=' + (anti.count || 0) + '/' + (anti.max_width || 0)
       + ' evidence_less_sequence_edges=' + elessCount });
   }
+  // The freeze's named advisory set, assembled ONCE and used by both consumers below — the durable
+  // `## Planning Evidence` lines here and the returned envelope's `warnings` array at the bottom of
+  // this function. Two separate assemblies would be two places for the record and the envelope to
+  // disagree about what the freeze found, and the record is the half that has to outlive the process.
+  const freezeAdvisories = [
+    ...(Array.isArray(validateResult.warnings) ? validateResult.warnings : []),
+    ...(decoyStripWarning ? [decoyStripWarning] : []),
+  ];
+  for (const line of planningEvidenceAdvisoryLines(freezeAdvisories)) peFields.push({ line });
   // #789 (D0): fold the no-target survey selection record the planner authored into Planning Evidence.
   // splicePlanningEvidence regenerates the WHOLE section from peFields every run, and the source of
   // truth is the frozen plan (re-derived via the validator), so this never clobbers on a re-run.
@@ -1187,10 +1309,9 @@ function runHandoff(opts) {
     // ready_to_run is unchanged. Step 1.7's `decoy_consent_halt_stripped` joins them: the strip is a
     // repair the freeze PERFORMED on the operator's draft, so it is the one advisory that must never
     // be lost, and it is accumulated into the same array rather than displacing what SPAWN 1 said.
-    ...((validateResult.warnings || decoyStripWarning)
-      ? { warnings: [...(validateResult.warnings || []),
-        ...(decoyStripWarning ? [decoyStripWarning] : [])] }
-      : {}),
+    // This reads the array Step 6 already assembled and wrote into `## Planning Evidence`, so the
+    // transient envelope and the durable record are the same set by construction, not by agreement.
+    ...(freezeAdvisories.length ? { warnings: freezeAdvisories } : {}),
     worktree_mirror: {
       status: mirrorResult.status
         || (mirrorResult.exitCode === 0 ? 'unknown' : 'failed'),
@@ -1208,7 +1329,21 @@ function runHandoff(opts) {
 // path. Keeping the authority receipt explicit prevents this API from becoming
 // a competing transaction state machine.
 function runReplanHandoff(opts) {
-  const refuse = (reason, extra) => Object.assign({ result: 'refuse', reason }, extra || {});
+  // The two `kernel_cas_lost` members in this helper ANSWER; the rest keep refusing. Both name a
+  // compare-and-set that lost — the child's authority receipt or its `## Meta` bindings disagree with
+  // the transaction the parent opened — and a lost CAS is a fact returned to the caller, not a stop:
+  // both sites run strictly BEFORE this helper's single write (`opts.writeFile`, further down), so
+  // `mutation_performed: false` is a measurement rather than a hope. The token spellings do not move,
+  // so no consumer keying on `reason` changes and the census ratchet is untouched.
+  //
+  // Its consumer tests POSITIVELY (`result !== 'child_frozen'` at replan.js's call site) and returns
+  // the object verbatim, so the fields below travel intact and the branch is unaffected.
+  const CAS_ANSWER_REASONS = new Set(['replan_child_authority_unverified', 'replan_child_binding_mismatch']);
+  const refuse = (reason, extra) => Object.assign(
+    CAS_ANSWER_REASONS.has(reason)
+      ? { result: 'answer', reason, mutation_performed: false }
+      : { result: 'refuse', reason },
+    extra || {});
   const expected = opts && opts.expected || {};
   const exactChildPath = String(expected.child_path || '');
   if (!opts || !path.isAbsolute(exactChildPath)
@@ -1220,14 +1355,29 @@ function runReplanHandoff(opts) {
   const authority = opts.authority || {};
   const content = String(opts.childContent || '');
   const authoredDigest = crypto.createHash('sha256').update(content).digest('hex');
-  if (authority.verified !== true || authority.candidate_match !== true
-      || authority.claim_root_match !== true || authority.inherited_frontier_match !== true
-      || !/^[0-9a-f]{64}$/.test(String(opts.transactionId || ''))
-      || authority.transaction_id !== opts.transactionId
-      || authority.child_digest !== authoredDigest
-      || authority.dispatch_nonce !== (opts.expected && opts.expected.planner_binding)
-      || !/^[0-9a-f]{64}$/.test(String(authority.planner_attestation_digest || ''))) {
-    return refuse('replan_child_authority_unverified');
+  // WHICH CONJUNCT FAILED, NAMED. This was one nine-way `||` that returned a bare token, so the
+  // caller learned that the authority receipt did not verify and nothing about WHY — the check knew
+  // exactly which clause tripped and threw it away at the `return`. Enumerated as rows so the first
+  // failing one can name its own `field`/`expected`/`found`; the CONJUNCTION is unchanged (any row
+  // failing still refuses), so this is strictly additive to what the caller can see.
+  const authorityChecks = [
+    { field: 'verified', ok: authority.verified === true, expected: true, found: authority.verified },
+    { field: 'candidate_match', ok: authority.candidate_match === true, expected: true, found: authority.candidate_match },
+    { field: 'claim_root_match', ok: authority.claim_root_match === true, expected: true, found: authority.claim_root_match },
+    { field: 'inherited_frontier_match', ok: authority.inherited_frontier_match === true, expected: true, found: authority.inherited_frontier_match },
+    { field: 'transaction_id_shape', ok: /^[0-9a-f]{64}$/.test(String(opts.transactionId || '')), expected: 'sha256 hex', found: String(opts.transactionId || '') || null },
+    { field: 'transaction_id', ok: authority.transaction_id === opts.transactionId, expected: opts.transactionId || null, found: authority.transaction_id == null ? null : authority.transaction_id },
+    { field: 'child_digest', ok: authority.child_digest === authoredDigest, expected: authoredDigest, found: authority.child_digest == null ? null : authority.child_digest },
+    { field: 'dispatch_nonce', ok: authority.dispatch_nonce === (opts.expected && opts.expected.planner_binding), expected: (opts.expected && opts.expected.planner_binding) || null, found: authority.dispatch_nonce == null ? null : authority.dispatch_nonce },
+    { field: 'planner_attestation_digest', ok: /^[0-9a-f]{64}$/.test(String(authority.planner_attestation_digest || '')), expected: 'sha256 hex', found: String(authority.planner_attestation_digest || '') || null },
+  ];
+  const failedAuthority = authorityChecks.find(c => !c.ok);
+  if (failedAuthority) {
+    return refuse('replan_child_authority_unverified', {
+      record: 'plan_hash', field: failedAuthority.field,
+      expected: failedAuthority.expected, found: failedAuthority.found,
+      failed_checks: authorityChecks.filter(c => !c.ok).map(c => c.field),
+    });
   }
   const metaBody = (() => {
     const match = /(?:^|\n)## Meta[ \t]*\n([\s\S]*?)(?=\n## |$)/.exec(content);
@@ -1238,15 +1388,35 @@ function runReplanHandoff(opts) {
     const match = /^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$/.exec(line);
     if (match) meta[match[1]] = match[2].trim();
   }
+  // `field` was ALREADY carried here — this is the repo's only live producer of the schema's declared
+  // `field` member, so it must survive any reshaping of this site. What it lacked is the pair that
+  // makes the field useful: the two values that disagree. Both are in hand at the comparison.
   for (const key of ['epoch_lineage_id', 'parent_plan_hash', 'claim_root_base_digest',
     'inherited_frontier_digest', 'planner_binding']) {
     if (String(meta[key] || '') !== String(expected[key] || '')) {
-      return refuse('replan_child_binding_mismatch', { field: key });
+      return refuse('replan_child_binding_mismatch', {
+        record: 'plan_hash', field: key,
+        expected: String(expected[key] || '') || null,
+        found: String(meta[key] || '') || null,
+      });
     }
   }
-  if (Number(meta.plan_epoch) !== Number(expected.plan_epoch)
-      || meta.contract_version !== '2' || meta.epoch_schema_version !== '2') {
-    return refuse('replan_child_binding_mismatch', { field: 'epoch_contract' });
+  const epochContractChecks = [
+    { field: 'plan_epoch', ok: Number(meta.plan_epoch) === Number(expected.plan_epoch),
+      expected: expected.plan_epoch == null ? null : Number(expected.plan_epoch),
+      found: meta.plan_epoch == null ? null : Number(meta.plan_epoch) },
+    { field: 'contract_version', ok: meta.contract_version === '2', expected: '2', found: meta.contract_version == null ? null : meta.contract_version },
+    { field: 'epoch_schema_version', ok: meta.epoch_schema_version === '2', expected: '2', found: meta.epoch_schema_version == null ? null : meta.epoch_schema_version },
+  ];
+  const failedEpoch = epochContractChecks.find(c => !c.ok);
+  if (failedEpoch) {
+    // `field` stays the shipped `'epoch_contract'` token — a consumer keying on it does not move —
+    // and the sub-clause that actually tripped rides beside it rather than replacing it.
+    return refuse('replan_child_binding_mismatch', {
+      record: 'plan_hash', field: 'epoch_contract', contract_field: failedEpoch.field,
+      expected: failedEpoch.expected, found: failedEpoch.found,
+      failed_checks: epochContractChecks.filter(c => !c.ok).map(c => c.field),
+    });
   }
   const freeze = opts.freezePlan || (input => require('./kaola-gitea-workflow-plan-validator').freezePlan(input, opts.validatorOptions || {}));
   const frozen = freeze(content);
@@ -1318,9 +1488,11 @@ function main() {
       '                  #789: emit a no-target survey pre-claim verdict (fail closed, NO claim,\n' +
       '                  NO state write) and exit non-zero; the orchestrator acts on the escalate\n' +
       '  --clarification-required --question "..." [--context-refs a,b] [--round N]\n' +
-      '                  emit the typed clarification return (escalate family, NO fs touched — it\n' +
-      '                  is legal pre-claim). Bounded at 3 round-trips; past the cap, or with an\n' +
-      '                  empty question, it degrades to clarification_exhausted / stop_and_ask\n'
+      '                  emit the typed clarification return (escalate family, exit 1, NO fs touched\n' +
+      '                  — it is legal pre-claim). UNBOUNDED: --round rides the return as data\n' +
+      '                  (with prior_rounds) and no threshold fires against it. A call with no\n' +
+      '                  question is a malformed invocation, not a decision: it answers\n' +
+      '                  clarification_malformed at exit 0\n'
     );
     return;
   }
@@ -1333,8 +1505,12 @@ function main() {
     const status = svIdx + 1 < args.length ? args[svIdx + 1] : '';
     const reasonIdx = args.indexOf('--reason');
     const reason = reasonIdx >= 0 && reasonIdx + 1 < args.length ? args[reasonIdx + 1] : '';
-    process.stdout.write(JSON.stringify(surveyVerdict(status, reason)) + '\n');
-    process.exitCode = 1;
+    const verdict = surveyVerdict(status, reason);
+    process.stdout.write(JSON.stringify(verdict) + '\n');
+    // Routed through the ONE exit rule rather than restating it. This verdict is `result:'escalate'`,
+    // so the code it produces is 1 exactly as before — but a hand-written `= 1` beside a shared rule
+    // is a site where the two can silently disagree later.
+    process.exitCode = handoffExitCode(verdict);
     return;
   }
 
@@ -1350,8 +1526,11 @@ function main() {
     const contextRefs = String(refsRaw).split(',').map(s => s.trim()).filter(Boolean);
     const roundIdx = args.indexOf('--round');
     const round = roundIdx >= 0 && roundIdx + 1 < args.length ? args[roundIdx + 1] : undefined;
-    process.stdout.write(JSON.stringify(clarificationRequired(question, contextRefs, round)) + '\n');
-    process.exitCode = 1;
+    const verdict = clarificationRequired(question, contextRefs, round);
+    process.stdout.write(JSON.stringify(verdict) + '\n');
+    // The question itself still escalates (exit 1) — it is a consent-route stop, the one legal
+    // mid-run halt. A malformed call answers at exit 0; see handoffExitCode.
+    process.exitCode = handoffExitCode(verdict);
     return;
   }
 
@@ -1370,13 +1549,15 @@ function main() {
   }
 
   if ((hasProject ? 1 : 0) + (hasPlan ? 1 : 0) !== 1) {
+    // A malformed invocation, answered on the same rule as every other finding — the caller's own
+    // argv is the whole finding, nothing was read and nothing written.
     const out = {
       handoff_status: 'plan_invalid',
       result: 'refuse',
       errors: ['exactly one of --project or --plan required'],
     };
-    process.stdout.write(JSON.stringify(out) + '\n');
-    process.exitCode = 1;
+    process.stdout.write(JSON.stringify(stampHandoffOutcome(out)) + '\n');
+    process.exitCode = handoffExitCode(out);
     return;
   }
 
@@ -1494,10 +1675,8 @@ function main() {
       }));
   } catch (_) { /* fail-open: telemetry never refuses, wedges or alters an outcome */ }
 
-  process.stdout.write(JSON.stringify(result) + '\n');
-  if (result.handoff_status !== 'ready_to_run') {
-    process.exitCode = 1;
-  }
+  process.stdout.write(JSON.stringify(stampHandoffOutcome(result)) + '\n');
+  process.exitCode = handoffExitCode(result);
 }
 
 if (require.main === module) {
@@ -1506,4 +1685,4 @@ if (require.main === module) {
 
 // CLI_FLAGS — the declared CLI dispatch set (see the CLI section header). Exported so the route
 // sweep can verify a route's verb against a DECLARATION rather than an unsound source scan.
-module.exports = { CLI_FLAGS, runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, clarificationRequired, CLARIFICATION_ROUND_CAP, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };
+module.exports = { CLI_FLAGS, runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS, clarificationRequired, handoffExitCode, stampHandoffOutcome, HANDOFF_CONSENT_REASONS, acceptanceRepairFence, acceptanceAnchorPath, ACCEPTANCE_ANCHOR_NAME };

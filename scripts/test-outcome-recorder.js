@@ -407,15 +407,53 @@ function partE() {
     // A REFUSAL, through the real CLI. What the process boundary adds over PART A is that the
     // record describes the envelope the CALLER actually received.
     const bad = runCli(fx.root, ['close-and-open-next', '--project', PROJECT, '--node-id', 'impl', '--json']);
-    ok(bad.status !== 0, 'CLI vehicle: closing an unopened node refuses');
     lines = readLog(fx.logPath);
-    equal(lines.length, 2, 'the refusal appended a SECOND record (append-only), got ' + lines.length);
+    equal(lines.length, 2, 'the converted answer appended a SECOND record (append-only), got ' + lines.length);
     const r = lines[1];
+    // Closing an unopened node is a CONVERTED site: it reports at exit 0 rather than stopping.
+    // The recorder's contract is unchanged by that and is what is pinned here — the record
+    // describes the envelope the CALLER actually received, whatever result that envelope carries.
+    equal(bad.status, 0, 'the converted site reports rather than stopping');
+    equal(bad.envelope.result, 'answer', 'and it reports as an answer');
     deepEqual([r.op, r.node, r.result, r.reason],
-      ['close-and-open-next', 'impl', 'refuse', bad.envelope.reason],
+      ['close-and-open-next', 'impl', 'answer', bad.envelope.reason],
       'the recorded reason IS the emitted reason, under the phase and node the invocation named');
     equal(r.condition, bad.envelope.condition == null ? bad.envelope.reason : bad.envelope.condition,
       'the recorded condition mirrors the envelope, which is the P2 census metric');
+    // The discriminating payload survives the conversion INTO THE RECORD. This is the half that
+    // makes a converted site auditable: exit 0 alone would leave a reader unable to tell a quiet
+    // success from a reported finding.
+    equal(r.family, bad.envelope.refusal_family,
+      'the family rides into the record, so a report is still classifiable by a successor');
+    equal(r.locus, bad.envelope.refusal_locus, 'as does the locus');
+
+    // ...AND A SURVIVING REFUSAL, through the same vehicle. Pinning only the converted arm would
+    // let a future change turn `result` into a constant and stay green: this file would then be
+    // tracking the conversion rather than pinning it. The consent fence is the R2 survivor —
+    // silence is never consent, so it still stops the run — which makes it the honest contrast.
+    const halted = runCli(fx.root,
+      ['write-halt', '--project', PROJECT, '--node-id', 'impl', '--reason', 'consent', '--json']);
+    const beforeFence = readLog(fx.logPath).length;
+    const fenced = runCli(fx.root, ['close-and-open-next', '--project', PROJECT, '--node-id', 'impl', '--json']);
+    equal(halted.status, 0, 'the consent fence was planted (setup precondition for the contrast below)');
+    const fenceLines = readLog(fx.logPath);
+    equal(fenceLines.length, beforeFence + 1,
+      'the fenced call appended exactly one record, got ' + (fenceLines.length - beforeFence));
+    const f = fenceLines[fenceLines.length - 1];
+
+    // The contrast, asserted as the two separate facts it is. A surviving refusal keeps BOTH the
+    // non-zero exit and the `refuse` result; the converted site above keeps neither. If a later
+    // change collapsed the distinction in either direction, exactly one of these two arms goes red.
+    equal(fenced.status, 1, 'an unanswered consent fence still STOPS the run — silence is never consent');
+    equal(fenced.envelope.result, 'refuse', 'and it is a refusal, not a report');
+    deepEqual([f.op, f.node, f.result, f.reason],
+      ['close-and-open-next', 'impl', 'refuse', 'halt_pending'],
+      'and the recorder captures the surviving refusal under the same phase and node');
+    equal(f.family, 'consent_required', 'classified into the consent family, which is what makes it a survivor');
+    ok(f.result !== r.result,
+      'THE PIN: the same subcommand records different results for a converted site and a surviving '
+      + 'refusal. A `result` that became constant would satisfy either arm alone and is caught here, '
+      + 'got ' + JSON.stringify(f.result) + ' and ' + JSON.stringify(r.result));
 
     // Ordering is monotonic, which is what makes triage wall-clock derivable at report time.
     ok(lines[0].ts <= lines[1].ts, 'records are appended in emit order, so inter-event gaps are derivable');

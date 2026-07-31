@@ -361,6 +361,95 @@ function advanceToAttestedChild(fx, opts = {}) {
   return tx;
 }
 
+// Marks `ids` complete in the LIVE plan's `## Node Ledger` and `## Required Agent Compliance`
+// tables. Both rewrites are SECTION-SCOPED on purpose: `## Nodes` carries id-prefixed pipe rows of
+// its own, so an unscoped row rewrite edits the plan GRAMMAR while reading as a ledger edit.
+function closeLedgerRows(text, ids) {
+  const want = new Set(ids);
+  let section = null;
+  return text.split('\n').map(line => {
+    const heading = /^##\s+(.*?)\s*$/.exec(line);
+    if (heading) { section = heading[1]; return line; }
+    if (section === 'Node Ledger') {
+      const row = /^\|\s*([A-Za-z0-9._-]+)\s*\|\s*[a-z/]+\s*\|\s*$/.exec(line);
+      return row && want.has(row[1]) ? `| ${row[1]} | complete |` : line;
+    }
+    if (section === 'Required Agent Compliance') {
+      const row = /^\|\s*([a-z-]+)\s*\(([A-Za-z0-9._-]+)\)\s*\|/.exec(line);
+      return row && want.has(row[2])
+        ? `| ${row[1]} (${row[2]}) | invoked | .cache/${row[2]}.md | |`
+        : line;
+    }
+    return line;
+  }).join('\n');
+}
+
+// `--finalize-check` verifies gate EXECUTION, not just gate SHAPE: for a schema-2 epoch each named
+// certifier must be `complete` AND carry a receipt bound to the CURRENT candidate. A promoted child
+// whose certifier rows are still `pending` therefore describes a state no real finalize can reach,
+// and asserting that a sweep passes over it asserts nothing about the sweep.
+//
+// Every field comes from the PRODUCTION resolvers — `validator.resolveNamedCertifier` for the member
+// set and the gate identity, `schema.sha256Canonical` for its digest, the plan's own `## Meta` for
+// the epoch anchors, and the `--candidate-hash` CLI for the candidate. Rebuilding the identity object
+// by hand would make the sweep validate this fixture's fabrication instead of a real receipt.
+//
+// SAFE AGAINST THE SNAPSHOT SEAL: neither table is plan_hash-covered and both stay table-only, so
+// `readStoredHash`, `computePlanHash` and the trailing-surface check still hold afterwards. That is
+// a claim, not an assumption — the control assertion beside the substitution variants proves it, and
+// without the control every `!result.ok` there would pass vacuously once the base broke.
+//
+// The receipts live under `.cache/**` and the plan under `kaola-workflow/**`; both are
+// validation-invisible, so neither write moves the candidate the sweep recomputes.
+function certifyNamedCertifiers(fx, candidateDigest) {
+  const planPath = path.join(fx.projectDir, 'workflow-plan.md');
+  const live = fs.readFileSync(planPath, 'utf8');
+  const nodes = validator.parseNodes(live);
+  const lines = live.split('\n');
+  const metaValue = key => {
+    const hit = lines.find(line => line.startsWith(key + ':'));
+    return hit ? hit.slice(key.length + 1).trim() : '';
+  };
+  const certified = [];
+  for (const [kind, field, role] of [
+    ['code', 'code_certifier', 'code-reviewer'],
+    ['security', 'security_certifier', 'security-reviewer'],
+  ]) {
+    const reference = metaValue(field);
+    if (!reference || reference === 'none') continue;
+    const resolved = validator.resolveNamedCertifier(nodes, reference, role);
+    if (!resolved) throw new Error('G4 fixture: ' + field + ' "' + reference + '" did not resolve');
+    const gateDigest = schema.sha256Canonical(resolved.identity);
+    for (const member of resolved.members) {
+      fs.writeFileSync(path.join(fx.cacheDir, member.id + '.md'), [
+        'evidence-binding: ' + member.id + ' fixture-' + member.id,
+        'verdict: pass',
+        'findings_blocking: 0',
+        'certifier_kind: ' + kind,
+        'certifier_aggregation: ' + resolved.aggregation,
+        'certifier_gate_digest: ' + gateDigest,
+        'certifier_epoch_lineage_id: ' + metaValue('epoch_lineage_id'),
+        'certifier_inherited_frontier_digest: ' + metaValue('inherited_frontier_digest'),
+        'certified_candidate_digest: ' + candidateDigest,
+      ].join('\n') + '\n');
+      certified.push(member.id);
+    }
+  }
+  // A certifier closed over a still-`pending` producer is a topologically impossible ledger
+  // (`state_ledger_progress_invalid`), so the certifiers' transitive dependencies close with them.
+  // The SINK stays pending, which is precisely the state a finalize sweep runs in.
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const closed = new Set();
+  const walk = id => {
+    if (!byId.has(id) || closed.has(id)) return;
+    closed.add(id);
+    for (const dep of byId.get(id).dependsOn || []) walk(dep);
+  };
+  for (const id of certified) walk(id);
+  fs.writeFileSync(planPath, closeLedgerRows(live, closed));
+  return { certified, closed: [...closed].sort() };
+}
+
 function installTypedCaseBParent(fx, config = {}) {
   const proofDir = path.join(fx.cacheDir, 'case-b');
   fs.mkdirSync(proofDir, { recursive: true });
@@ -1487,6 +1576,15 @@ scenario(() => {
     fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'), [
       'verdict: pass', 'validated_candidate_hash: ' + candidatePayload.validated_candidate_hash, '',
     ].join('\n'));
+    // The promoted child names two certifiers and this fixture never ran them, so the sweep below
+    // was refusing `gate_unsatisfied` on BOTH. Measured, not assumed: this file at pristine HEAD run
+    // against pristine HEAD's production code is green, and the SAME pristine file run against the
+    // current working tree reds here — so the cause is the `--finalize-check` contract change
+    // (gate EXECUTION, not just gate shape), and the fixture was encoding an illegal finalize state.
+    deepEqual(certifyNamedCertifiers(fx, candidatePayload.validated_candidate_hash),
+      { certified: ['child-review', 'child-security'],
+        closed: ['child-impl', 'child-review', 'child-security'] },
+      'both named certifiers are certified over a closed producer, and the sink stays pending');
     // spawn-class: durable-handoff
     const finalizeCheck = spawnSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
       path.join(fx.projectDir, 'workflow-plan.md'), '--finalize-check', '--json', '--base', 'main'], {
@@ -1532,6 +1630,16 @@ scenario(() => {
           fs.appendFileSync(path.join(projectDir, 'workflow-plan.md'), '\nlive-substitute\n');
         },
       };
+      // CONTROL. Every variant below asserts `!result.ok`; all six pass vacuously the moment the
+      // BASE stops verifying, and nothing else in this block would notice. Prove the unmutated copy
+      // still verifies first, so each `!result.ok` is measuring its own substitution.
+      {
+        const controlRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-binding-control-'));
+        fs.cpSync(path.join(baseCopy, fx.project), path.join(controlRoot, fx.project), { recursive: true });
+        const control = replan.verifySnapshotManifest(path.join(controlRoot, fx.project, '.cache', 'epochs', '1'));
+        ok(control.ok, 'unmutated copy of the sealed epoch still verifies: ' + JSON.stringify(control));
+        fs.rmSync(controlRoot, { recursive: true, force: true });
+      }
       for (const [name, mutate] of Object.entries(variants)) {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-binding-variant-'));
         const projectDir = path.join(root, fx.project);
@@ -3177,8 +3285,20 @@ scenario(() => {
     { id: 'bypass', role: 'doc-updater', write_set: 'docs/note.md' },
     { id: 'child-finalize', role: 'finalize', depends_on: 'review-a,review-b,bypass', model: '—' },
   ], { 'review-a': 'complete', 'review-b': 'complete', 'bypass': 'complete', 'child-finalize': 'pending' });
-  ok(validator.validatePlan(bypassRoot.text, {}).errors.some(error => error.includes('g4_inherited_frontier_uncovered')),
-    'an inherited-frontier root that bypasses the named certifier fanout still refuses g4_inherited_frontier_uncovered');
+  // The coverage REASON moved off `errors` and onto the `warnings` advisory channel byte-identically,
+  // so the guard now has two halves and both are pinned by name: the plan is still out of grammar
+  // (via the separate named-certifier post-dominance error), and the specific measurement naming the
+  // bypass root is still emitted. Asserting only the refusal would survive losing the measurement;
+  // asserting only the measurement would survive the plan quietly becoming in-grammar.
+  const bypassResult = validator.validatePlan(bypassRoot.text, {});
+  equal(bypassResult.result, 'refuse',
+    'an inherited-frontier root that bypasses the named certifier fanout is still out of grammar');
+  ok((bypassResult.warnings || []).some(warning => warning.check === 'G4'
+    && warning.warning === 'named_certifier_uncovered'
+    && (warning.nodes || []).includes('bypass')
+    && String(warning.detail).includes('g4_inherited_frontier_uncovered')),
+  'the g4_inherited_frontier_uncovered measurement still names the bypass root, on the advisory channel: '
+  + JSON.stringify(bypassResult.warnings));
 
   const directMember = frozenPlan('issue-699', { ...groupMeta, code_certifier: 'review-a' }, [
     { id: 'review-a', role: 'code-reviewer', shape: 'fanout(cert)',
@@ -3316,18 +3436,31 @@ scenario(() => {
       return rows;
     };
     const before = snapshot(fx.projectDir);
+    // The fence REPORT is identical at all four entry points; the EXIT CODE is not, and the
+    // difference is the shipped rule rather than an accident — `handoffExitCode` answers at exit 0
+    // for every return that is neither `ready_to_run`, a consent reason, nor an escalate, so the
+    // handoff REPORTS this fence where the other three still refuse on it. Named by hand per script:
+    // deriving the expectation from the rule under test would make this table agree with whatever
+    // the rule happens to say, which is the one thing it must not do.
     const commands = [
-      ['kaola-workflow-adaptive-node.js', ['open-next', '--project', fx.project, '--json']],
-      ['kaola-workflow-adaptive-node.js', ['orient', '--project', fx.project, '--json', '--summary']],
-      ['kaola-workflow-adaptive-handoff.js', ['--project', fx.project, '--json']],
-      ['kaola-workflow-plan-validator.js', [path.join(fx.projectDir, 'workflow-plan.md'), '--finalize-check', '--json']],
+      ['kaola-workflow-adaptive-node.js', ['open-next', '--project', fx.project, '--json'], 'refuse'],
+      ['kaola-workflow-adaptive-node.js', ['orient', '--project', fx.project, '--json', '--summary'], 'refuse'],
+      ['kaola-workflow-adaptive-handoff.js', ['--project', fx.project, '--json'], 'answer'],
+      ['kaola-workflow-plan-validator.js', [path.join(fx.projectDir, 'workflow-plan.md'), '--finalize-check', '--json'], 'refuse'],
     ];
-    for (const [script, args] of commands) {
+    for (const [script, args, disposition] of commands) {
       const child = spawnSync(process.execPath, [path.join(__dirname, script), ...args], {
         cwd: fx.root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
       });
-      ok(child.status !== 0, script + ' refuses a live valid re-plan fence');
       const out = JSON.parse(String(child.stdout || '').trim().split('\n').filter(Boolean).pop());
+      if (disposition === 'refuse') {
+        ok(child.status !== 0, script + ' refuses a live valid re-plan fence');
+        equal(out.result, 'refuse', script + ' reports the fence as a refusal');
+      } else {
+        equal(child.status, 0, script + ' REPORTS a live valid re-plan fence at exit 0: ' + String(child.stdout));
+        equal(out.result, 'answer', script + ' reports the fence as an answer');
+        equal(out.mutation_performed, false, script + ' states on the envelope that it mutated nothing');
+      }
       equal(out.reason, 'replan_in_progress', script + ' reports the shared typed fence reason');
       equal(out.transaction_id, tx.transaction_id, script + ' reports the exact transaction id');
       equal(out.parent_plan_hash, tx.parent.plan_hash, script + ' reports the exact parent plan hash');
@@ -5744,19 +5877,22 @@ scenario(() => {
 
     // ---- NON-VACUITY: the tiers are re-aimed, not disabled. ----
     const restore = () => fs.writeFileSync(fx.planPath, settledPlan);
+    // Every row edit goes through `editLedgerRow`, and the ghost row is DERIVED from a live one, so
+    // these mutations stay correct as the ledger table's column set changes. The literal two-column
+    // spellings they replaced silently became no-ops when the `wrote` column arrived.
     const mutations = [
       ['a missing ledger row for a real expansion unit',
-        text => text.replace('| ' + fx.unitIds[0] + ' | complete |\n', ''),
+        text => editLedgerRow(text, fx.unitIds[0], () => null),
         'state_ledger_authority_invalid'],
       ['a ledger row for a node that exists in neither view',
-        text => text.replace('| ' + fx.unitIds[0] + ' | complete |',
-          '| ' + fx.unitIds[0] + ' | complete |\n| ghost-unit | pending |'),
+        text => editLedgerRow(text, fx.unitIds[0],
+          row => row + '\n' + row.replace(fx.unitIds[0], 'ghost-unit').replace('complete', 'pending')),
         'state_ledger_authority_invalid'],
       ['a missing ledger row for a SPINE node',
-        text => text.replace('| wall | pending |\n', ''),
+        text => editLedgerRow(text, 'wall', () => null),
         'state_ledger_authority_invalid'],
       ['a ledger status outside the closed vocabulary',
-        text => text.replace('| ' + fx.unitIds[1] + ' | complete |', '| ' + fx.unitIds[1] + ' | done |'),
+        text => editLedgerRow(text, fx.unitIds[1], row => row.replace('complete', 'done')),
         'state_ledger_authority_invalid'],
     ];
     // #833: the two `state_compliance_*` mutations that used to live in this list are RETIRED with
@@ -5863,6 +5999,36 @@ scenario(() => {
 // A consumer reasoning about the EXECUTED graph's STATE but reading the FREEZE view (`parseNodes`)
 // is wrong on an expanded spine.
 // ===========================================================================
+// Rewrites ONE `## Node Ledger` row, addressed by node id; `replacer` returns the new text for that
+// row, or null to delete it. Two hazards this exists to close, both of which produced silently
+// passing tests here:
+//   WIDTH — the ledger table grew a `wrote` column, and every mutation spelled as a two-column
+//     literal (`'| wall | pending |\n'`) stopped matching. The mutation became a no-op, the fixture
+//     tested the UNMUTATED plan, and only its own self-check noticed.
+//   SCOPE — `## Nodes` carries id-prefixed pipe rows of its own, so an unscoped row match edits the
+//     plan GRAMMAR while reading as a ledger edit.
+// A miss THROWS rather than returning the input unchanged: a mutation that finds nothing must be a
+// loud failure, never a quiet pass.
+function editLedgerRow(text, id, replacer) {
+  let section = null;
+  let hit = false;
+  const out = [];
+  for (const line of text.split('\n')) {
+    const heading = /^##\s+(.*?)\s*$/.exec(line);
+    if (heading) section = heading[1];
+    const row = section === 'Node Ledger' && !heading ? /^\|\s*([A-Za-z0-9._-]+)\s*\|/.exec(line) : null;
+    if (row && row[1] === id) {
+      hit = true;
+      const next = replacer(line);
+      if (next !== null) out.push(next);
+      continue;
+    }
+    out.push(line);
+  }
+  if (!hit) throw new Error('fixture: no `## Node Ledger` row for ' + id);
+  return out.join('\n');
+}
+
 function initExpandedFamilyFixture(opts) {
   opts = opts || {};
   const epochActive = opts.epochActive !== false;     // PLAN Meta carries epoch_schema_version (site :4564 gate)
@@ -6089,6 +6255,14 @@ scenario(() => {
     const chHash = JSON.parse((ch.stdout || '').trim().split('\n').pop()).validated_candidate_hash;
     fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'),
       'verdict: pass\nvalidated_candidate_hash: ' + chHash + '\n');
+    // The unit landed `lib/feature.js` and `wall` — the plan's code-reviewer AND its named
+    // `code_certifier` — never ran, so the sweep was refusing `gate_unsatisfied` at G1 (an unreviewed
+    // complete producer) before it could ever reach the attribution question this scenario is about.
+    // Closing and certifying the reviewer is what makes the finalize state legal; the attribution
+    // non-vacuity arm below is unaffected and still reds on the orphan.
+    deepEqual(certifyNamedCertifiers(fx, chHash),
+      { certified: ['wall'], closed: ['m1', 'probe', 'wall'] },
+      'the reviewer that post-dominates the unit is closed and certified before the sweep');
 
     const finalize = () => {
       const r = fx.runScript('kaola-workflow-plan-validator.js',
@@ -7482,7 +7656,7 @@ scenario(() => {
       '#847-B: ...targeting the transaction the exit actually accepts (' + fileId.slice(0, 12) + '), never '
       + 'the stranded id the fence names (' + strandedId.slice(0, 12) + '). Printing the fence\'s id sends '
       + 'the operator to a command that refuses on arrival: ' + command);
-    ok(ran.out.result !== 'refuse',
+    ok(ran.out.result !== 'refuse' && ran.out.result !== 'answer',
       '#847-B: ...and the printed command must not refuse at all: ' + JSON.stringify(ran.out));
     notEqualReason(fence847(fx), 'replan_integrity_mismatch',
       '#847-B: ...so the wedge is genuinely gone afterwards, not merely re-described');
@@ -7526,7 +7700,7 @@ scenario(() => {
       '#847-C: ...and the exit named must be the one this phase ADMITS. A blanket `abort` here is a '
       + 'printed command that refuses on arrival — the operator is turned away a third time, by a '
       + 'third code, still with nowhere to go: ' + command);
-    ok(ran.out.result !== 'refuse',
+    ok(ran.out.result !== 'refuse' && ran.out.result !== 'answer',
       '#847-C: ...the printed command must not refuse: ' + JSON.stringify(ran.out));
     notEqualReason(fence847(fx), 'replan_integrity_mismatch',
       '#847-C: ...and following it clears the wedge');
@@ -7807,7 +7981,7 @@ scenario(() => {
       + JSON.stringify(out.legal_mutation));
     const command = namedReplanCommand847(out);
     const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
-    ok(ranOk === null || ranOk.result !== 'refuse',
+    ok(ranOk === null || (ranOk.result !== 'refuse' && ranOk.result !== 'answer'),
       '#847-G: ...and any command it DOES print must survive being pasted. A printed command that '
       + 'refuses is worse than none: ' + JSON.stringify({ command, ran: ranOk }));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
@@ -7861,7 +8035,7 @@ scenario(() => {
       + 'above and both refused: ' + JSON.stringify(out.legal_mutation));
     const command = namedReplanCommand847(out);
     const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
-    ok(ranOk === null || ranOk.result !== 'refuse',
+    ok(ranOk === null || (ranOk.result !== 'refuse' && ranOk.result !== 'answer'),
       '#847-H: ...and any command it prints must survive being pasted: '
       + JSON.stringify({ command, ran: ranOk }));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
@@ -7945,7 +8119,7 @@ scenario(() => {
     // clauses above are what carry the change.
     const command = namedReplanCommand847(out);
     const ranOk = command === null ? null : runNamedReplanCommand847(fx.root, command).out;
-    ok(ranOk === null || ranOk.result !== 'refuse',
+    ok(ranOk === null || (ranOk.result !== 'refuse' && ranOk.result !== 'answer'),
       '#847-K: ...and any command it prints must survive being pasted: '
       + JSON.stringify({ command, ran: ranOk }));
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
@@ -8140,7 +8314,7 @@ scenario(() => {
     // THE PIN — run what it names. A verb phrase is only an exit if the id needed to complete it
     // travels with it, so this executes `legal_mutation` + `transaction_id` exactly as reported.
     const ran = runNamedLegalMutation847(fx, out);
-    ok(ran === null || ran.result !== 'refuse',
+    ok(ran === null || (ran.result !== 'refuse' && ran.result !== 'answer'),
       '#847-I: the verb finalize names must be one this state ACCEPTS. It named `'
       + out.legal_mutation + '` with transaction_id ' + JSON.stringify(out.transaction_id)
       + '; run against the state that produced it, that is: ' + JSON.stringify(ran)

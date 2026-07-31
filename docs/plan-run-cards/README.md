@@ -36,7 +36,7 @@ apply to them). They live once under `docs/plan-run-cards/` and are pointed at b
 
 - **D-445-01** — `operator_hint` on every typed envelope + skeleton/card split
 - **D-446-01** — `--summary` mode + `route-findings` companion record
-- **D-434-01** — sanctioned repair primitives (`revert-overflow` / `repair-node`)
+- **D-434-01** — sanctioned repair primitives (`repair-node`; the discard verb it also named is retired)
 - **D-424-01** — `--drop-base` window-lock / anti-laundering model
 - **D-586-01** — retirement of the standalone `parallel-batch` aggregator; `frontier-batch.md` now documents the running-set scheduler
 - **D-611-01** — the Codex Join Protocol (wait budgets, writer kill-safety reconciliation, typed delegation outcomes); `join-protocol.md` documents the full mechanics

@@ -1013,6 +1013,14 @@ function claimProject(root, args) {
     // under `result: refuse` and neither emitted the field. Each is a determinate fact about the
     // target (the issue is closed; a local folder already holds it), so `refuse` is the verb, not
     // the `answer` the demoted claim-time statuses carry.
+    // MEASURED (on the GitHub canonical; this port shares the call graph): this arm's `result` is
+    // authoritative, its EXIT CODE is not reached. `classifyIssue` returns verdict 'red' for a
+    // closed issue and `claimExplicitTarget` answers on that verdict BEFORE it ever calls
+    // `claimProject`, so the startup path cannot reach this line; `cmdClaim` is the only caller
+    // that reaches it, and it calls `output()` with NO code argument, so the envelope always
+    // exits 0 whatever `claimExitCode` computes. That makes
+    // `claimExitCode('user_target_closed') === 1` unobservable today. Left as-is deliberately:
+    // an exit code no shipped path emits cannot be verified by driving it. Consumers read `result`.
     if (probe.state === 'closed') {
       return { status: 'user_target_closed', result: 'refuse', issue: issueIid, project, reasoning: 'Gitea issue #' + issueIid + ' is closed' };
     }
@@ -1227,8 +1235,14 @@ function claimBundle(root, opts) {
       fs.mkdirSync(dir);
     } catch (e) {
       if (e.code === 'EEXIST' && fs.existsSync(stateFile(root, project))) {
-        return { status: 'target_set_conflicts_active_work', issue: targets[0], project,
-          reasoning: 'bundle project folder already exists: ' + project };
+        // The routing surfaces classify a non-acquiring claim by `result` ALONE, so a status
+        // token that carries `result` from one arm and nothing from another classifies two ways
+        // depending on which internal arm fired — and nothing on the envelope names the arm.
+        // This is the mid-provision arm of a token `claimExplicitBundle` also emits pre-mutation,
+        // and `claimAnswer` is what makes both arms carry the same one. The `reasoning` string
+        // still distinguishes them.
+        return claimAnswer('target_set_conflicts_active_work', { issue: targets[0], project,
+          reasoning: 'bundle project folder already exists: ' + project });
       } else if (e.code !== 'EEXIST') { throw e; }
     }
     applied.dir = true;
@@ -1382,20 +1396,21 @@ function claimBundle(root, opts) {
       }
     }
     if (!rollbackOk) {
-      return {
-        status: 'target_set_label_rollback_failed',
+      // The one token on this surface with no scalar twin, because there is no scalar analogue of
+      // "the unwind itself failed": a claim label the rollback could not remove OUTLIVES this
+      // answer. `partial` is the applied-step record a human needs to finish the cleanup by hand.
+      return claimAnswer('target_set_label_rollback_failed', {
         issue_numbers: targets,
         project,
         reasoning: 'partial claim could not be fully rolled back; manual cleanup may be required',
         partial: applied
-      };
+      });
     }
-    return {
-      status: 'target_set_unavailable',
+    return claimAnswer('target_set_unavailable', {
       issue_numbers: targets,
       project,
       reasoning: 'bundle provision failed and was rolled back: ' + ((claimErr && claimErr.message) || String(claimErr))
-    };
+    });
   }
 }
 
@@ -1406,14 +1421,14 @@ function claimExplicitBundle(root, args) {
   const targets = args.targetIssues;
   // Step 0 (#370): refuse malformed tokens (echo the offender) BEFORE the empty check.
   if (Array.isArray(args.targetIssuesInvalidTokens) && args.targetIssuesInvalidTokens.length) {
-    return { status: 'target_set_invalid_token', claim: 'none', project: null, issue: null,
+    return claimAnswer('target_set_invalid_token', { claim: 'none', project: null, issue: null,
       reasoning: '--target-issues contains invalid token(s): ' + args.targetIssuesInvalidTokens.join(', ') +
-        ' — each target must be a positive integer' };
+        ' — each target must be a positive integer' });
   }
   // Step 1: empty/missing
   if (!Array.isArray(targets) || targets.length === 0) {
-    return { status: 'target_set_empty', claim: 'none', project: null, issue: null,
-      reasoning: '--target-issues <A,B,...> required' };
+    return claimAnswer('target_set_empty', { claim: 'none', project: null, issue: null,
+      reasoning: '--target-issues <A,B,...> required' });
   }
   // Step 2: bundle size is SHAPE, and shape is the orchestrator's to decide — how many issues one
   // claim takes is a judgement about the work, not a fact a script can get right. Nothing is
@@ -1432,55 +1447,53 @@ function claimExplicitBundle(root, args) {
     // 4a: check active folders (bundle-aware activeByIssue)
     const existing = activeByIssue(root, n);
     if (existing) {
-      return { status: 'target_set_conflicts_active_work', result: 'refuse', claim: 'none', issue: n,
-        reasoning: '#' + n + ' is already claimed by project ' + existing.project };
+      return claimAnswer('target_set_conflicts_active_work', { claim: 'none', issue: n,
+        reasoning: '#' + n + ' is already claimed by project ' + existing.project });
     }
     // 4b: probe issue state FIRST so a closed member gets the dedicated code before
     //     the classifier (which returns verdict:'red' for closed issues, causing it to
     //     be unreachable if probe runs after classify).
     const probe = probeIssueState(n);
     if (probe.state === 'closed') {
-      return { status: 'target_set_has_closed_issue', result: 'refuse', claim: 'none', issue: n,
-        reasoning: '#' + n + ' is closed' };
+      return claimAnswer('target_set_has_closed_issue', { claim: 'none', issue: n,
+        reasoning: '#' + n + ' is closed' });
     }
     // #519: a TRANSIENT-infra probe fault escalates the whole bundle instead of refusing on a TLS
     // timeout / rate-limit / DNS blip (reaches the existing target_set_indeterminate/escalate valve).
     if (!OFFLINE && probe.state === 'unavailable' && probe.transient === true) {
-      return { status: 'target_set_indeterminate', result: 'escalate', claim: 'none', issue: n,
+      return claimAnswer('target_set_indeterminate', { claim: 'none', issue: n,
         reasoning_class: 'classifier_error',
-        reasoning: '#' + n + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' };
+        reasoning: '#' + n + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' });
     }
     if (!OFFLINE && probe.state === 'unavailable') {
-      return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n,
-        reasoning: '#' + n + ' state probe failed' };
+      return claimAnswer('target_set_unavailable', { claim: 'none', issue: n,
+        reasoning: '#' + n + ' state probe failed' });
     }
     // 4c: classify
     const classified = classifyIssue(root, n);
     if (classified.verdict === 'owned' || classified.verdict === 'blocked') {
-      return { status: 'target_set_conflicts_active_work', result: 'refuse', claim: 'none', issue: n,
-        reasoning: classified.reasoning };
+      return claimAnswer('target_set_conflicts_active_work', { claim: 'none', issue: n,
+        reasoning: classified.reasoning });
     }
     if (classified.verdict === 'red') {
-      return { status: 'target_set_red', result: 'refuse', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return claimAnswer('target_set_red', { claim: 'none', issue: n, reasoning: classified.reasoning });
     }
     if (classified.verdict === 'target_unavailable') {
-      return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return claimAnswer('target_set_unavailable', { claim: 'none', issue: n, reasoning: classified.reasoning });
     }
     if (classified.verdict === 'target_unverified') {
-      return { status: 'target_set_unverified', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return claimAnswer('target_set_unverified', { claim: 'none', issue: n, reasoning: classified.reasoning });
     }
     // #519: the forge classifier now partitions a tea fetch fault by stderr ERROR-CLASS — a
     // transient-infra fault (TLS timeout / rate-limit / DNS) surfaces 'indeterminate' (mirroring
     // root), which this arm routes to result:escalate (a genuine-negative stays target_unavailable).
     if (classified.verdict === 'indeterminate') {
-      return {
-        status: 'target_set_indeterminate',
-        result: 'escalate',
+      return claimAnswer('target_set_indeterminate', {
         claim: 'none',
         issue: n,
         reasoning_class: classified.reasoning_class || 'classifier_error',
         reasoning: classified.reasoning
-      };
+      });
     }
   }
   // Step 5: derive project/branch — design §Naming: bundle_id = 'bundle-' + sorted targets
@@ -1703,14 +1716,79 @@ function output(obj, code) {
 // One wording for the no-target usage answer, shared by startup and pick-next.
 const NO_TARGET_USAGE = 'usage: --target-issue <N> (or --target-issues A,B,C) required; '
   + 'the workflow never auto-picks an issue.';
-const CLAIM_ANSWER_STATUSES = Object.freeze([
-  'no_target', 'target_ambiguity',
-  'user_target_red', 'user_target_blocked',
-  'target_unavailable', 'target_unverified', 'target_indeterminate',
-]);
+// The `result` every SCALAR claim-time status carries. This is the ONE authored half of the
+// vocabulary; the bundle half below is derived from it and is never authored separately. Keep it
+// that way — a second list of the same statuses maintained beside this one is the exact failure
+// this map exists to prevent, because a token added to one copy and not the other diverges
+// silently and no test can catch it (nothing would read the second copy).
+const CLAIM_SCALAR_RESULTS = Object.freeze({
+  no_target: 'answer',
+  target_ambiguity: 'answer',
+  user_target_blocked: 'answer',
+  user_target_red: 'answer',
+  target_unavailable: 'answer',
+  target_unverified: 'answer',
+  target_indeterminate: 'answer',
+  target_occupied: 'refuse',
+  user_target_closed: 'refuse',
+  dirty_tree_refused: 'consent',
+});
+
+// THE RULE: a `target_set_X` classifies and exits exactly like its scalar twin `X`.
+//
+// The bundle lane reports the same fact about a SET that the scalar lane reports about one issue,
+// and a fact does not change its meaning — or its exit code — because it was asked about three
+// issues instead of one. One statable rule, no per-token judgement. The map is the single source:
+// `result` and the exit code are both DERIVED from the twin, so a new bundle token cannot be added
+// to one half only, and a token cannot carry one classification at one emission site and a
+// different one at another.
+//
+// `twin: null` means the rule is SILENT — the token has no scalar counterpart, so the conservative
+// reading governs and the `result` is authored here instead. There is exactly one such token, and
+// it is the only code on this surface where a forge mutation SURVIVES the answer (a claim label
+// that could not be removed), so the "nothing was written" argument above does not reach it.
+//
+// `route` replaces the twin's `result` with a strictly MORE specific non-stopping answer, never
+// with a stop: `escalate` says "act on this by asking the user" where `answer` says "act on it
+// yourself". It does not change the exit code.
+const TARGET_SET_TWINS = Object.freeze({
+  target_set_empty:                 Object.freeze({ twin: 'no_target' }),
+  target_set_invalid_token:         Object.freeze({ twin: 'no_target' }),
+  target_set_red:                   Object.freeze({ twin: 'user_target_red' }),
+  target_set_unavailable:           Object.freeze({ twin: 'target_unavailable' }),
+  target_set_unverified:            Object.freeze({ twin: 'target_unverified' }),
+  target_set_indeterminate:         Object.freeze({ twin: 'target_indeterminate', route: 'escalate' }),
+  target_set_conflicts_active_work: Object.freeze({ twin: 'target_occupied' }),
+  target_set_has_closed_issue:      Object.freeze({ twin: 'user_target_closed' }),
+  target_set_label_rollback_failed: Object.freeze({ twin: null, result: 'refuse' }),
+});
+
+// The `result` for any claim-time status, scalar or bundle. Returns null for a status outside the
+// vocabulary — callers treat that as unknown, never as an answer.
+function claimResult(status) {
+  if (Object.prototype.hasOwnProperty.call(CLAIM_SCALAR_RESULTS, status)) return CLAIM_SCALAR_RESULTS[status];
+  const entry = TARGET_SET_TWINS[status];
+  if (!entry) return null;
+  if (entry.route) return entry.route;
+  if (entry.twin === null) return entry.result;
+  return CLAIM_SCALAR_RESULTS[entry.twin] || null;
+}
+
+// Build a non-acquiring claim envelope whose `result` comes from the map, never from the site.
+function claimAnswer(status, extra) {
+  return Object.assign({ status, result: claimResult(status) }, extra);
+}
+
+// The exit code follows `result`, and `result` follows the twin. At this surface the exit code no
+// longer classifies — it only separates the answers a caller acts on from the two stops it must
+// not walk past: `consent`, which is a human fence, and `refuse`, which survives exactly where the
+// scalar twin already refuses or where a forge mutation outlived the answer. An unrecognised
+// status keeps the historical fail-closed non-zero.
 function claimExitCode(status) {
   if (status === 'acquired' || status === 'owned') return 0;
-  return CLAIM_ANSWER_STATUSES.indexOf(status) >= 0 ? 0 : 1;
+  const result = claimResult(status);
+  if (result === null) return 1;
+  return (result === 'refuse' || result === 'consent') ? 1 : 0;
 }
 
 function cmdClaim() {
@@ -1787,6 +1865,14 @@ function cmdStartup() {
     return;
   }
 
+  // MEASURED, and left alone: this surface is INCONSISTENT about which key carries the token.
+  // This answer (and its `cmdPickNext` twin) emits a bare `verdict` with NO `status` key at all,
+  // while every arm composed through the Object.assign below carries BOTH `verdict` and `status`.
+  // A consumer — or a check — comparing `envelope.status` across the two shapes compares
+  // `undefined` to `undefined` on this one and reads it as agreement, which is how the gap stayed
+  // invisible. `verdict` and `result` are both correct here; only the missing `status` is the
+  // defect. Normalizing it is a breaking envelope change for anything keyed on the current shape,
+  // so it is recorded rather than fixed.
   if (!scalarTarget) {
     output({ verdict: 'no_target', claim: 'none', project: null, issue: null, result: 'answer',
       reasoning: NO_TARGET_USAGE }, claimExitCode('no_target'));
@@ -1842,9 +1928,15 @@ function reconcileNextCommand(root, folder) {
 
 // Detect the crash state where archiveProjectDir ran but the implementation commit was
 // not made yet. Pure read — no mutations. Returns:
-//   { incomplete: true,  reason: 'archived_impl_uncommitted' }  — crash state, resumable
-//   { incomplete: false, reason: 'already_finalized' }          — clean, nothing to resume
-//   null                                                         — archive dir absent, not applicable
+//   { incomplete: true,  reason: 'archived_impl_uncommitted', locus, archive_dir }  — crash state, resumable
+//   { incomplete: false, reason: 'already_finalized', locus, archive_dir }          — clean, nothing to resume
+//   null                                                                             — archive dir absent, not applicable
+// `locus` names WHICH of the two structurally different proofs fired — `local` (this root's own
+// archive dir is present, and git says it is committed) or `main_resident` (the archive lives in
+// the MAIN root and this branch no longer carries the live folder). Both reach the same word; only
+// one of them also means the sink ran, so a consumer that cannot tell them apart is guessing.
+// `archive_dir` is the directory the verdict was actually proved against, which for a
+// `main_resident` answer is NOT under `root`.
 function archiveDirDirty(root, project) {
   // #563: an UNPROBEABLE tree fails CLOSED = treated as DIRTY (mirror #557/#496/#552). A swallowed probe
   // fault here would mis-report a crashed finalize (archived-but-uncommitted) as already_finalized,
@@ -1860,8 +1952,10 @@ function detectFinalizeIncomplete(root, project) {
   if (!project) return null;
   const archiveDir = path.join(root, 'kaola-workflow', 'archive', project);
   if (fs.existsSync(archiveDir)) {
-    if (archiveDirDirty(root, project)) return { incomplete: true, reason: 'archived_impl_uncommitted' };
-    return { incomplete: false, reason: 'already_finalized' };
+    if (archiveDirDirty(root, project)) {
+      return { incomplete: true, reason: 'archived_impl_uncommitted', locus: 'local', archive_dir: archiveDir };
+    }
+    return { incomplete: false, reason: 'already_finalized', locus: 'local', archive_dir: archiveDir };
   }
   // #832: the archive resolves against MAIN's project root, so a resume invoked from a LINKED
   // worktree finds nothing locally even though the run finalized. Main's copy is deliberately
@@ -1873,13 +1967,14 @@ function detectFinalizeIncomplete(root, project) {
   try {
     const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
     if (path.resolve(main) === path.resolve(root)) return null;
-    if (!fs.existsSync(path.join(main, 'kaola-workflow', 'archive', project))) return null;
+    const mainArchiveDir = path.join(main, 'kaola-workflow', 'archive', project);
+    if (!fs.existsSync(mainArchiveDir)) return null;
     const liveRef = 'HEAD:kaola-workflow/' + project + '/workflow-state.md';
     try {
       execFileSync('git', ['-C', root, 'cat-file', '-e', liveRef], { stdio: ['ignore', 'ignore', 'ignore'] });
-      return { incomplete: true, reason: 'archived_impl_uncommitted' };
+      return { incomplete: true, reason: 'archived_impl_uncommitted', locus: 'main_resident', archive_dir: mainArchiveDir };
     } catch (_) { /* not on the branch — the archive commit landed (or the folder was never tracked) */ }
-    return { incomplete: false, reason: 'already_finalized' };
+    return { incomplete: false, reason: 'already_finalized', locus: 'main_resident', archive_dir: mainArchiveDir };
   } catch (_) { return null; }
 }
 
@@ -1899,11 +1994,49 @@ function cmdResume() {
         now: Date.now(),
         staleMs: adaptiveSchema.LANE_STALENESS_MS
       };
-      const mine = active.filter(f => classifyLane(f, ctx).bucket === 'mine');
+      const lanes = active.map(f => ({ folder: f, lane: classifyLane(f, ctx) }));
+      const mine = lanes.filter(l => l.lane.bucket === 'mine').map(l => l.folder);
       if (mine.length === 1) {
         args.project = mine[0].project;
       } else {
-        output({ resumed: false, reason: 'resume_ambiguous', candidates: active.map(f => f.project) }, 1);
+        // Ambiguity is a QUESTION, not a failure: nothing was read past the state files and
+        // nothing was written, and the caller answers it by naming one. So it ANSWERS at exit 0,
+        // and `resumed: false` / `mutation_performed: false` — not the exit code — are what say
+        // the resume did not happen.
+        //
+        // The candidate SET is the state this stop was freezing, and an answer that lets the
+        // agent continue can consume it: a lane ages past the staleness threshold, a marker
+        // rotates, a folder gets archived. So the set rides out with enough per candidate to
+        // CHOOSE without re-deriving anything — including `classifyLane`'s bucket and reasoning,
+        // which are computed here for every folder and were previously kept only for the
+        // one-boolean 'mine' test and then dropped. `candidates` keeps its shipped bare-name
+        // shape (consumers read it today); the detail is additive beside it.
+        output({
+          resumed: false,
+          result: 'answer',
+          reason: 'resume_ambiguous',
+          mutation_performed: false,
+          candidates: active.map(f => f.project),
+          candidate_detail: lanes.map(({ folder, lane }) => ({
+            project: folder.project,
+            issue_number: folder.issue_number,
+            issue_numbers: folder.issue_numbers,
+            bundle_id: folder.bundle_id,
+            status: folder.status,
+            phase: folder.phase,
+            branch: folder.branch,
+            worktree_path: folder.worktree_path,
+            session_marker: folder.session_marker,
+            claim_ts: folder.claim_ts,
+            lane_bucket: lane.bucket,
+            lane_reasoning: lane.reasoning,
+            state_file: folder.state_file,
+            next_command: reconcileNextCommand(root, folder),
+            resume_with: 'resume --project ' + folder.project + ' --json'
+          })),
+          own_session_marker: ctx.ownSession,
+          select_with: 'resume --project <one of candidates> --json'
+        });
         return;
       }
     }
@@ -1917,7 +2050,23 @@ function cmdResume() {
           output({ resumed: true, project: args.project, reason: 'finalize_incomplete', next_command: 'finalize --keep-worktree' });
           return;
         } else {
-          output({ resumed: false, reason: 'already_finalized', project: args.project }, 1);
+          // Not a failure at all: the transaction is SETTLED and there is nothing left to
+          // resume. It answers at exit 0 — `resumed: false` and `mutation_performed: false` say
+          // the resume did not run, and `settled: true` says why it did not need to.
+          // `archive_locus` is the discriminating field the single word hid: the two proofs
+          // above are structurally different, and only `main_resident` also implies the branch
+          // side is done. `archive_dir` is the directory the verdict was proved against.
+          output({
+            resumed: false,
+            result: 'answer',
+            reason: 'already_finalized',
+            project: args.project,
+            settled: true,
+            mutation_performed: false,
+            archive_locus: archiveCheck.locus,
+            archive_dir: archiveCheck.archive_dir,
+            next_action: 'none'
+          });
           return;
         }
       }
@@ -2911,27 +3060,42 @@ function buildClosureReceipt(project, issueNumber, steps) {
   return receipt;
 }
 
-// #441: Compute goal_check for the finalize closure receipt.
+// What this measures is DECLARATION, never satisfaction.
+//
+// It replaces the retired `goal_check`, whose enum ('satisfied' | 'unsatisfied' | 'absent')
+// rendered a presence check as a verdict. Two things were wrong with that, and the second is worse
+// than the first: the negative case was unreachable (its own comment said 'unsatisfied' was
+// "reserved for future use"), AND the positive case named a check that does not exist anywhere in
+// this workflow — the closure schema documented 'satisfied' as "AC verified" while nothing
+// verifies acceptance criteria. Driven end-to-end, the old field wrote `goal_check: satisfied`
+// into the terminal closure receipt for `KAOLA_GOAL="cure cancer"` on a run that achieved nothing.
+// The verdict is deleted; the measurement under it is kept and named for what it actually is.
+//
 // Advisory only — never throws, never blocks finalize.
 // planDirs: ordered array of directories to search for workflow-plan.md (archive dest first,
-//   then live). Returns 'satisfied', 'absent'. 'unsatisfied' is reserved for future use.
-// v1 rule: KAOLA_GOAL set + non-empty → 'satisfied'; else plan goal: line present → 'satisfied';
-//   otherwise → 'absent'.
-function computeGoalCheck(planDirs) {
+//   then live). Returns { declared, source, probed }:
+//   declared — a goal TEXT was found. Not a claim that anything was achieved.
+//   source   — 'env' (KAOLA_GOAL, non-empty after trim) | 'plan' (a `goal:` line in ## Meta) | null.
+//   probed   — every plan path examined, in order, so a reader can see exactly what was inspected
+//              and re-run the same check by hand. Empty when KAOLA_GOAL answered first and no file
+//              was opened — which is itself the honest record of what happened.
+function computeGoalDeclaration(planDirs) {
+  const probed = [];
   const envGoal = (process.env.KAOLA_GOAL || '').trim();
-  if (envGoal) return 'satisfied';
+  if (envGoal) return { declared: true, source: 'env', probed };
   // Probe each planDir for a workflow-plan.md with a goal: line.
   for (const dir of (planDirs || [])) {
     if (!dir) continue;
+    const planPath = path.join(dir, adaptiveSchema.PLAN_FILE);
+    probed.push(planPath);
     try {
-      const planPath = path.join(dir, adaptiveSchema.PLAN_FILE);
       if (!fs.existsSync(planPath)) continue;
       const content = fs.readFileSync(planPath, 'utf8');
       const { goal } = parseGoal(content);
-      if (goal) return 'satisfied';
+      if (goal) return { declared: true, source: 'plan', probed };
     } catch (_) {}
   }
-  return 'absent';
+  return { declared: false, source: null, probed };
 }
 
 // Source-missing Finalization must bind to one archive transaction authority, never merely to the
@@ -4028,12 +4192,16 @@ function cmdFinalize() {
   // n5 (#653 finding D3): advisory selection-evidence probe, computed beside the attestation
   // probe using the same archive-then-live candidate order (archiveProjectDir already ran).
   closureReceipt.selection_evidence = probeSelectionEvidence([archiveCacheDir, liveCacheDir]);
-  // #441: advisory goal_check — probe archive-dest first (plan was already renamed there),
-  // then live location as fallback (crash-resume where archive did not complete).
-  closureReceipt.goal_check = computeGoalCheck([
+  // Advisory goal DECLARATION (presence, never satisfaction — see computeGoalDeclaration). Probe
+  // archive-dest first (the plan was already renamed there), then the live location as a fallback
+  // for a crash-resume where the archive did not complete.
+  const goalDeclaration = computeGoalDeclaration([
     result.dest,
     path.join(root, 'kaola-workflow', args.project)
   ]);
+  closureReceipt.goal_declared = goalDeclaration.declared;
+  closureReceipt.goal_declared_source = goalDeclaration.source;
+  closureReceipt.goal_declared_probed = goalDeclaration.probed;
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
   // #333: disposition is DECISION-derived on cmdFinalize (the orchestrator closes the issue after
   // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).

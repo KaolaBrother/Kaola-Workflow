@@ -335,12 +335,15 @@ plan must CONCLUDE. A brief carrying a pre-authored `## Nodes` table, an `AUTHOR
 control boundary is unchanged, and it is exactly what keeps a synthesizer synthesizing.
 
 **`clarification_required`.** When the brief is genuinely under-determined the planner returns
-`{handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round}`
-instead of guessing. It is legal PRE-claim (nothing written) and post-claim/pre-freeze (claim held,
-plan unfrozen). ASK THE USER the question verbatim, append the answer to the selection record's
-`clarifications` field, and re-dispatch the planner with the answer in the brief. The channel is
-bounded at THREE round-trips; a fourth returns `clarification_exhausted` with a `stop_and_ask`
-posture — stop and take the design question to the user rather than looping.
+`{handoff_status: 'clarification_required', result: 'escalate', question, context_refs, round,
+prior_rounds}` instead of guessing. It is legal PRE-claim (nothing written) and post-claim/pre-freeze
+(claim held, plan unfrozen). ASK THE USER the question verbatim, append the answer to the selection
+record's `clarifications` field, and re-dispatch the planner with the answer in the brief. The
+channel is UNBOUNDED and `round` / `prior_rounds` are data, not a limit — read them and judge: a
+question on its fourth pass is usually a design failure rather than a question, and taking it to the
+user whole is the better move, but that is your call and nothing enforces it. A call carrying no
+question at all is a malformed invocation, not a decision: it answers `clarification_malformed` at
+exit 0 — supply `--question` and re-run.
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 
@@ -395,16 +398,23 @@ empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the
 as a self-check (NOT `--freeze`, NOT `authoring-allowed`), then RUNS `kaola-workflow-adaptive-handoff.js --project {project} --json` (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate), and RETURNS the handoff packet. It never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches. If the project already has a
 `workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). <!-- PIN: claim-escalate -->
 When `claim_verdict` is NOT `acquired`/`owned`, no `workflow-state.md` was written. Surface
-`claim_reasoning` and classify by `result`:
+`claim_reasoning` and classify by `result`. The bundle lane carries no separate vocabulary: a
+`target_set_X` classifies and exits exactly like its scalar twin `X`, because it reports the same
+fact about a set that `X` reports about one issue.
 - `result: answer` (e.g. `no_target`, `target_ambiguity`, `user_target_blocked`, `user_target_red`,
-  `target_unavailable`, `target_unverified`, `target_indeterminate`): the claim did not happen and
-  nothing was written. This is a fact to act on, not a stop — fix the argv, retry, go offline, or
-  re-state the reason and claim a different target. Never blind-read a missing state file.
+  `target_unavailable`, `target_unverified`, `target_indeterminate`, and the bundle twins
+  `target_set_empty`, `target_set_invalid_token`, `target_set_red`, `target_set_unavailable`,
+  `target_set_unverified`): the claim did not happen and nothing was written. This is a fact to act
+  on, not a stop — fix the argv, retry, go offline, or re-state the reason and claim a different
+  target. Never blind-read a missing state file.
 - `result: consent` (`dirty_tree_refused`): the subject is the user's own uncommitted work. **ASK
   THE USER the `ask` on the envelope verbatim** and act on the answer (commit, stash, or worktree).
-- `result: refuse` (`target_occupied`, `user_target_closed`, `target_set_*` other than the
-  indeterminate one, or `claim: none` with no other reading): **HARD STOP** (**fail closed** — do
-  not retry a different issue, do not blind-read a missing state file).
+- `result: refuse` (`target_occupied`, `user_target_closed`, and their bundle twins
+  `target_set_conflicts_active_work`, `target_set_has_closed_issue`; plus
+  `target_set_label_rollback_failed`, the one code where a claim label outlived the answer and
+  needs manual cleanup — its `partial` names what was applied; or `claim: none` with no other
+  reading): **HARD STOP** (**fail closed** — do not retry a different issue, do not blind-read a
+  missing state file).
 - `result: escalate` (`target_set_indeterminate`): the bundle classifier faulted and bounded retry
   is exhausted. **PAUSE and ASK THE USER** — offer to retry, pick a different target, go offline,
   or abort. This is NOT an `adaptive-node write-halt`; no plan/ledger exists yet at claim time.
@@ -507,16 +517,20 @@ A bundle run ends at ONE finalization. The finalization step:
 
 ### Claim outcomes (bundle-specific)
 
-| code | trigger |
-|------|---------|
-| `target_ambiguity` | both `--target-issue` and `--target-issues` set (usage answer, exit 0) |
-| `target_set_empty` | issue list empty or missing |
-| `target_set_conflicts_active_work` | any member is already claimed |
-| `target_set_has_closed_issue` | any member is already closed |
-| `target_set_red` | classifier returns `red` for any member |
-| `target_set_unavailable` | member state probe failed (online) |
-| `target_set_unverified` | member unverifiable (offline, no local evidence) |
-| `target_set_label_rollback_failed` | partial claim could not be fully rolled back |
+Each row carries the `result` its scalar twin carries; the `answer` rows exit 0.
+
+| code | `result` | trigger |
+|------|----------|---------|
+| `target_ambiguity` | `answer` | both `--target-issue` and `--target-issues` set (usage answer) |
+| `target_set_empty` | `answer` | issue list empty or missing |
+| `target_set_invalid_token` | `answer` | a token is not a positive integer (the offender is echoed) |
+| `target_set_red` | `answer` | classifier returns `red` for any member |
+| `target_set_unavailable` | `answer` | member state probe failed (online), or provisioning failed and was cleanly rolled back |
+| `target_set_unverified` | `answer` | member unverifiable (offline, no local evidence) |
+| `target_set_indeterminate` | `escalate` | classifier faulted transiently and bounded retry is exhausted |
+| `target_set_conflicts_active_work` | `refuse` | any member is already claimed, or the bundle folder already exists |
+| `target_set_has_closed_issue` | `refuse` | any member is already closed |
+| `target_set_label_rollback_failed` | `refuse` | partial claim could not be fully rolled back; `partial` names the applied steps |
 
 On any bundle claim refusal, treat it the same as a single-issue claim refusal:
 surface the typed code and STOP; do not retry with a different issue set.

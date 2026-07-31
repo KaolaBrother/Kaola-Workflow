@@ -147,7 +147,8 @@ set on this call:
   — never silently adopted.
 
 **`writerHalt: true` NAMES the paths, in `outOfWriteSet`, that nothing accounted for.** Resolve them
-here — `revert-overflow` to discard them, `repair-node` to fold them into a re-freeze, or a consent
+here — `amend-surface` to attribute and re-review them, a deliberate deletion, `repair-node` to fold
+them into a re-freeze, or a consent
 halt if the resolution itself is a judgment call — and the halt is spent. Skipping straight to
 `open-next` / `open-ready` re-anchors the node's baseline, which drops the stray paths underneath it
 and stops that node's own barrier from seeing them; the node then re-dispatches over a worktree that
@@ -203,7 +204,7 @@ spawn_agent(s) for the frontier, back-to-back in ONE turn
         |
         adopt -> proceed normally
         |
-        halt  -> resolve outOfWriteSet (revert-overflow / repair-node / consent halt) BEFORE re-open
+        halt  -> resolve outOfWriteSet (amend-surface / delete / repair-node / consent) BEFORE re-open
 
 spawn_agent refused (capacity)? -> wait for / close ONE finished agent -> retry the SAME spawn ONCE
 ```

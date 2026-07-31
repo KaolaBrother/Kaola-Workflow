@@ -263,11 +263,14 @@ refusal if the following is true (checked after the Chain-Receipt Gate above):
 
 These typed refusals are classified structurally — do not string-match.
 
-### Goal Attestation (advisory, v1)
+### Goal Declaration (advisory)
 
 Export `KAOLA_GOAL` before finalizing (or set a `goal:` line in the plan's Meta
-block) so `cmdFinalize`'s advisory `goal_check` records `satisfied`; see
-`docs/api.md` § Goal Attestation for the full enum and rationale.
+block) so `cmdFinalize` records `goal_declared: true` on the closure receipt,
+alongside `goal_declared_source` (`env` or `plan`) and `goal_declared_probed`
+(the plan paths it examined). This records only that a goal was DECLARED —
+nothing in the workflow checks whether it was achieved, so do not read it as
+success. See `docs/api.md` § Goal Declaration.
 
 ## Goal Contract
 

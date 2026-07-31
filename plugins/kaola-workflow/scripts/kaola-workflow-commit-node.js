@@ -36,13 +36,13 @@ const VALIDATOR = 'kaola-workflow-plan-validator.js';
 // OPERATOR_HINT_REGISTRY — per-aggregator map of typed reason → hint templateFn.
 // Each entry is a function of ctx: { nodeId, mode } → one-sentence string.
 // Vocabulary contract (D-445-01 §3):
-//   - overflow family → reference revert-overflow, NEVER drop-base
+//   - overflow family → reference amend-surface (attribute + re-review), NEVER drop-base
 //   - crash-repair    → reference repair-node
 //   - NO forge tokens (gh / glab / tea)
 // ---------------------------------------------------------------------------
 const OPERATOR_HINT_REGISTRY = {
   barrier_failed: (ctx) =>
-    `Barrier rejected node ${ctx.nodeId || '(unknown)'}. Review the offending paths in .cache/, then run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json if overflow; otherwise check the evidence file for the specific barrier failure.`,
+    `Barrier rejected node ${ctx.nodeId || '(unknown)'}. Read barrierCheck.reason and barrierCheck.actualPaths in the envelope for the exact finding and the paths it measured, then check the evidence file. A write-set overflow is REPORTED here, not rejected — a rejection at this scope is a sensitive write with no reviewer, a foreign-archive write, or a missing/mismatched baseline.`,
   gate_failed: (ctx) =>
     `Gate verify failed for node ${ctx.nodeId || '(unknown)'}. Ensure all code nodes are post-dominated by a completed reviewer. Check the plan\'s ## Node Ledger and review node status.`,
   verdict_failed: (ctx) =>
@@ -170,6 +170,17 @@ function shellValidator(vPath, planPath, flags) {
 //
 // Returns the complete JSON output object (caller writes it to stdout).
 // ---------------------------------------------------------------------------
+// The per-node / group barrier reports a write-set overflow instead of refusing it: the envelope
+// carries `result:'answer'` with the measured paths, `mutation_performed:false`, and exit 0. The
+// aggregator must read the RESULT TOKEN, not the exit code — an `answer` is a finding the caller
+// records and acts on, never a reason to hold the close. `pass` and `answer` are both non-blocking;
+// `refuse` (a sensitive write with no reviewer, a foreign-archive write, a broken baseline) is not.
+// The WHOLE-PLAN barrier never emits `answer`, so this predicate changes nothing on that path.
+function barrierIsNonBlocking(barrierCheck) {
+  const r = barrierCheck && barrierCheck.result;
+  return r === 'pass' || r === 'answer';
+}
+
 function combineResults(steps, opts) {
   const mode = opts.mode;
   const nodeId = opts.nodeId || null;
@@ -192,7 +203,7 @@ function combineResults(steps, opts) {
     // path. The informational tagging below is retained for a direct combineResults caller that
     // still supplies them — it is the reason they can never move overallOk, and deleting it would
     // silently make a supplied gate/verdict payload look blocking.
-    const barrierPass = !!(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
+    const barrierPass = !!(barrierCheck && barrierCheck.exitCode === 0 && barrierIsNonBlocking(barrierCheck));
     // #263: selector-check is BLOCKING per-node (checks the completing node's own .cache, like
     // barrier-check — no deadlock risk). A non-selector node returns isSelector:false/ok:true
     // (never false-blocks). A selector_source with missing/foreign selector returns ok:false/exit 1
@@ -231,7 +242,8 @@ function combineResults(steps, opts) {
       refuseReason = 'baseline_missing';
     } else {
       // Precedence: barrier > selector > gate > verdict (most-actionable first)
-      const barrierFailed = !(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
+      const barrierFailed = !(barrierCheck && barrierCheck.exitCode === 0
+        && (mode === 'per-node' ? barrierIsNonBlocking(barrierCheck) : barrierCheck.result === 'pass'));
       const selectorFailed = selectorCheck != null && !(selectorCheck.exitCode === 0 && selectorCheck.ok === true);
       const gateFailed = gateVerify != null && !(gateVerify.exitCode === 0 && gateVerify.ok === true);
       const verdictFailed = verdictCheck != null && !(verdictCheck.exitCode === 0 && verdictCheck.ok === true);
@@ -331,7 +343,10 @@ function main() {
     const fused = shellValidator(validatorPath, planPath, ['--node-end', '--node-id', nodeIdValue, '--json']);
     if (fused && fused.mode === 'node-end') {
       const withExit = (sub, ok) => (sub == null) ? sub : Object.assign({}, sub, { exitCode: ok ? 0 : 1 });
-      barrierCheck = withExit(fused.barrierCheck, fused.barrierCheck && fused.barrierCheck.result === 'pass');
+      // The synthesized exit code must reproduce what a SEPARATE `--barrier-check --node-id` spawn
+      // would have set, and that spawn now exits 0 on an `answer` too. Synthesizing 1 here would
+      // re-manufacture, downstream, exactly the refusal the validator stopped emitting.
+      barrierCheck = withExit(fused.barrierCheck, barrierIsNonBlocking(fused.barrierCheck));
       selectorCheck = withExit(fused.selectorCheck, fused.selectorCheck && fused.selectorCheck.ok === true);
     } else {
       // Fallback (older validator without --node-end, or a parse miss): the legacy per-node spawns.

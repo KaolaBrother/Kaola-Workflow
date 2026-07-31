@@ -65,9 +65,10 @@ try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user
 
 // #445 (D-445-01): per-aggregator operator hint registry. One entry per typed reason this
 // script can emit; generated at emit time (never stored). Forge-neutral: refer only to the forge CLI.
-// Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow, plus amend-surface where the
-// out-of-set files may be preservable companion work (the laundering anti-pattern is excluded);
-// crash-repair → repair-node; no forge CLI tokens in any hint.
+// Vocabulary contract (D-445-01 §3): the write_set_overflow family → amend-surface (attribute the
+// out-of-set files onto a surface and re-review them). It names no discard verb: the family is a
+// REPORT at per-node and lane-group scope, so nothing has to be destroyed to proceed, and the
+// laundering anti-pattern (drop-base) stays excluded. Crash-repair → repair-node; no forge CLI tokens.
 const OPERATOR_HINT_REGISTRY = {
   nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
   no_unique_sink: () => 'Plan has no unique finalize sink node. Add exactly one `finalize` role node and re-freeze.',
@@ -80,15 +81,18 @@ const OPERATOR_HINT_REGISTRY = {
   overlapping_write_sets: (ctx) => `Nodes ${(ctx.nodes || []).join(', ')} have overlapping write sets — they cannot co-schedule. Adjust the plan so parallel nodes have disjoint write sets.`,
   missing_nodes: () => '--parallel-safe requires --nodes A,B[,C] with at least 2 node IDs.',
   too_few_nodes: () => '--parallel-safe needs >= 2 node IDs.',
-  drop_base_window_open: (ctx) => `Cannot drop baseline for in_progress node "${ctx.nodeId || '(unknown)'}". Reset the node to pending first (ledger-reset → pending → drop → fresh open).`,
+  // The window-lock is retired: the drop is PERFORMED and what it destroyed is recorded. The hint no
+  // longer prescribes the reset dance, because that dance WAS the laundering sequence.
+  drop_base_window_open: (ctx) => `Baseline dropped for in_progress node "${ctx.nodeId || '(unknown)'}" — the paths it could still attribute are recorded in uncommitted_at_drop on this envelope and appended to .cache/barrier-drops-${ctx.nodeId || '<node-id>'}.json. Re-record a baseline before the node closes, and expect --base-freshness to report trusted:false for it.`,
   root_mismatch: () => 'Run the barrier from the repo root so write-set paths and the baseline diff measure against one root.',
-  // NAMED, not routed: both primitives are listed with one line on when each fits, and nothing selects
-  // between them — the caller owns that judgment; this only stops hiding the preserve option.
-  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set. To DISCARD those files (stray artifacts you want gone) run: node scripts/kaola-gitea-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json. To KEEP them (genuine companion work owned by a discharged milestone on a spine plan) attribute + re-review them instead: node scripts/kaola-gitea-workflow-adaptive-node.js amend-surface --project <project> --node-id <expansion-point> --files "<paths>" --json`,
-  write_set_granularity: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set (granularity). Run: node scripts/kaola-gitea-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
-  lockfile_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a lockfile outside its declared write set. Add the lockfile to the write set or run revert-overflow.`,
-  mirror_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a mirror file outside its declared write set. Add the mirror to the write set or run revert-overflow.`,
-  count_bump: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a count-bump file outside its declared write set. Add the file or run revert-overflow.`,
+  // The out-of-set paths are on the branch and the run continues; the hint names how to PLACE them.
+  // It offers no discard verb because none exists any more — a run that wants the files gone deletes
+  // them deliberately, and the pre-merge barrier still refuses an unattributed path either way.
+  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set (see actualPaths / outOfAllow on the envelope). To KEEP them, attribute + re-review: node scripts/kaola-gitea-workflow-adaptive-node.js amend-surface --project <project> --node-id <expansion-point> --files "<paths>" --json. To drop them, delete them yourself before the pre-merge barrier.`,
+  write_set_granularity: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote at a coarser granularity than its declared set allows. Enumerate the files and narrow the write set (re-freeze), or attribute them: node scripts/kaola-gitea-workflow-adaptive-node.js amend-surface --project <project> --node-id <expansion-point> --files "<paths>" --json`,
+  lockfile_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a lockfile outside its declared write set. Add the lockfile to the write set, attribute it with amend-surface, or restore it by hand.`,
+  mirror_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a mirror file outside its declared write set. Add the mirror to the write set or attribute it with amend-surface — and confirm the other editions carry the same bytes.`,
+  count_bump: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a count-bump file outside its declared write set. Add the file to the write set or attribute it with amend-surface.`,
   foreign_archive: () => 'A file from a foreign archive was written. This is never allowed — revert the archive write.',
   // #830: the freeze-time screen of DECLARED write sets against the same band the barrier owns. The
   // barrier's foreign_archive refusal is unconditional and first-in-precedence, so a plan declaring
@@ -101,8 +105,8 @@ const OPERATOR_HINT_REGISTRY = {
   sensitive_write_unreviewed: () => 'A sensitive file was written without a completed security-reviewer node. Add a security-reviewer gate to the plan.',
   unattributed_write: (ctx) => `File "${ctx.file || '(unknown)'}" was written but not attributed to any node\'s write set. Add it to a node\'s declared write set.`,
   unattributed_change: (ctx) => (ctx && ctx.route === 'final-fix-commit')
-    ? 'A file changed on this branch is not attributed to any complete node\'s write set. The sink is LIVE and still PRISTINE, so a finalize-time fix has a recorded home: fix it however you judge best, then record it with node scripts/kaola-gitea-workflow-adaptive-node.js final-fix-commit --project <project> --json --stdin (the entry names the exact failed command, the fix commit, the touched paths and the green rerun receipt). Otherwise attribute the file to a node or run revert-overflow.'
-    : 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node or run revert-overflow.',
+    ? 'A file changed on this branch is not attributed to any complete node\'s write set. The sink is LIVE and still PRISTINE, so a finalize-time fix has a recorded home: fix it however you judge best, then record it with node scripts/kaola-gitea-workflow-adaptive-node.js final-fix-commit --project <project> --json --stdin (the entry names the exact failed command, the fix commit, the touched paths and the green rerun receipt). Otherwise attribute the file to a node (amend-surface), or remove it from the branch.'
+    : 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node (amend-surface), or remove it from the branch.',
   // The sink-owned final-fix register is an ATTRIBUTION source, so an unverified register is a
   // laundering primitive: append a path and an unreviewed file ships attributed. Refuse on its OWN
   // reason rather than reporting the smuggled path as `unattributed_change`, whose documented cure —
@@ -112,9 +116,9 @@ const OPERATOR_HINT_REGISTRY = {
   // epoch snapshots are load-bearing safety evidence. When the on-disk lineage does not verify, the
   // barrier refuses HERE rather than falling through to a child-only allowlist — that fallthrough
   // would report write_set_overflow, which is a LIE (it names an authoring error when the real fault
-  // is snapshot tampering) and whose documented response, revert-overflow, would DESTROY legitimate
-  // parent-epoch work. The verbatim verifier reason travels in a sibling `lineage_reason` field.
-  epoch_lineage_unverified: (ctx) => `The epoch lineage under .cache/epochs/ did not verify (${ctx.reason || 'unknown'}), so the whole-plan barrier cannot safely union the parent-epoch write sets. Do NOT run revert-overflow — this is not an overflow. Restore the sealed snapshots (they are the replan transaction's own output) or investigate tampering, then re-run the barrier.`,
+  // is snapshot tampering) and whose documented response — discarding the out-of-set files — would
+  // DESTROY legitimate parent-epoch work. The verbatim verifier reason travels in `lineage_reason`.
+  epoch_lineage_unverified: (ctx) => `The epoch lineage under .cache/epochs/ did not verify (${ctx.reason || 'unknown'}), so the whole-plan barrier cannot safely union the parent-epoch write sets. This is NOT an overflow and must not be answered by discarding the changed files. Restore the sealed snapshots (they are the replan transaction's own output) or investigate tampering, then re-run the barrier.`,
   barrier_base_mismatch: (ctx) => `Barrier baseline mismatch for node "${ctx.nodeId || '(unknown)'}". Use repair-node to restore the baseline ref, or reset the node to pending and re-open to record a fresh baseline.`,
   no_group_base: (ctx) => `No recorded group baseline for "${ctx.nodeId || '(unknown)'}". Run --record-base --node-id <group_id> at group open.`,
   running_set_unreadable: () => 'Cannot read running-set.json — the group barrier needs the live lane_group. Check the file exists and is valid JSON.',
@@ -2829,9 +2833,26 @@ function validateSchema2ReviewPlan(content, nodes, sink, opts) {
   opts = opts || {};
   const errors = [];
   const failures = [];
+  // G4 COVERAGE vs G4 GRAMMAR — the split conversion 9 turns on.
+  //
+  // These three reasons are the named-certifier half of POST-DOMINANCE: the plan reaches the sink
+  // with a producer no declared certifier covers. They are findings about the plan's REVIEW SHAPE,
+  // and the substrate rule for those is "delete the verdict, keep the measurement": the planner
+  // authored the DAG, can read the finding in its own payload, and the plan stays on disk and
+  // re-checkable forever, so freezing loses no witness. They move to `coverage[]` and out of
+  // `errors[]`, and the finalize-time gate (verifyGateExecution, now run inside --finalize-check) is
+  // what actually stops an uncertified producer from reaching mainline.
+  //
+  // Every OTHER G4 reason is grammar, not coverage — missing/duplicate `## Meta` keys, an
+  // aggregation that contradicts a node's shape, gate metadata on a non-gate. Those describe a plan
+  // whose review vocabulary cannot be READ, so they stay errors.
+  const G4_COVERAGE_REASONS = new Set(['g4_certifier_missing', 'g4_common_certifier_uncovered', 'g4_inherited_frontier_uncovered']);
+  const coverage = [];
   const fail = (reason, detail) => {
     failures.push({ reason, ...detail });
-    errors.push('G4/' + reason + ': ' + Object.entries(detail || {}).map(([k, v]) => k + '=' + v).join(' '));
+    const line = 'G4/' + reason + ': ' + Object.entries(detail || {}).map(([k, v]) => k + '=' + v).join(' ');
+    if (G4_COVERAGE_REASONS.has(reason)) coverage.push({ reason, detail: line, ...detail });
+    else errors.push(line);
   };
   const testConsumedExtra = parseValidationTestConsumes(content);
   const producesCodeV2 = node => producesValidationVisibleCode(node, opts.project, testConsumedExtra);
@@ -2936,7 +2957,7 @@ function validateSchema2ReviewPlan(content, nodes, sink, opts) {
     const result = validateCommonCertifier(nodes, sink, securityRef, 'security-reviewer', [], false);
     if (!result.ok) fail(result.reason, result);
   }
-  return { ok: errors.length === 0, errors, failures, planView };
+  return { ok: errors.length === 0, errors, failures, coverage, planView };
 }
 
 // #509 (D-509-01, Option A): is THIS adversarial-verifier node a CHANGE GATE rather than an
@@ -3810,7 +3831,7 @@ function barrierCheck(content, actualPaths, opts) {
   // precedence contract below is unchanged. Rationale: tests are the artifact the rest of the machinery
   // treats as ground truth (validation vectors, gate verdicts, RED/GREEN evidence), so a class the
   // barrier cannot see is a verification oracle outside attribution. Recovery is the existing
-  // choreography — overflow ⇒ revert-overflow — with no new subcommand.
+  // choreography — the overflow report names the paths — with no new subcommand.
   // KAOLA_TEST_ATTRIBUTION=0 (schema.testAttributionDefaultOn, DEFAULT ON) collapses the two predicates
   // back into one, so the toggle-off barrier is BYTE-IDENTICAL to the pre-split behavior — the bridge
   // for plans frozen before this rule and for runs already in flight. The escape hatch is an env toggle
@@ -3908,7 +3929,47 @@ function barrierCheck(content, actualPaths, opts) {
     }
   }
   else if (unattributed.length) reason = 'unattributed_write';
-  return { result: errors.length ? 'refuse' : 'pass', reason, operator_hint: (errors.length && reason) ? getOperatorHint(reason, { nodeId: opts.nodeId, file: unattributed[0] }) : undefined, errors, sensitiveHits, outOfAllow, foreignArchiveHits, unattributed };
+  // THE OVERFLOW FAMILY IS A REPORT AT PER-NODE AND GROUP SCOPE — "delete the verdict, keep the
+  // measurement". An overflow is a future reader's problem, not a live one: the files are on the
+  // branch either way, nothing has published, and the finding survives to the whole-plan barrier that
+  // guards the merge. So this scope ANSWERS with the paths instead of freezing the run over them.
+  // Scope is DERIVED, never passed, so no caller can forget it and no future scope inherits it by
+  // accident: advisory is exactly "per-node or group, and not leg-scoped".
+  //   * WHOLE-PLAN (neither nodeId nor groupMembers) keeps REFUSING — it is the pre-publication door,
+  //     and an unattributed path reaching mainline is the one harm no later reader can undo.
+  //   * LEG scope keeps REFUSING — see the legScoped note above. An undeclared write inside an
+  //     isolated leg SILENTLY BOTH-APPLIES at the synthesis merge, which is a live merge-correctness
+  //     event, not an epistemic one. Deliberate residue; convert it only together with a
+  //     synthesizer-side reconciliation that reports the both-apply.
+  // Only the rank-3 family converts. Precedence guarantees a rank-3 `reason` implies the rank-1/rank-2
+  // arms pushed no error, and `unattributed` (rank 4) is empty in both advisory scopes, so `errors`
+  // holds exactly the overflow line when this fires.
+  const legalAdvisoryScope = !legScoped
+    && !!(opts.nodeId || (opts.groupMembers && opts.groupMembers.length));
+  const overflowAdvisory = legalAdvisoryScope && !!reason
+    && (reason === 'write_set_overflow' || reason === 'write_set_granularity'
+      || Object.prototype.hasOwnProperty.call(schema.WRITE_SET_OVERFLOW_SUBTYPES, reason));
+  const out = {
+    result: errors.length ? (overflowAdvisory ? 'answer' : 'refuse') : 'pass',
+    reason,
+    operator_hint: (errors.length && reason) ? getOperatorHint(reason, { nodeId: opts.nodeId, file: unattributed[0] }) : undefined,
+    errors, sensitiveHits, outOfAllow, foreignArchiveHits, unattributed,
+    // U9 — THE PER-NODE CONTENT LOCATOR. This function measures, by CONTENT, from a ref-anchored real
+    // commit, exactly the path set the scope wrote; every one of those paths used to die on this line,
+    // because only the COMPLEMENT (outOfAllow) escaped and on a pass NOTHING did. A node that delivered
+    // its whole declared set and a node that wrote nothing at all emitted byte-identical envelopes.
+    // `actualPaths` is the measurement itself; `declared` is what the scope was permitted to write and
+    // is NOT a restatement of one plan row (it has four distinct constructions above: group union, own
+    // node, whole-plan union + epoch lineage + surface amendments). Together they make
+    // claimed-minus-present computable in BOTH directions at per-node scope. Purely ADDITIVE: every
+    // pre-existing field keeps its exact value, so no current consumer changes.
+    actualPaths: real.slice(),
+    declared: Array.from(declared).sort(),
+  };
+  // The load-bearing bit the exit code stops carrying. Emitted ONLY on the converted arm, so `pass`
+  // and `refuse` envelopes are unchanged.
+  if (overflowAdvisory) out.mutation_performed = false;
+  return out;
 }
 
 // --- plan hash --------------------------------------------------------------
@@ -5093,17 +5154,42 @@ function validatePlan(content, opts) {
     }
   }
 
-  // gates (need a unique sink to be decidable)
+  // POST-DOMINANCE: THE COMPUTATION IS KEPT WHOLE; THE FREEZE-TIME VERDICT IS GONE.
+  //
+  // G1/G2/G3/OPT-5/SPINE-5/G4-coverage all ask one question over one primitive (gateUncovered:
+  // reachability-after-removal over the unique sink) — can a producing node reach the sink without
+  // crossing a gate of the required role. Every line of that computation survives; what changes is
+  // that its answer no longer refuses the freeze. It rides `warnings` into the frozen payload and
+  // from there into `## Planning Evidence`, where a zero-context successor reads it.
+  //
+  // WHY THIS ONE IS SAFE TO CONVERT AND THE FINALIZE ONE IS NOT. The freeze-time wall fails the
+  // Witness test outright: the plan and its ledger sit on disk and the same function recomputes the
+  // same answer at any later moment, so freezing destroys no evidence. The finalize-time twin
+  // (verifyGateExecution) passes it — the merge is the irreversible act, and after it "this shipped
+  // unreviewed" is no longer recoverable from the repo the merge produced. So the verdict MOVES
+  // rather than disappearing: it is now enforced inside --finalize-check, which cmdFinalize already
+  // shells, instead of only at freeze plus a bash block inside finalize prose that an agent has to
+  // choose to run. The refusal count goes down and the guarantee goes up.
+  // The `detail` strings below are BYTE-IDENTICAL to the messages this wall used to push into
+  // `errors[]`, check prefix included. Only the CHANNEL moved (errors → warnings); the operator-facing
+  // wording did not, so nothing downstream that reads or pins that text has to change, and a reader
+  // greps for the same string it always did.
+  const postDominance = [];
   if (sink) {
     if (planSchemaVersion === 2) {
       const reviewPlan = validateSchema2ReviewPlan(content, nodes, sink, opts);
       errors.push(...reviewPlan.errors);
+      for (const c of (reviewPlan.coverage || [])) {
+        postDominance.push({ check: 'G4', gate_role: c.role || null, detail: c.detail,
+          nodes: [c.producer_id || c.root_id].filter(Boolean) });
+      }
     }
     // G1: code-reviewer post-dominates every code-producing node (implement roles, plus a
     // doc-updater/other write role that writes non-docs — so code can't dodge review by
     // routing through doc-updater).
     const g1 = gateUncovered(nodes, producesCode, 'code-reviewer', sink);
-    if (g1.length) errors.push(`G1: code-reviewer does not post-dominate code-producing node(s): ${g1.join(', ')}`);
+    if (g1.length) postDominance.push({ check: 'G1', gate_role: 'code-reviewer', nodes: g1,
+      detail: `G1: code-reviewer does not post-dominate code-producing node(s): ${g1.join(', ')}` });
 
     // G2: security-reviewer post-dominates every sensitive node. The target set is the
     // UNION (never a replacement): any node whose declared write set touches a Phase-5
@@ -5115,7 +5201,8 @@ function validatePlan(content, opts) {
     if (sensitiveByLabel || sensitiveNodes.length) {
       const isTarget = n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n);
       const g2 = gateUncovered(nodes, isTarget, 'security-reviewer', sink);
-      if (g2.length) errors.push(`G2: security-reviewer does not post-dominate sensitive node(s): ${g2.join(', ')}`);
+      if (g2.length) postDominance.push({ check: 'G2', gate_role: 'security-reviewer', nodes: g2,
+        detail: `G2: security-reviewer does not post-dominate sensitive node(s): ${g2.join(', ')}` });
     }
 
     // #334 G3: a declared non-delegable main-session gate is an ACCEPTANCE gate for the whole
@@ -5124,7 +5211,8 @@ function validatePlan(content, opts) {
     // bypass). Active ONLY when the role is present: existing plans never newly refuse.
     if (nodes.some(n => n.role === MAIN_SESSION_GATE)) {
       const g3 = gateUncovered(nodes, producesCode, MAIN_SESSION_GATE, sink);
-      if (g3.length) errors.push(`G3: main-session-gate does not post-dominate code-producing node(s): ${g3.join(', ')}`);
+      if (g3.length) postDominance.push({ check: 'G3', gate_role: MAIN_SESSION_GATE, nodes: g3,
+        detail: `G3: main-session-gate does not post-dominate code-producing node(s): ${g3.join(', ')}` });
     }
 
     // #634 OPT-5 (reproduction gate): a change-gate adversarial-verifier must post-dominate every
@@ -5134,7 +5222,8 @@ function validatePlan(content, opts) {
     // (advVerifierIsChangeGate), so it is non-exempt from --verdict-check.
     if (nodes.some(n => n.role === 'metric-optimizer')) {
       const opt5 = gateUncovered(nodes, n => n.role === 'metric-optimizer', 'adversarial-verifier', sink);
-      if (opt5.length) errors.push(`OPT-5: adversarial-verifier does not post-dominate metric-optimizer node(s): ${opt5.join(', ')} — a change-gate adversarial-verifier must reproduce the metric claim before finalize`);
+      if (opt5.length) postDominance.push({ check: 'OPT-5', gate_role: 'adversarial-verifier', nodes: opt5,
+        detail: `OPT-5: adversarial-verifier does not post-dominate metric-optimizer node(s): ${opt5.join(', ')} — a change-gate adversarial-verifier must reproduce the metric claim before finalize` });
     }
 
     const epoch = validateEpochContract(content, nodes, sink);
@@ -5337,7 +5426,8 @@ function validatePlan(content, opts) {
         for (const role of c.review_class) {
           if (!GATE_VERDICT_ROLES.has(role)) continue; // already reported as out-of-vocabulary
           if (gateUncovered(nodes, x => x.id === n.id, role, sink).length) {
-            errors.push(`SPINE-5: ${role} does not post-dominate expansion point ${n.id} — the declared review obligation must be discharged before the sink; place a ${role} node on the spine between ${n.id} and the ${TERMINAL_ROLE} sink`);
+            postDominance.push({ check: 'SPINE-5', gate_role: role, nodes: [n.id],
+              detail: `SPINE-5: ${role} does not post-dominate expansion point ${n.id} — the declared review obligation must be discharged before the sink; place a ${role} node on the spine between ${n.id} and the ${TERMINAL_ROLE} sink` });
           }
         }
       }
@@ -5345,8 +5435,57 @@ function validatePlan(content, opts) {
   }
 
   const planHash = computePlanHash(content);
+  // The post-dominance measurement, projected into the SHIPPED advisory transport. `warnings` is an
+  // in-grammar-return array that both `--freeze-checked` and `--freeze` pass through. One named token
+  // per check, so a reader greps for the question rather than parsing prose.
+  //
+  // HOW IT REACHES THE DURABLE RECORD, and what still does not. Passing through the emission is only
+  // half the path: an envelope is transient, and a measurement that exists solely on this process's
+  // stdout is deleted the moment the process exits. The other half is a NAMED mechanism, not an
+  // incidental one — `planningEvidenceAdvisoryLines` in `kaola-gitea-workflow-adaptive-handoff.js` folds
+  // every advisory in the `--freeze-checked` verdict into `## Planning Evidence` as an
+  // `advisory_<token>: check=… gate_role=… nodes=… detail=…` line, carrying the uncovered node ids
+  // verbatim. That is the whole reason deleting the refusal here is a conversion rather than a
+  // deletion, so the two halves are one contract: a future change that stops emitting `warnings` from
+  // either freeze verb, or stops the handoff folding them, silently un-records this measurement.
+  //
+  // ONE PATH IS STILL STDOUT-ONLY, and it is not fixed here: a re-plan CHILD epoch. The child freeze
+  // returns its advisories (`runReplanHandoff`), but the activation in `kaola-gitea-workflow-replan.js`
+  // rewrites `## Planning Evidence` down to the five-field child tuple, so a child epoch's advisories
+  // reach no durable record. The parent-epoch freeze — every fresh run — is covered.
+  const POST_DOMINANCE_WARNING = {
+    G1: 'unreviewed_code_nodes',
+    G2: 'unreviewed_sensitive_nodes',
+    G3: 'main_session_gate_uncovered',
+    'OPT-5': 'unreproduced_metric_nodes',
+    'SPINE-5': 'expansion_review_uncovered',
+    G4: 'named_certifier_uncovered',
+  };
+  const postDominanceWarnings = postDominance.map(f => ({
+    warning: POST_DOMINANCE_WARNING[f.check] || 'gate_uncovered',
+    check: f.check,
+    gate_role: f.gate_role || null,
+    nodes: Array.isArray(f.nodes) && f.nodes.length ? f.nodes : null,
+    detail: f.detail,
+  }));
+  // THE ADVISORY SET RIDES EVERY RETURN FROM HERE ON, not just the in-grammar one. This function has
+  // five exits below (aggregate grammar wall, design_missing, acceptance_missing,
+  // child_frontier_unclosable, in-grammar) and the advisories used to be assembled inside the LAST
+  // one — so a plan that tripped any earlier wall silently lost them. That was survivable while every
+  // advisory was cosmetic; it is not survivable now that a converted VERDICT rides the same channel,
+  // because "the plan also has no reviewer" would vanish precisely when the plan is being repaired.
+  // Assembled once, spread everywhere, so a future exit cannot forget it by omission.
+  const advisories = [
+    ...(frontierWithoutWriter ? [{ warning: 'frontier_without_writer',
+      detail: 'this review_repair child epoch inherits a non-empty findings frontier but declares zero writer nodes — a new finding surfaced by its gate has no possible owner (legal for a certification-only epoch; confirm the shape)' }] : []),
+    ...(planFormNormalized ? [{ warning: 'plan_form_normalized',
+      detail: 'plan_form resolved to the only authorable shape `spine` (the plan declared `dag`, or omitted the field and defaulted to it). An all-concrete spine is semantically equal to the retired DAG grammar, so nothing was lost; declare `plan_form: spine` in ## Meta to state the shape explicitly.' }] : []),
+    ...postDominanceWarnings,
+  ];
+  const withAdvisories = advisories.length ? { warnings: advisories } : {};
   if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink,
     plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+    ...withAdvisories,
     // Post-normalization the freeze wall always judges a spine, so isSpine is always true here;
     // the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}) };
@@ -5361,6 +5500,7 @@ function validatePlan(content, opts) {
     return { result: 'refuse', reason: 'design_missing', operator_hint: getOperatorHint('design_missing'),
       errors: ['## Design is absent or empty — author the plan-level WHY (decomposition rationale, named serializer-evidence per sequence edge, disjointness, what done means) and re-freeze'],
       planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...withAdvisories,
       ...(isSpine ? { plan_form: 'spine' } : {}) };
   }
 
@@ -5378,6 +5518,7 @@ function validatePlan(content, opts) {
     return { result: 'refuse', reason: 'acceptance_missing', operator_hint: getOperatorHint('acceptance_missing'),
       errors: ['## Acceptance is absent or empty — a code-producing plan must transcribe what "done" means (A1:, A2:, … prose items) from the issue body plus explicit user statements, then re-freeze'],
       planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...withAdvisories,
       ...(isSpine ? { plan_form: 'spine' } : {}) };
   }
 
@@ -5391,6 +5532,7 @@ function validatePlan(content, opts) {
     return { result: 'refuse', reason: 'child_frontier_unclosable', operator_hint: getOperatorHint('child_frontier_unclosable'),
       errors: ['a review_repair child epoch whose inherited findings frontier is non-empty must declare at least one validation vector resolvable by its resolutions — validation_command and validation_timeout_minutes are absent, so its gate can produce no vector digest for a resolution to cite and the frontier can never close; declare the validation policy in ## Meta and re-freeze'],
       planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...withAdvisories,
       ...(isSpine ? { plan_form: 'spine' } : {}) };
   }
 
@@ -5432,14 +5574,12 @@ function validatePlan(content, opts) {
     //   `plan_form_normalized`: the plan declared `plan_form: dag` (or omitted the field, which
     //     defaults to dag) and the freeze wall resolved it to the only authorable shape, `spine`.
     //     Reported so the normalization is visible in the freeze payload rather than silent.
-    ...(planFormNormalized || frontierWithoutWriter
-      ? { warnings: [
-        ...(frontierWithoutWriter ? [{ warning: 'frontier_without_writer',
-          detail: 'this review_repair child epoch inherits a non-empty findings frontier but declares zero writer nodes — a new finding surfaced by its gate has no possible owner (legal for a certification-only epoch; confirm the shape)' }] : []),
-        ...(planFormNormalized ? [{ warning: 'plan_form_normalized',
-          detail: 'plan_form resolved to the only authorable shape `spine` (the plan declared `dag`, or omitted the field and defaulted to it). An all-concrete spine is semantically equal to the retired DAG grammar, so nothing was lost; declare `plan_form: spine` in ## Meta to state the shape explicitly.' }] : []),
-      ] }
-      : {}),
+    //   `unreviewed_code_nodes` and its five siblings: the post-dominance measurement. The freeze no
+    //     longer refuses over it — a plan whose producers no gate covers is a shape the planner
+    //     authored and can see, and the finding is recomputable from the on-disk plan at any later
+    //     moment. What DOES still refuse is --finalize-check, which re-runs the same primitive over
+    //     the runtime ledger and stops the merge; so the advisory here is a report, not the guard.
+    ...withAdvisories,
     // Post-normalization the freeze wall always judges a spine, so this always emits
     // plan_form: 'spine'; the conditional stays as a defensive spread.
     ...(isSpine ? { plan_form: 'spine' } : {}),
@@ -5620,10 +5760,15 @@ function reconcileLedger(content) {
 
   const nodeRole = new Map(nodes.map(n => [n.id, n.role]));
   const buildRow = id => {
-    const cells = new Array(headerCells.length).fill('');
+    // Extra columns are filled with the empty MARKER, never a blank cell. Absence must never render as
+    // a value: a blank cell is indistinguishable from a legacy row that predates the column, while `—`
+    // reads as "this column was written and holds nothing". This matches appendLedgerRows, which
+    // already used the marker — the two ledger-row writers disagreed until now, so the same plan could
+    // carry both spellings depending on which verb appended the row.
+    const cells = new Array(headerCells.length).fill('—');
     cells[idIdx] = id;
     cells[stIdx] = 'pending';
-    if (roleIdx >= 0) cells[roleIdx] = nodeRole.get(id) || '';
+    if (roleIdx >= 0) cells[roleIdx] = nodeRole.get(id) || '—';
     return '| ' + cells.join(' | ') + ' |';
   };
   const newRows = missing.map(n => buildRow(n.id)).join('\n');
@@ -6217,22 +6362,61 @@ function main() {
     // the governance-relevant payload (decision/risk) PLUS the computed planHash, WITHOUT writing.
     // The handoff runs its decision-record governance off this payload, then SPAWN 2
     // (--freeze --governance-ack <planHash>) re-validates, asserts the hash is unchanged, writes
-    // atomically, and folds --resume-check into its emission. refuse → same {result:'refuse',errors}.
+    // atomically, and folds --resume-check into its emission.
+    //
+    // THIS SUBCOMMAND IS A PURE REPORTER AND NOW EXITS 0 ON EVERY ANSWER. It writes nothing, and the
+    // party reading its verdict is the party that authored the plan — so the finding is neither
+    // hidden from the actor (Locus) nor consumed by continuing (the draft is on disk and
+    // re-validatable forever, Witness). All that a nonzero exit ever added was a second, weaker copy
+    // of a verdict already spelled out in `errors[]`.
+    //
+    // THE WRITE-SIDE VERDICT IS NOT CONVERTED WITH IT. `--freeze` still refuses an out-of-grammar
+    // plan, and deliberately: the bounded planner repair loop OVERWRITES an unfrozen draft, so a
+    // freeze that proceeded would stamp plan_hash, make every subsequent repair a plan_hash_mismatch,
+    // and leave a re-plan epoch or discard+restart as the only exits. Converting the writer would
+    // delete the recovery, which is the "conversion that is really a deletion" this design warns
+    // about. The reporter/writer split is the whole point: read freely at exit 0, decide, then write.
+    //
+    // TEST-3 RESTORATION. validatePlan returns planHash, sink, plan_schema_version, contract_version
+    // and plan_form ALONGSIDE its errors, and this CLI used to drop all five on the way to the wire —
+    // so the refusal already failed to carry the state it was freezing. They now ride the answer, as
+    // does `plan_digest`: without a content binding the finding names a plan that the next repair
+    // replaces, and a stale finding that cannot say it is stale is worse than none.
+    const planDigest = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
     const contract = resolvePlanContract(content, { forFreeze: true });
     if (!contract.ok) {
-      const out = { result: 'refuse', reason: contract.reason, operator_hint: getOperatorHint('plan_invalid'),
-        errors: [contract.detail || contract.reason], frozen: false };
-      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors.join('; ')) + '\n');
-      process.exitCode = 1; return;
+      const out = { result: 'answer', reason: contract.reason, in_grammar: false,
+        operator_hint: getOperatorHint('plan_invalid'),
+        errors: [contract.detail || contract.reason], frozen: false,
+        mutation_performed: false, plan_digest: planDigest, checked_at: new Date().toISOString(),
+        findings: [{ check: 'plan_contract', severity: 'blocking', nodes: null, detail: contract.detail || contract.reason }] };
+      process.stdout.write((json ? JSON.stringify(out) : 'checked: OUT OF GRAMMAR — ' + out.errors.join('; ')) + '\n');
+      return;
     }
     const v = validatePlan(content, { root, planPath });
     if (v.result !== 'in-grammar') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors: v.errors }) : 'typed refusal (out of grammar): ' + (v.errors || []).join('; ')) + '\n');
-      process.exitCode = 1; return;
+      // One typed row per error, so a caller can route by `check` instead of parsing prose. The
+      // prefix the message already carries IS the check name (`G4/<reason>`, `SPINE-5`, `OPT-5`,
+      // `concurrent siblings …`); anything unprefixed reports as `grammar` rather than being guessed.
+      const findings = (v.errors || []).map(e => {
+        const m = /^([A-Za-z0-9][A-Za-z0-9_./-]*)\s*:/.exec(String(e));
+        return { check: m ? m[1] : 'grammar', severity: 'blocking', nodes: null, detail: String(e) };
+      });
+      const out = { result: 'answer', reason: v.reason || 'plan_invalid', in_grammar: false,
+        operator_hint: getOperatorHint('plan_invalid'), errors: v.errors, findings,
+        frozen: false, mutation_performed: false,
+        planHash: v.planHash, sink: v.sink,
+        plan_schema_version: v.plan_schema_version, contract_version: v.contract_version,
+        ...(v.plan_form ? { plan_form: v.plan_form } : {}),
+        ...(v.warnings ? { warnings: v.warnings } : {}),
+        plan_digest: planDigest, checked_at: new Date().toISOString() };
+      process.stdout.write((json ? JSON.stringify(out) : 'checked: OUT OF GRAMMAR — ' + (v.errors || []).join('; ')) + '\n');
+      return;
     }
     const out = {
-      result: 'in-grammar', decision: v.decision, risk: v.risk, planHash: v.planHash,
-      frozen: false, governance: { decision: v.decision, risk: v.risk },
+      result: 'in-grammar', in_grammar: true, decision: v.decision, risk: v.risk, planHash: v.planHash,
+      frozen: false, mutation_performed: false, plan_digest: planDigest, findings: [],
+      governance: { decision: v.decision, risk: v.risk },
       // #789 (D1+D2 audit-only): surface plan-shape telemetry + the serializer-evidence flag so the
       // handoff folds them into `## Planning Evidence`. #789 (D0): the no-target selection record when
       // the planner authored one (omitted in explicit-target mode).
@@ -6272,10 +6456,34 @@ function main() {
     if (ackIdx >= 0) {
       const computed = computePlanHash(toFreeze);
       if (!ackHash || ackHash !== computed) {
-        const out = { result: 'refuse', reason: 'governance_ack_stale', operator_hint: getOperatorHint('governance_ack_stale'), frozen: false,
+        // COMPARE-AND-SWAP, ANSWERED. This is the U3 obligation verbatim — "no silent lost update:
+        // CAS, with the conflict returned to the caller" — and it was already discharged correctly
+        // except for the exit code. The write does NOT proceed: a CAS that writes on conflict is not
+        // a CAS, and proceeding here would freeze a plan under a governance decision recorded against
+        // DIFFERENT bytes, which is the lost update the obligation names. What changes is that the
+        // caller now learns both hashes at exit 0 and decides — re-ack the new hash, or investigate
+        // the mutation — instead of reading a stop it has to translate.
+        //
+        // The one consumer (the handoff's SPAWN 2) branches on `frozen` and then on `reason`, both of
+        // which are unchanged, so its behaviour is byte-identical across this change.
+        // THE CONFLICT, AS STRUCTURED FIELDS. `expected` and `found` were already computed one line
+        // apart and were then rendered ONLY into the `errors` prose below — a real measurement
+        // flattened into a sentence no machine can read, which is the pattern this campaign exists to
+        // undo. They are promoted to the `kernel_cas_lost` payload shape the schema already declares
+        // for this condition (`record: 'governance_ack'`, and `field`/`expected`/`found` are declared
+        // members of that family's field list). The prose stays, verbatim, alongside them.
+        //
+        // `blocking_rows`, `legal_next`, `token` and the rest of the declared field list are NOT
+        // emitted: they have no producer here and writing them empty-but-present would be the
+        // filled-in lie — a schema vouching for a value nobody measured.
+        const out = { result: 'answer', reason: 'governance_ack_stale', operator_hint: getOperatorHint('governance_ack_stale'),
+          frozen: false, mutation_performed: false,
+          record: 'governance_ack', field: 'plan_hash',
+          expected: ackHash || null, found: computed,
+          governance_ack_conflict: true,
           errors: ['--governance-ack ' + (ackHash || '(missing)') + ' does not match the plan\'s current hash ' + computed + ' — the plan mutated between governance and freeze; re-run --freeze-checked'] };
-        process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: governance_ack_stale (' + (ackHash || 'missing') + ' != ' + computed + ')') + '\n');
-        process.exitCode = 1; return;
+        process.stdout.write((json ? JSON.stringify(out) : 'governance ack conflict: ' + (ackHash || 'missing') + ' != ' + computed + ' (nothing was written)') + '\n');
+        return;
       }
     }
     const r = freezePlan(toFreeze, { root, planPath });
@@ -6328,6 +6536,29 @@ function main() {
   // legitimate same-HEAD re-dispatch is not bricked. The scheduler drops the base on every rollback.
   const openTokenFile = nid => path.join(path.dirname(path.resolve(planPath)), '.cache', 'barrier-open-' + sanitizeNodeId(nid));
   const headNow = () => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } };
+  // THE DROP REGISTER — the durable witness a dropped baseline used to take with it.
+  //
+  // A baseline is the ONLY artifact that can say what a node wrote. Dropping it is therefore an
+  // irreversible information loss, and the old window-lock answered that by forbidding the drop
+  // mid-node — which bought nothing, because the documented recovery (ledger-reset → pending → drop)
+  // IS the drop, and the workflow's own scheduler takes that route on every rollback. Recording what
+  // the baseline could still attribute, at the last instant it exists, is strictly stronger than
+  // forbidding the drop: the two-step route now leaves a trail where it used to launder silently.
+  //
+  // Append-only, one file per node, JSON `{node_id, drops:[…]}`. It lives under the project's
+  // `.cache`, which is barrier-invisible (isBarrierInvisible), so writing it never becomes an
+  // unattributed change. Absence of the file means "no drop was ever recorded for this node" — never
+  // "no drop happened", which is why a failed write is REPORTED (`register_write_failed`) rather than
+  // swallowed.
+  const dropRegisterFile = nid => path.join(path.dirname(path.resolve(planPath)), '.cache', 'barrier-drops-' + sanitizeNodeId(nid) + '.json');
+  const readDropRegister = nid => {
+    let raw = null;
+    try { raw = fs.readFileSync(dropRegisterFile(nid), 'utf8'); } catch (_) { return null; }
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch (_) { return { node_id: String(nid), drops: [], unparseable: true }; }
+    if (!parsed || !Array.isArray(parsed.drops)) return { node_id: String(nid), drops: [], unparseable: true };
+    return parsed;
+  };
   if (args.includes('--record-base')) {
     // #239 (v3.21.0): snapshot the full landable worktree as a per-node baseline at NODE START via
     // snapshotWorktree(), anchor it under a ref (anchorBase) so `git gc` cannot prune it before the
@@ -6388,25 +6619,76 @@ function main() {
     // stale base at dispatch without shelling a command that snapshots when the base is absent.
     // Never refuses: an absent base is reported (present:false), not an error — the consumer's own
     // no_barrier_base / writer_identity guards keep owning that refusal.
+    //
+    // `stale` ANSWERS ONE QUESTION AND MUST NOT BE READ AS A BILL OF HEALTH. It compares the recorded
+    // open-HEAD against the live HEAD and nothing else, so it said `stale:false` — complete, coherent
+    // and false — about two baselines that cannot attribute anything:
+    //   (1) the gc-anchor is gone while the .cache file survives (--barrier-check's
+    //       barrier_base_mismatch state), because this probe never resolved the ref at all; and
+    //   (2) a LAUNDERED baseline: drop the base over live work and re-record, and HEAD never moved,
+    //       so the head-vs-token comparison is silent by construction — and that two-step sequence is
+    //       exactly what the retired window-lock's own operator hint prescribed.
+    // `trusted` is the field that answers "can this baseline attribute this node's writes"; `stale`
+    // keeps its exact shipped meaning so runRepairNode's `rec.stale === true` read is unchanged, and
+    // every new field is additive.
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--base-freshness requires --node-id <id>'] }) : 'typed refusal: --base-freshness requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
+    // The drops that carried work. A drop over a CLEAN tree destroyed no attribution and is not a
+    // finding; a drop whose measured path set was non-empty means those paths are outside whatever
+    // baseline exists now. A drop recorded with an UNMEASURABLE path set (null) counts too — "we
+    // could not tell" is not "there was nothing", which is the whole point of U7.
+    const dropRegister = readDropRegister(nodeId);
+    // Read `attributable_at_drop` (the barrier-visible subset) and NOT the raw diff: the raw set
+    // always carries the baseline's own token files, so it would report every drop as a work drop.
+    const dropsOverWork = ((dropRegister && dropRegister.drops) || []).filter(d => d
+      && (d.attributable_at_drop === null || d.attributable_at_drop === undefined
+        || (Array.isArray(d.attributable_at_drop) && d.attributable_at_drop.length > 0)));
+    const droppedWorkPaths = Array.from(new Set(dropsOverWork
+      .flatMap(d => Array.isArray(d.attributable_at_drop) ? d.attributable_at_drop : []))).sort();
     let existing = '';
     try { existing = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) {}
     if (!existing) {
-      process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, present: false, stale: false }) : 'no recorded base for node ' + nodeId) + '\n');
+      const absent = { result: 'ok', nodeId, present: false, stale: false, trusted: false,
+        ref_name: barrierRef(nodeId), ref_sha: null, agrees: null,
+        drops: ((dropRegister && dropRegister.drops) || []).length,
+        drops_over_work: dropsOverWork.length,
+        findings: ['base_absent'] };
+      if (dropRegister && dropRegister.unparseable) absent.findings.push('drop_register_unparseable');
+      process.stdout.write((json ? JSON.stringify(absent) : 'no recorded base for node ' + nodeId) + '\n');
       return;
     }
     let openHead = '';
     try { openHead = fs.readFileSync(openTokenFile(nodeId), 'utf8').trim(); } catch (_) {}
     const cur = headNow();
     const stale = !!(openHead && cur && openHead !== cur);
-    const out = { result: 'ok', nodeId, present: true, base: existing, reused: true, stale };
+    // THE ANCHOR CROSS-CHECK, read-only. --record-base writes BOTH the .cache file and the gc-anchored
+    // ref; the barrier already refuses when they disagree, but this probe reported nothing about it,
+    // so a repair-time caller asking "is the base usable" got `stale:false` on a baseline the very
+    // next barrier would reject. Resolving the ref here is one rev-parse and closes that gap.
+    let refSha = '';
+    try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
+    const agrees = !!refSha && refSha === existing;
+    const rerecordedOverWork = dropsOverWork.length > 0;
+    const findings = [];
+    if (!refSha) findings.push('base_ref_missing');
+    else if (!agrees) findings.push('base_ref_disagrees');
+    if (rerecordedOverWork) findings.push('base_rerecorded_over_dropped_work');
+    if (stale) findings.push('head_advanced');
+    if (dropRegister && dropRegister.unparseable) findings.push('drop_register_unparseable');
+    const trusted = !!refSha && agrees && !rerecordedOverWork;
+    const out = { result: 'ok', nodeId, present: true, base: existing, reused: true, stale,
+      ref_name: barrierRef(nodeId), ref_sha: refSha || null, agrees, trusted,
+      drops: ((dropRegister && dropRegister.drops) || []).length,
+      drops_over_work: dropsOverWork.length,
+      findings };
+    if (rerecordedOverWork) out.dropped_work_paths = droppedWorkPaths;
     if (stale) { out.staleReason = 'head_advanced'; out.recordedHead = openHead; out.currentHead = cur; }
-    process.stdout.write((json ? JSON.stringify(out) : 'base freshness for node ' + nodeId + (stale ? ': STALE — head advanced ' + openHead + '->' + cur : ': fresh')) + '\n');
+    process.stdout.write((json ? JSON.stringify(out)
+      : 'base freshness for node ' + nodeId + (findings.length ? ': ' + findings.join(', ') : ': fresh')) + '\n');
     return;
   }
   if (args.includes('--drop-base')) {
@@ -6419,14 +6701,83 @@ function main() {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--drop-base requires --node-id <id>'] }) : 'typed refusal: --drop-base requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
-    // #424 (D-424-01) WINDOW-LOCK: --drop-base is honored ONLY pre-open (ledger status `pending`).
-    // Once the node is `in_progress`, dropping the baseline launders any write made since the open
-    // (the next --barrier-check sees an empty diff and passes vacuously). Refuse `drop_base_window_open`
-    // mid-node; the legal stale-baseline recovery is ledger-reset → `pending` → drop → fresh open.
+    // THE WINDOW-LOCK IS RETIRED — capture replaces refusal ("delete the verdict, keep the
+    // measurement"). The lock refused `drop_base_window_open` while the ledger row was `in_progress`,
+    // on the ground that dropping mid-node launders any write made since the open (the next
+    // --barrier-check sees an empty diff and passes vacuously). Three facts retired it:
+    //   * its own operator hint published the bypass — ledger-reset → pending → drop → fresh open IS
+    //     the laundering sequence, performed one step at a time;
+    //   * the workflow's own scheduler takes that route deliberately on every rollback, and
+    //     runReopenNode unlinks the base file outright before ever calling --drop-base; and
+    //   * the harm it named was entirely "the gate's verdict is neutered", which is a statement about
+    //     the check, not about the world.
+    // What the lock actually protected is real but is a WITNESS, not a verdict: the baseline is the
+    // only artifact that can attribute this node's writes, and this is the last instant it exists. So
+    // the drop now proceeds and records what it destroys. That is strictly stronger than the lock —
+    // the two-step bypass used to launder in silence and can no longer.
     const dropLedger = parseLedger(content);
-    if (dropLedger.get(nodeId) === 'in_progress') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'drop_base_window_open', operator_hint: getOperatorHint('drop_base_window_open', { nodeId }), errors: ['--drop-base refused: node "' + nodeId + '" is in_progress — dropping the baseline now would launder writes made since the open (vacuous-pass). Reset the node to pending before dropping (ledger-reset → pending → drop → fresh open).'] }) : 'typed refusal: drop_base_window_open (node ' + nodeId + ' is in_progress)') + '\n');
-      process.exitCode = 1; return;
+    const ledgerStatusAtDrop = dropLedger.has(nodeId) ? dropLedger.get(nodeId) : null;
+    const midNode = ledgerStatusAtDrop === 'in_progress';
+    // CAPTURE BEFORE DESTROYING — every read below happens while the artifacts still exist.
+    let droppedBaseSha = '';
+    try { droppedBaseSha = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { droppedBaseSha = ''; }
+    let droppedRefSha = '';
+    try { droppedRefSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { droppedRefSha = ''; }
+    let droppedOpenHead = '';
+    try { droppedOpenHead = fs.readFileSync(openTokenFile(nodeId), 'utf8').trim(); } catch (_) { droppedOpenHead = ''; }
+    // THE WITNESS: exactly the paths this baseline could still attribute. Measured against the FILE
+    // sha, falling back to the anchored ref when the file is already gone (runReopenNode's ordering).
+    // `null`, never `[]`, when it cannot be measured — an empty array would say "nothing was pending",
+    // which is the filled-in lie U7 forbids.
+    //
+    // TWO PATH SETS, because one would be either noisy or dishonest. `uncommitted_at_drop` is the RAW
+    // diff, unfiltered — the measurement, kept whole. `attributable_at_drop` is its barrier-VISIBLE
+    // subset, through the same isBarrierInvisible band the barrier itself applies, and is the set that
+    // actually carries attribution: the baseline's own .cache token files and the plan file always
+    // differ from the snapshot, so a raw-set signal would fire on every drop including a clean
+    // pre-open one and would mean nothing.
+    let uncommittedAtDrop = null;
+    let attributableAtDrop = null;
+    const measureFrom = droppedBaseSha || droppedRefSha;
+    if (measureFrom) {
+      try {
+        const nowTree = snapshotWorktree(root, nodeId + '-drop');
+        const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', measureFrom, nowTree], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+        uncommittedAtDrop = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+        attributableAtDrop = uncommittedAtDrop.filter(p => !isBarrierInvisible(p, projTag));
+      } catch (_) { uncommittedAtDrop = null; attributableAtDrop = null; }
+    }
+    const dropFindings = [];
+    if (midNode) dropFindings.push('dropped_while_in_progress');
+    if (!measureFrom) dropFindings.push('no_recorded_base');
+    else if (attributableAtDrop === null) dropFindings.push('attribution_unmeasurable');
+    else if (attributableAtDrop.length) dropFindings.push('dropped_over_uncommitted_work');
+    const dropRecord = {
+      dropped_at: new Date().toISOString(),
+      ledger_status_at_drop: ledgerStatusAtDrop,
+      dropped_base_sha: droppedBaseSha || null,
+      dropped_ref_sha: droppedRefSha || null,
+      dropped_open_head: droppedOpenHead || null,
+      measured_against: measureFrom || null,
+      uncommitted_at_drop: uncommittedAtDrop,
+      attributable_at_drop: attributableAtDrop,
+    };
+    // Append to the durable register BEFORE the destructive half, so a crash between the two leaves
+    // the witness recorded and the baseline intact (the recoverable order) rather than the reverse.
+    // A drop with NOTHING to destroy (the idempotent no-op every scheduler rollback issues) appends
+    // no row: a register of empty rows is exactly the "presents itself as authoritative but is not
+    // exhaustive" failure — it would bury the drops that carried work under the ones that did not.
+    let registerWritten = false;
+    if (measureFrom) {
+      const prior = readDropRegister(nodeId);
+      const drops = (prior && Array.isArray(prior.drops)) ? prior.drops.slice() : [];
+      drops.push(dropRecord);
+      try {
+        fs.mkdirSync(path.dirname(dropRegisterFile(nodeId)), { recursive: true });
+        schema.writeFileAtomicReplace(dropRegisterFile(nodeId), JSON.stringify({ node_id: nodeId, drops }, null, 2) + '\n');
+        registerWritten = true;
+      } catch (_) { registerWritten = false; }
+      if (!registerWritten) dropFindings.push('register_write_failed');
     }
     let fileRemoved = false;
     try { fs.unlinkSync(cacheBaseFile(nodeId)); fileRemoved = true; } catch (_) {}
@@ -6435,7 +6786,19 @@ function main() {
     // #385: drop the freshness token too, so a fresh re-record after a rollback re-stamps the
     // open-HEAD (and the next reuse compares against the NEW open event, not a stale one).
     try { fs.unlinkSync(openTokenFile(nodeId)); } catch (_) {}
-    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, fileRemoved, refRemoved }) : 'dropped base for node ' + nodeId + ' (file=' + fileRemoved + ', ref=' + refRemoved + ')') + '\n');
+    // `answer` on the arm that used to refuse; a clean pre-open drop keeps its byte-identical
+    // `result:'ok'` payload plus the additive capture. `mutation_performed: true` and not false —
+    // the drop is the caller's REQUESTED effect and it happened; claiming otherwise would be the
+    // same class of lie this conversion exists to remove.
+    const dropOut = { result: midNode ? 'answer' : 'ok', nodeId, fileRemoved, refRemoved,
+      ...(midNode ? { reason: 'drop_base_window_open', mutation_performed: true,
+        operator_hint: getOperatorHint('drop_base_window_open', { nodeId }) } : {}),
+      register: registerWritten ? dropRegisterFile(nodeId) : null,
+      ...dropRecord,
+      findings: dropFindings };
+    process.stdout.write((json ? JSON.stringify(dropOut)
+      : 'dropped base for node ' + nodeId + ' (file=' + fileRemoved + ', ref=' + refRemoved
+        + (dropFindings.length ? ', findings=' + dropFindings.join(',') : '') + ')') + '\n');
     return;
   }
   if (args.includes('--barrier-check')) {
@@ -6464,16 +6827,29 @@ function main() {
     }
     let actualPaths;
     let lineagePlans;
+    // The world-state the path set was measured against. Emitted alongside actualPaths so the locator
+    // is BOUND to a re-checkable baseline rather than floating free (U4) — a path list with no base is
+    // an assertion, a path list with its base is a receipt anyone can replay.
+    let measuredBase = null;
+    // The SECOND, clearly-labelled path set a per-node `--base` override produces. Null unless the
+    // caller asked for one; never a substitute for the authoritative measurement above.
+    let callerBaseView = null;
     if (nodeId) {
       // PER-NODE (#239, v3.21.0): tree-diff the CURRENT full-worktree snapshot against THIS node's
       // recorded node-start snapshot — exactly this node's own changes, checked against its OWN
-      // declared set. --base is REJECTED here: the baseline is the recorded snapshot, and honoring a
-      // caller --base (e.g. `--base HEAD` after the node committed) would empty the diff and neuter
-      // the gate. The whole-plan / phase-6 branch keeps --base.
-      if (args.includes('--base')) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'invalid_args', operator_hint: getOperatorHint('invalid_args'), errors: ['--base is not allowed with --node-id (per-node diffs vs the recorded node-start snapshot)'] }) : 'typed refusal: --base is not allowed with --node-id') + '\n');
-        process.exitCode = 1; return;
-      }
+      // declared set. The whole-plan / phase-6 branch keeps --base as an override.
+      //
+      // --base USED TO BE REJECTED HERE, and the comment that rejected it named exactly one harm:
+      // honoring a caller --base (e.g. `--base HEAD` after the node committed) "would empty the diff
+      // and NEUTER THE GATE". That is a statement about the check's verdict and nothing else — the
+      // archetype the substrate design converts. It is also a rejection with no reach: no shipped
+      // caller passes --base on a per-node invocation, and the fused --node-end path cannot.
+      //
+      // It now ANSWERS. The authoritative measurement is still made against the RECORDED baseline —
+      // a caller cannot move it — and the caller's base produces a SECOND, explicitly labelled path
+      // set beside it. A reader can tell the two apart, which is the only property the rejection was
+      // ever buying, and the caller gets the comparison it asked for instead of a usage error.
+      const callerBase = args.includes('--base') ? flagVal('--base') : null;
       let base = '';
       try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; }
       if (!base) {
@@ -6501,6 +6877,27 @@ function main() {
       // diff-tree prints only the changed paths (no leading object header for explicit tree-ishes).
       const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+      measuredBase = base;
+      // The caller's --base, answered as a SECOND view. It never displaces `actualPaths`; a resolution
+      // failure is reported as `paths: null` (not []) so an unresolvable rev cannot read as "nothing
+      // changed" — which is the exact shape the old rejection was worried about, now visible instead
+      // of prevented.
+      if (callerBase != null) {
+        let callerPaths = null;
+        let resolved = null;
+        try {
+          resolved = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', String(callerBase) + '^{tree}'], { encoding: 'utf8' }).trim() || null;
+        } catch (_) { resolved = null; }
+        if (resolved) {
+          try {
+            const callerDiff = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', resolved, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+            callerPaths = callerDiff.split('\n').map(s => s.trim()).filter(Boolean);
+          } catch (_) { callerPaths = null; }
+        }
+        callerBaseView = { requested: String(callerBase), resolved, paths: callerPaths,
+          authoritative: false,
+          note: 'a caller --base does NOT move the per-node measurement; this is a second view for comparison only' };
+      }
     } else {
       // WHOLE-PLAN (phase6 merge gate): cumulative diff vs the merge-base of HEAD and the integration
       // branch (default origin/main) — committed + staged + unstaged together, so a committed sensitive
@@ -6510,6 +6907,7 @@ function main() {
       const mergeBase = execFileSync('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).trim();
       const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+      measuredBase = mergeBase;
       // #724: EPOCH LINEAGE union (WHOLE-PLAN only). A schema-2 child at plan_epoch >= 2 measures a
       // cumulative diff that includes parent-epoch writes; without the parent write sets the union
       // allowlist is child-only and refuses legitimate, already-gated work write_set_overflow.
@@ -6525,7 +6923,7 @@ function main() {
               + (detail ? ': ' + detail : '')
               + ' — the whole-plan barrier unions the SEALED parent-epoch write sets into the declared'
               + ' allowlist, so an unverified lineage cannot be trusted to widen it; this is NOT a'
-              + ' write_set_overflow and must not be answered with revert-overflow'] };
+              + ' write_set_overflow and must not be answered by discarding the changed files'] };
           process.stdout.write((json ? JSON.stringify(out)
             : 'typed refusal: epoch_lineage_unverified (' + lineageReason + ')') + '\n');
           process.exitCode = 1;
@@ -6535,8 +6933,15 @@ function main() {
       }
     }
     const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag, lineagePlans });
-    process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
-    if (r.result !== 'pass') process.exitCode = 1;
+    if (measuredBase) r.base = measuredBase;
+    if (callerBaseView) r.caller_base = callerBaseView;
+    process.stdout.write((json ? JSON.stringify(r)
+      : (r.result === 'pass' ? 'barrier ok'
+        : (r.result === 'answer' ? 'barrier report: ' + r.errors.join('; ')
+          : 'typed refusal: ' + r.errors.join('; ')))) + '\n');
+    // `answer` exits 0: nothing was mutated and nothing published, so the exit code carries no
+    // verdict for the caller to act on — the paths on the envelope do.
+    if (r.result !== 'pass' && r.result !== 'answer') process.exitCode = 1;
     return;
   }
   if (args.includes('--group-barrier')) {
@@ -6672,9 +7077,15 @@ function main() {
       const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', baseRev, mSha], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
       const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
-      if (r.result === 'pass') { r.merge_commit = mSha; r.base = baseRev; }
-      process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok (commit ' + mSha.slice(0, 8) + ')' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
-      if (r.result !== 'pass') process.exitCode = 1;
+      // The merge commit and the baseline bind the measured set to the world-state it came from, so
+      // they ride BOTH the clean pass and the overflow report — an `answer` that cannot say what it
+      // measured against is the assertion this conversion exists to stop shipping.
+      if (r.result === 'pass' || r.result === 'answer') { r.merge_commit = mSha; r.base = baseRev; }
+      process.stdout.write((json ? JSON.stringify(r)
+        : (r.result === 'pass' ? 'group barrier ok (commit ' + mSha.slice(0, 8) + ')'
+          : (r.result === 'answer' ? 'group barrier report: ' + r.errors.join('; ')
+            : 'typed refusal: ' + r.errors.join('; ')))) + '\n');
+      if (r.result !== 'pass' && r.result !== 'answer') process.exitCode = 1;
       return;
     }
     // Group baseline: the shared SHA recorded at open via --record-base --node-id <group_id>. Same
@@ -6696,8 +7107,12 @@ function main() {
     const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
-    process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
-    if (r.result !== 'pass') process.exitCode = 1;
+    r.base = base;
+    process.stdout.write((json ? JSON.stringify(r)
+      : (r.result === 'pass' ? 'group barrier ok'
+        : (r.result === 'answer' ? 'group barrier report: ' + r.errors.join('; ')
+          : 'typed refusal: ' + r.errors.join('; ')))) + '\n');
+    if (r.result !== 'pass' && r.result !== 'answer') process.exitCode = 1;
     return;
   }
   if (args.includes('--parent-clean-check')) {
@@ -6834,6 +7249,16 @@ function main() {
     const diffOut = execFileSync('git', ['-C', legRoot, 'diff-tree', '-r', '--name-only', baseSha, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     const r = barrierCheck(content, actualPaths, { nodeId, root: legRoot, project: legSan(legProject), legScoped: true });
+    r.base = baseSha;
+    // DELIBERATE RESIDUE — this arm still REFUSES a write-set overflow while the per-node, group and
+    // fused arms report it. The asymmetry is the point: everywhere else the offending files are already
+    // on one branch and the finding survives to the pre-merge barrier, so freezing the run buys a future
+    // reader nothing. Here the leg is an ISOLATED worktree whose content is about to be merged into the
+    // parent by the synthesizer — an undeclared write that is merely REPORTED still lands, silently
+    // both-applying against whatever the sibling leg wrote at the same path. That is a live
+    // merge-correctness event, not a future reader's epistemic state, so the refusal is the only thing
+    // standing between the write and the merge. Convert this arm only together with a synthesizer-side
+    // reconciliation that reports the both-apply at the join.
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'leg barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;
@@ -7197,6 +7622,36 @@ function main() {
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
       process.exitCode = 1; return;
     }
+    // ---- (C) GATE EXECUTION (post-dominance over the runtime ledger) ----
+    //
+    // THE VERDICT THAT MOVED HERE. Post-dominance used to be a freeze-time refusal plus a runtime
+    // twin (--gate-verify) whose ONLY route into a real run was a bash block inside finalize prose —
+    // so the true statement was "it produces a merge iff the agent does not run the block the prose
+    // tells it to run." A gate whose enforcement is a prose instruction is a strong suggestion with
+    // an exit code. The freeze-time verdict is now an advisory (`unreviewed_code_nodes` and its
+    // siblings on `warnings`); the enforcement lives HERE, in the check cmdFinalize already shells,
+    // where the act being gated is the irreversible one.
+    //
+    // Same function, same primitive, no new computation: verifyGateExecution re-runs gateUncovered
+    // over the ledger with the gate roles relabelled by COMPLETION, so it catches both "no reviewer
+    // in the plan at all" and "a post-dominating reviewer marked n/a at runtime". It runs LAST, after
+    // the validation gate and the attribution sweep, so a plan that is broken for a cheaper reason
+    // still surfaces THAT reason first.
+    //
+    // Scope note: this is R3 (publication to mainline without a content-bound witness), not a new
+    // refusal — an unreviewed code node reaching mainline is unwitnessed publication. It refuses on
+    // gate_unsatisfied, the token --gate-verify already emits, and cmdFinalize already folds an
+    // inner --finalize-check reason into finalize_gate_unverified.
+    const gateExec = verifyGateExecution(content, { root, planPath });
+    if (!gateExec.ok) {
+      const out = { result: 'refuse', reason: gateExec.reasonCode || 'gate_unsatisfied',
+        operator_hint: gateExec.operator_hint || getOperatorHint('gate_unsatisfied'),
+        unsatisfied: gateExec.unsatisfied || [],
+        errors: (gateExec.unsatisfied || []).map(u => `${u.requirement}: ${u.reason}`) };
+      process.stdout.write((json ? JSON.stringify(out)
+        : 'typed refusal: ' + out.reason + ' (' + out.errors.join('; ') + ')') + '\n');
+      process.exitCode = 1; return;
+    }
     // #653: the pass payload echoes the verified binding in consumer mode ONLY (boundCandidateHash
     // stays null on the self-host arm, so the chain-receipt pass emission is byte-unchanged).
     const passPayload = { result: 'pass', mode: validationMode, checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) };
@@ -7236,6 +7691,9 @@ function main() {
         const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
         const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
         barrierCheckOut = barrierCheck(content, actualPaths, { nodeId, root, project: projTag });
+        // The baseline the path set was measured against, so the fused envelope the close path actually
+        // reads carries a locator BOUND to a re-checkable world-state rather than a floating path list.
+        barrierCheckOut.base = base;
       }
     }
     // (2)+(3) gate-verify and verdict-check are NOT computed here (#744).

@@ -18,7 +18,15 @@
 //   (7) #770: a stale --workflow-path (e.g. full) on the bundle lane silently acquires (no
 //       refusal) — bundle_requires_adaptive is retired along with the path SELECTOR itself.
 //   (8) Rollback path: when postAdvisoryClaim for a member fails mid-provision, the folder
-//       and previously applied labels are torn down.
+//       and previously applied labels are torn down — and, the teardown having SUCCEEDED, the
+//       claim ANSWERS at exit 0.
+//   (8b) The same failure with the teardown ALSO failing: a claim label survives on the forge,
+//       so this one keeps refusing at exit 1.
+//   (8c) The PAIR, asserted together: a clean world and a world with surviving forge residue
+//       must not classify alike. That contrast is the whole justification for (8b)'s carve-out.
+//   (11) THE TWIN RULE: a `target_set_X` classifies and exits exactly like its scalar twin `X`.
+//       A property over `TARGET_SET_TWINS` read as data, plus a driven comparison of both lanes
+//       — not nine hand-written token pins, which cannot catch the token added to one half only.
 //
 // OFFLINE-safe strategy: use KAOLA_GH_MOCK_SCRIPT (the existing pattern from
 // simulate-workflow-walkthrough.js) rather than KAOLA_WORKFLOW_OFFLINE, so that
@@ -110,12 +118,28 @@ function writeGhMockScript(binDir, opts) {
   const throwOnEdit = opts && opts.throwOnIssueEdit != null ? String(opts.throwOnIssueEdit) : 'null';
   const throwOnRemove = opts && opts.throwOnRemoveLabel != null ? String(opts.throwOnRemoveLabel) : 'null';
 
+  // viewFails: `issue view N` emits a GENUINE-negative 404 on stderr and exits 1, so the probe
+  // reports `unavailable` (not transient). This is the only way to reach the
+  // target_unavailable / target_set_unavailable pair hermetically — without it the claim would
+  // shell the real `gh`.
+  const viewFails = opts && opts.viewFails ? 'true' : 'false';
+
+  // logViews: also record the state probe, giving a "no labels were applied" assertion a
+  // live-log control. OPT-IN, and deliberately so: the probe runs BEFORE the dirty-tree check,
+  // so logging it unconditionally creates an untracked file inside the fixture repo and an
+  // in-place (KAOLA_WORKTREE_NATIVE=0) claim then reads the tree as dirty and asks for consent
+  // instead of acquiring. Measured, not theorised — turning this on for every fixture reddened
+  // the five #370 in-place assertions.
+  const logViews = opts && opts.logViews ? 'true' : 'false';
+
   fs.mkdirSync(binDir, { recursive: true });
   const script = [
     "'use strict';",
     'const fs = require("fs");',
     'const argv = process.argv.slice(2);',
     'const a = argv.join(" ");',
+    'const viewFails = ' + viewFails + ';',
+    'const logViews = ' + logViews + ';',
     'const logFile = ' + logFile + ';',
     'const openIssues = new Set(' + openIssues + '.map(String));',
     'const closedIssues = new Set(' + closedIssues + '.map(String));',
@@ -137,6 +161,11 @@ function writeGhMockScript(binDir, opts) {
     'const viewM = a.match(/issue view (\\d+)/);',
     'if (viewM) {',
     '  const n = viewM[1];',
+    '  if (logViews) log("view:" + n);',
+    '  if (viewFails) {',
+    '    process.stderr.write("GraphQL: Could not resolve to an Issue with the number of " + n + ". (repository.issue)\\n");',
+    '    process.exit(1);',
+    '  }',
     '  if (closedIssues.has(n)) {',
     '    process.stdout.write(JSON.stringify({number:parseInt(n),state:"closed",title:"issue "+n,body:"",labels:[]}) + "\\n");',
     '  } else {',
@@ -320,6 +349,7 @@ function readState(tmpRoot, project) {
       logFile,
       openIssues: [42, 53],
       closedIssues: [47],
+      logViews: true,   // live-log control for the "no labels added" assertion below
     });
 
     const result = runClaim(
@@ -338,14 +368,25 @@ function readState(tmpRoot, project) {
     );
     assert(out.issue === 47, 'refused on issue 47, got ' + JSON.stringify(out && out.issue));
 
-    // No active folder created (pre-mutation refusal)
+    // No active folder created (pre-mutation refusal). Asserted as the STRONG form: the folder
+    // must not exist AT ALL. The disjunction this replaces (`no dir OR no state file`) could
+    // never fail on its second clause here — a pre-mutation refusal never creates the directory,
+    // so the first clause was always true and the assertion could not do any work.
     const bundleDir = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47-53');
-    assert(!fs.existsSync(bundleDir) || !fs.existsSync(path.join(bundleDir, 'workflow-state.md')),
-      'no active folder after refusal');
+    assert(!fs.existsSync(bundleDir),
+      'a PRE-MUTATION refusal creates no bundle folder at all, but ' + bundleDir + ' exists'
+        + (fs.existsSync(bundleDir) ? ' containing ' + JSON.stringify(fs.readdirSync(bundleDir)) : ''));
 
-    // No labels were applied (refusal was pre-mutation)
+    // No labels were applied (refusal was pre-mutation).
     const calls = readLog(logFile);
     const labelsAdded = calls.filter(c => c.startsWith('label-added:'));
+    // LIVE-LOG CONTROL, and it is the point of this pair: "zero labels" and "the log never
+    // recorded anything" are indistinguishable without it, so the assertion below could pass
+    // against a mock that had stopped writing entirely. The state probe DID reach the mock and
+    // DID write, so the empty label set is a measurement.
+    assert(calls.some(c => c.startsWith('view:')),
+      'CONTROL: the gh mock really did write to the log during this fixture (otherwise "no labels" '
+        + 'is unfalsifiable), got: ' + JSON.stringify(calls));
     assert(labelsAdded.length === 0, 'no labels added after pre-mutation refusal, got: ' + labelsAdded.join(', '));
 
   } finally {
@@ -570,12 +611,87 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (8): Rollback path — add-label throws for member 47 (second member).
-// Verifies: member 42's label WAS added then rolled back (label-removed:42 in log),
-// no bundle folder remains, result is target_set_unavailable (rollback clean).
-// This exercises the claimBundle catch block + reverse-order label teardown that
-// was previously unreachable because postAdvisoryClaim swallows gh errors.
+// THE ROLLBACK DISCRIMINATOR — Test (8) and Test (8b) are ONE property in two halves.
+//
+// Both fixtures start the same way: add-label throws for member 47, so provisioning fails and
+// the bundle rolls back. What separates them is what the FORGE looks like afterwards, and that
+// difference is now the difference between an answer and a refusal:
+//
+//   (8)  teardown SUCCEEDS  -> nothing was written anywhere that outlives the process. The world
+//        is clean, the caller has learned a fact about its targets and can act on it, so the
+//        claim ANSWERS at exit 0 (`target_set_unavailable`, twin of the scalar
+//        `target_unavailable`, which has always answered).
+//   (8b) teardown ALSO FAILS -> a claim label SURVIVES on the forge. This is the one code on
+//        this surface where a mutation outlives the report, so the "nothing was written"
+//        argument that demotes every other claim-time stop does not reach it. It keeps
+//        `refuse` / exit 1, and `TARGET_SET_TWINS` records that by giving it `twin: null`.
+//
+// The two are asserted TOGETHER below (testRollbackDiscriminatorPair) as well as separately,
+// because the whole justification for the carve-out is the CONTRAST. Test (8) used to accept
+// EITHER status with a single exit code, which flattened exactly this distinction — the two
+// worlds are now different exit codes, so an `or` here could no longer discriminate anything.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// MUTATION LOG for (8) / (8b) / (8c) / (11). Each pin was un-wired in `kaola-workflow-claim.js`
+// and observed RED. Method: the repository is rsync'd to a scratch mirror, the mutation is
+// applied to the MIRROR and the suite is run from there — `git checkout --` is unusable while
+// several agents hold uncommitted work in this tree. Verbatim first casualties:
+//
+//   target_set_unavailable -> {twin:null, result:'refuse'}
+//     "clean rollback ANSWERS at exit 0, got 1" · "clean rollback carries result:answer, got
+//     "refuse"" · "THE DISCRIMINATOR: ... clean=["refuse",1] residue=["refuse",1]" ·
+//     "fixture drift: TARGET_SET_TWINS says `target_set_unavailable` twins `null`" (7 assertions)
+//
+//   target_set_label_rollback_failed given a twin that ANSWERS
+//     "rollback-failed claim exits 1, got 0" · "the surviving-residue token keeps result:refuse,
+//     got "answer"" · "THE DISCRIMINATOR: ... clean=["answer",0] residue=["answer",0]" (6)
+//
+//   a CLEAN rollback reports the residue token (the two worlds flattened)
+//     "a CLEAN rollback reports exactly target_set_unavailable, got:
+//     "target_set_label_rollback_failed"" · "a clean rollback carries NO partial-teardown
+//     evidence, got {...}" (7)
+//
+//   a token dropped from TARGET_SET_TWINS   -> "ADDED TO ONE HALF ONLY: `target_set_red` is
+//     emitted by the claim surface but has NO entry in TARGET_SET_TWINS."
+//   a dead entry added to TARGET_SET_TWINS  -> "DEAD TWIN ENTRY: ... `target_set_never_emitted_zz`"
+//   a SECOND token opting out (twin:null)   -> "exactly ONE token may carry `twin: null` ..."
+//   a twin naming a status not in the scalar table -> "`target_set_unverified` names the twin
+//     `target_unverified_zz`, which is not in CLAIM_SCALAR_RESULTS"
+//   claimResult stops consulting the scalar table -> 11 assertions, incl. "THE TWIN RULE
+//     (result): `target_set_invalid_token` emitted result="refuse" but its scalar twin
+//     `no_target` emitted "answer"" and the matching exit-code arm for three pairs.
+//
+// AND THE VACUITY AUDIT — four assertions in this block could not fail independently, and were
+// rewritten. Each replacement was then mutation-proved in turn:
+//
+//   the rollback stops removing the project directory
+//     "and the bundle folder itself is gone, not left orphaned — .../bundle-42-47 exists
+//     containing [".cache","workflow-state.md"]" AND the same for (8b) (3 assertions).
+//     The DISJUNCTION this replaced (`no dir OR no state file`) is red here on one clause only,
+//     which is what it was hiding: it accepted an orphaned directory.
+//
+//   the PRE-MUTATION closed-member refusal creates the folder first
+//     "a PRE-MUTATION refusal creates no bundle folder at all, but .../bundle-42-47-53 exists
+//     containing []" — the old disjunction at that site could never reach its second clause,
+//     because a pre-mutation refusal never creates the directory in the first place.
+//
+//   the partial record is emitted EMPTY (`partial: {}`)
+//     "the partial record NAMES the label that survived (#42)" AND the folder-creation
+//     non-vacuity arm. THE OLD `out.partial != null` STAYED GREEN under this mutation — that is
+//     the whole finding: a presence check on a field this code path itself wrote cannot fail
+//     while the field exists at all.
+//
+//   FIXTURE mutation — the gh mock stops writing its log
+//     13 assertions, incl. "CONTROL: the gh mock really did write to the log during this fixture
+//     (otherwise "no labels" is unfalsifiable), got: []". Without that control, Test (2)'s
+//     "no labels added" could not tell zero labels from a dead log.
+//
+// Nothing here survived a mutation aimed at it. The mirror control is green before and after.
+// ---------------------------------------------------------------------------
+
+// Recorded by (8) and (8b) for the joint assertion that follows them.
+const rollbackOutcomes = {};
 
 (function testRollbackOnMidProvisionLabelFailure() {
   console.log('Test (8): rollback — add-label fails for member 47, member-42 label torn down, no folder remains');
@@ -598,29 +714,55 @@ function readState(tmpRoot, project) {
     );
 
     const out = parseClaim(result);
-    // Claim must fail
-    assert(result.status === 1, 'rollback claim exits 1, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     assert(out !== null, 'rollback emits JSON');
-    // After clean rollback the status is target_set_unavailable
-    assert(
-      out.status === 'target_set_unavailable' || out.status === 'target_set_label_rollback_failed',
-      'rollback status is target_set_unavailable or target_set_label_rollback_failed, got: ' + JSON.stringify(out && out.status)
-    );
-
-    // No bundle folder remains (rolled back)
-    const bundleDir = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47');
-    assert(!fs.existsSync(bundleDir) || !fs.existsSync(path.join(bundleDir, 'workflow-state.md')),
-      'no bundle state file remains after rollback');
+    // A CLEAN rollback ANSWERS. The rule: a `target_set_X` classifies and exits exactly like its
+    // scalar twin `X`, and `target_set_unavailable`'s twin `target_unavailable` has always
+    // answered at exit 0. Nothing was written that survives, so the caller reads the reason and
+    // claims something else — an exit code saying "refused" only invited it to stop.
+    assert(result.status === 0, 'clean rollback ANSWERS at exit 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out.result === 'answer', 'clean rollback carries result:answer, got ' + JSON.stringify(out.result));
+    assert(out.claim === 'none', 'and `claim: none` is what says the claim did not happen — not the exit code, got ' + JSON.stringify(out.claim));
+    // EXACTLY the clean status. The old `or` accepted target_set_label_rollback_failed here too;
+    // that status now exits 1, so accepting either would make this pin unable to tell the clean
+    // world from the one with surviving forge residue — the distinction (8b) exists to draw.
+    assert(out.status === 'target_set_unavailable',
+      'a CLEAN rollback reports exactly target_set_unavailable, got: ' + JSON.stringify(out && out.status));
 
     // member-42 label was added (logged) and then removed in teardown (label-removed:42 in log)
     const calls = readLog(logFile);
     const labelsAdded = calls.filter(c => c.startsWith('label-added:'));
     const labelsRemoved = calls.filter(c => c.startsWith('label-removed:'));
+
+    // The local half of the teardown, as a CONJUNCTION. The disjunction this replaces
+    // (`no dir OR no state file`) accepted a rollback that left an orphaned directory behind, and
+    // it was additionally unfalsifiable whenever provisioning failed before the mkdir — the first
+    // clause would be true for a reason that has nothing to do with teardown. So: the folder is
+    // gone, the state file is gone, and provisioning is known to have got PAST the point where
+    // the folder is created (the label went on after it), which is what makes the absence
+    // evidence of an unwind rather than of an early exit.
+    const bundleDir = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47');
+    assert(labelsAdded.length > 0,
+      'NON-VACUITY: provisioning must have got past folder creation for its absence to mean '
+        + 'anything — gh log: ' + JSON.stringify(calls));
+    assert(!fs.existsSync(path.join(bundleDir, 'workflow-state.md')),
+      'no bundle state file remains after rollback');
+    assert(!fs.existsSync(bundleDir),
+      'and the bundle folder itself is gone, not left orphaned — ' + bundleDir + ' exists'
+        + (fs.existsSync(bundleDir) ? ' containing ' + JSON.stringify(fs.readdirSync(bundleDir)) : ''));
     assert(labelsAdded.some(c => c === 'label-added:42'), 'member 42 label was added before rollback');
     assert(labelsRemoved.some(c => c === 'label-removed:42'), 'member 42 label was removed during rollback teardown');
     // member-47 label was NOT added (gh threw before log)
     assert(!labelsAdded.some(c => c === 'label-added:47'), 'member 47 label was NOT added (threw before log)');
+    // THE WORLD IS CLEAN. This is the premise the exit-0 answer rests on, so it is asserted
+    // rather than assumed: every label this claim added was taken back off.
+    assert(labelsAdded.length > 0 && labelsAdded.every(c => labelsRemoved.includes(c.replace('label-added:', 'label-removed:'))),
+      'NO FORGE RESIDUE SURVIVES: every added label was removed — added=' + JSON.stringify(labelsAdded)
+        + ' removed=' + JSON.stringify(labelsRemoved));
+    assert(out.partial == null,
+      'a clean rollback carries NO partial-teardown evidence, got ' + JSON.stringify(out.partial));
 
+    rollbackOutcomes.clean = { code: result.status, status: out.status, result: out.result,
+      labelsAdded, labelsRemoved, partial: out.partial };
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -659,11 +801,85 @@ function readState(tmpRoot, project) {
     assert(out !== null, 'rollback-failed emits JSON');
     assert(out.status === 'target_set_label_rollback_failed',
       'status is target_set_label_rollback_failed, got: ' + JSON.stringify(out && out.status));
-    assert(out.partial != null, 'rollback-failed result includes partial evidence');
+    // THE CARVE-OUT, stated as behaviour. This token keeps `refuse` / exit 1 while its five
+    // siblings demoted to `answer` — not as an exception to the twin rule but because it has no
+    // scalar twin (`twin: null`) AND a forge mutation survives the report.
+    assert(out.result === 'refuse',
+      'the surviving-residue token keeps result:refuse, got ' + JSON.stringify(out.result));
 
+    // THE PARTIAL EVIDENCE, by CONTENT. `partial != null` accepted `{}` — a presence check on a
+    // field this very code path wrote, which cannot fail while the field exists at all and tells
+    // a human nothing. What the evidence is FOR is finishing the cleanup by hand, so what it must
+    // carry is the identity of the mutation that survived.
+    assert(out.partial != null && typeof out.partial === 'object',
+      'rollback-failed result includes partial evidence, got ' + JSON.stringify(out.partial));
+    assert(out.partial && Array.isArray(out.partial.labeled) && out.partial.labeled.indexOf(42) >= 0,
+      'the partial record NAMES the label that survived (#42) — without the identity a human cannot '
+        + 'finish the cleanup, got ' + JSON.stringify(out.partial));
+
+    // THE RESIDUE ITSELF — the fact that justifies the carve-out, measured rather than assumed.
+    // Member 42's label went on and the teardown could NOT take it off, so the forge is left in a
+    // state this process created and did not undo.
+    const calls = readLog(logFile);
+    assert(calls.includes('label-added:42'), 'member 42 label was added before the failed teardown');
+    assert(!calls.includes('label-removed:42'),
+      'FORGE RESIDUE SURVIVES: the label removal never landed, so the mutation outlives the report — '
+        + 'gh log: ' + JSON.stringify(calls));
+
+    // ...and the LOCAL half still unwinds. This was unpinned entirely: a failed FORGE teardown
+    // must not also leave a half-provisioned folder on disk, or the refusal would be covering two
+    // different failures and the operator could not tell which one it is being asked about.
+    const bundleDir8b = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47');
+    assert(!fs.existsSync(bundleDir8b),
+      'a failed LABEL teardown still removes the local bundle folder — ' + bundleDir8b + ' exists'
+        + (fs.existsSync(bundleDir8b) ? ' containing ' + JSON.stringify(fs.readdirSync(bundleDir8b)) : ''));
+    assert(out.partial.dir === true,
+      'NON-VACUITY: the partial record confirms the folder WAS created, so its absence above is an '
+        + 'unwind rather than an early exit, got ' + JSON.stringify(out.partial));
+
+    rollbackOutcomes.residue = { code: result.status, status: out.status, result: out.result,
+      calls, partial: out.partial };
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (8c): THE PAIR. Asserted in ONE place so the distinction cannot be flattened later by
+// someone who is looking at only one of the two halves.
+//
+// The failure this guards against is not "8 is wrong" or "8b is wrong" — it is a future edit
+// that makes them AGREE. Both answering deletes the one place on this surface where a surviving
+// forge mutation is visible; both refusing puts a hard stop back in front of a clean world, which
+// is the thing D5 removed. So the property is the CONTRAST, and it is stated as one assertion
+// over both recorded outcomes.
+// ---------------------------------------------------------------------------
+
+(function testRollbackDiscriminatorPair() {
+  console.log('Test (8c): the rollback pair — clean world ANSWERS, surviving forge residue REFUSES');
+  const clean = rollbackOutcomes.clean;
+  const residue = rollbackOutcomes.residue;
+  assert(clean && residue, 'both rollback halves ran and recorded an outcome');
+  if (!clean || !residue) return;
+
+  assert(clean.result !== residue.result && clean.code !== residue.code,
+    'THE DISCRIMINATOR: the two rollback worlds must NOT classify alike — clean='
+      + JSON.stringify([clean.result, clean.code]) + ' residue=' + JSON.stringify([residue.result, residue.code]));
+  assert(clean.result === 'answer' && clean.code === 0,
+    'the CLEAN half answers at exit 0, got ' + JSON.stringify([clean.result, clean.code]));
+  assert(residue.result === 'refuse' && residue.code === 1,
+    'the RESIDUE half refuses at exit 1, got ' + JSON.stringify([residue.result, residue.code]));
+
+  // ...and the world-state really is what separates them, not the status token. Same trigger,
+  // same failed provision; the only difference either fixture introduced is whether the teardown
+  // landed, so this is the causal claim rather than a restatement of the two statuses.
+  assert(clean.labelsRemoved.includes('label-removed:42'),
+    'the clean half really did take the label back off');
+  assert(!residue.calls.includes('label-removed:42'),
+    'the residue half really did leave the label on');
+  assert(clean.partial == null && residue.partial != null,
+    'partial-teardown evidence appears on exactly the half where the teardown failed — clean='
+      + JSON.stringify(clean.partial) + ' residue=' + JSON.stringify(residue.partial));
 })();
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1204,235 @@ function readState(tmpRoot, project) {
       'bundle: the staging dir must be REMOVED after the fold, still at ' + staging);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ===========================================================================
+// Test (11): THE TWIN RULE — a `target_set_X` classifies and exits exactly like its scalar
+// twin `X`.
+//
+// This replaces what would otherwise be nine hand-written token pins. A pin per token cannot
+// catch the failure the rule exists to prevent: a NEW `target_set_*` token added to the emission
+// sites and not to the map. `claimResult` returns null for such a token, `claimExitCode`
+// fail-closes it to 1, and the envelope goes out carrying `result: null` — a bundle lane silently
+// classifying a fact as a HARD STOP that the scalar lane calls act-on-it. No existing pin moves.
+//
+// TWO ARMS.
+//
+//   STRUCTURAL — the map, the scalar table and the emission sites are three independently
+//   authored lists, and the rule is a set relation over them. This is where "added to one half
+//   only" dies. Read as DATA (the literals are evaluated out of the production source, never
+//   transcribed), so a table edit is picked up without touching this file.
+//
+//   DRIVEN — for every pair both lanes can reach, the real CLI is run on BOTH sides and the
+//   emitted `result` and exit code are compared to each other. This is what makes the structural
+//   arm mean something: it proves the map is the thing the surface actually consults, rather than
+//   a table that agrees with itself.
+//
+// WHAT IS NOT DRIVEN, and why — stated rather than silently omitted:
+//   * `target_set_empty` — UNREACHABLE from the CLI. `cmdStartup` routes to `claimExplicitBundle`
+//     only when `--target-issues` parsed to a non-empty array, so the empty arm answers only to a
+//     direct call. It is driven IN-PROCESS against the exported function instead (result only).
+//   * `user_target_closed` — its exit code is not observable anywhere. The only surface that
+//     emits it is `cmdClaim`, which calls `output()` with no code and therefore always exits 0
+//     regardless of `claimExitCode`. Its `result` IS driven; its exit code is structural only.
+//   * `target_set_red` — no hermetic trigger found: the bundle loop probes issue state BEFORE it
+//     classifies, so a closed member takes the `target_set_has_closed_issue` arm and the
+//     classifier's `red` verdict is not reachable through this fixture harness. Structural only.
+// ===========================================================================
+
+(function testTwinRule() {
+  console.log('Test (11): the twin rule — every target_set_X classifies and exits like its scalar twin X');
+
+  // --- the two tables, as DATA out of the production source. -------------------------------
+  // Evaluating the literal is deliberate: a hand-transcribed copy here would be a second
+  // authoring surface for the very rule that exists to have only one.
+  const claimSrc = fs.readFileSync(claimScript, 'utf8');
+  function literalAfter(name) {
+    const marker = 'const ' + name + ' = ';
+    const start = claimSrc.indexOf(marker);
+    if (start < 0) return null;
+    const from = start + marker.length;
+    // Balance parentheses from `Object.freeze(` to its close; the values hold no parens.
+    let depth = 0;
+    for (let i = from; i < claimSrc.length; i++) {
+      const ch = claimSrc[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) return claimSrc.slice(from, i + 1); }
+    }
+    return null;
+  }
+  let TWINS = null;
+  let SCALARS = null;
+  try {
+    TWINS = new Function('return ' + literalAfter('TARGET_SET_TWINS'))();
+    SCALARS = new Function('return ' + literalAfter('CLAIM_SCALAR_RESULTS'))();
+  } catch (e) { /* asserted below */ }
+
+  // NON-VACUITY. Every assertion below is a set relation, and a set relation over an empty set
+  // is trivially true — so the read itself is checked first. The floors are deliberately LOOSE:
+  // they exist to catch a parse that silently returned nothing, not to pin today's token count.
+  // A count pin here would red on a legitimate token retirement, which is a tax on subtraction.
+  assert(TWINS && typeof TWINS === 'object' && Object.keys(TWINS).length >= 5,
+    'the twin map was read as data from ' + path.basename(claimScript) + ', got '
+      + JSON.stringify(TWINS && Object.keys(TWINS)));
+  assert(SCALARS && typeof SCALARS === 'object' && Object.keys(SCALARS).length >= 5,
+    'the scalar result table was read as data, got ' + JSON.stringify(SCALARS && Object.keys(SCALARS)));
+  if (!TWINS || !SCALARS) return;
+
+  // --- ARM 1 (structural): the three lists agree. -------------------------------------------
+  // Every `target_set_*` token this surface can EMIT. `claimAnswer` is the ONE constructor for a
+  // non-acquiring bundle envelope, so its call sites are the emission set by construction.
+  const emitted = new Set();
+  const re = /claimAnswer\(\s*'([a-z_]+)'/g;
+  let m;
+  while ((m = re.exec(claimSrc)) !== null) emitted.add(m[1]);
+  assert(emitted.size >= 7,
+    'NON-VACUITY: the emission-site scan found ' + emitted.size + ' tokens — it is looking in the wrong place');
+
+  for (const token of emitted) {
+    assert(Object.prototype.hasOwnProperty.call(TWINS, token),
+      'ADDED TO ONE HALF ONLY: `' + token + '` is emitted by the claim surface but has NO entry in '
+        + 'TARGET_SET_TWINS. claimResult returns null for it, claimExitCode fail-closes it to 1, and '
+        + 'the envelope ships `result: null` — a bundle lane calling a fact a HARD STOP that the '
+        + 'scalar lane acts on. Add the entry, do not add a pin.');
+  }
+  for (const token of Object.keys(TWINS)) {
+    assert(emitted.has(token),
+      'DEAD TWIN ENTRY: TARGET_SET_TWINS names `' + token + '` but nothing emits it. A map row for a '
+        + 'token that does not ship is a rule about nothing — delete the row.');
+    const entry = TWINS[token];
+    if (entry.twin === null) continue;
+    assert(Object.prototype.hasOwnProperty.call(SCALARS, entry.twin),
+      '`' + token + '` names the twin `' + entry.twin + '`, which is not in CLAIM_SCALAR_RESULTS — '
+        + 'the derivation resolves to null and the token fail-closes.');
+  }
+
+  // The carve-out is a property of the DATA, not a comment: exactly one token may opt out of the
+  // rule, and it must be the one where a forge mutation survives the report (Test 8b drives it).
+  const twinless = Object.keys(TWINS).filter(t => TWINS[t].twin === null);
+  assert(twinless.length === 1 && twinless[0] === 'target_set_label_rollback_failed',
+    'exactly ONE token may carry `twin: null` (the one whose forge mutation outlives the answer), got '
+      + JSON.stringify(twinless));
+  assert(TWINS.target_set_label_rollback_failed.result === 'refuse',
+    'and the twinless token authors its own result: refuse, got '
+      + JSON.stringify(TWINS.target_set_label_rollback_failed.result));
+
+  // --- the driven vehicle. -------------------------------------------------------------------
+  // Reuses runClaim (one spawn site for the whole file); each scenario owns a throwaway repo.
+  function drive(scenario) {
+    const tmpRoot = makeTmpRoot();
+    const binDir = path.join(tmpRoot, 'bin');
+    try {
+      initGitRepo(tmpRoot);
+      for (const n of scenario.roadmap || []) writeRoadmapFile(tmpRoot, n);
+      for (const f of scenario.folders || []) {
+        const p = path.join(tmpRoot, 'kaola-workflow', f.project);
+        fs.mkdirSync(p, { recursive: true });
+        fs.writeFileSync(path.join(p, 'workflow-state.md'),
+          'name: ' + f.project + '\nissue_number: ' + f.issue + '\nstatus: ' + f.status + '\nphase: 2\n');
+      }
+      if (scenario.gh) writeGhMockScript(binDir, scenario.gh);
+      const r = runClaim(scenario.argv, tmpRoot, binDir, scenario.env);
+      const out = parseClaim(r);
+      // The token rides on `status` almost everywhere, but the no-target answer is emitted as a
+      // bare `verdict` with no `status` at all. Reading only `status` there yields undefined, and
+      // two undefineds compare EQUAL — the comparison would have passed for the wrong reason.
+      return { code: r.status, status: out && (out.status || out.verdict), result: out && out.result,
+        stdout: r.stdout, stderr: r.stderr };
+    } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+  }
+
+  // Each row: [bundle token, scalar twin, bundle scenario, scalar scenario, compareExit].
+  // `compareExit: false` marks a pair whose scalar side emits from a surface that never applies
+  // claimExitCode — the result correspondence is still real, the exit-code half is not observable.
+  const OPEN = { openIssues: [42, 47] };
+  const PAIRS = [
+    ['target_set_invalid_token', 'no_target',
+      { argv: ['startup', '--target-issues', '42,4x'], roadmap: [42] },
+      { argv: ['startup'], roadmap: [42] }, true],
+    ['target_set_unavailable', 'target_unavailable',
+      { argv: ['startup', '--target-issues', '42,47'], roadmap: [42, 47], gh: { viewFails: true } },
+      { argv: ['startup', '--target-issue', '42'], roadmap: [42], gh: { viewFails: true } }, true],
+    ['target_set_unverified', 'target_unverified',
+      { argv: ['startup', '--target-issues', '42,47'], env: { KAOLA_WORKFLOW_OFFLINE: '1' } },
+      { argv: ['startup', '--target-issue', '42'], env: { KAOLA_WORKFLOW_OFFLINE: '1' } }, true],
+    ['target_set_conflicts_active_work', 'target_occupied',
+      { argv: ['startup', '--target-issues', '42,47'], roadmap: [42, 47], gh: OPEN,
+        folders: [{ project: 'issue-42', issue: 42, status: 'in_progress' }] },
+      // The scalar twin needs a folder that readActiveFolders SKIPS (so the claim is not `owned`)
+      // whose state file nonetheless survives — that is the EEXIST arm that emits target_occupied.
+      { argv: ['startup', '--target-issue', '42'], roadmap: [42], gh: OPEN,
+        folders: [{ project: 'issue-42', issue: 42, status: 'released' }] }, true],
+    ['target_set_has_closed_issue', 'user_target_closed',
+      { argv: ['startup', '--target-issues', '42,47'], roadmap: [42, 47], gh: { openIssues: [42], closedIssues: [47] } },
+      // `startup --target-issue` classifies a closed issue as user_target_red before it can reach
+      // this arm, so the twin is driven through `claim`, which is the only surface that emits it.
+      { argv: ['claim', '--project', 'issue-47', '--issue', '47'], roadmap: [47], gh: { closedIssues: [47] } }, false],
+  ];
+
+  let drivenPairs = 0;
+  for (const [bundleToken, scalarToken, bundleScenario, scalarScenario, compareExit] of PAIRS) {
+    const entry = TWINS[bundleToken];
+    assert(entry && entry.twin === scalarToken,
+      'fixture drift: TARGET_SET_TWINS says `' + bundleToken + '` twins `'
+        + (entry && entry.twin) + '`, this row drives `' + scalarToken + '`');
+    if (!entry || entry.twin !== scalarToken) continue;
+
+    const b = drive(bundleScenario);
+    const s = drive(scalarScenario);
+    // The fixtures must actually have produced the tokens under test; otherwise the comparison
+    // below is between two unrelated envelopes and passes for the wrong reason.
+    assert(b.status === bundleToken,
+      'fixture: the bundle lane produced ' + JSON.stringify(b.status) + ', expected ' + bundleToken
+        + '\nstdout: ' + b.stdout + '\nstderr: ' + b.stderr);
+    assert(s.status === scalarToken,
+      'fixture: the scalar lane produced ' + JSON.stringify(s.status) + ', expected ' + scalarToken
+        + '\nstdout: ' + s.stdout + '\nstderr: ' + s.stderr);
+    if (b.status !== bundleToken || s.status !== scalarToken) continue;
+
+    assert(b.result === s.result,
+      'THE TWIN RULE (result): `' + bundleToken + '` emitted result=' + JSON.stringify(b.result)
+        + ' but its scalar twin `' + scalarToken + '` emitted ' + JSON.stringify(s.result)
+        + '. A fact does not change its classification because it was asked about three issues '
+        + 'instead of one.');
+    if (compareExit) {
+      assert(b.code === s.code,
+        'THE TWIN RULE (exit code): `' + bundleToken + '` exited ' + b.code + ' but its scalar twin `'
+          + scalarToken + '` exited ' + s.code + '.');
+    }
+    drivenPairs++;
+  }
+
+  // NON-VACUITY on the driven arm itself: a fixture regression that quietly stopped reaching the
+  // tokens would leave every assertion above unexecuted and this test reading green.
+  assert(drivenPairs === PAIRS.length,
+    'DRIVEN COVERAGE: expected all ' + PAIRS.length + ' twin pairs to be exercised on BOTH lanes, got '
+      + drivenPairs);
+
+  // --- `target_set_empty`: driven in-process, because the CLI cannot reach it. ---------------
+  const claimApi = require('./kaola-workflow-claim.js');
+  const emptyEnvelope = claimApi.claimExplicitBundle(os.tmpdir(), { targetIssues: [] });
+  assert(emptyEnvelope && emptyEnvelope.status === 'target_set_empty',
+    'fixture: the empty bundle arm produced ' + JSON.stringify(emptyEnvelope && emptyEnvelope.status));
+  assert(emptyEnvelope && emptyEnvelope.result === SCALARS[TWINS.target_set_empty.twin],
+    'THE TWIN RULE (result): `target_set_empty` emitted ' + JSON.stringify(emptyEnvelope && emptyEnvelope.result)
+      + ' but its twin `' + TWINS.target_set_empty.twin + '` is '
+      + JSON.stringify(SCALARS[TWINS.target_set_empty.twin]));
+
+  // --- the ONE deliberate deviation, stated as such. -----------------------------------------
+  // `route` replaces the twin's result with a strictly MORE specific non-stopping answer. It is
+  // not an exception to the exit rule: `escalate` is an answer, so the exit code is unchanged.
+  const routed = Object.keys(TWINS).filter(t => TWINS[t].route);
+  assert(routed.length === 1 && routed[0] === 'target_set_indeterminate',
+    'exactly one token may override its twin with a `route`, got ' + JSON.stringify(routed));
+  for (const t of routed) {
+    assert(TWINS[t].route !== 'refuse' && TWINS[t].route !== 'consent',
+      '`' + t + '` routes to ' + JSON.stringify(TWINS[t].route) + ' — a route may only make an answer '
+        + 'MORE specific, never turn it into a stop.');
+    assert(SCALARS[TWINS[t].twin] === 'answer',
+      'and its twin `' + TWINS[t].twin + '` answers, so the exit code is unchanged by the route, got '
+        + JSON.stringify(SCALARS[TWINS[t].twin]));
   }
 })();
 

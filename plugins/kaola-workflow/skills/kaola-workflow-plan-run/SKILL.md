@@ -183,7 +183,7 @@ Then **enter the worktree** — every adaptive lifecycle call below runs from th
 
 **Worktree-cwd contract:** the mutating lifecycle subcommands (`open-next` / `open-ready` /
 `record-evidence --stdin` / `close-and-open-next` / `close-node` / `reconcile-running-set` /
-`write-halt` / `clear-halt` / `reopen-node` / `revert-overflow` / `repair-node` / `route-findings`)
+`write-halt` / `clear-halt` / `reopen-node` / `repair-node` / `route-findings`)
 resolve the project folder — `workflow-plan.md`, the `## Node Ledger`, `.cache/{node-id}.md` evidence,
 and the barrier baselines — **cwd-relative**. Run them ALL from the worktree so durable state lands
 where the role agents write. Running one from the main repo root while a worktree is linked refuses
@@ -251,11 +251,12 @@ belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechani
 interrupt discards the leg atomically rather than partially. After reclaiming ANY writer, run
 `reconcile-running-set`: a `writerHalt: true` result means at least one departing writer's changes
 could not be positively confirmed inside its declared write set, and it NAMES the out-of-set paths.
-Resolving them first (`revert-overflow`, `repair-node`, or a consent halt) is cheaper than not:
-re-opening the node re-anchors its baseline, so the stray paths drop underneath it and that node's
-own barrier stops seeing them — but they do not go away. The sink diffs the WHOLE claim against the
-union of every declared write set, so they resurface there as writes nothing declared, on a diff you
-will be explaining after the work is done instead of here, where they are already named for you.
+Placing them first (`amend-surface` to attribute + re-review, `repair-node` to re-drive the writer,
+a deliberate deletion, or a consent halt) is cheaper than not: re-opening the node re-anchors its
+baseline, so the stray paths drop underneath it and that node's own barrier stops seeing them — but
+they do not go away. The sink diffs the WHOLE claim against the union of every declared write set, so
+they resurface there as writes nothing declared, on a diff you will be explaining after the work is
+done instead of here, where they are already named for you.
 
 **F. Frontier dispatch discipline + slot awareness.** On `enterBatch: true`, issue every
 `spawn_agent` call for the frontier back-to-back in ONE turn, then run exactly ONE join loop (B) for
@@ -652,7 +653,8 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
 - `merge_conflict` (write-overlap): a write-leg level whose FIRST-detection refusal —
   `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
   bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.
-  Repair each first by its own recovery (re-dispatch the leg · `revert-overflow` · a reasoning-class
+  Repair each first by its own recovery (re-dispatch the leg · attribute or delete the out-of-lane
+  write · a reasoning-class
   (non-lowerable floor) `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
   the K-th failure escalate via `write-halt --reason merge_conflict`. Routed exactly like `test_thrash`
   (a schema constant the orchestrator applies — NO script counter on the adaptive path); the
@@ -743,11 +745,23 @@ the recomputed frontier, draining toward `allDone` WITHOUT operator prompting. C
 a small bound (e.g. 3 consecutive `frontier_blocked` cycles with no progress) before escalating with
 stop+ask — a blocked-but-not-done frontier must never silently stall the run.
 
-**Surface the narrowed barrier reason VERBATIM.** On a `barrier_failed` / `close-node`
-refusal the ACTIONABLE narrowed reason (`write_set_overflow` / `write_set_granularity` /
-`lockfile_write` / …) and the offending paths are now on the top-level `reason` / `outOfAllow`
-fields. Surface them VERBATIM — print the full `reason` / `operator_hint` / `outOfAllow` — never
-route the refusal through a lossy JSON-summary helper that truncates it.
+**Surface what the barrier MEASURED, verbatim.** Every close carries a content locator: the
+barrier's `barrierCheck` payload names `actualPaths` (exactly the files this node wrote, by content,
+against the `base` it measured from) and `declared` (what its write set allowed). Read BOTH — a node
+whose `actualPaths` is empty delivered nothing, however its ledger row reads, and a declared path
+missing from `actualPaths` is work the record claims and the tree does not have.
+
+A write-set overflow is a REPORT, not a refusal: `barrierCheck.result` is `answer`, the exit code is
+0, `mutation_performed` is false, and the run continues with the out-of-set paths named in
+`outOfAllow`. The close envelope carries the same finding as `write_set_report`
+(`{reason, outOfAllow, actual_paths, declared, base, mutation_performed:false}`) on an otherwise
+successful `result: ok`, so a successful close still tells you it happened. Place the paths
+(`amend-surface` to attribute + re-review, or delete them deliberately) before the pre-merge barrier,
+which still refuses an unattributed path. On a `barrier_failed` /
+`close-node` refusal — a sensitive write with no reviewer gate, a foreign-archive write, or a broken
+baseline — the narrowed `reason` and the offending paths are on the top-level `reason` / `outOfAllow`
+fields. Surface all of it VERBATIM — print the full `reason` / `operator_hint` / `outOfAllow` /
+`actualPaths` — never route it through a lossy JSON-summary helper that truncates it.
 
 <!-- CARD: repair-routing -->
 **Authoritative failed-review repair protocol.** `review_failed` is a settled failed transaction.
@@ -793,7 +807,7 @@ same command.
 
 On barrier refusal / `route-findings` result: `docs/plan-run-cards/repair-routing.md`
 (covers `write_set_granularity` / `write_set_overflow` / `sensitive_write_unreviewed` /
-`foreign_archive` / `unattributed_write`; `revert-overflow` vs `repair-node`; `halt for consent`;
+`foreign_archive` / `unattributed_write`; `amend-surface` vs `repair-node`; `halt for consent`;
 `write-halt --reason consent`; `escalated_to_full: consent` / `escalated_to_full: security`;
 `triage` / `proposed_repair` object; plan-repair via `--freeze`; `--forbidden-only` check)
 

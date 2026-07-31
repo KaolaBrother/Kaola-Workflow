@@ -226,8 +226,8 @@ When `close-and-open-next` refuses, the output is a typed envelope:
 ```json
 {
   "result": "refuse",
-  "reason": "write_set_overflow",
-  "operator_hint": "Node n4 wrote outside its declared set. Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --node-id n4",
+  "reason": "sensitive_write_unreviewed",
+  "operator_hint": "A sensitive file was written without a completed security-reviewer node...",
   "nodeId": "n4"
 }
 ```
@@ -237,6 +237,28 @@ to identify the recovery action without re-reading the full plan-run prose.
 
 The `reason` field is the structural classifier. The full set of typed reasons and their
 recoveries is below.
+
+**A write-set overflow is not in that envelope, because it is not a refusal.** At per-node and
+lane-group scope the barrier REPORTS it: `barrierCheck.result` is `answer`, the exit code is `0`,
+`mutation_performed` is `false`, and the close proceeds with the out-of-set paths named. Read it off
+the barrier payload, not off a refusal:
+
+```json
+{
+  "result": "answer",
+  "reason": "write_set_overflow",
+  "mutation_performed": false,
+  "outOfAllow": ["scripts/c.js", "test/t.test.js"],
+  "actualPaths": ["docs/api.md", "scripts/a.js", "scripts/c.js", "test/t.test.js"],
+  "declared": ["scripts/a.js", "scripts/b.js"],
+  "base": "7528a2eeedbc3a9686f2468d3e165d946433c4c9"
+}
+```
+
+`actualPaths` is exactly what this node wrote, by content, measured against `base`; `declared` is
+what its write set allowed. Both directions of the comparison are yours to make — a declared path
+absent from `actualPaths` is work the record claims and the tree does not have, and an empty
+`actualPaths` on a closing node means it delivered nothing at all.
 
 ---
 
@@ -256,56 +278,53 @@ Key fields:
 | `owning_node` | The node whose write set covers the offending path |
 | `fix_role` | The role to dispatch for the repair (e.g., `"implementer"`) |
 | `owning_node: null` | No node owns the path — this is a PLAN-REPAIR signal |
-| `proposed_repair.kind` | The machine-readable repair primitive (`revert-overflow`, `repair-node`, etc.) |
+| `proposed_repair.kind` | The machine-readable repair primitive (`amend_surface`, `add_to_write_set`, `write_set_swap`, `repair_node`) |
 | `operator_hint` | One-sentence human pointer (same vocabulary as the envelope) |
 
 ---
 
-## 3. `write_set_overflow` — use `revert-overflow`, NEVER `drop-base`
+## 3. `write_set_overflow` — place the paths; NEVER `drop-base`
 
-`reason: write_set_overflow` means a node wrote files outside its declared write set. The
-canonical recovery is `revert-overflow` (D-434-01 §1):
+`reason: write_set_overflow` means a node wrote files outside its declared write set. At per-node
+and lane-group scope this is REPORTED, not refused: the run continues, the files stay on the branch,
+and `outOfAllow` names them. Nothing is destroyed and nothing is attributed for you — placing them
+is the work.
+
+**The pre-merge (whole-plan) barrier and the per-leg barrier still REFUSE.** The first is the
+publication door: a path nobody declared must not reach mainline. The second is the synthesis merge:
+an undeclared write inside an isolated leg would silently both-apply against whatever a sibling leg
+wrote at the same path, which is a live merge-correctness event rather than a future reader's
+problem. So an overflow you leave unplaced does not disappear — it surfaces later, further from the
+node that made it.
+
+**To KEEP the files — `amend-surface`.** On a `plan_form: spine` plan, out-of-set files that are
+genuine companion work of a **discharged expansion point** are attributed rather than discarded:
 
 ```bash
-node scripts/kaola-workflow-adaptive-node.js revert-overflow \
-  --node-id {nodeId} \
-  --plan kaola-workflow/{project}/workflow-plan.md \
-  --ledger kaola-workflow/{project}/workflow-ledger.md
+node scripts/kaola-workflow-adaptive-node.js amend-surface \
+  --project {project} --node-id {expansion-point} --files "{exact,paths}" --json
 ```
 
-`revert-overflow` reverts the out-of-set writes while keeping the in-set writes intact.
+One atomic transaction: it appends an `amend({point}):` block attributing those EXACT files
+(append-only, outside the `plan_hash` body, so the frozen spine identity is untouched) and routes the
+point back through `reexpand-open` — re-opening it, its post-dominating review wall and the sink — so
+the work is KEPT **and re-reviewed**, never silently widened. Exact file paths only; a directory or
+glob token refuses `amend_surface_not_exact_file` with no write.
 
-**`revert-overflow` DISCARDS the out-of-set writes — read this before running it.** If the
-out-of-surface files are junk (a stray build artifact, a debug edit), that is exactly what you
-want. If they are *real companion work* the node legitimately needed to touch, reverting throws
-that work away and the node will likely reproduce it on the next attempt.
+**To DROP the files — delete them yourself.** There is no discard verb. The one that existed
+(`revert-overflow`) unlinked newly-created undeclared files, which exist in no commit, no stash and
+no ref, and it is gone with the refusal it existed to clear. Deleting an overflow is now a deliberate
+act by an agent that can see both the files and the measured path set on the envelope — read
+`outOfAllow`, confirm the content is genuinely disposable, and remove it.
 
-> **Preserve alternative — `amend-surface`.** On a `plan_form: spine` plan, out-of-set files that are
-> genuine companion work of a **discharged expansion point** are kept rather than discarded:
->
-> ```bash
-> node scripts/kaola-workflow-adaptive-node.js amend-surface \
->   --project {project} --node-id {expansion-point} --files "{exact,paths}" --json
-> ```
->
-> One atomic transaction: it appends an `amend({point}):` block attributing those EXACT files
-> (append-only, outside the `plan_hash` body, so the frozen spine identity is untouched) and routes the
-> point back through `reexpand-open` — re-opening it, its post-dominating review wall and the sink — so
-> the work is KEPT **and re-reviewed**, never silently widened. Exact file paths only; a directory or
-> glob token refuses `amend_surface_not_exact_file` with no write.
->
-> The `write_set_overflow` hint names both primitives and neither is routed for you: **stray artifacts
-> you want gone are `revert-overflow`; companion work you want kept is `amend-surface`.** Outside a
-> spine plan (or where the file belongs to no milestone) the answer is still to widen the declared write
-> set — re-freeze via plan-repair — and only then re-run the node. The fail-closed floor is unaffected
-> either way: an unamended out-of-surface write still refuses, and an amended file attributes at the
-> barrier only once its point RE-discharges.
+**Outside a spine plan** (or where the file belongs to no milestone) the answer is still to widen the
+declared write set — re-freeze via plan-repair — and only then re-run the node.
 
 **NEVER use `--drop-base`.** `--drop-base` drops the barrier baseline, laundering the node's
 accumulated work. This is explicitly banned by D-424-01. The `operator_hint` vocabulary
 enforces this — no hint in any aggregator's registry references `drop-base`.
 
-Subtypes that also use `revert-overflow`:
+Subtypes reported the same way:
 - `write_set_granularity` — a write landed at a coarser path than declared
 - `lockfile_write` — a lock file (e.g., `package-lock.json`) was written without declaration
 - `mirror_write` — a generated mirror file was written outside the set
@@ -407,7 +426,7 @@ child whose binding field remains `pending` is acceptable only when recursive ve
 
 ## 9. Dispatching a fix agent and closing the repair loop
 
-After an admissible in-place repair action (`revert-overflow`, attempt-bound `repair-node`, etc.):
+After an admissible in-place repair action (`amend-surface`, attempt-bound `repair-node`, etc.):
 
 1. Dispatch a fix agent (same role as the original node, or `implementer` for write repairs).
 2. The fix agent writes within the corrected write set.
@@ -440,7 +459,7 @@ write-leg level reaches after `MERGE_CONFLICT_REPAIR_LIMIT` (**K=3**) bounded re
      a same-file overlap cannot co-open in a frozen plan, so this is a defensive catch).
 2. **Bounded repair (K=3)** — repair each by its *own* recovery, re-running `close-node`:
    - no-op leg → **re-dispatch** the leg's role so it writes its declared file;
-   - overflow → `revert-overflow` (NEVER `drop-base`);
+   - overflow → reported, not refused; place the paths with `amend-surface` or delete them (NEVER `drop-base`);
    - real conflict → dispatch a **reasoning-floor** `synthesizer` agent to resolve **by
      intent** (a non-reasoning tier is a dispatch refusal, never a silent downgrade; a clean agentic
      merge is a weak signal — the union barrier on M is the landing gate, not the merge succeeding).
@@ -462,7 +481,7 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 
 | `reason` | Recovery |
 |---|---|
-| `write_set_overflow` (+ subtypes) | `revert-overflow` to DISCARD stray files; `amend-surface` to KEEP companion work owned by a discharged spine milestone (NEVER `drop-base`) |
+| `write_set_overflow` (+ subtypes) | REPORTED at per-node / lane-group scope (`result: answer`, exit 0). `amend-surface` to KEEP companion work owned by a discharged spine milestone; delete the files yourself to drop them (NEVER `drop-base`). Still REFUSED at the whole-plan and per-leg barriers. |
 | `sensitive_write_unreviewed` | Remove the sensitive write OR planner-owned re-plan with a real security certifier path |
 | `unattributed_write` | `owning_node: null` in route-findings → settle attempt → planner-owned re-plan |
 | `barrier_failed` | Read `findings-route.json` → dispatch fix agent → close repair loop |

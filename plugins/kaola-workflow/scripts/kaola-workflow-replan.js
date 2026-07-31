@@ -205,14 +205,63 @@ function deterministicPathLabel(prefix, ordinal, rel) {
     + schema.sha256Hex(Buffer.from(String(rel), 'utf8')).slice(0, 16);
 }
 
+// THE CAS FORK LIVES IN THE KERNEL (`schema.casLostAnswer`), not here.
+//
+// This file builds typed envelopes at over a hundred sites and the `kernel_cas_lost` family runs
+// through most of them: a parent plan or state that moved under a half-applied epoch transition, a
+// claim-root anchor that no longer proves what the lineage says it proves, a re-plan source another
+// session rotated. Every one of those is a compare-and-set that LOST — nothing was written and the
+// caller's next move is to re-read and decide. That is a report, and it is made ONCE, at the CLI
+// emit boundary in main(), which already owns the exit-code rule one line later.
+//
+// Two things were learned the expensive way and are recorded here so they are not re-learned. A
+// first cut renamed all 113 constructors to a local fork helper: that put the decision in 113 places
+// when main() already owned it, AND it made every one of those tokens invisible to the condition
+// census, which indexes emission sites by constructor shape and knows `schema.refuse`. The census
+// then reported eight LIVE tokens as retired — which would have deleted eight rows from a
+// shrink-only ratchet on a premise that was false. An instrument that cannot see its subject is
+// worse than no instrument, and production code that blinds one is a defect in the production code.
+//
+// The fork asks the CLASSIFIER for the family, never a token list, so a forgotten token is
+// structurally impossible. Every other family reaches the caller as `refuse` exactly as before, the
+// re-plan FENCE included: `replan_in_progress` is `kernel_lock_held`, not a CAS, and it is
+// deliberately NOT converted — two of its emitters are read by callers that gate on a nonzero exit,
+// so converting it would let a finalize proceed while an epoch transition is mid-flight.
+// ---------------------------------------------------------------------------
+
+// casPayloadOf(result) — lift the DECLARED kernel_cas_lost payload fields a pure-core helper
+// computed onto the envelope that reports it. A whitelist, not a spread: these helpers also return
+// the parent plan/state bytes on their ok path, and spreading would make a report's shape depend on
+// how far verification happened to get.
+const CAS_PAYLOAD_FIELDS = Object.freeze(['record', 'field', 'expected', 'found', 'actual', 'token',
+  'blocking_rows', 'legal_next', 'node_id', 'transaction_id', 'phase', 'seam',
+  'expected_plan_hash', 'found_plan_hash', 'detail']);
+function casPayloadOf(result) {
+  const out = {};
+  if (!result || typeof result !== 'object') return out;
+  for (const field of CAS_PAYLOAD_FIELDS) if (result[field] !== undefined) out[field] = result[field];
+  return out;
+}
+
 function withProjectLock(paths, subcommand, body) {
   const authority = ensureProjectAuthorityPaths(paths);
   if (!authority.ok) return schema.refuse(authority.reason, { detail: authority.detail });
   const lock = schema.acquireProjectLock(paths.lockPath, { subcommand });
   if (!lock.ok) {
-    return schema.refuse(lock.stale ? 'scheduler_lock_stale' : 'scheduler_lock_held', {
+    // #871 — scheduler contention ANSWERS at exit 0. The mutual exclusion is unchanged (`body()`
+    // is not called, so nothing is mutated); what the exit code used to carry now rides the
+    // envelope as `mutation_performed:false` + `acquired:false`, beside the holder and the
+    // liveness measurement the acquire path already computed. The named exit is in the route and
+    // in the hint: `unlock` on the stale arm, wait on the live one, then retry.
+    return schema.answer(lock.stale ? 'scheduler_lock_stale' : 'scheduler_lock_held', {
       holder: lock.holder || null,
       lockPath: paths.lockPath,
+      stale: lock.stale,
+      held_for_ms: lock.held_for_ms != null ? lock.held_for_ms : null,
+      liveness: lock.liveness || null,
+      acquired: false,
+      did_not_run: subcommand,
+      retry_after: lock.stale ? 'unlock' : 'holder_exit',
       operator_hint: lock.stale
         // The stale-lock exit is a verb, not a prose `rm`: adaptive-node's `unlock` removes the
         // lockfile under a live-holder probe plus a holder-identity CAS, from one session only.
@@ -288,7 +337,8 @@ function verifyClaimRootBase(repoRoot, rootInput) {
       })).trim().toLowerCase();
     } catch (_) { return { ok: false, reason: 'claim_root_tree_missing' }; }
     if (emptyTree !== root.tree) {
-      return { ok: false, reason: 'claim_root_tree_mismatch', expected: root.tree, actual: emptyTree };
+      return { ok: false, reason: 'claim_root_tree_mismatch', record: 'claim_root', field: 'tree',
+        expected: root.tree, actual: emptyTree, found: emptyTree };
     }
     return { ok: true, root, no_history: true };
   }
@@ -300,7 +350,8 @@ function verifyClaimRootBase(repoRoot, rootInput) {
   let tree;
   try { tree = String(git(repoRoot, ['rev-parse', root.commit + '^{tree}'])).trim().toLowerCase(); }
   catch (_) { return { ok: false, reason: 'claim_root_tree_missing' }; }
-  if (tree !== root.tree) return { ok: false, reason: 'claim_root_tree_mismatch', expected: root.tree, actual: tree };
+  if (tree !== root.tree) return { ok: false, reason: 'claim_root_tree_mismatch', record: 'claim_root',
+    field: 'tree', expected: root.tree, actual: tree, found: tree };
   return { ok: true, root };
 }
 
@@ -2036,14 +2087,33 @@ function buildTransaction(paths, opts, parentPlan, parentState, lineage, source,
   return transaction;
 }
 
+// #871 — the CAS payload the schema declares and nothing populated. Every field here is a value
+// this function ALREADY computed to make its decision and then discarded: the digest it demanded,
+// the digest it read, the transaction it is a seam of, and the phase that transaction is in. Test 3
+// needs nothing extra at this site — the parent's own bytes are held in
+// `transaction.parent.plan_bytes_base64` / `state_bytes_base64` and the transaction itself is
+// durable at `.cache/replan-transaction.json`, so nothing here exists only in memory.
+function casSeam(transaction, extra) {
+  return Object.assign({
+    record: extra && extra.record,
+    transaction_id: (transaction && transaction.transaction_id) || null,
+    phase: (transaction && transaction.phase) || null,
+  }, extra || {});
+}
+
 function verifyParentAuthority(paths, transaction) {
   let plan;
   let state;
   try { plan = readAuthorityText(paths.planPath); state = readAuthorityText(paths.statePath); }
-  catch (error) { return { ok: false, reason: 'replan_parent_missing', detail: error.message }; }
-  if (schema.sha256Hex(Buffer.from(plan, 'utf8')) !== transaction.parent.plan_digest
-      || validator.readStoredHash(plan) !== transaction.parent.plan_hash) {
-    return { ok: false, reason: 'replan_parent_plan_changed' };
+  catch (error) { return Object.assign({ ok: false, reason: 'replan_parent_missing', detail: error.message },
+    casSeam(transaction, { record: 'parent_plan', field: 'path', expected: paths.planPath, found: null })); }
+  const planDigest = schema.sha256Hex(Buffer.from(plan, 'utf8'));
+  const planHash = validator.readStoredHash(plan);
+  if (planDigest !== transaction.parent.plan_digest || planHash !== transaction.parent.plan_hash) {
+    return Object.assign({ ok: false, reason: 'replan_parent_plan_changed' },
+      casSeam(transaction, { record: 'parent_plan', field: 'plan_digest',
+        expected: transaction.parent.plan_digest, found: planDigest,
+        expected_plan_hash: transaction.parent.plan_hash, found_plan_hash: planHash }));
   }
   const authority = schema.sha256Canonical(authorityStateView(parseStateFields(state)));
   if (authority !== transaction.parent.state_authority_digest) {
@@ -2051,7 +2121,9 @@ function verifyParentAuthority(paths, transaction) {
         && schema.sha256Hex(Buffer.from(state, 'utf8')) === transaction.parent.state_pre_fence_digest) {
       return { ok: true, plan, state, state_needs_fence: true };
     }
-    return { ok: false, reason: 'replan_parent_state_changed' };
+    return Object.assign({ ok: false, reason: 'replan_parent_state_changed' },
+      casSeam(transaction, { record: 'parent_state', field: 'state_authority_digest',
+        expected: transaction.parent.state_authority_digest, found: authority }));
   }
   return { ok: true, plan, state };
 }
@@ -4404,7 +4476,7 @@ function resumeReplanUnlocked(paths, opts) {
 
   if (transaction.phase === 'prepared') {
     const authority = verifyParentAuthority(paths, transaction);
-    if (!authority.ok) return schema.refuse(authority.reason);
+    if (!authority.ok) return schema.refuse(authority.reason, casPayloadOf(authority));
     const sourceAuthority = verifySourceAuthority(paths, transaction);
     if (!sourceAuthority.ok) return schema.refuse(sourceAuthority.reason);
     const observed = observeCas(paths, transaction, 'prepare', opts);
@@ -4424,7 +4496,7 @@ function resumeReplanUnlocked(paths, opts) {
 
   if (transaction.phase === 'planner_pending') {
     const authority = verifyParentAuthority(paths, transaction);
-    if (!authority.ok) return schema.refuse(authority.reason);
+    if (!authority.ok) return schema.refuse(authority.reason, casPayloadOf(authority));
     const sourceAuthority = verifySourceAuthority(paths, transaction);
     if (!sourceAuthority.ok) return schema.refuse(sourceAuthority.reason);
     let childStat;
@@ -4529,7 +4601,7 @@ function resumeReplanUnlocked(paths, opts) {
       updateFenceState(paths, transaction, opts, null, 'after_state_child_frozen_fence');
     }
     const authority = verifyParentAuthority(paths, transaction);
-    if (!authority.ok) return schema.refuse(authority.reason);
+    if (!authority.ok) return schema.refuse(authority.reason, casPayloadOf(authority));
     const sourceAuthority = verifySourceAuthority(paths, transaction);
     if (!sourceAuthority.ok) return schema.refuse(sourceAuthority.reason);
     const childBytes = Buffer.from(transaction.child.bytes_base64, 'base64');
@@ -4567,7 +4639,7 @@ function resumeReplanUnlocked(paths, opts) {
       || livePlanDigest === transaction.child.digest;
     if (!promotionBegan) {
       const authority = verifyParentAuthority(paths, transaction);
-      if (!authority.ok) return schema.refuse(authority.reason);
+      if (!authority.ok) return schema.refuse(authority.reason, casPayloadOf(authority));
       const sourceAuthority = verifySourceAuthority(paths, transaction);
       if (!sourceAuthority.ok) return schema.refuse(sourceAuthority.reason);
       const observed = observeCas(paths, transaction, 'pre_activation', opts);
@@ -5141,6 +5213,10 @@ function main() {
   } else {
     throw new Error('no such subcommand: ' + subcommand);
   }
+  // #871 — the CAS half of the vocabulary reports at exit 0. Applied HERE, once, on the envelope
+  // `main()` is about to emit and score, so the exit-code rule and the fork that feeds it sit in
+  // one place and cannot disagree.
+  result = schema.casLostAnswer(result);
   recordOutcome(result);
   schema.emit(result);
   if (result && result.result === 'refuse') process.exitCode = 1;

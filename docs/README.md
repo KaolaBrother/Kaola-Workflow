@@ -10,7 +10,8 @@
 - [Decisions](decisions/)
   - [0001 — Legacy session/lock cleanup: no tooling](decisions/0001-legacy-session-lock-cleanup.md)
   - (0002–0011 and D-422-01 listed separately; see decisions/ for full catalog)
-  - **[0016 — The substrate: bookkeeping over gates](decisions/0016-the-substrate-bookkeeping-over-gates.md) — the current design. Supersedes the "two gates" premise; read before ADR 0013 or CLAUDE.md's kernel section.**
+  - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md) — THE CURRENT DESIGN, and the one to read first. Retires the node/DAG executor: a run is one file of `item` / `status` / `dispatched` / `result`, written at three moments, with no script required. Concurrency carries no machinery. Derived additively from an observed bare-session run, not by subtracting from the DAG.**
+  - **[0016 — The substrate: bookkeeping over gates](decisions/0016-the-substrate-bookkeeping-over-gates.md) — completed by 0017. Supersedes the "two gates" premise; read before ADR 0013 or CLAUDE.md's kernel section.**
   - [0012 — The finalize seam is orchestrator-owned; its mechanical residue is one transaction](decisions/0012-finalize-seam-is-orchestrator-owned.md)
   - [0013 — The Successor Test and the Two-Gate Target Architecture: axioms A1–A3, the four-record durable kernel, oracles as tools, refusal legal only at kernel-integrity + sink, parallel-by-default as theorem, prompts re-derived by the same razor](decisions/0013-successor-test-two-gate-target-architecture.md)
   - [0014 — Free origin: orchestrator-owned selection behind a typed commitment gate (supersedes 0006's entry lock; retains its control boundary)](decisions/0014-free-origin.md)
@@ -20,13 +21,13 @@
   - [D-420-01 — Goal-Driven Automation Part 1: autopilot loop (scout→claim→plan→run→finalize, confidence-threshold gating, typed stop conditions); Part 3: goal-conditioned bundles (optional `goal:` in `## Meta`, hash-covered, finalize AC-vs-goal check)](decisions/D-420-01.md)
   - [D-420-02 — Goal-Driven Automation Part 2: enriched consent-halt payload (offending paths, mechanical class, plan-repair diff); Part 4: release aggregator (`kaola-workflow-release.js --verify/--cut`, forge-neutral publish)](decisions/D-420-02.md)
   - [D-440-01 — Consent-halt triage payloads: `triage: { class, proposed_repair?, testDelta? }` on `write-halt` and `barrier_failed`; three `write_set_overflow` subtypes (`lockfile_write`, `mirror_write`, `count_bump`); classification table in `adaptive-schema.js`; structured `proposed_repair` using #434 primitives vocabulary; one shape on both channels (D-420 Part 2, issue #440)](decisions/D-440-01.md)
-  - [D-441-01 — Goal-conditioned bundles: optional `goal:` prose line in `## Meta`; `parseGoal` reader; hash-covered for free; `KAOLA_GOAL` env var; `issue-scout` `goal_alignment` note; advisory `goal_check: satisfied|unsatisfied|absent` in closure receipt (D-420 Part 3, issue #441)](decisions/D-441-01.md)
+  - [D-441-01 — Goal-conditioned bundles: optional `goal:` prose line in `## Meta`; `parseGoal` reader; hash-covered for free; `KAOLA_GOAL` env var; `issue-scout` `goal_alignment` note; advisory closure-receipt attestation (D-420 Part 3, issue #441). **Status update:** the `goal_check: satisfied|unsatisfied|absent` verdict is superseded by `goal_declared` / `goal_declared_source` / `goal_declared_probed`; the goal plumbing itself stands](decisions/D-441-01.md)
   - [D-442-01 — `kaola-workflow-release.js` release aggregator: envelope, architecture, closed-issue derivation, explicit `--version`, lockstep Codex-manifest bump, `--push` forge-neutral gate, step-receipt crash-resume, `COMMON_SCRIPTS`-only registration](decisions/D-442-01.md)
   - [D-661-01 — Split release trust transitions: prepare/commit/receipt authorization, strict candidate and tag-tree binding, and refusal-only cut compatibility](decisions/D-661-01.md)
 - [Plan-Run Cards](plan-run-cards/) — Per-situation adaptive plan-run reference cards (rare-branch recovery; pointed at by the plan-run skeleton `<!-- CARD: <name> -->` markers)
   - [resume.md](plan-run-cards/resume.md) — Crash/interrupt resume
   - [governance.md](plan-run-cards/governance.md) — Planner freeze/governance-ack handshake
-  - [repair-routing.md](plan-run-cards/repair-routing.md) — `route-findings` consumption, `revert-overflow` / `repair-node` choice, plan-repair
+  - [repair-routing.md](plan-run-cards/repair-routing.md) — `route-findings` consumption, `amend-surface` / `repair-node` choice, plan-repair
   - [reopen-complete-node.md](plan-run-cards/reopen-complete-node.md) — Reopening a `complete` writer
   - [frontier-batch.md](plan-run-cards/frontier-batch.md) — Parallel frontier fan-out / running-set scheduler subcommands
 - [Investigations](investigations/) — Investigation notes and analysis documents

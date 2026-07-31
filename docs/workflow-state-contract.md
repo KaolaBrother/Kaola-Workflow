@@ -200,7 +200,8 @@ that means giving the archive gate a digest comparison.
   as part of `## Nodes`, so keep it present and stable; `wait_budget_minutes` is optional, with an
   absent/blank/dash cell preserving the tier-derived dispatch default and a validated integer cell
   freezing an extension of that floor). The plan also contains a `## Node Ledger`
-  (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
+  (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`, plus an optional `wrote` **content locator**
+  column — see below),
   and a script-computed `plan_hash` (an HTML comment `<!-- plan_hash: <sha256> -->`)
   that **lives inside `workflow-plan.md`** — never in `workflow-state.md`, because
   repair-state runs precisely when `workflow-state.md` is missing. The validator/claim
@@ -209,6 +210,34 @@ that means giving the archive gate a digest comparison.
   `DELEGATION_CONTROLLED_REQUIREMENTS` matcher), with per-instance disambiguation in
   the Evidence column only. The barrier commit order is `.cache` evidence → Node
   Ledger row → `workflow-state.md` pointer LAST, so a crash mid-node is recoverable.
+- **The `wrote` locator column (`## Node Ledger`).** A completion claim is a receipt, not an
+  assertion. When a node closes, the barrier has just measured — by content, from a ref-anchored
+  baseline commit — exactly the paths that node wrote, and that set is recorded in two places. The
+  **authoritative** copy is the `close` entry in `.cache/provenance-log.jsonl`, which carries
+  `actual_paths`, `declared` and the `base` SHA (and `scope: "lane_group"` when the measurement was
+  the group union rather than one node's own writes). It is *effect-triggered*: written by the same
+  code path, one call after the barrier that observed the diff. The ledger `wrote` cell is a
+  **derived, capped, human-readable mirror** of it — comma-space separated repo-relative paths, the
+  same grammar as `declared_write_set`, `—` for a measured-and-empty set, and a `+K more` tail past
+  12 paths. The cell drops the run's own `kaola-workflow/**` bookkeeping (the barrier's own exempt
+  band — the paths it can never attribute against a declared write set), because every close writes
+  ~9 of them and a verbatim cell would answer "what did this node deliver" with the same nine strings
+  on every row; the provenance entry keeps them. A node that wrote nothing but bookkeeping therefore
+  renders `—`, which is the honest reading: no attributable work. When the two disagree, provenance
+  wins.
+
+  Three properties are load-bearing. (1) The column is **APPENDED after `status`**, never inserted:
+  the finalize worktree-regression guard (`kaola-workflow-ledger-compare.js`) parses the ledger
+  positionally and an inserted column would make it count zero complete rows and fail **open**.
+  (2) A row with no recorded measurement carries `—`, never a blank cell — absence must not render as
+  a value; its own `status` cell disambiguates (`pending | —` is not-yet-run). A row that closed
+  before this column shipped is the one genuine ambiguity, and provenance is the authority there.
+  (3) The cell is **deliberately outside `ledger_chain_head`**, whose digest covers `{id, status}`
+  only, so a hand-edited cell is not tamper-evident. That is a decision: the locator is a
+  measurement, its obligation is honesty rather than enforcement, and extending the chain digest
+  would invalidate every in-flight chain head to protect a field whose authoritative copy already
+  lives in an append-only journal.
+
 - **`## Acceptance` (the human-values artifact).** The frozen plan's statement of what "done" means,
   transcribed ONCE at freeze from the issue body plus explicit user statements: one item per line
   (`A1:`, `A2:`, …), prose. It is a **sibling** of `## Design`, never folded into it — `## Design`

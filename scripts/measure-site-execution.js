@@ -29,6 +29,48 @@
 //
 // The emission shapes are READ FROM `test-refusal-route-sweep.js`, never copied. Two measurements
 // of the same population may not disagree, and a third hand-kept copy is how they start to.
+//
+// ---------------------------------------------------------------------------
+// TWO PHASES, BECAUSE "COLD" WAS CONFLATING TWO DIFFERENT FACTS.
+//
+// The first readout taken with this instrument was withdrawn. Its cold count was an upper bound,
+// not a measurement, and the reason is structural: the probe REWRITES SCRIPT BYTES, and a subset of
+// the drivers are byte-identity checks (`validate-script-sync`, the cross-edition parity guards,
+// `edition-sync --check`). Those drivers necessarily fail while being measured, die early, and
+// every site they would have reached after their death point was counted COLD. A driver dying of
+// the instrument is indistinguishable, in a one-phase design, from a site that nothing runs.
+//
+// Worse, one number was answering two questions at once:
+//   * a site NO driver can reach          -> a COVERAGE GAP in the driver set
+//   * a site a driver reaches and skips   -> a FINDING about the code
+// Reporting one figure for both is what made the readout unquotable.
+//
+// So the run is two passes over the same mirrored tree, in this order:
+//
+//   PHASE R (reachability) — PRISTINE BYTES, before any instrumentation. Every driver runs with
+//     `NODE_OPTIONS=--require <hook>`; the hook logs every `kaola-workflow-*.js` module that is
+//     LOADED, and propagates into spawned children, which is where most of this corpus executes.
+//     Byte-identity drivers pass here because nothing has been rewritten, so the reachable set is
+//     measured WITHOUT the confound rather than caveated around it.
+//
+//   PHASE X (execution) — INSTRUMENTED BYTES. Every driver runs again; the site probe logs hits.
+//     Byte-identity drivers may fail here, and that is fine: their failure now degrades only the
+//     `executed` count, never the reachability denominator that Phase R established.
+//
+// A driver that is GREEN in R and RED in X is CONFOUNDED BY THE PROBE, and the instrument says so
+// by name. A driver red in BOTH is red for its own reasons and is reported separately, so a suite
+// broken by unrelated work is never silently charged to this measurement.
+//
+// FOUR STATES, NEVER TWO:
+//   executed                  the site's probe fired
+//   reachable_not_executed    its FILE was loaded in Phase R, the site never fired  -> a FINDING
+//   unreachable_by_drivers    its FILE was never loaded by any driver               -> a COVERAGE GAP
+//   excluded                  could not be instrumented, with the reason, per site
+//
+// EXEMPT-LIST, NOT ALLOWLIST. Every driver is instrumented by default. There is no opt-in list to
+// forget to add to, so a newly added driver is measured on the day it lands rather than the day
+// somebody remembers it. Where a driver must be excluded it is named WITH ITS REASON in the
+// readout — a silently excluded driver is how the first cold count lied.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -224,6 +266,44 @@ function instrument(files, sites, destRoot) {
   return { done, skipped };
 }
 
+// ---- the driver list, read by the instrument itself -------------------------
+// THE INSTRUMENT READS ITS OWN DRIVER LIST AND ASSERTS THE COUNT.
+//
+// The first readout ran 49 drivers from a list holding 50, and the difference went unexplained into
+// the handoff. The cause: the list file ended WITHOUT a trailing newline, and it was fed to the
+// instrument by a shell `while read -r` loop, which discards a final unterminated line. `wc -l`
+// counts newlines, so the file measured 49 and agreed with the run — two instruments sharing one
+// blind spot, which is the exact failure this file's header warns about. The dropped driver was
+// `scripts/test-runtime-lexicon-parity.js`, the last line.
+//
+// The fix is not "remember the newline". It is that the instrument reads the file itself and
+// asserts, so a reader bug cannot silently shrink the driver set again. A list whose parsed count
+// disagrees with its non-blank non-comment line count kills the run.
+function readDriversFile(p) {
+  const raw = fs.readFileSync(p, 'utf8');
+  // Split on newlines and keep a final unterminated line — the whole point.
+  const rawLines = raw.split('\n');
+  if (rawLines.length && rawLines[rawLines.length - 1] === '') rawLines.pop();
+  const drivers = [];
+  let blanks = 0;
+  for (const l of rawLines) {
+    const t = l.trim();
+    if (!t || t.startsWith('#')) { blanks++; continue; }
+    drivers.push(t);
+  }
+  if (drivers.length + blanks !== rawLines.length) {
+    die('DRIVER LIST ACCOUNTING FAILED for ' + p + ': ' + rawLines.length + ' lines but '
+      + drivers.length + ' drivers + ' + blanks + ' blank/comment. The list is the denominator of '
+      + 'every coverage claim below; it may not be approximated.');
+  }
+  if (!raw.endsWith('\n')) {
+    console.error('measure-site-execution: NOTE — ' + p + ' has no trailing newline. This file is '
+      + 'read correctly here, but a shell `while read` loop would DROP the last driver ('
+      + drivers[drivers.length - 1] + '). Add the newline.');
+  }
+  return drivers;
+}
+
 // ---- main ------------------------------------------------------------------
 function main() {
   const argv = process.argv.slice(2);
@@ -232,8 +312,19 @@ function main() {
   const destRoot = path.resolve(argv[rootIx + 1]);
   const drivers = [];
   for (let i = 0; i < argv.length; i++) if (argv[i] === '--driver') drivers.push(argv[i + 1]);
-  if (!drivers.length) die('at least one --driver <script-rel-path> is required.');
+  // Default source is the committed list beside this script, read HERE rather than by a caller.
+  const dfIx = argv.indexOf('--drivers-file');
+  const driversFile = dfIx >= 0 ? path.resolve(argv[dfIx + 1])
+    : (drivers.length ? null : path.join(__dirname, 'measure-site-execution.drivers.txt'));
+  if (driversFile) {
+    if (!fs.existsSync(driversFile)) die('drivers file not found: ' + driversFile);
+    for (const d of readDriversFile(driversFile)) drivers.push(d);
+  }
+  if (!drivers.length) die('no drivers: pass --driver <path> or --drivers-file <path>.');
+  const skipReach = argv.includes('--no-reach');
   const logPath = path.join(destRoot, 'kw-site-hits.log');
+  const reachLog = path.join(destRoot, 'kw-file-loads.log');
+  const reachHook = path.join(destRoot, 'kw-reach-hook.js');
 
   if (!fs.existsSync(destRoot)) die('--root ' + destRoot + ' does not exist; mirror the tree first '
     + '(git archive HEAD | tar -x -C <dir>) so the driver has its fixtures.');
@@ -262,6 +353,54 @@ function main() {
     die('POPULATION MISMATCH: this scan sees ' + mine + ' distinct condition values, the refusal '
       + 'sweep reports ' + m[1] + '. Two measurements of the same population may not disagree — '
       + 'reconcile the shapes before trusting any hot/cold number below.');
+  }
+
+  // ---- PHASE R — reachability, on PRISTINE bytes -----------------------------
+  // Runs BEFORE instrumentation, deliberately. Nothing has been rewritten, so the byte-identity
+  // drivers pass and the reachable set is a MEASUREMENT rather than a lower bound with a caveat.
+  // The hook rides NODE_OPTIONS, which Node propagates into spawned children — most of this corpus
+  // executes in subprocesses, so a require-hook that stopped at the parent would measure almost
+  // nothing.
+  const reachByFile = new Set();
+  const reachStatus = [];
+  if (!skipReach) {
+    fs.writeFileSync(reachHook, [
+      "'use strict';",
+      '// Records every kaola-workflow-*.js module this process (or any child) loads.',
+      "const Mod = require('module');",
+      "const fsx = require('fs');",
+      'const orig = Mod._load;',
+      'Mod._load = function (req, parent, isMain) {',
+      '  const m = orig.apply(this, arguments);',
+      '  try {',
+      '    const r = Mod._resolveFilename(req, parent, isMain);',
+      "    if (/[\\\\/]kaola-workflow-[^\\\\/]*\\.js$/.test(r)) {",
+      "      fsx.appendFileSync(process.env.KW_REACH_LOG, r.split(/[\\\\/]scripts[\\\\/]/).pop() + '\\n');",
+      '    }',
+      '  } catch (_) {}',
+      '  return m;',
+      '};',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(reachLog, '');
+    const reachEnv = Object.assign({}, process.env, {
+      KW_REACH_LOG: reachLog,
+      NODE_OPTIONS: (process.env.NODE_OPTIONS ? process.env.NODE_OPTIONS + ' ' : '') + '--require ' + reachHook,
+    });
+    for (const d of drivers) {
+      const r = require('child_process').spawnSync(process.execPath, d.split(/\s+/), {
+        cwd: destRoot, env: reachEnv, encoding: 'utf8', maxBuffer: 1 << 28,
+      });
+      reachStatus.push({ driver: d, exit: r.status, signal: r.signal || null });
+    }
+    for (const line of fs.readFileSync(reachLog, 'utf8').split('\n')) {
+      if (line) reachByFile.add('scripts/' + line);
+    }
+    if (reachByFile.size === 0) {
+      die('PHASE R LOADED NOTHING. The require-hook did not fire in any driver, so every '
+        + 'reachability verdict below would be a fabricated "unreachable". This is an error, not a '
+        + 'result — check that NODE_OPTIONS survives into the drivers.');
+    }
   }
 
   const inst = instrument(files, sites, destRoot);
@@ -311,43 +450,128 @@ function main() {
   const hot = done.filter(s => hits.has(s.id));
   const cold = done.filter(s => !hits.has(s.id));
 
+  // ---- FOUR STATES ------------------------------------------------------------
+  // The split the withdrawn readout could not make. A cold site in a file NO driver ever loaded is
+  // a hole in the driver set; a cold site in a file that WAS loaded is a claim about the code. One
+  // is our problem, the other is the code's, and one number for both is unquotable.
+  const reachKnown = !skipReach && reachByFile.size > 0;
+  const reachableNotExecuted = reachKnown ? cold.filter(s => reachByFile.has(s.file)) : [];
+  const unreachable = reachKnown ? cold.filter(s => !reachByFile.has(s.file)) : cold;
+  const unreachedFiles = reachKnown ? files.filter(f => !reachByFile.has(f)) : files.slice();
+
+  // ---- DRIVER LEDGER: which reds are the instrument's fault -------------------
+  // Green in R (pristine) and red in X (instrumented) is the byte-identity confound, by name.
+  // Red in both is somebody else's breakage and is NOT charged to this measurement.
+  const reachByDriver = new Map(reachStatus.map(r => [r.driver, r]));
+  const driverLedger = driverStatus.map(x => {
+    const r = reachByDriver.get(x.driver) || null;
+    let cls;
+    if (x.signal || (r && r.signal)) cls = 'killed';
+    else if (!reachKnown) cls = x.exit === 0 ? 'ok' : 'red_instrumented_unclassified';
+    else if (x.exit === 0) cls = 'ok';
+    else if (r && r.exit === 0) cls = 'confounded_by_probe';
+    else cls = 'red_independently';
+    return { driver: x.driver, exit_instrumented: x.exit, exit_pristine: r ? r.exit : null,
+      signal: x.signal || (r && r.signal) || null, classification: cls };
+  });
+  const confounded = driverLedger.filter(d => d.classification === 'confounded_by_probe');
+  const redAnyway = driverLedger.filter(d => d.classification === 'red_independently');
+  const killedD = driverLedger.filter(d => d.classification === 'killed');
+
   const report = {
+    // The moment this was taken. The emission-site population moves as conversions land, so a
+    // readout without its instant is a number nobody can reproduce or diff against.
+    taken_at: new Date().toISOString(),
+    repo_head: (() => { try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim(); } catch (_) { return null; } })(),
+    working_tree_dirty_files: (() => { try { return execFileSync('git', ['status', '--porcelain'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean).length; } catch (_) { return null; } })(),
     static_sites: sites.length,
     instrumented: done.length,
     skipped: skipped.length,
     files: files.length,
-    drivers: driverStatus,
-    hot_sites: hot.length,
-    cold_sites: cold.length,
+    drivers_declared: drivers.length,
+    drivers_run_reach: reachStatus.length,
+    drivers_run_exec: driverStatus.length,
+    reachability_measured: reachKnown,
+    files_reached: reachKnown ? files.length - unreachedFiles.length : null,
+    files_unreached: unreachedFiles,
+    // THE FOUR STATES.
+    executed: hot.length,
+    reachable_not_executed: reachableNotExecuted.length,
+    unreachable_by_drivers: unreachable.length,
+    excluded: skipped.length,
     distinct_tokens_static: new Set(sites.map(s => s.token)).size,
     distinct_tokens_hot: new Set(hot.map(s => s.token)).size,
+    driver_ledger: driverLedger,
+    confounded_drivers: confounded.map(d => d.driver),
+    red_independently_drivers: redAnyway.map(d => d.driver),
     // PROPERTY 2 — what it could not reach, as output.
     could_not_instrument: skipped,
-    cold: cold.map(s => ({ file: s.file, line: s.line, token: s.token })),
+    reachable_not_executed_sites: reachableNotExecuted.map(s => ({ file: s.file, line: s.line, token: s.token })),
+    unreachable_sites: unreachable.map(s => ({ file: s.file, line: s.line, token: s.token })),
+    caveats: [
+      confounded.length
+        ? 'executed is a LOWER BOUND: ' + confounded.length + ' driver(s) are byte-identity checks '
+          + 'that fail under the rewrite and die early, so sites past their death point were not '
+          + 'observed executing. Reachability is UNAFFECTED — Phase R ran them on pristine bytes.'
+        : 'no driver was confounded by the probe; executed is not depressed by instrument-induced failures.',
+      killedD.length
+        ? 'INCOMPLETE: ' + killedD.length + ' driver(s) were KILLED by a signal. A killed driver is '
+          + 'evidence of nothing in either direction; re-run before quoting any figure.'
+        : 'no driver was killed by a signal.',
+      redAnyway.length
+        ? redAnyway.length + ' driver(s) are red on pristine bytes too — pre-existing or concurrent '
+          + 'breakage, not this instrument. Their contribution is also a lower bound, for a reason '
+          + 'that is not the probe.'
+        : 'every driver is green on pristine bytes.',
+      'reachability is measured at FILE granularity: a site counts as reachable when its containing '
+        + 'file was LOADED by some driver. A loaded file whose site never fires is a finding; an '
+        + 'unloaded file is a coverage gap. Finer granularity would need per-branch instrumentation.',
+      'COLD IS A NOMINATION, NOT A VERDICT.',
+    ],
   };
   const outPath = path.join(destRoot, 'kw-site-execution.json');
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
 
   console.log('SITE EXECUTION — static=' + report.static_sites
     + '  instrumented=' + report.instrumented
-    + '  could_not_instrument=' + report.skipped
-    + '  HOT=' + report.hot_sites + '  COLD=' + report.cold_sites);
+    + '  excluded=' + report.excluded);
+  console.log('  FOUR STATES: executed=' + report.executed
+    + '  reachable_not_executed=' + report.reachable_not_executed
+    + '  unreachable_by_drivers=' + report.unreachable_by_drivers
+    + '  excluded=' + report.excluded);
   console.log('  distinct tokens: static=' + report.distinct_tokens_static
     + '  ever-executed=' + report.distinct_tokens_hot
     + '   [underscore-bearing subset=' + mine + ', cross-checked against the census]');
+  if (reachKnown) {
+    console.log('  REACHABILITY (Phase R, pristine bytes): ' + report.files_reached + '/'
+      + files.length + ' files loaded by some driver; ' + unreachedFiles.length + ' never loaded');
+    for (const f of unreachedFiles) console.log('    unreached file: ' + f);
+  } else {
+    console.log('  REACHABILITY NOT MEASURED (--no-reach): every cold site is reported as '
+      + 'unreachable, which OVERSTATES the coverage gap. Re-run without --no-reach to split it.');
+  }
 
   // THE DENOMINATOR AND THE UNREACHED SET TRAVEL WITH THE RESULT, ALWAYS. A bare list of cold
   // sites without the population it was measured against is the shape that has misled this
   // campaign repeatedly, so neither is a footnote and neither can be omitted by a quiet run.
-  const killed = driverStatus.filter(d => d.signal);
-  const nonZero = driverStatus.filter(d => !d.signal && d.exit !== 0);
-  console.log('  DRIVERS: ' + driverStatus.length + ' run, ' + nonZero.length
-    + ' non-zero exit, ' + killed.length + ' KILLED');
-  for (const d of killed) {
+  console.log('  DRIVERS: declared=' + drivers.length + '  ran(R)=' + reachStatus.length
+    + '  ran(X)=' + driverStatus.length
+    + '  |  ok=' + driverLedger.filter(d => d.classification === 'ok').length
+    + '  confounded_by_probe=' + confounded.length
+    + '  red_independently=' + redAnyway.length
+    + '  KILLED=' + killedD.length);
+  for (const d of killedD) {
     console.log('    !! KILLED ' + d.driver + ' signal=' + d.signal
       + ' — evidence of NOTHING in either direction; this readout is INCOMPLETE until it is re-run');
   }
-  for (const d of nonZero) console.log('    non-zero: ' + d.driver + ' exit=' + d.exit);
+  for (const d of confounded) {
+    console.log('    confounded_by_probe: ' + d.driver + ' (pristine exit=0, instrumented exit='
+      + d.exit_instrumented + ') — a byte-identity check failing on the rewrite, NOT a finding');
+  }
+  for (const d of redAnyway) {
+    console.log('    red_independently: ' + d.driver + ' (pristine exit=' + d.exit_pristine
+      + ', instrumented exit=' + d.exit_instrumented + ') — red without the probe too');
+  }
   console.log('  COULD NOT INSTRUMENT: ' + skipped.length
     + (skipped.length ? ' — listed in the report; these sites are NOT part of the cold set and'
       + ' were never observed either way' : ' (every scanned site carries a probe)'));
