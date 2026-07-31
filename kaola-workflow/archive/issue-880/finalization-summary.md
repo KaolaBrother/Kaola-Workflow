@@ -78,4 +78,4 @@ surface drift, plus a kernel-load-failure diagnostic that reports a load error a
 Also standing: 20 of the 55 surviving kernel exports have no production consumer — tests and contract
 validators are their only readers. Measured, not acted on.
 
-## Status: READY FOR FINAL GIT GATE
+## Status: ARCHIVED AFTER FINAL GIT GATE
