@@ -66,23 +66,6 @@ function normalizeTier(token) {
   return null;                                          // out-of-vocab → null
 }
 
-// #610: the Claude-executor mapping made mechanical (not prose) — a neutral tier resolves to the
-// Agent(model=…) alias the Claude runtime dispatches with (`reasoning`→`opus`, `standard`→`sonnet`).
-// Legacy aliases pass through the normalizer, so a frozen-plan `opus`/`sonnet` cell yields the same
-// Claude model as before. No tier / out-of-vocab → null (role-default resolution). Pure — ×4 anchor.
-const TIER_MODEL_CLAUDE = Object.freeze({ reasoning: 'opus', standard: 'sonnet' });
-function dispatchModelClaude(tier) {
-  const t = normalizeTier(tier);
-  return t ? TIER_MODEL_CLAUDE[t] : null;
-}
-
-// Codex child strength is inherited from the current parent session, never selected by this tier.
-const TIER_MODEL_CODEX = Object.freeze({ reasoning: null, standard: null });
-function dispatchModelCodex(tier) {
-  const t = normalizeTier(tier);
-  return t ? TIER_MODEL_CODEX[t] : null;
-}
-
 // Codex role profile policy. Every known profile omits runtime-strength keys and inherits the parent
 // pair. The historical standard/reasoning classes remain declarative metadata and wait defaults.
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
@@ -103,19 +86,6 @@ const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'adversarial-verifier',
   'synthesizer',
 ]);
-function codexProfilePolicy(role, model) {
-  const name = String(role == null ? '' : role).trim();
-  const pinnedStandard = CODEX_PINNED_STANDARD_ROLES.indexOf(name) !== -1;
-  const pinnedReasoning = CODEX_PINNED_REASONING_ROLES.indexOf(name) !== -1;
-  const mode = (pinnedStandard || pinnedReasoning) ? 'known' : null;
-  const tier = pinnedStandard ? 'standard' : (pinnedReasoning ? 'reasoning' : null);
-  return {
-    codex_profile_mode: mode === null ? null : 'inherit',
-    codex_profile_tier: tier,
-    codex_profile_compatible: mode !== null,
-  };
-}
-
 // #405 (#382 deferred half): the node-dispatchable roles for which a `model: opus` tier earns a
 // dedicated Codex `<role>-max` xhigh effort-variant profile. Derived from the #382 planner rubric
 // (agents/workflow-planner.md: assign opus when output quality is bounded by *reasoning depth* —
@@ -144,39 +114,6 @@ function dispatchEffort(model, sessionProof) {
     codex_reasoning_effort: null,
     codex_reasoning_effort_source: 'role_default',
   };
-}
-
-// The Codex join protocol's per-node WAIT BUDGET (minutes) — the planner's ESTIMATE of how long the
-// work takes, NOT a floor the orchestrator is held behind. A `running` agent interrupted well inside
-// its budget is usually just being interrupted; escalation after the budget expires is an ORDER
-// (ask → interrupt → reclaim) and nothing more, its rungs are not gated on each other, and no fixed
-// grace window is prescribed — how long to wait between them is the orchestrator's judgement.
-// Derived from the node's effort tier, the SAME normalized tier `dispatchEffort` reads, so a legacy
-// `opus`/`sonnet` cell resolves to the same budget as its neutral token. Reasoning-tier nodes get the
-// larger budget (deeper work runs longer), standard the smaller; an absent/blank/out-of-vocab tier
-// resolves to a CONCRETE role-default (never null) so every dispatch card carries a number. Values sit
-// ABOVE the observed 10–30-minute runtime of substantive role nodes so the estimate replaces the
-// improvised 2–7-minute impatience ceiling. A validated optional per-node planner override may extend
-// (never shorten) this tier-derived value through the canonical cap — that lower bound is the one
-// sense in which "floor" still applies here, and it bounds the OVERRIDE, never the interrupt.
-const WAIT_BUDGET_MINUTES = Object.freeze({ reasoning: 40, standard: 20 });
-const WAIT_BUDGET_MINUTES_DEFAULT = 20; // no tier resolves → concrete role-default (never null)
-const WAIT_BUDGET_MINUTES_CAP = 720;
-function waitBudgetFloor(model) {
-  const tier = normalizeTier(model);
-  return tier === 'reasoning' ? WAIT_BUDGET_MINUTES.reasoning
-    : tier === 'standard' ? WAIT_BUDGET_MINUTES.standard
-      : WAIT_BUDGET_MINUTES_DEFAULT;
-}
-function waitBudgetMinutes(model) {
-  const tier = normalizeTier(model);
-  if (tier === 'reasoning') {
-    return { wait_budget_minutes: WAIT_BUDGET_MINUTES.reasoning, wait_budget_source: 'planner_model' };
-  }
-  if (tier === 'standard') {
-    return { wait_budget_minutes: WAIT_BUDGET_MINUTES.standard, wait_budget_source: 'planner_model' };
-  }
-  return { wait_budget_minutes: WAIT_BUDGET_MINUTES_DEFAULT, wait_budget_source: 'role_default' };
 }
 
 // #382-opencode (#544 contract-keyed): the GENERAL tier→effort mapping for provider-open
@@ -254,66 +191,6 @@ function mapTier(tier, providerId) {
   const profile = effortForProvider(providerId);
   if (!profile) return null;
   return profile[rank];
-}
-
-// #537 Surface 2: PURE provider resolver for the opencode dispatch twin. buildDispatch calls
-// dispatchEffortOpencode(model, ctx.opencode_provider), but NO runtime caller ever populates
-// ctx.opencode_provider — so a declared tier silently resolved to role_default. The active
-// opencode provider is supplied here from KAOLA_OPENCODE_INHERIT_MODEL (the established
-// inherited-model env, "provider/model" form — the same value sync-opencode-edition.js's
-// detectInheritModel()/parseModelProvider() consume). Splitting on the first '/' yields the
-// bare provider id mapTier()/effortForProvider() expect. env defaults to process.env so the
-// real runtime 2-arg call resolves; tests pass a controlled env to stay hermetic. null/'' →
-// null (so the UNSET case stays role_default and claude/codex are behavior-inert — they
-// consume dispatchEffort/the codex twin, never this function). No fs / no forge-CLI / no
-// sibling-path: the file's purity contract is intact.
-const OPENCODE_PROVIDER_ENV = 'KAOLA_OPENCODE_INHERIT_MODEL';
-function resolveOpencodeProvider(env) {
-  const src = env || process.env;
-  const raw = String((src && src[OPENCODE_PROVIDER_ENV]) || '').trim();
-  if (!raw) return null;
-  const i = raw.indexOf('/');
-  return i <= 0 ? raw : raw.slice(0, i);
-}
-
-// The opencode dispatch twin of dispatchEffort(): emits the resolved opencode variant for
-// a node's model tier under a provider, so the executor/plan-run surface carries the
-// intended per-node effort. null tier / unknown provider → role_default (the agent's
-// configured variant wins), mirroring dispatchEffort's absent-tier branch. When no provider
-// is passed, the active provider is PURE-resolved from KAOLA_OPENCODE_INHERIT_MODEL (see
-// resolveOpencodeProvider) — the gap closed by #537 Surface 2: the runtime caller never
-// populated ctx.opencode_provider, so a declared tier now still reaches a concrete variant.
-// #610: mapTier() normalizes, so a legacy `opus`/`sonnet` cell resolves to the same variant.
-function dispatchEffortOpencode(model, providerId, env) {
-  let pid = providerId;
-  if (pid == null || String(pid).trim() === '') pid = resolveOpencodeProvider(env);
-  const mapped = mapTier(model, pid);
-  return mapped
-    ? { opencode_variant: mapped.variant, opencode_variant_source: 'planner_model' }
-    : { opencode_variant: null, opencode_variant_source: 'role_default' };
-}
-
-// #609/#610: the runtime-native DISPLAY for a per-node tier, so a payload echo of the raw tier
-// (e.g. handoff `first_node.model`, the dispatch descriptor) reads natively on every runtime instead
-// of surfacing a Claude noun ("sonnet") on Codex/opencode. ADDITIVE — the raw tier stays in the
-// payload; consumers attach this alongside it. Each runtime reads its own key:
-//   claude   — the Agent(model=…) alias (dispatchModelClaude: reasoning→"opus" / standard→"sonnet"),
-//   codex    — "<model> (<effort> reasoning effort)" (the pair expected from the standalone profile),
-//   opencode — "<rank> effort variant" (TIER_RANK: reasoning→"top …" / standard→"second …",
-//              provider-agnostic — the Level-1 rank of the opencode mapping, always available).
-//   kimi     — same inherit display as codex (sub-agents inherit the session model; the tier is
-//              metadata only, never mapped to a variant/effort).
-// A legacy alias normalizes first (a frozen-plan `opus` cell displays identically to `reasoning`).
-// No tier / out-of-vocab → null (nothing to display natively; the raw `model: null` inherit echo stands).
-function modelDisplay(tier) {
-  const t = normalizeTier(tier);
-  if (!t) return null;
-  return {
-    claude:   TIER_MODEL_CLAUDE[t],
-    codex:    'parent session (' + t + ' tier metadata)',
-    opencode: TIER_RANK[t] + ' effort variant',
-    kimi:     'parent session (' + t + ' tier metadata)',
-  };
 }
 
 // Claim identity. Forge-neutral and side-effect-free so every edition hashes the same
@@ -491,19 +368,6 @@ function writeClaimIdentityBlock(content, values) {
 // honest than either a bare category or a bare number.
 const LANE_STALENESS_MS = 86400000; // 24 hours in milliseconds
 
-// The provenance record for the guess above — what it is, where it came from, and what would
-// replace it. Exported so a consumer emits the SAME description rather than paraphrasing it into a
-// second, drifting one; `source` is what tells a reader the number was a shipped default and not a
-// measurement of this run.
-const LANE_STALENESS_PROVENANCE = Object.freeze({
-  threshold_ms: LANE_STALENESS_MS,
-  source: 'shipped_default',
-  kind: 'heuristic',
-  basis: 'a run completes well within a day, so an untouched 24h-old claim is very likely abandoned',
-  supersedable_by: 'a same-host holder probe (process.kill(pid, 0)), which is a measurement rather '
-    + 'than an age guess and is what the scheduler-lock path already uses',
-});
-
 // The shared, cross-edition intersection of workflow-state.md fields that every
 // active-folders parser (canonical + all forge ports) reads and surfaces on the
 // returned active-folder item. Using this constant as the single source of truth
@@ -577,7 +441,6 @@ const CURATED_ROOT_PATHS = Object.freeze([
   'Gemfile', 'Gemfile.lock', 'pom.xml', 'build.gradle', 'composer.json', 'composer.lock',
   'secrets.yaml', 'secrets.yml', 'tsconfig.json',
 ]);
-const CURATED_ROOT_SET = new Set(CURATED_ROOT_PATHS);
 // Case-insensitive lookup: lowercased name -> canonical name. On case-insensitive filesystems
 // (macOS/Windows) `makefile`/`Makefile`, `dockerfile`/`Dockerfile`, `gemfile`/`Gemfile` are the SAME
 // physical file (v3.21.0). Matching folds case and maps back to the canonical name so the candidate
@@ -611,14 +474,6 @@ function extractCuratedRootPaths(text) {
   }
   return found;
 }
-// Case-insensitive membership test, so the claimed side can fold STRUCTURED declared paths directly (no
-// lossy re-tokenize of a stringified write-set blob) while reusing the one curated vocabulary.
-function isCuratedRoot(p) { return CURATED_ROOT_LC.has(String(p || '').toLowerCase()); }
-// Canonical curated name for a path (case-folded), or null. The structured-claimed fold MUST store the
-// CANONICAL name (not the raw declared token) so it intersects the canonical candidate/prose sets —
-// otherwise a non-canonical-case declaration (e.g. a plan writing `dockerfile`) never matches a
-// canonical candidate `Dockerfile` and the curated overlap fails open. Mirrors extractCuratedRootPaths.
-function canonicalCuratedRoot(p) { return CURATED_ROOT_LC.get(String(p || '').toLowerCase()) || null; }
 
 // #579: parked-lane selectivity — applied ON TOP of each clean-check site's existing untracked
 // posture (claim.js treeDirty, sink-merge assertCleanWorktree/assertWorktreeClean). Byte-identical
@@ -772,74 +627,8 @@ function resolveMainRoot(root) {
   try { return mainRootFromCoord(getCoordRoot(r)); } catch (_) { return r; }
 }
 
-// ---------------------------------------------------------------------------
-// The emit / refuse / answer protocol — the shared envelope + framed-output constructor.
-//
-// emit(obj) writes EXACTLY ONE compact JSON line LAST (never pretty-printed): a caller
-// recovering the payload with a last-valid-JSON-line parser always round-trips it, even if the
-// script logged a warning/debug line before its result. A multi-line pretty JSON would NOT parse
-// line-by-line, so emit is deliberately single-line. The default stream is stdout (refusals belong
-// on stdout too, so a non-zero exit still carries a machine-readable reason); pass
-// { stream: process.stderr } only for genuinely out-of-band logs.
-//
-// refuse(reason, extra) and answer(reason, extra) build the two envelopes every script shares:
-// the same token and payload, differing only in `result` and, downstream of it, the exit code.
-// They are PLAIN CONSTRUCTORS. The kernel refusal registry that used to stamp a family, a locus
-// and a typed route onto every envelope is gone with the machinery it routed: nothing in the
-// mission-list design refuses at a door, so there is no route to resolve and no registry to
-// resolve it against. What survives is the measurement — the token, the payload, and the
-// `mutation_performed` bit a caller used to have to infer from the exit code.
-//
-// Per-subcommand payloads may carry extra fields (additive); pass backward-compat keys (e.g.
-// `status`, `errors`) via `extra` so existing consumers keep working.
-// ---------------------------------------------------------------------------
-function emit(obj, opts) {
-  const stream = (opts && opts.stream) || process.stdout;
-  stream.write(JSON.stringify(obj) + '\n');
-}
-
 function refuse(reason, extra) {
   return Object.assign({ result: 'refuse', reason: reason }, extra || {});
-}
-
-function answer(reason, extra) {
-  return Object.assign({ result: 'answer', reason: reason, mutation_performed: false }, extra || {});
-}
-
-
-// ---------------------------------------------------------------------------
-// deriveSinkProgressFromState — the ONE derivation of "has the sink taken its first irreversible
-// step?", shared by the adaptive node's sink-progress probe and the plan validator's finalize
-// deviation route so the two can never disagree about whether the lane is open. Resolves the run's
-// branch from `workflow-state.md` (NEVER `git rev-parse HEAD`: the sink runs main-session-direct
-// from the MAIN root, so HEAD would make the predicate inert), then treats a PUSHED branch —
-// `origin/<branch>` exists — as the first irreversible step.
-//
-// THREE-VALUED and FAIL-CLOSED: only 'pristine' admits. A missing origin ref is the pristine
-// not-yet-pushed signal; ANY other failure (no branch pointer, git error, non-repo) collapses to
-// 'unknown', because the dangerous direction is a false 'pristine' after a push.
-// ---------------------------------------------------------------------------
-function deriveSinkProgressFromState(io) {
-  const readFile = io && io.readFile;
-  if (typeof readFile !== 'function') return { state: 'unknown', evidence: 'no readFile seam' };
-  let branch = null;
-  try {
-    const st = readFile(io.statePath);
-    const m = /^branch:\s*(\S+)\s*$/m.exec(String(st || ''));
-    if (m) branch = m[1];
-  } catch (_) { branch = null; }
-  if (!branch) return { state: 'unknown', evidence: 'no branch: pointer in workflow-state.md (cannot derive sink progress)' };
-  const root = (io && io.repoRoot) || process.cwd();
-  const { execFileSync } = require('child_process');
-  try {
-    const out = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/' + branch],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    if (String(out).trim()) return { state: 'started', evidence: 'origin/' + branch + ' exists — the sink has pushed (irreversible)' };
-    return { state: 'pristine', evidence: 'origin/' + branch + ' unresolved — the sink has not pushed' };
-  } catch (e) {
-    if (e && e.status === 1) return { state: 'pristine', evidence: 'no origin/' + branch + ' — the sink has not pushed' };
-    return { state: 'unknown', evidence: 'git rev-parse for origin/' + branch + ' failed (status ' + (e && e.status) + ') — cannot derive sink progress' };
-  }
 }
 
 // ===========================================================================
@@ -1135,12 +924,6 @@ function classifyDurableArtifact(relPath) {
     if (hit) return { path: rel, ruling, record, writer, note, matcher: String(matcher) };
   }
   return { path: rel, ruling: 'unclassified', record: null, writer: null, note: null, matcher: null };
-}
-
-// isKernelRecordPath — the atomicity predicate. TRUE exactly for the durable artifacts ruled
-// `record`, i.e. the ones whose writes must be atomic and whose loss breaks resume-from-durable-state.
-function isKernelRecordPath(relPath) {
-  return classifyDurableArtifact(relPath).ruling === 'record';
 }
 
 // Folder names directly under `kaola-workflow/` (or under `kaola-workflow/archive/`) that are NOT
@@ -1969,7 +1752,6 @@ function parseGoal(content) {
 
 module.exports = {
   LANE_STALENESS_MS,
-  LANE_STALENESS_PROVENANCE,
   SHARED_STATE_FIELDS,
   PARKED_LANE_PREFIXES,
   parsePorcelainPaths,
@@ -1981,67 +1763,21 @@ module.exports = {
   NEXT_COMMAND,
   NEXT_SKILL,
   PLAN_FILE,
-  NODE_MODEL_TIERS,
-  TIER_ALIASES,
-  normalizeTier,
-  TIER_MODEL_CLAUDE,
-  dispatchModelClaude,
-  TIER_MODEL_CODEX,
-  dispatchModelCodex,
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
-  codexProfilePolicy,
-  modelDisplay,
-  TIER_RANK,
-  CONTRACT_EFFORT_TABLE,
   contractForProvider,
   dispatchEffort,
-  WAIT_BUDGET_MINUTES,
-  WAIT_BUDGET_MINUTES_DEFAULT,
-  WAIT_BUDGET_MINUTES_CAP,
-  waitBudgetFloor,
-  waitBudgetMinutes,
   effortForProvider,
   mapTier,
-  dispatchEffortOpencode,
-  CLAIM_IDENTITY_FIELD_ORDER,
   isPlainObject,
   canonicalJson,
   sha256Hex,
   sha256Canonical,
-  // #777 — ledger tamper-evidence hash chain
-  normalizeIssueNumbers,
   buildClaimIdentity,
-  parseStateFields,
   writeClaimIdentityBlock,
-  parseValidatedCandidateHash,
-  parseRecordedVerdict,
-  // #761: the OPTIONAL expansion_id binding on a review-journal attempt (a re-review names WHICH
-  // expansion record it reviewed) + its fail-closed field validator — exported for direct pins.
-  canonicalJson,
-  sha256Hex,
-  CURATED_ROOT_PATHS,
   extractCuratedRootPaths,
-  isCuratedRoot,
-  canonicalCuratedRoot,
   writeFileAtomicReplace,
-  emit,
   refuse,
-  answer,
-  // --- ADR 0013 Amendment A1 / M3: the ONE kernel refusal registry ---
-  // The cell-keyed WHY slot: hint = FACT(payload) + WHY(cell) + ROUTE(payload). REFUSAL_WHY is the
-  // ONE hand-authored table (O(cells), not O(conditions)); everything else here is derived.
-  // The ONE actionable-result predicate. Exported so the adaptive-node aggregator's second
-  // stamping seam tests the same rule rather than keeping a third copy of it.
-  // The discharge owner projection (.cache/epoch-projections/): the ONE entry shape, its digest
-  // verification, the append-order fold, and the route-owner canonicalization both journal route
-  // validators apply — the cross-edition anchor for the discharge commitment-point translation.
-  // The sink-owned final-fix register (the finalize deviation route's ONE commitment point): the
-  // filename + verb constants, the digest binding, and the fail-closed verifier BOTH the writer
-  // (adaptive-node) and the finalize attribution sweep (plan-validator) prove the file through.
-  // The finalize-context predicates the deviation routes key on: one derivation of "has the sink
-  // pushed?" and one reading of the unique terminal sink row.
-  deriveSinkProgressFromState,
   // ADR 0013 M2 — the outcome recorder's PURE half plus the parent-owned sidecar set. The set is
   // the ONE list both the sidecar writers and the leg capture sweep read; the builder is the one
   // record shape every edition emits.
@@ -2051,7 +1787,6 @@ module.exports = {
   PARENT_OWNED_SIDECARS,
   isParentOwnedSidecar,
   OUTCOME_LOG_SCHEMA_VERSION,
-  OUTCOME_RESULTS,
   OUTCOME_CLASSIFICATIONS,
   buildOutcomeRecord,
   appendOutcomeRecord,
@@ -2062,28 +1797,20 @@ module.exports = {
   KERNEL_RECORDS,
   KERNEL_ARTIFACT_REGISTRY,
   classifyDurableArtifact,
-  isKernelRecordPath,
   projectRelativeArtifactPath,
   // The validation surface. ONE band constant and ONE hash helper, read by BOTH the producer
   // (run-chains) and the gates (finalize, release) — a second copy of either is a second answer.
   VALIDATION_TEST_CONSUMES,
-  SELF_HOST_TEST_CONSUMED,
   isBookkeepingPath,
   testConsumes,
   isValidationInvisible,
-  detectSelfHostNpm,
-  classifyRepoKind,
   resolveFinalizeCheckRoot,
   computeCodeTreeHash,
-  headAdvanceIsValidationInvisible,
-  attachChainsStaleDiagnostics,
   evaluateChainReceipt,
   evaluateReleaseReceipt,
-  evaluateReleasePrepCarryOver,
   CODEX_MANIFEST_RELPATHS,
   CLAUDE_MANIFEST_RELPATHS,
   RELEASE_FILES,
-  RELEASE_VERSIONED_JSON_FILES,
   changedPathsSinceBase,
   MISSION_LIST_FILE,
   parseGoal,
