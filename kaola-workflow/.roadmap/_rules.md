@@ -1,69 +1,74 @@
-## The design — read `docs/decisions/0016-the-substrate-bookkeeping-over-gates.md` first
+## The design — read `docs/decisions/0017-the-mission-list.md` first
 
-**The derivation is finished and the owner has ruled.** The campaign is no longer "derive the
-gates"; it is **execute ADR 0016**. Everything below is settled unless an issue says otherwise.
+**The derivation is finished and the owner has ruled.** The work is now **build ADR 0017**.
+ADR 0016 is its predecessor and still worth reading, but where the two disagree, 0017 wins.
 
 ### The premise
 
 The workflow was built when agents were weak orchestrators, so it encoded orchestration **as
-constraint**. That premise expired. An agent today plans, decomposes, dispatches, verifies and
-self-corrects unaided. **What remains is durable memory across discontinuity, plus tools that
-extend reach.** Every gate justified by *"the agent might get this wrong"* is rent against a
-capability that already exists.
+constraint**. That premise expired, and 0017 acts on the consequence 0016 stopped short of: if the
+agent orchestrates itself, the plan need not be a machine-readable schedule.
 
-### The hinge
+**The existence proof is observed, not argued.** A bare session — no framework, no plan, no gates, no
+bookkeeping, given only the main-orchestrator role plus a goal — decomposed the work, ran six
+concurrent subagents across disjoint files with no conflicts, found real defects, and did not drift.
 
-Adaptation requires **observability**. A *missing* record leaves a successor correctly uncertain,
-which it solves by going and getting the fact. A **complete, coherent, false** record leaves it no
-move. **The bookkeeping's obligation is HONESTY, not completeness.**
+### What the design is
+
+**One file per run. Four fields per item — `item` / `status` / `dispatched` / `result` — written at
+three moments** (created, dispatched, closed), plus a header line carrying the goal. No script is
+required; a file convention suffices. An item is a mission in one line of prose: hints and facts,
+never a prescription. Tools are what the orchestrator already reaches for — subagents, worktrees —
+offered and declinable.
 
 ### The governing rule for every change
 
-> **Delete the verdict. Keep the measurement.**
+> **Derive ADDITIVELY. Add only what an observed failure demands. Silence is an answer.**
 
-Deleting a gate is cheap and almost always right. Deleting the computation underneath it can be
-catastrophic — the harm becomes *invisible* rather than merely unenforced. Measured instance: all
-three derivations cut the post-dominance gate reasoning "the agent would hit that at runtime." It
-would not. A missing reviewer over a code-producing node produces **a merge**.
+Subtractive derivation asks *"may I remove this?"*, and there is always an answer that keeps it —
+three separate passes of the 0017 discussion preserved machinery under *"harder to reason about"*
+dressed as *"permits irreversible harm"*. Additive derivation asks *"what forced this to exist?"*
 
-### Three tests, all of which must pass, before anything may refuse
+0016's **delete the verdict, keep the measurement** still governs anything that survives.
 
-1. **Reach** — the harm persists for an agent that uses every tool correctly.
-2. **Locus** — the harm sits entirely in a *future reader's* epistemic state.
-3. **Witness** — proceeding would destroy the evidence of the finding itself.
+### Nothing refuses
 
-**Consequence:** when a refusal becomes a report, the report must durably capture what the refusal
-was freezing. Otherwise it is a deletion wearing a conversion's name.
+The refusal count is **zero**. R1 was never armable, the consent valve is the orchestrator asking the
+user, and R3 is now a report.
 
-### The three refusals — everything else is a tool or an obligation
+**Concurrency carries no machinery at all** — no antichain sweep, no disjointness check, no
+serializer taxonomy, no evidence line, no caps. Disjointness is the agent's call, with no inspection.
 
-- **R1** unrecordable irreversible effect (not armable until a fallback record location exists)
-- **R2** the run clearing a human fence it did not get answered (#865)
-- **R3** publication to mainline without a content-bound witness
+### Owner rulings — do not re-litigate
 
-### Owner rulings, 2026-07-29 — do not re-litigate
+- **The sink reports; the orchestrator owns the outcome.** *Supersedes the 2026-07-29 "R3 survives
+  permanently" ruling.* The sink says what it found; the orchestrator gets the branch right — correct
+  merge, resynchronize, or **file a PR** — and cleans up after. The change is not refuse-versus-proceed;
+  it is **who is accountable for the branch ending up right.**
+- **Any form of regulation or structure is limiting.** A mechanism justified by *"the agent might get
+  this wrong"* argues against the design's premise rather than for a gate.
+- **Do not over-complicate. There is already too much in this project.**
+- **No run-cost ledger is built.** *(Stands from 2026-07-29.)* Residual risk accepted: if it recurs,
+  it recurs silently.
 
-- **The system keeps merging to mainline itself.** R3 therefore survives permanently. It would have
-  dissolved into a tool under "open a PR and let a human merge"; full autonomy was chosen.
-- **A consent fence never expires.** Silence is never consent. What changes is scope: park the
-  *dependent subgraph*, not the whole run.
-- **No run-cost ledger is built.** Both long runs were fixed at the cause, not by a bound. Residual
-  risk accepted: if it recurs, it recurs silently.
+### Watch-list discipline
 
-### Working rules
+Mechanisms derived for failure classes **never observed** in this methodology are recorded, not
+built — see #878. Each row names the observation that would arm it. **Do not build one speculatively.**
+
+### Working rules that survive
 
 - **The unit of progress is a MECHANISM removed. Never a test removed.** Tests fall out with the
-  mechanism. An issue whose deliverable is an assertion or duplication count is not campaign work.
+  mechanism.
 - **A tool the agent is forced to use is a gate wearing a tool's name.** Test: can the agent decline
   it and still finish?
 - **Correctness is never traded for the count.** A defect found while cutting gets fixed even when
   the fix adds code.
 - **Premises get measured before they get built on.** A premise that collapses is the result, not a
-  setback.
-- **Grade against driven behaviour, never the condition census.** The census includes a literal only
-  if it contains an underscore — measured, it sees 747 of 786 tokens and 1,413 of 1,526 sites, and
-  what it drops is disproportionately the refusal vocabulary. It is a sound ratchet and an index of
-  emission sites. It is not a population.
-- **Convergence is weaker evidence than it looks.** Two of three blind derivations re-derived
-  shipped machinery while calling it invisible to the framing that shipped it, and all three
-  declared contamination from `CLAUDE.md` being auto-injected. **Prefer the disagreements.**
+  setback — and this cuts both ways. Two capability claims in the corpus turned out to be untraced:
+  #854 row 9's *"every traced run silently serialized"* is a **tooling** defect (`open-next`
+  single-opened a frontier the planner had authored as parallel), and 0016's *"a missing reviewer
+  produces a merge"* cites no trace at all.
+- **Grade against driven behaviour, never the condition census.** It is a sound ratchet and an index
+  of emission sites. It is not a population.
+- **Convergence is weaker evidence than it looks. Prefer the disagreements.**

@@ -6,7 +6,8 @@
   the role vocabulary, declared write sets, post-dominance gates, the disjointness proof, the
   serializer taxonomy, the freeze chain and the re-plan epoch machinery. **Does not supersede** ADR
   0016, which it completes, nor the four durable records, which survive as fields in one file.
-- **Open, deliberately:** whether R3 ports into this build. See *The one question left open*.
+- **Resolves:** ADR 0016's standing *"keep merging; R3 survives permanently"* ruling. R3 becomes a
+  report; the orchestrator owns the sink's outcome. **The refusal count reaches zero.**
 
 ## What ADR 0016 started and this finishes
 
@@ -128,7 +129,7 @@ is a lookup rather than a campaign.
 | stale / replayed / cross-copied evidence | a result that does not correspond to the work claimed | provenance stamps: open, baseline ref, author, time |
 | two honest live writers on one file | a successor resuming beside a crashed-but-alive predecessor | CAS with the conflict returned as data; lease with liveness probe |
 | co-open items sharing a working tree | per-item results that cannot be told apart | label the blend as a blend — a joint result, honestly named |
-| unwitnessed publication | content on mainline no record describes | R3, or its rescue-ref dissolution |
+| an unrecoverable merge | a sink outcome the orchestrator could not repair after the fact | a rescue ref per merge, recording pre-merge state |
 | a value call taken by the agent | an irreversible choice a human should have made | the consent valve |
 
 The consent valve deserves one note. In the observed configuration it was not absent — it was the
@@ -136,22 +137,34 @@ orchestrator **asking the user**, which happened and worked. A durable valve is 
 question must outlive the process that asked it; until that is observed, conversation is the
 mechanism.
 
-## The one question left open
+## R3: the sink reports, and the orchestrator owns the outcome
 
-**Does R3 port into this build?** *"Keep merging; R3 survives permanently"* is the standing ruling in
-ADR 0016 (2026-07-29), and it predates this reset. The zero-point build has no sink door to inherit
-it, and nothing in the observed record failed there.
+ADR 0016's standing ruling was *"keep merging; R3 survives permanently"* — a refusal at the
+publication door. **That does not port.** Owner ruling, 2026-07-31:
 
-Two coherent options, and only two:
+> "It's not refusing. We should tell the agent that the sinking is somehow problematic if anything
+> occurs, and let the main orchestrator solve the syncing and make sure they're correctly merged,
+> resynchronized, or a PR filed. And clean up after the sink."
 
-- **A — R3 stays a refusal.** Publication moves content outside the agent's reversible workspace onto
-  a mainline shared with siblings who did not consent to this run's risk tolerance, and *"produce a
-  witness that does not exist"* is not something a tool can do after the fact.
-- **B′ — report plus a rescue ref per merge.** Recording pre-merge state makes the act reversible,
-  which dissolves R3 by removing its admission condition rather than by deleting it.
+So the sink is the last mechanism to lose its verdict, and it loses it the same way every other one
+did: **the measurement stays, the verdict goes, and the agent acts on what it is told.** The sink
+reports what it found — content on the branch that no record describes, a witness bound to different
+bytes, a merge that did not fast-forward — and the orchestrator resolves it.
 
-**B without the rescue ref is not on the menu:** it lands unwitnessed content irreversibly on parties
-who did not consent, which is a value call belonging to a human.
+**This is not "merge anyway and report."** Resolution is the orchestrator's *responsibility*, and it
+owns the full outcome: get the merge correct, resynchronize, or **file a PR instead** — a PR being a
+perfectly good resolution precisely because it stages content for review rather than publishing it —
+and then clean up after the sink. The distinction that matters is not refuse-versus-proceed; it is
+**who is accountable for the branch ending up right.** Under a refusal the answer was "nobody, the
+door said no"; here it is the orchestrator, which is the only party with the context to fix it.
+
+No rescue ref is mandated. It remains available as a tool for an orchestrator that wants pre-merge
+state recorded, and it sits on the watch list against the day an unrecoverable merge is actually
+observed.
+
+**Consequence for the refusal count: it reaches zero.** The consent valve is conversation with the
+user, R1 was never armable for want of a fallback record location, and R3 is now a report. Nothing in
+the mission-list design refuses.
 
 ## Two evidentiary corrections, kept because other work leans on them
 
