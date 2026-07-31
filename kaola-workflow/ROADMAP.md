@@ -8,7 +8,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 | #877 | Build the mission list: four fields where the DAG was (ADR 0017) | open | — | Step 1 of 6 — write the file format and the four fields (docs/decisions/0017-the-mission-list.md § Build sequence). Nothing is deleted until step 2 observes a real run. |
-| #878 | Watch list: derived-but-never-observed mechanisms — do not build speculatively (ADR 0017) | open | — | REFERENCE ONLY — do not schedule. Consult when one of its failure classes is observed. |
+| #878 | Watch list: derived-but-never-observed mechanisms — do not build speculatively (ADR 0017) | open | — | REFERENCE ONLY — do not schedule. Consult when one of its failure classes is observed. Two rows now have their sizing in git history rather than in live code: the project scheduler lock (acquireProjectLock / probeLockLiveness, the 'two honest live writers' row) and the durable consent valve (the halt marker, its two journals and consentScopeDigest, the 'value call taken by the agent' row). Both were deleted with the node executor because what forced them to exist was the running-set scheduler and a plan-scoped halt; recover them from the commit before the ADR 0017 build if either class is ever observed. |
 
 ## Rules
 

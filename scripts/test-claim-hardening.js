@@ -3845,6 +3845,175 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 }
 
+
+// --- the MISMATCHED-only arm of the archive-completeness gate ------------------------------------
+//
+// verifyArchiveComplete has two independent failure halves. `missing[]` is the one every existing
+// scenario drives: the copy DROPPED a file the source held. `mismatched[]` is the other: the file
+// reached the destination but is not the same thing — different bytes, a different mode, or an
+// entry the walk could not treat as a plain file. That half had no scenario, which is how it stayed
+// open long enough for a guard keyed on `missing.length > 0` to report success over a bad archive.
+//
+// WHERE THIS IS REACHABLE, measured rather than assumed. The copy+verify path runs only on the
+// LINKED-RUN branch of archiveProjectDir (mainRoot !== linkedRoot); the in-place branch renames the
+// folder, so no copy exists to be unfaithful. Instrumenting `isLinkedRun` across four suites: 20
+// linked-run archives, every one of them entered from cmdFinalize inside a worktree, and ZERO from
+// the sink — the sink resolves main itself and passes it, so its own call always renames. That is
+// why this scenario drives `claim.js finalize`, not the sink.
+//
+// The fixture is the linked-worktree shape (a real `git worktree add`), because the seam does not
+// exist without it. The mismatch vehicle is a SYMLINK inside the live .cache: copyDir follows it and
+// writes a regular file, so the destination holds the right bytes under the right name while the
+// source entry is not a plain file — `missing` stays empty and `mismatched` names the entry. That is
+// exactly the shape the old guard waved through.
+//
+// NOT COVERED, because it is unreachable here: the `{missing:[], mismatched:['<root>']}` shape from
+// a symlinked run-folder ROOT. Measured — cmdFinalize refuses earlier, at the workflow_state
+// authority gate, with `finalize_gate_unverified` / `archive_authority_invalid_type`, so
+// verifyArchiveComplete never sees it.
+{
+  const { execFileSync: execFS941, spawnSync: spawnS941 } = require('child_process');
+  const CLAIM941 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV941 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const g941 = (cwd, args) => {
+    try { execFS941('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV941 }); return true; }
+    catch (_) { return false; }
+  };
+  const gOut941 = (cwd, args) =>
+    String(spawnS941('git', ['-C', cwd, ...args], { encoding: 'utf8', env: GIT_ENV941 }).stdout || '').trim();
+
+  function mk941(project, plant) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-941-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+    g941(mainRoot, ['init', '-b', 'main']);
+    g941(mainRoot, ['config', 'user.email', 't@t.com']);
+    g941(mainRoot, ['config', 'user.name', 'Test']);
+    g941(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true'
+      }
+    }) + '\n');
+    g941(mainRoot, ['add', 'package.json']);
+    g941(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
+    g941(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+
+    const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
+    const wtCacheDir = path.join(wtProjDir, '.cache');
+    fs.mkdirSync(wtCacheDir, { recursive: true });
+    const stateText = [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive', 'step: start', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: 941',
+      'sink: merge', 'run_posture: worktree', 'worktree_path: ' + wtRoot,
+      'main_root: ' + mainRoot, 'session_marker: fixture-941', 'claim_ts: 2026-01-01T00:00:00Z', ''
+    ].join('\n');
+    fs.writeFileSync(path.join(wtProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
+    g941(wtRoot, ['add', '-A']);
+    g941(wtRoot, ['commit', '-m', 'feat: impl for ' + project]);
+    const headSha = gOut941(wtRoot, ['rev-parse', 'HEAD']);
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(mainProjDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(wtCacheDir, 'chain-receipt.json'), JSON.stringify({
+      headSha,
+      chains: ['claude', 'codex', 'gitlab', 'gitea'].map(n => ({ name: n, exitCode: 0, accepted_red: false }))
+    }) + '\n');
+    if (plant) plant({ base, mainRoot, wtRoot, wtProjDir, wtCacheDir, mainProjDir, project });
+    return { base, mainRoot, wtRoot, wtProjDir, wtCacheDir, mainProjDir, project };
+  }
+
+  // A fresh finalize process, driven from the WORKTREE so archiveProjectDir takes the linked-run
+  // copy+verify branch. spawn-class: durable-handoff
+  function runFinalize941(fx) {
+    const e = Object.assign({}, process.env, GIT_ENV941, {
+      KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    });
+    const r = spawnS941(process.execPath,
+      [CLAIM941, 'finalize', '--project', fx.project, '--keep-worktree'],
+      { cwd: fx.wtRoot, encoding: 'utf8', timeout: 60000, env: e });
+    let json = null;
+    try {
+      const lines = String(r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: r.status, json, stdout: r.stdout, stderr: r.stderr };
+  }
+  const cleanup941 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
+
+  // (1) DISCRIMINATOR: the same fixture WITHOUT the mismatch must finalize cleanly. Without this,
+  // an assertion that finalize refuses proves nothing — a fixture broken in any other way refuses
+  // too, and the scenario would pass while measuring the wrong failure.
+  {
+    const fx = mk941('issue-94101');
+    try {
+      const r = runFinalize941(fx);
+      assert(r.status === 0,
+        '#941 control: a faithful linked-run archive must finalize cleanly, got exit ' + r.status
+        + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      assert(r.json && (r.json.status === 'closed' || r.json.result !== 'refuse'),
+        '#941 control: a faithful linked-run archive must not refuse, got ' + JSON.stringify(r.json));
+    } finally { cleanup941(fx); }
+  }
+
+  // (2) THE ARM: mismatched non-empty, missing EMPTY.
+  {
+    const fx = mk941('issue-94102', f => {
+      fs.writeFileSync(path.join(f.wtCacheDir, 'real-evidence.md'), 'verdict: pass\n');
+      fs.symlinkSync(path.join(f.wtCacheDir, 'real-evidence.md'),
+        path.join(f.wtCacheDir, 'linked-evidence.md'));
+    });
+    try {
+      const r = runFinalize941(fx);
+      const j = r.json || {};
+
+      assert(r.status === 1,
+        '#941: an archive whose copy does not faithfully reproduce the source must exit 1, got '
+        + r.status + '\nstdout: ' + r.stdout);
+      assert(j.result === 'refuse' && j.reason === 'archive_incomplete',
+        '#941: the refusal must be typed archive_incomplete, got ' + JSON.stringify(j));
+
+      // The load-bearing pair. `missing` empty is what made this shape invisible to a guard keyed
+      // on it; `mismatched` non-empty is the only signal that says what actually went wrong.
+      assert(Array.isArray(j.missing) && j.missing.length === 0,
+        '#941: this shape must report an EMPTY missing[] — that is precisely why a guard keyed on '
+        + 'missing.length could not see it; got ' + JSON.stringify(j.missing));
+      assert(Array.isArray(j.mismatched) && j.mismatched.length > 0,
+        '#941: the refusal envelope must carry the mismatched[] half. Without it the operator is '
+        + 'told the archive "dropped evidence" and handed an empty list, which is both wrong and '
+        + 'unactionable; got ' + JSON.stringify(j));
+      assert(Array.isArray(j.mismatched) && j.mismatched.some(p => String(p).includes('linked-evidence.md')),
+        '#941: mismatched[] must NAME the offending entry, not merely be non-empty — a locator is '
+        + 'what makes the refusal repairable; got ' + JSON.stringify(j.mismatched));
+
+      // Nothing DESTROYED: the refusal fires before either live copy is deleted, so the run record
+      // still stands where the run left it — including the evidence the bad copy was carrying.
+      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+        '#941: the live project folder must survive the refusal');
+      assert(fs.existsSync(path.join(fx.wtCacheDir, 'real-evidence.md')),
+        '#941: the live evidence must survive the refusal — a refusal that protects the folder but '
+        + 'not its contents protects nothing');
+
+      // MEASURED, and deliberately not asserted in either direction: the half-written archive
+      // destination IS left behind. copyDir runs before verifyArchiveComplete and the failure path
+      // returns without unwinding it, so main keeps an untracked partial copy and a retry lands in
+      // a `.archived-<ts>` sibling. Whether that is residue to clean up or evidence to preserve for
+      // inspection is a judgement about the archive contract, not something this scenario can
+      // settle — asserting a preference here would freeze one answer by accident.
+    } finally { cleanup941(fx); }
+  }
+}
+
 spawnCensus.report();
 
 if (failed > 0) {

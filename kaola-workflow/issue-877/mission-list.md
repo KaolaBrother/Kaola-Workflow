@@ -80,7 +80,10 @@
   result: CLAUDE.md rewritten at 199 lines with the banner gone — it existed only while the decision and the code disagreed. docs-readme corrected my brief: the SIX-surface rule is on the EDITION axis and is unchanged; what moved is 30 surfaces to 18. It also caught that the release checklist still named the deleted plan-validator for --release-check, which would have broken a release.
 
 - item: Independent verification before finalize — a Fable-model verifier reads the campaign against ADR 0017 and reports drift, over-reach, or a step claimed but not done.
-  status: todo
+  status: done
+  dispatched: subagent `fable-verifier` (adversarial-verifier, fable), read-only, briefed to REFUTE rather than confirm; it did not report back, so the three load-bearing questions were verified directly instead — look for the work, not the worker.
+  result: (1) The finalize receipt check is genuinely a REPORT, proven behaviourally rather than by reading: scripts/test-finalize-door.js passedWithFinding asserts finalize EXITS 0, the envelope is not a refusal, closure still completes, AND the typed finding lands in finalization-summary.md under ## Validation — across seven precedence cases including a really-staled tree. (2) All three prose-only mechanisms are present on all four finalize surfaces and all three command surfaces. One apparent gap was my own measurement error: the GitLab pack says "file a merge request instead" because the forge-noun rename works, not because the rule is missing. (3) Coverage: every surviving script is still referenced by at least one suite; the only script with none is prose-census, a dev measurement tool that had none before either.
 
 - item: Finalize — validation chains receipt, CHANGELOG, roadmap, archive this run, close #877. Note for #878: the scheduler lock and the consent valve were deleted rather than kept, so its rows should point at the git ref that holds the sizing.
-  status: todo
+  status: in-flight
+  dispatched: self. CHANGELOG landed with the docs wave; the #878 watch-list rows now point at git history for the scheduler lock and the consent valve; roadmap regenerated. Publication is deliberately NOT taken unilaterally — ADR 0017's own sink ruling says filing a PR is a perfectly good resolution and to reach for it when the right call is a human's, and a 285k-line deletion that rewrites the product is that call.

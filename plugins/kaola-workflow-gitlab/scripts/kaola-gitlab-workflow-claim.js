@@ -3665,26 +3665,37 @@ function cmdFinalize() {
     return;
   }
   if (result.skipped === 'source-missing') result.dest = result.dest || finalizeAuthorityDir;
-  // #676: receipt honesty — a lossy archive copy (verifyArchiveComplete refused BEFORE deleting
-  // the live copy/copies because the DEST dropped an evidence file the live SOURCE held) must halt
-  // finalize here, before any downstream side effect (roadmap source removal, issue close,
-  // claim-label removal). Without this, cmdFinalize would fabricate a status:'closed' receipt while
-  // archived:false/archive_incomplete:true sat right beside it, and would still close the issue /
-  // remove the roadmap source for a run whose archive copy silently lost gate evidence. The live
-  // folder(s) already survived (that is the whole point of the pre-deletion gate); this just
-  // refuses to lie about it.
+  // #676: receipt honesty — an archive copy that does not faithfully reproduce the live source
+  // (verifyArchiveComplete refused BEFORE deleting the live copy/copies, because the DEST either
+  // dropped a file the SOURCE held or reproduced one unfaithfully) must halt finalize here, before
+  // any downstream side effect (roadmap source removal, issue close, claim-label removal). Without
+  // this, cmdFinalize would fabricate a status:'closed' receipt while archived:false/
+  // archive_incomplete:true sat right beside it, and would still close the issue / remove the
+  // roadmap source for a run whose archive silently lost or corrupted evidence. The live folder(s)
+  // already survived (that is the whole point of the pre-deletion gate); this just refuses to lie
+  // about it.
   if (result.archive_incomplete === true) {
+    // Report BOTH halves. An archive can be incomplete without dropping anything: a source entry
+    // that is not a plain file lands in the destination as one, so the bytes and the name are
+    // right while the entry is not — missing[] stays empty and mismatched[] names it. Reporting
+    // only missing[] told the operator the archive 'dropped evidence' and then handed them an
+    // empty list, which is both wrong and unactionable.
+    const missing = Array.isArray(result.missing) ? result.missing : [];
+    const mismatched = Array.isArray(result.mismatched) ? result.mismatched : [];
     output({
       result: 'refuse',
       reason: 'archive_incomplete',
       project: args.project,
-      missing: result.missing,
+      missing,
+      mismatched,
       dest: result.dest,
-      reasoning: 'the archive copy dropped evidence the live project still held (' +
-        (Array.isArray(result.missing) ? result.missing.join(', ') : 'unknown') +
-        '); the live project folder was left in place — no roadmap/issue/label side effect was ' +
-        'performed. Re-run finalize so the archive faithfully preserves every workflow-plan.md / ' +
-        'workflow-state.md / finalization-summary.md / .cache/n*-*.md file the source contains.'
+      reasoning: (missing.length > 0
+        ? 'the archive copy dropped evidence the live project still held (' + missing.join(', ') + ')'
+        : 'the archive copy does not faithfully reproduce the live project (' +
+          (mismatched.join(', ') || 'unknown') + ')') +
+        '; the live project folder was left in place — no roadmap/issue/label side effect was '  +
+        'performed. Re-run finalize so the archive reproduces every file the source contains, '  +
+        'byte for byte and entry kind for entry kind.'
     }, 1);
     return;
   }
