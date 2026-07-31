@@ -3,7 +3,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary, persistExpansionRollupToSummary } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock } = require('./kaola-workflow-claim.js');
+// The porcelain classifier backs the dirty-worktree data-loss guard, which is a KEEP. It lives in
+// the byte-identical schema, not in claim.js — claim.js only ever re-exported it.
+const { parsePorcelainPaths, isParkedLanePath } = require('./kaola-workflow-adaptive-schema.js');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
@@ -50,31 +53,31 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 // ---------------------------------------------------------------------------
-// THE SINK REPORTS; THE ORCHESTRATOR OWNS THE OUTCOME.
+// THE SINK REPORTS; THE ORCHESTRATOR OWNS THE OUTCOME — AND REPORTING MEANS STOPPING.
 //
-// A verdict the sink used to refuse on is now a typed FINDING. The measurement is
-// unchanged — what the caller does with it is what changed. The sink says what it found
-// (a red witness at the publication door, a branch carrying no implementation, a merge
-// that did not fast-forward) and the party with the context to fix it decides: get the
-// merge correct, resynchronize, or file a pull request instead.
+// A converted site does NOT merge and report. It **stops without merging**. That is not a
+// softer refusal, it is the opposite of one: stopping leaves every option open — fix and
+// re-run, file a pull request instead, or record a human decision to publish anyway —
+// whereas merging forecloses all of them. Only stopping is verdict-free, because only
+// stopping leaves the choice with the party entitled to make it.
 //
-// What still refuses is a different class entirely: a guard that refuses to DESTROY or
-// CORRUPT (a dirty worktree about to be force-removed, a push that did not land, an
-// archive that would lose a file, an unrecognized flag). Those judge nothing about the
-// work, so they are not verdicts and they do not convert.
+// FOUR properties, at every converted site:
+//   1. the MEASUREMENT completes and the finding is recorded DURABLY — a named field on
+//      the sink receipt under `--sink` (the journal survives a non-terminal stop, which is
+//      exactly when a converted finding exists), a typed envelope on the legacy path;
+//   2. the sink STOPS, with nothing merged and nothing published;
+//   3. the exit stays non-success — transport for an output-blind consumer, not a verdict;
+//   4. a sanctioned proceed-path is named in the finding's operator_hint.
 //
-// EVERY finding lands in THREE places, because a conversion that emits a verdict and
-// drops the state the refusal was freezing is a deletion, not a conversion:
-//   1. stderr, immediately and loudly;
-//   2. `findings[]` on the emitted envelope, for whoever is reading the run right now;
-//   3. DURABLY — `## Sink Findings` in the run's finalization-summary.md (committed by
-//      the archive commit, so a successor that never saw stdout still learns it) and
-//      mirrored onto the in-flight sink-receipt.json for a crash-resume to re-read.
+// What a KEEP site loses that a converted one keeps is property 4: proceeding past a
+// dirty worktree, a failed push, or an incomplete archive destroys something, so there is
+// no sanctioned proceed-path to offer. A converted finding is decision-input the
+// orchestrator may legitimately overrule; a KEEP refusal is not.
 //
-// The shape follows adaptive-schema's evaluateChainReceipt finding — a typed
-// `classification`, a `detail` array, an `operator_hint` — and the classification tokens
-// reuse the vocabulary that already exists (`chains_red` for the validation witness,
-// `non_fast_forward` for the merge outcome classifyMergeError already names).
+// Every finding also lands on stderr immediately, and in `findings[]` on the emitted
+// envelope. The shape follows adaptive-schema's evaluateChainReceipt finding — a typed
+// `classification`, a `detail` array, an `operator_hint` — reusing the vocabulary that
+// already exists (`chains_red` for the validation witness) where one fits.
 const sinkFindings = [];
 
 function recordSinkFinding(classification, detail, operatorHint, payload) {
@@ -112,19 +115,25 @@ function resolveRunRecordDir(mainRoot, project, archiveDestRel) {
   return null;
 }
 
-// The durable half. `## Sink Findings` sits in the same finalization-summary.md, under the
-// same presence-guarded / swallow-on-error discipline, as the `## Validation`,
-// `## Changed Paths` and `## Attestation` sections the finalize report already writes there —
-// a measurement writer must never be able to fail the operation it is reporting on. Returns
-// the absolute path written, or null when there was nothing to write.
-function persistSinkFindingsToSummary(destDir) {
-  if (!sinkFindings.length || !destDir) return null;
+// The durable half for a sink that SUCCEEDS. A converted finding stops the run, so its durable
+// home is the surviving receipt / the emitted envelope; what reaches this writer is the record a
+// completed sink would otherwise leave nowhere — above all the post-rebase test result, which
+// under `stdio: 'inherit'` scrolled past and was never written down when it was GREEN.
+//
+// `## Sink Findings` sits in the same finalization-summary.md, under the same presence-guarded /
+// swallow-on-error discipline, as the `## Validation` and `## Changed Paths` sections the finalize
+// report writes there — a measurement writer must never be able to fail the operation it reports
+// on. Returns the absolute path written, or null when there was nothing to write.
+function persistSinkFindingsToSummary(destDir, postRebaseTests) {
+  if (!destDir) return null;
+  if (!sinkFindings.length && !postRebaseTests) return null;
   try {
     const p = path.join(destDir, 'finalization-summary.md');
     let s = '';
     try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
     if (/^## Sink Findings$/m.test(s)) return null; // idempotent across a crash-resumed re-entry
     const lines = ['## Sink Findings', ''];
+    if (postRebaseTests) lines.push('post_rebase_tests: ' + postRebaseTests, '');
     for (const f of sinkFindings) {
       lines.push('classification: ' + f.classification);
       for (const d of f.detail || []) lines.push('', d);
@@ -833,14 +842,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     worktree_removed: worktreeRemoved,
     branch_removed: branchRemoved
   });
-  // M2 (#280): WARN-FIRST dispatch attestation check, archive-first (matching cmdFinalize).
-  // cmdFinalize archives .cache/ before sink-merge runs, so the live path is absent;
-  // check archive candidate first, then live as fallback. emptyReceipt 'failed' defaults
-  // are overwritten here so a real dispatch-log (with both lines) yields 'attested'.
-  checkDispatchAttestations([
-    path.join(archiveDest, '.cache'),
-    path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
-  ], receipt);
+  // The dispatch-attestation probe that ran here is gone with the mechanism it read: claim.js no
+  // longer exports checkDispatchAttestations, and the closure receipt carries no attestation field
+  // for it to fill. Calling a retired export was not a stale comment — it threw AFTER the merge had
+  // already landed on the default branch, so the sink advanced main and then died reporting exit 1.
   // #369: post-attach the bundle per-member buckets (the builder filters to CLOSURE_RECEIPT_FIELDS,
   // so these arrays are attached here) BEFORE the invariant check so remote-members-closed can see them.
   if (bundleBuckets) {
@@ -1452,16 +1457,19 @@ function deriveSinkKeepOpen(mainRoot, args, receipt) {
   return false;
 }
 
-// #700: persist the SAME terminal metadata cmdFinalize writes — the ## Closure state block
-// (appendClosureBlock), the ## Attestation summary block (persistAttestationToSummary), and (#763)
-// the ## Expansion Rollup line (persistExpansionRollupToSummary) — into the archive dest, for a
-// --sink that is the SOLE archiver (no prior cmdFinalize --keep-worktree already wrote them).
-// Without this, the sink's own archiveProjectDir archives a folder with NO terminal metadata (a
-// latent gap that bites exactly when the sink is the only archiver). Attestation reflects
-// the REAL dispatch-log probe (checkDispatchAttestations) of the claim/author seam — no fabrication
-// for inline execution. All three writers are presence-guarded / idempotent (a dest already carrying
-// the blocks is a no-op), and the disposition/label/invariant fields are honestly PENDING here: the
-// sink's own closure + verify steps (later) perform the real close and record the authoritative verdict.
+// #700: persist the terminal metadata cmdFinalize writes — the ## Closure state block
+// (appendClosureBlock) — into the archive dest, for a --sink that is the SOLE archiver (no prior
+// cmdFinalize --keep-worktree already wrote it). Without this, the sink's own archiveProjectDir
+// archives a folder with NO terminal metadata (a latent gap that bites exactly when the sink is the
+// only archiver). The writer is presence-guarded / idempotent (a dest already carrying the block is
+// a no-op), and the disposition/label/invariant fields are honestly PENDING here: the sink's own
+// closure + verify steps (later) perform the real close and record the authoritative verdict.
+//
+// The ## Attestation block and the ## Expansion Rollup line are gone with the mechanisms behind
+// them: claim.js retired persistAttestationToSummary and persistExpansionRollupToSummary, and a
+// call to a retired export is not a stale comment — it throws, here on the sole-archiver path,
+// after the merge has already landed.
+//
 // Fail-soft — metadata persistence must never abort an otherwise-successful sink; only a programmer
 // error (a missing/renamed claim.js export, the #550 cross-edition drift class) rethrows.
 function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) {
@@ -1469,28 +1477,11 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
   if (!dest) return;
   try {
     const keepOpen = deriveSinkKeepOpen(mainRoot, args, sinkReceipt);
-    const closureReceipt = buildClosureReceipt(args.project, args.issue != null ? args.issue : null, {
-      archive: 'closed',
-      roadmap_source_removed: archiveResult.roadmap_source_removed,
-      roadmap_regenerated: archiveResult.roadmap_regenerated,
-    });
-    // Real attestation probe — archive .cache first (archiveProjectDir already moved the live cache
-    // there), live .cache fallback. NO fabrication: an inline-executed sink with no dispatch-log
-    // records 'missing', exactly as cmdFinalize would.
-    checkDispatchAttestations([
-      path.join(dest, '.cache'),
-      path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
-    ], closureReceipt);
-    persistAttestationToSummary(dest, closureReceipt);
-    // #763: the per-run expansion-efficiency rollup line — the SOLE-archiver path needs the same
-    // writer cmdFinalize calls, or a run that finalizes through --sink alone never gets one.
-    persistExpansionRollupToSummary(dest);
     appendClosureBlock(dest, {
       issueDisposition: keepOpen ? 'kept-open' : 'close-pending',
       claimLabelRemoved: 'close-pending',
       worktreeRemoved: 'removed',
       closureInvariants: 'pending',
-      claimPlannerAttested: closureReceipt.claim_planner_attested
     });
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;
