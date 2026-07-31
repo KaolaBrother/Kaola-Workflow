@@ -413,10 +413,14 @@ it found — chains that came back red over the rebased tree, content on the bra
 describes, a witness bound to different bytes than the ones being published, a merge that did not
 fast-forward — and then **you** are accountable for the branch ending up right.
 
-It still stops for one class of thing, and that is not a verdict: an operation that would destroy
-something. A dirty main root or a linked worktree with uncommitted changes, a probe it could not
-run, an archive that would lose a file. Those protect work nobody agreed to lose, so they fail
-loudly rather than reporting and continuing.
+**Reporting is not merging anyway.** When the sink finds one of those things it records the finding
+and **stops without merging** — stopping leaves every option open, and merging forecloses them. What
+changed is that it hands you a named finding and a route instead of a verdict, not that it publishes
+content it could not vouch for.
+
+It also stops the way any operation stops — a push that did not land, an archive move that would
+lose a file, a tree it does not own, a record it would have to misreport. It stops rather than
+destroy or lie. That is an operation failing, not a judgement of your work.
 
 This is not "merge anyway and report." Resolution is your responsibility and you own the whole
 outcome. Three resolutions are available and all three are legitimate:

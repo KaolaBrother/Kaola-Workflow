@@ -105,6 +105,10 @@ branch that no record describes, a merge that did not fast-forward — and the o
 it: get the merge correct, resynchronize, or file a PR, then clean up after. The sink does not judge
 the work; the orchestrator is accountable for the branch ending up right.
 
-It still fails loudly for one class, and that is not a verdict: an operation that would destroy
-something — a dirty tree carrying uncommitted work, a probe it could not run, an archive that would
-lose a file.
+**Reporting is not merging anyway.** On a finding the sink records it and stops without merging —
+stopping leaves every option open, merging forecloses them. What changed is that it hands over a
+named finding and a route instead of a verdict.
+
+It also stops the way any operation stops — a push that did not land, an archive that would lose a
+file, a tree it does not own, a record it would have to misreport. That is an operation failing, not
+a judgement of the work.
