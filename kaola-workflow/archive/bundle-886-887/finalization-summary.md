@@ -44,3 +44,7 @@ Files this branch changed outside the run-state and documentation bands:
 - scripts/validate-vendored-agents.js
 - templates/reviewers/behavior-contracts.json
 - templates/routing/rename-table.js
+
+## Sink Findings
+
+post_rebase_tests: skipped
