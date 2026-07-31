@@ -53,12 +53,12 @@ at the end exist to catch what the named rows do not.
 | `.cache/final-validation.md` | record | evidence | agent | the tests-green oracle receipt (consumer repo kind), candidate-hash bound; recorded by the agent, not a producer script |
 | `.cache/selection-evidence.md` | record | evidence | agent | the no-target selection rationale, docked verbatim; not faithfully reconstructible after the claim |
 | `.cache/run-gaps-manual.md` | record | evidence | agent | agent/operator-authored gap items — an input no script can regenerate |
-| `finalization-summary.md` | record | evidence | agent | the terminal artifact; the script-owned ## Attestation section is appended to it presence-guarded |
+| `finalization-summary.md` | record | evidence | agent | the terminal artifact — the run's agent-authored close-out record |
 | `.cache/sink-receipt.json` | record | forge | script | step-by-step record of what has already reached the outside world; disposed at terminal success, when the forge itself becomes the authority |
 | `.cache/sink-fallback.json` | record | forge | script | the sink fallback journal, same lifetime rule as sink-receipt.json |
 | `/^\.cache\/[a-z-]+-envelope\.json$/` | derivable | — | script | the cached stdout of a --summary subcommand invocation; re-run the subcommand (the read-only emitters are idempotent). No script reads it back |
 | `.cache/node-timings.jsonl` | preference | — | script | best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict |
-| `.cache/dispatch-log.jsonl` | preference | — | script | hook-written spawn log; the attestation check is WARN-FIRST, so absence degrades to a warning, never a wrong outcome |
+| `.cache/dispatch-log.jsonl` | preference | — | script | hook-written spawn log; advisory telemetry — no check consumes it, so losing it costs a record, never a verdict |
 | `.cache/outcome-log.jsonl` | preference | — | script | the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label |
 | `.cache/wedged-attestation.json` | preference | — | script | historical residue; no producer and no consumer remains in the tree |
 | `fast-summary.md` | preference | — | agent | legacy marker, never newly authored; both readers (classifier scope parse, router folder detection) are tolerant |
@@ -220,8 +220,7 @@ patched in place by the later lifecycle verbs. Its blocks:
   paths stamp (for example `closed_keep_open`).
 - `## Lease` — legacy, deprecated. Preserved for backward compatibility on read only.
 - `## Closure` — appended at archive time by `appendClosureBlock`: `archived_at`,
-  `issue_disposition`, `claim_label_removed`, `worktree_removed`, `closure_invariants`, and the
-  attestation field.
+  `issue_disposition`, `claim_label_removed`, `worktree_removed`, and `closure_invariants`.
 
 ### What this file no longer carries
 
@@ -335,8 +334,7 @@ The numbers in the bundle identifier are always in ascending sorted order, match
 The closure contract — the invariants a completed issue must satisfy, the closure receipt schema,
 and which path populates which field — lives in `api.md` § Closure Contract, with its
 machine-readable half in `scripts/kaola-workflow-closure-contract.js`. The archived
-`workflow-state.md` carries the same terminal facts in its `## Closure` block, and the archived
-`finalization-summary.md` carries the `## Attestation` section.
+`workflow-state.md` carries the same terminal facts in its `## Closure` block.
 
 ## Generated Mirrors
 

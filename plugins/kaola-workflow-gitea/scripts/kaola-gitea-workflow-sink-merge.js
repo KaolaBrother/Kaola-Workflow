@@ -1347,11 +1347,10 @@ function lingeringLaneGroupRefusal(mainRoot, project) {
           '" with ' + members.length + ' member(s) and ' + legCount + ' leg(s). A clean write-parallel group ' +
           'completion DELETES the lane_group key; a residual key means the group never ran its synthesizer + ' +
           'group barrier (the #552 crash-window desync), so surviving legs\' committed work is NOT on the feature ' +
-          'branch. Refusing to sink — main must not advance with code missing. Run reconcile-running-set, resume ' +
-          'the adaptive run so the last member synthesizes + merges all legs, then re-run --sink.'],
-        'Run reconcile-running-set, resume the adaptive run so the last member synthesizes and merges '
-          + 'every leg, then re-run the sink — it resumes where it stopped. If the legs are genuinely '
-          + 'unrecoverable, run sink-pr instead so the partial content is staged for review.',
+          'branch. Refusing to sink — main must not advance with code missing.'],
+        'Recover the legs\' committed work by hand from the leg branches/worktrees the running-set '
+          + 'names, then re-run the sink; or run sink-pr so what survives is staged for review rather '
+          + 'than published.',
         { lane_group_id: lg.group_id || null, members: members.length, legs: legCount, running_set_path: rsPath });
       return { ok: false, reason: 'lingering_lane_group', detail: finding.detail[0], finding };
     }
@@ -1707,8 +1706,6 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, {
           keepWorktree: false,
           excludeIssues: keepOpenAtFinalize ? finalizeMembers : [],
-          // #707: this sink destroys the last live copy — demand the ledger-proven node evidence.
-          requireNodeEvidence: true,
         });
         // An incomplete archive fails the sink loudly, whatever made it incomplete. The former
         // discriminator was `missing.length > 0` OR a non-allowlisted snapshot_error, and BOTH halves

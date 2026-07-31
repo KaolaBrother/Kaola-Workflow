@@ -168,28 +168,13 @@ function canonCommandPath(basename, forge) {
 
 // --- renderers (pure; exported for parity test) ---
 
-// opencode-edition-only body suffixes. The adaptive workflow ADOPTS the adaptive
-// selection of efforts: the workflow-planner is told how its per-node {opus, sonnet}
-// choice is realized as a provider-relative EFFORT VARIANT on opencode (mapTier), so it
-// makes effort-aware role choices. Empty for every other agent (verbatim canonical body).
-function opencodeAgentSuffix(agentName) {
-  if (agentName !== 'workflow-planner') return '';
-  return [
-    '',
-    '## opencode effort tiers (mapTier) — adaptive effort selection',
-    '',
-    'On the opencode runtime your per-node `model` choice (the two Kaola tiers) is realized as a',
-    'reasoning-EFFORT VARIANT of the inherited model via `mapTier(tier, provider)`: the reasoning tier',
-    "→ the provider's TOP effort variant, the standard tier → its SECOND (max/high on GLM-5.2 and Anthropic;",
-    'xhigh/high on OpenAI; high/low on Google). opencode applies the variant per-ROLE (via',
-    '`agent.<role>.variant` in opencode.json) — there is NO per-call variant override — so your',
-    "tier selection is realized through ROLE CHOICE: a reasoning-heavy node uses a top-tier role",
-    '(planner, code-architect, code-reviewer, security-reviewer, synthesizer, workflow-planner →',
-    "top variant); an execution node uses a standard role (→ second variant). Adaptive effort",
-    "selection: choose the role whose tier matches the node's reasoning weight, and set the",
-    '`model` column to record that intent (authoritative on Claude Code, role-resolved on opencode).',
-    '',
-  ].join('\n');
+// opencode-edition-only body suffixes: empty for every role — every agent body ships as the
+// verbatim canonical body. The only non-empty branch belonged to the retired workflow-planner
+// (its mapTier effort-tier addendum), and the roster is readdirSync-derived, so no surviving
+// agent reaches a suffix. Kept and exported because renderAgent and the parity test consume
+// the empty contract.
+function opencodeAgentSuffix() {
+  return '';
 }
 
 function renderAgent(canonContent, agentName, forge) {
@@ -466,9 +451,9 @@ function reasoningRoles() {
 // SET MEMBERSHIP IS UNCHANGED by collapsing the two sources into one. The effort tier used to be
 // `higherProfileRoles() ∪ canonical-reasoning`; the retired install-time default selected the
 // `higher` variant, so those roles' assignments now live in the canonical agent tree and the union
-// is redundant. Both spellings yield the same six roles: code-architect, code-reviewer, planner,
-// security-reviewer, synthesizer, workflow-planner. A seventh member here means a role's canonical
-// frontmatter tier moved — fix the frontmatter, not this function (test-opencode-edition.js A12).
+// is redundant. Both spellings yield the same five roles: code-architect, code-reviewer, planner,
+// security-reviewer, synthesizer. A sixth member here means a role's canonical frontmatter tier
+// moved — fix the frontmatter, not this function (test-opencode-edition.js A12).
 //
 // The opt-in MODEL-PIN scaffold in opencode.json does gain three entries, and that is a
 // correction: it was previously derived from canonical frontmatter ALONE, so it omitted the three

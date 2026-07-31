@@ -8,7 +8,7 @@
 // denial per the official .env-protection plugin pattern).
 //
 // Coverage (mirrors plugins/kaola-workflow/config/hooks.json):
-//   tool.execute.before · task      → kaola-workflow-subagent-dispatch-log.sh (record spawn for closure attestation)
+//   tool.execute.before · task      → kaola-workflow-subagent-dispatch-log.sh (advisory spawn record)
 //   experimental.session.compacting → inject active kaola-workflow resume state
 //
 // Fail-open everywhere (matches the scripts' own philosophy): a missing script, a
@@ -127,8 +127,8 @@ export default async function KaolaWorkflowHooks({ directory, worktree }) {
       // Subagent dispatch log — fire-and-forget; never blocks the dispatch.
       // opencode's tool.execute.before input carries { tool, sessionID, callID };
       // thread whichever is present into agent_id (prefer sessionID, fall back to
-      // callID, then empty). Attestation keys on agent_type+cwd so this is a
-      // non-blocking data-degradation fix, not a correctness change.
+      // callID, then empty). The log is advisory — a sparse agent_id degrades the
+      // record, never an outcome.
       if (tool === "task") {
         try {
           const st = args.subagent_type || args.agent || "";

@@ -1201,7 +1201,7 @@ evidence path.
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint (active project, current phase, current step, next command, fallback authorization) read from the most recent `workflow-state.md` | `scripts/kaola-workflow-compact-context.js` |
-| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` for WARN-FIRST closure attestation (#277 M1). Fail-open | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
+| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` — an advisory spawn record; no check consumes it. Fail-open | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 ### Codex lifecycle hooks
 
@@ -1219,7 +1219,7 @@ those paths.
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, next skill, in-progress node, pending gates, consent markers, task summary) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
-| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl`, making `checkDispatchAttestations` (closure attestation) live on Codex when `multi_agent` is enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
+| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` — an advisory spawn record; no check consumes it. Fires only with Codex `multi_agent` enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 **Caveats and preconditions:**
 
@@ -1229,8 +1229,8 @@ those paths.
   under *Trust the hooks* above. For automation use
   `codex exec --dangerously-bypass-hook-trust`.
 - **`multi_agent` precondition:** `SubagentStart` provenance requires Codex
-  `multi_agent` enabled. With it off the hook never fires and closure attestation
-  reads `missing` — non-fatal, WARN-first (closure still succeeds).
+  `multi_agent` enabled. With it off the hook never fires and no spawn record is
+  written — non-fatal; the log is advisory.
 - **Matcher note:** the `PreToolUse`/`PostToolUse` matchers (`Bash`, `Write|Edit`)
   follow Claude Code tool names; if a Codex build uses different tool-event names the
   matcher string in `~/.codex/hooks.json` may need adjustment.

@@ -789,105 +789,11 @@ function testAC4SubagentDispatchLog() {
   }
 }
 
-// v3.21.0 (critic-1): the default Codex edition ships the #238/#239 adaptive production code (its
-// classifier / plan-validator / adaptive-schema are byte-identical to root, sync-enforced), but this
-// self-test previously exercised NONE of it. These cases run the CODEX scripts and lock the same
-// soundness the root suite does — the curated-root candidate-side normalization (#238) and the
-// per-node tree-diff barrier (#239: over-attribution, --base rejection, idempotent base).
-const codexValidator = path.join(pluginRoot, 'scripts', 'kaola-workflow-plan-validator.js');
-const codexClassifier = path.join(pluginRoot, 'scripts', 'kaola-workflow-classifier.js');
 function git(args, cwd) { return spawnSync('git', args, { cwd, encoding: 'utf8' }); }
 function initGitRepo(tmp) {
   git(['init', '-b', 'main'], tmp); git(['config', 'user.email', 't@t.t'], tmp); git(['config', 'user.name', 't'], tmp);
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n'); git(['add', '-A'], tmp); git(['commit', '-m', 'init'], tmp);
   const remote = tmp + '-remote'; git(['init', '--bare', remote], path.dirname(tmp)); git(['remote', 'add', 'origin', remote], tmp); git(['push', '-u', 'origin', 'main'], tmp);
-}
-function injectSpineForm(content) {
-  if (/^[ \t]*plan_form[ \t]*:/m.test(content)) return content;
-  // Fence-aware: inject after the FIRST genuine (non-fenced) `## Meta` header, skipping any decoy
-  // `## Meta` inside a ``` / ~~~ code fence. Return unchanged when there is no genuine Meta header.
-  const lines = content.split('\n');
-  let fence = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const m = line.match(/^([`~]{3,})/);
-    if (m) {
-      if (fence === null) fence = m[1][0].repeat(m[1].length);
-      else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
-      continue;
-    }
-    if (fence === null && /^## Meta[ \t]*$/.test(line)) {
-      lines.splice(i + 1, 0, 'plan_form: spine');
-      return lines.join('\n');
-    }
-  }
-  // No genuine `## Meta` header: synthesize a minimal Meta block before the first `## Nodes`.
-  fence = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const m = line.match(/^([`~]{3,})/);
-    if (m) {
-      if (fence === null) fence = m[1][0].repeat(m[1].length);
-      else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
-      continue;
-    }
-    if (fence === null && /^## Nodes[ \t]*$/.test(line)) {
-      lines.splice(i, 0, '## Meta', 'plan_form: spine', '');
-      return lines.join('\n');
-    }
-  }
-  return content;
-}
-// #790: a frozen plan requires a non-empty `## Design` section at the freeze wall. Inject a minimal
-// prose block when absent — BEFORE `## Node Ledger` (so the hash-neutral ledger tail is preserved for
-// fixtures that append a row / halt marker to it), fence-aware. No-op when a `## Design` heading exists.
-function injectDesignSection(content) {
-  if (/^##[ \t]+Design[ \t]*$/m.test(content)) return content;
-  const block = '## Design\n\nDecompose the frozen spine into its concrete role nodes; every sequence '
-    + 'edge is a real data dependency (S1 — the downstream node consumes the upstream node\'s change) '
-    + 'or a gate ordering, and any co-opened write legs touch disjoint paths. Done means the review gate '
-    + 'clears and validation_command passes.\n';
-  const lines = content.split('\n');
-  let fence = null, ledgerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^([`~]{3,})/);
-    if (m) { if (fence === null) fence = m[1][0].repeat(m[1].length); else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
-    if (fence === null && /^##[ \t]+Node Ledger[ \t]*$/.test(lines[i])) { ledgerIdx = i; break; }
-  }
-  if (ledgerIdx >= 0) { lines.splice(ledgerIdx, 0, block, ''); return lines.join('\n'); }
-  return content.replace(/\n*$/, '\n') + '\n' + block;
-}
-function stampVerifiedLegacyCodexPlan(planPath) {
-  const raw = fs.readFileSync(planPath, 'utf8');
-  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)
-      || /^plan_schema_version:\s*2\s*$/m.test(raw)) return;
-  const content = injectDesignSection(injectSpineForm(raw)); // #765 spine + #790 design at the freeze wall
-  const validator = require(codexValidator);
-  const hash = validator.computePlanHash(content);
-  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
-}
-function runVal(args, cwd) {
-  // #765: a fresh (not yet hash-stamped) fixture that hits the freeze-wall grammar is migrated to a
-  // concrete spine (plan_form: spine). resume-check validates the dag-tolerant path, and a pre-stamped
-  // fixture keeps its authoritative hash — both are left untouched.
-  if (args[0] && !args[0].startsWith('--') && fs.existsSync(args[0]) && !args.includes('--resume-check')) {
-    const raw = fs.readFileSync(args[0], 'utf8');
-    if (!/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) {
-      const migrated = injectDesignSection(injectSpineForm(raw)); // #765 spine + #790 design
-      if (migrated !== raw) fs.writeFileSync(args[0], migrated);
-    }
-  }
-  // These historical walkthrough fixtures are byte-preserved, already-adopted v1 plans.
-  // New field-absent drafts remain refused by production; stamp only before their legacy freeze.
-  if (args.includes('--freeze') && args[0] && fs.existsSync(args[0])) stampVerifiedLegacyCodexPlan(args[0]);
-  return spawnSync(process.execPath, [codexValidator, ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
-  });
-}
-function classifyOffline(tmp, issue) {
-  const r = spawnSync(process.execPath, [codexClassifier, 'classify', '--issue', String(issue)], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  assert(r.status === 0, 'codex classifier exit 0 expected, got ' + r.status + '\n' + r.stderr);
-  return JSON.parse(r.stdout.trim());
 }
 function plantFolder(tmp, project, issue, phase3Body) {
   const dir = path.join(tmp, 'kaola-workflow', project); fs.mkdirSync(dir, { recursive: true });
@@ -898,19 +804,6 @@ function plantRoadmap(tmp, issue, body) {
   const dir = path.join(tmp, 'kaola-workflow', '.roadmap'); fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'issue-' + issue + '.md'), ['issue: #' + issue, 'title: t', 'status: open', 'workflow_project: —', 'next_step: ready', body, ''].join('\n'));
 }
-const CODEX_PLAN = ['# Workflow Plan — issue #971', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
-  '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
-  '| ex | code-explorer | — | — | 1 | sequence |',
-  '| a | tdd-guide | ex | aaa/x.js | 1 | fanout(impl) |',
-  '| b | tdd-guide | ex | bbb/y.js | 1 | fanout(impl) |',
-  '| rv | code-reviewer | a,b | — | 1 | sequence |',
-  '| done | finalize | rv | — | 1 | sequence |', '',
-  '## Node Ledger', '', '| id | status |', '|---|---|',
-  '| ex | complete |', '| a | complete |', '| b | complete |', '| rv | complete |', '| done | complete |', ''].join('\n');
-
-
-
-
 // ---------------------------------------------------------------------------
 // AC-7 (#266): RED-first regression tests for the 3 new scripts.
 // Each case proves discriminating RED (wrong fixture → typed refusal / wrong JSON)
@@ -918,7 +811,6 @@ const CODEX_PLAN = ['# Workflow Plan — issue #971', '', '## Meta', 'labels: en
 // ---------------------------------------------------------------------------
 
 const preflightScript   = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-const taskMirrorScript  = path.join(pluginRoot, 'scripts', 'kaola-workflow-task-mirror.js');
 const compactResumeScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-compact-resume.js');
 
 

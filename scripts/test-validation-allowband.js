@@ -100,7 +100,7 @@ for (const p of [...referenced].sort()) {
   assert(pv.testConsumes(p) === true,
     'validator-referenced allowband prose "' + p + '" is NOT in testConsumes — it would be excluded from ' +
     'the #547 code-tree hash, so a real change could be cited-as-unchanged and skip the chains. Add it to ' +
-    'SELF_HOST_TEST_CONSUMED in kaola-workflow-plan-validator.js (or the plan validators must stop reading it).');
+    'SELF_HOST_TEST_CONSUMED in kaola-workflow-adaptive-schema.js (or the validators must stop reading it).');
 }
 
 // 2) Sanity controls — the band must still EXCLUDE genuinely-inert prose (else the fix de-dups nothing)

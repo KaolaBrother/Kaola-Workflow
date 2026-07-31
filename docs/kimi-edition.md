@@ -173,7 +173,7 @@ re-expresses the two canonical `hooks/hooks.json` entries:
 
 | Claude/Codex hook | Kimi `[[hooks]]` mapping | Script |
 | --- | --- | --- |
-| `SubagentStart` (dispatch attestation) | `event="SubagentStart"` (matcher omitted) | `kaola-workflow-subagent-dispatch-log.sh` |
+| `SubagentStart` (advisory dispatch log) | `event="SubagentStart"` (matcher omitted) | `kaola-workflow-subagent-dispatch-log.sh` |
 | `SessionStart` compact (resume state) | `event="PostCompact"` | `node kaola-workflow-compact-context.js` |
 
 The kimi edition ships the runtime-neutral shell script above and carries no other hook

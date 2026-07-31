@@ -485,21 +485,25 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
 
 - **Pre-tag release gate (issue #651, D-651-01).** Before creating the release tag, run the check-only
   pre-tag gate: `node scripts/kaola-workflow-run-chains.js --release-check
-  [--json] [--candidate <sha>] [--receipt <path>]`. **It moved here from the retired plan-validator
-  and is otherwise unchanged** — same argv, same typed envelope, same precedence family — and it now
+  [--json] [--candidate <sha>] [--receipt <path>]`. **It moved here from the retired plan-validator**
+  — same argv, same typed envelope, same precedence family — and it now
   lives in the file that PRODUCES the receipt it reads. It reads only `.cache/chain-receipt.json`
   (git-toplevel default, overridable via `--receipt`), local git, and `package.json` (to resolve
   the expected `test:kaola-workflow:*` chain set) — no CI/CD or forge calls — and refuses with a
   typed `reason` unless the receipt is a clean-stamped, all-green, UNWAIVED receipt COVERING
-  every declared chain, whose `headSha` STRICTLY equals the release-candidate commit (default
-  `HEAD`; `--candidate` for an explicit commit — the #547 `codeTreeHash` freshness relaxation
-  used at finalize is deliberately NOT applied here; a release tag names an exact
-  commit). **This is one of the two places that still refuses**, and deliberately so: it is release
+  every declared chain, whose `headSha` either STRICTLY equals the release-candidate commit
+  (default `HEAD`; `--candidate` for an explicit commit) or binds through the one deliberate
+  alternative, the **release-prep carry-over**: the receipt's `headSha` is an ancestor of the
+  candidate, every path in the post-receipt diff lies inside the release-prep surface
+  (`RELEASE_FILES`), and `package.json` plus each plugin manifest differ by the version field
+  alone — anything else refuses `chains_stale` naming the culprit paths, and the pass envelope
+  names which route bound. The #547 `codeTreeHash` freshness relaxation used at finalize still
+  does NOT apply. **This is one of the two places that still refuses**, and deliberately so: it is release
   tooling a human invokes before tagging, not a workflow judging a run. A red, missing, stale,
   incomplete, waived, or unresolvable-chain-set receipt is a
   typed refusal, never a judgment call: `chains_unverified` (no/unparseable receipt) >
-  `chains_stale` (`headSha` unbound/mismatched, or the receipt stamped over a dirty worktree —
-  with hint-only `stale_paths`/`stale_kind` culprit diagnostics on a sha mismatch) >
+  `chains_stale` (`headSha` unbound, or bound by neither route, or the receipt stamped over a dirty
+  worktree — with hint-only `stale_paths`/`stale_kind` culprit diagnostics on a sha mismatch) >
   `chains_empty` (zero chains recorded) > `repo_kind_undetermined` (the expected chain set
   cannot be resolved from `package.json` — fails CLOSED, never treated as a vacuous pass) >
   `chains_incomplete` (the receipt is a legitimate but partial subset — e.g. a
@@ -510,10 +514,12 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   (`{result:'pass', mode:'release-check', candidate, chains:[...]}`) clears the gate. See
   `docs/api.md` for the full envelope shapes and `docs/decisions/D-651-01.md` for the design.
 - **Working sequence:** `--prepare` → one release-only commit →
-  `KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js` at the bump commit
-  (OFFLINE both skips the tag-existence check that would otherwise fail before the tag exists,
-  and lets the chains stamp `headSha` at the candidate with no tag needed yet) →
   `--release-check` passes → `--tag` → online post-tag validation → push the named tag → publish.
+  A four-chain receipt recorded at the pre-prep commit carries over the release-only commit, so
+  no chain re-run at the bump commit is required; re-running there
+  (`KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js` — OFFLINE skips the
+  tag-existence check that would otherwise fail before the tag exists) also binds, via strict
+  equality.
 - Push only the named tag before creating the forge release. The release tooling emits neutral
   guidance; no external pipeline or forge service participates in the release gate.
 - **Release-commit hygiene (issue #651).** A release/tag commit is version bump + release docs

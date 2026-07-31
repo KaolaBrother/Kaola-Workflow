@@ -403,8 +403,13 @@ Deltas from the finalize measurement, each load-bearing:
 
 - no project folder — at release time the run is archived, so the receipt default is the git
   top-level's `.cache/chain-receipt.json` (override with `--receipt`);
-- **strict `headSha` equality** against the candidate (default `HEAD`); the `codeTreeHash`
-  content-address relaxation deliberately does not apply, because a tag names an exact commit;
+- **strict `headSha` equality** against the candidate (default `HEAD`) — or the one deliberate
+  alternative, the **release-prep carry-over**: a receipt whose `headSha` is an ancestor of the
+  candidate binds when every path in the post-receipt diff lies inside the release-prep surface
+  (`RELEASE_FILES`) and `package.json` plus each plugin manifest differ by the version field
+  alone; anything else refuses `chains_stale` naming the culprit paths, and the pass envelope
+  names which route bound. The `codeTreeHash` content-address relaxation still does not apply —
+  a tag names an exact commit or a release-prep-only descendant of one;
 - a missing or `unknown` `headSha` refuses, never passes;
 - a **dirty-stamped** receipt (`workTreeHash !== 'clean'`) refuses — the chains validated the commit
   plus uncommitted edits, not the tree the tag would name;
@@ -634,13 +639,12 @@ regenerated `ROADMAP.md` MUST still list `#N`. Invariants 3, 4, 6 and 7 apply un
 inversion keys on the recorded **intent**, not on the mutable `remote_issue_closed` token, which
 flips to `already_closed` when the issue was auto-closed on the forge.
 
-**WARN-FIRST attestation invariant.** `claim-planner-attested` is recorded in the receipt but does
-NOT affect `closure_invariants.ok`. Missing attestation adds a warning and sets the field to
-`missing`; it never blocks closure. The detector is log-gated: with no `.cache/dispatch-log.jsonl`
-the field is `missing` and the warning says the detector is inactive. The finalize seam has no
-attestation at all — it is orchestrator-owned by design, so inline execution there is the design,
-not a bypass. A legacy receipt carrying the retired `finalize_contractor_attested` field is read and
-kept **verbatim**; nothing rewrites one.
+**Retired: the WARN-FIRST attestation invariant.** `claim_planner_attested` went with its producer
+chain (`checkDispatchAttestations`, the `--attest-planner-spawn` back-fill) when the mandatory
+planner seam was retired; no closure path records or checks a dispatch attestation, on any edition.
+The finalize seam never had one — it is orchestrator-owned by design, so inline execution there is
+the design, not a bypass. A legacy receipt carrying `claim_planner_attested` or the earlier-retired
+`finalize_contractor_attested` field is read and kept **verbatim**; nothing rewrites one.
 
 ### Closure receipt schema
 
@@ -664,7 +668,6 @@ success.
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
-  "claim_planner_attested": "attested|missing|failed",
   "selection_evidence": "present|absent",
   "goal_declared": false,
   "goal_declared_source": null,
@@ -734,23 +737,11 @@ bundle is `closed` (all members) or `partial` when online — never `skipped_off
 offline-only token. A `partial` close trips `remote-members-closed`, so it is never reported as a
 clean success.
 
-**Attestation persistence to the archive.** The receipt fields are otherwise ephemeral.
-`persistAttestationToSummary(destDir, receipt)` durably appends a script-owned, presence-guarded
-(`/^## Attestation$/m`, create-if-absent) section to the archived `finalization-summary.md`:
-
-```
-## Attestation
-claim_planner_attested: <value>
-<every receipt.warnings entry starting with 'ATTESTATION WARNING' or 'attestation:', verbatim, one per line>
-```
-
-The status field is always written, even when `attested` — a clean result is a positive statement,
-not an absence. `appendClosureBlock` independently carries the same field in the archived
-`workflow-state.md` `## Closure` block, so the archive holds two mutually reinforcing copies. The
-presence guard is also the legacy-tolerance rule: an archived section carrying a retired field is
-left byte-identical. **Known residual:** a summary pre-seeding a column-0 `## Attestation` heading
-before finalize suppresses the append (the guard exists for crash-resume idempotence, not
-tamper-resistance).
+**Retired: attestation persistence to the archive.** `persistAttestationToSummary` and the
+script-owned `## Attestation` section went with the attestation invariant above: nothing appends to
+the archived `finalization-summary.md` at close, and `appendClosureBlock` writes no attestation
+field to the `## Closure` block. An archived summary that already carries a `## Attestation`
+section is a legacy record and is left byte-identical; nothing rewrites one.
 
 **Offline behavior** is explicit: local invariants (1–4) are always checked; remote actions
 (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline` rather than `failed`.
@@ -1146,7 +1137,7 @@ Test-only. Do not use in production.
 worktree. Also exports `mainRootFromCoord`, `resolveMainRoot`, `resolveSessionMarker`,
 `claimProject`, `claimExplicitTarget`, `claimExplicitBundle`, `buildClosureReceipt`,
 `checkClosureInvariants`, `verifyArchiveComplete`, `archiveProjectDir`, `appendClosureBlock`,
-`persistAttestationToSummary`, `removeWorktree`, `provisionWorktree`, `readActiveFolders`,
+`removeWorktree`, `provisionWorktree`, `readActiveFolders`,
 `readPriorityConfig`, `treeDirty`, `commitDiscardArchive`, and the label/worktree maintenance
 commands.
 

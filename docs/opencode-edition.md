@@ -338,7 +338,7 @@ silently drift when a future second plugin is added. Enforced by `A11-allowlist`
 
 | Claude/Codex hook | opencode plugin mapping | Script |
 | --- | --- | --- |
-| `SubagentStart` (dispatch attestation) | `tool.execute.before` · `task` | `kaola-workflow-subagent-dispatch-log.sh` |
+| `SubagentStart` (advisory dispatch log) | `tool.execute.before` · `task` | `kaola-workflow-subagent-dispatch-log.sh` |
 | `SessionStart` compact (resume state) | `experimental.session.compacting` | inline (reads `workflow-state.md`) |
 
 Fail-open everywhere (a missing script, malformed payload, or non-git cwd never

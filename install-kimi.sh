@@ -134,10 +134,10 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# Role skills this edition deployed on a PREVIOUS release and no longer generates. The install
-# prune is namespace-wide (kaola-role-*), so install already self-heals; uninstall removes by
-# source-tree name and needs the retired names listed here.
-RETIRED_ROLE_SKILLS=("kaola-role-contractor")
+# Skills this edition deployed on a PREVIOUS release and no longer generates. The install
+# prune is namespace-wide (kaola-role-* and kaola-workflow-*), so install already self-heals;
+# uninstall removes by source-tree name and needs the retired names listed here.
+RETIRED_ROLE_SKILLS=("kaola-role-contractor" "kaola-role-workflow-planner" "kaola-workflow-adapt" "kaola-workflow-plan-run")
 
 # Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.

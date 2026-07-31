@@ -591,14 +591,9 @@ for (const target of emittedCommandTargets) {
     assert(!/\bopus-tier\b/i.test(body) && !/\bsonnet-tier\b/i.test(body),
       'S2[' + file + ']: no opus-tier/sonnet-tier leak in rewrite prose');
   }
-  // (c) The planner agent SUFFIX (opencode-only addition) must be neutral. The
-  //     planner's verbatim canonical body legitimately keeps {opus,sonnet} as the
-  //     cross-edition model-column vocabulary, so assert on the suffix in isolation.
-  const suffix = sync.opencodeAgentSuffix('workflow-planner');
-  assert(!/\bopus\b/i.test(suffix) && !/\bsonnet\b/i.test(suffix),
-    'S2: workflow-planner opencodeAgentSuffix carries no Claude-tier-name (opus/sonnet) leak');
-  assert(/reasoning tier|standard tier/i.test(suffix),
-    'S2: workflow-planner opencodeAgentSuffix names tiers by role (neutral labels)');
+  // (c) DELETED with its mechanism: the workflow-planner opencodeAgentSuffix addendum is
+  //     retired, the suffix is empty for every role (A13), and there is no suffix prose
+  //     left to assert neutrality over.
 
   // (d) #609: body-wide B2 sweep — the narrowed exemption. Every generated agent
   // and command file must carry ZERO capitalized "Opus"/"Sonnet" proper-noun

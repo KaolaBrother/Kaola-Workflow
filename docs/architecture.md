@@ -341,4 +341,5 @@ See `conventions.md` § Two validation tiers.
 Chain selection at finalize belongs to the producer: `run-chains.js` diff-scopes it from
 `--project` / `--plan`. A non-edition-touching diff runs the `claude` chain alone; an
 edition-touching diff — or an unresolved diff base — fails closed to all four. A release tag always
-requires the full, unwaived four-chain receipt regardless of scope.
+requires the full, unwaived four-chain receipt regardless of scope — bound at the tagged commit, or
+carried over release-prep-only commits.

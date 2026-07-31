@@ -177,7 +177,7 @@ architecture docs if structure changed · inline comments where public interface
 - **Chain selection belongs to the producer.** `kaola-workflow-run-chains.js` diff-scopes it at
   finalize: a non-edition-touching diff runs the `claude` chain alone; an edition-touching diff — or an
   unresolved diff base — fails closed to all four. A release tag always requires the full, unwaived
-  four-chain receipt.
+  four-chain receipt — bound at the tagged commit, or carried over release-prep-only commits.
 - **Prose changes propagate to generated surfaces.** The command and SKILL surfaces are rendered from
   skeletons in `templates/routing/`; edit the skeleton and regenerate, never a rendered surface.
   `node scripts/generate-routing-surfaces.js --check` prints the surface count and is wired into every chain.
