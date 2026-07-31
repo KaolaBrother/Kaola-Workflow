@@ -205,38 +205,25 @@ for (const role of reviewerGenerator.ROLES) {
     `A6-reviewer[${role}]: OpenCode agent makes no stochastic-output-identity claim`);
 }
 
-// #708: end-to-end — resolveReviewerProfileIdentity(role, { reviewRuntime: 'opencode' }) must return
-// ok against the installed .opencode/agent/ profile, with a resolved_profile_hash matching the file.
-// This is the exact call that hard-blocked every review-gated plan on opencode (review_profile_
-// unavailable / review_profile_identity_unavailable). CWD is the repo root, so the project candidate
-// (.opencode/agent/<role>.md) is the first probe path and must resolve.
-const adaptiveNode = require('./kaola-workflow-adaptive-node');
-for (const role of reviewerGenerator.ROLES) {
-  const identity = adaptiveNode.resolveReviewerProfileIdentity(role, { reviewRuntime: 'opencode' });
-  assert(identity.ok === true,
-    `#708[${role}]: resolveReviewerProfileIdentity(opencode) must succeed (got ${identity.reason})`);
-  const fileHash = (read('.opencode/agent/' + role + '.md')
-    .match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(identity.resolved_profile_hash === fileHash,
-    `#708[${role}]: resolved_profile_hash must match the installed profile file`);
-  assert(identity.runtime === 'opencode',
-    `#708[${role}]: identity runtime is opencode`);
-}
+// #708 END-TO-END, RETIRED WITH ITS CONSUMER. The reviewer profile hash was re-stamped over the
+// opencode bytes so `resolveReviewerProfileIdentity` could bind a schema-2 review receipt to the
+// exact profile that produced it, and this block drove that resolver against the installed tree.
+// The resolver lived in the node executor and went with it, along with the review receipts it
+// bound. The re-stamped hash itself is still generated and still checked above (A6-reviewer:
+// present, valid under verifyResolvedProfileHash, and distinct from the Claude hash); what is no
+// longer covered is any CONSUMER resolving that hash back to a profile, because there is none.
 
-// A13: the workflow-planner ADOPTS adaptive effort selection — its opencode-edition body
-// carries the mapTier guidance (effort tiers), and ONLY it does (other agents stay verbatim).
-assert(read('.opencode/agent/workflow-planner.md').includes('mapTier'),
-  'A13: workflow-planner opencode body carries the mapTier effort-tier guidance');
-assert(/effort[- ]tier/i.test(read('.opencode/agent/workflow-planner.md')),
-  'A13: workflow-planner opencode body names the effort tiers');
-assert(!read('.opencode/agent/implementer.md').includes('mapTier'),
-  'A13: non-planner agents stay verbatim (no mapTier guidance)');
-assert(sync.opencodeAgentSuffix('workflow-planner').includes('mapTier')
-  && sync.opencodeAgentSuffix('implementer') === '',
-  'A13: opencodeAgentSuffix is non-empty only for workflow-planner');
-// #816: the retired bookkeeping role must not be regenerated onto this runtime.
-assert(!fs.existsSync(path.join(REPO, '.opencode', 'agent', 'contractor.md')),
-  'A13: the retired bookkeeping role must not ship on the opencode edition');
+// A13: the retired roles must not be regenerated onto this runtime. `workflow-planner` carried the
+// mapTier effort-tier guidance through `opencodeAgentSuffix` — the one agent whose opencode body
+// was not verbatim; the planner role is retired, so both the role and its suffix are gone and the
+// remaining claim is that EVERY agent body is now verbatim.
+for (const retired of ['contractor.md', 'workflow-planner.md']) {
+  assert(!fs.existsSync(path.join(REPO, '.opencode', 'agent', retired)),
+    'A13: the retired role ' + retired + ' must not ship on the opencode edition');
+}
+assert(sync.opencodeAgentSuffix('implementer') === ''
+  && sync.opencodeAgentSuffix('code-reviewer') === '',
+  'A13: opencodeAgentSuffix is empty for every surviving role — no agent body is rewritten');
 for (const file of canonCommands) {
   const expected = sync.renderCommand(read('commands/' + file));
   assert(read('.opencode/command/' + file) === expected,
@@ -488,14 +475,13 @@ assert(unk.agent.planner.variant === 'high' && unk.agent.implementer.variant ===
 // installed opencode command surface (the #400 guarantee, for the opencode
 // edition). Mirrors test-route-reachability.js T2, scoped to .opencode/command.
 // ---------------------------------------------------------------------------
-// #725 Phase A: claim.js never emits a non-adaptive route target post-retirement
-// (no isFast branch survives) — the emitted-target set shrinks to the 2 real
-// adaptive targets (mirrors test-route-reachability.js's T1/T2 retirement).
-const stripSlash = c => c.replace(/^\//, '');
-const emittedCommandTargets = [
-  stripSlash(schema.PLAN_RUN_COMMAND),
-  stripSlash(schema.ADAPT_COMMAND),
-];
+// The target set is DERIVED from the generated-surface registry — the same TOPICS table that
+// renders the surfaces — exactly as test-route-reachability.js T2 does. It used to be the two
+// schema constants `PLAN_RUN_COMMAND` / `ADAPT_COMMAND`; both name commands that no longer exist,
+// and a hand-typed pair is how a suite ends up asserting reachability for a surface nobody ships.
+const { TOPICS: ROUTING_TOPICS } = require('./generate-routing-surfaces.js');
+const emittedCommandTargets = Object.keys(ROUTING_TOPICS).sort()
+  .map(t => ROUTING_TOPICS[t].command_basename);
 const installed = new Set(genCommandFiles.map(f => f.slice(0, -3)));
 for (const target of emittedCommandTargets) {
   assert(installed.has(target),
@@ -519,11 +505,12 @@ for (const target of emittedCommandTargets) {
   const cmdBody = name => read('.opencode/command/' + name + '.md');
   const has = (name, tok) => cmdBody(name).includes(tok);
 
-  // A15 (mirror T5): plan-run carries the frontier-unit PIN + literal (n9-prose-skeleton).
-  assert(has('kaola-workflow-plan-run', '<!-- PIN: frontier unit -->'),
-    'A15: plan-run must contain <!-- PIN: frontier unit --> comment');
-  assert(has('kaola-workflow-plan-run', 'frontier unit'),
-    'A15: plan-run must contain "frontier unit" literal');
+  // A15, A17, A18, A19 — RETIRED WITH THEIR CARRIERS. All four pinned markers on
+  // `kaola-workflow-plan-run` and `kaola-workflow-adapt`, and both commands are gone: the
+  // frontier unit (A15) and the leg-isolation recipe (A18) belonged to the node scheduler, the
+  // speculative-open card (A19) to `--speculative-consent`, and the claim-escalate pin (A17) to
+  // the adapt surface. None has a surviving carrier; a repo-wide sweep of `commands/` finds only
+  // `consent-in-conversation`, `sink-reports-orchestrator-owns` and `closure-audit`.
 
   // A16 (mirror T6): finalize carries the closure-audit PIN + literal (#496/#497).
   assert(has('kaola-workflow-finalize', '<!-- PIN: closure-audit -->'),
@@ -531,25 +518,14 @@ for (const target of emittedCommandTargets) {
   assert(has('kaola-workflow-finalize', 'closure-audit'),
     'A16: finalize must contain "closure-audit" literal');
 
-  // A17 (mirror T7): adapt + auto carry the claim-escalate PIN + result:escalate literal (#495).
-  for (const name of ['kaola-workflow-adapt']) {
-    assert(has(name, '<!-- PIN: claim-escalate -->'),
-      'A17[' + name + ']: must contain <!-- PIN: claim-escalate --> comment');
-    assert(has(name, 'result: escalate'),
-      'A17[' + name + ']: must contain "result: escalate" literal');
+  // A16b: the two pins that REPLACED them, locked in on the same fail-closed shape. The sink
+  // reports and the orchestrator owns the outcome; consent is a conversation with the user.
+  assert(has('kaola-workflow-finalize', '<!-- PIN: sink-reports-orchestrator-owns -->'),
+    'A16b: finalize must contain <!-- PIN: sink-reports-orchestrator-owns --> comment');
+  for (const name of ['kaola-workflow-finalize', 'workflow-init', 'workflow-next']) {
+    assert(has(name, '<!-- PIN: consent-in-conversation -->'),
+      'A16b[' + name + ']: must contain <!-- PIN: consent-in-conversation --> comment');
   }
-
-  // A18 (mirror T8): plan-run carries the leg-isolation-recipe PIN + --write-overlap-consent literal (#500 L2).
-  assert(has('kaola-workflow-plan-run', '<!-- PIN: leg-isolation-recipe -->'),
-    'A18: plan-run must contain <!-- PIN: leg-isolation-recipe --> comment');
-  assert(has('kaola-workflow-plan-run', '--write-overlap-consent'),
-    'A18: plan-run must contain "--write-overlap-consent" literal');
-
-  // A19 (mirror T9): plan-run carries the speculative-open CARD + --speculative-consent literal (#500 L3).
-  assert(has('kaola-workflow-plan-run', '<!-- CARD: speculative-open -->'),
-    'A19: plan-run must contain <!-- CARD: speculative-open --> comment');
-  assert(has('kaola-workflow-plan-run', '--speculative-consent'),
-    'A19: plan-run must contain "--speculative-consent" literal');
 
   // A20 (mirror T10) — RETIRED (#725 Phase D). The dormant fast-compliance-backstop PIN +
   // `fast_compliance_unresolved` legacy backstop on finalize was removed with the deleted fast path
@@ -687,10 +663,16 @@ for (const target of emittedCommandTargets) {
   // A25 (#645): the First Principles axiom POINTER line lives in the shared skeleton body (outside
   // every REGION marker), so it propagates into the generated opencode workflow-next as well. Lock
   // its presence so an opencode regen can never drop the consumer axiom reference.
-  assert(wfNext.includes('First Principles axioms'),
+  // The needle is scoped to ONE line: the pointer sentence wraps in canonical, so a needle
+  // spanning the wrap would be pinning the line-break rather than the rule.
+  assert(wfNext.includes('Principles axioms (the `## First Principles` block'),
     'A25 (#645): opencode workflow-next must carry the First Principles axiom pointer (shared-body reference line)');
-  assert(wfNext.includes('never cite one to skip a typed gate'),
-    'A25 (#645): opencode workflow-next must carry the axiom tighten-only clause');
+  assert(wfNext.includes('applied in priority order'),
+    'A25 (#645): opencode workflow-next must carry the priority-order clause');
+  // The companion tighten-only clause ("never cite one to skip a typed gate") is RETIRED with the
+  // typed gates it protected: there is no gate an axiom could be cited to skip. What replaced it —
+  // the derivation being useful and never required — is not a tighten-only rule and is not pinned
+  // as one.
   // A26 (#646, updated #789): the {ISSUE_SCOUT_MODEL} placeholder and the issue-scout dispatch it
   // named are retired entirely — the no-target survey folded into the workflow-planner (dispatched
   // by the separate adapt surface), so workflow-next carries no agent dispatch of its own at all.
@@ -705,16 +687,16 @@ for (const target of emittedCommandTargets) {
   assert(!read('commands/workflow-next.md').includes('this placeholder'),
     'A27 (obs1): generated commands/workflow-next.md must NOT carry the dangling "this placeholder" phrasing (no referent post-render)');
 
-  // A22 (#F6, updated #765): the cutover retired the fast/full paths, so the opencode adapt surface
-  // carries NO fast/full downgrade/fallback wording at all — neither the former guarded "NEVER
-  // downgrade to fast/full" nor an unguarded escape. Fail loud if a future canonical edit reintroduces
-  // any path-fallback wording onto the adaptive-only surface.
-  const adapt = read('.opencode/command/kaola-workflow-adapt.md');
+  // A22 (#F6, updated #765): no path-fallback wording on ANY generated opencode command. The
+  // check used to be scoped to the adapt surface, which is gone; the ban itself is not about that
+  // one file, so it now sweeps every generated command — strictly wider than before.
   {
     const fallback = /(?:downgrade to (?:fast\/full|full path)|fall back to (?:fast\/full|full path|full))/g;
-    const found = adapt.match(fallback) || [];
-    assert(found.length === 0,
-      'A22 (#F6): adapt carries NO fast/full downgrade/fallback wording (the paths are retired, #765) — found: ' + found.join(', '));
+    for (const file of genCommandFiles) {
+      const found = read('.opencode/command/' + file).match(fallback) || [];
+      assert(found.length === 0,
+        'A22 (#F6): ' + file + ' carries NO fast/full downgrade/fallback wording (the paths are retired, #765) — found: ' + found.join(', '));
+    }
   }
 }
 
@@ -887,9 +869,10 @@ if (exists(pluginRel)) {
   const os = require('os');
 
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
+  // The three surviving command topics. `kaola-workflow-adapt` and `kaola-workflow-plan-run`
+  // were the node executor's own surfaces and went with it.
   const ADAPTIVE_CORE = [
-    'kaola-workflow-adapt', 'kaola-workflow-finalize',
-    'kaola-workflow-plan-run', 'workflow-init', 'workflow-next',
+    'kaola-workflow-finalize', 'workflow-init', 'workflow-next',
   ];
 
   // F5: partition exhaustiveness — the canonical command set must be EXACTLY adaptive-core (the

@@ -5,7 +5,7 @@
   // Kaola-Workflow · opencode edition — TWO model tiers:
   //   普通模型 (standard tier)  → top-level "model".
   //   推理模型 (reasoning tier) → "agent.<role>.model" overrides for
-  //                               the reasoning roles: code-architect, code-reviewer, planner, security-reviewer, synthesizer, workflow-planner.
+  //                               the reasoning roles: code-architect, code-reviewer, planner, security-reviewer, synthesizer.
   // DEFAULT: nothing is pinned, so BOTH tiers inherit the model you are
   // already using in opencode. To pin a tier, uncomment & set it below
   // (any provider/model works, e.g. "anthropic/claude-sonnet-4-5",
@@ -19,7 +19,6 @@
   //   "code-reviewer": { "model": "<inherits your opencode default>" },
   //   "planner": { "model": "<inherits your opencode default>" },
   //   "security-reviewer": { "model": "<inherits your opencode default>" },
-  //   "synthesizer": { "model": "<inherits your opencode default>" },
-  //   "workflow-planner": { "model": "<inherits your opencode default>" }
+  //   "synthesizer": { "model": "<inherits your opencode default>" }
   // }
 }

@@ -10,17 +10,18 @@
 //            ruling that silently never applies.
 //   PART B — the ruling is SINGLE-SOURCED against `docs/workflow-state-contract.md`, which is
 //            where a human reads which artifacts a successor may delete.
-//   PART C — the ruling is TOTAL, over what real archived runs wrote AND over the artifact
-//            names the production scripts declare. An unclassified artifact inherits neither
-//            the atomic-write obligation nor resume coverage — and the A1 successor test
-//            treats unclassified as deletable.
+//   PART C — the ruling is TOTAL over the artifact names the production scripts declare. An
+//            unclassified artifact inherits neither the atomic-write obligation nor resume
+//            coverage. The second, EMPIRICAL corpus this used to check — what real archived runs
+//            wrote — is gone; see the note above PART C for why, and what that costs.
 //   PART D/E — the atomic-write obligation, both directions: no production script writes a
 //            `record` path off the atomic replace, and the atomic replace is not used off the
 //            kernel. OBSERVED, not grepped: the writes that matter travel through helpers,
 //            injected `writeFile` options and spawned CLIs, so `kernel-write-observer.js` is
 //            preloaded into vehicle suites that drive the real writers over real fixtures.
 //            The failure class is not hypothetical — a kernel write that silently failed while
-//            the run reported `done` is a shipped defect.
+//            the run reported `done` is a shipped defect. Four of the six vehicles went with the
+//            node executor; what that costs is named at the foot of PART E.
 //   PART F — the static ratchet for writers no vehicle reaches.
 //
 // Run: node scripts/test-kernel-conformance.js        (~70s; the vehicles do real git work)
@@ -108,20 +109,7 @@ function partA() {
 // Returns null for a pattern with no registered witness (and PART A then fails on the coverage
 // assertion below, rather than silently skipping the row).
 const PATTERN_WITNESSES = {
-  '/^\\.cache\\/epochs\\/[^/]+\\/manifest\\.json$/': '.cache/epochs/1/manifest.json',
-  '/^\\.cache\\/committed-transactions\\/[^/]+\\.json$/': '.cache/committed-transactions/tx-1.json',
-  '/^\\.cache\\/aborted-transactions\\/[^/]+\\.json$/': '.cache/aborted-transactions/tx-1.json',
-  '/^\\.cache\\/barrier-base-[^/]+$/': '.cache/barrier-base-n1',
-  '/^\\.cache\\/barrier-open-[^/]+$/': '.cache/barrier-open-n1',
-  '/^\\.cache\\/replan-sources\\/[^/]+\\.json$/': '.cache/replan-sources/a1.json',
-  '/^\\.cache\\/review-contexts\\/[^/]+\\.json$/': '.cache/review-contexts/g1.json',
-  '/^\\.cache\\/review-receipts\\//': '.cache/review-receipts/g1/r1.json',
-  '/^\\.cache\\/review-claim-roots\\/[^/]+\\.json$/': '.cache/review-claim-roots/g1.json',
-  '/^\\.cache\\/review-certifiers\\//': '.cache/review-certifiers/g1.json',
-  '/^\\.cache\\/review-findings\\//': '.cache/review-findings/g1.json',
   '/^\\.cache\\/validation-vectors\\/[^/]+\\.json$/': '.cache/validation-vectors/v1.json',
-  '/^\\.cache\\/epochs\\/[^/]+\\/files\\//': '.cache/epochs/1/files/workflow-plan.md',
-  '/^\\.cache\\/epoch-projections\\//': '.cache/epoch-projections/owner-projection.json',
   '/^\\.cache\\/[a-z-]+-envelope\\.json$/': '.cache/orient-envelope.json',
   '/^phase[0-9]+-[a-z-]+\\.md$/': 'phase3-plan.md',
   '/^\\.cache\\/\\.cache\\//': '.cache/.cache/n1.md',
@@ -565,6 +553,28 @@ function partDE(text) {
     'the scoping half is non-vacuous: the position record was observed taking the atomic replace ('
     + atomicPathList.length + ' atomic paths: ' + atomicPathList.sort().join(', ') + ')');
 }
+
+// ---------------------------------------------------------------------------
+// WHAT THE OBSERVED HALVES NO LONGER REACH, named so it is a known gap rather than a silence.
+//
+// Four vehicles and one in-file CLI driver went with the node executor. The writers they were the
+// only observers of:
+//
+//   * the barrier baselines and the ledger flip (`test-commit-node.js`) — the writers themselves
+//     are gone, so nothing is uncovered here;
+//   * the freeze transaction's plan / state / acceptance-anchor writes (`test-adaptive-handoff.js`)
+//     — gone with the freeze chain;
+//   * the ledger-chain journal (`test-ledger-chain-tamper.js`) — gone with the ledger;
+//   * the re-plan epoch snapshot staging and its transaction writers
+//     (`test-barrier-base-integrity.js`) — gone with the epochs;
+//   * the SPAWNED-CLI wiring itself (the in-file `driveKernelCli`). This is the one that is NOT
+//     merely gone with its subject. Its argument was that in-process vehicles inject their own
+//     `writeFile` doubles and therefore never reach a CLI's own durable-write injection — measured,
+//     de-atomizing that injection left every in-process vehicle green. That argument still holds
+//     for `kaola-workflow-claim.js`, and no surviving vehicle drives a CLI whose durable writes are
+//     observed under the preload. PART F's static ratchet is what stands in its place, and a static
+//     ratchet is exactly what the observed halves exist because grep cannot do.
+// ---------------------------------------------------------------------------
 
 // ===========================================================================
 // PART F — the static surface ratchet.

@@ -17,9 +17,9 @@
 //   node scripts/test-kimi-edition.js
 //
 // The kimi edition is delivered the Kimi-native way: directory-form Skills
-// under `.kimi/skills/<name>/SKILL.md` (5 command skills — adaptive-only, the
-// fast/full command skills are #725-retired — + 15 kaola-role-*
-// role-contract skills) plus `.kimi/hooks/` (1 byte-copied shell hook + the
+// under `.kimi/skills/<name>/SKILL.md` (one Skill per canonical command, plus
+// one `kaola-role-*` role-contract Skill per canonical agent — both counts are
+// derived from the canonical trees, never typed here) plus `.kimi/hooks/` (1 byte-copied shell hook + the
 // generated `kimi-hooks.toml` fragment the installer merges into the global
 // config.toml). ONE model tier: every subagent inherits the session model (the
 // Codex inherit precedent), so there is no variant/effort surface to assert —
@@ -85,13 +85,13 @@ function generatedTreeFiles() {
 }
 
 const canonCommands = sync.listCanonCommands();                    // ['kaola-workflow-adapt.md', ...]
-const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // 5 command basenames (adaptive-only, #725)
-const canonAgents = sync.listCanonAgents();                        // 15 roles (top-level agents/*.md only)
+const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // command basenames
+const canonAgents = sync.listCanonAgents();                        // roles (top-level agents/*.md only)
 const roleDirNames = canonAgents.map(a => 'kaola-role-' + a);
 const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 
 // ---------------------------------------------------------------------------
-// K1: count/structure parity — exactly 5 command Skill dirs + 15 kaola-role-*
+// K1: count/structure parity — one command Skill dir per canonical command + one kaola-role-*
 // Skill dirs, set-equal to the canonical commands/*.md + top-level agents/*.md
 // inventories (the canonical agent tree is flat — one file per role). Every SKILL.md carries a
 // frontmatter `name` (the dir name, so Kimi registers the canonical slash
@@ -104,7 +104,8 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
   assert(entries.length === expected.length && entries.every(e => e.isDirectory()),
     'K1: .kimi/skills/ holds exactly ' + expected.length + ' entries, all directories (no stray files)');
   assert(JSON.stringify(dirNames) === JSON.stringify(expected),
-    'K1: .kimi/skills/ dir set == 5 canonical commands + 15 kaola-role-* roles — got ' + JSON.stringify(dirNames));
+    'K1: .kimi/skills/ dir set == ' + canonCommandNames.length + ' canonical commands + '
+    + roleDirNames.length + ' kaola-role-* roles — got ' + JSON.stringify(dirNames));
   const roleSet = dirNames.filter(d => d.startsWith('kaola-role-'));
   assert(roleSet.length === canonAgents.length,
     'K1: kaola-role-* skill count matches canonical agent count (' + canonAgents.length + ')');
@@ -151,18 +152,21 @@ for (const rel of generatedTreeFiles()) {
   assert(!/--runtime claude\b/.test(content),
     'K2: ' + rel + ': no "--runtime claude" (rewritten to --runtime kimi at generation)');
 }
-for (const name of ['workflow-next', 'kaola-workflow-adapt']) {
+for (const name of ['workflow-next']) {
   const content = read(skillDir(name));
   assert(/--runtime kimi\b/.test(content),
     'K2[' + name + ']: claim invocation stamps "--runtime kimi" into workflow-state.md');
 }
 // #789: workflow-next itself no longer carries ANY "MUST pass model=" dispatch instruction
 // (issue-scout was its only one, and is fully retired), so there is nothing left to strip and
-// replace there. kaola-workflow-adapt still dispatches workflow-planner with an explicit model
-// badge, so its inherit-model replacement stays checked.
-assert(read(skillDir('kaola-workflow-adapt')).includes(
-  'Never pass a per-call model override; sub-agents inherit the session model.'),
-  'K2[kaola-workflow-adapt]: carries the inherit-model guidance (the stripped "MUST pass model=" prose replacement)');
+// replace there.
+//
+// THE INHERIT-MODEL PROSE REPLACEMENT HAS NO CARRIER LEFT. It was checked on
+// `kaola-workflow-adapt`, the one surviving surface that dispatched an agent with an explicit
+// model badge; that surface is retired and no generated skill carries a per-call model override to
+// strip. The BAN half still runs — the loop above asserts no `MUST pass model=` survives anywhere
+// in the tree — so what is lost is the positive half: nothing confirms the replacement PROSE is
+// still emitted, because there is nothing left for it to replace.
 
 // K2-declaration: the model-inheritance divergence must exist as a DECLARED EXEMPTION-TABLE ENTRY,
 // not merely as prose. "One rule, one wording" permits a runtime to diverge only where its
@@ -433,14 +437,14 @@ for (const script of sync.HOOK_SCRIPTS) {
 // preceded by a path char, so only genuine slash-command mentions match.
 // ---------------------------------------------------------------------------
 {
-  // #725 Phase A: claim.js never emits a non-adaptive route target post-retirement
-  // (no isFast branch survives) — the emitted-target set shrinks to the 2 real
-  // adaptive targets (mirrors test-opencode-edition.js's A9 retirement).
-  const stripSlash = c => c.replace(/^\//, '');
-  const emittedCommandTargets = [
-    stripSlash(schema.PLAN_RUN_COMMAND),
-    stripSlash(schema.ADAPT_COMMAND),
-  ];
+  // The target set is DERIVED from the generated-surface registry — the same TOPICS table that
+  // renders the surfaces — exactly as test-route-reachability.js T2 does. It used to be the two
+  // schema constants `PLAN_RUN_COMMAND` / `ADAPT_COMMAND`; both name commands that no longer
+  // exist, and a hand-typed pair is how a suite ends up asserting reachability for a surface
+  // nobody ships.
+  const { TOPICS: ROUTING_TOPICS } = require('./generate-routing-surfaces.js');
+  const emittedCommandTargets = Object.keys(ROUTING_TOPICS).sort()
+    .map(t => ROUTING_TOPICS[t].command_basename);
   const installed = new Set(
     fs.readdirSync(path.join(REPO, '.kimi', 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory()).map(e => e.name)
@@ -464,7 +468,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 
 // ---------------------------------------------------------------------------
 // P1 / P4 / U1 / A1: install-kimi.sh contract — the install-time COMMAND-skill
-// deploy (adaptive-core 5, all 15 kaola-role-* always), re-install idempotency
+// deploy (every adaptive-core command, all kaola-role-* always), re-install idempotency
 // (exactly ONE managed hooks block in config.toml), --uninstall zero-residue,
 // and zero Claude-path leaks across the deployed tree. HERMETIC per sub-case:
 // each run gets its OWN fresh temp HOME (seed_kaola_config writes only under
@@ -492,9 +496,10 @@ for (const script of sync.HOOK_SCRIPTS) {
   const os = require('os');
 
   const INSTALLER = path.join(REPO, 'install-kimi.sh');
+  // The three surviving command topics. `kaola-workflow-adapt` and `kaola-workflow-plan-run`
+  // were the node executor's own surfaces and went with it.
   const ADAPTIVE_CORE = [
-    'kaola-workflow-adapt', 'kaola-workflow-finalize',
-    'kaola-workflow-plan-run', 'workflow-init', 'workflow-next',
+    'kaola-workflow-finalize', 'workflow-init', 'workflow-next',
   ];
 
   // Partition exhaustiveness (mirror of the opencode F5): the canonical command
@@ -545,7 +550,8 @@ for (const script of sync.HOOK_SCRIPTS) {
   const expectDeployed = (r, cmdNames, label) => {
     const expected = [...cmdNames, ...roleDirNames].sort();
     assert(JSON.stringify(deployedSkills(r)) === JSON.stringify(expected),
-      label + ': deployed skill set == ' + cmdNames.length + ' command(s) + 15 kaola-role-* roles — got ' + JSON.stringify(deployedSkills(r)));
+      label + ': deployed skill set == ' + cmdNames.length + ' command(s) + ' + roleDirNames.length
+      + ' kaola-role-* roles — got ' + JSON.stringify(deployedSkills(r)));
   };
   const firstStderrLine = r => String(r.stderr).split('\n')[0];
 
@@ -688,79 +694,18 @@ for (const script of sync.HOOK_SCRIPTS) {
     clean(r);
   }
 
-  // K9 — kimi reviewer profile resolution end-to-end: a review-gated plan on a REAL kimi
-  // install resolves the kimi-native reviewer SKILL.md. detectReviewRuntime recognizes the
-  // <kimi-home>/kaola-workflow/scripts layout (and is NOT swallowed by the opencode
-  // <config>/kaola-workflow/scripts pattern — a project carrying .opencode/agent/ must not
-  // hijack the kimi identity), reviewerProfilePath probes project → global → self-dev, and
-  // the generated SKILL.md's re-stamped resolved_profile_hash passes the runtime's
-  // zeroed-self sha256 verification. Each probe runs the deployed support script in a
-  // subprocess so __dirname/process.cwd() match a real consumer invocation.
-  {
-    const probe = (scriptsHome, cwd, home, kimiHome) => {
-      const script = 'const m=require(' + JSON.stringify(path.join(scriptsHome, 'kaola-workflow-adaptive-node.js')) + ');'
-        + "const r=m.resolveReviewerProfileIdentity('code-reviewer',{});"
-        + 'console.log(JSON.stringify({ok:r.ok,reason:r.reason||null,runtime:r.runtime||null,'
-        + 'hash:r.resolved_profile_hash||null,path:r.profile_path||null}));';
-      // spawn-class: environment
-      const r = spawnSync(process.execPath, ['-e', script],
-        { cwd, env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }), encoding: 'utf8' });
-      try { return JSON.parse(String(r.stdout).trim()); }
-      catch (_) { return { ok: false, reason: 'probe_crash: ' + String(r.stderr || r.stdout).split('\n')[0] }; }
-    };
-
-    const r1 = runInstaller([]);
-    assert(r1.ok, 'K9: seed install (project scope) exits 0');
-    const scriptsHome = path.join(r1.kimiHome, 'kaola-workflow', 'scripts');
-    const projectSkill = path.join(skillsDir(r1), 'kaola-role-code-reviewer', 'SKILL.md');
-    const deployedHash = p => (readFileSync(p, 'utf8')
-      .match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1] || null;
-
-    // case 1 — project-scope candidate resolves (ok:true, runtime 'kimi', verified hash).
-    const p1 = probe(scriptsHome, r1.dest, r1.home, r1.kimiHome);
-    assert(p1.ok === true && p1.runtime === 'kimi',
-      'K9[project]: reviewer identity resolves on a real kimi install — got ' + JSON.stringify(p1));
-    assert(p1.path === fs.realpathSync(projectSkill),
-      'K9[project]: resolved profile is the project-scope SKILL.md — got ' + p1.path);
-    assert(p1.hash && p1.hash === deployedHash(projectSkill),
-      'K9[project]: resolved_profile_hash verifies against the deployed SKILL.md bytes');
-
-    // case 2 — a global install into the SAME kimi home does not override the project win.
-    // spawn-class: environment
-    const rg = spawnSync('bash', [INSTALLER, '--global', '--yes'],
-      { env: Object.assign({}, process.env, { HOME: r1.home, KIMI_CODE_HOME: r1.kimiHome }), encoding: 'utf8' });
-    assert(rg.status === 0,
-      'K9[global-seed]: --global install exits 0 (got ' + rg.status + (rg.stderr ? ' — ' + String(rg.stderr).split('\n')[0] : '') + ')');
-    const globalSkill = path.join(r1.kimiHome, 'skills', 'kaola-role-code-reviewer', 'SKILL.md');
-    assert(existsSync(globalSkill), 'K9[global-seed]: global skill deployed at <kimi-home>/skills/');
-    const p2 = probe(scriptsHome, r1.dest, r1.home, r1.kimiHome);
-    assert(p2.ok === true && p2.path === fs.realpathSync(projectSkill),
-      'K9[priority]: project candidate wins over the global one — got ' + JSON.stringify(p2));
-
-    // case 3 — without a project candidate (empty cwd), the global candidate is used.
-    const emptyCwd = mkdtempSync(path.join(os.tmpdir(), 'kimi-i-empty-'));
-    const p3 = probe(scriptsHome, emptyCwd, r1.home, r1.kimiHome);
-    assert(p3.ok === true && p3.path === fs.realpathSync(globalSkill),
-      'K9[global]: falls back to the global <kimi-home>/skills candidate — got ' + JSON.stringify(p3));
-
-    // case 4 — a stray .opencode/agent profile in the project does NOT hijack the kimi
-    // identity (the detectReviewRuntime kimi branch fires before the opencode pattern).
-    fs.mkdirSync(path.join(r1.dest, '.opencode', 'agent'), { recursive: true });
-    fs.writeFileSync(path.join(r1.dest, '.opencode', 'agent', 'code-reviewer.md'),
-      '---\nname: code-reviewer\ndescription: stray opencode profile (must be ignored on kimi)\n---\n');
-    const p4 = probe(scriptsHome, r1.dest, r1.home, r1.kimiHome);
-    assert(p4.ok === true && p4.runtime === 'kimi' && p4.path === fs.realpathSync(projectSkill),
-      'K9[no-swallow]: a stray .opencode/agent profile does not hijack the kimi identity — got ' + JSON.stringify(p4));
-
-    // case 5 — no kimi reviewer profile anywhere → typed refusal (never a silent fallthrough).
-    rmSync(path.join(r1.dest, '.kimi-code'), { recursive: true, force: true });
-    rmSync(path.join(r1.kimiHome, 'skills'), { recursive: true, force: true });
-    const p5 = probe(scriptsHome, emptyCwd, r1.home, r1.kimiHome);
-    assert(p5.ok === false && p5.reason === 'review_profile_unavailable',
-      'K9[negative]: missing kimi reviewer profile refuses review_profile_unavailable — got ' + JSON.stringify(p5));
-    try { rmSync(emptyCwd, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    clean(r1);
-  }
+  // K9 — RETIRED WITH ITS RESOLVER. This drove `resolveReviewerProfileIdentity` against a real
+  // kimi install through five cases: the project-scope SKILL.md wins, a global install does not
+  // override it, an empty cwd falls back to the global candidate, a stray `.opencode/agent/`
+  // profile does not hijack the kimi identity, and a missing profile refuses
+  // `review_profile_unavailable` rather than falling through silently. The resolver lived in the
+  // node executor and went with it, along with the review receipts whose identity it bound.
+  //
+  // WHAT IS NOW UNCOVERED: the reviewer SKILL.md is still generated and its re-stamped
+  // `resolved_profile_hash` is still verified against the bytes (earlier in this file), but the
+  // runtime-DETECTION half — that a kimi install reads as kimi and not as opencode — has no
+  // consumer left and therefore no test. If a reviewer-identity resolver returns, that
+  // no-swallow case is the one worth restoring first: it was a real defect, not a hypothetical.
 }
 
 // ---------------------------------------------------------------------------

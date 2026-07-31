@@ -119,7 +119,12 @@ function seedAdaptiveFinalizeFixture(tmpRoot, project) {
   const dir = path.join(tmpRoot, 'kaola-workflow', project);
   fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
   let cand = '';
-  try { cand = adaptiveSchema.computeCodeTreeHash(tmpRoot, project) || ''; } catch (_) { cand = ''; }
+  // Pass the shared constant explicitly rather than letting it default. It is `[]` today, so this
+  // is behaviour-preserving — but the gate reads the same constant when it recomputes the hash, and
+  // a fixture that omitted it would silently stop tracking the gate the moment the constant grew.
+  try {
+    cand = adaptiveSchema.computeCodeTreeHash(tmpRoot, project, adaptiveSchema.VALIDATION_TEST_CONSUMES) || '';
+  } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
     'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
