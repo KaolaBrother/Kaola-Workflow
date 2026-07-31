@@ -1675,15 +1675,130 @@ function evaluateChainReceipt(root, opts) {
     validated_candidate_hash: currentCandidate };
 }
 
+// The release-prep surface (#877) — the ONE list of files a release cut may touch. Single source
+// for BOTH sides of the release seam: the release script's --prepare step stamps exactly these
+// files, and evaluateReleaseReceipt's carry-over route (below) binds a pre-cut receipt across a
+// commit iff the intervening diff stays inside them. Lives here, in the base-named byte-identical
+// kernel, so every edition reads one wording.
+const RELEASE_PLUGIN_BASE = 'plugins/kaola-workflow';
+const CODEX_MANIFEST_RELPATHS = Object.freeze([
+  RELEASE_PLUGIN_BASE + '/.codex-plugin/plugin.json',
+  RELEASE_PLUGIN_BASE + '-gitlab/.codex-plugin/plugin.json',
+  RELEASE_PLUGIN_BASE + '-gitea/.codex-plugin/plugin.json',
+]);
+const CLAUDE_MANIFEST_RELPATHS = Object.freeze([
+  RELEASE_PLUGIN_BASE + '-gitlab/.claude-plugin/plugin.json',
+  RELEASE_PLUGIN_BASE + '-gitea/.claude-plugin/plugin.json',
+]);
+const RELEASE_FILES = Object.freeze(['CHANGELOG.md', 'README.md', 'package.json', ...CODEX_MANIFEST_RELPATHS, ...CLAUDE_MANIFEST_RELPATHS]);
+// The members whose content is version-stamped JSON: the carry-over route demands deep-equality
+// after deleting the `version` field. CHANGELOG.md / README.md content is unrestricted.
+const RELEASE_VERSIONED_JSON_FILES = Object.freeze(['package.json', ...CODEX_MANIFEST_RELPATHS, ...CLAUDE_MANIFEST_RELPATHS]);
+
+// First differing key path between two parsed JSON values (sorted key union, depth-first), or
+// null when deep-equal. The carry-over refusal names the culprit KEY, not just the file — the
+// operator sees WHAT moved beyond the version stamp, not merely that something did.
+function firstJsonDifference(a, b, prefix) {
+  if (a === b) return null;
+  const join = (k) => prefix ? prefix + '.' + k : k;
+  if (Object.prototype.toString.call(a) !== Object.prototype.toString.call(b)) return prefix || '(root)';
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return (prefix || '(root)') + '.length';
+    for (let i = 0; i < a.length; i++) {
+      const d = firstJsonDifference(a[i], b[i], (prefix || '(root)') + '[' + i + ']');
+      if (d) return d;
+    }
+    return null;
+  }
+  if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
+    for (const k of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+      if (!(k in a) || !(k in b)) return join(k);
+      const d = firstJsonDifference(a[k], b[k], join(k));
+      if (d) return d;
+    }
+    return null;
+  }
+  return prefix || '(root)';
+}
+
+// evaluateReleasePrepCarryOver — the carry-over half of the release binding (#877). Decides
+// whether a receipt stamped at `receiptSha` still proves `candidateSha`: yes iff receiptSha is an
+// ANCESTOR of the candidate, every intervening path is inside RELEASE_FILES, and every
+// versioned-JSON member of that diff is deep-equal after deleting `version`. The chains proved
+// the CODE tree; a cut commit that only stamps versions and prose cannot invalidate that proof —
+// removing THAT forced re-run is the entire scope of this route. Returns { ok: true,
+// carriedPaths } or { ok: false, errors, payload } naming the culprit. Fail-closed by
+// construction: any git or JSON failure is a refusal, never a pass.
+function evaluateReleasePrepCarryOver(root, receiptSha, candidateSha) {
+  const { execFileSync } = require('child_process');
+  const run = (args) => execFileSync('git', ['-C', root].concat(args), { encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+  const regen = 'regenerate the receipt at the candidate commit with kaola-workflow-run-chains.js';
+  // (1) ancestry — a receipt from a side branch or rewritten history proves nothing about the candidate.
+  let ancestor = false;
+  try {
+    execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', receiptSha, candidateSha], { stdio: ['ignore', 'ignore', 'ignore'] });
+    ancestor = true;
+  } catch (_) { ancestor = false; }
+  if (!ancestor) {
+    return { ok: false, errors: ['chain receipt headSha "' + receiptSha + '" is neither the release candidate "'
+      + candidateSha + '" nor an ancestor of it — the receipt cannot carry over; ' + regen],
+      payload: { receiptSha, carryOver: { failed: 'non_ancestor' } } };
+  }
+  // (2) every intervening path must be inside the release-prep surface.
+  let raw;
+  try { raw = run(['diff', '--name-only', receiptSha, candidateSha]); }
+  catch (_) {
+    return { ok: false, errors: ['release-prep carry-over: git diff ' + receiptSha + '..' + candidateSha
+      + ' failed — the intervening paths cannot be verified; ' + regen],
+      payload: { receiptSha, carryOver: { failed: 'diff_unavailable' } } };
+  }
+  const paths = [...new Set(raw.split('\n').map((s) => s.trim()).filter(Boolean))];
+  const offSurface = paths.filter((p) => !RELEASE_FILES.includes(p));
+  if (offSurface.length) {
+    return { ok: false, errors: ['release-prep carry-over: path(s) outside the release-prep surface changed between receipt '
+      + receiptSha + ' and candidate ' + candidateSha + ': ' + offSurface.join(', ')
+      + ' — the chains did not validate those changes; ' + regen],
+      payload: { receiptSha, carryOver: { failed: 'off_surface', offSurfacePaths: offSurface } } };
+  }
+  // (3) versioned-JSON members: deep-equal after deleting `version`. Unreadable or unparseable at
+  // either end fails CLOSED — a surface that cannot be compared is not a verified one.
+  for (const rel of paths) {
+    if (RELEASE_VERSIONED_JSON_FILES.indexOf(rel) < 0) continue; // CHANGELOG.md / README.md: unrestricted
+    const sides = [];
+    for (const sha of [receiptSha, candidateSha]) {
+      let parsed;
+      try { parsed = JSON.parse(run(['show', sha + ':' + rel])); }
+      catch (_) {
+        return { ok: false, errors: ['release-prep carry-over: cannot read/parse ' + rel + ' at ' + sha
+          + ' — the versioned-JSON surface cannot be compared; ' + regen],
+          payload: { receiptSha, carryOver: { failed: 'json_unreadable', file: rel, at: sha } } };
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) delete parsed.version;
+      sides.push(parsed);
+    }
+    const key = firstJsonDifference(sides[0], sides[1], '');
+    if (key) {
+      return { ok: false, errors: ['release-prep carry-over: ' + rel + ' changed beyond the version field between receipt '
+        + receiptSha + ' and candidate ' + candidateSha + ' (first differing key: ' + key + ') — ' + regen],
+        payload: { receiptSha, carryOver: { failed: 'non_version_json_change', file: rel, key } } };
+    }
+  }
+  return { ok: true, carriedPaths: paths };
+}
+
 // evaluateReleaseReceipt — THE PRE-TAG RELEASE GATE. A check-only twin of the chain-receipt arm
 // above, pinned STRICTLY to the release-candidate commit. Reads only the receipt + local git
 // (self-owned: no CI/CD, no forge calls); mutates nothing. Deltas vs the finalize arm, each of them
 // load-bearing:
 //   • NO project folder — at release time the run is archived, so the receipt default is the git
 //     top-level's .cache/chain-receipt.json, overridable via opts.receiptPath.
-//   • STRICT headSha EQUALITY against the candidate (default HEAD). The codeTreeHash content-address
-//     relaxation is deliberately NOT used — a release tag names an exact commit, so only that
-//     commit's receipt counts.
+//   • BINDING (#877): strict headSha equality against the candidate (default HEAD) is the primary
+//     route. The codeTreeHash content-address relaxation is still deliberately NOT used; what a
+//     non-equal receipt gets instead is the narrower RELEASE-PREP CARRY-OVER
+//     (evaluateReleasePrepCarryOver above): it binds iff its commit is an ANCESTOR of the
+//     candidate and the intervening diff is confined to RELEASE_FILES with version-only JSON
+//     changes — the cut commit's own bookkeeping cannot invalidate the chains that proved the
+//     code tree. Anything else refuses chains_stale naming the culprit.
 //   • headSha 'unknown'/missing is a REFUSAL, never a pass (release.js's own greenness probe treats
 //     headSha === 'unknown' as green; this gate must not copy that leniency — an unbound receipt
 //     proves nothing about the candidate).
@@ -1697,8 +1812,10 @@ function evaluateChainReceipt(root, opts) {
 //     empty expected set would make coverage vacuous.
 // Typed precedence family: chains_unverified > chains_stale > chains_empty > repo_kind_undetermined
 // > chains_incomplete > chains_red > chains_waived — coverage before greenness.
-// opts: { receiptPath, candidate }. Returns { ok: true, mode: 'release-check', candidate, chains }
-// or { ok: false, reason, operator_hint, errors, ... }.
+// opts: { receiptPath, candidate }. Returns { ok: true, mode: 'release-check', candidate, chains,
+// binding } — binding is 'exact' | 'release_prep_carry_over' (the test custodian's pinned
+// vocabulary), and on the carry-over route a sibling carryOver: { receiptSha, carriedPaths } says
+// what was skipped and why that was safe — or { ok: false, reason, operator_hint, errors, ... }.
 function evaluateReleaseReceipt(root, opts) {
   const fs = require('fs');
   const path = require('path');
@@ -1733,11 +1850,25 @@ function evaluateReleaseReceipt(root, opts) {
       ['chain receipt headSha "' + (stamped || '(missing)') + '" is not bound to a commit — a release tag names an exact commit; regenerate the receipt with kaola-workflow-run-chains.js at the release-candidate commit']),
     root, null, receipt);
   }
-  if (!candidate || stamped !== candidate) {
+  // BINDING (#877): strict sha equality first; a non-equal receipt binds only via the
+  // release-prep carry-over, and a failed carry-over refuses chains_stale naming the culprit.
+  if (!candidate) {
     return attachChainsStaleDiagnostics(refuseWith('chains_stale',
-      ['chain receipt headSha "' + stamped + '" != release candidate "' + (candidate || '(unresolved)')
-        + '" — regenerate the receipt at the candidate commit (strict sha equality; the finalize-time codeTreeHash relaxation does not apply to a release tag)']),
+      ['chain receipt headSha "' + stamped + '" cannot be checked against release candidate "(unresolved)"'
+        + ' — the candidate did not resolve to a commit; pass a resolvable --candidate (default HEAD)']),
     root, null, receipt);
+  }
+  let binding;
+  let carryOver = null;
+  if (stamped === candidate) {
+    binding = 'exact';
+  } else {
+    const co = evaluateReleasePrepCarryOver(root, stamped, candidate);
+    if (!co.ok) {
+      return attachChainsStaleDiagnostics(refuseWith('chains_stale', co.errors, { payload: co.payload }), root, null, receipt);
+    }
+    binding = 'release_prep_carry_over';
+    carryOver = { receiptSha: stamped, carriedPaths: co.carriedPaths };
   }
   if (receipt.workTreeHash !== 'clean') {
     return refuseWith('chains_stale', ['chain receipt was stamped over a DIRTY worktree (workTreeHash "'
@@ -1790,8 +1921,9 @@ function evaluateReleaseReceipt(root, opts) {
       { hintCtx: { waivedChains: names },
         payload: { waivedChains: waivedChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red_issue: c.accepted_red_issue || null })) } });
   }
-  return { ok: true, mode: 'release-check', candidate,
-    chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: false })) };
+  return Object.assign({ ok: true, mode: 'release-check', candidate,
+    chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: false })),
+    binding }, carryOver ? { carryOver } : {});
 }
 
 // changedPathsSinceBase — the branch-level MEASUREMENT the finalize attribution refusal became.
@@ -1947,6 +2079,11 @@ module.exports = {
   attachChainsStaleDiagnostics,
   evaluateChainReceipt,
   evaluateReleaseReceipt,
+  evaluateReleasePrepCarryOver,
+  CODEX_MANIFEST_RELPATHS,
+  CLAUDE_MANIFEST_RELPATHS,
+  RELEASE_FILES,
+  RELEASE_VERSIONED_JSON_FILES,
   changedPathsSinceBase,
   MISSION_LIST_FILE,
   parseGoal,

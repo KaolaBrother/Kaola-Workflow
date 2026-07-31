@@ -621,6 +621,14 @@ function assertNoPlanAnywhere(repo, label) {
 // from the finalize arm gets one scenario: strict headSha equality, a missing/`unknown` headSha, a
 // dirty-stamped receipt, any waiver, a subset receipt, and an unresolvable chain set. A PASS case
 // is included so the whole set cannot be satisfied by a gate that only ever refuses.
+//
+// OWNER RULING 2026-07-31 (corrected form — the transient diff-scoped reading was retracted): the
+// four-chain demand is UNCHANGED; what falls is the forced RE-RUN at release cut. Beside strict
+// headSha equality the receipt also binds via the RELEASE-PREP CARRY-OVER: its commit is an
+// ANCESTOR of the candidate, the diff between them touches only release.js's RELEASE_FILES
+// surface (CHANGELOG.md, README.md, package.json, the codex/claude manifests), and package.json /
+// each manifest are JSON-deep-equal after removing `version`. Violations refuse chains_stale
+// naming the culprits; the pass envelope names the binding route. Pinned by T5j-T5n.
 // ---------------------------------------------------------------------------
 (function T5_releaseCheck() {
   console.log('T5: run-chains.js --release-check reproduces every release refusal');
@@ -712,6 +720,75 @@ function assertNoPlanAnywhere(repo, label) {
     try { fs.unlinkSync(rootReceiptPath(repo)); } catch (_) {}
     x = releaseCheck();
     refusedWith(x.r, x.out, 'chains_unverified', 'T5i (no receipt)');
+
+    // --- T5j..T5n: the RELEASE-PREP CARRY-OVER route (see the block header). The version-only
+    // package.json edits below patch the COMMITTED bytes rather than re-spelling the fixture, so
+    // a fixture change can never silently turn "version-only" into a violation.
+    const pkgPath = path.join(repo, 'package.json');
+    const bumpPkgVersion = version => {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      pkg.version = version;
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+    };
+
+    // T5j: the carry-over PASS — a full four-chain green receipt at C, then ONE prep-only commit
+    // (CHANGELOG + README + a version-only package.json change). No re-run; the envelope names
+    // the route so a reader can tell it from strict equality.
+    writeRootReceipt(Object.assign({}, base_, { headSha: G.head(repo) }));
+    fs.appendFileSync(path.join(repo, 'CHANGELOG.md'), '\n## [0.0.1]\n- prep\n');
+    fs.writeFileSync(path.join(repo, 'README.md'), '# fixture 0.0.1\n');
+    bumpPkgVersion('0.0.1');
+    G.commitAll(repo, 'chore(release): prepare 0.0.1');
+    x = releaseCheck();
+    assert(x.r.status === 0 && x.out && x.out.result === 'pass',
+      'T5j: a four-chain green receipt at C must CARRY OVER a release-prep-only commit and PASS; got '
+      + x.r.status + '\nstdout: ' + String(x.r.stdout || '').slice(0, 500) + '\nstderr: ' + String(x.r.stderr || '').slice(0, 300));
+    assert(x.out && x.out.binding === 'release_prep_carry_over',
+      'T5j: the pass envelope must NAME the carry-over binding route; got ' + JSON.stringify(x.out));
+
+    // T5k: a scripts/ path in the post-receipt diff breaks the carry-over — code moved, the
+    // receipt proves the wrong tree -> chains_stale NAMING the culprit.
+    writeRootReceipt(Object.assign({}, base_, { headSha: G.head(repo) }));
+    fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'scripts', 'sneak.js'), 'module.exports = 877;\n');
+    G.commitAll(repo, 'feat: smuggled code after the receipt');
+    x = releaseCheck();
+    refusedWith(x.r, x.out, 'chains_stale', 'T5k (scripts/ path in the post-receipt diff)');
+    assert(x.out && Array.isArray(x.out.stale_paths) && x.out.stale_paths.includes('scripts/sneak.js'),
+      'T5k: the refusal must name the culprit path; got ' + JSON.stringify(x.out && x.out.stale_paths));
+
+    // T5l: package.json changed BEYOND its version field in an otherwise prep-only diff ->
+    // refuse. A chain-script edit re-defines what the receipt measured; only a version-only
+    // change (JSON-deep-equal after removing `version`) is carry-over-legal.
+    writeRootReceipt(Object.assign({}, base_, { headSha: G.head(repo) }));
+    fs.appendFileSync(path.join(repo, 'CHANGELOG.md'), '- more prep\n');
+    {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      pkg.version = '0.0.2';
+      pkg.scripts['test:kaola-workflow:claude'] = 'node -e "process.exit(0)" --tag877';
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+    }
+    G.commitAll(repo, 'chore(release): prep plus a chain-script edit');
+    x = releaseCheck();
+    refusedWith(x.r, x.out, 'chains_stale', 'T5l (non-version package.json change in a prep-only diff)');
+    assert(/package\.json/.test(JSON.stringify(x.out)),
+      'T5l: the refusal must name package.json as the culprit; got ' + JSON.stringify(x.out));
+
+    // T5m: a NON-ANCESTOR receipt refuses. The orphan commit shares the candidate's TREE (the
+    // carry-over diff is empty), so this pins the ancestry condition itself, not a side effect
+    // of the diff scan.
+    const orphan = String(G.git(repo, ['commit-tree', 'HEAD^{tree}', '-m', 'orphan'], { encoding: 'utf8' }).stdout || '').trim();
+    writeRootReceipt(Object.assign({}, base_, { headSha: orphan }));
+    x = releaseCheck();
+    refusedWith(x.r, x.out, 'chains_stale', 'T5m (non-ancestor receipt over an identical tree)');
+
+    // T5n: a DIRTY stamp refuses even on a prep-only diff — the carry-over relaxes the binding
+    // commit, never the clean-tree demand.
+    writeRootReceipt(Object.assign({}, base_, { headSha: G.head(repo), workTreeHash: 'deadbeefdeadbeef' }));
+    fs.appendFileSync(path.join(repo, 'CHANGELOG.md'), '- even more prep\n');
+    G.commitAll(repo, 'chore(release): more prep');
+    x = releaseCheck();
+    refusedWith(x.r, x.out, 'chains_stale', 'T5n (dirty stamp survives a prep-only diff)');
   } finally { rm(base); }
 })();
 

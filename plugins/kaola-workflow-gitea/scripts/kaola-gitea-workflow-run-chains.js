@@ -808,7 +808,11 @@ function resolveChains(cwd) {
 // the receipt it reads. Check-only: it runs no chain, writes nothing, and touches no forge. The
 // verdict itself lives in the kernel (adaptiveSchema.evaluateReleaseReceipt) so the finalize gate
 // and this one share one band, one hash and one precedence family; this function is only the CLI
-// skin — flag parsing and the typed envelope.
+// skin — flag parsing and the typed envelope. The receipt binds by strict headSha equality or by
+// the kernel's release-prep carry-over route (#877: receipt sha an ancestor of the candidate, the
+// intervening diff confined to RELEASE_FILES, version-only JSON changes); the pass line names
+// WHICH route bound — and, for a carry-over, the receipt's sha and the carried-over paths — so
+// the operator sees that a re-run was skipped and why that was safe.
 //
 // Emits the same envelope shape as every other refusal on this CLI: `{ result, reason,
 // operator_hint, errors, ... }` under --json, one `typed refusal: <reason>` line otherwise. Exit 1
@@ -828,9 +832,16 @@ function runReleaseCheck(args, cwd) {
       : 'typed refusal: ' + verdict.reason + ' (' + (verdict.errors || []).join('; ') + ')') + '\n');
     return 1;
   }
+  const binding = verdict.binding || 'exact';
+  const carryOver = verdict.carryOver || null;
+  const routeText = carryOver
+    ? 'carried over from receipt ' + carryOver.receiptSha + ' — release-prep-only diff: '
+      + ((carryOver.carriedPaths && carryOver.carriedPaths.length) ? carryOver.carriedPaths.join(', ') : '(empty diff)')
+    : 'bound by strict sha equality';
   process.stdout.write((json
-    ? JSON.stringify({ result: 'pass', mode: 'release-check', candidate: verdict.candidate, chains: verdict.chains })
-    : 'release ok (' + verdict.chains.length + ' chains green, unwaived, at ' + verdict.candidate + ')') + '\n');
+    ? JSON.stringify(Object.assign({ result: 'pass', mode: 'release-check', candidate: verdict.candidate, chains: verdict.chains, binding },
+        carryOver ? { carryOver } : {}))
+    : 'release ok (' + verdict.chains.length + ' chains green, unwaived, at ' + verdict.candidate + '; ' + routeText + ')') + '\n');
   return 0;
 }
 
@@ -926,12 +937,17 @@ async function main(argv) {
         '--release-check [--candidate <sha-ish>] [--receipt path] [--json]\n' +
         '  The PRE-TAG release gate: verify an existing receipt against a release candidate.\n' +
         '  Check-only — runs no chain, writes nothing, contacts no forge. STRICTER than the\n' +
-        '  finalize gate: strict headSha equality against the candidate (default HEAD; the\n' +
-        '  codeTreeHash relaxation does not apply to a tag), a dirty-stamped receipt refuses,\n' +
-        '  ANY waived chain refuses, and the receipt must cover EVERY declared\n' +
-        '  test:kaola-workflow:* edition chain. Typed precedence: chains_unverified >\n' +
-        '  chains_stale > chains_empty > repo_kind_undetermined > chains_incomplete >\n' +
-        '  chains_red > chains_waived. Exit 0 on pass, 1 on any typed refusal.\n'
+        '  finalize gate: the receipt binds by strict headSha equality against the candidate\n' +
+        '  (default HEAD), or by the RELEASE-PREP CARRY-OVER route — the receipt\'s commit is\n' +
+        '  an ancestor of the candidate and the intervening diff is confined to the\n' +
+        '  release-prep surface (CHANGELOG.md, README.md, package.json + the plugin\n' +
+        '  manifests, with version-only JSON changes); anything else refuses chains_stale\n' +
+        '  naming the culprit, and the pass line names which route bound. A dirty-stamped\n' +
+        '  receipt refuses, ANY waived chain refuses, and the receipt must cover EVERY\n' +
+        '  declared test:kaola-workflow:* edition chain. Typed precedence:\n' +
+        '  chains_unverified > chains_stale > chains_empty > repo_kind_undetermined >\n' +
+        '  chains_incomplete > chains_red > chains_waived. Exit 0 on pass, 1 on any typed\n' +
+        '  refusal.\n'
       );
       return 0;
     } else {

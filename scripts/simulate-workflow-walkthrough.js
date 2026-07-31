@@ -222,7 +222,7 @@ function testFinalize(tmp) {
   plantRoadmapIssue(tmp, 164, '');
   json(runNode(claimScript, ['startup', '--target-issue', '164', '--runtime', 'claude'], tmp));
   // This fixture exercises terminal archive normalization directly rather than an
-  // authored adaptive run, so it seeds a minimal frozen adaptive plan + passing gate.
+  // authored adaptive run, so it seeds a bound, passing consumer-mode validation record.
   seedAdaptiveFinalizeFixture(tmp, 'issue-164');
   const retiredBlock = '## ' + 'Lease';
   const retiredSessionField = 'sess' + 'ion_id:';
@@ -1012,38 +1012,6 @@ function testAdaptiveResumeAfterFlipOff() {
 }
 
 
-// ── (#383/#387/#391 walkthrough ×4 editions) — cross-surface mutual exclusion,
-//    plan-integrity gate, and durable-halt fence exercised end-to-end through the
-//    REAL adaptive-node CLI. The #386 AC already had a walkthrough scenario; this
-//    adds the missing canonical ones the #383/#387/#391 ACs call for. The
-//    production engine (adaptive-node.js) is byte-synced to codex and rename-rendered
-//    to gitlab/gitea by `npm run sync:editions`, so each edition's own walkthrough /
-//    contract chain exercises the SAME guarded code — giving the cross-edition
-//    coverage the ACs require.
-const CROSS_SURFACE_PLAN = [
-  '# Workflow Plan — issue #386', '',
-  '## Meta', 'plan_form: spine', 'labels: enhancement', '',
-  '## Nodes', '',
-  '| id | role | depends_on | declared_write_set | cardinality | shape |',
-  '|---|---|---|---|---|---|',
-  '| explore | code-explorer | — | — | 1 | sequence |',
-  '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
-  '| review | code-reviewer | impl | — | 1 | sequence |',
-  '| done | finalize | review | — | 1 | sequence |',
-  '',
-  '## Node Ledger', '',
-  '| id | status | notes |',
-  '| --- | --- | --- |',
-  '| explore | pending | |',
-  '| impl | pending | |',
-  '| review | pending | |',
-  '| done | pending | |',
-  ''
-].join('\n');
-
-function adaptiveNodeJson(res) {
-  return JSON.parse(res.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
-}
 
 
 
@@ -1059,17 +1027,28 @@ function adaptiveNodeJson(res) {
 // ---------------------------------------------------------------------------
 // THE PRE-TAG RELEASE GATE (`--release-check`).
 //
-// Extracted VERBATIM from testBundle424432433ValidatorGates, whose other half — the barrier
-// allowband, the role-token registry and the finalize attribution sweep — fell with the plan
-// grammar. These thirteen sub-cases did not: the gate is plan-independent (it reads only
+// Extracted from testBundle424432433ValidatorGates, whose other half — the barrier allowband,
+// the role-token registry and the finalize attribution sweep — fell with the plan grammar. This
+// block did not: the gate is plan-independent (it reads only
 // <git-toplevel>/.cache/chain-receipt.json and local git), and it is deliberately NOT converted
 // to a report. Release tooling is a human-invoked door in front of an irreversible, published
 // act, so it still REFUSES, and every refusal below is a live contract.
 //
 // Its host moved to the file that PRODUCES the receipt it reads (kaola-workflow-run-chains.js
-// --release-check). Nothing else changed: same argv, same typed envelope, same precedence family:
+// --release-check). Same argv, same typed envelope, same precedence family:
 //   chains_unverified > chains_stale > chains_empty > repo_kind_undetermined > chains_incomplete
 //   > chains_red > chains_waived.
+//
+// OWNER RULING 2026-07-31 (corrected same day; the transient diff-scoped reading was retracted):
+// the FOUR-CHAIN demand stays — full coverage of every declared chain, unwaived, all green, no
+// dirty stamp. What falls is the forced RE-RUN at release cut: beside strict headSha equality the
+// gate gains ONE acceptance, the RELEASE-PREP CARRY-OVER — the receipt also binds when its bound
+// commit is an ANCESTOR of the candidate AND the diff between them touches only the release-prep
+// surface (release.js's RELEASE_FILES: CHANGELOG.md, README.md, package.json, the codex/claude
+// manifests), with package.json and each manifest changed in their version field alone
+// (JSON-deep-equal after removing `version`). Any other path in that diff, a non-version JSON
+// change, a non-ancestor receipt, a dirty stamp, a waiver or a red anywhere: refuse, exactly as
+// before. Cases (14)-(18) pin the route; (1)-(13) are the unchanged contract.
 //
 // mkReleaseRepo / writeRootReceipt / greenChains651 are re-derived here rather than deleted: the
 // originals were function-locals shared with the dying attribution cases.
@@ -1092,6 +1071,8 @@ function testReleaseCheckPreTagGate() {
   // repo_kind_undetermined (unresolvable chain set) > chains_incomplete > chains_red >
   // chains_waived. Fixtures mirror the real repo: root /.cache/ is gitignored, so the untracked
   // receipt itself never pollutes the culprit hints; package.json declares all four edition chains.
+  // Delta (2) has exactly ONE carve-out since the 2026-07-31 ruling: the release-prep carry-over
+  // route pinned by cases (14)-(18) below.
   const mkReleaseRepo = () => {
     const grepo = adaptiveTmp('release651-git');
     initGitRepo(grepo);
@@ -1269,6 +1250,95 @@ function testReleaseCheckPreTagGate() {
       const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
       assert(r.status === 1 && JSON.parse(r.stdout).reason === 'repo_kind_undetermined',
         '#651 (13): an unresolvable chain set (no package.json) must refuse repo_kind_undetermined, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // Fixture pieces for the RELEASE-PREP CARRY-OVER route (owner ruling 2026-07-31, corrected
+  // form). The fixture package.json mirrors mkReleaseRepo's, so a "version-only" edit is a
+  // byte-real re-write with only `version` differing.
+  const fixturePkg651 = version => JSON.stringify(Object.assign(version ? { version } : {}, { scripts: {
+    'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
+    'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } })) + '\n';
+  const commitPrepOnly651 = (grepo, version) => {
+    fs.writeFileSync(path.join(grepo, 'CHANGELOG.md'), '# Changelog\n\n## [' + version + ']\n- prep\n');
+    fs.writeFileSync(path.join(grepo, 'README.md'), '# fixture ' + version + '\n');
+    fs.writeFileSync(path.join(grepo, 'package.json'), fixturePkg651(version));
+    G.git(grepo, ['add', 'CHANGELOG.md', 'README.md', 'package.json'], { encoding: 'utf8' });
+    G.git(grepo, ['commit', '-m', 'chore(release): prepare ' + version], { encoding: 'utf8' });
+  };
+
+  // --- #877 (14) THE CARRY-OVER PASS: a green, unwaived, clean, FULL four-chain receipt at
+  //     commit C, then one release-prep-only commit (CHANGELOG + README + a version-only
+  //     package.json change) → the receipt binds to the candidate WITHOUT a re-run, and the
+  //     envelope names the route so a reader can tell it from strict equality.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
+      commitPrepOnly651(grepo, '9.9.9');
+      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 0 && out.result === 'pass' && out.mode === 'release-check'
+        && out.candidate === headOf(grepo),
+        '#877 (14): a four-chain green receipt at C must carry over a release-prep-only commit and PASS, got status ' + r.status + ' ' + r.stdout);
+      assert(out.binding === 'release_prep_carry_over',
+        '#877 (14): the pass envelope must NAME the carry-over binding route, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #877 (15) a scripts/ path in the post-receipt diff BREAKS the carry-over: code moved, so
+  //     the receipt proves the wrong tree → chains_stale NAMING the culprit.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
+      fs.mkdirSync(path.join(grepo, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'scripts', 'sneak.js'), 'module.exports = 877;\n');
+      fs.writeFileSync(path.join(grepo, 'CHANGELOG.md'), '# Changelog\n- prep\n');
+      G.git(grepo, ['add', 'scripts/sneak.js', 'CHANGELOG.md'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'prep plus a smuggled script'], { encoding: 'utf8' });
+      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && Array.isArray(out.stale_paths) && out.stale_paths.includes('scripts/sneak.js'),
+        '#877 (15): a scripts/ path in the post-receipt diff must refuse chains_stale naming the culprit, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #877 (16) package.json changed BEYOND its version field in an otherwise prep-only diff →
+  //     refuse: a chain-script edit re-defines what the receipt measured, and only a version-only
+  //     change (JSON-deep-equal after removing `version`) is carry-over-legal.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
+      fs.writeFileSync(path.join(grepo, 'CHANGELOG.md'), '# Changelog\n- prep\n');
+      fs.writeFileSync(path.join(grepo, 'package.json'), JSON.stringify({ version: '9.9.9', scripts: {
+        'test:kaola-workflow:claude': 'false', 'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } }) + '\n');
+      G.git(grepo, ['add', 'CHANGELOG.md', 'package.json'], { encoding: 'utf8' });
+      G.git(grepo, ['commit', '-m', 'prep plus a chain-script edit'], { encoding: 'utf8' });
+      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale' && /package\.json/.test(r.stdout),
+        '#877 (16): a non-version package.json change must break the carry-over and name package.json, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #877 (17) NON-ANCESTOR receipt → chains_stale. The orphan commit shares the candidate's
+  //     TREE (the carry-over diff is empty), so this pins the ANCESTRY condition itself, not a
+  //     side effect of the diff scan.
+  { const grepo = mkReleaseRepo();
+    try {
+      const orphan = G.git(grepo, ['commit-tree', 'HEAD^{tree}', '-m', 'orphan'], { encoding: 'utf8' }).stdout.trim();
+      writeRootReceipt(grepo, { headSha: orphan, workTreeHash: 'clean', chains: greenChains651() });
+      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
+        '#877 (17): a receipt bound to a non-ancestor commit must refuse chains_stale even over an identical tree, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #877 (18) a DIRTY stamp refuses even on a prep-only diff: the carry-over relaxes the
+  //     binding commit, never the clean-tree demand.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'b'.repeat(64), chains: greenChains651() });
+      commitPrepOnly651(grepo, '9.9.10');
+      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
+        '#877 (18): a dirty-stamped receipt must refuse chains_stale even when the post-receipt diff is prep-only, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
   console.log('testReleaseCheckPreTagGate: PASSED');
 }
@@ -4845,9 +4915,8 @@ function testE2EGitHubMergeFullChain() {
       'second worktree-finalize must not create a commit (no-diff branch); HEAD count was ' +
       headCountBefore + ', now ' + headCountAfter);
 
-    // Seed the finalize authority in the linked worktree (where finalize runs): a frozen
-    // adaptive plan whose tdd-guide node attributes the committed feature file, plus a passing
-    // gate, so the adaptive --finalize-check proceeds.
+    // Seed the finalize authority in the linked worktree (where finalize runs): a bound,
+    // passing consumer-mode validation record, so the finalize validation arm proceeds.
     seedAdaptiveFinalizeFixture(wt850, 'issue-850', ['feature-850.txt']);
     // Step 4: finalize --keep-worktree (cwd=wt850, cleans main worktree copy, preserves linked worktree)
     // finalize writes the archive and the closure state and EXITS; the second finalize and the

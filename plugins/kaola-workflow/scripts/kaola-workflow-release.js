@@ -8,17 +8,11 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
-const PLUGIN_BASE = 'plugins/kaola-workflow';
-const CODEX_MANIFEST_RELPATHS = [
-  PLUGIN_BASE + '/.codex-plugin/plugin.json',
-  PLUGIN_BASE + '-gitlab/.codex-plugin/plugin.json',
-  PLUGIN_BASE + '-gitea/.codex-plugin/plugin.json',
-];
-const CLAUDE_MANIFEST_RELPATHS = [
-  PLUGIN_BASE + '-gitlab/.claude-plugin/plugin.json',
-  PLUGIN_BASE + '-gitea/.claude-plugin/plugin.json',
-];
-const RELEASE_FILES = ['CHANGELOG.md', 'README.md', 'package.json', ...CODEX_MANIFEST_RELPATHS, ...CLAUDE_MANIFEST_RELPATHS];
+// #877: the release-prep surface is single-sourced from the kernel — the SAME list the release
+// gate's carry-over route enforces (evaluateReleasePrepCarryOver). Stamping a file the gate would
+// refuse, or refusing one --prepare stamps, is exactly the drift this require removes. The kernel
+// is base-named in every edition tree, so this line renders unchanged in every port.
+const { CODEX_MANIFEST_RELPATHS, CLAUDE_MANIFEST_RELPATHS, RELEASE_FILES } = require('./kaola-workflow-adaptive-schema.js');
 const RELEASE_TAG_PREFIX = 'kaola-workflow' + '--v';
 
 function flagVal(args, flag) { const i = args.indexOf(flag); return i < 0 ? null : (args[i + 1] || null); }
