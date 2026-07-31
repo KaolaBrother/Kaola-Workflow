@@ -693,7 +693,20 @@ withForge({
   console.log('offline-mr subprocess test passed');
 }
 
-// assertNoLiveWorkflowFolder guard — exits 1 with 'sink-merge refused:'
+// The unfinalized-run precondition STOPS the sink. CONVERTED VOCABULARY — this used to pin the bare
+// `sink-merge refused:` prefix on stderr. That prefix is now reserved for the KEEP-class guards (a
+// dirty worktree, a failed push): the preconditions that CAN name a sanctioned way forward were
+// converted to typed report findings, so the old prefix is a vocabulary this path no longer speaks.
+// The pin moves ONTO the conversion rather than being loosened off it — the classification is named
+// on stderr AND carried on the envelope, and the exit stays non-success: transport for an
+// output-blind caller, not a verdict.
+//
+// DELIBERATELY NOT PINNED HERE: that the envelope's `result` token is not `refuse` — the one
+// distinction a converted stop draws against a KEEP guard. This edition's sink-merge emits
+// `result: 'refuse'` on this path while announcing the finding and carrying the converted prose, so
+// the stop describes itself as a report on stderr and as a refusal on stdout. That contradiction is
+// production, not test staleness, and pinning EITHER token here would freeze half of a half-finished
+// conversion. See the report; the canonical sink emits `result: 'report', status: 'not_merged'`.
 {
   const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
   const { root, branch } = setupRepoWithLiveFolderOnBranch('live-folder-gl-test', 'test-gl-live-folder');
@@ -703,8 +716,16 @@ withForge({
     encoding: 'utf8'
   });
   assert(result.status === 1, `live-folder guard test: expected exit 1, got ${result.status}. stderr: ${result.stderr}`);
-  assert((result.stderr || '').includes('sink-merge refused:'),
-    `live-folder guard test: expected 'sink-merge refused:' in stderr, got: ${result.stderr}`);
+  assert(/^sink-merge: FINDING run_not_finalized:/m.test(result.stderr || ''),
+    `live-folder guard test: the finding must be announced by classification on stderr, got: ${result.stderr}`);
+  const liveOut = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+  assert(liveOut && liveOut.reason === 'run_not_finalized',
+    `live-folder guard test: the envelope must classify the stop, got: ${JSON.stringify(liveOut)}`);
+  assert(Array.isArray(liveOut.findings) && liveOut.findings.some(f => f.classification === 'run_not_finalized'),
+    `live-folder guard test: findings[] must carry a run_not_finalized finding, got: ${JSON.stringify(liveOut.findings)}`);
+  const liveFinding = liveOut.findings.find(f => f.classification === 'run_not_finalized');
+  assert(typeof liveFinding.operator_hint === 'string' && liveFinding.operator_hint.trim().length > 0,
+    `live-folder guard test: the finding must name a way forward, got: ${JSON.stringify(liveFinding.operator_hint)}`);
   console.log('live-folder guard subprocess test passed');
 }
 
@@ -874,9 +895,18 @@ withForge({
 }
 
 {
-  // #300 RED→GREEN: checkDispatchAttestations must be called in postMergeCleanup.
-  // Without the call, closure_receipt.claim_planner_attested === 'failed' (emptyReceipt default).
-  // After the fix, with no dispatch-log present, it resolves to 'missing' (detector-inactive path).
+  // NARROWED (was the #300 attestation probe). It asserted closure_receipt.claim_planner_attested
+  // resolved to 'missing' rather than the 'failed' default, which pinned checkDispatchAttestations
+  // running inside postMergeCleanup. That probe is gone with its mechanism: the shared closure
+  // contract dropped the field and this edition's sink-merge dropped the call, so the receipt
+  // carries no attestation key for either value to land in. Asserting a value for it would mean
+  // re-adding the field to satisfy a suite.
+  //
+  // What is KEPT is the property the retirement itself created, and it is not incidental: calling
+  // the retired export threw AFTER the merge had already landed on the default branch, so the sink
+  // advanced main and then died reporting exit 1. So a REAL end-to-end sink-merge with no
+  // dispatch-log present must reach exit 0 with a parseable envelope — plus the reappearance guard
+  // for BOTH retired attestation fields, the one direction a live mechanism can still regress in.
   const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
   const { root, branch } = setupRealRepo('attest-test', 'test-gl-attest');
   try {
@@ -891,14 +921,16 @@ withForge({
       encoding: 'utf8'
     });
     assert.strictEqual(result.status, 0,
-      'attestation test: expected exit 0, got ' + result.status + '. stderr: ' + result.stderr);
+      'post-retirement sink-merge must reach exit 0 with no dispatch-log present, got ' + result.status +
+      '. stderr: ' + result.stderr);
     const lastLine = result.stdout.trim().split('\n').filter(Boolean).pop();
     const parsed = JSON.parse(lastLine);
-    assert.strictEqual(parsed.closure_receipt.claim_planner_attested, 'missing',
-      'attestation test: claim_planner_attested must be "missing" (not "failed") — checkDispatchAttestations not called');
+    assert.ok(!('claim_planner_attested' in parsed.closure_receipt),
+      'the retired planner attestation field must not reappear on the closure receipt, got: ' +
+      JSON.stringify(Object.keys(parsed.closure_receipt)));
     assert.ok(!('finalize_contractor_attested' in parsed.closure_receipt),
       '#816: the retired finalize-seam attestation field must not be emitted');
-    console.log('attestation fields populated by checkDispatchAttestations: PASSED');
+    console.log('sink-merge completes exit 0 carrying neither retired attestation field: PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

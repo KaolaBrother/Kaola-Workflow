@@ -295,10 +295,17 @@ function testAC1HooksJson() {
   }
 }
 
-// AC3 (#284): positive attestation — seeded dispatch-log → 'attested' on both fields.
-// Demonstrates RED (no-seed → 'missing') is already proven by the existing main() test;
-// this function proves GREEN (seeded → 'attested').
-function testAC3AttestationSeeded() {
+// NARROWED (was testAC3AttestationSeeded, #284 AC3). It seeded a workflow-planner dispatch-log
+// entry and asserted claim_planner_attested === 'attested' — the positive half of the warn-first
+// attestation probe. claim.js retired the whole producer chain (the --attest-planner-spawn flag,
+// checkDispatchAttestations, persistAttestationToSummary and the receipt field), and the codex
+// edition runs the byte-identical claim.js, so nothing writes the field on this path either.
+//
+// What is KEPT is the #333 claim that merely shared the fixture and never depended on attestation:
+// a real codex-runtime startup claim finalizes to status:closed, archives exactly one folder, and
+// NEUTRALIZES the archived state's resume command. Plus the reappearance guard for both retired
+// attestation fields — the one direction a retirement can still regress in.
+function testCodexFinalizeNeutralizesArchivedResume333() {
   // Use an isolated tmp to avoid touching the live kaola-workflow folder.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-attest-'));
   try {
@@ -315,14 +322,9 @@ function testAC3AttestationSeeded() {
     assert(acquired.claim === 'acquired', 'AC3 setup: startup must acquire issue-284, got: ' + JSON.stringify(acquired));
     seedAdaptiveFinalizeFixture(root, 'issue-284');
 
-    // Seed the dispatch-log BEFORE finalize.  finalize archives the folder (moves it), then
-    // checkDispatchAttestations checks archive-first — so seeding the live cache is correct.
-    const cacheDir = path.join(root, 'kaola-workflow', 'issue-284', '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const ts = '2026-06-09T00:00:00Z';
-    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'test-planner', cwd: root }) + '\n'
-    );
+    // DELETED with its mechanism: the dispatch-log seeding. It existed solely so the retired
+    // checkDispatchAttestations probe would find a workflow-planner entry; no consumer reads the
+    // log on this path any more, so seeding it would be fixture dressing for nobody.
 
     // Plant roadmap entry (finalize reads it for roadmap cleanup).
     plantRoadmap(root, 284, '');
@@ -330,10 +332,10 @@ function testAC3AttestationSeeded() {
     // Finalize — offline mode.
     const finalizeResult = runClaim(['finalize', '--project', 'issue-284'], root);
     assert(finalizeResult.status === 'closed',
-      'AC3: finalize must return status:closed, got: ' + JSON.stringify(finalizeResult));
-    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested === 'attested',
-      'AC3 GREEN: claim_planner_attested must be "attested" when dispatch-log is seeded, got: ' +
-      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested));
+      'finalize must return status:closed, got: ' + JSON.stringify(finalizeResult));
+    assert(finalizeResult.closure_receipt && !('claim_planner_attested' in finalizeResult.closure_receipt),
+      'the retired planner attestation field must not reappear on the codex closure receipt, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && Object.keys(finalizeResult.closure_receipt)));
     assert(finalizeResult.closure_receipt && !('finalize_contractor_attested' in finalizeResult.closure_receipt),
       '#816: the finalize seam emits no attestation field, got: ' +
       JSON.stringify(finalizeResult.closure_receipt && Object.keys(finalizeResult.closure_receipt)));
@@ -348,66 +350,26 @@ function testAC3AttestationSeeded() {
     assert(!/next_command:.*(kaola-workflow-plan-run|kaola-workflow-phase)/.test(arch284State),
       '#333: archived state must not retain an active plan-run/phase resume command');
 
-    console.log('testAC3AttestationSeeded (#284 AC3): PASSED');
+    console.log('testCodexFinalizeNeutralizesArchivedResume333: PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-// Attestation warning durable persistence (codex edition): a non-empty ATTESTATION WARNING must
-// land in the archived finalization-summary.md and workflow-state.md ## Closure block, not just
-// stdout JSON. Seed a role-only dispatch-log (no workflow-planner entry).
-function testAttestationWarningPersistenceCodex() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-codex-'));
-  try {
-    initGitRepo(root);
-    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
-    fs.mkdirSync(roadmapDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(roadmapDir, 'issue-653102.md'),
-      'issue: #653102\ntitle: —\nstatus: open\nworkflow_project: issue-653102\nnext_step: ready\n'
-    );
-    const acquired = runClaim(['startup', '--target-issue', '653102', '--runtime', 'codex', '--sink', 'pr'], root);
-    assert(acquired.claim === 'acquired', 'attestation persistence (codex): startup must acquire issue-653102, got: ' + JSON.stringify(acquired));
-    seedAdaptiveFinalizeFixture(root, 'issue-653102');
-
-    // Seed dispatch-log with ONLY a role entry (no workflow-planner).
-    const cacheDir = path.join(root, 'kaola-workflow', 'issue-653102', '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: '2026-06-09T00:00:00Z', agent_type: 'tdd-guide', agent_id: 'test-role', cwd: root }) + '\n');
-
-    plantRoadmap(root, 653102, '');
-
-    const finalizeResult = runClaim(['finalize', '--project', 'issue-653102'], root);
-    assert(finalizeResult.status === 'closed',
-      'attestation persistence (codex): finalize must return status:closed, got: ' + JSON.stringify(finalizeResult));
-    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested === 'missing',
-      'attestation persistence (codex): claim_planner_attested must be missing, got: ' +
-      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested));
-
-    const archived = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-653102'));
-    assert(archived.length === 1, 'attestation persistence (codex): finalize must archive issue-653102');
-    const archiveDir = path.join(root, 'kaola-workflow', 'archive', archived[0]);
-
-    const summaryPath = path.join(archiveDir, 'finalization-summary.md');
-    assert(fs.existsSync(summaryPath), 'attestation persistence (codex): archived finalization-summary.md must exist');
-    const summary = fs.readFileSync(summaryPath, 'utf8');
-    assert(/^claim_planner_attested: missing$/m.test(summary),
-      'attestation persistence (codex): archived finalization-summary.md must carry column-0 claim_planner_attested: missing, got: ' + summary);
-    assert(summary.includes('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log'),
-      'attestation persistence (codex): archived finalization-summary.md must carry the verbatim ATTESTATION WARNING, got: ' + summary);
-
-    const state = fs.readFileSync(path.join(archiveDir, 'workflow-state.md'), 'utf8');
-    assert(/^## Closure$/m.test(state), 'attestation persistence (codex): archived workflow-state.md must carry ## Closure block');
-    assert(/^claim_planner_attested: missing$/m.test(state),
-      'attestation persistence (codex): archived workflow-state.md ## Closure block must carry claim_planner_attested, got: ' + state);
-
-    console.log('testAttestationWarningPersistenceCodex: PASSED');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
+// DELETED: testAttestationWarningPersistenceCodex, the codex twin of the canonical suite's
+// testAttestationWarningPersistence (deleted there for the same reason). It seeded a role-only
+// dispatch-log so the planner seam would surface `ATTESTATION WARNING: no workflow-planner dispatch
+// found in dispatch-log`, then asserted that warning and the claim_planner_attested field landed in
+// the archived finalization-summary.md and the workflow-state.md ## Closure block. Every producer in
+// that chain is retired — the mandatory planner agent is gone, inline authoring is the design, and
+// claim.js dropped checkDispatchAttestations, persistAttestationToSummary and the field itself. The
+// warning string has no producer anywhere outside test sources.
+//
+// UNCOVERED (codex edition): that the archived finalization-summary.md exists at all. Nothing else
+// in THIS suite reads that file; the ## Closure block it also covered is still asserted by the
+// keep-open archive scenario below. The finalize path that writes both is byte-identical claim.js,
+// covered by the canonical suite, so this is an edition-local coverage gap rather than a repo-wide
+// one — but it is a real one and it is named here rather than papered over.
 
 // n5 (#653 finding D3, codex edition): selection-evidence probe. Case (a) seeds
 // .cache/selection-evidence.md pre-finalize (simulating the router's D2 docking) ->
@@ -1831,29 +1793,32 @@ function main() {
     const status = runClaim(['status'], tmp);
     assert(status.count === 1, 'status should report one active folder');
 
-    // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
-    // claim_planner_attested; 'missing' in offline test
-    // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
+    // DELETED with its mechanism: the two M2 (#277) assertions that the codex closure receipt
+    // CARRIES claim_planner_attested and that its value is one of missing|attested. claim.js
+    // retired the whole producer chain — the --attest-planner-spawn flag, checkDispatchAttestations,
+    // persistAttestationToSummary and the receipt field — and the codex edition runs the
+    // byte-identical claim.js, so there is no producer to pin. Asserting the field is PRESENT is
+    // now asserting the retirement did not happen.
+    //
+    // What survives is the direction a live mechanism can still regress in — neither retired field
+    // may REAPPEAR — plus the half of the warn-first contract that never depended on attestation: a
+    // codex finalize with no dispatch-log at all still closes with closure_invariants.ok.
     seedAdaptiveFinalizeFixture(tmp, 'issue-163');
     plantRoadmap(tmp, 163, '');
     const finalizeResult = runClaim(['finalize', '--project', 'issue-163'], tmp);
-    assert(finalizeResult.status === 'closed', 'M2 (#277): Codex finalize must return status:closed');
+    assert(finalizeResult.status === 'closed', 'Codex finalize must return status:closed');
     assert(
-      finalizeResult.closure_receipt && 'claim_planner_attested' in finalizeResult.closure_receipt,
-      'M2 (#277): Codex closure_receipt must have claim_planner_attested field'
+      finalizeResult.closure_receipt && !('claim_planner_attested' in finalizeResult.closure_receipt),
+      'Codex closure_receipt must NOT carry the retired planner attestation field, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && Object.keys(finalizeResult.closure_receipt))
     );
     assert(
       finalizeResult.closure_receipt && !('finalize_contractor_attested' in finalizeResult.closure_receipt),
       '#816: Codex closure_receipt must NOT carry a retired finalize-seam attestation field'
     );
     assert(
-      finalizeResult.closure_receipt.claim_planner_attested === 'missing' ||
-      finalizeResult.closure_receipt.claim_planner_attested === 'attested',
-      'M2 (#277): Codex claim_planner_attested must be missing or attested'
-    );
-    assert(
       finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,
-      'M2 (#277): Codex closure_invariants.ok must be true (warn-first: attestation miss is not a hard violation)'
+      'Codex closure_invariants.ok must be true with no dispatch-log present'
     );
 
     const skill = fs.readFileSync(nextSkill, 'utf8');
@@ -1874,8 +1839,7 @@ function main() {
     testAC1HooksJson();
     testUpdateHooksHardening325();
     test409StableHomeSurvivesDirDeletion();   // #409
-    testAC3AttestationSeeded();
-    testAttestationWarningPersistenceCodex();
+    testCodexFinalizeNeutralizesArchivedResume333();
     testSelectionEvidenceDockingCodex();
     testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();

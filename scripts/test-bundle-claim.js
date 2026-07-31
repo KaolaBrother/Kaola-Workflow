@@ -971,28 +971,17 @@ const rollbackOutcomes = {};
 })();
 
 // ---------------------------------------------------------------------------
-// Test (#370): --attest-planner-spawn back-fills the dispatch log on the bundle path
+// DELETED: testBundleAttestPlannerSpawn (#370). It drove a bundle startup WITH
+// --attest-planner-spawn and asserted the flag back-filled a workflow-planner entry into
+// .cache/dispatch-log.jsonl. The flag is retired from claim.js — the parser refuses unknown_flag
+// before any subcommand body runs, so the claim never acquires and the log is never written. Every
+// assertion in the scenario read the flag's effect, so there was nothing to narrow to.
+//
+// UNCOVERED: nothing. The back-fill has no mechanism left, and the property that outlives it — a
+// retired flag is never SILENTLY accepted at the claim surface — is a parser-level boundary that
+// `test-claim-hardening.js` already covers for startup and finalize; bundle is not a distinct
+// argv path. No live prompt surface passes the flag any more, so this is not a caller left broken.
 // ---------------------------------------------------------------------------
-(function testBundleAttestPlannerSpawn() {
-  console.log('Test (#370): --attest-planner-spawn back-fills dispatch-log.jsonl on the bundle path');
-  const tmpRoot = makeTmpRoot();
-  const binDir = path.join(tmpRoot, 'bin');
-  try {
-    initGitRepo(tmpRoot);
-    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47);
-    writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 47] });
-    const result = runClaim(
-      ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive', '--attest-planner-spawn'],
-      tmpRoot, binDir
-    );
-    const out = parseClaim(result);
-    assert(out && out.claim === 'acquired', '#370 attest: claim acquired, got ' + JSON.stringify(out && out.status));
-    const logPath = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(logPath), '#370 attest: dispatch-log.jsonl back-filled on the bundle path');
-    assert(/workflow-planner/.test(fs.readFileSync(logPath, 'utf8')),
-      '#370 attest: dispatch log carries a workflow-planner entry');
-  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
-})();
 
 // ---------------------------------------------------------------------------
 // Test (#370): NATIVE=0 bundle creates the in-place branch + records base_branch + run_posture
