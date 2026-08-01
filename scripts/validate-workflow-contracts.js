@@ -511,6 +511,17 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_STATE_FILE="kaola-wo
 // what finalize reads there, not a chain receipt.
 assertIncludes('commands/kaola-workflow-finalize.md', '.cache/final-validation.md');
 assertIncludes('commands/kaola-workflow-finalize.md', 'verdict: pass');
+// #900: the two pins above were GREEN while the recipe they defend was unusable. The gate also
+// requires a column-0 validated_candidate_hash, so a record carrying only the file and the verdict is
+// classified final_validation_unbound — a threshold cannot see a rule beneath its bar. Both halves are
+// pinned, because either alone is insufficient: naming the field without naming a producer leaves the
+// reader to reproduce a content address by hand, and naming the producer without the field lets a
+// later edit drop the requirement the producer exists to satisfy. The invocation needle is split at
+// the line continuation, so it pins the verb attached to the script AND the flags that make the
+// record land bound.
+assertIncludes('commands/kaola-workflow-finalize.md', 'validated_candidate_hash');
+assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-validation-runner.js" record');
+assertIncludes('commands/kaola-workflow-finalize.md', '--project {project} --verdict pass --command');
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
 assertIncludes('commands/kaola-workflow-finalize.md', 'Use the metadata captured in Step 9');
 // #816: ownership-inversion lock — the finalize seam is orchestrator-owned and the mechanical

@@ -208,7 +208,10 @@ staging, and the `chore: finalize {project}` commit gate. It is idempotent — r
 call resumes at whichever step it stopped on — and the emit names every step it completed.
 
 It never authors the implementation commit (if implementation-shaped changes are uncommitted,
-author the commit and re-run), and it owns the worktree→main project-folder sync itself.
+author the commit and re-run), and it owns the project-folder sync itself, in **both** directions —
+worktree→main and main→worktree. Either direction failing is typed the same way, `mirror_sync_failed`,
+and fails closed before anything downstream has run, so a sync the script cannot perform is a refusal
+the operator can read rather than an untyped crash.
 
 ### `finalize --check` — one read-only pass
 
@@ -216,7 +219,7 @@ Evaluates **every** precondition in one pass and reports all of them together, s
 preconditions come back from one invocation instead of one per re-run. Zero side effects.
 
 ```json
-{ "project": "issue-N", "ok": true, "checks": {}, "reasons": [] }
+{ "project": "issue-N", "ok": true, "checks": {}, "reasons": [], "authority": {} }
 ```
 
 `checks` carries `mirror`, `workflow_state`, `implementation_commit`, `staging_guard`, `validation`,
@@ -224,6 +227,25 @@ preconditions come back from one invocation instead of one per re-run. Zero side
 is empty when the run is finalize-ready. Nothing short-circuits: a failed rung never hides a later
 one. `validation` is reported as state, never as a reason — it stopped being a precondition when it
 stopped being a verdict.
+
+**`checks` and `reasons` answer different questions**, and the split is what a caller acts on. A token
+in `reasons` is an operator obligation. A token that appears only in `checks` is state the transaction
+settles itself: `sync_required` is the long-standing case, and `workflow_state: 'pending_mirror'` is
+the other one — an authority absent from this working tree that the mirror step will construct from the
+main checkout. `pending_mirror` never enters `reasons` and never makes `ok` false. The reserved
+`archive_authority_missing` is unchanged and still lands in both, because it names a condition
+execution cannot repair.
+
+The `authority` block (`--check` only) names where the authority is proven and where the transaction
+will read it, so the check and the transaction cannot silently disagree about which tree they mean:
+
+| Key | Meaning |
+|-----|---------|
+| `main_root` | Absolute realpath of the main checkout; falls back to the run root when unresolvable |
+| `linked_root` | Absolute realpath of the linked worktree the run was invoked from; `null` on an in-place run |
+| `source` | `live` \| `archive` \| `pending_mirror` \| `none` — where the authority is proven **today**. `none` means no single authority could be proven (absent, or ambiguous) |
+| `source_dir` | The directory that proves the authority today, or `null`. On `pending_mirror` this is the **main-resident** run folder the mirror will copy |
+| `dest_dir` | The directory the transaction will read the authority from. Equals `source_dir` except on `pending_mirror`, where it is `<linked_root>/kaola-workflow/<project>`. `null` when `source` is `none` |
 
 ### The two reports
 
@@ -449,13 +471,16 @@ saying stale — an inert advance is not staleness.
 `validated_candidate_hash` equal to the recomputed code-tree hash. It compares two hashes; it never
 re-executes tests. An absent or malformed binding is `final_validation_unbound` (an omitted field
 must not read as bound); a mismatch is `final_validation_stale`, with both hashes carried so a
-reader can check the claim rather than take it on trust.
+reader can check the claim rather than take it on trust. The producer of all three fields is
+`kaola-workflow-validation-runner.js record` below — the field the gate requires is the one an
+agent writing the file by hand is likeliest to omit, and both remediation hints name that verb.
 
 ### `kaola-workflow-validation-runner.js`
 
 The owned local gate for a consumer repo. Runs in a scrubbed environment, binds
 executable/toolchain and candidate identity, and reduces repeated runs to `pass`, `fail`, or
-`inconclusive`.
+`inconclusive`. `record` is the separate verb that binds an already-run validation to the tree it ran
+against, so the consumer arm above has an invocable producer rather than a format to reproduce.
 
 ```
 kaola-workflow-validation-runner.js run --command <command> --timeout-minutes <1..120>
@@ -464,9 +489,40 @@ kaola-workflow-validation-runner.js run --command <command> --timeout-minutes <1
 kaola-workflow-validation-runner.js qualify-local --contract-hash <sha256> --context-hash <sha256>
     --claude-profile-hash <sha256> --codex-profile-hash <sha256> --invariant-classes <a,b>
     [--timeout-minutes <1..120>] [--output <path>]
+kaola-workflow-validation-runner.js record --project <name> --verdict pass|fail
+    --command "<the exact validation command you ran>" [--output <path>]
 ```
 
 Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not `pass`.
+
+#### `record` — bind a consumer validation to the tree it validated
+
+Writes `kaola-workflow/<project>/.cache/final-validation.md` with the three column-0 fields the
+consumer arm requires: `verdict`, `validation_command`, and `validated_candidate_hash`. The hash is
+`adaptiveSchema.computeCodeTreeHash(candidateRoot, project, VALIDATION_TEST_CONSUMES)` — the gate's own
+function, reached over the gate's own root resolution, so producer and gate cannot compute different
+answers over the same tree.
+
+- **It hashes the working tree the shell is in.** `candidate_root` is echoed on the result for exactly
+  that reason. A linked worktree and the main checkout hash differently until the branch merges, so a
+  record written from the wrong checkout binds the wrong candidate and the gate reports
+  `final_validation_stale`. Standing in a checkout that does not carry the run folder is
+  `project_folder_missing` — it refuses to bind rather than silently hashing the tree it is in.
+- **The verdict is a field, not the exit code.** `0` means the record was written, `--verdict fail`
+  included; the gate then reads `final_validation_failed`. `1` is `outcome: "inconclusive"` with
+  `reasons` naming why no binding could be recorded (`candidate_root_unresolved`,
+  `project_folder_missing`, `candidate_hash_unresolved`). `2` is an argument or usage error.
+- **Merge, never clobber.** The verb owns only its three field lines, recognised at column zero
+  anywhere in the file; every owned line is removed wherever it sat and one fresh block is appended, so
+  repeating the call is byte-idempotent and surrounding agent prose survives. Ownership includes a
+  column-0 field line inside a code fence, deliberately — the gate reads the file fence-blind, so such
+  a line is already a live binding and leaving one behind would leave a second answer.
+- `other_candidate_roots` lists other working trees of the same repository that also carry the run
+  folder, `[]` when none, with an operator hint when it is not empty.
+
+The verb's name is spelled in the kernel's remediation hints for both `final_validation_unbound` and
+`final_validation_stale` (`kaola-workflow-adaptive-schema.js`), so a rename has to change both hints in
+all four byte-identical copies. Nothing keeps the two spellings in step.
 
 ## Sink API
 
@@ -572,6 +628,7 @@ attempted — a sink with nothing to close is never false-flagged.
 | `push_upstream` | `git push -u origin <branch>` did not verifiably reach parity with its upstream; the branch may not be backed up | the step is left NOT done, so a re-run retries it |
 | `finalize`, `archive_refusal: "archive_incomplete"` | the archive would not be a faithful copy: `missing` names files the source held that the destination lacks, `mismatched` names files that arrived with different bytes. Fires **before** any archive mutation, so the live folder is not deleted | restore the evidence and re-run |
 | `finalize`, `archive_refusal: "archive_exception"` \| `"archive_forced_refusal"` \| `"archive_not_performed"` | the archive did not happen at all — a throw other than the `TypeError`/`ReferenceError` export-drift class (`archive_exception`), the `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` test seam (`archive_forced_refusal`), or a return reporting neither `archived: true` nor `skipped: "source-missing"` (`archive_not_performed`). Nothing was pushed to the mainline and no issue was closed | resolve the fault (for example a non-writable `kaola-workflow/archive/`) and re-run; the step is left NOT done |
+| `archive_commit` | the archive was staged and committed, but a file the archive holds on disk did not become a blob at `HEAD`. `archive_missing_paths` names every one and `archive_add_errors` carries the `git add` output. Returned before teardown, so the branch, the worktree and the on-disk archive are all retained — nothing recoverable is lost | fix whatever git could not index (a mode, a permission) and re-run; the step is left NOT done |
 | `push_main` | the fast-forward landed locally but pushing the mainline threw | branch preserved; resolve the push fault and re-run |
 | `closure` | at least one issue could not be closed, or an exit-0 close could not be verified | the step is left NOT done, so a re-run retries it |
 
@@ -606,6 +663,33 @@ does not attempt to tell one from the other: the archive copies a folder that is
 and committed nowhere, so git holds no record of what belongs, and a basename allowlist cannot work
 when archives carry arbitrarily-named orchestrator artifacts. The listing is uniform by design — it
 makes the commit visible, it does not prevent it, and the orchestrator adjudicates.
+
+**Gitignored archive evidence is force-added, and the commit is verified per file.** A consumer
+`.gitignore` rule written as a basename — `.cache/` rather than the archive band — does not match the
+archive *directory*, so a directory-level ignore probe answers "not ignored" while every evidence file
+underneath is unstageable. The archive step therefore probes per file, force-adds exactly the
+ignored-untracked files under this project's own archive pathspec, and then confirms against
+`git ls-tree -r` that each required file really is a blob at `HEAD` rather than trusting the add's exit
+status. Three fields report it, each written only when non-empty:
+
+| Field | Where | Meaning |
+|---|---|---|
+| `archive_forced_paths` | receipt | The files staged with `git add -f` because the consumer's own ignore rules covered them. Overriding a rule the consumer wrote is recorded, never silent — the same paths are named on stderr. It can never name a transaction journal: the four journal paths are subtracted from the required set and from the force-add allowlist alike |
+| `archive_missing_paths` | receipt + refusal envelope | Required files the archive holds on disk that are **not** blobs at `HEAD`. Measured unconditionally, including in the keep-worktree posture where `archive_dest` is unset — that posture lost the same files |
+| `archive_add_errors` | refusal envelope | The `git add` statuses, verbatim. They were previously discarded, which is what made a failed stage indistinguishable from a successful one |
+
+A required file that could not be indexed is `{result: 'refuse', reason: 'sink_incomplete', step:
+'archive_commit'}` at exit `1`, returned **before** teardown so the branch, the worktree and the
+on-disk archive are all retained. The whole-band case is unchanged: when the archive path itself is
+ignored, the step still declines to force-add and completes as `skipped_gitignored`, now with the
+uncommitted required files itemized rather than merely counted. Force-add and an honest skip are
+mutually exclusive.
+
+All three names are **forge-neutral** — identical in all three editions, unlike the deliberate MR/PR
+divergences recorded for the closure audit below — because they describe git-local facts and carry no
+route noun. On the finalize side, `finalize_transaction.archive_ignored_evidence` names the archived
+evidence a consumer's ignore rules cover, so a folder handed to the sink says which of its files git
+would refuse to stage unaided.
 
 The close loop runs whenever a primary issue (`--issue`) **or** at least one bundle member
 (`--issue-numbers`) is present, so a bundle sink invoked with only `--issue-numbers` closes every
@@ -854,9 +938,32 @@ sources, the generated `ROADMAP.md`, active folders, archive state, remote issue
 `workflow:in-progress` label. A dedicated script, not a `claim.js` subcommand.
 
 ```bash
-node scripts/kaola-workflow-closure-audit.js             # dry-run: report drift as JSON, change nothing
-node scripts/kaola-workflow-closure-audit.js --execute   # repair safe local drift
+node scripts/kaola-workflow-closure-audit.js                             # repository-wide, dry-run: report drift as JSON, change nothing
+node scripts/kaola-workflow-closure-audit.js --execute                   # repository-wide, repair safe local drift
+node scripts/kaola-workflow-closure-audit.js --project <name>            # scoped verdict, dry-run
+node scripts/kaola-workflow-closure-audit.js --project <name> --execute  # scoped verdict + scoped repair
+node scripts/kaola-workflow-closure-audit.js --issue <N> [--issue <M>]   # scope by issue number(s); repeatable
+node scripts/kaola-workflow-closure-audit.js --help                      # usage on stdout, exit 0
 ```
+
+**Scoping partitions the report; it never narrows the sweep.** The repository sweep always runs whole,
+so no remote-call count changes and out-of-scope drift is never suppressed. `--project <name>` reads
+its member issues from that project's own `workflow-state.md` (live folder first, then
+`archive/<name>`, `archive/<name>.archived-*`, `archive/<name>.discarded-*`) and is not repeatable;
+`--issue <N>` is. Passing either switches the envelope to the scoped shape: `scope`,
+`current_project_clean`, `current_project_drift`, `current_project_counts`,
+`repository_drift_outside_scope`, `repository_counts_outside_scope`. Passing neither is the
+repository-wide default, whose envelope is unchanged.
+
+| Fact | Contract |
+|---|---|
+| `current_project_clean` | **Fail-closed** — `true` only when every scoped class actually evaluated and came back empty. A class that returned `"skipped_offline"` or `"skipped_timeout"` makes it `false`, so an offline scoped run is never `true` and `false` must not be read as "drift found" without the counts. A `--project` that resolved to no record makes it `false` too — the same rule applied to the scope itself, since nothing was read for the name the operator gave, whatever the classes say about `--issue` numbers passed beside it |
+| `scope.project_unresolved` | (omitted unless `true`) The named `--project` resolved to no `workflow-state.md` anywhere. It is what makes a `null` `scope.state_file` legible — the name was given and found nothing, rather than never given — and it is why the verdict above is `false` |
+| a skipped class | appears verbatim in **both** halves — it never evaluated, so neither half may claim it clean |
+| exit `0` | every successful run, **including one that found drift**. There is deliberately no verdict in the exit code |
+| exit `1` | operator-input error only: unknown flag, a missing or malformed flag value, or a `--project` resolving to no `workflow-state.md` anywhere with no `--issue` given. stdout is empty. Answering "clean" for a mistyped project name is the failure this replaces |
+| `attribution` | on scoped archive findings only, `"name_match"` or `"ambiguous_name_match"`. The two archive classes are attributed by name alone, because the artifact they report missing is itself the record that would carry an issue number |
+| scoped `--execute` | repairs only in-scope drift, but still rebuilds `ROADMAP.md` whole — the mirror is one generated file derived from all surviving sources, so there is no partial rebuild |
 
 | Key | Meaning |
 |-----|---------|
@@ -865,8 +972,9 @@ node scripts/kaola-workflow-closure-audit.js --execute   # repair safe local dri
 | `stale_in_progress_labels` | Closed remote issues still carrying `workflow:in-progress` |
 | `active_folder_for_closed_issue` | An active folder whose linked issue is closed. `dirty` flags uncommitted content. **Report-only** |
 | `unarchived_pr_folders` | An active `sink: pr` folder whose PR is MERGED/CLOSED but was never archived. **Report-only** |
-| `archive_content_incomplete` | An archived run whose folder is missing a required artifact. **Report-only in both modes**, and identical offline |
+| `archive_content_incomplete` | An archived run whose folder is missing its `workflow-state.md` identity anchor — the only unconditionally required artifact. **Report-only in both modes**, and identical offline |
 | `unresolved_closed_state` | (omitted when empty) Issue numbers whose closed state could not be determined because the remote check timed out or failed. Present in both `drift` and `counts` |
+| `archive_summary_citation_missing` | (omitted when empty) An archived `finalization-summary.md` cites a bare-relative `.cache/…` artifact that is not in the archive — a record pointing at evidence nobody can read. **Report-only**, and it carries the cited path so one `ls` settles it. Append-log citations (`.jsonl`) are excluded: their disposal is a documented step, so absence there is correct. A narrative mention of a path that lives elsewhere reads as a citation, so the class has a known false-positive mode and is a prompt to adjudicate, not a verdict |
 
 **Safe-repair boundary.** `--execute` only ever (1) deletes stale `.roadmap/issue-N.md` sources,
 (2) regenerates `ROADMAP.md`, and (3) removes `workflow:in-progress` from closed issues when online.

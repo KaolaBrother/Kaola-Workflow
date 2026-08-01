@@ -66,6 +66,20 @@
 //   (q) #832 — receipt honesty: on a consumer whose .gitignore covers kaola-workflow/archive, git
 //       REFUSES the archive pathspec, so archive_commit must record 'skipped_gitignored' — the
 //       keep-worktree flow's unconditional stepDone() reports "done" for an operation git refused.
+//   (y1)–(y6) #901 — the same consumer rule at a NARROWER granularity than (q)'s: a basename
+//       `.cache/` leaves the archive DIRECTORY un-ignored, so the dir probe answered "not ignored",
+//       the honest-skip arm never fired, and `git add <archive>/` exited 1 with git's ignore report
+//       while still staging the non-ignored siblings — inside `catch (_) {}`. archive_commit read
+//       "done" at exit 0 over a commit carrying 3 of 8 files. (y1) pins that the evidence lands as
+//       BLOBS at HEAD and in a FRESH CLONE (every archived-evidence assertion in this corpus reads
+//       the disk, and the lost files were on disk the whole time — a disk pin passes against the
+//       bug), with (y2) the single-axis irrelevant-rule control. (y3) holds #832's decision and
+//       sharpens it: force-add and honest-skip are mutually exclusive, and the skip now itemizes
+//       what it leaves behind. (y4) is the armed-gate pin — one required file unreadable, so the
+//       force-add cannot take: refuse sink_incomplete, name every missing path, surface the git add
+//       failure, keep the step NOT done, and retain the branch and the archive. (y5)/(y6) repeat the
+//       axis in the OTHER posture, where archive_dest is set and the #700 guard is live but reads a
+//       tree that a partial commit also satisfies.
 //   (r) the workflow-only branch verdict became a MEASUREMENT: assertBranchHasNonWorkflowChanges
 //       returns a typed finding instead of throwing, carries a way forward, announces itself on
 //       stderr, and keeps every skip arm that made it safe (no false positive on a mixed branch, no
@@ -208,6 +222,13 @@ function roadmapMirror(issues) {
 //   opts.extraLiveFiles — { <name>: <content> } committed into the live folder on the BRANCH
 //     alongside workflow-state.md, for a scenario that needs to name a second run-record file by
 //     path. Omit for the plain shape.
+//   opts.gitignoreBody — a consumer root .gitignore, committed on main ahead of the branch so its
+//     rules are in force for every later staging decision. Omit for the plain shape (no .gitignore
+//     at all, exactly as before).
+//   opts.liveCacheFiles — { <name>: <content> } written into the live folder's OWN .cache/ on the
+//     branch and force-added, so the run's evidence is branch-tracked the way a real sole-archiver
+//     run leaves it. Forcing is what keeps preflight clean in BOTH #901 legs, so the .gitignore body
+//     stays the single axis between them.
 function buildSoleArchiverFixture(project, issue, opts) {
   opts = opts || {};
   const tmpRoot = makeTmpRoot();
@@ -223,6 +244,10 @@ function buildSoleArchiverFixture(project, issue, opts) {
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
   fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', 'archive', project), { recursive: true });
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'archive', project, 'placeholder.txt'), 'prior cycle residue\n');
+  if (opts.gitignoreBody) {
+    fs.writeFileSync(path.join(tmpRoot, '.gitignore'), opts.gitignoreBody);
+    git(tmpRoot, ['add', '.gitignore']);
+  }
   git(tmpRoot, ['add', 'kaola-workflow']);
   git(tmpRoot, ['commit', '-m', 'chore: roadmap + pre-existing archive']);
   git(tmpRoot, ['push', 'origin', 'main']);
@@ -236,8 +261,12 @@ function buildSoleArchiverFixture(project, issue, opts) {
   for (const name of Object.keys(opts.extraLiveFiles || {})) {
     fs.writeFileSync(path.join(liveDir, name), opts.extraLiveFiles[name]);
   }
+  for (const name of Object.keys(opts.liveCacheFiles || {})) {
+    fs.writeFileSync(path.join(liveDir, '.cache', name), opts.liveCacheFiles[name]);
+  }
   fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
   git(tmpRoot, ['add', '-A']);
+  if (opts.liveCacheFiles) git(tmpRoot, ['add', '-f', '--', 'kaola-workflow/' + project + '/.cache/']);
   git(tmpRoot, ['commit', '-m', 'feat: deliverable + live state']);
   git(tmpRoot, ['push', '-u', 'origin', branch]);
   git(tmpRoot, ['checkout', 'main']);
@@ -321,6 +350,52 @@ function cleanup(fx) {
   try { fs.rmSync(fx.tmpRoot, { recursive: true, force: true }); } catch (_) {}
   try { fs.rmSync(fx.binDir, { recursive: true, force: true }); } catch (_) {}
   try { if (fx.remotePath) fs.rmSync(fx.remotePath, { recursive: true, force: true }); } catch (_) {}
+}
+// #901: the BLOBS under `pathspec` at `ref`. `ls-tree -r` enumerates blobs, never directories, and
+// that distinction is the whole reason #901 survived this corpus: every archived-evidence assertion
+// here reads the DISK (fs.existsSync / readFileSync), and the five files the incident lost were on
+// disk the entire time — untracked, absent from every commit, absent from a fresh clone, while the
+// sink reported archive_commit "done" at exit 0. A durability pin that reads the disk passes against
+// the broken sink; only a blob probe can tell the two apart.
+// Entries, so a caller that needs the MODE (a symlink is a 120000 blob, not a 100644 one) does not
+// need a second ls-tree helper. `-z` records are `<mode> SP <type> SP <sha> TAB <path>`.
+//
+// NUL-split ONLY — never `.trim()`. That normalization is the whole reason `-z` was chosen: git emits
+// no trailing newline here, so trimming destroys leading/trailing whitespace that is genuinely part of
+// a pathname. Trimming a `-z` stream in the SINK is what made a run permanently unsinkable (D3), and
+// this reader had the identical bug: it silently trimmed the space out of an observed blob path while
+// the expected name kept it, which would have made the whitespace pin below red against a correct
+// sink. The three shipped `-z` readers and these two are held to the same rule.
+function treeEntriesUnder(cwd, ref, pathspec) {
+  const r = git(cwd, ['ls-tree', '-r', '-z', ref, '--', pathspec]);
+  if (r.status !== 0) return [];
+  return (r.stdout || '').split('\0').filter(Boolean).map((rec) => {
+    const tab = rec.indexOf('\t');
+    const meta = (tab < 0 ? rec : rec.slice(0, tab)).split(' ');
+    return { mode: meta[0], type: meta[1], sha: meta[2], path: tab < 0 ? '' : rec.slice(tab + 1) };
+  });
+}
+function blobsUnder(cwd, ref, pathspec) {
+  return treeEntriesUnder(cwd, ref, pathspec).map(e => e.path).filter(Boolean);
+}
+// The archive commit itself, located by its own subject rather than assumed to be HEAD, so the
+// "3 files changed / 8 files changed" claim is made about the commit that actually carries it.
+function archiveCommitOf(cwd, project) {
+  const subject = 'chore: archive ' + project + ' [sink]';
+  const r = git(cwd, ['log', '--format=%H%x1f%s']);
+  if (r.status !== 0) return null;
+  for (const line of (r.stdout || '').split('\n')) {
+    const i = line.indexOf('\x1f');
+    if (i > 0 && line.slice(i + 1) === subject) return line.slice(0, i);
+  }
+  return null;
+}
+// The paths one non-merge commit touched. `-z` so a pathname is never quoted or split — and, per the
+// note above, NUL-split only, never trimmed.
+function pathsInCommit(cwd, sha) {
+  const r = git(cwd, ['diff-tree', '--no-commit-id', '-r', '-z', '--name-only', sha]);
+  if (r.status !== 0) return [];
+  return (r.stdout || '').split('\0').filter(Boolean);
 }
 function suffixedArchiveRel(tmpRoot, project) {
   const base = path.join(tmpRoot, 'kaola-workflow', 'archive');
@@ -1755,7 +1830,18 @@ function buildJournalOnlyLiveDirFixture(project, issue) {
 // keep-worktree flow's archive_commit step runs stepDone() unconditionally — its honesty guard is
 // scoped to receipt.archive_dest, which is unset precisely on this flow. The result is
 // steps.archive_commit:"done" for an operation git refused, on every run, silently.
-function buildGitignoredArchiveSinkFixture(project, issue) {
+//   opts.gitignoreBody — the consumer's root .gitignore, the ONE axis the (y1)–(y4) #901 legs vary.
+//     Defaults to the archive band, i.e. (q)'s own fixture unchanged.
+//   opts.cacheFiles — { <name>: <content> } written into the archive's own .cache/. Defaults to
+//     (q)'s single evidence file; the #901 legs pass the five the incident names. A name may contain
+//     `/` (its parent is created) and may carry leading/trailing whitespace or an embedded newline —
+//     those are legal pathname bytes and (y7) turns on them.
+//   opts.cacheSymlinks — { <name>: <target> } created with symlinkSync inside the archive's .cache/,
+//     after the regular files so a link may point at one. (y8) turns on these.
+function buildGitignoredArchiveSinkFixture(project, issue, opts) {
+  const o = opts || {};
+  const gitignoreBody = o.gitignoreBody || 'kaola-workflow/archive/\n';
+  const cacheFiles = o.cacheFiles || { 'n1-impl.md': 'binding: n1-impl nonce83203\nverdict: pass\n' };
   const tmpRoot = makeTmpRoot();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
   const logFile = path.join(binDir, 'gh-calls.log');
@@ -1764,7 +1850,7 @@ function buildGitignoredArchiveSinkFixture(project, issue) {
   writeGhMock(binDir, logFile);
 
   // main: the consumer's .gitignore covers the archive band + roadmap source/mirror.
-  fs.writeFileSync(path.join(tmpRoot, '.gitignore'), 'kaola-workflow/archive/\n');
+  fs.writeFileSync(path.join(tmpRoot, '.gitignore'), gitignoreBody);
   fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
@@ -1790,7 +1876,14 @@ function buildGitignoredArchiveSinkFixture(project, issue) {
     liveState(project, issue, new Date().toISOString()).replace('status: active', 'status: closed'));
   fs.writeFileSync(path.join(archiveDir, 'workflow-plan.md'), runPlanDoc('archived run'));
   fs.writeFileSync(path.join(archiveDir, 'finalization-summary.md'), '# Finalization Summary\n\nARCHIVED AFTER FINAL GIT GATE\n');
-  fs.writeFileSync(path.join(archiveDir, '.cache', 'n1-impl.md'), 'binding: n1-impl nonce83203\nverdict: pass\n');
+  for (const name of Object.keys(cacheFiles)) {
+    const dest = path.join(archiveDir, '.cache', name);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, cacheFiles[name]);
+  }
+  for (const name of Object.keys(o.cacheSymlinks || {})) {
+    fs.symlinkSync(o.cacheSymlinks[name], path.join(archiveDir, '.cache', name));
+  }
 
   return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project, archiveDir };
 }
@@ -1826,6 +1919,544 @@ function buildGitignoredArchiveSinkFixture(project, issue) {
       '#832 q: the on-disk archive must survive an honest skipped_gitignored');
   } finally {
     cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (y1)–(y6) #901
+//
+// (q) above covers a rule over the whole archive BAND. A consumer's common basename rule `.cache/`
+// is a DIFFERENT question at a different granularity: it leaves the archive DIRECTORY un-ignored
+// (measured: check-ignore exits 1) while covering every evidence file beneath it. The dir probe
+// therefore answered "not ignored", the honest-skip arm never fired, `git add <archive>/` exited 1
+// with git's ignore report while STILL writing the non-ignored siblings to the index, and both add
+// sites sat inside `catch (_) {}`. The run reported steps.archive_commit "done" at exit 0 over an
+// archive commit carrying 3 of its 8 files, with archived_paths naming the 3 survivors as the whole
+// set — and no code path could have noticed.
+//
+// Two independent reasons no test in this corpus could catch that shape, and both are what these
+// pins are built against:
+//   1. Every .gitignore fixture writes the archive band, an ANCHORED `/.cache/` (which matches only
+//      the repo root), or `kaola-workflow/` wholesale. None matches an archive .cache SUBTREE.
+//   2. No assertion anywhere checks that an archived .cache file became a git BLOB. The one ls-files
+//      assertion touching an archive .cache checks the INVERSE (#520: journals stay untracked). So
+//      even a fixture that had the rule would have passed — a disk probe cannot see this defect.
+// Hence: the fixture body is exactly `.cache/`, and every durability clause below reads `ls-tree`,
+// never the disk.
+const CACHE_EVIDENCE_901 = {
+  'final-validation.md': '# Final Validation\n\nall four chains green\n',
+  'doc-updater.md': '# Doc Updater\n\nREADME + CHANGELOG updated\n',
+  'doc-docking.md': '# Doc Docking\n\ndocked into docs/api.md\n',
+  'run-gaps-manual.md': '# Run Gaps (manual)\n\nnone\n',
+  'run-gaps.json': '{"gaps":[]}\n',
+};
+function cacheEvidenceRel(archiveRel) {
+  return Object.keys(CACHE_EVIDENCE_901).map(n => archiveRel + '/.cache/' + n).sort();
+}
+
+// (y1) and (y2) are held to ONE assertion set so neither the ignored leg nor its control can end up
+// checked more weakly than the other — the same discipline assertArchiveFailureStopsTheSink applies
+// to the two archive-failure doors. `opts.expectForced` is the only thing that differs, and it is
+// the axis: under an irrelevant rule nothing may be force-added at all.
+function assertArchivedEvidenceIsDurable(fx, label, opts) {
+  const o = opts || {};
+  const out = o.out;
+  const archiveRel = 'kaola-workflow/archive/' + fx.projectName;
+  const want = cacheEvidenceRel(archiveRel);
+
+  assert(o.exit === 0, label + ': the sink must complete; got exit ' + o.exit
+    + '\nstdout: ' + o.stdout + '\nstderr: ' + o.stderr);
+  assert(out && out.status === 'sinked', label + ': status must be sinked; got ' + JSON.stringify(out && out.status));
+  // The token lives on steps.archive_commit. receipt.archive_commit is UNDEFINED in this posture (it
+  // is only ever assigned 'skipped_gitignored' or 'failed'), so asserting that field instead would
+  // pass against anything at all.
+  const steps = (out && out.receipt && out.receipt.steps) || {};
+  assert(steps.archive_commit === 'done', label + ': steps.archive_commit must be "done"; got '
+    + JSON.stringify(steps.archive_commit) + '\nsteps: ' + JSON.stringify(steps));
+
+  // THE clause #901 turns on: each evidence file is a BLOB in the published commit, not a file on
+  // disk. This is the one assertion whose absence let the incident ship.
+  const blobs = blobsUnder(fx.tmpRoot, 'HEAD', archiveRel);
+  const notBlobs = want.filter(p => !blobs.includes(p));
+  assert(notBlobs.length === 0, label + ': every archived .cache evidence file must be a BLOB at HEAD'
+    + ' (on-disk presence is what the broken sink already satisfied); missing ' + JSON.stringify(notBlobs)
+    + '\nblobs under ' + archiveRel + ': ' + JSON.stringify(blobs));
+
+  // ...and the archive commit carries the WHOLE archive. 3 of 8 was the incident's own number.
+  const archiveSha = archiveCommitOf(fx.tmpRoot, fx.projectName);
+  assert(archiveSha != null, label + ': the archive commit must exist; git log carries no '
+    + '"chore: archive ' + fx.projectName + ' [sink]" subject');
+  const inCommit = pathsInCommit(fx.tmpRoot, archiveSha).filter(p => p.startsWith(archiveRel + '/'));
+  assert(inCommit.length === 8, label + ': the archive commit must carry all 8 archive files, not the 3'
+    + ' non-ignored survivors; got ' + inCommit.length + ': ' + JSON.stringify(inCommit));
+
+  // archived_paths becomes the durable record via persistArchivedPathsToSummary. A complete-looking
+  // list of an incomplete archive is what the incident wrote into the archive it had just truncated.
+  const named = (out && out.receipt && out.receipt.archived_paths) || [];
+  const unnamed = want.filter(p => !named.includes(p));
+  assert(unnamed.length === 0, label + ': archived_paths must name every evidence file the commit'
+    + ' carries; unnamed ' + JSON.stringify(unnamed) + '\narchived_paths: ' + JSON.stringify(named));
+
+  // "Durable" is a claim about a FRESH CLONE, so make a fresh clone the witness rather than inferring
+  // it from the local tree.
+  const cloneDir = fx.tmpRoot + '-clone';
+  try {
+    G.clone(fx.remotePath, cloneDir, ['-q']);
+    const cloned = blobsUnder(cloneDir, 'HEAD', archiveRel);
+    const gone = want.filter(p => !cloned.includes(p));
+    assert(gone.length === 0, label + ': the evidence must survive a fresh clone of the pushed remote;'
+      + ' missing ' + JSON.stringify(gone) + '\nthe clone carries: ' + JSON.stringify(cloned));
+  } finally { try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch (_) {} }
+
+  // #520 under the force-add: forcing paths past the consumer's rule is the ONE new way a transaction
+  // journal could leak into a commit, so neither the forced list nor the tracked tree may hold one.
+  const forced = (out && out.receipt && out.receipt.archive_forced_paths);
+  assert(!(forced || []).some(p => /\/sink-(?:receipt|fallback)\.json$/.test(p)),
+    label + ': #520 — archive_forced_paths must never name a transaction journal; got ' + JSON.stringify(forced));
+  const trackedJournals = git(fx.tmpRoot, ['ls-files', '--', '*/sink-receipt.json', '*/sink-fallback.json']).stdout.trim();
+  assert(trackedJournals === '', label + ': #520 — no sink journal may be tracked after the archive'
+    + ' commit; got:\n' + trackedJournals);
+
+  if (o.expectForced) {
+    assert(JSON.stringify((forced || []).slice().sort()) === JSON.stringify(want),
+      label + ': archive_forced_paths must name exactly the ignored evidence files — overriding a rule'
+      + ' the consumer wrote is recorded, never silent; got ' + JSON.stringify(forced) + '\nwant ' + JSON.stringify(want));
+  } else {
+    assert(forced === undefined, label + ': nothing here is ignored, so no path may be force-added at'
+      + ' all; got ' + JSON.stringify(forced));
+  }
+}
+
+// (y1)/(y2) The defect and its single-axis control. The ONLY difference between these two runs is the
+// body of the consumer's root .gitignore.
+(function testBasenameCacheRuleStillCommitsArchiveEvidence901() {
+  console.log('Test (#901 y1): a consumer whose .gitignore carries the basename rule ".cache/" must still get its run evidence into the archive commit — asserted as BLOBS at HEAD and in a fresh clone, never as files on disk');
+  const project = 'issue-90101';
+  const issue = 90101;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, {
+    gitignoreBody: '.cache/\n', cacheFiles: CACHE_EVIDENCE_901,
+  });
+  try {
+    // Precondition — the granularity mismatch is really present in this fixture: the archive DIR is
+    // not ignored (exit 1) while a file beneath it is (exit 0). Without this the leg could pass for
+    // the wrong reason, e.g. a rule that never matched anything.
+    assert(git(fx.tmpRoot, ['check-ignore', '-q', '--', 'kaola-workflow/archive/' + project]).status === 1,
+      '#901 y1: precondition — a basename rule must leave the archive DIRECTORY un-ignored (that is why the dir probe answered "not ignored")');
+    assert(git(fx.tmpRoot, ['check-ignore', '-q', '--', 'kaola-workflow/archive/' + project + '/.cache/run-gaps.json']).status === 0,
+      '#901 y1: precondition — the same rule must cover a FILE beneath the archive');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    assertArchivedEvidenceIsDurable(fx, '#901 y1 IGNORED', {
+      out: lastJson(result), exit: result.status, stdout: result.stdout, stderr: result.stderr,
+      expectForced: true,
+    });
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+(function testIrrelevantIgnoreRuleIsUnchanged901() {
+  console.log('Test (#901 y2): the single-axis control — an irrelevant .gitignore rule leaves the archive commit exactly as before and force-adds nothing');
+  const project = 'issue-90102';
+  const issue = 90102;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, {
+    gitignoreBody: 'node_modules/\n', cacheFiles: CACHE_EVIDENCE_901,
+  });
+  try {
+    assert(git(fx.tmpRoot, ['check-ignore', '-q', '--', 'kaola-workflow/archive/' + project + '/.cache/run-gaps.json']).status === 1,
+      '#901 y2: precondition — the control rule must cover nothing under the archive');
+    const result = runSink(fx, ['--issue', String(issue)]);
+    assertArchivedEvidenceIsDurable(fx, '#901 y2 CONTROL', {
+      out: lastJson(result), exit: result.status, stdout: result.stdout, stderr: result.stderr,
+      expectForced: false,
+    });
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (y3) The #832 decision is preserved, and sharpened: force-add and honest-skip are mutually
+// exclusive. A band rule is a consumer saying "no tracked archives at all", so overriding it would
+// be the opposite of honoring it — and nothing pinned that they stay exclusive.
+(function testArchiveBandRuleKeepsHonestSkipAndNeverForceAdds901() {
+  console.log('Test (#901 y3 / #832): a rule over the whole archive band keeps its honest skip — skipped_gitignored, exit 0, NO force-add, archive retained on disk — and now itemizes every required file the skip leaves uncommitted');
+  const project = 'issue-90103';
+  const issue = 90103;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, {
+    gitignoreBody: 'kaola-workflow/archive/\n', cacheFiles: CACHE_EVIDENCE_901,
+  });
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    const archiveRel = 'kaola-workflow/archive/' + project;
+    const receipt = (out && out.receipt) || {};
+
+    assert(result.status === 0, '#901 y3: the honest skip must still complete; got exit ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#901 y3: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(receipt.archive_commit === 'skipped_gitignored',
+      '#901 y3: the band rule must still record skipped_gitignored; got ' + JSON.stringify(receipt.archive_commit));
+    assert(receipt.archive_forced_paths === undefined,
+      '#901 y3: the force-add must be DECLINED when the rule covers the whole band; got ' + JSON.stringify(receipt.archive_forced_paths));
+    assert(blobsUnder(fx.tmpRoot, 'HEAD', archiveRel).length === 0,
+      '#901 y3: nothing under the ignored archive may reach HEAD; got '
+        + JSON.stringify(blobsUnder(fx.tmpRoot, 'HEAD', archiveRel)));
+
+    // What the skip gained is the inventory: every required file it leaves uncommitted, named.
+    // "Announced" was already true; itemized was not.
+    const missing = receipt.archive_missing_paths || [];
+    const want = cacheEvidenceRel(archiveRel);
+    assert(missing.length === 8 && want.every(p => missing.includes(p)),
+      '#901 y3: the skip must itemize all 8 uncommitted required files; got ' + JSON.stringify(missing));
+
+    // ...and it still does not destroy the archive it declined to commit.
+    for (const name of Object.keys(CACHE_EVIDENCE_901)) {
+      assert(fs.existsSync(path.join(fx.archiveDir, '.cache', name)),
+        '#901 y3: the on-disk archive must survive an honest skip; ' + name + ' is gone');
+    }
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (y4) The armed-gate pin. A happy path cannot tell the per-path blob verdict from a no-op: it is
+// green either way once the force-add works. Break the force-add on ONE required file and the gate
+// has to be the thing that speaks.
+(function testPartiallyCommittedArchiveRefusesAndRetainsEverything901() {
+  console.log('Test (#901 y4): with one required evidence file unreadable the force-add cannot take — the sink must refuse sink_incomplete, name every missing path, surface the git add failure that used to be swallowed, and retain the branch and the on-disk archive');
+  const project = 'issue-90104';
+  const issue = 90104;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, {
+    gitignoreBody: '.cache/\n', cacheFiles: CACHE_EVIDENCE_901,
+  });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  const blocked = path.join(fx.archiveDir, '.cache', 'run-gaps.json');
+  try {
+    // The ONE axis versus (y1): a required file git cannot index. Verified in-fixture rather than
+    // assumed — a chmod that silently did not take would turn this pin into a second happy path.
+    fs.chmodSync(blocked, 0o000);
+    let stillReadable = true;
+    try { fs.readFileSync(blocked); } catch (_) { stillReadable = false; }
+    assert(!stillReadable,
+      '#901 y4: arming axis — the required file must be genuinely unreadable, else this leg proves nothing');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 1, '#901 y4: a partially committed archive must exit 1; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'archive_commit',
+      '#901 y4: must emit result:refuse reason:sink_incomplete step:archive_commit; got ' + JSON.stringify(out));
+    assert(!(out && out.status === 'sinked'),
+      '#901 y4: status must NOT be sinked over an archive the commit does not carry; got ' + JSON.stringify(out && out.status));
+
+    // Left NOT done, so a re-run retries the step rather than skipping it as already satisfied. A
+    // refusal envelope carries no `receipt` key at all, so reading out.receipt.steps here would be
+    // vacuous — the surviving on-disk journal is the record, and the refusal returns before the #653
+    // disposal precisely so it survives.
+    const journal = path.join(fx.archiveDir, '.cache', 'sink-receipt.json');
+    assert(findSinkJournal(fx.tmpRoot, project) === journal,
+      '#901 y4: the refusal must leave its journal on disk at ' + journal + '; found '
+        + JSON.stringify(findSinkJournal(fx.tmpRoot, project)));
+    // Read defensively: a sink that DISPOSED of its journal (i.e. completed) must fail these clauses
+    // as assertions, not abort the suite before the scenarios after this one get to run.
+    let persisted = null;
+    try { persisted = JSON.parse(fs.readFileSync(journal, 'utf8')); } catch (_) { persisted = null; }
+    assert(persisted && persisted.steps && persisted.steps.archive_commit !== 'done',
+      '#901 y4: the journal must leave steps.archive_commit NOT done so a re-run retries it; got '
+        + JSON.stringify(persisted && persisted.steps));
+    assert(persisted && persisted.archive_commit === 'failed',
+      '#901 y4: the journal must record archive_commit:"failed"; got '
+        + JSON.stringify(persisted && persisted.archive_commit));
+    assert(persisted && Array.isArray(persisted.archive_missing_paths) && persisted.archive_missing_paths.length > 0,
+      '#901 y4: the journal must itemize the missing paths durably, not only on the envelope; got '
+        + JSON.stringify(persisted && persisted.archive_missing_paths));
+
+    // EVERY missing required path is named — a count is not a diagnosis.
+    const missing = (out && out.archive_missing_paths) || [];
+    const want = cacheEvidenceRel(archiveRel);
+    assert(want.every(p => missing.includes(p)),
+      '#901 y4: archive_missing_paths must name every required path absent from the commit; got '
+        + JSON.stringify(missing) + '\nwant all of ' + JSON.stringify(want));
+
+    // ...and the signal `catch (_) {}` used to throw away rides the envelope. It is the diagnosis for
+    // WHY the paths are absent, and it was the only evidence git ever produced.
+    const addErrors = (out && out.archive_add_errors) || [];
+    assert(addErrors.length > 0 && addErrors.some(e => /git add/.test(String(e))),
+      '#901 y4: the swallowed git add failure must reach archive_add_errors; got ' + JSON.stringify(addErrors));
+
+    // #520 stays subtracted even on this path: the journal asserted above is on disk under the
+    // archive .cache and IS covered by the consumer's rule — and must still be neither demanded of
+    // the commit nor tracked. This is the leg where that is observable rather than vacuous, since a
+    // terminally successful sink disposes of its journal before anything can look.
+    assert(!missing.some(p => /sink-(?:receipt|fallback)\.json$/.test(p)),
+      '#901 y4: #520 — a transaction journal must never be demanded of the archive commit; got ' + JSON.stringify(missing));
+    assert(git(fx.tmpRoot, ['ls-files', '--', '*/sink-receipt.json', '*/sink-fallback.json']).stdout.trim() === '',
+      '#901 y4: #520 — no journal may be tracked');
+
+    // The refusal destroys nothing recoverable: it returns BEFORE teardown, so the branch and the
+    // on-disk archive both survive and a re-run can retry.
+    assert(git(fx.tmpRoot, ['rev-parse', '--verify', fx.branch]).status === 0,
+      '#901 y4: the feature branch must be RETAINED by the refusal');
+    for (const name of Object.keys(CACHE_EVIDENCE_901)) {
+      assert(fs.existsSync(path.join(fx.archiveDir, '.cache', name)),
+        '#901 y4: the on-disk archive must survive the refusal; ' + name + ' is gone');
+    }
+  } finally {
+    try { fs.chmodSync(blocked, 0o644); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// (y5)/(y6) The OTHER archiver posture. (y1)–(y4) run with receipt.archive_dest unset, which is where
+// the #700 completeness guard is dormant; here the sink archives the folder itself, the dest IS set
+// and that guard is live — and the incident lost the same files anyway, because a partially committed
+// archive still yields a `tree` for cat-file. The live folder's evidence is branch-tracked here, so
+// the pre-fix commit stages the DELETION of the live copies without adding the archive ones.
+(function testSoleArchiverPostureCommitsIgnoredEvidence901() {
+  console.log('Test (#901 y5/y6): sole-archiver posture (archive_dest SET, so the #700 completeness guard is live) — a basename .cache/ rule must not clip the run evidence out of the collision-suffixed archive commit; irrelevant-rule control alongside');
+  for (const leg of [
+    { label: '#901 y5 IGNORED', project: 'issue-90105', issue: 90105, body: '.cache/\n', expectForced: true },
+    { label: '#901 y6 CONTROL', project: 'issue-90106', issue: 90106, body: 'node_modules/\n', expectForced: false },
+  ]) {
+    const fx = buildSoleArchiverFixture(leg.project, leg.issue, {
+      gitignoreBody: leg.body, liveCacheFiles: CACHE_EVIDENCE_901,
+    });
+    fx.projectName = leg.project;
+    try {
+      const result = runSink(fx, ['--issue', String(leg.issue)]);
+      const out = lastJson(result);
+      const receipt = (out && out.receipt) || {};
+
+      assert(result.status === 0, leg.label + ': the sink must complete; got exit ' + result.status
+        + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      assert(out && out.status === 'sinked', leg.label + ': status must be sinked; got ' + JSON.stringify(out && out.status));
+      assert(typeof receipt.archive_dest === 'string' && receipt.archive_dest.length > 0,
+        leg.label + ': precondition — this posture must record an archive_dest, which is what makes the'
+        + ' #700 completeness guard live; got ' + JSON.stringify(receipt.archive_dest));
+
+      const archRel = suffixedArchiveRel(fx.tmpRoot, leg.project) || receipt.archive_dest;
+      const want = cacheEvidenceRel(archRel);
+      const blobs = blobsUnder(fx.tmpRoot, 'HEAD', archRel);
+      const notBlobs = want.filter(p => !blobs.includes(p));
+      assert(notBlobs.length === 0, leg.label + ': every .cache evidence file must be a BLOB at HEAD under '
+        + archRel + '; missing ' + JSON.stringify(notBlobs) + '\nblobs: ' + JSON.stringify(blobs));
+
+      const named = receipt.archived_paths || [];
+      assert(want.every(p => named.includes(p)), leg.label + ': archived_paths must name the evidence it'
+        + ' committed; got ' + JSON.stringify(named));
+
+      if (leg.expectForced) {
+        assert(JSON.stringify((receipt.archive_forced_paths || []).slice().sort()) === JSON.stringify(want),
+          leg.label + ': archive_forced_paths must name exactly the ignored evidence files; got '
+            + JSON.stringify(receipt.archive_forced_paths) + '\nwant ' + JSON.stringify(want));
+      } else {
+        assert(receipt.archive_forced_paths === undefined,
+          leg.label + ': nothing is ignored here, so no path may be force-added; got '
+            + JSON.stringify(receipt.archive_forced_paths));
+      }
+
+      // The archive move RENAMED tracked live paths, so a commit that adds the archive copies without
+      // the matching deletions (or the reverse) leaves main dirty after status:sinked.
+      const st = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
+      assert(st === '', leg.label + ': main must be clean after status:sinked; got:\n' + st);
+    } finally {
+      cleanup(fx);
+    }
+  }
+})();
+
+// (y7) The repair the guard exists to perform must actually REACH the file it refuses over. `-z` was
+// chosen so a pathname is never mangled, and then its output was `.trim()`ed — while the required set
+// is built from readdirSync, which preserves the name exactly. So an archive file named `notes.md `
+// (one trailing space) could never match the ignored-untracked set, was never force-added, and was
+// then refused over: three consecutive re-runs produced the identical `sink_incomplete`. A refusal
+// that says "a re-run retries it" over a deterministic computation is a bricked repository.
+//
+// The failure mode was OVER-refusal, so the naive fix weakens the guard until it stops firing. The
+// non-regression shapes therefore ride in the SAME fixture rather than a separate green run: non-ASCII,
+// an embedded newline, a nested directory and a 0-byte file all have to land as blobs too, so a fix
+// that simply stopped requiring awkward names would fail here.
+(function testWhitespaceBearingArchiveNameSinksOnTheFirstRun901() {
+  console.log('Test (#901 y7): an archive filename carrying trailing whitespace must be force-added and land as a BLOB on the FIRST run — the -z readers are NUL-split only, never trimmed, and the non-ASCII / embedded-newline / nested / 0-byte shapes must not regress');
+  const project = 'issue-90107';
+  const issue = 90107;
+  // Every name is a legal pathname; the trailing space in 'notes.md ' is the axis. `deep/x.md` is the
+  // nested shape and `zero.md` the 0-byte one.
+  const names = {
+    'plain.md': 'plain evidence\n',
+    'notes.md ': 'trailing space in the NAME, not the content\n',
+    'ünïcödé-日本.md': 'non-ASCII name\n',
+    'a\nb.md': 'embedded newline in the name\n',
+    'deep/x.md': 'nested evidence\n',
+    'zero.md': '',
+  };
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, {
+    gitignoreBody: '.cache/\n', cacheFiles: names,
+  });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  const want = Object.keys(names).map(n => archiveRel + '/.cache/' + n).sort();
+  try {
+    // Precondition — the space really is on disk, and git really does report it raw under `-z`. A
+    // fixture whose filesystem silently normalized the name would make the whole leg vacuous.
+    assert(fs.readdirSync(path.join(fx.archiveDir, '.cache')).includes('notes.md '),
+      '#901 y7: precondition — the space-bearing name must exist on disk verbatim; got '
+        + JSON.stringify(fs.readdirSync(path.join(fx.archiveDir, '.cache'))));
+    const ignoredRaw = git(fx.tmpRoot, ['ls-files', '-o', '-i', '--exclude-standard', '-z', '--', archiveRel]).stdout || '';
+    assert(ignoredRaw.split('\0').filter(Boolean).includes(archiveRel + '/.cache/notes.md '),
+      '#901 y7: precondition — git must report the ignored path with its space intact under -z; got '
+        + JSON.stringify(ignoredRaw.split('\0').filter(Boolean)));
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // CONVERGENCE: the first run must suffice. This is the whole point — the defect was not that the
+    // sink failed once, it is that it could never succeed. (A second --sink on an already-sinked
+    // fixture exits 1 at push_upstream for reasons that predate this and are the same for plain
+    // names, so re-running here would measure that instead and is deliberately not asserted.)
+    assert(result.status === 0, '#901 y7: the sink must converge on the FIRST run; got exit ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#901 y7: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(!(out && out.reason), '#901 y7: no refusal reason may be emitted; got ' + JSON.stringify(out && out.reason));
+    assert(out && out.receipt && out.receipt.archive_missing_paths === undefined,
+      '#901 y7: nothing may be reported missing — the over-refusal is what this pins; got '
+        + JSON.stringify(out && out.receipt && out.receipt.archive_missing_paths));
+
+    // ...and every name, the space-bearing one included, is a BLOB in the published commit. Read
+    // through ls-tree -z with NUL-split only: an assertion that trimmed its own input could not tell
+    // "the space survived" from "the space was lost".
+    const blobs = blobsUnder(fx.tmpRoot, 'HEAD', archiveRel);
+    const notBlobs = want.filter(p => !blobs.includes(p));
+    assert(notBlobs.length === 0, '#901 y7: every archived evidence name must be a BLOB at HEAD; missing '
+      + JSON.stringify(notBlobs) + '\nblobs: ' + JSON.stringify(blobs));
+
+    // The force-add must NAME the space-bearing path with its space — that set is what the trim
+    // mismatch emptied, and it is the direct measurement that the repair reached the file.
+    const forced = (out && out.receipt && out.receipt.archive_forced_paths) || [];
+    assert(forced.includes(archiveRel + '/.cache/notes.md '),
+      '#901 y7: archive_forced_paths must name the space-bearing path verbatim; got ' + JSON.stringify(forced));
+    assert(JSON.stringify(forced.slice().sort()) === JSON.stringify(want),
+      '#901 y7: archive_forced_paths must name exactly the ignored evidence set; got '
+        + JSON.stringify(forced) + '\nwant ' + JSON.stringify(want));
+
+    // #520 still subtracted: the journal appears in the ignored set and must never be force-added.
+    assert(!forced.some(p => /\/sink-(?:receipt|fallback)\.json$/.test(p)),
+      '#901 y7: #520 — no journal may be force-added; got ' + JSON.stringify(forced));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (y8) A symlink in the archive. The exclusion that produced this rested on an in-comment claim that
+// neither a symlink nor its target becomes a blob under the archive path — and that claim is false:
+// `git add -f` stages a symlink as a mode-120000 blob whose content is the target string. So a
+// gitignored symlink was dropped from the required set, nothing forced it in, nothing missed it, and
+// the run reported steps.archive_commit:"done" at exit 0 over an entry a fresh clone did not carry.
+//
+// `steps.archive_commit === 'done'` is therefore USELESS as the pin here — the bug already satisfied
+// it — and so is anything that reads the run's own working tree, where the symlink was present the
+// whole time. What separates the two is the published commit and a clone made from it.
+(function testGitignoredArchiveSymlinkSurvivesAFreshClone901() {
+  console.log('Test (#901 y8): a gitignored SYMLINK in the archive must reach the commit as a 120000 blob and survive a FRESH CLONE — "done" at exit 0 is what the defect already reported, and the run\'s own disk held the symlink throughout');
+  const project = 'issue-90108';
+  const issue = 90108;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, {
+    gitignoreBody: '.cache/\n',
+    cacheFiles: { 'plain.md': 'plain evidence\n' },
+    cacheSymlinks: { 'link.md': 'plain.md' },
+  });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  const linkRel = archiveRel + '/.cache/link.md';
+  try {
+    // Preconditions: it really is a symlink, and the consumer's rule really does cover it (so the
+    // force-add is the only way it can land).
+    assert(fs.lstatSync(path.join(fx.archiveDir, '.cache', 'link.md')).isSymbolicLink(),
+      '#901 y8: precondition — the fixture entry must be a symlink');
+    assert(git(fx.tmpRoot, ['check-ignore', '-q', '--', linkRel]).status === 0,
+      '#901 y8: precondition — the consumer rule must cover the symlink, else nothing needs forcing');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    assert(result.status === 0, '#901 y8: the sink must complete; got exit ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#901 y8: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // THE pin, half one: the symlink is an entry in the published commit, at mode 120000. Asserting
+    // mere path presence would not distinguish a symlink from a regular file, and the mode is the
+    // measured fact the false comment denied.
+    const entries = treeEntriesUnder(fx.tmpRoot, 'HEAD', archiveRel);
+    const linkEntry = entries.find(e => e.path === linkRel) || null;
+    assert(linkEntry != null, '#901 y8: the symlink must be an entry in the commit at HEAD; entries: '
+      + JSON.stringify(entries.map(e => e.mode + ' ' + e.path)));
+    // Read defensively throughout this scenario: when the symlink is absent from the commit — the
+    // defect's own shape — every later clause must still report as an assertion rather than abort the
+    // suite before the fresh-clone clause, which is the one that matters most, gets to run.
+    assert(linkEntry != null && linkEntry.mode === '120000',
+      '#901 y8: the symlink must be recorded as a 120000 blob; got ' + JSON.stringify(linkEntry));
+    assert(out && out.receipt && (out.receipt.archive_forced_paths || []).includes(linkRel),
+      '#901 y8: archive_forced_paths must name the force-added symlink; got '
+        + JSON.stringify(out && out.receipt && out.receipt.archive_forced_paths));
+
+    // THE pin, half two: a FRESH CLONE of the pushed remote holds it — as a symlink, pointing where it
+    // pointed. This is the clause the defect failed while reporting success, and no probe of the run's
+    // own tree can stand in for it.
+    const cloneDir = fx.tmpRoot + '-clone';
+    try {
+      G.clone(fx.remotePath, cloneDir, ['-q']);
+      const clonedLink = path.join(cloneDir, linkRel);
+      const clonedBlobs = blobsUnder(cloneDir, 'HEAD', archiveRel);
+      let isLink = false;
+      let target = null;
+      try { isLink = fs.lstatSync(clonedLink).isSymbolicLink(); } catch (_) { isLink = false; }
+      try { target = fs.readlinkSync(clonedLink); } catch (_) { target = null; }
+      assert(isLink, '#901 y8: the fresh clone must materialize it as a SYMLINK — this is the clause the'
+        + ' defect failed while reporting archive_commit:"done" at exit 0; the clone holds '
+        + JSON.stringify(clonedBlobs));
+      assert(target === 'plain.md',
+        '#901 y8: the cloned symlink must point where it pointed; got ' + JSON.stringify(target));
+      assert(clonedBlobs.includes(linkRel),
+        '#901 y8: the clone\'s own HEAD must carry the symlink as a blob; got ' + JSON.stringify(clonedBlobs));
+    } finally { try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch (_) {} }
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (y9) The cheapest guard against the exact regression, at the source level: the `-z` readers must
+// stay NUL-split ONLY. A `.trim()` here is invisible to every behavioural test whose fixtures use
+// tidy filenames, which is precisely how it shipped — so the guard reads the bytes.
+//
+// Scoped to THIS edition's copies. `plugins/kaola-workflow/scripts/` is byte-identical by
+// validate-script-sync, so asserting the canonical pair covers it; each forge port is defended by its
+// own suite, because there is no cross-edition coverage comparison here.
+(function testZReadersStayNulSplitOnly901() {
+  console.log('Test (#901 y9): the -z readers in the shipped sink and claim scripts must split on NUL and nothing else — a .trim() here is invisible to any fixture with tidy filenames');
+  const readers = [
+    ['scripts/kaola-workflow-sink-merge.js', 'ignoredUntrackedUnder'],
+    ['scripts/kaola-workflow-sink-merge.js', 'blobPathsUnder'],
+    ['scripts/kaola-workflow-claim.js', 'ignoredArchiveEvidence'],
+  ];
+  for (const [rel, fnName] of readers) {
+    const src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+    const at = src.indexOf('function ' + fnName + '(');
+    assert(at >= 0, '#901 y9: ' + rel + ' must still define ' + fnName + ' — if it was renamed or removed, '
+      + 'this pin is stale and belongs deleted with its mechanism, not repaired');
+    // The function body, bounded by the next top-level function declaration (or EOF), with whole-line
+    // comments dropped. Stripping them matters: these readers CARRY a comment explaining why a
+    // `.trim()` must never come back, and a guard that matched its own rationale would fail on the
+    // correct code — measured, on the first run of this pin.
+    const next = src.indexOf('\nfunction ', at + 1);
+    const code = src.slice(at, next < 0 ? src.length : next)
+      .split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+    // Stated as the required FORM rather than a blocklist: NUL-split, then drop empty records, with
+    // nothing in between. Dropping empties is the only normalization the stream needs (measured: it is
+    // purely NUL-terminated, no trailing newline), so any step wedged in there is doing something the
+    // `-z` flag was chosen to prevent.
+    assert(/\.split\('\\0'\)\s*\.filter\(Boolean\)/.test(code),
+      '#901 y9: ' + fnName + ' in ' + rel + " must read its -z output as .split('\\0').filter(Boolean) "
+      + 'with nothing between the two. Code:\n' + code);
+    assert(!/\.trim\(\)/.test(code),
+      '#901 y9: ' + fnName + ' in ' + rel + ' must NOT trim a -z record — trimming destroys the '
+      + 'leading/trailing whitespace -z exists to preserve, and made a run permanently unsinkable. Code:\n' + code);
   }
 })();
 

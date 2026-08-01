@@ -108,10 +108,17 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 // The repo-relative paths currently STAGED under one pathspec. Read from the INDEX, not the working
 // tree and not the caller's own list of what it believed it planted — that is what stops the #893
 // report under-claiming a file that rode in unnoticed, or over-claiming one this sink never touched.
+//
+// `-z`, and split on NUL and NOTHING ELSE — the fourth site of the same normalization, kept identical
+// to the three below. This list is not diagnostic: persistArchivedPathsToSummary writes it DURABLY
+// into the archive, so a name it mangles is a false statement in the run's own permanent record. The
+// plain `--name-only` stream C-quotes an embedded newline and emits a trailing space RAW (measured
+// with `od -c`), so the `.trim()` here reported a file really named `notes.md ` as `.cache/notes.md` —
+// a path that exists nowhere — and left the quoted form of the others in the archive verbatim.
 function stagedPathsUnder(mainRoot, pathspec, excludes) {
   try {
-    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '--', pathspec, ...(excludes || [])], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
-    return out.split('\n').map(s => s.trim()).filter(Boolean);
+    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '-z', '--', pathspec, ...(excludes || [])], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\0').filter(Boolean);
   } catch (_) { return []; }
 }
 
@@ -1358,6 +1365,100 @@ function sinkLandStagedUnion(src, dest) {
   }
 }
 
+// #901: every regular file the archive holds ON DISK, repo-relative POSIX, minus the #520
+// transaction journals (SINK_STAGE_SKIP names exactly those two by basename — the only archive
+// content that must never be committed). This is the set the archive commit OWES, and the disk is
+// the only authority available: the archive is a copy of a folder that lived untracked in main, so
+// git holds no record of what belongs and no list of names could stand in for one when archives
+// carry whatever artifacts a run happened to need (the same reason archived_paths is index-derived).
+// A SYMLINK is required like any other entry. It was skipped here on the claim that it "does not
+// become a blob under the archive path" — measurably false: `git add -f -- <link>` exits 0 and stages
+// it as `120000 <sha>`, a blob whose content is the target string, and `ls-tree -r` names it. The
+// exclusion is what let a gitignored symlink read `archive_commit:"done"` at exit 0 while a fresh
+// clone did not hold it. Anything named `.git` IS skipped, at any type: git silently declines to
+// stage a path under a `.git` component (`add -f -- e/.git` exits 0 and indexes nothing), so
+// requiring one could only produce a refusal no re-run can clear. Never throws: an unreadable
+// subtree contributes nothing rather than aborting the sink.
+function requiredArchiveFiles(mainRoot, archiveRel) {
+  const out = [];
+  const walk = (absDir, relDir) => {
+    let entries;
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      if (entry.name === '.git') continue;
+      const rel = relDir + '/' + entry.name;
+      if (entry.isDirectory()) { walk(path.join(absDir, entry.name), rel); continue; }
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      if (SINK_STAGE_SKIP.has(entry.name)) continue;
+      out.push(rel);
+    }
+  };
+  walk(path.join(mainRoot, archiveRel), archiveRel);
+  return out.sort();
+}
+
+// #901: the paths under `pathspec` that git would REFUSE to stage — untracked AND covered by an
+// ignore rule. This is the granularity a directory probe cannot reach: a consumer's basename rule
+// `.cache/` leaves the archive DIRECTORY un-ignored (measured: `check-ignore` exits 1) while
+// covering every evidence file beneath it. `-o -i --exclude-standard` answers per FILE and is
+// index-aware, so an already-tracked path is correctly absent — it needs no `-f`. `-z` so a
+// pathname is never quoted or split. Any probe fault yields the empty set: an unprobeable repo must
+// not manufacture a force-add.
+//
+// The stream is split on NUL and NOTHING ELSE. A `.trim()` here undid the very thing `-z` was chosen
+// for: `notes.md ` (one trailing space) came back as `notes.md`, matched nothing requiredArchiveFiles
+// produced from `readdirSync`, so the file was never force-added — and then the blob gate refused over
+// its own omission, identically on every re-run, bricking the sink from a filename. Measured with
+// `od -c`: the stream is purely NUL-TERMINATED with no trailing newline, so dropping empty records is
+// the only normalization it needs. Byte-identical in blobPathsUnder below and in claim.js's
+// ignoredArchiveEvidence — a divergence between the three is a future bug.
+function ignoredUntrackedUnder(mainRoot, pathspec) {
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'ls-files', '-o', '-i', '--exclude-standard', '-z', '--', pathspec],
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\0').filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// #901: the paths that are BLOBS under `pathspec` at `commitish`. `ls-tree -r` enumerates blobs, not
+// directories, which is the one question that distinguishes "the archive directory exists at HEAD" —
+// which a PARTIALLY committed archive also satisfies — from "this file is durably in the commit".
+// Same NUL-only split as ignoredUntrackedUnder above, for the same reason: trimming a record here
+// made a whitespace-bearing committed path read as absent from its own commit.
+function blobPathsUnder(mainRoot, commitish, pathspec) {
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'ls-tree', '-r', '-z', '--name-only', commitish, '--', pathspec],
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\0').filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// #901: the members of `rels` this repository's ignore rules cover BY NAME ALONE — a file with the
+// same BASENAME at the repository root would be ignored too. That is what separates a rule about
+// WHERE a file lives (`/.cache/`, `kaola-workflow/issue-55/`: the run archive's own location, which
+// is the case #901 was authorized to override) from a rule about WHAT a file is CALLED (`.DS_Store`,
+// `*.log`: junk and secrets the consumer wants tracked nowhere, ever). Only the second kind is
+// dropped by the callers. The force-add half of #901 overrides a rule the consumer wrote, and the
+// authorization was for the run's finalization evidence — not for anything that happens to sit in
+// the folder, which is what "every file on disk" delivered.
+//
+// ONE batched `check-ignore --stdin -z`, over synthetic ROOT-level basenames so the question is
+// location-free. `--no-index` so the answer is about the RULES and not about what happens to be
+// tracked. Measured: exit 1 means "none of them is ignored" and is not a fault; the output is
+// NUL-terminated and lists only the ignored names. Any probe fault yields the EMPTY set, so each
+// caller keeps its own pre-existing behaviour — see each call site for which way that fails.
+// Kept identical to kaola-workflow-claim.js's copy; a divergence between the two is a bug.
+function repoWideIgnoredNames(root, rels) {
+  const names = Array.from(new Set(rels.map(r => String(r).split('/').pop()).filter(Boolean)));
+  if (!names.length) return new Set();
+  try {
+    const out = execFileSync('git', ['-C', root, 'check-ignore', '--stdin', '-z', '--no-index'],
+      { input: names.join('\0') + '\0', encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
+        stdio: ['pipe', 'pipe', 'ignore'] });
+    return new Set(out.split('\0').filter(Boolean));
+  } catch (_) { return new Set(); }
+}
+
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
   // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
@@ -1886,10 +1987,71 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           archiveIgnored = true;
         } catch (_) { archiveIgnored = false; }
       }
+      // #901: the probe above asks about the archive DIRECTORY, which is the wrong granularity for a
+      // rule that clips a SUBTREE out of it. A consumer's basename rule `.cache/` leaves the archive
+      // directory un-ignored, so archiveIgnored stayed false and the honest-skip arm never fired;
+      // `git add <archive>/` then exited 1 with git's ignore report while STILL writing the
+      // non-ignored siblings to the index. The commit carried 3 of 8 files, archived_paths named the
+      // 3 survivors as if they were the whole set, and archive_commit read `done`.
+      //
+      // So ask about the FILES. The required set is what the archive holds on disk minus the #520
+      // journals; its ignored members are force-added under THIS project's own archive path only —
+      // never a repo-wide `add -f`, and never a journal. A rule covering the whole BAND is a
+      // DIFFERENT answer and stays honored by archiveIgnored above: that consumer asked for no
+      // tracked archives at all, and #832's honest skip is the response. A rule that merely clips a
+      // subtree out of an archive the consumer does want is #901, and forcing exactly those paths in
+      // is the Expected behavior the issue authorizes.
+      //
+      // What that authorizes is the run's finalization EVIDENCE, and "every regular file on disk"
+      // is not the same set. A rule the consumer wrote about a file's NAME — `.DS_Store`, `*.log` —
+      // says "never track this anywhere", and an archive that happened to collect one (a Finder
+      // window opened on the run folder during the run, then copied in by copyDir) would have had it
+      // force-added into main's archive commit and announced as a "run-evidence file". Overriding a
+      // location rule is the authorized fix; overriding a name rule is not ours to do. Subtracted
+      // from the REQUIRED set rather than only from the force list, because a path that stays required
+      // and is not force-added becomes a missing blob and refuses — which would brick the sink over a
+      // `.DS_Store`. A probe fault subtracts nothing, i.e. leaves the pre-#901 breadth in place.
+      let requiredPaths = fs.existsSync(archiveDir) ? requiredArchiveFiles(mainRoot, archiveRel) : [];
+      if (requiredPaths.length > 0) {
+        const ignoredByName = repoWideIgnoredNames(mainRoot, requiredPaths);
+        requiredPaths = requiredPaths.filter(p => !ignoredByName.has(p.split('/').pop()));
+      }
+      let forcePaths = [];
+      if (!archiveIgnored && requiredPaths.length > 0) {
+        const ignoredHere = new Set(ignoredUntrackedUnder(mainRoot, ps));
+        forcePaths = requiredPaths.filter(p => ignoredHere.has(p));
+      }
       const commitPaths = (archiveIgnored ? [] : [ps]).concat(stagedRoadmap, liveTracked ? [livePathspec] : []);
       const excludes = [exRcpt, exFb, exLiveRcpt, exLiveFb];
+      // The staging runs TWICE (once before the archived_paths report, once after the durable copy is
+      // appended to the summary), so the ordinary sweep and the #901 forced sweep are one step. The
+      // errors are RETURNED, never discarded: `git add <dir>` exits 1 whenever an ignored directory
+      // sits under the pathspec — measured, and still true after that directory's files are in the
+      // index — so the status alone is not a fault and must not become a refusal on its own. It is
+      // routed into the per-path blob verdict below, the only place that can tell a harmless exit 1
+      // from a partial add. That routing is exactly what `catch (_) {}` used to throw away.
+      const stageArchive = () => {
+        const errs = [];
+        try { execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' }); }
+        catch (e) { errs.push('git add: ' + String((e && e.message) || e).trim()); }
+        if (forcePaths.length) {
+          try { execFileSync('git', ['-C', mainRoot, 'add', '-f', '--', ...forcePaths], { encoding: 'utf8' }); }
+          catch (e) { errs.push('git add -f: ' + String((e && e.message) || e).trim()); }
+        }
+        return errs;
+      };
+      let addErrors = [];
       if (fs.existsSync(archiveDir) && commitPaths.length > 0) {
-        try { execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' }); } catch (_) {}
+        addErrors = stageArchive();
+        if (forcePaths.length) {
+          // Overriding a rule the consumer wrote is never silent. Recorded on the receipt (so it
+          // rides the emitted envelope) as well as on stderr, and scoped to files this project's own
+          // archive already holds.
+          receipt.archive_forced_paths = forcePaths.slice();
+          process.stderr.write('sink-merge --sink: NOTE: ' + forcePaths.length + ' run-evidence file(s) under '
+            + archiveRel + ' are covered by this repository\'s .gitignore; force-added so the archive survives a '
+            + 'fresh clone: ' + forcePaths.join(', ') + '\n');
+        }
         // #893: name what this commit carries under THIS project's own archive path. Taken from the
         // index AFTER the add and BEFORE the commit — the one moment the answer is both knowable and
         // still changeable. Scoped to `ps`, so a SIBLING's archive residue (#715-exempt at preflight
@@ -1900,7 +2062,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         // cannot shift underneath the report.
         receipt.archived_paths = stagedPathsUnder(mainRoot, ps, excludes);
         if (persistArchivedPathsToSummary(archiveDir, receipt.archived_paths)) {
-          try { execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' }); } catch (_) {}
+          addErrors = addErrors.concat(stageArchive());
         }
         let hasStaged = false;
         try { execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ...commitPaths, ...excludes], { stdio: 'ignore' }); }
@@ -1914,13 +2076,33 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // HEAD from the merge; a genuinely-absent archive proceeds as before) — never a false refusal.
       let archiveAtHead = false;
       try { const t = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', 'HEAD:' + archiveRel], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); archiveAtHead = (t === 'tree'); } catch (_) { archiveAtHead = false; }
+      // #901: the ONE question that makes archive_commit:"done" truthful — is each required archive
+      // path a BLOB in the published commit? The tree-existence probe above cannot answer it: a
+      // PARTIALLY committed archive still yields `tree`, so a run that dropped 5 of its 8 files
+      // reported done, exit 0, and a complete-looking archived_paths list, and nothing anywhere
+      // noticed. Measured unconditionally (never gated on archive_dest — the keep-worktree posture,
+      // where the dest is unset, lost the same files), and an absent archive yields an empty required
+      // set that cannot false-refuse. `missingBlobs` is the single measurement both arms below read.
+      let missingBlobs = [];
+      if (requiredPaths.length > 0) {
+        const blobs = new Set(blobPathsUnder(mainRoot, 'HEAD', archiveRel));
+        missingBlobs = requiredPaths.filter(p => !blobs.has(p));
+      }
+      if (missingBlobs.length > 0) receipt.archive_missing_paths = missingBlobs;
       // #832: an archive the consumer's .gitignore covers can NEVER reach HEAD, so the #700
       // never-committed refusal below would brick every such repo. That is not the remedy the
       // incident asks for — the sink still completes; it just stops claiming a commit git refused.
+      // #901: this is the arm where the force-add is DECLINED by design — the rule covers the whole
+      // archive band, so the consumer asked for no tracked archives and that answer is honored. What
+      // was missing was the inventory: name every required file the skip leaves uncommitted
+      // (receipt.archive_missing_paths above) so the loss is itemized, not merely announced.
       if (archiveIgnored) {
         receipt.archive_commit = 'skipped_gitignored';
         process.stderr.write('sink-merge --sink: WARNING: ' + archiveRel + ' is covered by this repository\'s '
-          + '.gitignore — git REFUSES to track the run archive, so it was NOT committed. The archive exists on '
+          + '.gitignore — git REFUSES to track the run archive, so it was NOT committed'
+          + (missingBlobs.length ? ' (' + missingBlobs.length + ' run-evidence file(s) uncommitted; see '
+            + 'archive_missing_paths)' : '')
+          + '. The archive exists on '
           + 'disk only and will not survive a fresh clone. Un-ignore kaola-workflow/archive/ to make run '
           + 'archives durable.\n');
       }
@@ -1932,6 +2114,31 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           result: 'refuse', reason: 'sink_incomplete', step: 'archive_commit',
           archive_dest: archiveRel, branch: args.branch, default_branch: defBranch,
           detail: 'the archive directory (' + archiveRel + ') is neither committed nor present at ' + defBranch + ' HEAD — the archive + roadmap-source removal + regenerated ROADMAP.md never landed in a commit (a collision-suffixed dest escaping the archive commit, #700). Refusing to report status:sinked. The archive_commit step is left NOT done so a re-run retries it.',
+        }, 1);
+        return;
+      }
+      // #901: the archive band is committable (not ignored) and yet a required path is absent from
+      // the commit — the force-add above either could not run or did not take. That is the shape the
+      // incident produced, and reporting `done` over it publishes a complete-looking record of an
+      // incomplete archive. Refuse, name EVERY missing file, and carry the add exit statuses that
+      // used to be swallowed: they are the diagnosis for why the paths are absent. Returning here is
+      // before teardown, so the branch, the worktree and the on-disk archive are all retained — the
+      // recoverable source is never the thing this refusal destroys, and a re-run retries the step.
+      if (!archiveIgnored && missingBlobs.length > 0) {
+        receipt.archive_commit = 'failed';
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        sinkEmit({
+          result: 'refuse', reason: 'sink_incomplete', step: 'archive_commit',
+          archive_dest: archiveRel,
+          archive_missing_paths: missingBlobs,
+          archive_add_errors: addErrors,
+          branch: args.branch, default_branch: defBranch,
+          detail: missingBlobs.length + ' required archive path(s) exist on disk under ' + archiveRel
+            + ' but are NOT blobs in ' + defBranch + ' HEAD, so the run evidence would not survive a fresh clone: '
+            + missingBlobs.join(', ') + '. Refusing to report status:sinked for a partially committed archive '
+            + '(#901). The archive_commit step is left NOT done so a re-run retries it; the branch, the worktree '
+            + 'and the on-disk archive are preserved.',
         }, 1);
         return;
       }

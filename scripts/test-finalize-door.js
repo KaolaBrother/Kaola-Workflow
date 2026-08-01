@@ -59,6 +59,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
 const runChainsScript = path.join(repoRoot, 'scripts', 'kaola-workflow-run-chains.js');
 const adaptiveSchemaPath = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js');
+const validationRunnerScript = path.join(repoRoot, 'scripts', 'kaola-workflow-validation-runner.js');
 
 let passed = 0;
 let failed = 0;
@@ -187,6 +188,40 @@ function writeGhMock(binDir, closedIssues) {
   const p = path.join(binDir, 'gh.js');
   fs.writeFileSync(p, script);
   return p;
+}
+
+// A CONSUMER git repo: NO package.json anywhere, so classifyRepoKind reads `consumer` and the gate
+// takes the final-validation arm instead of the chain-receipt one. README/CHANGELOG/docs are seeded
+// deliberately — they are validation-INVISIBLE in a consumer repo, so their presence proves the
+// candidate hash is addressing the code band and not the whole tree. `project` may be null (T8l
+// claims its run folder in the linked worktree instead).
+function initConsumerRepo(repo, project) {
+  fs.mkdirSync(repo, { recursive: true });
+  G.init(repo, { branch: 'main' });
+  fs.writeFileSync(path.join(repo, '.gitignore'), '/.cache/\n');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'src', 'app.swift'), 'let x = 1\n');
+  fs.writeFileSync(path.join(repo, 'README.md'), '# consumer app\n');
+  fs.writeFileSync(path.join(repo, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n');
+  fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs', 'design.md'), 'design notes\n');
+  G.commitAll(repo, 'init');
+  if (project) fs.mkdirSync(path.join(repo, 'kaola-workflow', project, '.cache'), { recursive: true });
+  return repo;
+}
+
+// The consumer arm's PRODUCER, driven as an operator drives it. The recipe is what is under test, so
+// it goes through the real CLI from a real cwd: the candidate root the verb resolves is
+// process.cwd()-driven, and an in-process call would supply that answer instead of measuring it.
+function runRecord(cwd, args) {
+  // spawn-class: cli-contract
+  const r = spawnSync(process.execPath, [validationRunnerScript, 'record', ...args], {
+    cwd, encoding: 'utf8', timeout: 120000,
+    // Set EXPLICITLY, never inherited: a fixture that takes whatever the parent process had is a
+    // fixture whose environment nobody chose, and that is how a guard gets switched off unnoticed.
+    env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0' }),
+  });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, json: lastJson(r) };
 }
 
 // A trivially-green mock chain command, written OUTSIDE the fixture repo.
@@ -769,6 +804,11 @@ function assertNoPlanAnywhere(repo, label) {
       fs.writeFileSync(path.join(dir, '.cache', 'n1.md'), 'evidence n1\n');
       fs.writeFileSync(path.join(dir, '.cache', 'run-notes.md'), 'notes\n');
       if (o.plan) fs.writeFileSync(path.join(dir, 'workflow-plan.md'), o.plan);
+      // #901: the fixed finalize/machinery sidecars, planted only where a case asks for them so
+      // T6a-T6f keep measuring exactly what they measured before.
+      for (const name of (o.sidecars || [])) {
+        fs.writeFileSync(path.join(dir, '.cache', name), 'sidecar ' + name + '\n');
+      }
       return dir;
     };
     const copyRun = (src, destName, drop) => {
@@ -831,6 +871,74 @@ function assertNoPlanAnywhere(repo, label) {
     fs.writeFileSync(path.join(dest6, '.cache', 'extra.md'), 'added by the archiver\n');
     v = verifyArchiveComplete(src6, dest6);
     assert(v && v.ok === true, 'T6f: a destination holding MORE than the source is still complete; got ' + JSON.stringify(v));
+
+    // --- T6g (#901): THE EXEMPTION IS THE GAP, stated as a measurement -------------------------
+    //
+    // verifyArchiveComplete deliberately EXEMPTS the fixed finalize/machinery `.cache/*.md`
+    // sidecars from its comparison (claim.js:5126 skips them in the source walk, and
+    // listSourceEvidenceFiles:5074 subtracts them from the required set). So for those names it
+    // answers a question it was never asked: `ok: true` over a destination that does not hold them.
+    // That is not a bug in this function — the archive contract makes those sidecars optional — but
+    // it IS the reason a separate PRESENCE re-check has to exist before the delete, because `ok:
+    // true` here is what authorizes destroying the live source.
+    //
+    // Every name is driven separately rather than as one set, because the exemption is by exact
+    // basename: a set-membership bug that dropped one name would be invisible to a single-name arm.
+    // If a name is ever REMOVED from the shipped set this arm reds (the file becomes required, so
+    // `ok` goes false) — stale-loud, not stale-silent. The reverse drift, a name ADDED to the set,
+    // is caught by the source-text pin below rather than by behaviour.
+    const claimSrc901 = fs.readFileSync(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'), 'utf8');
+    const setBlock901 = claimSrc901.match(/ARCHIVE_CACHE_SIDECAR_MD\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+    const shipped901 = setBlock901
+      ? (setBlock901[1].match(/'([^']+)'/g) || []).map(s => s.slice(1, -1))
+      : null;
+    const EXPECTED_SIDECARS_901 = ['final-validation.md', 'run-gaps-manual.md',
+      'selection-evidence.md', 'doc-docking.md', 'doc-updater.md'];
+    assert(shipped901 !== null, 'T6g: the ARCHIVE_CACHE_SIDECAR_MD set is readable from claim.js');
+    assert(shipped901 !== null && shipped901.length === EXPECTED_SIDECARS_901.length
+      && EXPECTED_SIDECARS_901.every(n => shipped901.includes(n)),
+      'T6g: the exempt-sidecar set is exactly the five names the arms below drive. A name added here '
+      + 'without an arm is an exemption nothing measures; got ' + JSON.stringify(shipped901));
+
+    const drivenSidecars901 = shipped901 || EXPECTED_SIDECARS_901;
+    drivenSidecars901.forEach((sidecar, i) => {
+      const src = mkRun('src901-' + i, { sidecars: drivenSidecars901 });
+      const dest = copyRun(src, 'dest901-' + i, ['.cache/' + sidecar]);
+      const r = verifyArchiveComplete(src, dest);
+      assert(r && r.ok === true,
+        'T6g[' + sidecar + ']: a destination missing this EXEMPT sidecar still reports complete — '
+        + 'which is exactly why byte-completeness alone cannot authorize the delete for these five '
+        + 'names; got ' + JSON.stringify(r));
+      assert(r && Array.isArray(r.missing) && !r.missing.includes('.cache/' + sidecar),
+        'T6g[' + sidecar + ']: and it is not even NAMED in missing[], so no caller can recover the '
+        + 'fact from this return value; got ' + JSON.stringify(r && r.missing));
+    });
+
+    // --- T6h: the DISCRIMINATING CONTROL, on the identical fixture shape ------------------------
+    // Without this, T6g proves nothing: a fixture broken in any way that made everything pass would
+    // read the same. Same builder, same sidecars present, one NON-exempt `.cache/*.md` dropped
+    // instead — and the answer must flip. A control that agreed with T6g would mean the control is
+    // wrong, not that the exemption is wide.
+    const src901c = mkRun('src901c', { sidecars: drivenSidecars901 });
+    const dest901c = copyRun(src901c, 'dest901c', ['.cache/n1.md']);
+    v = verifyArchiveComplete(src901c, dest901c);
+    assert(v && v.ok === false && Array.isArray(v.missing) && v.missing.includes('.cache/n1.md'),
+      'T6h control: on the SAME shape, dropping a NON-exempt .cache/*.md must refuse and name it — '
+      + 'so T6g\'s `ok: true` is caused by the exemption and not by a fixture that cannot fail; got '
+      + JSON.stringify(v));
+
+    // --- T6i: the exemption's SCOPE — silent about the sidecar even while already refusing --------
+    // Drop one exempt sidecar AND one non-exempt file together. The refusal fires for the non-exempt
+    // file only, and missing[] stays silent about the sidecar. This is the sharpest form of the gap:
+    // even on a return value that is already `ok: false`, a caller cannot learn that a sidecar was
+    // lost, so it cannot be recovered downstream from this signal at all.
+    const src901d = mkRun('src901d', { sidecars: drivenSidecars901 });
+    const dest901d = copyRun(src901d, 'dest901d', ['.cache/n1.md', '.cache/final-validation.md']);
+    v = verifyArchiveComplete(src901d, dest901d);
+    assert(v && v.ok === false && Array.isArray(v.missing)
+      && v.missing.includes('.cache/n1.md') && !v.missing.includes('.cache/final-validation.md'),
+      'T6i: missing[] names the non-exempt loss and stays silent about the exempt one even when it is '
+      + 'already refusing; got ' + JSON.stringify(v));
   } finally { rm(base); }
 })();
 
@@ -915,6 +1023,507 @@ function assertNoPlanAnywhere(repo, label) {
         'T7: a code edit flips the code-tree hash (it is a content address, not a constant)');
     }
   } finally { rm(base); }
+})();
+
+// ---------------------------------------------------------------------------
+// T8 (#900) — the CONSUMER arm's producer and the gate agree, and the producer binds THE TREE IT IS
+// STANDING IN.
+//
+// T7 pins producer==gate for the SELF-HOST arm, where the producer is run-chains.js. The consumer arm
+// had NO producer at all: the gate demands a column-0 `validated_candidate_hash` equal to a freshly
+// recomputed code-tree hash, and no shipped command printed that value — so an agent following the
+// recorded recipe verbatim earned `final_validation_unbound` on a run whose own tests all passed.
+// `kaola-workflow-validation-runner.js record` is that missing producer, and this is its twin of T7.
+//
+// THE RECIPE IS THE THING UNDER TEST, so every leg drives the real CLI from a shell: no internal
+// require() of the hash function, and no hand-copied value anywhere. A test that computed the hash
+// itself and wrote it into the file would be measuring the test.
+//
+// TWO WAYS TO GET THIS WRONG, and a negative control for each, because a leg that only asserts
+// "green" cannot tell a right answer from a lucky one:
+//   * THE FUNCTION. This module's own computeLandableTreeDigest is a DIFFERENT algorithm over the
+//     same visibility band and yields a different value on the same tree. T8e records that value
+//     and requires `final_validation_stale`.
+//   * THE TREE. main and a linked worktree agree only while the branch carries nothing main lacks —
+//     i.e. they differ across exactly the pre-merge window a finalize happens in. T8l builds that
+//     divergence and requires the recorded value to be provably the WORKTREE's: the same bytes read
+//     with the gate standing in main must come back stale.
+// ---------------------------------------------------------------------------
+(function T8_consumerRecorderAndGateAgree() {
+  console.log('T8: the consumer arm\'s `record` producer and the finalize gate agree on one candidate hash');
+  const base = makeBase('t8');
+  const project = 'issue-9008';
+  let schema = null;
+  try { schema = require(adaptiveSchemaPath); } catch (_) { schema = null; }
+  let runnerMod = null;
+  try { runnerMod = require(validationRunnerScript); } catch (_) { runnerMod = null; }
+  try {
+    assert(schema !== null && runnerMod !== null,
+      'T8: adaptive-schema and validation-runner are both requireable');
+    if (!schema || !runnerMod) return;
+
+    // --- the CONSUMER fixture: no package.json anywhere, so the gate takes the final-validation arm.
+    const repo = fs.realpathSync(initConsumerRepo(path.join(base, 'repo'), project));
+    const cacheDir = path.join(repo, 'kaola-workflow', project, '.cache');
+    const fvPath = path.join(cacheDir, 'final-validation.md');
+    const gate = root => schema.evaluateChainReceipt(root, { cacheDir, project });
+    assert(gate(repo).mode === 'final-validation',
+      'T8 premise: a repo with no package.json is a CONSUMER repo, so the gate reads '
+      + '.cache/final-validation.md and not a chain receipt; got mode=' + JSON.stringify(gate(repo).mode));
+
+    // --- T8a: the PRE-#900 recipe — a verdict and the command, no hash. This is the state the issue
+    // reports, and it is also the positive control for the whole leg: the fixture provably reaches
+    // the arm under test and provably refuses there.
+    fs.writeFileSync(fvPath, 'verdict: pass\nvalidation_command: swift test\n');
+    let g = gate(repo);
+    assert(g.classification === 'final_validation_unbound' && g.green === false,
+      'T8a: a hand-written verdict with no hash is UNBOUND — the recipe was unusable, which is what '
+      + '#900 exists to fix; got ' + JSON.stringify({ classification: g.classification, green: g.green }));
+    assert(typeof g.operator_hint === 'string' && /\brecord\b/.test(g.operator_hint)
+      && /--verdict/.test(g.operator_hint),
+      'T8a: the unbound hint must NAME the producer that fixes it — a remediation hint for a command '
+      + 'that does not exist is the defect, not the cure; got ' + JSON.stringify(g.operator_hint));
+
+    // --- T8b: the shipped recipe, VERBATIM, through the real CLI. This is the acceptance criterion.
+    let rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(rec.status === 0 && rec.json && rec.json.outcome === 'recorded',
+      'T8b: `record` exits 0 having written the binding; got status=' + rec.status
+      + ' json=' + JSON.stringify(rec.json) + ' stderr=' + String(rec.stderr || '').slice(0, 300));
+    g = gate(repo);
+    assert(g.classification === 'chains_green' && g.green === true,
+      'T8b: following the shipped recipe VERBATIM must earn a receipt the gate ACCEPTS — no internal '
+      + 'require(), no hand-copied hash; got ' + JSON.stringify({ classification: g.classification, green: g.green, detail: g.detail }));
+    assert(g.mode === 'final-validation',
+      'T8b: and it is accepted on the consumer arm, not by falling through to the chain-receipt arm; got '
+      + JSON.stringify(g.mode));
+
+    // --- T8c: PRODUCER == GATE (T7's property, consumer arm). Three values, one answer: what the
+    // producer printed, what landed at column zero, and what the gate recomputed.
+    // The sentinel is not defensive decoration: on a build where nothing was recorded every leg
+    // below must still run and red on ITS OWN assertion, rather than the first missing field
+    // crashing the suite and hiding every other arm behind one stack trace.
+    const producerHash = (rec.json && rec.json.validated_candidate_hash) || '(nothing was recorded)';
+    const gateHash = schema.computeCodeTreeHash(repo, project, schema.VALIDATION_TEST_CONSUMES);
+    assert(/^[0-9a-f]{64}$/.test(String(producerHash)),
+      'T8c: the producer prints a sha256; got ' + JSON.stringify(producerHash));
+    assert(producerHash === gateHash,
+      'T8c: the producer and the gate reach the SAME shared computeCodeTreeHash over the same tree — '
+      + 'a second copy of this computation is a second answer; producer=' + JSON.stringify(producerHash)
+      + ' gate=' + JSON.stringify(gateHash));
+    assert(g.validated_candidate_hash === producerHash,
+      'T8c: and the value the gate accepted is that same one; got ' + JSON.stringify(g.validated_candidate_hash));
+    assert(rec.json && rec.json.candidate_root === repo,
+      'T8c: the verb REPORTS which working tree it hashed, so a reader can see that rather than trust it; got '
+      + JSON.stringify(rec.json && rec.json.candidate_root));
+
+    // The PLAIN-REPO regression guard (V1 pin 21). Everything off the worktree lane must be
+    // byte-for-byte unchanged by a fix aimed at that lane: one tree, the run folder local, so there is
+    // no split to report and no sibling tree to warn about. `operator_hint: null` is the observable
+    // that says "nothing to tell you" — a fallback that fired here, or a hint that appeared, would both
+    // show up as a non-null value.
+    assert(rec.json && rec.json.record_path === fvPath,
+      'T8c(plain repo): with the folder local the record stays local — the main fallback must not fire '
+      + 'when it has nothing to resolve; got ' + JSON.stringify(rec.json && rec.json.record_path));
+    assert(rec.json && rec.json.operator_hint === null,
+      'T8c(plain repo): and there is nothing to report — a non-null hint here means the worktree-lane '
+      + 'message leaked into the ordinary case; got ' + JSON.stringify(rec.json && rec.json.operator_hint));
+    assert(rec.json && Array.isArray(rec.json.other_candidate_roots)
+      && rec.json.other_candidate_roots.length === 0,
+      'T8c(plain repo): no sibling working tree carries this run; got '
+      + JSON.stringify(rec.json && rec.json.other_candidate_roots));
+
+    // --- T8d: NEGATIVE — a well-formed but WRONG hash. Without this, T8b passes on a gate that
+    // accepts any 64 hex digits.
+    const bound = fs.readFileSync(fvPath, 'utf8');
+    fs.writeFileSync(fvPath, bound.replace(producerHash, '0'.repeat(64)));
+    g = gate(repo);
+    assert(g.classification === 'final_validation_stale',
+      'T8d: a well-formed hash that is not THIS tree\'s must read stale; got ' + JSON.stringify(g.classification));
+    assert(g.recorded_candidate_hash === '0'.repeat(64) && g.current_candidate_hash === producerHash,
+      'T8d: both hashes are carried so a reader can check the claim instead of taking it on trust; got '
+      + JSON.stringify({ recorded: g.recorded_candidate_hash, current: g.current_candidate_hash }));
+
+    // --- T8e: NEGATIVE — THE WRONG FUNCTION. computeLandableTreeDigest is the plausible mistake: it
+    // is exported by the very module `record` lives in, addresses the same visibility band, and
+    // returns a well-formed 64-hex value. It is a different algorithm, and the gate must say so.
+    const landable = runnerMod.computeLandableTreeDigest(repo);
+    assert(/^[0-9a-f]{64}$/.test(String(landable)) && landable !== producerHash,
+      'T8e: the runner\'s own computeLandableTreeDigest is a DIFFERENT algorithm over the same band — '
+      + 'if these two ever coincided this control would be vacuous; landable=' + JSON.stringify(landable)
+      + ' shared=' + JSON.stringify(producerHash));
+    fs.writeFileSync(fvPath, bound.replace(producerHash, landable));
+    g = gate(repo);
+    assert(g.classification === 'final_validation_stale',
+      'T8e: recording the runner\'s own digest instead of the shared one buys stale — which is why the '
+      + 'band must be read from the shared constant and the hash from the shared helper; got '
+      + JSON.stringify(g.classification));
+
+    // --- T8f: NEGATIVE — COLUMN ZERO is load-bearing. The gate's parser is `^`-anchored, so an
+    // indented field is silently no binding at all. An assertion that merely grepped the field name
+    // would pass on this file.
+    fs.writeFileSync(fvPath, bound.replace(/^validated_candidate_hash:/m, '  validated_candidate_hash:'));
+    g = gate(repo);
+    assert(g.classification === 'final_validation_unbound',
+      'T8f: an INDENTED hash line is not a binding — the parser is `^`-anchored, so the producer '
+      + 'writing at column zero is a correctness requirement, not formatting; got ' + JSON.stringify(g.classification));
+
+    // --- T8g: NEGATIVE — a 63-hex value is present but malformed, and must not read as bound.
+    fs.writeFileSync(fvPath, bound.replace(producerHash, producerHash.slice(0, 63)));
+    g = gate(repo);
+    assert(g.classification === 'final_validation_unbound',
+      'T8g: a 63-hex value is present but malformed and must fail closed exactly as an absent one; got '
+      + JSON.stringify(g.classification));
+
+    // --- T8h: the loop CLOSES. The hint told the operator to re-record; doing that returns to green.
+    rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(rec.status === 0 && gate(repo).classification === 'chains_green',
+      'T8h: re-running the recorded remediation returns the gate to green — a hint whose own '
+      + 'instruction does not close the loop is not a remediation; got status=' + rec.status
+      + ' classification=' + JSON.stringify(gate(repo).classification));
+
+    // --- T8i: the binding is a LIVE content address. A code edit must break it, and re-recording
+    // must repair it.
+    fs.writeFileSync(path.join(repo, 'src', 'app.swift'), 'let x = 2\n');
+    g = gate(repo);
+    assert(g.classification === 'final_validation_stale',
+      'T8i: a code edit after recording must break the binding — otherwise the hash is a constant, '
+      + 'not a content address; got ' + JSON.stringify(g.classification));
+    const rec2 = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(rec2.status === 0 && rec2.json && rec2.json.validated_candidate_hash !== producerHash
+      && gate(repo).classification === 'chains_green',
+      'T8i: and re-recording over the changed tree binds the NEW candidate; got '
+      + JSON.stringify({ status: rec2.status, hash: rec2.json && rec2.json.validated_candidate_hash }));
+
+    // --- T8j: MERGE, NEVER CLOBBER, and byte-idempotent — over a file the agent already wrote prose
+    // into, which is the shape a real consumer run has.
+    fs.writeFileSync(fvPath, [
+      '# Final Validation', '',
+      '## Command', '```', 'swift test', '```', '',
+      '## Result', 'All 412 tests passed on 2026-08-01.', ''
+    ].join('\n'));
+    const recProse = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(recProse.status === 0, 'T8j: recording over agent prose exits 0; got ' + recProse.status);
+    const withProse = fs.readFileSync(fvPath, 'utf8');
+    assert(withProse.includes('# Final Validation') && withProse.includes('All 412 tests passed on 2026-08-01.'),
+      'T8j: the agent\'s own evidence survives byte-for-byte; got ' + JSON.stringify(withProse));
+    assert(gate(repo).classification === 'chains_green',
+      'T8j: and the gate still accepts it — the prose does not shadow the binding; got '
+      + JSON.stringify(gate(repo).classification));
+    runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(fs.readFileSync(fvPath, 'utf8') === withProse,
+      'T8j: re-recording is BYTE-IDENTICAL — the file does not grow and no superseded binding is left '
+      + 'below the new one to win last-match-wins');
+
+    // --- T8k: exit 0 means THE RECORD WAS WRITTEN. A `fail` verdict is a successful write of a
+    // bound failure, and the gate reads it as such.
+    const recFail = runRecord(repo, ['--project', project, '--verdict', 'fail', '--command', 'swift test']);
+    assert(recFail.status === 0 && recFail.json && recFail.json.verdict === 'fail',
+      'T8k: a `--verdict fail` record is a successful WRITE, not a non-zero exit — read `verdict` for '
+      + 'the validation outcome; got status=' + recFail.status + ' json=' + JSON.stringify(recFail.json));
+    assert(gate(repo).classification === 'final_validation_failed',
+      'T8k: and the gate classifies the recorded failure from the file; got '
+      + JSON.stringify(gate(repo).classification));
+  } finally { rm(base); }
+})();
+
+// ---------------------------------------------------------------------------
+// T8l (#900) — THE LINKED-WORKTREE BINDING. Its own fixture, because the property needs two working
+// trees of one repository whose code-tree hashes genuinely differ.
+//
+// The gate hashes the tree ITS OWN shell is in. Under a worktree run the run folder exists twice, so
+// a record written from one checkout and a finalize run from the other disagree by construction — and
+// they differ across exactly the pre-merge window a finalize happens in. Asserting only "green from
+// the worktree" passes on a recorder that hashes main, so the load-bearing half is the inverse: the
+// SAME bytes, read with the gate standing in main, must come back stale naming main's hash.
+// ---------------------------------------------------------------------------
+(function T8l_recordBindsTheTreeItStandsIn() {
+  console.log('T8l: `record` binds the working tree it was invoked from, provably not the other one');
+  const base = makeBase('t8l');
+  const project = 'issue-9009';
+  let schema = null;
+  try { schema = require(adaptiveSchemaPath); } catch (_) { schema = null; }
+  try {
+    assert(schema !== null, 'T8l: adaptive-schema is requireable');
+    if (!schema) return;
+    // The worktree is a SIBLING of the main checkout, never nested inside it: a nested worktree
+    // enters main's own snapshot as a gitlink and the divergence being measured becomes an artifact
+    // of the fixture rather than a fact about the two trees.
+    const mainRoot = fs.realpathSync(initConsumerRepo(path.join(base, 'main'), null));
+    const wtRoot = path.join(base, 'wt');
+    G.git(mainRoot, ['worktree', 'add', '-q', '-b', 'workflow/' + project, wtRoot],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    const wt = fs.realpathSync(wtRoot);
+    // ONE un-merged code commit on the branch — without it the two trees are byte-identical and the
+    // whole leg is vacuous.
+    fs.writeFileSync(path.join(wt, 'src', 'feature.swift'), 'let feature = true\n');
+    G.commitAll(wt, 'feat: branch-only code');
+    const wtProject = path.join(wt, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(wtProject, '.cache'), { recursive: true });
+
+    const mainHash = schema.computeCodeTreeHash(mainRoot, project, schema.VALIDATION_TEST_CONSUMES);
+    const wtHash = schema.computeCodeTreeHash(wt, project, schema.VALIDATION_TEST_CONSUMES);
+    assert(/^[0-9a-f]{64}$/.test(String(mainHash)) && mainHash !== wtHash,
+      'T8l premise: the two working trees must genuinely DIVERGE, or nothing below discriminates; main='
+      + JSON.stringify(mainHash) + ' worktree=' + JSON.stringify(wtHash));
+
+    // Recorded from the WORKTREE.
+    const rec = runRecord(wt, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(rec.status === 0 && rec.json && rec.json.candidate_root === wt,
+      'T8l: `record` invoked from the linked worktree resolves THAT tree as the candidate; got status='
+      + rec.status + ' json=' + JSON.stringify(rec.json) + ' stderr=' + String(rec.stderr || '').slice(0, 300));
+    assert(rec.json && rec.json.validated_candidate_hash === wtHash,
+      'T8l: it binds the WORKTREE\'s hash, not main\'s; recorded='
+      + JSON.stringify(rec.json && rec.json.validated_candidate_hash) + ' worktree=' + JSON.stringify(wtHash)
+      + ' main=' + JSON.stringify(mainHash));
+    const wtCache = path.join(wtProject, '.cache');
+    let g = schema.evaluateChainReceipt(wt, { cacheDir: wtCache, project });
+    assert(g.classification === 'chains_green' && g.green === true,
+      'T8l: the gate standing in the worktree accepts it; got ' + JSON.stringify(g.classification));
+
+    // THE LOAD-BEARING INVERSE. Mirror the run folder into main exactly as the finalize transaction's
+    // Step 8a does, so the file the gate reads is byte-identical — then stand in main.
+    const mainProject = path.join(mainRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(mainProject, '.cache'), { recursive: true });
+    const wtRecord = path.join(wtCache, 'final-validation.md');
+    const mainRecord = path.join(mainProject, '.cache', 'final-validation.md');
+    assert(fs.existsSync(wtRecord),
+      'T8l: there must BE a record to mirror — the inverse below is a statement about the same bytes '
+      + 'read from two trees, and it has no subject if the producer wrote nothing');
+    if (fs.existsSync(wtRecord)) {
+      fs.copyFileSync(wtRecord, mainRecord);
+      assert(fs.readFileSync(wtRecord, 'utf8') === fs.readFileSync(mainRecord, 'utf8'),
+        'T8l: the two copies are byte-identical, so only the READER\'s tree varies below');
+      g = schema.evaluateChainReceipt(mainRoot, { cacheDir: path.join(mainProject, '.cache'), project });
+      assert(g.classification === 'final_validation_stale',
+        'T8l: the SAME bytes read with the gate standing in MAIN come back stale — which is what proves '
+        + 'the recorded value was the worktree\'s and not main\'s; got ' + JSON.stringify(g.classification));
+      assert(g.recorded_candidate_hash === wtHash && g.current_candidate_hash === mainHash,
+        'T8l: and it names both trees\' hashes, so the claim is checkable; got '
+        + JSON.stringify({ recorded: g.recorded_candidate_hash, current: g.current_candidate_hash }));
+    }
+
+    // Standing in the WRONG checkout does not silently bind it. main now carries the mirrored folder,
+    // so the refusal is measured on a project claimed only in the worktree.
+    //
+    // THE FALLBACK IS ONE-DIRECTIONAL, AND THIS ARM IS WHAT KEEPS IT THAT WAY. `record` resolves the
+    // run folder in this tree and then in MAIN, so a main-resident folder IS reachable from a linked
+    // worktree (T8m below). The reverse must never be added: main's hash bound to a worktree-resident
+    // run folder is the wrong tree, in mirror image, and a symmetric fallback would reintroduce
+    // exactly the wrong-tree binding T8l exists to forbid. Do not relax this into a success case.
+    const unclaimed = 'issue-9009b';
+    fs.mkdirSync(path.join(wt, 'kaola-workflow', unclaimed, '.cache'), { recursive: true });
+    const wrongTree = runRecord(mainRoot, ['--project', unclaimed, '--verdict', 'pass', '--command', 'swift test']);
+    assert(wrongTree.status === 1 && wrongTree.json
+      && Array.isArray(wrongTree.json.reasons) && wrongTree.json.reasons.includes('project_folder_missing'),
+      'T8l: recording from main for a run claimed only in the worktree REFUSES rather than hashing '
+      + 'whatever tree the shell is in — a plausible-looking hash bound to the wrong candidate is worse '
+      + 'than none; got status=' + wrongTree.status + ' json=' + JSON.stringify(wrongTree.json));
+    assert(wrongTree.json && wrongTree.json.validated_candidate_hash === null,
+      'T8l: and it writes no binding at all; got '
+      + JSON.stringify(wrongTree.json && wrongTree.json.validated_candidate_hash));
+    assert(!fs.existsSync(path.join(mainRoot, 'kaola-workflow', unclaimed)),
+      'T8l: the refusal creates nothing in the wrong checkout');
+  } finally {
+    try {
+      const mainRoot = path.join(base, 'main');
+      G.git(mainRoot, ['worktree', 'remove', '--force', path.join(base, 'wt')],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { /* the rm below takes it either way */ }
+    rm(base);
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// T8m (#900 / V1) — THE WORKTREE LANE. The hash follows the INVOKING tree; the record follows the
+// RUN FOLDER; they are resolved separately because the gate reads them separately.
+//
+// In the standard worktree lane the run folder is resident in MAIN and the linked worktree does not
+// carry it (Step 8a copies main→worktree later). Requiring one tree to be both is unsatisfiable
+// there: standing in the worktree there was nowhere to write (`record` exited 1 on a hint that told
+// you to record from the tree you were already standing in — the loop), and standing in main the
+// hash binds the wrong tree. So `record` from the worktree now hashes the WORKTREE and writes into
+// MAIN's run folder, which is precisely the pair the gate reads.
+//
+// T8l pins that the binding follows the invoking tree. This arm pins the write half, and its control
+// is the same inverse: if the recorded value read green from anywhere, the pair would be meaningless.
+// ---------------------------------------------------------------------------
+(function T8m_worktreeLaneRecordsIntoMainAndBindsThisTree() {
+  console.log('T8m: `record` from a linked worktree hashes THAT tree and writes into main\'s run folder');
+  const base = makeBase('t8m');
+  const project = 'issue-9010';
+  let schema = null;
+  try { schema = require(adaptiveSchemaPath); } catch (_) { schema = null; }
+  try {
+    assert(schema !== null, 'T8m: adaptive-schema is requireable');
+    if (!schema) return;
+    const mainRoot = fs.realpathSync(initConsumerRepo(path.join(base, 'main'), null));
+    const wtRoot = path.join(base, 'wt');
+    G.git(mainRoot, ['worktree', 'add', '-q', '-b', 'workflow/' + project, wtRoot],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    const wt = fs.realpathSync(wtRoot);
+    fs.writeFileSync(path.join(wt, 'src', 'feature.swift'), 'let feature = true\n');
+    G.commitAll(wt, 'feat: branch-only code');
+
+    // MAIN-RESIDENT ONLY — the topology the lane is named for. The worktree carries no run folder,
+    // and the claim record is what makes `finalize --check` able to read this as a worktree run.
+    const mainProject = path.join(mainRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(mainProject, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(mainProject, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+      'runtime: claude', 'step: complete', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: 9010',
+      'sink: merge', 'run_posture: worktree', 'worktree_path: ' + wt,
+      'main_root: ' + mainRoot, 'session_marker: fixture-t8m', 'claim_ts: 2026-01-01T00:00:00Z', ''
+    ].join('\n'));
+
+    const mainHash = schema.computeCodeTreeHash(mainRoot, project, schema.VALIDATION_TEST_CONSUMES);
+    const wtHash = schema.computeCodeTreeHash(wt, project, schema.VALIDATION_TEST_CONSUMES);
+    assert(/^[0-9a-f]{64}$/.test(String(wtHash)) && mainHash !== wtHash,
+      'T8m premise: the two trees must genuinely diverge, or nothing below discriminates; main='
+      + JSON.stringify(mainHash) + ' worktree=' + JSON.stringify(wtHash));
+    assert(!fs.existsSync(path.join(wt, 'kaola-workflow', project)),
+      'T8m premise: the worktree does NOT carry the run folder — that is the lane');
+
+    // --- W1: record from the worktree.
+    const rec = runRecord(wt, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(rec.status === 0 && rec.json && rec.json.outcome === 'recorded',
+      'T8m(W1): `record` from the worktree must now SUCCEED — exiting 1 here was the dead end, and the '
+      + 'hint told you to record from the tree you were already in; got status=' + rec.status
+      + ' json=' + JSON.stringify(rec.json) + ' stderr=' + String(rec.stderr || '').slice(0, 300));
+    assert(rec.json && rec.json.record_path === path.join(mainProject, '.cache', 'final-validation.md'),
+      'T8m(W1): the record lands in MAIN\'s run folder — the one the finalize authority reads; got '
+      + JSON.stringify(rec.json && rec.json.record_path));
+    assert(rec.json && rec.json.candidate_root === wt,
+      'T8m(W1): while the candidate root stays THIS tree; got ' + JSON.stringify(rec.json && rec.json.candidate_root));
+    assert(rec.json && rec.json.validated_candidate_hash === wtHash
+      && rec.json.validated_candidate_hash !== mainHash,
+      'T8m(W1): and the bound hash is the WORKTREE\'s, not the hash of the tree it wrote into — "fix it '
+      + 'by hashing main" is the wrong answer this asserts against; recorded='
+      + JSON.stringify(rec.json && rec.json.validated_candidate_hash)
+      + ' worktree=' + JSON.stringify(wtHash) + ' main=' + JSON.stringify(mainHash));
+    assert(!fs.existsSync(path.join(wt, 'kaola-workflow', project)),
+      'T8m(W1): and NO run folder is created in the worktree — a worktree-side folder would change the '
+      + 'finalize authority topology this record depends on, so the workaround is deliberately not taken');
+    assert(typeof (rec.json && rec.json.operator_hint) === 'string'
+      && rec.json.operator_hint.includes(mainProject) && rec.json.operator_hint.includes(wt),
+      'T8m(W1): the split is surprising enough that saying nothing would read as a bug — the hint names '
+      + 'BOTH the folder written and the tree hashed; got '
+      + JSON.stringify(rec.json && rec.json.operator_hint));
+
+    // --- W2: the gate's own pair.
+    const mainCache = path.join(mainProject, '.cache');
+    let g = schema.evaluateChainReceipt(wt, { cacheDir: mainCache, project });
+    assert(g.classification === 'chains_green' && g.green === true,
+      'T8m(W2): the gate\'s own pair — hash over the invoking worktree, record out of main\'s .cache/ — '
+      + 'must read green; got ' + JSON.stringify({ classification: g.classification, green: g.green }));
+
+    // --- W3: THE CONTROL THAT MAKES W2 NON-VACUOUS. Same bytes, gate standing in main.
+    g = schema.evaluateChainReceipt(mainRoot, { cacheDir: mainCache, project });
+    assert(g.classification === 'final_validation_stale',
+      'T8m(W3 control): the SAME bytes read with the gate standing in MAIN must be STALE. Without this, '
+      + 'W2 also passes on a value that reads green from anywhere — which is what a recorder that hashed '
+      + 'its write destination would produce; got ' + JSON.stringify(g.classification));
+    assert(g.recorded_candidate_hash === wtHash && g.current_candidate_hash === mainHash,
+      'T8m(W3 control): and it names both trees\' hashes, so the claim is checkable rather than trusted; '
+      + 'got ' + JSON.stringify({ recorded: g.recorded_candidate_hash, current: g.current_candidate_hash }));
+
+    // --- END TO END through the real finalize door, from the worktree.
+    const ghMock = writeGhMock(path.join(base, 'bin'), [9010]);
+    const chk = runClaim(['finalize', '--project', project, '--keep-worktree', '--check', '--json'],
+      wt, ghMock);
+    const chkJson = lastJson(chk);
+    assert(chk.status === 0 && chkJson && chkJson.ok === true
+      && Array.isArray(chkJson.reasons) && chkJson.reasons.length === 0,
+      'T8m(E2E): `finalize --check` from the worktree must now report finalize-ready — it used to exit 1 '
+      + 'on a validation finding whose only remedy looped; got status=' + chk.status
+      + ' json=' + JSON.stringify(chkJson) + ' stderr=' + String(chk.stderr || '').slice(0, 300));
+    assert(chkJson && chkJson.authority && chkJson.authority.source === 'pending_mirror',
+      'T8m(E2E): over the pending_mirror topology exactly — the lane this fix is about; got '
+      + JSON.stringify(chkJson && chkJson.authority));
+    assert(chkJson && chkJson.checks && chkJson.checks.validation === 'chains_green',
+      'T8m(E2E): and the measurement the recorder produced is what the door reads; got '
+      + JSON.stringify(chkJson && chkJson.checks && chkJson.checks.validation));
+
+    // --- W5: idempotent in the main-resident lane too. Guarded so a build that recorded NOTHING reds
+    // on its own assertion rather than crashing the suite and hiding T8n behind one stack trace.
+    const recordedAt = (rec.json && rec.json.record_path) || '';
+    const readRecord = () => { try { return fs.readFileSync(recordedAt, 'utf8'); } catch (_) { return null; } };
+    const bytes = readRecord();
+    const again = runRecord(wt, ['--project', project, '--verdict', 'pass', '--command', 'swift test']);
+    assert(bytes !== null && again.status === 0 && readRecord() === bytes,
+      'T8m(W5): re-recording across trees is byte-identical — the merge policy does not change with the '
+      + 'destination; got status=' + again.status + ' record_path=' + JSON.stringify(recordedAt));
+  } finally {
+    try {
+      G.git(path.join(base, 'main'), ['worktree', 'remove', '--force', path.join(base, 'wt')],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { /* the rm below takes it either way */ }
+    rm(base);
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// T8n (#900 / V1) — the two things the FALLBACK itself had to get right.
+//
+// W9 is a defect the V1 fix CREATED and then closed: resolving the run folder in main made main's
+// durable archive band reachable from a worktree that has no local band, by a route the local path
+// check could not see. So the band rule follows the WRITE — the resolved destination is checked
+// against its own root. W7 is the loop the old hint was: it named one path while you stood in it.
+// ---------------------------------------------------------------------------
+(function T8n_fallbackBandAndTwoPathHint() {
+  console.log('T8n: the fallback must not open a route into main\'s archive band, and must name what it searched');
+  const base = makeBase('t8n');
+  try {
+    const mainRoot = fs.realpathSync(initConsumerRepo(path.join(base, 'main'), null));
+    const wtRoot = path.join(base, 'wt');
+    G.git(mainRoot, ['worktree', 'add', '-q', '-b', 'workflow/issue-9011', wtRoot],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    const wt = fs.realpathSync(wtRoot);
+
+    // --- W9: main has an archive band; this worktree has none.
+    const mainBand = path.join(mainRoot, 'kaola-workflow', 'archive');
+    fs.mkdirSync(path.join(mainBand, 'issue-old', '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(mainBand, 'issue-old', 'workflow-state.md'), 'status: closed\n');
+    assert(!fs.existsSync(path.join(wt, 'kaola-workflow', 'archive')) && fs.existsSync(mainBand),
+      'T8n(W9) premise: the band exists ONLY in main — that is what makes it reachable solely through '
+      + 'the fallback, and invisible to a check on the local path');
+    const bandBefore = walkFiles(mainBand, '', []).sort().join('|');
+    const w9 = runRecord(wt, ['--project', 'Archive', '--verdict', 'pass', '--command', 'swift test']);
+    assert(w9.status === 2,
+      'T8n(W9): a `--project` that resolves into the durable archive band is a USAGE error — no checkout '
+      + 'and no re-run turns the band into a run folder, so it is exit 2 and not an inconclusive '
+      + 'measurement; got ' + w9.status + ' stdout=' + String(w9.stdout || '').slice(0, 200));
+    assert(/archive band/i.test(String(w9.stderr || '')),
+      'T8n(W9): and it says so; got stderr=' + JSON.stringify(String(w9.stderr || '').slice(0, 240)));
+    assert(walkFiles(mainBand, '', []).sort().join('|') === bandBefore,
+      'T8n(W9): NOTHING is written into main\'s band — an archived run\'s record is closed evidence. '
+      + 'This is the route the fallback opened, so the band check has to follow the resolved '
+      + 'destination and not the local path; band was ' + JSON.stringify(bandBefore)
+      + ' now ' + JSON.stringify(walkFiles(mainBand, '', []).sort().join('|')));
+
+    // --- W7: no run folder at either place — the hint must name BOTH searched paths.
+    const missing = 'issue-9012';
+    const w7 = runRecord(wt, ['--project', missing, '--verdict', 'pass', '--command', 'swift test']);
+    assert(w7.status === 1 && w7.json && Array.isArray(w7.json.reasons)
+      && w7.json.reasons.includes('project_folder_missing'),
+      'T8n(W7): no folder at either place is inconclusive, not a usage error; got status=' + w7.status
+      + ' json=' + JSON.stringify(w7.json));
+    const hint = String((w7.json && w7.json.operator_hint) || '');
+    assert(hint.includes(path.join(wt, 'kaola-workflow', missing))
+      && hint.includes(path.join(mainRoot, 'kaola-workflow', missing)),
+      'T8n(W7): the hint must name BOTH places the transaction reads a run folder from. Naming only one '
+      + 'is how the loop existed — it told an operator standing in the worktree to record from the '
+      + 'worktree; got ' + JSON.stringify(hint.slice(0, 300)));
+  } finally {
+    try {
+      G.git(path.join(base, 'main'), ['worktree', 'remove', '--force', path.join(base, 'wt')],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { /* the rm below takes it either way */ }
+    rm(base);
+  }
 })();
 
 // ---------------------------------------------------------------------------

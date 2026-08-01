@@ -955,8 +955,12 @@ says** — which is not licence to ship something you know is wrong. Moving the 
 accountability onto you, because you are the only party with enough context to carry it.
 
 - **Validation** — self-host repos run `kaola-workflow-run-chains.js` to produce
-  `.cache/chain-receipt.json`; consumer repos record their own `verdict: pass` in
-  `.cache/final-validation.md`. The finalize transaction classifies the result (absent / stale /
+  `.cache/chain-receipt.json`; on a consumer repo you own verification and record the result with
+  `kaola-workflow-validation-runner.js record`, which writes `.cache/final-validation.md` carrying
+  three column-0 fields — `verdict: pass`, the exact command you ran, and a
+  `validated_candidate_hash` bound to the tree. Run it from the working tree you validated: the
+  binding follows the tree the shell is in, and a linked worktree and main hash differently until the
+  branch merges. The finalize transaction classifies the result (absent / stale /
   empty / red / green) onto the envelope as `validation` and durably under `## Validation`.
 - **Changed paths** — the paths the run actually touched, on the envelope as `changed_paths` and
   durably under `## Changed Paths`. Nothing compares them against a declaration; the report exists so

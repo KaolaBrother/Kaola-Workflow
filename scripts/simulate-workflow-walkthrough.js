@@ -7637,14 +7637,30 @@ function testClosureAuditDedupRoadmapAndArchive() {
 //
 // The required set is derived from the archive's OWN record, never a blanket demand (a blanket
 // "plan + summary + evidence" rule flags 76 of the 184 plan-bearing closed archives in this repo,
-// which is noise, not drift):
-//   - workflow-state.md is ALWAYS required — the identity anchor, exactly #676's unconditional rule.
-//   - a state naming a real plan_hash / active_plan_hash requires workflow-plan.md.
-//   - a plan whose `## Node Ledger` has `complete` rows requires each `.cache/<id>.md`
-//     (listRecordedNodeEvidence — the run record that survives a gutted .cache/).
+// which is noise, not drift). It is now exactly ONE file: workflow-state.md, the identity anchor —
+// #676's unconditional rule. The two demands that used to stand beside it (workflow-plan.md when the
+// state named a plan hash, and one `.cache/<id>.md` per `complete` ledger row) went with the ledger
+// they were derived from, so a plan-hash-bearing archive is obliged to hold nothing but its anchor.
+// Fixture (v) pins that case: it is the shape on which two forge ports silently disagreed with this
+// script, and the shape no suite in any edition used to build.
 // Report-only in both modes: an incomplete archive is unrepairable, so --execute must never touch it.
 // ---------------------------------------------------------------------------
 function testClosureAuditArchiveContentDrift832() {
+  // The SHIPPED required set, read from the script rather than inferred from the arms below. The
+  // behavioural fixtures can only see a demand for a file they omit; this sees any second required
+  // name the moment it is written, conditional or not — which is the drift that survived unnoticed.
+  const auditSrc832 = fs.readFileSync(closureAuditScript, 'utf8');
+  const requiredFn832 = auditSrc832.match(/function archiveRequiredContent\(dir\) \{([\s\S]*?)\n\}/);
+  assert(requiredFn832,
+    '#832: archiveRequiredContent must be readable from ' + closureAuditScript);
+  const shippedRequired832 = Array.from(
+    new Set((requiredFn832[1].match(/'[^']*\.md'/g) || []).map(s => s.slice(1, -1)))
+  ).sort();
+  assert(shippedRequired832.length === 1 && shippedRequired832[0] === 'workflow-state.md',
+    '#832: the required set is exactly the identity anchor. A second name here is a demand no fixture '
+      + 'below omits, so nothing else would see it — the exact way a workflow-plan.md demand outlived '
+      + 'its derivation in two forge ports; got ' + JSON.stringify(shippedRequired832));
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-archive-content-832-'));
   try {
     initGitRepo(tmp);
@@ -7689,6 +7705,15 @@ function testClosureAuditArchiveContentDrift832() {
     fs.writeFileSync(path.join(archiveBase, 'issue-8327', 'workflow-state.md'),
       'status: closed\nstep: complete\nissue_number: 8327\n');
 
+    // (v) PLAN-HASH-BEARING and PLAN-LESS — the state names a real plan_hash and there is no
+    //     workflow-plan.md beside it. Nothing may be required of it but its anchor: the hash names a
+    //     plan whose ledger no longer exists to derive an obligation from, so demanding the file back
+    //     would be a blanket rule wearing a derivation's clothes. Distinct from (iv) — a plan-less
+    //     archive that never claimed a plan cannot see a demand that keys off the claim.
+    fs.mkdirSync(path.join(archiveBase, 'issue-8328'), { recursive: true });
+    fs.writeFileSync(path.join(archiveBase, 'issue-8328', 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 8328\nplan_hash: ' + 'c'.repeat(64) + '\n');
+
     // The class is LOCAL — it must report the same offline, where every remote class is skipped.
     const result = runClosureAuditOffline([], tmp);
     const drift = result.drift.archive_content_incomplete;
@@ -7719,6 +7744,19 @@ function testClosureAuditArchiveContentDrift832() {
       !byProject.has('issue-8327'),
       '#832: a legacy plan-less archive must stay quiet (record-derived, never a blanket demand); got: '
         + JSON.stringify(byProject.get('issue-8327'))
+    );
+    assert(
+      !byProject.has('issue-8328'),
+      '#832: a plan_hash-bearing archive with NO workflow-plan.md must produce NO finding — a named '
+        + 'plan hash obliges nothing now that the ledger it was read through is gone. Two forge ports '
+        + 'kept demanding workflow-plan.md here and reported '
+        + '[{"project":...,"missing":["workflow-plan.md"]}] where this script reported []; got: '
+        + JSON.stringify(byProject.get('issue-8328'))
+    );
+    assert(
+      byProject.has('issue-8324'),
+      '#832 control: the anchor-less archive in this same sweep is still reported, so the two '
+        + 'must-stay-quiet arms above are measuring a live class and not a class that stopped running'
     );
     assert(
       result.counts.archive_content_incomplete === drift.length,
@@ -8211,6 +8249,908 @@ function testClosureAuditPrFolderTimeout() {
       'PR-folder hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.unarchived_pr_folders)
     );
     console.log('testClosureAuditPrFolderTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ===========================================================================
+// #903 — the closure audit is repository-wide by DEFAULT; --project/--issue add a scoped verdict
+// on top. The regression these pin: parseArgs recognized the exact string `--execute` and had no
+// `else`, so `--help` and every mistyped or invented flag was absorbed silently and answered with
+// the full repository report at exit 0. An operator who believed they had scoped the audit read an
+// unscoped answer — carrying another project's drift — as authoritative.
+//
+// Two behaviours the scoping work forced, pinned here alongside it:
+//   * the candidate set now expands a bundle's `issue_numbers`, so a non-primary MEMBER is visible
+//     to the archive_closed and active_folder_for_closed_issue classes. `--execute` deletes the
+//     roadmap sources that set authorizes, so `closure_policy` is read before a member is trusted.
+//   * `archive_summary_citation_missing` (#901): report-only, omitted when empty, and under
+//     --project its findings land out-of-scope so they cannot touch a scoped verdict.
+// ===========================================================================
+
+// An archived project folder. `fields === null` plants the directory with NO workflow-state.md —
+// the identity-anchor-less shape archive_content_incomplete reports.
+function plantArchive903(root, name, fields) {
+  const dir = path.join(root, 'kaola-workflow', 'archive', name);
+  fs.mkdirSync(dir, { recursive: true });
+  if (fields !== null) {
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+      Object.keys(fields).map(k => k + ': ' + fields[k]).join('\n') + '\n');
+  }
+  return dir;
+}
+
+// Append a line-anchored field to a planted active folder's state (plantActiveFolder writes the
+// scalar primary only; a bundle also carries `issue_numbers`).
+function appendStateField903(root, project, name, value) {
+  fs.appendFileSync(path.join(root, 'kaola-workflow', project, 'workflow-state.md'),
+    name + ': ' + value + '\n');
+}
+
+// runClosureAudit / runClosureAuditOffline assert status === 0 and JSON.parse stdout
+// unconditionally, so the operator-input-error and --help paths cannot go through them. This
+// returns the process result untouched. OFFLINE is set EXPLICITLY rather than inherited: every
+// assertion below is about argv handling, which is decided before any remote call, and an inherited
+// value would leave what the pin actually ran under unstated.
+function runClosureAuditRaw(args, cwd) {
+  // The argv-in / envelope-out contract of this CLI, exit code and stream separation included.
+  // spawn-class: cli-contract
+  return spawnSync(process.execPath, [closureAuditScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+  });
+}
+
+function testClosureAuditProjectScopePartitions903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-scope-'));
+  try {
+    initGitRepo(tmp);
+    // Two independent closed archives, each with a surviving roadmap source. OFFLINE, so the
+    // closed-set is empty and only the LOCAL archive_closed reason can fire — no forge needed.
+    plantArchive903(tmp, 'issue-700', { status: 'closed', step: 'complete', issue_number: 700 });
+    plantArchive903(tmp, 'issue-555', { status: 'closed', step: 'complete', issue_number: 555 });
+    plantRoadmapIssue(tmp, 700, '');
+    plantRoadmapIssue(tmp, 555, '');
+
+    // Control on the fixture: unscoped, BOTH are drift, and the unscoped envelope carries none of
+    // the scoped keys. Without this leg the partition assertions could pass on a dead fixture.
+    const unscoped = runClosureAuditOffline([], tmp);
+    assert(
+      unscoped.drift.stale_roadmap_sources.map(s => s.issue_number).join(',') === '555,700',
+      '#903 control: unscoped must report BOTH 555 and 700 as stale, got: '
+        + JSON.stringify(unscoped.drift.stale_roadmap_sources)
+    );
+    // The repository-wide envelope is EXACT, not merely a superset: scoping is additive, so an
+    // unscoped run must be the shape this script has always emitted. Nothing pinned an exact key set
+    // before, which is why a new key could appear in the default report unnoticed.
+    assert(JSON.stringify(Object.keys(unscoped)) === '["dry_run","offline","drift","counts"]',
+      '#903: the unscoped dry-run envelope must carry exactly these four keys, got: '
+        + JSON.stringify(Object.keys(unscoped)));
+    assert(JSON.stringify(Object.keys(unscoped.drift))
+      === '["stale_roadmap_sources","mirror_lists_closed_issues","stale_in_progress_labels",'
+        + '"active_folder_for_closed_issue","unarchived_pr_folders","archive_content_incomplete"]',
+      '#903: the unscoped drift keys and their order must be unchanged on a tree carrying none of the '
+        + 'omit-when-empty classes, got: ' + JSON.stringify(Object.keys(unscoped.drift)));
+    assert(JSON.stringify(Object.keys(unscoped.counts)) === JSON.stringify(Object.keys(unscoped.drift)),
+      '#903: counts must carry one entry per drift key, in the same order, got: '
+        + JSON.stringify(Object.keys(unscoped.counts)));
+
+    const scoped = runClosureAuditOffline(['--project', 'issue-700'], tmp);
+    assert(JSON.stringify(Object.keys(scoped))
+      === '["dry_run","offline","scope","current_project_clean","current_project_drift",'
+        + '"current_project_counts","repository_drift_outside_scope","repository_counts_outside_scope"]',
+      '#903: the scoped dry-run envelope must carry the scope, the verdict, both halves and both '
+        + 'count objects, got: ' + JSON.stringify(Object.keys(scoped)));
+    assert(scoped.scope.project === 'issue-700',
+      '#903: scope.project must echo the requested project, got: ' + JSON.stringify(scoped.scope));
+    assert(JSON.stringify(scoped.scope.issue_numbers) === '[700]',
+      '#903: scope.issue_numbers must come from the project\'s own record, got: ' + JSON.stringify(scoped.scope.issue_numbers));
+    assert(scoped.scope.state_file === 'kaola-workflow/archive/issue-700/workflow-state.md',
+      '#903: scope.state_file must name the record the scope was read from, got: ' + JSON.stringify(scoped.scope.state_file));
+    assert(!('archive_name_ambiguous' in scoped.scope),
+      '#903: archive_name_ambiguous must be OMITTED unless true, got: ' + JSON.stringify(scoped.scope));
+
+    const inSources = scoped.current_project_drift.stale_roadmap_sources;
+    assert(inSources.length === 1 && inSources[0].issue_number === 700,
+      '#903: the scoped project\'s own stale source must be in current_project_drift, got: ' + JSON.stringify(inSources));
+    const outSources = scoped.repository_drift_outside_scope.stale_roadmap_sources;
+    assert(outSources.length === 1 && outSources[0].issue_number === 555,
+      '#903: an unrelated project\'s stale source must land in repository_drift_outside_scope — it may '
+        + 'neither contaminate the scoped verdict nor be hidden by it, got: ' + JSON.stringify(outSources));
+    assert(scoped.current_project_counts.stale_roadmap_sources === 1,
+      '#903: current_project_counts must count the scoped half, got: ' + JSON.stringify(scoped.current_project_counts));
+    assert(scoped.repository_counts_outside_scope.stale_roadmap_sources === 1,
+      '#903: repository_counts_outside_scope must count the complement, got: ' + JSON.stringify(scoped.repository_counts_outside_scope));
+
+    // LAST, because it mutates the fixture: the unscoped --execute envelope is exact too. A scoped
+    // --execute swaps the two current_project_* keys for repaired/reported_not_repaired; the
+    // unscoped one never grew a scope block at all.
+    const unscopedExec = runClosureAuditOffline(['--execute'], tmp);
+    assert(JSON.stringify(Object.keys(unscopedExec))
+      === '["dry_run","offline","repaired","reported_not_repaired"]',
+      '#903: the unscoped --execute envelope must be unchanged, got: '
+        + JSON.stringify(Object.keys(unscopedExec)));
+    console.log('testClosureAuditProjectScopePartitions903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditRejectsUnknownFlagAndHelp903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-flags-'));
+  const noRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-norepo-'));
+  try {
+    initGitRepo(tmp);
+    // Control: the bare invocation on this fixture answers at exit 0, so every exit 1 below is the
+    // flag being rejected and not a broken fixture.
+    const bare = runClosureAuditRaw([], tmp);
+    assert(bare.status === 0, '#903 control: the bare invocation must still exit 0, got ' + bare.status
+      + '\nstderr: ' + bare.stderr);
+    assert(bare.stdout.includes('"dry_run"'),
+      '#903 control: the bare invocation must print the drift report, got: ' + bare.stdout);
+
+    const bogus = runClosureAuditRaw(['--bogus-flag-xyz'], tmp);
+    assert(bogus.status === 1,
+      '#903: an unknown flag must exit 1 — it was silently absorbed and answered with the full report before, got '
+        + bogus.status + '\nstdout: ' + bogus.stdout);
+    assert(bogus.stdout === '',
+      '#903: on the operator-input-error path stdout must be EMPTY — a report there is the silent-scoping '
+        + 'failure itself, got: ' + bogus.stdout);
+    assert(bogus.stderr.includes('unknown flag: --bogus-flag-xyz'),
+      '#903: stderr must name the rejected flag, got: ' + bogus.stderr);
+    assert(bogus.stderr.includes('usage:'),
+      '#903: the rejection must carry the usage text, got: ' + bogus.stderr);
+
+    // A scoping flag with a missing or malformed value is the same class of operator error.
+    for (const argv of [['--project'], ['--project', '--execute'], ['--issue'], ['--issue', 'abc'],
+      ['--issue', '0700'], ['--issue', '0'], ['--issue', '-3']]) {
+      const bad = runClosureAuditRaw(argv, tmp);
+      assert(bad.status === 1,
+        '#903: ' + JSON.stringify(argv) + ' must exit 1, got ' + bad.status + '\nstdout: ' + bad.stdout);
+      assert(bad.stdout === '',
+        '#903: ' + JSON.stringify(argv) + ' must leave stdout empty, got: ' + bad.stdout);
+    }
+
+    for (const flag of ['--help', '-h']) {
+      const help = runClosureAuditRaw([flag], tmp);
+      assert(help.status === 0, '#903: ' + flag + ' must exit 0, got ' + help.status + '\nstderr: ' + help.stderr);
+      assert(help.stdout.includes('usage:'),
+        '#903: ' + flag + ' must print usage on STDOUT, got: ' + help.stdout);
+      assert(!help.stdout.includes('"dry_run"'),
+        '#903: ' + flag + ' must print usage INSTEAD of the report — it printed the full drift JSON before, got: '
+          + help.stdout);
+    }
+
+    // Flags are parsed before the repository probe, so --help answers outside a git repository too.
+    const outside = runClosureAuditRaw(['--help'], noRepo);
+    assert(outside.status === 0,
+      '#903: --help must answer outside a git repository, got ' + outside.status + '\nstderr: ' + outside.stderr);
+    assert(outside.stdout.includes('usage:'),
+      '#903: --help outside a repo must still print usage, got: ' + outside.stdout);
+    console.log('testClosureAuditRejectsUnknownFlagAndHelp903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(noRepo, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditMistypedProjectExitsOne903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-mistyped-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'bundle-700-701', 700, null);
+    appendStateField903(tmp, 'bundle-700-701', 'issue_numbers', '700,701');
+
+    // Control: the correctly-spelled project resolves and answers at exit 0.
+    const good = runClosureAuditRaw(['--project', 'bundle-700-701'], tmp);
+    assert(good.status === 0, '#903 control: a resolvable --project must exit 0, got ' + good.status
+      + '\nstderr: ' + good.stderr);
+    const goodParsed = JSON.parse(good.stdout);
+    assert(JSON.stringify(goodParsed.scope.issue_numbers) === '[700,701]',
+      '#903 control: the live folder\'s members must resolve, got: ' + JSON.stringify(goodParsed.scope));
+
+    // The mistyped name must REFUSE. Answering "clean" for a project that does not exist is exactly
+    // the silent-scoping failure #903 removes, and the old behaviour was exit 0 with an unscoped answer.
+    const typo = runClosureAuditRaw(['--project', 'bundle-700-71'], tmp);
+    assert(typo.status === 1,
+      '#903: a --project resolving to no workflow-state.md must exit 1, got ' + typo.status
+        + '\nstdout: ' + typo.stdout);
+    assert(typo.stdout === '',
+      '#903: a mistyped --project must print NOTHING on stdout — an unscoped report there reads as a '
+        + 'scoped verdict, got: ' + typo.stdout);
+    assert(typo.stderr.includes('bundle-700-71'),
+      '#903: the error must name the project it could not resolve, got: ' + typo.stderr);
+    assert(typo.stderr.includes('--issue'),
+      '#903: the error must name the escape hatch, got: ' + typo.stderr);
+
+    // That escape hatch: --issue makes an unresolvable --project scopeable rather than fatal.
+    const withIssue = runClosureAuditRaw(['--project', 'bundle-700-71', '--issue', '701'], tmp);
+    assert(withIssue.status === 0,
+      '#903: an unresolvable --project plus --issue must exit 0, got ' + withIssue.status
+        + '\nstderr: ' + withIssue.stderr);
+    const withIssueParsed = JSON.parse(withIssue.stdout);
+    assert(withIssueParsed.scope.state_file === null,
+      '#903: state_file must be null when no record was read, got: ' + JSON.stringify(withIssueParsed.scope));
+    assert(JSON.stringify(withIssueParsed.scope.issue_numbers) === '[701]',
+      '#903: the scope must be the --issue values alone, got: ' + JSON.stringify(withIssueParsed.scope.issue_numbers));
+
+    // --issue alone: a scope with no project at all.
+    const issueOnly = runClosureAuditRaw(['--issue', '701', '--issue', '700'], tmp);
+    assert(issueOnly.status === 0, '#903: --issue alone must exit 0, got ' + issueOnly.status
+      + '\nstderr: ' + issueOnly.stderr);
+    const issueOnlyParsed = JSON.parse(issueOnly.stdout);
+    assert(issueOnlyParsed.scope.project === null && issueOnlyParsed.scope.state_file === null,
+      '#903: --issue alone must report project:null and state_file:null, got: ' + JSON.stringify(issueOnlyParsed.scope));
+    assert(JSON.stringify(issueOnlyParsed.scope.issue_numbers) === '[700,701]',
+      '#903: repeated --issue must accumulate, sorted and deduped, got: ' + JSON.stringify(issueOnlyParsed.scope.issue_numbers));
+
+    // ── The escape hatch's VERDICT, and it must run ONLINE ─────────────────────────────────────
+    // MEASURED: `--project <typo> --issue N` answered current_project_clean:TRUE over a project
+    // carrying real drift — a false clean, reached THROUGH the escape hatch rather than past the
+    // assert that exists to stop it. --issue supplies numbers to scope BY; it does not supply the
+    // record the name failed to resolve, so the project half of the scope never evaluated.
+    //
+    // Why not runClosureAuditRaw, which every leg above uses: it hardcodes KAOLA_WORKFLOW_OFFLINE=1,
+    // and OFFLINE the same argv reads clean:false because two classes token 'skipped_offline'. A pin
+    // written through that runner PASSES AGAINST THE DEFECT. The verdict legs therefore run with
+    // OFFLINE=0 and a mock on gh's own hook.
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const unresolvedOnline = runClosureAudit(['--project', 'bundle-700-71', '--issue', '701'], tmp, binDir);
+    assert(unresolvedOnline.offline === false,
+      '#903: this leg must be ONLINE or it proves nothing — offline masks the false clean, got offline: '
+        + unresolvedOnline.offline);
+    assert(unresolvedOnline.scope.project_unresolved === true,
+      '#903: an unresolvable --project accepted via --issue must SAY the name resolved to nothing, got: '
+        + JSON.stringify(unresolvedOnline.scope));
+    assert(unresolvedOnline.current_project_clean === false,
+      '#903: and it must never read clean — nothing was read for the name the operator typed, so no '
+        + 'class speaks for that project. This answered TRUE, got: ' + unresolvedOnline.current_project_clean
+        + ' scope: ' + JSON.stringify(unresolvedOnline.scope));
+    // clean:false above must come from the UNRESOLVED SCOPE, not from a class that failed. If the mock
+    // were dead every probe would read 'unavailable', unresolved_closed_state would appear, and the
+    // assertion above would pass for a reason that has nothing to do with the fix.
+    assert(!('unresolved_closed_state' in unresolvedOnline.current_project_drift),
+      '#903: no probe may have failed — an unresolved_closed_state class here means the gh mock never '
+        + 'answered and this leg is measuring a dead axis, got: '
+        + JSON.stringify(Object.keys(unresolvedOnline.current_project_drift)));
+    for (const key of ['stale_in_progress_labels', 'unarchived_pr_folders']) {
+      assert(Array.isArray(unresolvedOnline.current_project_drift[key]),
+        '#903: ' + key + ' must be an EVALUATED array on this axis, not a skip token — a token here is '
+          + 'the offline masking reappearing, got: ' + JSON.stringify(unresolvedOnline.current_project_drift[key]));
+    }
+    const unresolvedNonZero = Object.keys(unresolvedOnline.current_project_counts)
+      .filter(k => unresolvedOnline.current_project_counts[k] !== 0);
+    assert(unresolvedNonZero.length === 0,
+      '#903: every scoped count must be 0, so clean:false is the UNRESOLVED verdict and not drift that '
+        + 'happened to be found; nonzero: ' + JSON.stringify(unresolvedNonZero));
+
+    // POSITIVE CONTROL — same fixture, same runner, same mock, same --issue: a RESOLVABLE --project
+    // over this zero-drift repo must still read clean:TRUE. Without it an always-false verdict would
+    // satisfy every assertion above.
+    const resolvedOnline = runClosureAudit(['--project', 'bundle-700-701', '--issue', '701'], tmp, binDir);
+    assert(resolvedOnline.current_project_clean === true,
+      '#903 control: a resolvable --project with the same --issue over zero drift must still read '
+        + 'clean:true — this is what separates the fix from a verdict that never says clean, got: '
+        + resolvedOnline.current_project_clean + ' drift: ' + JSON.stringify(resolvedOnline.current_project_drift));
+    assert(!('project_unresolved' in resolvedOnline.scope),
+      '#903 control: project_unresolved is OMITTED when false, so a resolvable scope emits exactly the '
+        + 'three keys it always did, got: ' + JSON.stringify(resolvedOnline.scope));
+
+    // The scope LABEL is axis-independent, unlike the verdict: offline the same unresolvable argv still
+    // reports project_unresolved, and reads clean:false there only because two classes never ran.
+    assert(withIssueParsed.scope.project_unresolved === true,
+      '#903: the unresolved label must be on the offline answer too — it is a fact about the NAME, not '
+        + 'about what could be probed, got: ' + JSON.stringify(withIssueParsed.scope));
+    console.log('testClosureAuditMistypedProjectExitsOne903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// A `--project` value is ONE folder name under kaola-workflow/, never a path. `--project ../../outside`
+// resolved a workflow-state.md from OUTSIDE the repository and answered a scoped verdict on it at exit
+// 0 — a report about a tree the audit was never pointed at, carrying an issue number that appears
+// nowhere inside the repo. It is the same operator-input error class as a mistyped flag (docs/api.md
+// already publishes exit 1 for "a missing or malformed flag value", stdout empty), so it answers the
+// same way: exit 1, EMPTY stdout, message on stderr. The empty-stdout half is the load-bearing one —
+// any bytes there read as a scoped answer to whoever parses them.
+//
+// The fixture is a CONTAINER holding the repo and the outside tree as SIBLINGS, so `../../outside`
+// from <root>/kaola-workflow/<project> lands on a file this scenario planted. Without that file the
+// pre-fix run exits 1 for the unrelated unresolvable-name reason, and this pin would pass against the
+// very defect it exists to catch.
+function testClosureAuditProjectNameIsNotAPath903() {
+  const container = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-traversal-')));
+  const repo = path.join(container, 'repo');
+  try {
+    fs.mkdirSync(repo, { recursive: true });
+    initGitRepo(repo);
+    fs.mkdirSync(path.join(container, 'outside'), { recursive: true });
+    fs.writeFileSync(path.join(container, 'outside', 'workflow-state.md'),
+      'status: in_progress\nstep: implement\nissue_number: 4242\n');
+    plantActiveFolder(repo, 'issue-555', 555, null);
+
+    const traversal = runClosureAuditRaw(['--project', '../../outside'], repo);
+    assert(traversal.status === 1,
+      '#903: a --project that is a PATH must exit 1 — `../../outside` reported a verdict on a '
+        + 'workflow-state.md outside the repository at exit 0, got ' + traversal.status
+        + '\nstdout: ' + traversal.stdout);
+    assert(traversal.stdout === '',
+      '#903: and stdout must be EMPTY — the traversal run printed a full scoped report there, which '
+        + 'every caller reads as an answer about the project it asked for, got: ' + traversal.stdout);
+    assert(traversal.stderr.includes('safe folder name'),
+      '#903: stderr must name the rule that rejected the value, got: ' + traversal.stderr);
+    assert(!traversal.stdout.includes('4242'),
+      '#903: the outside record\'s issue number must not reach stdout — resolving it was the defect, '
+        + 'got: ' + traversal.stdout);
+
+    // POSITIVE CONTROL, same fixture, same runner: a legitimate folder name still scopes at exit 0.
+    // A validator that rejected every name would satisfy the assertions above on its own.
+    const good = runClosureAuditRaw(['--project', 'issue-555'], repo);
+    assert(good.status === 0,
+      '#903 control: a legitimate project name must still scope at exit 0, got ' + good.status
+        + '\nstderr: ' + good.stderr);
+    const goodScope = JSON.parse(good.stdout).scope;
+    assert(goodScope.project === 'issue-555'
+      && goodScope.state_file === 'kaola-workflow/issue-555/workflow-state.md',
+      '#903 control: the scope must resolve to the IN-REPO record, got: ' + JSON.stringify(goodScope));
+    assert(JSON.stringify(goodScope.issue_numbers) === '[555]',
+      '#903 control: and to that record\'s members, got: ' + JSON.stringify(goodScope.issue_numbers));
+    console.log('testClosureAuditProjectNameIsNotAPath903: PASSED');
+  } finally {
+    fs.rmSync(container, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditScopedCleanIsFailClosed903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-failclosed-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-910', 910, null);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+
+    // Control FIRST, and it is what keeps the fail-closed assertion from being vacuous: the SAME
+    // zero-drift project, ONLINE, with every class actually evaluated, must read clean:true. An
+    // always-false verdict would satisfy the offline leg below on its own.
+    const online = runClosureAudit(['--project', 'issue-910'], tmp, binDir);
+    assert(online.current_project_clean === true,
+      '#903 control: a scoped project with zero drift and every class EVALUATED must read clean:true, got '
+        + online.current_project_clean + ' drift: ' + JSON.stringify(online.current_project_drift));
+
+    // Fail-closed: offline, two classes never ran, so nothing can prove the project clean.
+    const offline = runClosureAuditOffline(['--project', 'issue-910'], tmp);
+    assert(offline.current_project_clean === false,
+      '#903: current_project_clean must be FALSE when a scoped class did not evaluate — a probe that '
+        + 'cannot PROVE clean must not report clean, got: ' + offline.current_project_clean);
+    for (const key of ['stale_in_progress_labels', 'unarchived_pr_folders']) {
+      assert(offline.current_project_drift[key] === 'skipped_offline',
+        '#903: the skip reason must be readable verbatim in current_project_drift.' + key + ', got: '
+          + JSON.stringify(offline.current_project_drift[key]));
+      assert(offline.repository_drift_outside_scope[key] === 'skipped_offline',
+        '#903: a skipped class must appear in BOTH halves — it never evaluated, so neither half may '
+          + 'claim it clean; ' + key + ' got: ' + JSON.stringify(offline.repository_drift_outside_scope[key]));
+      assert(offline.current_project_counts[key] === 0,
+        '#903: a skip must count 0 findings, never be mistaken for a measurement; ' + key + ' got: '
+          + JSON.stringify(offline.current_project_counts[key]));
+    }
+    // clean:false here must NOT be readable as "drift found": every scoped count is zero.
+    const nonZero = Object.keys(offline.current_project_counts)
+      .filter(k => offline.current_project_counts[k] !== 0);
+    assert(nonZero.length === 0,
+      '#903: the offline scoped run must have ZERO findings — clean:false is the un-evaluated verdict, '
+        + 'not drift; nonzero counts: ' + JSON.stringify(nonZero));
+    console.log('testClosureAuditScopedCleanIsFailClosed903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditBundleMemberArchiveClosed903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-member-archive-'));
+  try {
+    initGitRepo(tmp);
+    // An archived bundle whose OWN record says every member closed with it.
+    plantArchive903(tmp, 'bundle-700-701', {
+      status: 'closed', step: 'complete', issue_number: 700,
+      issue_numbers: '700,701', bundle_id: 'bundle-700-701', closure_policy: 'all_or_nothing'
+    });
+    plantRoadmapIssue(tmp, 700, '');
+    plantRoadmapIssue(tmp, 701, '');
+
+    // OFFLINE: the closed-set is empty, so archive_closed is the only reason that can fire and a
+    // finding for 701 can only have come from the archive's own issue_numbers line.
+    const result = runClosureAuditOffline([], tmp);
+    const byNumber = new Map(result.drift.stale_roadmap_sources.map(s => [s.issue_number, s]));
+    assert(byNumber.has(700) && byNumber.get(700).reason === 'archive_closed',
+      '#903 control: the bundle PRIMARY must still be flagged archive_closed — this is what proves the '
+        + 'fixture and the detector are live, got: ' + JSON.stringify(result.drift.stale_roadmap_sources));
+    assert(byNumber.has(701) && byNumber.get(701).reason === 'archive_closed',
+      '#903: a bundle MEMBER\'s stale roadmap source must be flagged too — archiveClosedIssues read only '
+        + 'the scalar issue_number, so 701 was invisible, got: ' + JSON.stringify(result.drift.stale_roadmap_sources));
+    assert(result.counts.stale_roadmap_sources === 2,
+      '#903: counts must cover both, got: ' + result.counts.stale_roadmap_sources);
+
+    // The breadth this widens, pinned deliberately: unscoped --execute deletes EVERY stale member
+    // source, not just the primary. .roadmap/issue-N.md carries hand-written content, so what the
+    // default destructive path now reaches is a decision and not an implementation detail.
+    const primarySrc = path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-700.md');
+    const memberSrc = path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-701.md');
+    assert(fs.existsSync(primarySrc) && fs.existsSync(memberSrc),
+      'precondition: both roadmap sources must be on disk before --execute');
+    const executed = runClosureAuditOffline(['--execute'], tmp);
+    assert(executed.repaired.roadmap_sources_removed.includes(700)
+      && executed.repaired.roadmap_sources_removed.includes(701),
+      '#903: unscoped --execute must report both the primary and the member as removed, got: '
+        + JSON.stringify(executed.repaired.roadmap_sources_removed));
+    assert(!fs.existsSync(primarySrc) && !fs.existsSync(memberSrc),
+      '#903: unscoped --execute must delete BOTH the primary and the member stale source from disk');
+    console.log('testClosureAuditBundleMemberArchiveClosed903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditBundleMemberClosurePolicyNegative903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-member-policy-'));
+  try {
+    initGitRepo(tmp);
+    // Identical to the all_or_nothing fixture except for ONE line: the policy. Only an
+    // all_or_nothing archive can promise its members closed, so any other policy must contribute
+    // the primary alone — the destructive path reads the record before it trusts a member.
+    plantArchive903(tmp, 'bundle-702-703', {
+      status: 'closed', step: 'complete', issue_number: 702,
+      issue_numbers: '702,703', bundle_id: 'bundle-702-703', closure_policy: 'partial'
+    });
+    plantRoadmapIssue(tmp, 702, '');
+    plantRoadmapIssue(tmp, 703, '');
+
+    const result = runClosureAuditOffline([], tmp);
+    const nums = result.drift.stale_roadmap_sources.map(s => s.issue_number);
+    assert(nums.indexOf(702) !== -1,
+      '#903 control: the PRIMARY is still flagged under any closure_policy — this proves the fixture '
+        + 'is live and the negative below is not vacuous, got: ' + JSON.stringify(result.drift.stale_roadmap_sources));
+    assert(nums.indexOf(703) === -1,
+      '#903 NEGATIVE: a closure_policy other than all_or_nothing cannot promise the member closed, so '
+        + 'its roadmap source must NOT be flagged — --execute would delete a hand-written file, got: '
+        + JSON.stringify(result.drift.stale_roadmap_sources));
+
+    const memberSrc = path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-703.md');
+    const executed = runClosureAuditOffline(['--execute'], tmp);
+    assert(executed.repaired.roadmap_sources_removed.includes(702),
+      '#903 control: --execute must still remove the primary, got: '
+        + JSON.stringify(executed.repaired.roadmap_sources_removed));
+    assert(!executed.repaired.roadmap_sources_removed.includes(703),
+      '#903 NEGATIVE: --execute must not report the partial-close member as removed, got: '
+        + JSON.stringify(executed.repaired.roadmap_sources_removed));
+    assert(fs.existsSync(memberSrc),
+      '#903 NEGATIVE: --execute must leave the partial-close member\'s roadmap source ON DISK');
+    console.log('testClosureAuditBundleMemberClosurePolicyNegative903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditBundleMemberActiveFolderClosed903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-member-folder-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    // (i) the previously-invisible case: primary OPEN, member CLOSED.
+    plantActiveFolder(tmp, 'bundle-800-801', 800, null);
+    appendStateField903(tmp, 'bundle-800-801', 'issue_numbers', '800,801');
+    // (ii) over-report control: a bundle with no closed member must stay quiet.
+    plantActiveFolder(tmp, 'bundle-802-803', 802, null);
+    appendStateField903(tmp, 'bundle-802-803', 'issue_numbers', '802,803');
+    // (iii) primary-arm control: proves the detector and the gh mock are both live, and that the
+    //       pre-#903 finding shape is unchanged.
+    plantActiveFolder(tmp, 'issue-804', 804, null);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "const m = a.match(/issue view (\\d+)/);",
+      "if (m) { const closed = ['801', '804'].indexOf(m[1]) !== -1;",
+      "  process.stdout.write(JSON.stringify({ state: closed ? 'closed' : 'open' }) + '\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const folders = result.drift.active_folder_for_closed_issue;
+    const byProject = new Map(folders.map(f => [f.project, f]));
+    assert(byProject.has('issue-804') && byProject.get('issue-804').issue_number === 804,
+      '#903 control: a closed PRIMARY must still be reported, unchanged, got: ' + JSON.stringify(folders));
+    assert(byProject.has('bundle-800-801') && byProject.get('bundle-800-801').issue_number === 801,
+      '#903: a bundle folder whose MEMBER 801 is closed must be reported naming 801 — the candidate set '
+        + 'read only the scalar issue_number, so 801 was never probed at all, got: ' + JSON.stringify(folders));
+    assert(!byProject.has('bundle-802-803'),
+      '#903 over-report control: a bundle with no closed member must produce NO finding, got: '
+        + JSON.stringify(byProject.get('bundle-802-803')));
+    assert(folders.length === 2,
+      '#903: one finding per folder, never one per closed member, got: ' + JSON.stringify(folders));
+    console.log('testClosureAuditBundleMemberActiveFolderClosed903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditScopedExecuteSparesOtherProjects903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-scoped-exec-'));
+  try {
+    initGitRepo(tmp);
+    plantArchive903(tmp, 'bundle-704-705', {
+      status: 'closed', step: 'complete', issue_number: 704,
+      issue_numbers: '704,705', bundle_id: 'bundle-704-705', closure_policy: 'all_or_nothing'
+    });
+    plantArchive903(tmp, 'issue-556', { status: 'closed', step: 'complete', issue_number: 556 });
+    plantRoadmapIssue(tmp, 704, '');
+    plantRoadmapIssue(tmp, 705, '');
+    plantRoadmapIssue(tmp, 556, '');
+    const roadmapSrc = n => path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md');
+
+    const executed = runClosureAuditOffline(['--execute', '--project', 'bundle-704-705'], tmp);
+    assert(executed.dry_run === false, '#903: --execute must report dry_run:false, got: ' + executed.dry_run);
+    // A scoped --execute SWAPS the two current_project_* keys for repaired/reported_not_repaired.
+    // Both halves of that swap are pinned: a repair envelope carrying a `clean` verdict would invite
+    // a caller to read a post-repair state that was never computed.
+    assert(JSON.stringify(Object.keys(executed))
+      === '["dry_run","offline","scope","repaired","reported_not_repaired",'
+        + '"repository_drift_outside_scope","repository_counts_outside_scope"]',
+      '#903: the scoped --execute envelope must swap the current_project_* keys for repaired/'
+        + 'reported_not_repaired, got: ' + JSON.stringify(Object.keys(executed)));
+    assert(JSON.stringify(executed.scope.issue_numbers) === '[704,705]',
+      '#903: the scope must carry both members, got: ' + JSON.stringify(executed.scope));
+    const removed = executed.repaired.roadmap_sources_removed.slice().sort((a, b) => a - b);
+    assert(JSON.stringify(removed) === '[704,705]',
+      '#903: scoped --execute must repair exactly the scoped findings, got: '
+        + JSON.stringify(executed.repaired.roadmap_sources_removed));
+    // Control: the scoped sources really were deleted, so the survival assertion below is not vacuous.
+    assert(!fs.existsSync(roadmapSrc(704)) && !fs.existsSync(roadmapSrc(705)),
+      '#903 control: scoped --execute must actually delete the in-scope sources');
+    assert(fs.existsSync(roadmapSrc(556)),
+      '#903: scoped --execute must NOT delete an unrelated project\'s roadmap source');
+    const outside = executed.repository_drift_outside_scope.stale_roadmap_sources;
+    assert(outside.length === 1 && outside[0].issue_number === 556,
+      '#903: the unrepaired out-of-scope finding must still be REPORTED, got: ' + JSON.stringify(outside));
+    // ROADMAP.md is ONE generated file derived from all surviving sources, so a scoped --execute
+    // still rebuilds the mirror whole. That is inherent to the mirror, not a hole in the scoping.
+    assert(executed.repaired.roadmap_regenerated === true,
+      '#903: scoped --execute must still regenerate the whole mirror, got: ' + executed.repaired.roadmap_regenerated);
+    const mirror = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), 'utf8');
+    assert(mirror.includes('556'),
+      '#903: the whole-mirror rebuild must retain the out-of-scope issue it deliberately did not repair, got: '
+        + mirror);
+    assert(!mirror.includes('704') && !mirror.includes('705'),
+      '#903: the rebuilt mirror must drop the sources the scoped repair removed, got: ' + mirror);
+    console.log('testClosureAuditScopedExecuteSparesOtherProjects903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditCitationMissingOmittedWhenEmpty903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-citation-empty-'));
+  try {
+    initGitRepo(tmp);
+    // An archive whose summary cites an artifact that IS present. The class must then be absent
+    // from the envelope entirely — that omission is what keeps the repository-wide default report
+    // unchanged on a repo carrying none of this drift.
+    const dir = plantArchive903(tmp, 'issue-920', { status: 'closed', step: 'complete', issue_number: 920 });
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'), 'verdict: pass\n');
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'),
+      '# Finalization Summary\n\nEvidence: `.cache/final-validation.md`\n');
+
+    const result = runClosureAuditOffline([], tmp);
+    assert(!('archive_summary_citation_missing' in result.drift),
+      '#901: the citation class must be OMITTED from drift when empty, got: '
+        + JSON.stringify(result.drift.archive_summary_citation_missing));
+    assert(!('archive_summary_citation_missing' in result.counts),
+      '#901: ... and from counts, got keys: ' + JSON.stringify(Object.keys(result.counts)));
+    // Control: the archive IS being read — its resolved citation is why nothing was reported, and
+    // the other archive class stayed quiet too (the identity anchor is present).
+    assert(Array.isArray(result.drift.archive_content_incomplete)
+      && result.drift.archive_content_incomplete.length === 0,
+      '#901 control: a complete archive must produce no archive drift at all, got: '
+        + JSON.stringify(result.drift.archive_content_incomplete));
+
+    const executed = runClosureAuditOffline(['--execute'], tmp);
+    assert(!('archive_summary_citation_missing' in executed.reported_not_repaired),
+      '#901: ... and from reported_not_repaired, got keys: '
+        + JSON.stringify(Object.keys(executed.reported_not_repaired)));
+    console.log('testClosureAuditCitationMissingOmittedWhenEmpty903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditCitationMissingReportsAndExcludesJsonl903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-citation-'));
+  try {
+    initGitRepo(tmp);
+    // (i) a backticked citation whose file is gone — the real-loss shape.
+    const a = plantArchive903(tmp, 'issue-921', { status: 'closed', step: 'complete', issue_number: 921 });
+    fs.writeFileSync(path.join(a, 'finalization-summary.md'),
+      '# Finalization Summary\n\nChain receipt: `.cache/chain-receipt.json` (headSha: 05590e2f)\n');
+    // (ii) an UNBACKTICKED table-cell citation. Requiring backticks reads tidier and silently drops
+    //      this shape, which is a measured true positive in this repo's own archive corpus.
+    const b = plantArchive903(tmp, 'issue-922', { status: 'closed', step: 'complete', issue_number: 922 });
+    fs.writeFileSync(path.join(b, 'finalization-summary.md'),
+      '# Finalization Summary\n\n| agent | status | output |\n|---|---|---|\n'
+      + '| doc-updater | invoked | .cache/doc-updater.md (report) |\n');
+    // (iii) a `.jsonl` append-log citation whose file is absent must produce NO finding: disposing
+    //       of it is a DOCUMENTED step, so absence there is correct rather than lost. The token must
+    //       also never truncate to `.cache/release-receipt.json`, which WOULD be reported missing.
+    const c = plantArchive903(tmp, 'issue-923', { status: 'closed', step: 'complete', issue_number: 923 });
+    fs.writeFileSync(path.join(c, 'finalization-summary.md'),
+      '# Finalization Summary\n\nDelete `.cache/release-receipt.jsonl` before the next release.\n');
+    // (iv) over-report control: an archive with no summary at all must stay quiet.
+    plantArchive903(tmp, 'issue-924', { status: 'closed', step: 'complete', issue_number: 924 });
+
+    const result = runClosureAuditOffline([], tmp);
+    const found = result.drift.archive_summary_citation_missing;
+    assert(Array.isArray(found),
+      '#901: a cited-but-absent artifact must be reported as archive_summary_citation_missing, got drift: '
+        + JSON.stringify(result.drift));
+    const byProject = new Map(found.map(f => [f.project, f]));
+    assert(byProject.has('issue-921')
+      && byProject.get('issue-921').cited_missing.join(',') === '.cache/chain-receipt.json',
+      '#901: a backticked citation of an absent artifact must be reported with its path, got: '
+        + JSON.stringify(found));
+    assert(byProject.has('issue-922')
+      && byProject.get('issue-922').cited_missing.join(',') === '.cache/doc-updater.md',
+      '#901: backticks must NOT be required — an unbackticked table-cell citation is a measured true '
+        + 'positive, got: ' + JSON.stringify(found));
+    assert(!byProject.has('issue-923'),
+      '#901: a `.jsonl` append-log citation must be EXCLUDED, and its token must never read as `.json`, got: '
+        + JSON.stringify(byProject.get('issue-923')));
+    assert(!byProject.has('issue-924'),
+      '#901 over-report control: an archive with no finalization-summary.md must stay quiet, got: '
+        + JSON.stringify(byProject.get('issue-924')));
+    assert(result.counts.archive_summary_citation_missing === 2,
+      '#901: counts must cover the class, got: ' + JSON.stringify(result.counts.archive_summary_citation_missing));
+
+    // Report-only in both modes: the cited bytes are gone and nothing here can rebuild them.
+    const executed = runClosureAuditOffline(['--execute'], tmp);
+    const notRepaired = executed.reported_not_repaired.archive_summary_citation_missing;
+    assert(Array.isArray(notRepaired) && notRepaired.length === 2,
+      '#901: --execute must carry the class under reported_not_repaired, got: '
+        + JSON.stringify(executed.reported_not_repaired));
+    assert(fs.existsSync(path.join(a, 'finalization-summary.md'))
+      && fs.existsSync(path.join(a, 'workflow-state.md')),
+      '#901: --execute must never delete or rewrite an archive whose citation did not resolve');
+    console.log('testClosureAuditCitationMissingReportsAndExcludesJsonl903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// Unit-level: the four pure helpers #903 added, called in-process. No spawn buys anything here, and
+// archiveNameMatchesProject's bare-prefix rule is a one-line decision that a scoped run can only
+// observe indirectly.
+function testClosureAuditScopingHelpers903() {
+  const {
+    archiveNameMatchesProject, stateIssueNumbers, driftIsClean, parseArgs, partitionDriftByScope
+  } = require('./kaola-workflow-closure-audit.js');
+
+  assert(archiveNameMatchesProject('bundle-700-701', 'bundle-700-701') === true,
+    '#903: the exact archive name must match');
+  assert(archiveNameMatchesProject('bundle-700-701.archived-2026-01-01T00-00-00-000Z', 'bundle-700-701') === true,
+    '#903: a .archived-<ts> archive must match its project');
+  assert(archiveNameMatchesProject('bundle-700-701.discarded-2026-01-01T00-00-00-000Z', 'bundle-700-701') === true,
+    '#903: a .discarded-<ts> archive must match its project');
+  assert(archiveNameMatchesProject('bundle-700-701-extra', 'bundle-700-701') === false,
+    '#903: a bare PREFIX must NOT match — it would swallow an unrelated project whose name extends this one');
+  assert(archiveNameMatchesProject('bundle-700-701.something', 'bundle-700-701') === false,
+    '#903: only the two known suffixes match, not any dotted sibling');
+  assert(archiveNameMatchesProject('bundle-700', 'bundle-700-701') === false,
+    '#903: a shorter name must not match');
+
+  assert(JSON.stringify(stateIssueNumbers('issue_number: 700\nissue_numbers: 701,700,703\n')) === '[700,701,703]',
+    '#903: members and primary, sorted and deduped');
+  assert(JSON.stringify(stateIssueNumbers('issue_number: 700\n')) === '[700]',
+    '#903: a single-issue run suppresses issue_numbers, so the scalar primary must still resolve');
+  assert(JSON.stringify(stateIssueNumbers('status: closed\n')) === '[]',
+    '#903: a record with no issue number resolves to nothing, never to NaN');
+
+  assert(driftIsClean({ a: [], b: [] }) === true,
+    '#903 control: every class evaluated and empty IS clean — without this leg the fail-closed '
+      + 'assertions below would pass on an always-false verdict');
+  assert(driftIsClean({ a: [], b: 'skipped_offline' }) === false,
+    '#903: a class that did not evaluate cannot prove clean');
+  assert(driftIsClean({ a: [], b: 'skipped_timeout' }) === false,
+    '#903: a timed-out class cannot prove clean either');
+  assert(driftIsClean({ a: [1] }) === false, '#903: a finding is not clean');
+
+  // The same fail-closed rule applied to the SCOPE rather than to a class: an unresolvable --project
+  // accepted via --issue answered clean:true over a project carrying real drift. Nothing was read for
+  // the name, so no class speaks for the project the operator named.
+  assert(driftIsClean({ a: [] }, { project_unresolved: true }) === false,
+    '#903: a scope whose --project resolved to NOTHING can never read clean, whatever the classes say '
+      + 'about the issue numbers that came in beside it');
+  assert(driftIsClean({ a: [] }, { project_unresolved: false }) === true,
+    '#903 control: a RESOLVED scope over an evaluated empty drift set still reads clean — without this '
+      + 'leg the assertion above is satisfied by a verdict that never says clean');
+  assert(driftIsClean({ a: [] }) === true,
+    '#903 control: the scope argument is optional, so the drift-only rule stays callable on its own');
+
+  assert(parseArgs(['--execute']).execute === true, '#903: --execute must still parse');
+  assert(parseArgs(['--project', 'p', '--issue', '7', '--issue', '9']).issues.join(',') === '7,9',
+    '#903: --issue is repeatable');
+  assert(parseArgs(['--project', 'a', '--project', 'b']).project === 'b',
+    '#903: --project is not repeatable — a second one overwrites the first');
+  // The last entry: a project is ONE folder name under kaola-workflow/, never a path. `--project
+  // ../../outside` resolved a workflow-state.md from OUTSIDE the repository and answered a scoped
+  // verdict on it at exit 0. The ACCEPTING control is three assertions above — `--project b` still
+  // parses — so this list cannot be satisfied by a validator that rejects every name.
+  for (const argv of [['--bogus'], ['--project'], ['--issue'], ['--issue', 'abc'], ['--issue', '0700'],
+    ['--project', '../../outside']]) {
+    let threw = false;
+    try { parseArgs(argv); } catch (_) { threw = true; }
+    assert(threw, '#903: parseArgs must throw for ' + JSON.stringify(argv));
+  }
+
+  // A skipped class lands in BOTH halves verbatim; an issue-keyed class splits.
+  const parts = partitionDriftByScope(
+    { stale_roadmap_sources: [{ issue_number: 1 }, { issue_number: 2 }], stale_in_progress_labels: 'skipped_offline' },
+    { project: null, issues: new Set([1]), archive_name_ambiguous: false }
+  );
+  assert(JSON.stringify(parts.inScope.stale_roadmap_sources) === '[{"issue_number":1}]'
+    && JSON.stringify(parts.outScope.stale_roadmap_sources) === '[{"issue_number":2}]',
+    '#903: an issue-keyed class must split by the scope\'s issue set, got: ' + JSON.stringify(parts));
+  assert(parts.inScope.stale_in_progress_labels === 'skipped_offline'
+    && parts.outScope.stale_in_progress_labels === 'skipped_offline',
+    '#903: a skipped class must appear in BOTH halves verbatim, got: ' + JSON.stringify(parts));
+  console.log('testClosureAuditScopingHelpers903: PASSED');
+}
+
+function testClosureAuditScopedArchiveNameMatch903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-attr-name-'));
+  try {
+    initGitRepo(tmp);
+    // A live folder so --project resolves; two INCOMPLETE archives whose names differ only by a
+    // trailing segment, so the name-match rule is the only thing deciding which is in scope. The
+    // two archive classes can be attributed BY NAME ONLY: the artifact they report missing is
+    // itself the record that would have carried an issue number.
+    plantActiveFolder(tmp, 'proj-a', 930, null);
+    plantArchive903(tmp, 'proj-a', null);
+    plantArchive903(tmp, 'proj-a-extra', null);
+    // A DOTTED sibling that is not one of the two archive suffixes. Planted COMPLETE so it adds no
+    // finding and the counts below are untouched — it is here for the ambiguity assertion only: the
+    // rule counts folders matching by NAME SHAPE, and a naive "more than one archive mentions this
+    // project" count would flag `proj-a` on the strength of these two neighbours alone.
+    plantArchive903(tmp, 'proj-a.something', { status: 'closed', step: 'complete', issue_number: 939 });
+
+    const scoped = runClosureAuditOffline(['--project', 'proj-a'], tmp);
+    const inFindings = scoped.current_project_drift.archive_content_incomplete;
+    const outFindings = scoped.repository_drift_outside_scope.archive_content_incomplete;
+    assert(inFindings.length === 1 && inFindings[0].project === 'proj-a',
+      '#903: the name-matched archive must be in scope, got: ' + JSON.stringify(inFindings));
+    assert(inFindings[0].attribution === 'name_match',
+      '#903: a scoped archive finding must say HOW it was attributed, got: ' + JSON.stringify(inFindings[0]));
+    assert(outFindings.length === 1 && outFindings[0].project === 'proj-a-extra',
+      '#903: a bare prefix must not pull proj-a-extra into scope, and it must still be REPORTED; got in='
+        + JSON.stringify(inFindings) + ' out=' + JSON.stringify(outFindings));
+    assert(!('attribution' in outFindings[0]),
+      '#903: out-of-scope findings pass through verbatim — attribution is a scoped annotation only, got: '
+        + JSON.stringify(outFindings[0]));
+    assert(!('archive_name_ambiguous' in scoped.scope),
+      '#903: archive_name_ambiguous must be omitted when the name match is unambiguous, got: '
+        + JSON.stringify(scoped.scope));
+
+    // The repository-wide envelope must be untouched by the annotation.
+    const unscoped = runClosureAuditOffline([], tmp);
+    assert(unscoped.drift.archive_content_incomplete.length === 2
+      && unscoped.drift.archive_content_incomplete.every(f => !('attribution' in f)),
+      '#903: no unscoped finding may carry attribution, got: '
+        + JSON.stringify(unscoped.drift.archive_content_incomplete));
+    console.log('testClosureAuditScopedArchiveNameMatch903: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditScopedArchiveAmbiguousMatch903() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-attr-ambig-'));
+  const ts = '2026-01-01T00-00-00-000Z';
+  try {
+    initGitRepo(tmp);
+    // A bare `P` residue directory beside its timestamped sibling. One of the two is the archive and
+    // the other is residue, and neither folder says which — so the report says the attribution is
+    // ambiguous instead of adopting one reading silently. Contrast with the name_match scenario
+    // above: same code path, one fixture line different, a different answer.
+    plantArchive903(tmp, 'proj-b', null);
+    plantArchive903(tmp, 'proj-b.archived-' + ts, { status: 'closed', step: 'complete', issue_number: 931 });
+
+    const scoped = runClosureAuditOffline(['--project', 'proj-b'], tmp);
+    assert(scoped.scope.archive_name_ambiguous === true,
+      '#903: a bare `P` archive beside a timestamped sibling is ambiguous and must be REPORTED, never '
+        + 'guessed, got: ' + JSON.stringify(scoped.scope));
+    assert(scoped.scope.state_file === 'kaola-workflow/archive/proj-b.archived-' + ts + '/workflow-state.md',
+      '#903: the resolver must fall through the anchor-less bare dir to the sibling that HAS a state '
+        + 'file, got: ' + JSON.stringify(scoped.scope.state_file));
+    assert(JSON.stringify(scoped.scope.issue_numbers) === '[931]',
+      '#903: the scope must come from the record it actually read, got: ' + JSON.stringify(scoped.scope.issue_numbers));
+    const inFindings = scoped.current_project_drift.archive_content_incomplete;
+    assert(inFindings.length === 1 && inFindings[0].project === 'proj-b',
+      '#903: the residue directory is the incomplete archive and it is in scope, got: ' + JSON.stringify(inFindings));
+    assert(inFindings[0].attribution === 'ambiguous_name_match',
+      '#903: an ambiguous name match must say so rather than implying a clean match, got: '
+        + JSON.stringify(inFindings[0]));
+    assert(scoped.repository_drift_outside_scope.archive_content_incomplete.length === 0,
+      '#903 control: nothing else is incomplete here, so the out-of-scope half must be empty, got: '
+        + JSON.stringify(scoped.repository_drift_outside_scope.archive_content_incomplete));
+
+    // TWO TIMESTAMPED SIBLINGS AND NO BARE `P` — the commonest residue pair, and MEASURED invisible:
+    // the rule demanded a bare `P` plus a suffixed sibling, so the scope adopted one of the two records
+    // silently. Both halves of that defect are pinned here, because either alone still lies:
+    //   * the FLAG — more than one archive folder matches, so the attribution cannot be clean;
+    //   * the STAMP — annotateAttribution keyed on `finding.project === scope.project`, which only ever
+    //     matched the bare-`P` half, so a timestamped sibling read `name_match` even when the flag fired.
+    // Two shapes, because the suffix set has two members and a rule can be written for one of them.
+    const ts2 = '2026-02-02T00-00-00-000Z';
+    for (const [label, sibling] of [['archived', '.archived-' + ts2], ['discarded', '.discarded-' + ts2]]) {
+      const pairTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-attr-ambig-pair-'));
+      try {
+        initGitRepo(pairTmp);
+        // The record-bearing sibling the scope resolves through, and an anchor-LESS sibling whose
+        // finding is what must carry the ambiguous stamp. No bare `P` anywhere.
+        plantArchive903(pairTmp, 'proj-c.archived-' + ts, { status: 'closed', step: 'complete', issue_number: 941 });
+        plantArchive903(pairTmp, 'proj-c' + sibling, null);
+
+        const pair = runClosureAuditOffline(['--project', 'proj-c'], pairTmp);
+        assert(pair.scope.archive_name_ambiguous === true,
+          '#903 (' + label + '): two archive folders match `proj-c` and no bare `P` exists — the scope '
+            + 'must report the ambiguity instead of adopting one record silently, got: ' + JSON.stringify(pair.scope));
+        assert(pair.scope.state_file === 'kaola-workflow/archive/proj-c.archived-' + ts + '/workflow-state.md',
+          '#903 (' + label + '): the scope still resolves through the sibling that HAS a record, got: '
+            + JSON.stringify(pair.scope.state_file));
+        const pairFindings = pair.current_project_drift.archive_content_incomplete;
+        assert(pairFindings.length === 1 && pairFindings[0].project === 'proj-c' + sibling,
+          '#903 (' + label + '): the anchor-less sibling must be pulled into scope by name shape, got: '
+            + JSON.stringify(pairFindings));
+        assert(pairFindings[0].attribution === 'ambiguous_name_match',
+          '#903 (' + label + '): a TIMESTAMPED sibling\'s finding must carry the ambiguous stamp too — '
+            + 'keyed on the bare project name it read as an unqualified name_match while the scope itself '
+            + 'said ambiguous, so the two halves of one report disagreed; got: ' + JSON.stringify(pairFindings[0]));
+      } finally {
+        fs.rmSync(pairTmp, { recursive: true, force: true });
+      }
+    }
+
+    // NEGATIVE CONTROL — a single matching archive folder is not ambiguous, and its finding keeps the
+    // unqualified stamp. A count rule that flagged anything it could see, or a stamp that said
+    // `ambiguous_name_match` unconditionally, would look identical to a working one on the legs above.
+    // It repeats the name_match scenario's fixture shape deliberately: a control belongs beside the
+    // assertions it discriminates, not one scenario away.
+    const soloTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-attr-ambig-solo-'));
+    try {
+      initGitRepo(soloTmp);
+      plantActiveFolder(soloTmp, 'proj-solo', 942, null);
+      plantArchive903(soloTmp, 'proj-solo', null);
+      const solo = runClosureAuditOffline(['--project', 'proj-solo'], soloTmp);
+      assert(!('archive_name_ambiguous' in solo.scope),
+        '#903 control: ONE matching archive folder is unambiguous and the key stays omitted, got: '
+          + JSON.stringify(solo.scope));
+      const soloFindings = solo.current_project_drift.archive_content_incomplete;
+      assert(soloFindings.length === 1 && soloFindings[0].attribution === 'name_match',
+        '#903 control: and its finding keeps the unqualified stamp, got: ' + JSON.stringify(soloFindings));
+    } finally {
+      fs.rmSync(soloTmp, { recursive: true, force: true });
+    }
+    console.log('testClosureAuditScopedArchiveAmbiguousMatch903: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -10140,6 +11080,21 @@ function buildRegistry() {
   add('testClosureAuditExecuteLabelRemovalTimeoutBreaks', testClosureAuditExecuteLabelRemovalTimeoutBreaks);
   add('testClosureAuditExecuteLabelRemovalNonTimeoutFails', testClosureAuditExecuteLabelRemovalNonTimeoutFails);
   add('testClosureAuditPrFolderTimeout',                  testClosureAuditPrFolderTimeout);
+  // #903 scoping + the two behaviours it forced (bundle members, #901 citation class)
+  add('testClosureAuditProjectScopePartitions903',        testClosureAuditProjectScopePartitions903);
+  add('testClosureAuditRejectsUnknownFlagAndHelp903',     testClosureAuditRejectsUnknownFlagAndHelp903);
+  add('testClosureAuditMistypedProjectExitsOne903',       testClosureAuditMistypedProjectExitsOne903);
+  add('testClosureAuditProjectNameIsNotAPath903',         testClosureAuditProjectNameIsNotAPath903);
+  add('testClosureAuditScopedCleanIsFailClosed903',       testClosureAuditScopedCleanIsFailClosed903);
+  add('testClosureAuditBundleMemberArchiveClosed903',     testClosureAuditBundleMemberArchiveClosed903);
+  add('testClosureAuditBundleMemberClosurePolicyNegative903', testClosureAuditBundleMemberClosurePolicyNegative903);
+  add('testClosureAuditBundleMemberActiveFolderClosed903', testClosureAuditBundleMemberActiveFolderClosed903);
+  add('testClosureAuditScopedExecuteSparesOtherProjects903', testClosureAuditScopedExecuteSparesOtherProjects903);
+  add('testClosureAuditCitationMissingOmittedWhenEmpty903', testClosureAuditCitationMissingOmittedWhenEmpty903);
+  add('testClosureAuditCitationMissingReportsAndExcludesJsonl903', testClosureAuditCitationMissingReportsAndExcludesJsonl903);
+  add('testClosureAuditScopingHelpers903',                testClosureAuditScopingHelpers903);
+  add('testClosureAuditScopedArchiveNameMatch903',        testClosureAuditScopedArchiveNameMatch903);
+  add('testClosureAuditScopedArchiveAmbiguousMatch903',   testClosureAuditScopedArchiveAmbiguousMatch903);
   add('testProbeTimeoutEnv',                              testProbeTimeoutEnv);
   add('testContractValidatorOfflineSkip',                 testContractValidatorOfflineSkip);
   add('testContractValidatorReflowTolerant',              testContractValidatorReflowTolerant);

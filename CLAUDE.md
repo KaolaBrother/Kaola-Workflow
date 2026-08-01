@@ -66,14 +66,13 @@ Tie-breaking axioms, applied in priority order whenever a situation is not alrea
 
 ### Nothing refuses
 
-The refusal count in the run design is **zero**. Measurements survive; verdicts do not. The finalize
-chain-receipt check reports a typed finding on its envelope and durably in `finalization-summary.md`,
-and the orchestrator decides what to do about it.
-
-What is deliberately not converted is never a gate on the work. The pre-tag release gate
-(`run-chains.js --release-check`) still refuses — a release tag demands an unwaived four-chain
-receipt. And an operation that would **destroy** something still fails loudly: an archive that would
-lose a file, a sink over a tree carrying uncommitted work. Those protect work nobody agreed to lose.
+The refusal count in the run design is **zero**: measurements survive, verdicts do not, and the finalize
+chain-receipt check reports a typed finding on its envelope and durably in `finalization-summary.md` for
+the orchestrator to act on. What is deliberately not converted is never a gate on the work — the pre-tag
+release gate (`run-chains.js --release-check`) still refuses, a release tag demanding an unwaived
+four-chain receipt, and an operation that would **destroy** something still fails loudly (an archive
+that would lose a file, a sink over a tree carrying uncommitted work). Those protect work nobody agreed
+to lose.
 
 **Missing is a routing problem, never a stop** — "blocked on a prerequisite" is nearly always a task
 nobody dispatched.
@@ -123,17 +122,15 @@ gone, and never re-add a field to satisfy a test.
 ## Key Scripts
 
 - `kaola-workflow-claim.js` — claim, release/discard, status, startup, pick-next, resume, finalize,
-  worktrees, sink-fallback, verify-sink, labels.
-- `kaola-workflow-roadmap.js` — roadmap mirror. `generate` makes no remote call; `validate-remote` is
-  the only subcommand touching the forge. Ported per forge.
-- `kaola-workflow-run-chains.js` — runs the validation chains, writes the receipt, diff-scopes chain
-  selection at finalize. Also owns `--release-check`, the pre-tag gate.
-- `kaola-workflow-adaptive-schema.js` — forge-neutral constants and shared helpers, including the
-  chain-receipt evaluation and the code-tree hash that producer and finalize must compute identically.
-  **Byte-identical across all four editions** — the cross-edition drift anchor.
-- `kaola-workflow-sink-merge.js` — the sink. Reports what it found; the orchestrator gets the branch
-  right (correct merge, resynchronize, or file a PR) and cleans up after.
-- `simulate-workflow-walkthrough.js` — integration suite (hand-rolled assert, no framework).
+  worktrees, sink-fallback, verify-sink, labels. · `kaola-workflow-roadmap.js` — roadmap mirror;
+  `generate` makes no remote call, `validate-remote` is the only forge call. Ported per forge.
+- `kaola-workflow-run-chains.js` — runs the chains, writes the receipt, diff-scopes chain selection at
+  finalize; also owns `--release-check`, the pre-tag gate. · `kaola-workflow-sink-merge.js` — the sink;
+  reports what it found, and the orchestrator gets the branch right and cleans up after.
+- `kaola-workflow-adaptive-schema.js` — forge-neutral constants and shared helpers, incl. chain-receipt
+  evaluation and the code-tree hash producer and finalize must compute identically. **Byte-identical
+  across all four editions** — the cross-edition drift anchor. · `simulate-workflow-walkthrough.js` —
+  integration suite (hand-rolled assert, no framework).
 
 ## Running Tests
 
@@ -182,8 +179,10 @@ architecture docs if structure changed · inline comments where public interface
   `node scripts/generate-routing-surfaces.js --check` prints the surface count and runs in every chain.
 - **opencode and kimi are additive runtime editions**, not forges: absent from `npm test`,
   `edition-sync.js` and `install.sh`. An edition-only diff owes no four-chain run; run its own suite.
-- **A guard reads what ships, not what was authored**, and a threshold cannot see a rule beneath its bar.
-  Both corollaries, and the five observations that forced them, are in `docs/conventions.md`.
+- **A guard reads what ships, not what was authored**; a threshold cannot see a rule beneath its bar; and
+  **specify the result, never the method** — a mechanism claim in a brief rots and makes the agent wrong,
+  where the same fact as evidence only makes it check; affordable exactly when the result is falsifiable
+  and the check is not the doer's. All three, with the observations that forced each: `docs/conventions.md`.
 
 ## Documentation Map
 

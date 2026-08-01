@@ -1,5 +1,213 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **A consumer repo can now produce the final-validation record the finalize gate actually reads,
+  instead of reconstructing its format by hand (#900).** The gate's consumer arm requires three
+  column-0 fields in `kaola-workflow/<project>/.cache/final-validation.md` — `verdict`, the validation
+  command, and a `validated_candidate_hash` equal to a recomputed code-tree hash — and until now **no
+  invocable producer existed for the third**. Thirteen shipped surfaces stated the recipe; all thirteen
+  asked for the first two and were silent on the one the gate cannot do without, a wording inherited
+  from 648, when the column-0 `verdict: pass` line genuinely was the whole parsed requirement. So an
+  agent following the shipped instruction to the letter produced a record the gate classified
+  `final_validation_unbound` — the recipe was not merely incomplete, it was unusable, and the
+  measurement is on a consumer fixture whose only axis is the recipe: the shipped recipe verbatim reads
+  `final_validation_unbound`, `green: false`; `kaola-workflow-validation-runner.js record --project <p>
+  --verdict pass --command "<cmd>"` and nothing else reads `chains_green`, `green: true`, with the
+  recorded hash byte-equal to the value the gate recomputed for itself.
+  It reproduces in a second runtime edition, independently of the incident that filed it: a consumer run
+  on another forge (vrpai-cli issue 1042, 2026-08-01) followed the shipped recipe verbatim under the Kimi
+  edition, landed on `final_validation_unbound`, and reached for the same internal-module workaround. Two
+  editions failing the same way on the same wording is stronger evidence than either incident alone, and
+  that run names the sharpest harm: the binding was finally stamped **after** the finalize transaction
+  had already archived the project folder, so the record a later reader would trust was edited post-hoc.
+  An invocable producer matters because it exists *before* the transaction, not because it saves typing.
+  Two things the verb has to get right, and both were proven by breaking them. The hash comes from the
+  kernel's shared `computeCodeTreeHash`, reached over the gate's own root resolution and its own
+  test-consumed band, never the runner's local digest — swapping in the local digest flips the same
+  fixture to `final_validation_stale`. And the three fields are written at column zero, because the
+  gate's parser is `^`-anchored — indenting them by two spaces flips it to `final_validation_failed`.
+  A record is **merged, never clobbered**: the verb owns only its own three field lines, recognised at
+  column zero anywhere in the file including inside a code fence (the gate reads the file fence-blind,
+  so such a line is already a live binding), removes each wherever it sat and appends one fresh block.
+  Repeating the recipe is byte-idempotent and surrounding agent prose survives intact.
+  **It binds the tree the shell is in, and says so.** A linked worktree and the main checkout hash
+  differently until the branch merges — measured as two distinct hashes on a real `git worktree add`
+  with one unmerged commit — so `record` echoes the `candidate_root` it hashed, names any sibling
+  working tree that also carries the run folder, and refuses `project_folder_missing` at exit 1 rather
+  than silently hashing the checkout you are standing in when that checkout does not hold the run.
+  The exit code is not the verdict: `0` means the record was written, `--verdict fail` included, and
+  the `verdict` field carries the validation outcome. `1` is `outcome: "inconclusive"` with `reasons`
+  naming why nothing could be bound; `2` is an argument error. Both consumer-arm remediation hints in
+  the kernel — `final_validation_unbound` and `final_validation_stale` — now name the verb, so the
+  operator who bound the wrong checkout is told how to get back to green rather than left to infer it.
+  The surfaces state the required field and the producer command in one wording rendered to all
+  eighteen generated surfaces and reaching all four runtimes, and the contract validator now pins both
+  halves. That pin is the point: the previous pin asked for `.cache/final-validation.md` and
+  `verdict: pass` — exactly the two things the incomplete recipe already said — and was green for the
+  whole life of the defect. Replaying the shipped v9.1.1 surface against the extended validator reds on
+  the missing field, so detection of this class goes from 0.0 to 1.0.
+
+- **The closure audit can be scoped to one run, so its verdict is about your work rather than about
+  the repository (#903).** The reconciliation sweep after a sink answered repository-wide and every
+  rendered invocation site called it that way, so a run finishing cleanly still read a report carrying
+  every unrelated pre-existing finding in the repo — on this repository, two of them, permanently, in
+  every run's sweep since they appeared. An operator cannot tell "my run left drift" from "the repo has
+  old drift" by reading it, which is the whole question the sweep is asked at that moment.
+  `--project <name>` and a repeatable `--issue <N>` now scope the verdict. Scoping **partitions the
+  report and never narrows the sweep**: the repository walk still runs whole, no remote-call count
+  changes, and out-of-scope drift is emitted separately under `repository_drift_outside_scope`, where
+  it can neither contaminate the scoped verdict nor hide behind it. `--project` resolves its member
+  issues from that project's own `workflow-state.md`, live folder or archive under any of its three
+  name shapes, and reports `archive_name_ambiguous` when a bare residue directory sits beside a
+  timestamped sibling instead of guessing which is which.
+  Three contract details a caller has to know. `current_project_clean` is **fail-closed** — `true` only
+  when every scoped class actually evaluated, so an offline scoped run is never `true` and a `false` is
+  not by itself a finding. A named `--project` that resolves to no record is that same rule applied to
+  the scope itself: nothing was read for the name, so the verdict is `false` and `scope.project_unresolved`
+  (omitted unless true) says so outright, whatever the classes report about `--issue` numbers passed
+  beside it. The exit code still carries no verdict: `0` is every successful run, drift and an unresolved
+  name included. And `1` now means the invocation was wrong — a mistyped `--project` with **no** `--issue`
+  beside it exits 1 with empty stdout, because answering "clean" for a project name that
+  does not exist is precisely the silent-scoping failure being removed. `--help` prints usage on
+  stdout at exit 0 and works outside a git repository. The unscoped default is unchanged in shape and
+  byte-identical in output on a tree that carries none of the newly-visible drift.
+  Two findings the audit could not previously see are now visible, and one of them widens a
+  destructive default. Bundle members were read from the primary issue number alone, so an archived
+  bundle's non-primary members were invisible to both the stale-source and active-folder classes; the
+  candidate set now comes from the record's own `issue_numbers`. That makes unscoped `--execute` delete
+  a member's stale `.roadmap/issue-N.md` where it previously left it — the correct repair, since the
+  archive's own record says the member closed with the bundle, and bounded by two checks read from that
+  record before any member is trusted: the pre-existing `issue_action: comment_keep_open` arm still
+  skips the whole archive, and a `closure_policy` other than `all_or_nothing` contributes the primary
+  alone (negative control measured). Separately, a report-only `archive_summary_citation_missing` class
+  flags an archived `finalization-summary.md` that cites a `.cache/` artifact the archive does not
+  hold — a record pointing at evidence nobody can read. Measured across this repository's 368 archives,
+  118 summaries and 436 citations it flags four, three of them genuine losses that nothing else detects;
+  the fourth is a narrative mention of a receipt that lives elsewhere, and no structural rule removed it
+  without also dropping a true positive. Append-log citations are excluded, because disposing of those
+  is a documented step and their absence is correct. It is report-only, omitted when empty, carries the
+  cited path so one `ls` settles it, and under `--project` it lands outside the scoped verdict.
+  One parity claim the documentation was already making is now true, and one scope escape is closed. Both
+  forge ports still carried a retired demand canonical had deleted — a `plan_hash` probe requiring a
+  `workflow-plan.md` — so on an archive carrying `plan_hash` and no plan file, canonical reported
+  `archive_content_incomplete: []` while both ports reported the folder missing `workflow-plan.md`.
+  `docs/api.md` said the ports ship "the same contract and JSON shape"; on that input they did not, and
+  now they do. The required set is exactly one file, the `workflow-state.md` identity anchor, which is
+  also why this class is attributable by folder name alone. Separately, `--project` is now validated
+  against the same safe-folder-name rule the rest of the script already used, so `--project ../../outside`
+  exits 1 with empty stdout instead of resolving a scope outside the repository at exit 0.
+
+### Fixed
+
+- **A sink no longer discards a consumer's archived evidence and reports success anyway (#901).** On a
+  repository whose `.gitignore` names a basename — `.cache/` rather than the `kaola-workflow/archive/`
+  band that 832 handles — the sink exited `0`, reported `status: sinked`, and left every archived
+  evidence file out of the commit: absent from `HEAD`, absent from the pushed remote, and absent from a
+  fresh clone of it. `receipt.archived_paths` named three of the eight files and nothing said the other
+  five were gone. This is the floor the project draws explicitly — an operation that would destroy
+  something fails loudly — breached by an operation that quietly destroyed the run's whole evidence
+  trail while claiming to have preserved it.
+  Two compounding causes, both measured on raw git rather than inferred. The ignore probe was
+  **directory-level**: `git check-ignore` on the archive directory exits 1 under `.cache/` while every
+  file underneath exits 0, so the probe read "not ignored" and the honest-skip path 832 built was never
+  reached. And both `git add` sites were wrapped in `catch (_) {}`, so the failure git reported on its
+  way out was discarded. The archive step now probes per file, force-adds exactly the ignored-untracked
+  files under this project's own archive pathspec, and then confirms against `git ls-tree -r` that each
+  required file really is a blob at `HEAD` rather than trusting the add's exit status. The measured
+  archive commit goes from three files to eight, in all three forge editions. Three new fields report
+  it: `archive_forced_paths` names every file staged over the consumer's own ignore rule, on the receipt
+  and on stderr, because overriding a rule someone else wrote is recorded and never silent;
+  `archive_missing_paths` names required files that are not blobs at `HEAD`, measured unconditionally
+  rather than only when `archive_dest` is set, since the keep-worktree posture lost the same files; and
+  `archive_add_errors` carries the git output that `catch (_) {}` used to throw away. A required file
+  that could not be indexed is now `sink_incomplete` at `step: 'archive_commit'`, exit `1`, returned
+  **before** teardown so the branch, the worktree and the on-disk archive all survive and a re-run
+  resumes — nothing recoverable is destroyed by the stop.
+  What is deliberately unchanged: 832's whole-band case still completes as `skipped_gitignored` at exit
+  0, byte-for-byte the same decision before and after, now with the uncommitted required files itemized
+  instead of merely counted — force-add and an honest skip are mutually exclusive on the directory
+  probe. 520's four transaction journals are subtracted from the required set and from the force-add
+  allowlist alike, so the one new way a journal could leak into a commit cannot; measured, they stay
+  untracked after a forced run. 700's never-committed tree test is kept and the per-path check added
+  after it rather than in place of it, and 893's `archived_paths` derivation is unchanged and now names
+  the forced files because it reads the index between the two staging points.
+  The gate is armed, not merely green: with one required file at mode `000` so no add can index it, the
+  shipped sink reports `status: sinked` at exit 0 over a file it demonstrably could not commit, and the
+  fixed sink refuses at exit 1 naming it. On the finalize side the same per-file granularity is what was
+  missing from the report rather than from the decision — deferring the archive to the sink is the
+  *correct* token now that the sink can commit it, so what changed is the silence:
+  `finalize_transaction.archive_ignored_evidence` names the covered evidence, and the archive's live
+  source is no longer disposed of while the destination is missing a file the source holds, including
+  the four `.cache` sidecars 676's byte verifier exempts. Proven by making the copy lossy in a scratch
+  mirror: the shipped code deleted the live source and left the file existing nowhere; the fix refuses
+  `archive_incomplete` naming it and retains the source, with a negative control confirming an inert
+  mutation produces no false refusal.
+  Both halves land in all four editions. The two forge sinks were **measured** to carry the defect
+  identically rather than assumed to — the expectation that a `check-ignore` fact is forge-neutral is now
+  a measurement — and the three new field names carry no route noun, so they are deliberately identical
+  across editions rather than substituted the way the MR/PR nouns are.
+
+- **`finalize --check` no longer refuses the ordinary linked-worktree topology, or loses the validation
+  measurement there (#902).** Run from a linked worktree whose project folder lives in the main
+  checkout — the shape the documented flow produces — `--check` reported
+  `archive_authority_missing` in `reasons` and exited 1 for an authority the transaction's own mirror
+  step, added by 837, constructs one statement later. The same invocation from the main root exited 0.
+  So the checklist 837 introduced to save an operator a round-trip per unmet precondition was handing
+  back an obligation nobody could discharge, and the transaction it is supposed to predict succeeded on
+  the very tree it refused.
+  This reproduces in a second runtime edition too, from the same consumer run on another forge
+  (vrpai-cli issue 1042, 2026-08-01) under the Kimi edition, with `archive_authority_missing` the *only*
+  unmet precondition reported — and the operator, taking the check at face value, hand-copied the project
+  folder main→worktree with `cp -R` before re-running. The copy was unnecessary; the transaction
+  self-heals. That is the user-visible cost of a preflight that disagrees with the transaction it
+  predicts: it trains operators to hand-copy project folders, which is exactly the class of manual mirror
+  repair 837 moved *inside* the transaction so nobody would have to do it by hand again.
+  `--check` now predicts the authority the mirror will construct, and only that: the conversion applies
+  when the resolution failed on exactly that reason, the run is in a linked worktree, the mirror will
+  actually run, the destination does not yet exist so the mirror will create rather than merge into it,
+  and the main-resident source itself resolves to a live authority. Any one of those failing leaves the
+  original resolution and its refusal untouched. The authority is deliberately **not** relocated to main:
+  `dest_dir` stays the tree execution reads, and the field evidence is what makes that the right call
+  rather than the lesser of two — predicting the mirror is precisely what makes the hand-copy
+  unnecessary, where naming main as the authority would have been the same disagreement inverted. The
+  pending step is reported the way 837 already
+  reports a required sync — as **state** in `checks`, `workflow_state: 'pending_mirror'`, and
+  deliberately never in `reasons` — so what a reader must act on stays exactly the contents of
+  `reasons`, and a script-owned step it will settle itself does not masquerade as work. The finalize
+  surfaces say so now: "clear everything in `reasons`", not "clear everything it lists".
+  The fail-closed cases are intact and were the mandatory part of the proof, because on the repaired
+  topology a correct fix and a blanket suppression of the token are indistinguishable. Measured with
+  both mutants: suppressing the token wholesale is caught only by the unrepairable case — no live folder
+  in either root and no archive, which still exits 1 with `archive_authority_missing` in `reasons` —
+  while disabling the new bit reproduces the original defect exactly. Two matching archives still
+  report `archive_authority_ambiguous`. A main-resident source lacking `workflow-state.md` now reports
+  `state_missing`, the transaction's own token, where before the check and the transaction named
+  different tokens for the same tree.
+  `checks.validation` and `checks.changed_paths` come back as a consequence: the validation probe is
+  gated on a resolved authority, and the predicted one carries the very `.cache/` the mirror is about to
+  copy, so the worktree run now reports the same classification and the same changed paths as the
+  transaction over the identical tree instead of `not_checked` and `[]`. A new `--check`-only
+  `authority` block names `main_root`, `linked_root`, where the authority is proven today
+  (`live` / `archive` / `pending_mirror` / `none`) and the directory the transaction will read it from,
+  so a check and a transaction can no longer disagree in silence about which tree they mean. No refusal
+  was added anywhere; this change only removes a false stop, and it lands in all four editions.
+  One repair to the sync itself rode along on the same seam. The transaction owns the project-folder
+  mirror in **both** directions, but only worktree→main had a failure path: an unwritable destination made
+  the main→worktree copy throw straight out of the transaction, so the operator got a stack line and no
+  typed envelope at all — for the direction whose sibling already refused legibly. Both now report the
+  same `mirror_sync_failed` and fail closed before anything downstream has run, leaving the worktree as it
+  was found. That is not a new stop; it is the stop that already existed, made readable.
+
+### Documentation
+
+- **`docs/conventions.md` gains `## Specify the result; the method is the agent's (#900–#903)`.** It
+  records the design conclusion the four investigations above converged on, and it is the register of
+  record for it — deliberately not restated here. Documentation only: no behaviour, no surface, no guard
+  and no command contract changed.
+
 ## [9.1.1] - 2026-08-01
 
 ### Changed

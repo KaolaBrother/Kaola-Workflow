@@ -1027,6 +1027,351 @@ async function qualifyLocalReviewers(options, processAdapters) {
   return Object.assign({}, semantic, { qualification_id: sha256(canonicalJson(semantic)) });
 }
 
+// ── the consumer arm's final-validation producer ────────────────────────────────────────────────
+// A consumer repo (no test:kaola-workflow:* chains) owns its own verification, and the finalize gate
+// reads that ownership out of `kaola-workflow/<project>/.cache/final-validation.md`: a column-0
+// `verdict: pass` AND a column-0 `validated_candidate_hash:` equal to a FRESHLY recomputed code-tree
+// hash. The verdict was always writable by hand; the hash was not — no shipped command printed it, so
+// a consumer following the recorded recipe verbatim earned `final_validation_unbound` on a run whose
+// tests all passed. This verb is that missing producer.
+//
+// Two things it must not get wrong, both of them measured rather than reasoned:
+//   • THE FUNCTION. The hash comes from the adaptive-schema's computeCodeTreeHash with the gate's own
+//     default band, READ from the shared constant rather than re-typed. This script's own
+//     computeLandableTreeDigest is a DIFFERENT algorithm over the same visibility band (records joined
+//     by NUL and sorted as Buffers, against the schema's '\n' join) and yields a different value on the
+//     same tree; recording that one buys `final_validation_stale`. There is one answer and it lives in
+//     the cross-edition anchor.
+//   • THE TREE, and — separately — THE FOLDER. The gate reads the two halves out of two places: the
+//     record from the finalize authority's `.cache/`, and the hash over the git top level of the shell
+//     the finalize ran in. In the standard worktree lane those are different trees (the authority is
+//     main's run folder, which the Step-8a mirror copies from; the hashed tree is the linked worktree),
+//     and main and a worktree agree ONLY while the branch carries nothing main lacks — i.e. they differ
+//     across exactly the pre-merge window a finalize happens in. So the hash follows the invoking tree
+//     and the record follows the run folder (resolveRecordFolder), and BOTH are reported, so a reader can
+//     see which tree got bound and where the binding landed rather than trust that either was right.
+//     Requiring one tree to satisfy both is the defect this pairing replaced: it left the documented
+//     invocation site with nowhere to write, and the only writable checkout binding the wrong tree.
+const FINAL_VALIDATION_FILE = 'final-validation.md';
+// The column-0 field lines this verb OWNS. Everything else in the file is the agent's own evidence and
+// survives byte-for-byte. Ownership is by field name at column zero ANYWHERE in the file, fenced or
+// not, because the gate's parser is `^`-anchored and fence-blind: a field line inside a code fence is
+// already a live binding, so leaving one behind would leave a second answer in the file.
+const RECORD_FIELDS = Object.freeze(['verdict', 'validation_command', 'validated_candidate_hash']);
+
+// Same rule as the shared run-folder name check: one path segment, no separators, no NUL, not a dot
+// entry. Kept inline rather than imported so this ×4 byte-identical module keeps its single sibling
+// require.
+function isSafeProjectSegment(name) {
+  return typeof name === 'string' && name.length > 0
+    && !name.includes('/') && !name.includes('\\')
+    && !name.includes('\0') && name !== '.' && name !== '..';
+}
+
+function gitTopLevel(dir) {
+  const result = runGit(dir, ['rev-parse', '--show-toplevel'], null, 'utf8');
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+// The candidate root: THE INVOKING SHELL'S GIT TOP LEVEL, which is the tree the gate hashes. Returns ''
+// when no git working tree resolves at all — reported, never guessed at.
+//
+// The resolveFinalizeCheckRoot call is a deliberate pass-through, and it resolves nothing today: it
+// redirects only when its argument's top level differs from cwd's, and `planRoot` was just derived from
+// cwd, so the two are equal by construction and it returns `planRoot` on the first branch. It is kept
+// because it is the same call the gate makes over the same value, so a producer/gate divergence cannot be
+// introduced there without both sides moving together — NOT because it covers a divergence. It cannot:
+// the gate's redirect fires when its root came from somewhere other than cwd (a source-missing resume),
+// and no argument this verb accepts can produce that.
+function resolveCandidateRoot(schema) {
+  const planRoot = gitTopLevel(process.cwd());
+  if (!planRoot) return '';
+  return gitTopLevel(schema.resolveFinalizeCheckRoot(planRoot));
+}
+
+// WHERE THE RECORD LANDS — which is not always the tree it BINDS, and requiring one tree to be both is
+// unsatisfiable in the standard worktree lane. There, the run folder is resident in MAIN and the linked
+// worktree does not carry it (the finalize transaction's Step 8a copies main→worktree), while the gate
+// hashes the tree its own shell is in. So standing in the worktree there is nowhere to write, and
+// standing in main the hash binds the wrong tree — main and a linked worktree agree only while the branch
+// carries nothing main lacks, i.e. they differ across exactly the pre-merge window a finalize happens in.
+// The gate itself reads the two halves from two places: the record out of the finalize authority's
+// `.cache/` (in this topology main's run folder, the source the mirror copies from) and the hash over the
+// invoking tree. This resolver is the write half of that pair: this tree first, then MAIN via the same
+// resolver claim.js uses. It never reaches the other way — a run folder that lives only in a linked
+// worktree is NOT written from main, because binding main's hash to it is the wrong tree, and the typed
+// report that says so is the honest answer. `dir` is null when no live folder exists at either place, and
+// `searched` carries what was looked at so the report can name it.
+function resolveRecordFolder(root, project, schema) {
+  const searched = [];
+  const liveDir = candidate => {
+    const dir = path.join(candidate, 'kaola-workflow', project);
+    searched.push(dir);
+    let stat = null;
+    try { stat = fs.statSync(dir); } catch (_) { stat = null; }
+    return stat && stat.isDirectory() ? dir : '';
+  };
+  const local = liveDir(root);
+  if (local) return { dir: local, root, mainResident: false, searched };
+  let main = '';
+  try { main = schema.resolveMainRoot(root) || ''; } catch (_) { main = ''; }
+  if (main && path.resolve(main) !== path.resolve(root)) {
+    const inMain = liveDir(main);
+    if (inMain) return { dir: inMain, root: main, mainResident: true, searched };
+  }
+  return { dir: null, root: '', mainResident: false, searched };
+}
+
+// Other working trees of the same repository that ALSO carry this project's run folder. Under a
+// worktree run the folder exists twice (the finalize transaction mirrors worktree→main), and the gate
+// binds whichever tree its own shell is in — so a record written from one checkout and a finalize run
+// from the other disagree by construction. Not a refusal: the resolution above is unambiguous, and this
+// is the fact a reader needs to keep it that way. null means the probe could not run.
+function otherProjectRoots(root, project) {
+  const listed = runGit(root, ['worktree', 'list', '--porcelain'], null, 'utf8');
+  if (listed.status !== 0) return null;
+  let here = root;
+  try { here = fs.realpathSync(root); } catch (_) {}
+  const found = [];
+  for (const line of String(listed.stdout || '').split('\n')) {
+    if (!line.startsWith('worktree ')) continue;
+    const tree = line.slice('worktree '.length).trim();
+    if (!tree) continue;
+    let real = tree;
+    try { real = fs.realpathSync(tree); } catch (_) {}
+    if (real === here) continue;
+    let stat = null;
+    try { stat = fs.statSync(path.join(tree, 'kaola-workflow', project)); } catch (_) {}
+    if (stat && stat.isDirectory()) found.push(tree);
+  }
+  found.sort();
+  return found;
+}
+
+// ── the durable archive band is never a write target ───────────────────────────────────────────────
+// `kaola-workflow/archive/**` holds CLOSED evidence: the record of a run the finalize transaction has
+// already accounted for. Nothing this verb produces may land inside it — not the record, not the
+// `--output` JSON. A stray file there is worse than litter: the closure audit walks every directory
+// under the band, so `kaola-workflow/archive/.cache/` reads as a phantom project missing its
+// workflow-state.md — permanent drift with nothing to repair.
+//
+// The question is asked of the LOCATION, never of a name. `archive` is a structurally valid single path
+// segment and nothing about the string disqualifies it; what disqualifies a path is that it resolves to
+// the band. Four routes there were measured, and a name check sees only the first: the literal spelling
+// (`--project archive`); a `..` segment inside an `--output` path; a symlink whose target is in the
+// band; and a case-variant spelling, which on a case-INsensitive filesystem is the very same directory
+// while `fs.realpathSync` (measured on darwin) does NOT canonicalize the case. So the literal
+// comparison is made over a `..`-normalized, symlink-followed path, and the case route is caught by
+// filesystem IDENTITY instead of by string — which is also why a case-SENSITIVE filesystem, where
+// `Archive/` is a genuinely different directory, keeps recording there.
+function archiveBandRoot(root) {
+  return path.join(root, 'kaola-workflow', 'archive');
+}
+
+// Resolve `.`/`..`, then follow symlinks for as much of the path as exists; a not-yet-created tail stays
+// literal. `path.resolve` alone cannot see through a symlinked parent, and this verb is handed paths
+// whose last segment is the file it is about to write.
+function realResolve(target) {
+  let head = path.resolve(target);
+  let tail = '';
+  for (;;) {
+    try {
+      const real = fs.realpathSync(head);
+      return tail ? path.join(real, tail) : real;
+    } catch (_) { /* head does not exist yet — climb */ }
+    const parent = path.dirname(head);
+    if (parent === head) return path.resolve(target);
+    tail = tail ? path.join(path.basename(head), tail) : path.basename(head);
+    head = parent;
+  }
+}
+
+function isSameDirectory(a, b) {
+  let left = null;
+  let right = null;
+  try { left = fs.statSync(a); } catch (_) { return false; }
+  try { right = fs.statSync(b); } catch (_) { return false; }
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+// True iff `target` IS the archive band of `root`, or sits anywhere inside it.
+function isArchiveBandPath(root, target) {
+  const band = realResolve(archiveBandRoot(root));
+  const abs = realResolve(target);
+  if (abs === band || abs.startsWith(band + path.sep)) return true;
+  for (let dir = abs, previous = ''; dir !== previous; previous = dir, dir = path.dirname(dir)) {
+    if (isSameDirectory(dir, band)) return true;
+  }
+  return false;
+}
+
+// The working tree that OWNS a path — its own git top level, found from the deepest ancestor that
+// exists (the path itself is usually a file about to be created). '' when the path belongs to no
+// repository. `--output` is checked against this root rather than against the record's candidate root,
+// because the two are not the same band: under a worktree run the finalize transaction lands the archive
+// in MAIN first, so `--output <main>/kaola-workflow/archive/…` written from the linked worktree reaches
+// the durable band by a route the candidate root cannot see (measured).
+function owningWorkingTree(target) {
+  let dir = realResolve(target);
+  for (;;) {
+    let stat = null;
+    try { stat = fs.statSync(dir); } catch (_) { stat = null; }
+    if (stat && stat.isDirectory()) return gitTopLevel(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) return '';
+    dir = parent;
+  }
+}
+
+// Archived run folders for this project — the SAME search the finalize authority resolver performs:
+// `kaola-workflow/archive/<project>` or a `<project>.archived-*` sibling, looked for in this working
+// tree AND in main (the finalize transaction lands the archive in main first, so a caller standing in
+// the linked worktree may only find it there). Read-only, and deliberately NOT a write target: an
+// archived record is closed evidence. The absence of a live folder means two very different things —
+// "you are standing in the wrong checkout" and "this run is already finalized" — and only the second
+// one is answered by not recording at all.
+function archivedProjectPaths(root, project, schema) {
+  const roots = [root];
+  try {
+    const main = schema.resolveMainRoot(root);
+    if (main && path.resolve(main) !== path.resolve(root)) roots.push(main);
+  } catch (_) {}
+  const found = [];
+  const seen = new Set();
+  for (const candidate of roots) {
+    const archiveBase = archiveBandRoot(candidate);
+    let names = [];
+    try { names = fs.readdirSync(archiveBase); } catch (_) { continue; }
+    for (const name of names) {
+      if (name !== project && !name.startsWith(project + '.archived-')) continue;
+      const abs = path.resolve(archiveBase, name);
+      if (seen.has(abs)) continue;
+      let stat = null;
+      try { stat = fs.statSync(abs); } catch (_) {}
+      if (!stat || !stat.isDirectory()) continue;
+      seen.add(abs);
+      found.push(abs);
+    }
+  }
+  found.sort();
+  return found;
+}
+
+// PURE. Merge the owned field lines into whatever the file already holds. Every owned line is dropped
+// wherever it sat and the fresh block is appended once, so re-recording is byte-idempotent (the file
+// does not grow, and no superseded binding survives below the new one to win last-match-wins).
+function renderFinalValidationRecord(existingText, fields) {
+  const owned = new RegExp('^(?:' + RECORD_FIELDS.join('|') + '):');
+  const kept = String(existingText || '').split('\n').filter(line => !owned.test(line));
+  while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
+  const block = RECORD_FIELDS.map(name => name + ': ' + fields[name]).join('\n');
+  return (kept.length ? kept.join('\n') + '\n\n' + block : block) + '\n';
+}
+
+function recordFinalValidation(options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const project = opts.project === undefined || opts.project === null ? '' : String(opts.project);
+  const verdict = opts.verdict === undefined || opts.verdict === null ? '' : String(opts.verdict);
+  const command = (opts.command === undefined || opts.command === null ? '' : String(opts.command)).trim();
+  if (!isSafeProjectSegment(project)) throw new Error('--project must name one run folder segment under kaola-workflow/ (no separators, no NUL, not "." or "..")');
+  if (verdict !== 'pass' && verdict !== 'fail') throw new Error('--verdict must be exactly "pass" or "fail"');
+  if (command === '' || /[\r\n\0]/.test(command)) throw new Error('--command must be the exact validation command you ran, as a non-empty single-line NUL-free string');
+
+  const schema = require('./kaola-workflow-adaptive-schema');
+  const base = {
+    schema_version: RECEIPT_SCHEMA_VERSION,
+    kind: 'final_validation_record',
+    project,
+    verdict,
+    validation_command: command,
+  };
+  const inconclusive = (reason, hint) => Object.assign({}, base, {
+    outcome: 'inconclusive',
+    reasons: [reason],
+    candidate_root: null,
+    other_candidate_roots: [],
+    validated_candidate_hash: null,
+    record_path: null,
+    operator_hint: hint,
+  });
+
+  const candidateRoot = resolveCandidateRoot(schema);
+  if (!candidateRoot) {
+    return inconclusive('candidate_root_unresolved',
+      'No git working tree resolves from this directory, so the candidate the verdict would bind to cannot be identified. Run this from inside the checkout you validated.');
+  }
+  const projectPath = path.join(candidateRoot, 'kaola-workflow', project);
+  // The band check needs the resolved root, so it sits here rather than beside the argument checks
+  // above — it asks where `--project` POINTS, and that is not knowable from the segment alone. Same
+  // register as those checks: a `--project` that names the band is a usage error, not an inconclusive
+  // measurement, because no checkout and no re-run can turn the band into a run folder.
+  if (isArchiveBandPath(candidateRoot, projectPath)) {
+    throw new Error('--project must name a live run folder under kaola-workflow/, and ' + projectPath
+      + ' resolves into the durable archive band (kaola-workflow/archive/**) — an archived run\'s record is closed'
+      + ' evidence, never a write target. Record the validation against the live run folder, before finalize archives it.');
+  }
+  const folder = resolveRecordFolder(candidateRoot, project, schema);
+  if (!folder.dir) {
+    const archived = archivedProjectPaths(candidateRoot, project, schema);
+    const hint = archived.length
+      ? 'No live run folder at ' + projectPath + ' — this run is already archived at ' + archived.join(', ')
+        + '. The binding belongs in the record BEFORE finalize, as part of the validation step that produces the verdict;'
+        + ' once the transaction has archived the run its record is closed evidence and must not be edited retroactively.'
+        + ' The finding on the archived run stands as recorded — a bound validation for this work is a fresh run, not an amendment to this one.'
+      : 'No live run folder for this project at any of the places the finalize transaction reads one from: '
+        + folder.searched.join(', ') + '. The binding has to land in that folder, and there is none.'
+        + ' If the run is claimed in another linked worktree, record from that worktree; otherwise check the project name,'
+        + ' or claim the run first.';
+    return Object.assign(inconclusive('project_folder_missing', hint),
+      { candidate_root: candidateRoot, archived_project_paths: archived });
+  }
+  // Read the band from the constant the gate reads, never a literal: the gate substitutes
+  // VALIDATION_TEST_CONSUMES whenever it is handed no array, so the day that constant stops being
+  // empty a hardcoded [] here would silently address a narrower band than the gate does.
+  const hash = schema.computeCodeTreeHash(candidateRoot, project, schema.VALIDATION_TEST_CONSUMES);
+  if (!hash) {
+    return Object.assign(inconclusive('candidate_hash_unresolved',
+      'The code-tree hash over ' + candidateRoot + ' could not be computed (git snapshot failed), so no binding can be recorded. Fix the git failure and re-record.'),
+    { candidate_root: candidateRoot });
+  }
+  // The run-state tree is validation-invisible, so writing this file cannot move the hash it records —
+  // and when the folder is main-resident the write is not even in the hashed tree.
+  const recordPath = path.join(folder.dir, '.cache', FINAL_VALIDATION_FILE);
+  // The band rule follows the WRITE, not a proxy for it: the destination may be another tree's folder,
+  // and that tree has its own band.
+  if (isArchiveBandPath(folder.root, recordPath)) {
+    throw new Error('--project must name a live run folder, and ' + recordPath
+      + ' resolves into the durable archive band (kaola-workflow/archive/**) — an archived run\'s record is closed'
+      + ' evidence, never a write target.');
+  }
+  let existing = '';
+  try { existing = fs.readFileSync(recordPath, 'utf8'); } catch (_) { existing = ''; }
+  schema.writeFileAtomicReplace(recordPath, renderFinalValidationRecord(existing, {
+    verdict,
+    validation_command: command,
+    validated_candidate_hash: hash,
+  }));
+  const others = otherProjectRoots(candidateRoot, project);
+  return Object.assign({}, base, {
+    outcome: 'recorded',
+    candidate_root: candidateRoot,
+    other_candidate_roots: others || [],
+    validated_candidate_hash: hash,
+    record_path: recordPath,
+    operator_hint: folder.mainResident
+      // The split is the normal worktree lane, not a fault — but it is surprising enough that saying
+      // nothing would read as a bug, and the operator must not "help" by creating the folder here: a
+      // worktree-side run folder changes the finalize authority topology this record depends on.
+      ? 'This run folder lives in the main checkout, not in this working tree, so the record was written to '
+        + recordPath + ' while the hash binds THIS tree (' + candidateRoot + ') — which is the pair the finalize'
+        + ' gate reads: it hashes the tree its own shell is in and reads the record out of the main-resident run'
+        + ' folder. Run finalize from this working tree, and do not create the run folder here by hand.'
+      : (others && others.length)
+        ? 'This project also has a run folder in ' + others.join(', ') + '. The finalize gate hashes the working tree its own shell is in, so run finalize from ' + candidateRoot + ' — or re-record there — or the recorded hash will read as stale.'
+        : null,
+  });
+}
+
 function parseCli(argv) {
   const args = [...argv];
   const subcommand = args.shift();
@@ -1063,6 +1408,7 @@ function usage() {
     'usage:',
     '  kaola-workflow-validation-runner.js run --command <command> --timeout-minutes <1..120> [--repo-root <path>] [--cwd <repo-relative>] [--repetitions <1..5>] [--env-allowlist <A,B>] [--output <path>]',
     '  kaola-workflow-validation-runner.js qualify-local --contract-hash <sha256> --context-hash <sha256> --claude-profile-hash <sha256> --codex-profile-hash <sha256> --invariant-classes <a,b> [--timeout-minutes <1..120>] [--output <path>]',
+    '  kaola-workflow-validation-runner.js record --project <run-folder> --verdict pass|fail --command "<exact validation command>" [--output <path>]',
   ].join('\n');
 }
 
@@ -1103,6 +1449,30 @@ async function main(argv) {
     if (result.outcome !== 'pass') process.exitCode = 1;
     return;
   }
+  if (parsed.subcommand === 'record') {
+    const values = parsed.values;
+    // `--output` is checked BEFORE the record is written, not after: the band must not receive this
+    // verb's JSON either, and a refusal that arrived after the write would leave a bound record whose
+    // result was never reported. Nothing has happened yet at this point, so the exit is a clean usage
+    // error with an empty stdout.
+    const outputRoot = values.output ? owningWorkingTree(values.output) : '';
+    if (outputRoot && isArchiveBandPath(outputRoot, values.output)) {
+      throw new Error('--output must not resolve inside the durable archive band (kaola-workflow/archive/**) — an'
+        + ' archived run\'s record is closed evidence, never a write target; ' + realResolve(values.output)
+        + ' is inside it. Write the JSON outside the band.');
+    }
+    const result = recordFinalValidation({
+      project: values.project,
+      verdict: values.verdict,
+      command: values.command,
+    });
+    // Exit 0 means THE RECORD WAS WRITTEN, not that the validation passed: a `--verdict fail` record is
+    // a successful write of a failing verdict, and the gate classifies it final_validation_failed from
+    // the file. Exit 1 is reserved for "no binding could be recorded" — read `reasons`.
+    writeCliResult(result, values.output);
+    if (result.outcome !== 'recorded') process.exitCode = 1;
+    return;
+  }
   throw new Error(`unknown subcommand "${parsed.subcommand || ''}"`);
 }
 
@@ -1139,4 +1509,8 @@ module.exports = {
   extractQualificationReport,
   qualificationInvocation,
   qualifyLocalReviewers,
+  FINAL_VALIDATION_FILE,
+  RECORD_FIELDS,
+  renderFinalValidationRecord,
+  recordFinalValidation,
 };

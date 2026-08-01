@@ -119,9 +119,10 @@ Gate on repo kind. It is detected, never configured.
   test-consumed prose has landed. It writes `.cache/chain-receipt.json`. Do not delegate this one:
   the finalize transaction only reads the receipt, it never produces it.
 - **Consumer** — no `test:kaola-workflow:*` scripts. Do not invoke the chain runner; it has nothing
-  to run. You own verification: run the project's own validation command and record
-  `kaola-workflow/{project}/.cache/final-validation.md` with a column-0 `verdict: pass` line and the
-  exact command you ran.
+  to run. You own verification: run the project's own validation command, then record the result.
+  `kaola-workflow/{project}/.cache/final-validation.md` needs three column-0 fields — a
+  `verdict: pass` line, the exact command you ran, and a `validated_candidate_hash` bound to the tree
+  you validated — and the recorder below writes all three.
 
 On the self-host branch:
 
@@ -129,6 +130,22 @@ On the self-host branch:
 <!-- SLOT:fz-scripts-resolver -->
 <!-- SPLICE:fz-runchains-run -->
 ```
+
+On the consumer branch:
+
+```bash
+<!-- SLOT:fz-scripts-resolver -->
+node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
+  --project {project} --verdict pass --command "<the exact command you ran>"
+```
+
+Run that from the working tree you validated, which must be the tree you will run finalize from: the
+binding follows the working tree the shell is in, and a linked worktree and main hash differently
+until the branch merges. It prints the `candidate_root` it hashed, so check that against where you
+are. The record itself lands in the run folder the gate reads it from — on a worktree run that is the
+main checkout's rather than this tree's, because the gate takes the record from the authority folder and
+hashes the tree its own shell is in — so `record_path` is where to look for the file. Exit 0 means the
+record was written — the `verdict` field, not the exit code, carries whether your validation passed.
 
 On failure, **repair it however you judge best.** Fix it inline for a trivial correction, or
 dispatch it to whichever role fits — `tdd-guide` for a test defect, because it holds custody of the
@@ -348,7 +365,9 @@ instead of one per re-run:
   --project {project} --keep-worktree --check --json)
 ```
 
-It makes zero side effect: clear everything it lists, then run the transaction once. The emit names
+It makes zero side effect: clear everything in `reasons`, then run the transaction once. `checks` also
+carries state the transaction settles itself — a project folder the mirror will construct, a sync it
+will perform — and a token there that `reasons` does not repeat is not yours to clear. The emit names
 each step it completed, so a resumed run is readable from the emit alone, and the transaction is
 idempotent — re-running the SAME call resumes at whichever step it stopped on.
 
@@ -458,7 +477,17 @@ folder that the sink's own reporting did not catch.
 
 Dry-run is the default and reports without mutating. `--execute` repairs safe local drift — stale
 roadmap sources, mirror rows, an in-progress label on a closed issue — and never deletes folders or
-worktrees. The sink's own report is the immediate catch; this is the after-the-fact drift detector
+worktrees. `--project` partitions the report rather than narrowing the sweep: `current_project_clean`
+is the verdict for this run alone, and whatever the sweep found elsewhere stays visible under
+`repository_drift_outside_scope`, so it can neither contaminate that verdict nor hide behind it. That
+verdict is fail-closed — `true` only when every scoped class actually evaluated, so an offline run is
+never `true`, and a `false` is not by itself a finding: read the counts. A name that resolves to no
+record is the same rule applied to the scope itself: nothing was read for it, so the verdict is `false`
+and `scope.project_unresolved` says why. The exit code carries no verdict either — 0 is every
+successful run, drift and an unresolved name included, and 1 means the invocation itself was wrong,
+which is what a mistyped project name with no `--issue` beside it still is.
+
+The sink's own report is the immediate catch; this is the after-the-fact drift detector
 that finds what escaped it. Together they are defense in depth. If the sink reported that it did not
 complete, the step it names is where to resume, not where to give up: the receipt makes every
 completed step idempotent, so re-running applies only what is left.

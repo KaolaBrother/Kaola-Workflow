@@ -800,3 +800,47 @@ for more care. A rule that can only ratchet tighter is how a corpus grows while 
 they are shrinking it.
 
 See `docs/decisions/D-645-01.md`.
+
+## Specify the result; the method is the agent's (#900–#903)
+
+Hand an agent the **form of the result** and check whether it arrived. Do not specify how, and do not
+inspect the route. When an agent gets it wrong it adapts — that is the premise ADR 0017 rests on, and
+the bundle closing #900–#903 measured it at scale.
+
+**The asymmetry that forced this.** Across that run the orchestrator issued two kinds of instruction.
+Statements about the *result* — "prove the pin reds on the recorded baseline", "all three editions must
+agree on this fixture", "`record` must never write inside `kaola-workflow/archive/**`" — held without
+exception, and each time the agent found a route the orchestrator had not thought of. Statements about
+*mechanism* failed **four times out of four**: an on-disk fixture construction `copyDir` makes
+structurally impossible, a propagation flag (`--materialize-kernel`) that does not carry the file named,
+a sidecar set called four members when it has five, and two test paths that do not exist. Every one was
+corrected by the agent that received it, and could only be corrected because nothing obliged it to
+comply. **A mechanism claim in a brief makes the agent wrong when it rots; the same fact offered as
+evidence merely makes the agent check.**
+
+**Adaptation covers visible error, which is most error — and not the error that matters.** All four
+mechanism claims failed loudly: a command printed "0 file(s)", a grep returned the wrong count, a
+fixture would not reproduce. The two defects that survived every suite were invisible from inside the
+task — a guard whose condition is unreachable, where the tests pass and the mutation proof passes and
+nothing in the agent's own loop distinguishes *armed* from *cannot fire*; and a fixture built with the
+topology inverted, which greens everything it touches. Iterating never finds those, because the
+feedback signal is itself wrong.
+
+So "don't care how" is affordable on exactly two conditions.
+
+**The result must be falsifiable.** "The sink must not lose evidence" cannot be checked. "Every required
+archive path is present as a blob in the published commit" can, and it is what caught a symlink passing
+the gate while a fresh clone did not carry the file. A vague goal does not free the agent; it relocates
+the specification into the check, where nobody reads it.
+
+**The check must not come from the doer.** Eleven green suites, a full-scope walkthrough and every
+implementer's own mutation proof reported done-correctly on a bundle that destroyed user evidence at
+exit 0. Self-verification tests the arm the author thought of: the recorder's producer/gate proof
+exercised the inverted topology and left the shipped one untested. This is the **test custody** rule one
+level up — whoever produces a result does not own the evidence that it is correct.
+
+Two corollaries, both live in that run. A guard that cannot fail is worse than no guard because it reads
+as coverage: **mutation-proving a guard proves it is armed, never that its condition is reachable.** And
+a control that agrees with its positive leg is a signal to check the control, not evidence the guard
+works — two agents shipped a control that had silently become the positive leg, one via an empty env var
+hitting a `|| 'default'` fallback, one via a CLI mock keyed on the wrong subcommand name for one forge.

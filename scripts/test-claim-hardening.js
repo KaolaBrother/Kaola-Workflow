@@ -4077,6 +4077,722 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       // settle — asserting a preference here would freeze one answer by accident.
     } finally { cleanup941(fx); }
   }
+
+  // (3) THE COPY THAT CANNOT COMPLETE AT ALL — the disposal must fail LOUDLY and destroy NOTHING.
+  //
+  // Case (2) above covers a copy that finished but was unfaithful. This is the other failure: the
+  // copy ABORTS PART-WAY. `copyDir` (claim.js:5033-5041) calls a bare `fs.copyFileSync` per entry, so
+  // an unreadable source file throws out of the middle of the walk — before verifyArchiveComplete and
+  // before the sidecar presence re-check ever run. `archiveProjectDirSafely` (:2660-2666) catches it
+  // into a typed `archive_exception`, and the deletion of both live copies is downstream of a gate
+  // that was never reached.
+  //
+  // WHY THIS IS PINNED AND THE ADJACENT GATE'S OWN EMIT IS NOT: the run folder is the only copy of
+  // the run's evidence at this instant, so "an operation that would destroy something fails loudly"
+  // is the property that actually protects work nobody agreed to lose. It is reachable end-to-end
+  // with no seam and no test hook in shipped code, which the presence re-check's own output is not
+  // (its destination is manufactured by copyDir from the source one statement earlier, at a path
+  // proven fresh, so no on-disk construction can make the copy lossy-but-complete).
+  //
+  // The vehicle is an EXEMPT sidecar (`final-validation.md`), because that is the file class whose
+  // loss verifyArchiveComplete is blind to — a non-exempt file would be caught by the completeness
+  // comparison and this arm would be measuring case (2) again under a different name.
+  {
+    // A root process reads a mode-000 file regardless, which makes the whole axis inert and would
+    // turn every assertion below into a vacuous pass. Skip LOUDLY instead.
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (uid === 0) {
+      console.error('SKIP: #901(disposal) — running as uid 0, where chmod 000 is inert and this arm '
+        + 'cannot fail. Re-run as a non-root user to exercise it.');
+    } else {
+      const fx = mk941('issue-94103', f => {
+        fs.writeFileSync(path.join(f.wtCacheDir, 'final-validation.md'), 'verdict: pass\n');
+        fs.writeFileSync(path.join(f.wtCacheDir, 'n1-evidence.md'), 'per-item evidence\n');
+      });
+      const sidecar = path.join(fx.wtCacheDir, 'final-validation.md');
+      try {
+        fs.chmodSync(sidecar, 0o000);
+        // PROVE THE AXIS before running anything. A chmod that did not take (root, an exotic mount,
+        // an ACL) would leave the copy succeeding and the refusal never firing — and the arm would
+        // then be asserting nothing at all.
+        let axisCode = null;
+        try { fs.readFileSync(sidecar); } catch (e) { axisCode = e && e.code; }
+        assert(axisCode === 'EACCES',
+          '#901(disposal) premise: the source sidecar must be genuinely UNREADABLE, or the copy '
+          + 'succeeds and every assertion below passes vacuously; fs.readFileSync gave '
+          + JSON.stringify(axisCode) + ' (expected EACCES)');
+
+        const r = runFinalize941(fx);
+        const j = r.json || {};
+
+        // FAILS LOUDLY, and says which door it failed at.
+        assert(r.status === 1,
+          '#901(disposal): a copy that cannot complete must exit 1, never proceed to the delete; got '
+          + r.status + '\nstdout: ' + String(r.stdout || '').slice(0, 500));
+        assert(j.result === 'refuse' && j.reason === 'archive_exception',
+          '#901(disposal): the refusal is typed archive_exception — a DIFFERENT door from '
+          + 'archive_incomplete, because the completeness gate was never reached; got '
+          + JSON.stringify({ result: j.result, reason: j.reason }));
+        assert(typeof j.detail === 'string' && j.detail.includes('final-validation.md'),
+          '#901(disposal): the detail must NAME the file the copy died on — an unlocatable failure is '
+          + 'unrepairable, the same property case (2) pins for mismatched[]; got ' + JSON.stringify(j.detail));
+
+        // NOTHING DESTROYED. This is the whole arm; the four assertions are four distinct things the
+        // delete would have taken.
+        assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+          '#901(disposal): the live run folder in the WORKTREE must survive — the delete is downstream '
+          + 'of a gate that never ran, so reaching it at all would destroy the only copy');
+        assert(fs.existsSync(sidecar),
+          '#901(disposal): the unreadable sidecar itself must survive. It is the file the copy could '
+          + 'not carry, so it is precisely the one with no second copy anywhere');
+        assert(fs.existsSync(path.join(fx.wtCacheDir, 'n1-evidence.md')),
+          '#901(disposal): the sibling evidence the aborted walk never reached must survive too — a '
+          + 'refusal that protects the folder but not its contents protects nothing');
+        assert(fs.existsSync(path.join(fx.mainProjDir, 'workflow-state.md')),
+          '#901(disposal): and the MAIN live copy must survive — archiveProjectDir deletes both, so '
+          + 'both are at risk from one unreached gate');
+
+        // No bookkeeping side effect either: a refusal this early must not have advanced the branch.
+        assert(!/^chore: (finalize|archive) /m.test(gOut941(fx.wtRoot, ['log', '--format=%s', '-5'])),
+          '#901(disposal): the refusing transaction must author no bookkeeping commit');
+
+        // NOT asserted, for the same reason case (2) does not assert it: a PARTIAL archive
+        // destination is left behind (measured — it holds whatever the walk copied before the throw).
+        // Whether that is residue or evidence is a judgement about the archive contract.
+      } finally {
+        try { fs.chmodSync(sidecar, 0o644); } catch (_) {}
+        cleanup941(fx);
+      }
+    }
+  }
+}
+
+
+// --- #902: `finalize --check` must predict the authority the transaction CONSTRUCTS -------------
+//
+// On the ORDINARY linked-worktree topology — run folder resident in the MAIN checkout, the worktree
+// not carrying it, no archive — Step 8a's artifact mirror CREATES the live folder the workflow_state
+// resolution then reads. The read-only checklist resolved over the PRE-mirror tree, saw no authority
+// at all, and reported `archive_authority_missing` + exit 1: an operator obligation for a step the
+// script performs itself, unasked, one statement later. The real finalize from the SAME cwd
+// succeeded with no repair, so the two surfaces disagreed about the same tree.
+//
+// WHY THE EXISTING CORPUS COULD NOT SEE IT — each reason is one arm below:
+//   * every `--check` fixture in this repo (mk816, mk837, mk941) seeds the run folder into BOTH
+//     roots, so `livePresent` is always true and the failing branch is unreachable from them. Arm A
+//     is the UNSEEDED-worktree topology, which no existing fixture builds.
+//   * NO test varies the CWD — runFinalize816/runFinalize837 hard-code `cwd: fx.wtRoot` — and the
+//     cwd is the only variable that flips the answer. mk902's runner takes it as a parameter and
+//     every arm asserts both cwds.
+//   * check-vs-execute agreement WAS pinned (#816 T2a/T2b above), but only over a destination that
+//     already existed — i.e. exactly where it already held. Arms A and E run the REAL transaction
+//     over topologies where the two used to answer differently.
+//
+// AND WHY ARM A ALONE PROVES NOTHING. A blanket suppression — never pushing
+// `archive_authority_missing` into `reasons` — passes arm A identically to a correct prediction.
+// The arm that tells them apart is C: an authority NOTHING will construct must still fail closed,
+// on BOTH surfaces, under the SAME token. C is mandatory, not decoration. D and E are its siblings:
+// a prediction must not swallow an ambiguous authority, and where the mirror will construct a dest
+// whose authority is still invalid the check must name the token EXECUTE names (`state_missing`),
+// not the one it used to name for every shape at once.
+{
+  const { execFileSync: execFS902, spawnSync: spawnS902 } = require('child_process');
+  const CLAIM902 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV902 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const g902 = (cwd, args) => {
+    try { execFS902('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV902 }); return true; }
+    catch (_) { return false; }
+  };
+  const gOut902 = (cwd, args) =>
+    String(spawnS902('git', ['-C', cwd, ...args], { encoding: 'utf8', env: GIT_ENV902 }).stdout || '').trim();
+
+  // mk837's repo, with the ONE thing mk837 cannot express: which roots carry the run folder.
+  //   seed.main      — the run folder lives in the MAIN checkout (the ordinary worktree-run shape)
+  //   seed.mainState — false plants the folder WITHOUT workflow-state.md (arm E)
+  //   seed.worktree  — the worktree ALSO carries it (the shape every existing fixture builds)
+  //   seed.archives  — archive folder names planted in MAIN (findArchiveAuthorities searches the
+  //                    run root AND the main root, so a main-side archive is visible from the wt)
+  function mk902(project, seed) {
+    const s = seed || {};
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-902-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+    g902(mainRoot, ['init', '-b', 'main']);
+    g902(mainRoot, ['config', 'user.email', 't@t.com']);
+    g902(mainRoot, ['config', 'user.name', 'Test']);
+    g902(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true'
+      }
+    }) + '\n');
+    g902(mainRoot, ['add', 'package.json']);
+    g902(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
+    g902(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+
+    // The implementation commit lives on the branch, authored INSIDE the worktree.
+    fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
+    g902(wtRoot, ['add', '-A']);
+    g902(wtRoot, ['commit', '-m', 'feat: impl for ' + project]);
+    const headSha = gOut902(wtRoot, ['rev-parse', 'HEAD']);
+
+    const stateText = closed => [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: ' + (closed ? 'closed' : 'active'), '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive',
+      'workflow_path: adaptive', 'step: start', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: 902',
+      'sink: merge', 'run_posture: worktree', 'worktree_path: ' + wtRoot,
+      'main_root: ' + mainRoot, 'session_marker: fixture-902',
+      'claim_ts: 2026-01-01T00:00:00Z', ''
+    ].join('\n');
+    const missionList = ['# close issue #902 — fixture', '',
+      '- item: mission 1', '  status: done',
+      '  dispatched: agent-1, output to out/1.md', '  result: out/1.md', ''].join('\n');
+    // Bound to the WORKTREE head: the branch is the candidate under validation whichever tree the
+    // folder happens to sit in, so a green classification is available from the wt cwd on every arm.
+    const receipt = JSON.stringify({
+      headSha,
+      chains: ['claude', 'codex', 'gitlab', 'gitea'].map(n => ({ name: n, exitCode: 0, accepted_red: false }))
+    }) + '\n';
+    const plant = (dir, withState, closed) => {
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      if (withState) fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText(!!closed));
+      fs.writeFileSync(path.join(dir, 'mission-list.md'), missionList);
+      fs.writeFileSync(path.join(dir, '.cache', 'chain-receipt.json'), receipt);
+    };
+
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
+    if (s.main) plant(mainProjDir, s.mainState !== false, false);
+    if (s.worktree) plant(wtProjDir, true, false);
+    for (const name of (s.archives || [])) {
+      plant(path.join(mainRoot, 'kaola-workflow', 'archive', name), true, true);
+    }
+    return { base, mainRoot, wtRoot, project, headSha, mainProjDir, wtProjDir };
+  }
+
+  // THE CWD IS A PARAMETER. That is the whole point: the defect was invisible to every existing
+  // finalize runner precisely because they all hard-code one cwd, and the answer differs by cwd.
+  // spawn-class: durable-handoff
+  function runFinalize902(fx, cwd, extraArgs) {
+    const e = Object.assign({}, process.env, GIT_ENV902, {
+      KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    });
+    const r = spawnS902(process.execPath,
+      [CLAIM902, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
+      { cwd, encoding: 'utf8', timeout: 120000, env: e });
+    let json = null;
+    try {
+      const lines = String(r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
+  }
+  const check902 = (fx, cwd) => runFinalize902(fx, cwd, ['--check', '--json']);
+  const cleanup902 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
+  const reasons902 = r => (r.json && Array.isArray(r.json.reasons)) ? r.json.reasons : ['(no reasons array)'];
+
+  // The cwd-axis invariant, applied to every arm: whether the run is finalize-ready cannot depend on
+  // which checkout of the same repository the operator is standing in, and the token reserved for an
+  // unrepairable authority must appear from both cwds or neither. This is the assertion that would
+  // have caught #902 directly.
+  function assertCwdAxisAgrees(fx, label, expectOk) {
+    const fromWt = check902(fx, fx.wtRoot);
+    const fromMain = check902(fx, fx.mainRoot);
+    assert((fromWt.status === 0) === expectOk && !!(fromWt.json && fromWt.json.ok) === expectOk,
+      label + ' (cwd axis): from the LINKED WORKTREE, ok must be ' + expectOk + '; got status='
+      + fromWt.status + ' json=' + JSON.stringify(fromWt.json) + ' stderr='
+      + String(fromWt.stderr || '').slice(0, 300));
+    assert((fromMain.status === 0) === expectOk && !!(fromMain.json && fromMain.json.ok) === expectOk,
+      label + ' (cwd axis): from the MAIN ROOT, ok must be ' + expectOk + '; got status='
+      + fromMain.status + ' json=' + JSON.stringify(fromMain.json));
+    const missingWt = reasons902(fromWt).includes('archive_authority_missing');
+    const missingMain = reasons902(fromMain).includes('archive_authority_missing');
+    assert(missingWt === missingMain,
+      label + ' (cwd axis): `archive_authority_missing` must be reported from BOTH cwds or NEITHER '
+      + '— it is a fact about the repository, not about where the shell is. worktree='
+      + JSON.stringify(reasons902(fromWt)) + ' main=' + JSON.stringify(reasons902(fromMain)));
+    return { fromWt, fromMain };
+  }
+
+  // --- A: the #902 topology. The one axis no existing fixture varies. ---------------------------
+  {
+    const fx = mk902('issue-902a', { main: true });
+    try {
+      assert(!fs.existsSync(fx.wtProjDir) && fs.existsSync(fx.mainProjDir),
+        '#902(A) fixture premise: the run folder is MAIN-resident and the worktree does NOT carry it '
+        + '— the topology every existing --check fixture seeds away');
+      assert(!fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive'))
+        && !fs.existsSync(path.join(fx.mainRoot, 'kaola-workflow', 'archive')),
+        '#902(A) fixture premise: no archive stands in for the live folder in either root');
+
+      const { fromWt, fromMain } = assertCwdAxisAgrees(fx, '#902(A)', true);
+      const checks = (fromWt.json && fromWt.json.checks) || {};
+      assert(reasons902(fromWt).length === 0,
+        '#902(A): a mirror the script itself performs one statement later is NOT an operator '
+        + 'obligation — `reasons` must be empty, got ' + JSON.stringify(reasons902(fromWt)));
+      assert(checks.workflow_state === 'pending_mirror',
+        '#902(A): the pending construction must be reported as STATE, got '
+        + JSON.stringify(checks.workflow_state));
+      assert(checks.mirror === 'ready',
+        '#902(A): the mirror probe must say the mirror will run, got ' + JSON.stringify(checks.mirror));
+
+      // The authority topology — the new envelope key, and the only place a reader can see WHICH
+      // tree each answer came from.
+      const auth = (fromWt.json && fromWt.json.authority) || null;
+      assert(auth && typeof auth === 'object',
+        '#902(A): --check must emit the `authority` block, got ' + JSON.stringify(fromWt.json && fromWt.json.authority));
+      assert(auth && auth.source === 'pending_mirror',
+        '#902(A): authority.source must name the pending construction, got ' + JSON.stringify(auth));
+      assert(auth && auth.linked_root === fx.wtRoot && auth.main_root === fx.mainRoot,
+        '#902(A): the block must name both roots, got ' + JSON.stringify(auth));
+      assert(auth && auth.source_dir === fx.mainProjDir,
+        '#902(A): source_dir must be the MAIN-resident folder the mirror will copy, got ' + JSON.stringify(auth));
+      assert(auth && auth.dest_dir === fx.wtProjDir && auth.dest_dir !== auth.source_dir,
+        '#902(A): dest_dir must stay the tree EXECUTION reads — the authority is predicted, never '
+        + 'relocated to main (a prediction naming main is the same defect inverted), got ' + JSON.stringify(auth));
+      assert(fromMain.json && fromMain.json.authority && fromMain.json.authority.linked_root === null,
+        '#902(A): an in-place (main-root) run has no linked root, got '
+        + JSON.stringify(fromMain.json && fromMain.json.authority));
+
+      // The second defect: the validation measurement was LOST to `not_checked` on this topology
+      // purely because the rung above had not looked in the right tree yet.
+      assert(checks.validation === 'chains_green',
+        '#902(A): the validation measurement must be REAL over the predicted authority\'s .cache/, '
+        + 'not lost to not_checked, got ' + JSON.stringify(checks.validation));
+      assert(Array.isArray(checks.changed_paths) && checks.changed_paths.includes('impl.txt'),
+        '#902(A): checks.changed_paths must carry the real branch diff, not [], got '
+        + JSON.stringify(checks.changed_paths));
+
+      // READ-ONLY. Predicting the mirror must not perform it.
+      assert(!fs.existsSync(fx.wtProjDir),
+        '#902(A): --check must PREDICT the mirror, never run it — the worktree folder must still '
+        + 'not exist after two check passes');
+
+      // CHECK vs EXECUTE, from the SAME cwd, over the SAME tree. This is the disagreement #902 is.
+      const real = runFinalize902(fx, fx.wtRoot, []);
+      assert(real.status === 0,
+        '#902(A): the real transaction from the SAME cwd must succeed — --check reporting a stop the '
+        + 'transaction does not hit is the defect, got status=' + real.status + ' json='
+        + JSON.stringify(real.json) + ' stderr=' + String(real.stderr || '').slice(0, 400));
+      assert(real.json && real.json.finalize_transaction && real.json.finalize_transaction.mirror === 'mirrored',
+        '#902(A): the transaction records the mirror step --check predicted, got '
+        + JSON.stringify(real.json && real.json.finalize_transaction));
+      assert(real.json && real.json.validation && real.json.validation.classification === checks.validation,
+        '#902(A): --check and the transaction must report the SAME validation classification over the '
+        + 'same tree; check=' + JSON.stringify(checks.validation) + ' execute='
+        + JSON.stringify(real.json && real.json.validation && real.json.validation.classification));
+      // WHERE it archived to is READ from the envelope, never reconstructed. A collision-suffixed
+      // dest (`archive/<project>.archived-<ts>`) escapes a hardcoded `archive/<project>`, so a pin
+      // that rebuilt the path would silently measure a tree the transaction never wrote — and an
+      // existence check against the wrong tree fails OPEN. Both halves are asserted: the envelope
+      // names a dest, and the run folder is on disk AT that dest.
+      const archivedDest = real.json && real.json.dest;
+      assert(typeof archivedDest === 'string'
+        && archivedDest.startsWith(path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project)),
+        '#902(A): the transaction must REPORT an archive dest under MAIN\'s archive band for this '
+        + 'project (plain or collision-suffixed); got ' + JSON.stringify(archivedDest));
+      assert(typeof archivedDest === 'string' && fs.existsSync(path.join(archivedDest, 'workflow-state.md')),
+        '#902(A): and the run it predicted an authority for is on disk at the dest the envelope names '
+        + '— envelope and disk must agree; got dest=' + JSON.stringify(archivedDest));
+    } finally { cleanup902(fx); }
+  }
+
+  // --- B: CONTROL — the seeded shape every existing fixture builds, unchanged ---------------------
+  {
+    const fx = mk902('issue-902b', { main: true, worktree: true });
+    try {
+      const { fromWt } = assertCwdAxisAgrees(fx, '#902(B control)', true);
+      const checks = (fromWt.json && fromWt.json.checks) || {};
+      assert(checks.workflow_state === 'ok',
+        '#902(B control): a worktree that already carries the folder resolves a LIVE authority and '
+        + 'must be untouched by the prediction, got ' + JSON.stringify(checks.workflow_state));
+      const auth = (fromWt.json && fromWt.json.authority) || {};
+      assert(auth.source === 'live' && auth.source_dir === fx.wtProjDir && auth.dest_dir === auth.source_dir,
+        '#902(B control): on a live authority source_dir and dest_dir are the same tree, got '
+        + JSON.stringify(auth));
+      const real = runFinalize902(fx, fx.wtRoot, []);
+      assert(real.status === 0,
+        '#902(B control): the seeded topology must still finalize, got status=' + real.status
+        + ' json=' + JSON.stringify(real.json));
+    } finally { cleanup902(fx); }
+  }
+
+  // --- C: THE MANDATORY FAIL-CLOSED NEGATIVE ----------------------------------------------------
+  // No live folder in EITHER root and no archive: there is nothing for the mirror to construct the
+  // authority FROM, so `archive_authority_missing` is still the right answer and must still stop.
+  // Arm A passes identically under a blanket suppression of this token; this arm is the ONLY one
+  // that tells a prediction from a suppression, which is why it is not optional.
+  {
+    const fx = mk902('issue-902c', {});
+    try {
+      assert(!fs.existsSync(fx.wtProjDir) && !fs.existsSync(fx.mainProjDir),
+        '#902(C) fixture premise: no live folder in either root');
+      const { fromWt } = assertCwdAxisAgrees(fx, '#902(C)', false);
+      assert(reasons902(fromWt).includes('archive_authority_missing'),
+        '#902(C): an authority NOTHING will construct must STILL fail closed under the same typed '
+        + 'token — this is the arm a blanket suppression reds on, got ' + JSON.stringify(reasons902(fromWt)));
+      const checks = (fromWt.json && fromWt.json.checks) || {};
+      assert(checks.workflow_state === 'archive_authority_missing',
+        '#902(C): the state token must survive too, got ' + JSON.stringify(checks.workflow_state));
+      assert(checks.mirror === 'source_absent',
+        '#902(C): the mirror probe must report there is no source to copy, got ' + JSON.stringify(checks.mirror));
+      const auth = (fromWt.json && fromWt.json.authority) || {};
+      assert(auth.source === 'none' && auth.source_dir === null && auth.dest_dir === null,
+        '#902(C): an unprovable authority is `none` with no directories, got ' + JSON.stringify(auth));
+
+      // And EXECUTE agrees — the fail-closed half is pinned on both surfaces, not just the checklist.
+      const real = runFinalize902(fx, fx.wtRoot, []);
+      assert(real.status !== 0 && real.json && real.json.inner_reason === 'archive_authority_missing',
+        '#902(C): the transaction must refuse under the SAME token the checklist reported, got status='
+        + real.status + ' json=' + JSON.stringify(real.json));
+    } finally { cleanup902(fx); }
+  }
+
+  // --- D: NEGATIVE — an ambiguous authority must survive the prediction untouched -----------------
+  {
+    const fx = mk902('issue-902d', { archives: ['issue-902d', 'issue-902d.archived-20260101T000000Z'] });
+    try {
+      const { fromWt } = assertCwdAxisAgrees(fx, '#902(D)', false);
+      assert(reasons902(fromWt).includes('archive_authority_ambiguous'),
+        '#902(D): two matching archives and no live folder is still ambiguous — the prediction must '
+        + 'not convert a token it was never derived for, got ' + JSON.stringify(reasons902(fromWt)));
+      const checks = (fromWt.json && fromWt.json.checks) || {};
+      assert(checks.mirror === 'skipped_post_archive',
+        '#902(D): with an archive standing in, the mirror is skipped — so `ready` alone can never be '
+        + 'read as "the mirror will construct the destination", got ' + JSON.stringify(checks.mirror));
+      const real = runFinalize902(fx, fx.wtRoot, []);
+      assert(real.status !== 0 && real.json && real.json.inner_reason === 'archive_authority_ambiguous',
+        '#902(D): execute must refuse under the same token, got status=' + real.status
+        + ' json=' + JSON.stringify(real.json));
+    } finally { cleanup902(fx); }
+  }
+
+  // --- E: the mirror WILL construct a destination whose authority is still invalid ----------------
+  // Main source present but carrying no workflow-state.md. Before the prediction the two surfaces
+  // named DIFFERENT tokens for the same tree — `archive_authority_missing` from the checklist,
+  // `state_missing` from the transaction. The prediction must produce EXECUTE's token.
+  {
+    const fx = mk902('issue-902e', { main: true, mainState: false });
+    try {
+      assert(fs.existsSync(fx.mainProjDir) && !fs.existsSync(path.join(fx.mainProjDir, 'workflow-state.md')),
+        '#902(E) fixture premise: the main source exists but carries no workflow-state.md');
+      const fromWt = check902(fx, fx.wtRoot);
+      assert(fromWt.status !== 0 && reasons902(fromWt).includes('state_missing'),
+        '#902(E): the checklist must name the token EXECUTE names, got status=' + fromWt.status
+        + ' reasons=' + JSON.stringify(reasons902(fromWt)));
+      assert(!reasons902(fromWt).includes('archive_authority_missing'),
+        '#902(E): `archive_authority_missing` is reserved for an authority nothing can construct — '
+        + 'it must not double as the answer for a construction that lands invalid, got '
+        + JSON.stringify(reasons902(fromWt)));
+      const auth = (fromWt.json && fromWt.json.authority) || {};
+      assert(auth.source === 'pending_mirror',
+        '#902(E): the source is still the folder the mirror will copy, got ' + JSON.stringify(auth));
+      const real = runFinalize902(fx, fx.wtRoot, []);
+      assert(real.status !== 0 && real.json && real.json.inner_reason === 'state_missing',
+        '#902(E): execute must refuse `state_missing` — the token the checklist now predicts, got '
+        + 'status=' + real.status + ' json=' + JSON.stringify(real.json));
+    } finally { cleanup902(fx); }
+  }
+
+  // --- F: a legitimate ARCHIVE resume must not be hijacked by the prediction ----------------------
+  // Exactly one closed archive, no live folder anywhere: the authority is PROVEN today, so nothing
+  // is pending and `source` must say `archive`. This completes the `source` vocabulary
+  // (live / archive / pending_mirror / none) and pins that `dest_dir === source_dir` off
+  // `pending_mirror`.
+  {
+    const fx = mk902('issue-902f', { archives: ['issue-902f'] });
+    try {
+      const { fromWt } = assertCwdAxisAgrees(fx, '#902(F)', true);
+      const checks = (fromWt.json && fromWt.json.checks) || {};
+      assert(checks.workflow_state === 'ok',
+        '#902(F): a single closed archive IS a proven authority, got ' + JSON.stringify(checks.workflow_state));
+      const auth = (fromWt.json && fromWt.json.authority) || {};
+      assert(auth.source === 'archive',
+        '#902(F): a proven archive authority must report `archive`, never `pending_mirror` — nothing '
+        + 'is being constructed, got ' + JSON.stringify(auth));
+      assert(auth.source_dir === path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project)
+        && auth.dest_dir === auth.source_dir,
+        '#902(F): dest_dir differs from source_dir EXACTLY on pending_mirror, got ' + JSON.stringify(auth));
+    } finally { cleanup902(fx); }
+  }
+
+  // --- G: `pending_mirror` must not PROMISE a mirror that cannot happen -------------------------
+  //
+  // `'ready'` is a promise that Step 8a's copy will run, and the prediction converts an operator
+  // obligation into script-owned state on the strength of it. The writability probe used to live only
+  // in the `sync_required` arm — and it probes the SOURCE, which is that arm's own write target — so
+  // on the pending_mirror topology nothing probed the tree about to be WRITTEN. With the worktree's
+  // `kaola-workflow/` read-only, `--check` said `ok:true` / `pending_mirror` / `reasons: []` and the
+  // transaction then died one statement later with a raw EACCES and NO JSON ENVELOPE AT ALL.
+  //
+  // THE CONTROL IS THE WHOLE ARM, and G1 is it. A blanket re-refusal on this topology passes G2
+  // identically while silently undoing the #902 conversion arms A-F exist to hold — the same lesson
+  // arm C teaches about suppression, in the opposite direction. G1 and G2 differ in exactly one bit:
+  // the mode of one directory.
+  {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (uid === 0) {
+      console.error('SKIP: #902(G) — running as uid 0, where chmod 555 is inert, `--check` would '
+        + 'report the writable answer, and G2 could not fail. Re-run as a non-root user.');
+    } else {
+      // G1 — CONTROL: the destination's parent EXISTS AND IS WRITABLE. The #902 conversion intact.
+      {
+        const fx = mk902('issue-902g1', { main: true });
+        try {
+          fs.mkdirSync(path.join(fx.wtRoot, 'kaola-workflow'), { recursive: true });
+          const chk = check902(fx, fx.wtRoot);
+          const checks = (chk.json && chk.json.checks) || {};
+          assert(chk.status === 0 && chk.json && chk.json.ok === true,
+            '#902(G1 control): a writable destination must still be finalize-ready, got status='
+            + chk.status + ' json=' + JSON.stringify(chk.json));
+          assert(checks.mirror === 'ready' && checks.workflow_state === 'pending_mirror',
+            '#902(G1 control): and must still report the pending construction as STATE, got '
+            + JSON.stringify(checks));
+          assert(reasons902(chk).length === 0
+            && !reasons902(chk).includes('archive_authority_missing'),
+            '#902(G1 control): `reasons` must be EMPTY — if this arm ever reds, the writability probe '
+            + 'has become a blanket refusal and the #902 conversion is undone; got '
+            + JSON.stringify(reasons902(chk)));
+          const real = runFinalize902(fx, fx.wtRoot, []);
+          assert(real.status === 0,
+            '#902(G1 control): and the transaction still succeeds, got status=' + real.status
+            + ' json=' + JSON.stringify(real.json));
+        } finally { cleanup902(fx); }
+      }
+
+      // G2 — the SAME topology, one bit changed: `kaola-workflow/` unwritable.
+      {
+        const fx = mk902('issue-902g2', { main: true });
+        const wtKw = path.join(fx.wtRoot, 'kaola-workflow');
+        try {
+          fs.mkdirSync(wtKw, { recursive: true });
+          fs.chmodSync(wtKw, 0o555);
+          // Prove the axis before trusting anything below it.
+          let axisCode = null;
+          try { fs.accessSync(wtKw, fs.constants.W_OK); } catch (e) { axisCode = e && e.code; }
+          assert(axisCode === 'EACCES',
+            '#902(G2) premise: the destination parent must be genuinely unwritable, or `--check` '
+            + 'reports the writable answer and this arm passes vacuously; accessSync gave '
+            + JSON.stringify(axisCode));
+
+          const chk = check902(fx, fx.wtRoot);
+          const checks = (chk.json && chk.json.checks) || {};
+          assert(chk.status !== 0 && chk.json && chk.json.ok === false,
+            '#902(G2): a mirror that CANNOT happen is a genuine operator-owed precondition and must '
+            + 'not be reported as ok; got status=' + chk.status + ' json=' + JSON.stringify(chk.json));
+          assert(checks.mirror === 'sync_failed',
+            '#902(G2): the promise is falsified by probing the tree that will be WRITTEN, and reuses '
+            + 'the token this probe already carries; got ' + JSON.stringify(checks.mirror));
+          assert(reasons902(chk).includes('mirror_sync_failed'),
+            '#902(G2): the actionable token must be in `reasons`; got ' + JSON.stringify(reasons902(chk)));
+          assert(checks.workflow_state !== 'pending_mirror',
+            '#902(G2): and the authority must NOT be predicted — a construction that cannot happen is '
+            + 'not a pending step; got ' + JSON.stringify(checks.workflow_state));
+          // `archive_authority_missing` DOES reappear here, and that is correct: the prediction
+          // declines to promise a construction that cannot happen. Deliberately not asserted absent —
+          // asserting its absence would demand the checklist hide a real precondition.
+
+          // THE TRANSACTION'S OWN HALF. The defect was the ABSENCE of an envelope, so the load-bearing
+          // assertion is that the envelope PARSES — a reason-only assertion passes on a null envelope.
+          const real = runFinalize902(fx, fx.wtRoot, []);
+          assert(real.status !== 0, '#902(G2): the transaction must fail, got ' + real.status);
+          assert(real.json !== null,
+            '#902(G2): the transaction must emit a PARSEABLE JSON envelope — dying on a raw EACCES with '
+            + 'no envelope is the defect, and asserting only the reason would pass on a null one; got '
+            + 'stdout=' + JSON.stringify(String(real.stdout || '').slice(0, 200))
+            + ' stderr=' + JSON.stringify(String(real.stderr || '').slice(0, 200)));
+          assert(real.json && real.json.reason === 'finalize_mirror_refused'
+            && real.json.inner_reason === 'mirror_sync_failed',
+            '#902(G2): typed with the EXISTING vocabulary for "the mirror the script owes cannot be '
+            + 'performed", not a new token; got ' + JSON.stringify(real.json && {
+              result: real.json.result, reason: real.json.reason, inner_reason: real.json.inner_reason }));
+        } finally {
+          try { fs.chmodSync(wtKw, 0o755); } catch (_) {}
+          cleanup902(fx);
+        }
+      }
+
+      // G3 — a regular FILE where `kaola-workflow/` belongs. A second, independent way for the copy
+      // to be impossible (ENOTDIR rather than EACCES), and it died untyped the same way.
+      {
+        const fx = mk902('issue-902g3', { main: true });
+        try {
+          fs.writeFileSync(path.join(fx.wtRoot, 'kaola-workflow'), 'not a directory\n');
+          const real = runFinalize902(fx, fx.wtRoot, []);
+          assert(real.status !== 0 && real.json !== null,
+            '#902(G3): an ENOTDIR mirror failure must also come back as a PARSEABLE envelope, not a '
+            + 'raw stack; got status=' + real.status + ' stderr='
+            + JSON.stringify(String(real.stderr || '').slice(0, 200)));
+          assert(real.json && real.json.reason === 'finalize_mirror_refused'
+            && real.json.inner_reason === 'mirror_sync_failed',
+            '#902(G3): and typed identically — one wrapper covers every way the copy can fail; got '
+            + JSON.stringify(real.json && { reason: real.json.reason, inner_reason: real.json.inner_reason }));
+        } finally { cleanup902(fx); }
+      }
+    }
+  }
+}
+
+// --- D1: the destruction gate must guard EVERY live copy, not just the invoked one --------------
+//
+// `archiveProjectDir` deleted TWO live copies while measuring ONE. Both `verifyArchiveComplete` and
+// the sidecar presence re-check read the copy the command was invoked from; main's live folder was
+// `rmSync`'d with no comparison against the destination at all. Measured before the fix: a `release`
+// from a linked worktree exited **0** reporting `archived: true` and lost three main-only files from
+// EVERYWHERE — one of them an exempt sidecar.
+//
+// The three routes that reach here — release / discard, watch-pr on a merged PR, and the abandon
+// backstop — run NO Step-8a mirror, so nothing upstream establishes "worktree ⊇ main" for them. That
+// is why the pair `mainLive ↔ dest` is the one that can differ, and why it is the pair that must be
+// compared. (It is also why the older `src ↔ dest` re-check could never fire on its own: `copyDir`
+// had just made that pair identical one statement earlier.)
+//
+// PRESENCE, not byte-identity, for main — deliberately: the terminal stamp and the two sentinel
+// rewrites all rewrite the INVOKING root's copy, so main's bytes legitimately differ from the
+// archive's and a byte comparison would false-refuse every ordinary linked run.
+//
+// ONE AXIS, FIVE LEGS: what main's live folder holds relative to the worktree's. Three that must NOT
+// refuse are as load-bearing as the two that must — a blanket refusal on this path would pass L4/L5
+// and destroy nothing, which looks like a fix and is a broken `release`.
+{
+  const { execFileSync: execFS910, spawnSync: spawnS910 } = require('child_process');
+  const CLAIM910 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV910 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const g910 = (cwd, args) => {
+    try { execFS910('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV910 }); return true; }
+    catch (_) { return false; }
+  };
+
+  // A linked-worktree run whose WORKTREE live folder is fixed and whose MAIN live folder is the axis.
+  // `mainFiles === null` means main carries no live folder at all.
+  function mk910(project, mainFiles) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-910-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+    g910(mainRoot, ['init', '-b', 'main']);
+    g910(mainRoot, ['config', 'user.email', 't@t.com']);
+    g910(mainRoot, ['config', 'user.name', 'Test']);
+    g910(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'README.md'), 'fixture\n');
+    g910(mainRoot, ['add', '-A']);
+    g910(mainRoot, ['commit', '-m', 'chore: init']);
+    g910(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+
+    const stateText = [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+      'runtime: claude', 'step: start', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: 910',
+      'sink: merge', 'run_posture: worktree', 'worktree_path: ' + wtRoot,
+      'main_root: ' + mainRoot, 'session_marker: fixture-910', 'claim_ts: 2026-01-01T00:00:00Z', ''
+    ].join('\n');
+
+    // The INVOKED tree's live folder — the same two files in every leg.
+    const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(wtProjDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(wtProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(wtProjDir, '.cache', 'shared.md'), '# held by both copies\n');
+
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    if (mainFiles) {
+      fs.mkdirSync(path.join(mainProjDir, '.cache'), { recursive: true });
+      for (const rel of mainFiles) {
+        const abs = path.join(mainProjDir, ...rel.split('/'));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, rel === 'workflow-state.md' ? stateText : '# ' + rel + '\n');
+      }
+    }
+    return { base, mainRoot, wtRoot, project, mainProjDir, wtProjDir };
+  }
+
+  // `release` is driven rather than `finalize` because it is one of the three routes that run NO
+  // Step-8a mirror — the lane where "worktree ⊇ main" is never established upstream.
+  // spawn-class: durable-handoff
+  function runRelease910(fx) {
+    const e = Object.assign({}, process.env, GIT_ENV910, {
+      KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    });
+    const r = spawnS910(process.execPath, [CLAIM910, 'release', '--project', fx.project, '--json'],
+      { cwd: fx.wtRoot, encoding: 'utf8', timeout: 120000, env: e });
+    let json = null;
+    try {
+      const lines = String(r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
+  }
+  const cleanup910 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
+
+  const LEGS_910 = [
+    { name: 'L1_equal', main: ['workflow-state.md', '.cache/shared.md'], expect: 'archive',
+      why: 'main holds exactly what the worktree holds — nothing can be lost' },
+    { name: 'L2_subset', main: ['workflow-state.md'], expect: 'archive',
+      why: 'main holds a strict SUBSET — still nothing only it has' },
+    { name: 'L3_absent', main: null, expect: 'archive',
+      why: 'no main live folder at all — nothing to compare and nothing to lose' },
+    { name: 'L4_extra', main: ['workflow-state.md', '.cache/shared.md', '.cache/EXTRA.md'],
+      expect: 'refuse', lost: '.cache/EXTRA.md',
+      why: 'one ORDINARY main-only file — the archive is about to become the only copy and does not hold it' },
+    { name: 'L5_sidecar', main: ['workflow-state.md', '.cache/shared.md', '.cache/final-validation.md'],
+      expect: 'refuse', lost: '.cache/final-validation.md',
+      why: 'one main-only EXEMPT sidecar — the half verifyArchiveComplete is blind to by design '
+        + '(T6g in test-finalize-door.js pins that blindness), so this is the leg only a presence '
+        + 're-check can catch' },
+  ];
+
+  for (const leg of LEGS_910) {
+    const fx = mk910('issue-9101' + leg.name.slice(1, 2), leg.main);
+    const label = '#901(D1 ' + leg.name + ')';
+    try {
+      const r = runRelease910(fx);
+      const j = r.json || {};
+      if (leg.expect === 'archive') {
+        assert(r.status === 0 && j.released === true && j.archived === true,
+          label + ': must still archive — ' + leg.why + '. A gate that refuses here is a broken '
+          + '`release`, not a fix; got status=' + r.status + ' json=' + JSON.stringify(j)
+          + ' stderr=' + String(r.stderr || '').slice(0, 300));
+        assert(!fs.existsSync(fx.wtProjDir),
+          label + ': and the invoked tree\'s live folder is disposed of as before');
+        assert(!fs.existsSync(fx.mainProjDir),
+          label + ': and main\'s live copy too — the gate must not strand it');
+      } else {
+        assert(r.status === 1 && j.result === 'refuse' && j.reason === 'archive_incomplete',
+          label + ': ' + leg.why + ', so the disposal must REFUSE under the existing typed reason; got '
+          + 'status=' + r.status + ' json=' + JSON.stringify(j)
+          + ' stderr=' + String(r.stderr || '').slice(0, 300));
+        assert(Array.isArray(j.missing) && j.missing.includes(leg.lost),
+          label + ': and NAME the file that would be lost — an unnamed loss is unrepairable; got '
+          + JSON.stringify(j.missing));
+        // BOTH live copies retained. The refusal is worthless if it still destroys one of them.
+        assert(fs.existsSync(path.join(fx.mainProjDir, ...leg.lost.split('/'))),
+          label + ': main\'s live copy AND the at-risk file must survive the refusal — this is the '
+          + 'file that was being lost from everywhere at exit 0');
+        assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+          label + ': the invoked tree\'s live copy must survive too — the delete is all-or-nothing');
+        assert(j.archived !== true,
+          label + ': and the envelope must not claim it archived; got ' + JSON.stringify(j.archived));
+      }
+    } finally { cleanup910(fx); }
+  }
 }
 
 spawnCensus.report();

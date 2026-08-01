@@ -2269,19 +2269,63 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // that dropped the run record / finalization summary / a per-item .cache evidence file refuses
     // here, before either live copy is deleted (see verifyArchiveComplete).
     const v = verifyArchiveComplete(src, dest);
+    // #901: the delete below disposes of TWO live copies and this verifier reads only ONE of them.
+    // Both the `mainLive` delete and the src-only comparison PRE-DATE this campaign (baseline
+    // 9b68b096 carries the same two statements); what #901 added beside them was a sidecar presence
+    // re-check that ALSO read `src`, which is a statement about the one pair that cannot differ —
+    // `copyDir` is fully recursive and either reproduces every entry or throws, so a sidecar present
+    // in `src` is always present at `dest`. That re-check had no reachable condition, and a guard
+    // with no reachable condition reads as coverage; it is gone rather than kept.
+    //
+    // The pair that CAN differ is `mainLive` ↔ `dest`: main's copy is never copied to `dest` on this
+    // path, so nothing established that `dest` subsumed it, and a run whose main copy held evidence
+    // the worktree's did not lost those files from EVERYWHERE at exit 0. Three of the four routes
+    // here — release / discard, watch-pr on a merged PR, the abandon backstop — run no Step-8a
+    // mirror, so "worktree ⊇ main" is not established for them by anything upstream. So the SAME
+    // comparison is aimed at that pair, plus the sidecar presence it exempts by design (four of the
+    // five files the incident lost are exempt names). One rule: no live copy is deleted while the
+    // destination is missing a file THAT copy holds.
+    //
+    // PRESENCE only, deliberately. Byte-identity is the wrong question for main, whose copy
+    // legitimately differs — the terminal stamp, the #324 sentinel rewrite and the final-validation
+    // normalization above all rewrite the INVOKING root's copy, never main's — so this reads the
+    // comparison's missing[] half and not its mismatched[] half.
+    //
+    // Two subtractions keep it from refusing over a loss that is not one: the #520 transaction
+    // journals (cycle-local scratch that must never be committed anywhere — the same two names
+    // ignoredArchiveEvidence and the sink's SINK_STAGE_SKIP already subtract), and files this
+    // repository ignores BY NAME (the `.DS_Store` a Finder window leaves in a run folder is not run
+    // evidence). A probe fault leaves the by-name set EMPTY, so an unprobeable repo refuses rather
+    // than destroys.
+    const mainLive = path.join(mainRoot, 'kaola-workflow', project);
+    // Disposability decides comparability: a copy that will NOT be deleted needs no statement about
+    // it. A realpath resolving to `dest` IS the archive (nothing to lose), and an unresolvable one
+    // was never deleted either — both preserved exactly as before.
+    let mainLiveDisposable = false;
+    if (fs.existsSync(mainLive)) {
+      try { mainLiveDisposable = fs.realpathSync(mainLive) !== dest; } catch (_) { mainLiveDisposable = false; }
+    }
+    let missingFromMain = [];
+    if (mainLiveDisposable) {
+      missingFromMain = (verifyArchiveComplete(mainLive, dest).missing || [])
+        .concat(missingArchiveSidecars(mainLive, dest))
+        .filter(rel => !/(^|\/)sink-(receipt|fallback)\.json$/.test(rel));
+      const ignoredByName = repoWideIgnoredNames(mainRoot, missingFromMain);
+      missingFromMain = missingFromMain.filter(rel => !ignoredByName.has(rel.split('/').pop()));
+    }
     // Carry BOTH incompleteness signals. verifyArchiveComplete can fail with an EMPTY missing[]
     // and a non-empty mismatched[] — a file that reached the destination with different bytes — and
     // dropping that half left the sink unable to tell a corrupt archive from a clean one.
-    if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, mismatched: v.mismatched || [], dest };
-    // (d) delete BOTH live copies — only after copy+verify confirmed.
-    fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
-    const mainLive = path.join(mainRoot, 'kaola-workflow', project);
-    if (fs.existsSync(mainLive)) {
-      try {
-        if (fs.realpathSync(mainLive) !== dest)
-          fs.rmSync(mainLive, { recursive: true, force: true }); // main live folder
-      } catch (_) {}
+    if (!v.ok || missingFromMain.length > 0) {
+      // De-duplicated: the two live copies overlap by design, and a file BOTH hold that the
+      // destination lacks is one loss, not two.
+      const missing = Array.from(new Set((v.missing || []).concat(missingFromMain)));
+      return { skipped: undefined, archived: false, archive_incomplete: true,
+        missing, mismatched: v.mismatched || [], dest };
     }
+    // (d) delete BOTH live copies — only after copy+verify confirmed, for EACH of them.
+    fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
+    if (mainLiveDisposable) fs.rmSync(mainLive, { recursive: true, force: true }); // main live folder
   } else {
     // in-place run: existing renameSync path unchanged. #676: no completeness gate needed here —
     // an atomic rename relocates the WHOLE live folder, so the archive dest is byte-identical to
@@ -2367,12 +2411,17 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
 // and awaiting the sink's own archive_commit step, or null when the caller's ordinary
 // staged/committed accounting applies. Existence of the dest is not re-probed: the caller only
 // reaches here with the dest archiveProjectDir just wrote.
+//
+// #901: the probe is on the archive DIRECTORY, and that granularity is deliberate HERE — it is the
+// same question the sink's archive_commit step asks to decide whether to honor a whole-band ignore,
+// and the two surfaces must not disagree. What it cannot see is a rule that clips a SUBTREE out of an
+// archive the consumer does want (a basename `.cache/` leaves the directory un-ignored while covering
+// every evidence file beneath it): that is still a genuine `deferred_to_sink`, because the sink now
+// force-adds exactly those paths and verifies each became a blob. The blindness was the SILENCE, not
+// the token — see ignoredArchiveEvidence, which the caller reports alongside the deferral.
 function classifyArchiveDisposition(mainRoot, dest) {
-  if (!mainRoot || !dest) return null;
-  let rel;
-  try { rel = path.relative(mainRoot, dest); } catch (_) { return null; }
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  const relPosix = rel.split(path.sep).join('/');
+  const relPosix = archiveRelFromRoot(mainRoot, dest);
+  if (!relPosix) return null;
   try {
     // exit 0 = the path IS ignored; exit 1 = not ignored; anything else = probe fault. Only a
     // proven refusal earns the skipped_gitignored token — a probe fault must not manufacture one.
@@ -2381,6 +2430,85 @@ function classifyArchiveDisposition(mainRoot, dest) {
     return 'skipped_gitignored';
   } catch (_) { /* not ignored (or unprobeable) — the sink commits it from main */ }
   return 'deferred_to_sink';
+}
+
+// #901: the repo-relative POSIX path of an archive dest that lies inside `mainRoot`, or null when it
+// does not (a linked-run dest resolved against a different root, or an unrelativizable pair). Shared
+// so the disposition classifier and the ignored-evidence probe below ask about the SAME path.
+function archiveRelFromRoot(mainRoot, dest) {
+  if (!mainRoot || !dest) return null;
+  let rel;
+  try { rel = path.relative(mainRoot, dest); } catch (_) { return null; }
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return rel.split(path.sep).join('/');
+}
+
+// #901: the members of `rels` this repository's ignore rules cover BY NAME ALONE — a file with the
+// same BASENAME at the repository root would be ignored too. That is what separates a rule about
+// WHERE a file lives (`/.cache/`, `kaola-workflow/issue-55/`: the run archive's own location, which
+// is the case #901 was authorized to override) from a rule about WHAT a file is CALLED (`.DS_Store`,
+// `*.log`: junk and secrets the consumer wants tracked nowhere, ever). Only the second kind is
+// dropped by the callers. The force-add half of #901 overrides a rule the consumer wrote, and the
+// authorization was for the run's finalization evidence — not for anything that happens to sit in
+// the folder, which is what "every file on disk" delivered.
+//
+// ONE batched `check-ignore --stdin -z`, over synthetic ROOT-level basenames so the question is
+// location-free. `--no-index` so the answer is about the RULES and not about what happens to be
+// tracked. Measured: exit 1 means "none of them is ignored" and is not a fault; the output is
+// NUL-terminated and lists only the ignored names. Any probe fault yields the EMPTY set, so each
+// caller keeps its own pre-existing behaviour — see each call site for which way that fails.
+// Kept identical to kaola-workflow-sink-merge.js's copy; a divergence between the two is a bug.
+function repoWideIgnoredNames(root, rels) {
+  const names = Array.from(new Set(rels.map(r => String(r).split('/').pop()).filter(Boolean)));
+  if (!names.length) return new Set();
+  try {
+    const out = execFileSync('git', ['-C', root, 'check-ignore', '--stdin', '-z', '--no-index'],
+      { input: names.join('\0') + '\0', encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
+        stdio: ['pipe', 'pipe', 'ignore'] });
+    return new Set(out.split('\0').filter(Boolean));
+  } catch (_) { return new Set(); }
+}
+
+// #901: the run-evidence files under an archive dest that this repository's .gitignore covers —
+// untracked AND ignored, so `git add <dest>/` skips them while still staging their non-ignored
+// siblings and exiting 1. `-o -i --exclude-standard` answers per FILE, which is the granularity the
+// directory probe above cannot reach, and it is index-aware so an already-tracked path is correctly
+// absent. The #520 journals are subtracted: they are cycle-local scratch that must never be
+// committed anyway, so naming them would report a loss that is not one. So are the by-name-ignored
+// paths, because this list PROMISES that the sink force-adds every entry — and the sink no longer
+// force-adds those. The two sets must agree or the NOTE describes an override that will not happen.
+// Any probe fault yields the empty set — an unprobeable repo must not manufacture a warning.
+function ignoredArchiveEvidence(mainRoot, dest) {
+  const relPosix = archiveRelFromRoot(mainRoot, dest);
+  if (!relPosix) return [];
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'ls-files', '-o', '-i', '--exclude-standard', '-z', '--', relPosix + '/'],
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    // Split on NUL and NOTHING ELSE. `-z` is chosen so a pathname is never quoted or mangled, and a
+    // `.trim()` here undid exactly that: `notes.md ` (one trailing space) came back as `notes.md`,
+    // matched nothing the disk walk produced, and the whole point of the -z stream was lost. Measured:
+    // the stream is purely NUL-TERMINATED with no trailing newline, so dropping empty records is the
+    // only normalization it needs. Kept byte-identical to the sink's two -z readers.
+    const covered = out.split('\0').filter(Boolean)
+      .filter(p => !/(^|\/)sink-(receipt|fallback)\.json$/.test(p));
+    const ignoredByName = repoWideIgnoredNames(mainRoot, covered);
+    return covered.filter(p => !ignoredByName.has(p.split('/').pop()));
+  } catch (_) { return []; }
+}
+
+// #901: ONE wording for the disposal refusal's remedy, because the path list alone cannot carry it.
+// EVERY live copy is compared against the archive, so a named file may be held by either tree — and
+// the two are not interchangeable for the fix: the archive is built by copying the INVOKED tree's
+// folder, so a file left only in the main checkout is not carried in by a re-run. Naming the tree is
+// the whole remedy; without it "re-run finalize" is advice the operator cannot act on, which is the
+// same unactionable-hint defect this campaign removed from two other refusals. Rendered by every
+// surface that carries prose, so the sentence exists once.
+function archiveIncompleteRemedy(root, project) {
+  const live = projectDir(root, project);
+  return 'Every live copy is compared against the archive — the run folder in the tree this command '
+    + 'was invoked from (' + live + ') and, on a linked run, the one in the main checkout — so a named '
+    + 'file may be held by either. Put each named file in ' + live + ', then re-run: the archive is '
+    + 'built by copying THAT folder, so a file left only in the main checkout is not carried in.';
 }
 
 function archiveProjectDirSafely(root, project, statusValue, suffix, opts) {
@@ -2975,7 +3103,23 @@ function mirrorFinalizationArtifacts(root, project) {
       ledgerCompare = 'skipped_no_script';
     }
   }
-  mergeCopyDir(srcDir, destDir, FINALIZE_MIRROR_DEST_OWNED);
+  // The main→worktree copy is a WRITE, and it was the one write in this function with no failure
+  // path: an unwritable destination (`kaola-workflow/` read-only in the worktree) made mergeCopyDir
+  // throw its raw `EACCES … mkdir` straight out of the transaction, so the operator got a node stack
+  // line and NO typed envelope at all — for the mirror direction whose sibling already refuses under
+  // `mirror_sync_failed` twenty lines above. Same reason, same fail-closed shape: nothing downstream
+  // has run yet, so the worktree is left exactly as it was found.
+  try {
+    mergeCopyDir(srcDir, destDir, FINALIZE_MIRROR_DEST_OWNED);
+  } catch (e) {
+    if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+    return {
+      refused: true,
+      inner_reason: 'mirror_sync_failed',
+      detail: 'the transaction could not mirror the main checkout\'s project folder down into the '
+        + 'linked worktree (' + destDir + '): ' + String((e && e.message) || e).slice(0, 400)
+    };
+  }
   return {
     mirror: 'mirrored',
     ledger_compare: ledgerCompare,
@@ -3122,26 +3266,59 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
 // Read-only classification of what Step 8a WILL do. Mirrors mirrorFinalizationArtifacts' own
 // branch order exactly, minus every write.
 //   'not_needed' | 'ready' | 'sync_required' | 'sync_failed' | 'source_absent' | 'skipped_post_archive'
+// `destAuthorityAbsent` carries the one bit the state token cannot: 'ready' is reached from THREE
+// distinct situations (no source record, a safe compare, and a compare that threw — compareLedgers
+// fails open on a null destination), so 'ready' ALONE never means "the mirror will construct the
+// authority". 'ready' AND destAuthorityAbsent does mean exactly that, which is what the authority
+// prediction reads.
+//
+// It is the AUTHORITY FILE, not the directory. The bit used to be `!existsSync(destDir)`, which
+// answers "the mirror will create the DIRECTORY" — a different question, and false for the ordinary
+// shape where the worktree already carries a partial `kaola-workflow/<project>/` (a `.cache/` holding
+// a chain receipt, and no `workflow-state.md`). There `--check` reported `state_missing` as an
+// operator obligation for a file Step 8a copies in one statement later: the same defect the pending
+// prediction exists to remove, one branch over. The predicate is now literally the copy decision
+// mergeCopyDir will make — FINALIZE_MIRROR_DEST_OWNED skips `workflow-state.md` only when the
+// destination ALREADY has one, so "dest has no workflow-state.md" is exactly "the mirror will write
+// the authority". A dest whose state file exists but is unreadable or the wrong type is NOT repaired
+// by the mirror (it is skipped as dest-owned), and reads false here, so those tokens still stand.
+//
+// 'ready' is a PROMISE that the copy will happen, so it is falsified the same way the sync_required
+// arm is — by probing the tree that will be WRITTEN. It used to probe nothing at all on this arm
+// (the writability probe existed only below, and it reads the SOURCE), so a read-only worktree
+// `kaola-workflow/` produced `ok:true` + `pending_mirror` from `--check` and then an untyped mkdir
+// EACCES out of the transaction one statement later. An unwritable destination is a genuine
+// operator-owed precondition and reports as `sync_failed`, the token this probe already carries for
+// "the mirror the script owes cannot be performed" — no new vocabulary, and the same
+// `mirror_sync_failed` reason the transaction now emits for that failure.
 function probeFinalizeMirror(root, project) {
   let mainRoot = null;
   try {
     mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-    if (mainRoot === fs.realpathSync(root)) return { state: 'not_needed', mainRoot: null };
-  } catch (_) { return { state: 'not_needed', mainRoot: null }; }
+    if (mainRoot === fs.realpathSync(root)) return { state: 'not_needed', mainRoot: null, destAuthorityAbsent: false };
+  } catch (_) { return { state: 'not_needed', mainRoot: null, destAuthorityAbsent: false }; }
   const srcDir = path.join(mainRoot, 'kaola-workflow', project);
   const destDir = path.join(root, 'kaola-workflow', project);
-  if (!fs.existsSync(destDir) && findArchiveAuthorities(root, project).length > 0) {
-    return { state: 'skipped_post_archive', mainRoot };
+  // The DIRECTORY bit is local to the crash-resume branch below, which mirrors
+  // mirrorFinalizationArtifacts' own `!fs.existsSync(destDir)` test and must keep doing so. The bit
+  // the prediction reads is a different question, and is the one that leaves this function.
+  const destAbsent = !fs.existsSync(destDir);
+  const destAuthorityAbsent = !fs.existsSync(path.join(destDir, 'workflow-state.md'));
+  if (destAbsent && findArchiveAuthorities(root, project).length > 0) {
+    return { state: 'skipped_post_archive', mainRoot, destAuthorityAbsent };
   }
-  if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot };
+  if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot, destAuthorityAbsent };
+  // What 'ready' promises: mergeCopyDir mkdirs destDir and copies into it. Probed once, here, so
+  // every 'ready' return below carries the same answer.
+  const ready = mirrorDestWritable(destDir) ? 'ready' : 'sync_failed';
   const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
-  if (!fs.existsSync(srcRecord)) return { state: 'ready', mainRoot };
+  if (!fs.existsSync(srcRecord)) return { state: ready, mainRoot, destAuthorityAbsent };
   try {
     const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
     let destText = null;
     try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
     const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
-    if (verdict.safe) return { state: 'ready', mainRoot };
+    if (verdict.safe) return { state: ready, mainRoot, destAuthorityAbsent };
     // A pending worktree→main sync is machinery-repairable, so it is REPORTED as state, never as an
     // operator-owed precondition — unless the destination is provably unwritable, in which case the
     // transaction will hit the fail-closed mirror_sync_failed refusal and the operator should know.
@@ -3150,10 +3327,27 @@ function probeFinalizeMirror(root, project) {
       fs.accessSync(srcDir, fs.constants.W_OK);
       if (fs.existsSync(srcRecord)) fs.accessSync(srcRecord, fs.constants.W_OK);
     } catch (_) { writable = false; }
-    return { state: writable ? 'sync_required' : 'sync_failed', mainRoot };
+    return { state: writable ? 'sync_required' : 'sync_failed', mainRoot, destAuthorityAbsent };
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-    return { state: 'ready', mainRoot };
+    return { state: ready, mainRoot, destAuthorityAbsent };
+  }
+}
+
+// Can Step 8a's main→worktree copy actually write? `mergeCopyDir` mkdirs `destDir` recursively, so
+// the question is about the NEAREST EXISTING ancestor when the destination itself is absent — which
+// is precisely the `pending_mirror` topology, where nothing at `destDir` exists to probe. Only a
+// proven refusal answers false: an unprobeable path (walked past the filesystem root) reads writable,
+// because a probe fault must not manufacture a precondition the operator cannot act on.
+function mirrorDestWritable(destDir) {
+  let probe = destDir;
+  for (;;) {
+    if (fs.existsSync(probe)) {
+      try { fs.accessSync(probe, fs.constants.W_OK); return true; } catch (_) { return false; }
+    }
+    const parent = path.dirname(probe);
+    if (!parent || parent === probe) return true;
+    probe = parent;
   }
 }
 
@@ -3215,6 +3409,65 @@ function finalizeAuthorityHint(livePresent, innerReason) {
     return 'Multiple exact/suffixed archives match this project, so no current transaction authority can be proven. Restore the live project or retain exactly the archive for the interrupted finalize transaction; no closure side effect was made.';
   }
   return 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.';
+}
+
+// The authority ONE STATEMENT INTO the transaction, not the authority as it stands right now.
+// cmdFinalize runs Step 8a BEFORE it resolves the authority, and on the ordinary linked-worktree
+// topology — run folder resident in the main checkout, worktree not yet carrying it — that mirror
+// CREATES the live folder the resolution then reads. The read-only checklist resolves over the
+// PRE-mirror tree, so it saw no authority at all and reported `archive_authority_missing`: an
+// operator obligation for a step the script performs itself, unasked, one line later. A pending
+// mirror is machinery-repairable exactly as a pending worktree→main sync is, so it is REPORTED as
+// state (`pending_mirror`) and never pushed into `reasons` — the same rule probeFinalizeMirror
+// already applies to `sync_required`.
+//
+// The authority is NOT relocated to the main root: `dest_dir` stays the tree the transaction will
+// read, and only the state file the mirror is about to copy is read out of the source. A prediction
+// naming main as the authority would disagree with execution — the same defect, inverted. Anything
+// the mirror will NOT construct (no source to copy, an archive already standing in, an in-place run)
+// is left exactly as resolved, so a genuinely absent or ambiguous authority still fails closed.
+// Returns { authority, pending, topology }: the resolution the checklist reports, whether the mirror
+// is what constructs it, and the two roots plus source/destination the prediction was made over.
+//
+// TWO inner reasons are converted, because the mirror repairs both and they are the same tree seen at
+// two stages: nothing at the destination (`archive_authority_missing`), and a destination folder that
+// exists WITHOUT the state file (`state_missing`) — the ordinary shape as soon as anything has written
+// a `.cache/` into the worktree. Restricting the conversion to the first left `state_missing` standing
+// as an operator obligation for a file Step 8a copies one statement later. No other token is
+// converted: `state_unreadable`, `state_invalid_type` and `archive_authority_ambiguous` all describe a
+// destination the mirror will NOT overwrite (`FINALIZE_MIRROR_DEST_OWNED` skips an existing state
+// file) or cannot disambiguate, so they still fail closed.
+function predictFinalizeAuthority(root, project, mirror) {
+  const resolved = resolveFinalizeAuthority(root, project);
+  let authority = resolved;
+  let pending = false;
+  if ((resolved.innerReason === 'archive_authority_missing' || resolved.innerReason === 'state_missing')
+    && mirror.mainRoot && mirror.state === 'ready' && mirror.destAuthorityAbsent) {
+    // Resolve over the source Step 8a is about to copy — the same content the post-mirror
+    // resolution will read. Only a LIVE source in main is a construction this can promise; a source
+    // that itself resolves to an archive, or to nothing, leaves the original answer standing.
+    const predicted = resolveFinalizeAuthority(mirror.mainRoot, project);
+    if (predicted.livePresent) {
+      authority = predicted;
+      pending = true;
+    }
+  }
+  // Fail-open on the roots, as resolveMainRoot does: an unresolvable main root reads as the run root.
+  let runRoot = root;
+  try { runRoot = fs.realpathSync(root); } catch (_) {}
+  const topology = {
+    main_root: mirror.mainRoot || runRoot,
+    linked_root: mirror.mainRoot ? runRoot : null,
+    source: 'none',
+    source_dir: null,
+    dest_dir: null
+  };
+  if (authority.authorityDir) {
+    topology.source = pending ? 'pending_mirror' : (authority.livePresent ? 'live' : 'archive');
+    topology.source_dir = authority.authorityDir;
+    topology.dest_dir = pending ? projectDir(root, project) : authority.authorityDir;
+  }
+  return { authority, pending, topology };
 }
 
 // THE FINALIZE REPORT. Two measurements, neither of which refuses.
@@ -3299,17 +3552,23 @@ function persistChangedPathsToSummary(projectDir, changed, probe) {
   return appendSummarySection(projectDir, '## Changed Paths', lines);
 }
 
-// ONE pass over EVERY finalize precondition. Returns { checks, reasons }:
+// ONE pass over EVERY finalize precondition. Returns { checks, reasons, authority }:
 //   checks.mirror                — what Step 8a will do (never performed here)
-//   checks.workflow_state        — 'ok' or the workflow_state rung's inner reason
+//   checks.workflow_state        — 'ok', 'pending_mirror' (Step 8a constructs the authority), or the
+//                                  workflow_state rung's inner reason
 //   checks.implementation_commit — the probe state, or 'not_checked' outside the commit-gate lane
 //   checks.staging_guard         — 'ok' or the guard's reason
 //   checks.validation            — the validation CLASSIFICATION ('chains_green' when green)
 //   checks.dirty_paths           — uncommitted non-`kaola-workflow/` paths in the run root
+//   authority                    — { main_root, linked_root, source, source_dir, dest_dir }: the
+//                                  topology the answers above were predicted over, so a reader can
+//                                  see WHICH tree each one came from
 // `reasons` carries the MOST SPECIFIC token per UNMET precondition — an inner reason wherever the
 // ladder has one — and is EMPTY when the run is finalize-ready. Nothing here short-circuits: a
 // failed rung never hides a later one, which is the whole point of the subtraction. A pending
-// worktree→main sync is machinery-repairable and is therefore reported as state, never as a reason.
+// worktree→main sync is machinery-repairable and is therefore reported as state, never as a reason;
+// so is a pending main→worktree mirror that will CONSTRUCT the authority (`pending_mirror`). What a
+// reader acts on is `reasons`; what the script still owes itself is a state token in `checks`.
 //
 // The validation rung is REPORTED, never a reason: it stopped being a precondition when it stopped
 // being a verdict. A non-green classification shows up in `checks.validation` for a reader to act
@@ -3344,10 +3603,15 @@ function evaluateFinalizePreconditions(root, project, opts) {
       .filter(p => !p.startsWith('kaola-workflow/') && !authored.has(p));
   } catch (_) { checks.dirty_paths = []; }
 
-  const authority = resolveFinalizeAuthority(root, project);
+  // The authority as the TRANSACTION will find it: Step 8a runs before it resolves one, and may be
+  // what constructs it. A construction the script owns is state, never an operator obligation.
+  const prediction = predictFinalizeAuthority(root, project, mirror);
+  const authority = prediction.authority;
   if (authority.innerReason) {
     checks.workflow_state = authority.innerReason;
     reasons.push(authority.innerReason);
+  } else if (prediction.pending) {
+    checks.workflow_state = 'pending_mirror';
   }
 
   // The implementation-commit and staging rungs are scoped exactly as the transaction scopes them:
@@ -3371,7 +3635,9 @@ function evaluateFinalizePreconditions(root, project, opts) {
 
   // The validation measurement needs a proven authority to locate the run's `.cache/` from. Without
   // one the workflow_state rung above already owns the refusal, so report it as unevaluated rather
-  // than inventing a second answer for the same missing artifact.
+  // than inventing a second answer for the same missing artifact. A PREDICTED authority carries the
+  // same `.cache/` the mirror is about to copy, so the measurement is available there too — it used
+  // to be lost to `not_checked` purely because the rung above had not looked in the right tree yet.
   if (!authority.authorityDir) {
     checks.validation = 'not_checked';
   } else {
@@ -3381,23 +3647,27 @@ function evaluateFinalizePreconditions(root, project, opts) {
     checks.changed_paths = report.changed_paths;
   }
 
-  return { checks, reasons };
+  return { checks, reasons, authority: prediction.topology };
 }
 function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
   // #837: `--check` is the one-pass PRE-FLIGHT — every precondition evaluated together, read-only,
-  // zero side effect, emitted in cmdVerifySink's { project, ok, checks, reasons } shape. It is an
-  // ADDED surface, never a replacement: the transaction below keeps every one of its own
-  // fail-closed gates, so a caller that skips the pre-flight is refused exactly as before.
+  // zero side effect, emitted in cmdVerifySink's { project, ok, checks, reasons } shape plus the
+  // `authority` topology the answers were predicted over. It is an ADDED surface, never a
+  // replacement: the transaction below keeps every one of its own fail-closed gates, so a caller
+  // that skips the pre-flight is refused exactly as before.
   if (args.check) {
     const report = evaluateFinalizePreconditions(root, args.project, {
       keepWorktree: !!args.keepWorktree,
       base: args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null
     });
     const ok = report.reasons.length === 0;
-    output({ project: args.project, ok, checks: report.checks, reasons: report.reasons }, ok ? 0 : 1);
+    output({
+      project: args.project, ok, checks: report.checks, reasons: report.reasons,
+      authority: report.authority
+    }, ok ? 0 : 1);
     return;
   }
   // #816: the transaction ledger — one object recording every step of the mechanical residue, so
@@ -3428,10 +3698,11 @@ function cmdFinalize() {
         inner_reason: mirror.inner_reason,
         project: args.project,
         detail: mirror.detail,
-        operator_hint: 'The transaction owns the worktree→main project-folder sync and could not '
-          + 'perform it — the main checkout is unwritable or its copy could not be repaired. Make '
-          + 'the main checkout writable, then re-run finalize. Never hand-copy a staler main ledger '
-          + 'over the worktree. No archive or closure side effect was made.',
+        operator_hint: 'The transaction owns the project-folder sync between the main checkout and '
+          + 'the linked worktree, in BOTH directions, and could not perform it — one of the two '
+          + 'trees is unwritable, or the main copy could not be repaired. `detail` names the tree '
+          + 'and the error. Make that tree writable, then re-run finalize. Never hand-copy a staler '
+          + 'main ledger over the worktree. No archive or closure side effect was made.',
         errors: [mirror.inner_reason]
       }, 1);
       return;
@@ -3590,12 +3861,12 @@ function cmdFinalize() {
       mismatched,
       dest: result.dest,
       reasoning: (missing.length > 0
-        ? 'the archive copy dropped evidence the live project still held (' + missing.join(', ') + ')'
+        ? 'the archive copy dropped evidence a live project folder still held (' + missing.join(', ') + ')'
         : 'the archive copy does not faithfully reproduce the live project (' +
           (mismatched.join(', ') || 'unknown') + ')') +
-        '; the live project folder was left in place — no roadmap/issue/label side effect was '  +
-        'performed. Re-run finalize so the archive reproduces every file the source contains, '  +
-        'byte for byte and entry kind for entry kind.'
+        '; every live project folder was left in place — no roadmap/issue/label side effect was ' +
+        'performed. The archive must reproduce every file the source contains, byte for byte and '  +
+        'entry kind for entry kind. ' + archiveIncompleteRemedy(root, args.project)
     }, 1);
     return;
   }
@@ -3939,6 +4210,20 @@ function cmdFinalize() {
         process.stderr.write('kaola-gitlab-workflow-claim finalize: WARNING: kaola-workflow/archive is covered by this '
           + 'repository\'s .gitignore — the archive for ' + args.project + ' was written to '
           + result.dest + ' but git REFUSES to track it. It is on disk only; nothing was committed.\n');
+      } else if (archiveDisposition === 'deferred_to_sink') {
+        // #901: the archive band is committable but a rule may still cover files INSIDE it. The
+        // deferral is honest — the sink force-adds these under this project's archive path and then
+        // verifies each became a blob — but the run record must name what the deferral rests on. This
+        // silence is what let a finalize look clean while the run's .cache evidence sat on a path git
+        // refuses to stage; recorded on the transaction, not only on stderr, so it outlives the run.
+        const ignoredEvidence = ignoredArchiveEvidence(mainRoot2, result.dest);
+        if (ignoredEvidence.length > 0) {
+          finalizeTx.archive_ignored_evidence = ignoredEvidence;
+          process.stderr.write('kaola-gitlab-workflow-claim finalize: NOTE: ' + ignoredEvidence.length + ' run-evidence '
+            + 'file(s) under ' + result.dest + ' are covered by this repository\'s .gitignore while the archive '
+            + 'directory itself is not — the sink\'s archive_commit step force-adds them and verifies each one '
+            + 'became a blob: ' + ignoredEvidence.join(', ') + '\n');
+        }
       }
       let hasStaged = false;
       try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
@@ -4060,7 +4345,8 @@ function cmdRelease() {
     output({ released: false, result: 'refuse', project: folder.project,
       reason: result.reason || (result.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
       detail: result.detail, missing: result.missing,
-      reasoning: 'archival did not return an explicit success result; worktree, branch, and claim-label cleanup was not attempted.' }, 1);
+      reasoning: 'archival did not return an explicit success result; worktree, branch, and claim-label cleanup was not attempted.'
+        + (result.archive_incomplete === true ? ' ' + archiveIncompleteRemedy(root, folder.project) : '') }, 1);
     return;
   }
   try { removeWorktree(root, folder.project, folder); } catch (_) {}
@@ -4646,6 +4932,23 @@ const ARCHIVE_CACHE_SIDECAR_MD = new Set([
   'doc-docking.md',        // finalize Documentation-Docking sub-step (DOCKED/BLOCKED)
   'doc-updater.md',        // finalize doc-updater sub-step output
 ]);
+
+// #901: the exempt sidecars a LIVE copy holds and the archive destination does not. The byte
+// verifier below skips these on purpose (a normalized sidecar may legitimately differ from its
+// source), which left the pre-deletion gate with no statement about them at all — and four of the
+// five evidence files the incident lost live in this set. PRESENCE is strictly weaker than
+// byte-identity and costs one readdir. Called once per live copy that is about to be deleted, so
+// the answer is about THAT copy: an unreadable `.cache` contributes nothing rather than throwing.
+function missingArchiveSidecars(liveDir, destDir) {
+  const missing = [];
+  try {
+    for (const entry of fs.readdirSync(path.join(liveDir, '.cache'), { withFileTypes: true })) {
+      if (!entry.isFile() || !ARCHIVE_CACHE_SIDECAR_MD.has(entry.name)) continue;
+      if (!fs.existsSync(path.join(destDir, '.cache', entry.name))) missing.push('.cache/' + entry.name);
+    }
+  } catch (_) { /* no readable .cache in this copy — nothing exempt to re-check */ }
+  return missing;
+}
 function listSourceEvidenceFiles(srcDir) {
   const rels = [];
   for (const f of ['workflow-plan.md', 'workflow-state.md', 'finalization-summary.md']) {

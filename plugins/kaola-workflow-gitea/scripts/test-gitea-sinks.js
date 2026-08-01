@@ -1722,4 +1722,582 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
   console.log('Gitea #746 journal-only live dir is skipped, not classified evidence-losing');
 }
 
+// --- #901: a consumer's basename `.cache/` rule must not clip the run evidence out of the archive --
+//
+// The archive-band case (`kaola-workflow/archive/`) was already covered, and it is a DIFFERENT
+// question at a different granularity. A basename rule leaves the archive DIRECTORY un-ignored
+// (check-ignore exits 1) while covering every evidence file beneath it, so this port's dir probe
+// answered "not ignored", the honest-skip arm never fired, `git add <archive>/` exited 1 with git's
+// ignore report while STILL staging the non-ignored siblings, and both add sites sat inside
+// `catch (_) {}`. Measured on this port: exit 0, status:sinked, steps.archive_commit:"done", an
+// archive commit carrying 3 of 8 files, and archived_paths naming the 3 survivors as the whole set.
+//
+// Two things make these pins the ones that could have caught it, and each edition needs its own —
+// there is no cross-edition coverage comparison, so a canonical pin does not defend this file:
+//   1. the fixture's rule is exactly `.cache/`. Every existing .gitignore fixture in this suite and
+//      both forge walkthroughs writes the archive band, an ANCHORED `/.cache/` (root-only), or
+//      `kaola-workflow/` wholesale — none of which matches an archive .cache subtree.
+//   2. every durability clause reads `git ls-tree`, never the disk. The lost files were on disk the
+//      whole time, so an fs.existsSync pin passes against the broken port.
+// KAOLA_WORKFLOW_OFFLINE is set to '0' EXPLICITLY rather than inherited: an inherited '1' disables
+// the push/clone half and would silently retire the durability half of the check.
+{
+  const sinkScript901 = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
+  // The five run-evidence files #901 names as lost. Content is inert — what matters is that each is a
+  // regular FILE the archive holds on disk, and therefore a file the archive commit owes.
+  const cacheEvidence901 = {
+    'final-validation.md': '# Final Validation\n\nall four chains green\n',
+    'doc-updater.md': '# Doc Updater\n\nREADME + CHANGELOG updated\n',
+    'doc-docking.md': '# Doc Docking\n\ndocked into docs/api.md\n',
+    'run-gaps-manual.md': '# Run Gaps (manual)\n\nnone\n',
+    'run-gaps.json': '{"gaps":[]}\n',
+  };
+  const evidenceRel901 = (archiveRel) =>
+    Object.keys(cacheEvidence901).map(n => archiveRel + '/.cache/' + n).sort();
+  const liveState901 = (project, issue) => ['# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: closed', '',
+    '## Current Position', 'phase: adaptive', 'runtime: claude', 'step: start', '',
+    '## Last Updated', new Date().toISOString(), '', '## Sink',
+    'branch: workflow/' + project, 'issue_number: ' + issue, 'sink: merge', 'run_posture: in-place',
+    'main_root: (test)', 'session_marker: test-session', 'claim_ts: ' + new Date().toISOString()].join('\n') + '\n';
+  const roadmapSource901 = (issue) => ['issue: #' + issue, 'title: Test issue ' + issue,
+    'status: active', 'workflow_project: sink-test', 'next_step: TBD'].join('\n') + '\n';
+  const roadmapMirror901 = (issue) => '# Kaola-Workflow Roadmap\n\n| Issue | Title | Status | Project'
+    + ' | Next Step |\n|---|---|---|---|---|\n| #' + issue + ' | Test issue ' + issue
+    + ' | active | sink-test | TBD |\n';
+
+  // The STATEFUL tea mock this suite already relies on (see the #619 post-probe note at Test 17b):
+  // `issues view` reports open until a matching `issues close` has been logged. A constant response
+  // makes the sink's post-close probe bucket a real close as failed.
+  const writeTeaMock901 = (mockPath, logFile, number) => {
+    fs.writeFileSync(mockPath, [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      "function log(m){ try { fs.appendFileSync(logFile, m + '\\n'); } catch (_) {} }",
+      "function closed(){ try { return fs.readFileSync(logFile, 'utf8').split('\\n').some(function (l) { return l === 'CLOSE'; }); } catch (_) { return false; } }",
+      "log('CALL: ' + a);",
+      "if (a.startsWith('issues view')) { process.stdout.write(JSON.stringify({ number: " + number + ", state: closed() ? 'closed' : 'open' }) + '\\n'); process.exit(0); }",
+      "if (a.startsWith('issues close')) { log('CLOSE'); process.stdout.write(JSON.stringify({ number: " + number + ", state: 'closed' }) + '\\n'); process.exit(0); }",
+      "if (a.startsWith('issues edit')) { process.stdout.write(JSON.stringify({ number: " + number + ", state: 'closed', labels: [] }) + '\\n'); process.exit(0); }",
+      "if (a.startsWith('api')) { process.stdout.write('{\"id\":9005}\\n'); process.exit(0); }",
+      "process.stdout.write('{}\\n'); process.exit(0);",
+    ].join('\n'));
+  };
+
+  // The keep-worktree posture: receipt.archive_dest stays UNSET, the archive already sits on MAIN's
+  // disk (untracked, because the consumer's rule covers part of it), and the branch carries only the
+  // deliverable. `gitignoreBody` is the ONE axis between the legs below.
+  //   cacheOverride — replaces the five-file evidence set. A name may contain `/` (its parent is
+  //     created) and may carry leading/trailing whitespace or an embedded newline; those are legal
+  //     pathname bytes and the whitespace pin turns on them.
+  //   symlinks — { <name>: <target> }, created after the regular files so a link may point at one.
+  const mkFixture901 = (project, issue, gitignoreBody, cacheOverride, symlinks) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-901-'));
+    const remote = root + '-remote';
+    const mockScript = root + '-tea-mock.js';
+    const logFile = root + '-tea-calls.log';
+    const branch = 'workflow/' + project;
+    const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n'); git('add', '-A'); git('commit', '-m', 'init');
+    G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+    git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
+    writeTeaMock901(mockScript, logFile, issue);
+
+    fs.writeFileSync(path.join(root, '.gitignore'), gitignoreBody);
+    fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource901(issue));
+    fs.writeFileSync(path.join(root, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror901(issue));
+    git('add', '-A'); git('commit', '-m', 'chore: roadmap + gitignore'); git('push', 'origin', 'main');
+
+    git('checkout', '-b', branch);
+    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable\n');
+    git('add', '-A'); git('commit', '-m', 'feat: deliverable');
+    git('push', '-u', 'origin', branch); git('checkout', 'main');
+
+    const archiveDir = path.join(root, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(path.join(archiveDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), liveState901(project, issue));
+    fs.writeFileSync(path.join(archiveDir, 'mission-list.md'), '# Mission list\n\n- item: do the thing\n  status: done\n');
+    fs.writeFileSync(path.join(archiveDir, 'finalization-summary.md'), '# Finalization Summary\n\nARCHIVED AFTER FINAL GIT GATE\n');
+    const entries = cacheOverride || cacheEvidence901;
+    for (const n of Object.keys(entries)) {
+      const dest = path.join(archiveDir, '.cache', n);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, entries[n]);
+    }
+    for (const n of Object.keys(symlinks || {})) fs.symlinkSync(symlinks[n], path.join(archiveDir, '.cache', n));
+    return { root, remote, mockScript, logFile, branch, project, archiveDir };
+  };
+
+  // The sole-archiver posture: the run folder is LIVE on the branch (its .cache force-added, so the
+  // consumer's own rule cannot make preflight the axis), and this sink archives it itself — which is
+  // what sets receipt.archive_dest and makes the #700 completeness guard live.
+  const mkSoleFixture901 = (project, issue, gitignoreBody) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-901s-'));
+    const remote = root + '-remote';
+    const mockScript = root + '-tea-mock.js';
+    const logFile = root + '-tea-calls.log';
+    const branch = 'workflow/' + project;
+    const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n'); git('add', '-A'); git('commit', '-m', 'init');
+    G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+    git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
+    writeTeaMock901(mockScript, logFile, issue);
+
+    fs.writeFileSync(path.join(root, '.gitignore'), gitignoreBody);
+    fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource901(issue));
+    fs.writeFileSync(path.join(root, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror901(issue));
+    git('add', '-A'); git('commit', '-m', 'chore: roadmap + gitignore'); git('push', 'origin', 'main');
+
+    git('checkout', '-b', branch);
+    const liveDir = path.join(root, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState901(project, issue).replace('status: closed', 'status: active'));
+    fs.writeFileSync(path.join(liveDir, 'mission-list.md'), '# Mission list\n\n- item: do the thing\n  status: done\n');
+    fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+    for (const n of Object.keys(cacheEvidence901)) fs.writeFileSync(path.join(liveDir, '.cache', n), cacheEvidence901[n]);
+    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable\n');
+    git('add', '-A');
+    git('add', '-f', '--', 'kaola-workflow/' + project + '/.cache/');
+    git('commit', '-m', 'feat: deliverable + live state');
+    git('push', '-u', 'origin', branch); git('checkout', 'main');
+    return { root, remote, mockScript, logFile, branch, project };
+  };
+
+  // The measured properties are the process's OWN exit code and its emitted envelope, so the CLI
+  // boundary is where they live.
+  // spawn-class: cli-contract
+  const runSink901 = (fx) => spawnSync(process.execPath,
+    [sinkScript901, '--branch', fx.branch, '--project', fx.project, '--issue', String(fx.issue || 901), '--sink', '--json'],
+    {
+      cwd: fx.root, encoding: 'utf8', timeout: 180000,
+      // OFFLINE '0' is EXPLICIT, never inherited — an inherited '1' skips the push and would retire
+      // the fresh-clone half of every durability clause below without failing anything.
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1', KAOLA_TEA_MOCK_SCRIPT: fx.mockScript },
+    });
+  const parseLast901 = (out) => {
+    const ls = String(out || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    try { return JSON.parse(ls[ls.length - 1]); } catch (_) { return {}; }
+  };
+  // `ls-tree -r` enumerates BLOBS, never directories — the one probe that separates "the archive
+  // directory reached the commit" (which a partial commit also satisfies) from "this file is durably
+  // in it". Entries rather than names, so the MODE is available: a symlink is a 120000 blob, and
+  // asserting only that a path exists would not distinguish it from a regular file.
+  //
+  // NUL-split ONLY — never `.trim()`. That normalization is the whole reason `-z` was chosen: git
+  // emits no trailing newline here, so trimming destroys leading/trailing whitespace that is
+  // genuinely part of a pathname. Trimming a `-z` stream in the SINK is what made a run permanently
+  // unsinkable, and this reader had the identical bug — it trimmed the space out of an observed blob
+  // path while the expected name kept it, which would have made the whitespace pin below red against
+  // a correct port.
+  const treeEntriesUnder901 = (cwd, ref, pathspec) => {
+    const r = G.git(cwd, ['ls-tree', '-r', '-z', ref, '--', pathspec], { encoding: 'utf8' });
+    if (r.status !== 0) return [];
+    return String(r.stdout || '').split('\0').filter(Boolean).map((rec) => {
+      const tab = rec.indexOf('\t');
+      const meta = (tab < 0 ? rec : rec.slice(0, tab)).split(' ');
+      return { mode: meta[0], type: meta[1], sha: meta[2], path: tab < 0 ? '' : rec.slice(tab + 1) };
+    });
+  };
+  const blobsUnder901 = (cwd, ref, pathspec) =>
+    treeEntriesUnder901(cwd, ref, pathspec).map(e => e.path).filter(Boolean);
+  const pathsInCommit901 = (cwd, sha) => {
+    const r = G.git(cwd, ['diff-tree', '--no-commit-id', '-r', '-z', '--name-only', sha], { encoding: 'utf8' });
+    if (r.status !== 0) return [];
+    return String(r.stdout || '').split('\0').filter(Boolean);
+  };
+  const archiveCommitOf901 = (cwd, project) => {
+    const subject = 'chore: archive ' + project + ' [sink]';
+    const r = G.git(cwd, ['log', '--format=%H%x1f%s'], { encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    for (const line of String(r.stdout || '').split('\n')) {
+      const i = line.indexOf('\x1f');
+      if (i > 0 && line.slice(i + 1) === subject) return line.slice(0, i);
+    }
+    return null;
+  };
+  const cleanup901 = (fx) => {
+    for (const p of [fx.root, fx.remote]) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+    for (const p of [fx.mockScript, fx.logFile]) { try { fs.rmSync(p, { force: true }); } catch (_) {} }
+  };
+
+  // (a) and (b) are held to ONE assertion set so the ignored leg and its control cannot end up
+  // checked at different strengths. `expectForced` is the only difference, and it IS the axis.
+  const assertEvidenceDurable901 = (fx, label, r, expectForced) => {
+    const p = parseLast901(r.stdout);
+    const archiveRel = 'kaola-workflow/archive/' + fx.project;
+    const want = evidenceRel901(archiveRel);
+    assert.strictEqual(r.status, 0, label + ': the sink must complete, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    assert.strictEqual(p.status, 'sinked', label + ': status must be sinked, got ' + JSON.stringify(p));
+    // The token lives on steps.archive_commit; receipt.archive_commit is UNDEFINED in this posture,
+    // so asserting that field instead would pass against anything.
+    assert.strictEqual(p.receipt && p.receipt.steps && p.receipt.steps.archive_commit, 'done',
+      label + ': steps.archive_commit must be "done", got ' + JSON.stringify(p.receipt && p.receipt.steps));
+
+    const blobs = blobsUnder901(fx.root, 'HEAD', archiveRel);
+    assert.deepStrictEqual(want.filter(x => !blobs.includes(x)), [],
+      label + ': every archived .cache evidence file must be a BLOB at HEAD (on-disk presence is what'
+      + ' the broken port already satisfied); blobs under ' + archiveRel + ': ' + JSON.stringify(blobs));
+
+    const sha = archiveCommitOf901(fx.root, fx.project);
+    assert.ok(sha, label + ': the archive commit must exist (no "chore: archive ' + fx.project + ' [sink]" subject in git log)');
+    const inCommit = pathsInCommit901(fx.root, sha).filter(x => x.startsWith(archiveRel + '/'));
+    assert.strictEqual(inCommit.length, 8, label + ': the archive commit must carry all 8 archive files,'
+      + ' not the 3 non-ignored survivors, got ' + inCommit.length + ': ' + JSON.stringify(inCommit));
+
+    const named = (p.receipt && p.receipt.archived_paths) || [];
+    assert.deepStrictEqual(want.filter(x => !named.includes(x)), [],
+      label + ': archived_paths must name every evidence file the commit carries — it becomes the'
+      + ' durable ## Sink Findings record, got ' + JSON.stringify(named));
+
+    // "Durable" is a claim about a fresh clone, so make a fresh clone the witness.
+    const cloneDir = fx.root + '-clone';
+    try {
+      G.clone(fx.remote, cloneDir, ['-q'], { encoding: 'utf8' });
+      const cloned = blobsUnder901(cloneDir, 'HEAD', archiveRel);
+      assert.deepStrictEqual(want.filter(x => !cloned.includes(x)), [],
+        label + ': the evidence must survive a fresh clone of the pushed remote, the clone carries '
+        + JSON.stringify(cloned));
+    } finally { try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch (_) {} }
+
+    // #520 under the force-add — the ONE new way a transaction journal could leak into a commit.
+    const forced = p.receipt && p.receipt.archive_forced_paths;
+    assert.ok(!(forced || []).some(x => /\/sink-(?:receipt|fallback)\.json$/.test(x)),
+      label + ': #520 — archive_forced_paths must never name a transaction journal, got ' + JSON.stringify(forced));
+    const trackedJournals = String(G.git(fx.root, ['ls-files', '--', '*/sink-receipt.json', '*/sink-fallback.json'], { encoding: 'utf8' }).stdout || '').trim();
+    assert.strictEqual(trackedJournals, '', label + ': #520 — no sink journal may be tracked after the archive commit, got ' + trackedJournals);
+
+    if (expectForced) {
+      assert.deepStrictEqual((forced || []).slice().sort(), want,
+        label + ': archive_forced_paths must name exactly the ignored evidence files — overriding a'
+        + ' rule the consumer wrote is recorded, never silent, got ' + JSON.stringify(forced));
+    } else {
+      assert.strictEqual(forced, undefined,
+        label + ': nothing here is ignored, so no path may be force-added at all, got ' + JSON.stringify(forced));
+    }
+  };
+
+  // (a) the defect: the basename rule.
+  {
+    const project = 'issue-98011';
+    const fx = mkFixture901(project, 98011, '.cache/\n'); fx.issue = 98011;
+    try {
+      // Precondition — the granularity mismatch is genuinely present, else the leg could pass for
+      // the wrong reason (a rule that matched nothing at all).
+      assert.strictEqual(G.git(fx.root, ['check-ignore', '-q', '--', 'kaola-workflow/archive/' + project], { encoding: 'utf8' }).status, 1,
+        '#901-gitea-a: precondition — a basename rule must leave the archive DIRECTORY un-ignored');
+      assert.strictEqual(G.git(fx.root, ['check-ignore', '-q', '--', 'kaola-workflow/archive/' + project + '/.cache/run-gaps.json'], { encoding: 'utf8' }).status, 0,
+        '#901-gitea-a: precondition — the same rule must cover a FILE beneath the archive');
+      assertEvidenceDurable901(fx, '#901-gitea-a IGNORED', runSink901(fx), true);
+    } finally { cleanup901(fx); }
+  }
+
+  // (b) the single-axis control: an irrelevant rule changes nothing and forces nothing.
+  {
+    const project = 'issue-98012';
+    const fx = mkFixture901(project, 98012, 'node_modules/\n'); fx.issue = 98012;
+    try {
+      assert.strictEqual(G.git(fx.root, ['check-ignore', '-q', '--', 'kaola-workflow/archive/' + project + '/.cache/run-gaps.json'], { encoding: 'utf8' }).status, 1,
+        '#901-gitea-b: precondition — the control rule must cover nothing under the archive');
+      assertEvidenceDurable901(fx, '#901-gitea-b CONTROL', runSink901(fx), false);
+    } finally { cleanup901(fx); }
+  }
+
+  // (c) the archive-BAND decision is preserved, and sharpened: force-add and honest-skip are
+  // mutually exclusive. A band rule is a consumer saying "no tracked archives at all", so overriding
+  // it would be the opposite of honoring it — and nothing pinned that they stay exclusive.
+  {
+    const project = 'issue-98013';
+    const fx = mkFixture901(project, 98013, 'kaola-workflow/archive/\n'); fx.issue = 98013;
+    try {
+      const r = runSink901(fx);
+      const p = parseLast901(r.stdout);
+      const archiveRel = 'kaola-workflow/archive/' + project;
+      assert.strictEqual(r.status, 0, '#901-gitea-c: the honest skip must still complete, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      assert.strictEqual(p.status, 'sinked', '#901-gitea-c: status must be sinked, got ' + JSON.stringify(p));
+      assert.strictEqual(p.receipt && p.receipt.archive_commit, 'skipped_gitignored',
+        '#901-gitea-c: a band rule must still record skipped_gitignored, got ' + JSON.stringify(p.receipt && p.receipt.archive_commit));
+      assert.strictEqual(p.receipt && p.receipt.archive_forced_paths, undefined,
+        '#901-gitea-c: the force-add must be DECLINED when the rule covers the whole band, got ' + JSON.stringify(p.receipt && p.receipt.archive_forced_paths));
+      assert.deepStrictEqual(blobsUnder901(fx.root, 'HEAD', archiveRel), [],
+        '#901-gitea-c: nothing under the ignored archive may reach HEAD');
+      // What the skip GAINED is the inventory: every required file it leaves uncommitted, named.
+      // "Announced" was already true; itemized was not.
+      const missing = (p.receipt && p.receipt.archive_missing_paths) || [];
+      assert.strictEqual(missing.length, 8, '#901-gitea-c: the skip must itemize all 8 uncommitted required files, got ' + JSON.stringify(missing));
+      assert.deepStrictEqual(evidenceRel901(archiveRel).filter(x => !missing.includes(x)), [],
+        '#901-gitea-c: the itemized list must name the .cache evidence, got ' + JSON.stringify(missing));
+      // ...and it still does not destroy the archive it declined to commit.
+      for (const n of Object.keys(cacheEvidence901)) {
+        assert.ok(fs.existsSync(path.join(fx.archiveDir, '.cache', n)),
+          '#901-gitea-c: the on-disk archive must survive an honest skip, ' + n + ' is gone');
+      }
+    } finally { cleanup901(fx); }
+  }
+
+  // (d) the armed-gate pin. A happy path cannot tell the per-path blob verdict from a no-op — it is
+  // green either way once the force-add works. Break the force-add on ONE required file and the gate
+  // has to be the thing that speaks.
+  {
+    const project = 'issue-98014';
+    const fx = mkFixture901(project, 98014, '.cache/\n'); fx.issue = 98014;
+    const blocked = path.join(fx.archiveDir, '.cache', 'run-gaps.json');
+    try {
+      // The ONE axis versus (a): a required file git cannot index. Verified in-fixture rather than
+      // assumed — a chmod that silently did not take turns this into a second happy path.
+      fs.chmodSync(blocked, 0o000);
+      let stillReadable = true;
+      try { fs.readFileSync(blocked); } catch (_) { stillReadable = false; }
+      assert.ok(!stillReadable,
+        '#901-gitea-d: arming axis — the required file must be genuinely unreadable, else this leg proves nothing');
+      const r = runSink901(fx);
+      const p = parseLast901(r.stdout);
+      const archiveRel = 'kaola-workflow/archive/' + project;
+
+      assert.strictEqual(r.status, 1, '#901-gitea-d: a partially committed archive must exit 1, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      assert.strictEqual(p.result, 'refuse', '#901-gitea-d: must emit result:refuse, got ' + JSON.stringify(p));
+      assert.strictEqual(p.reason, 'sink_incomplete', '#901-gitea-d: must refuse under sink_incomplete, got ' + JSON.stringify(p));
+      assert.strictEqual(p.step, 'archive_commit', '#901-gitea-d: the refusal must name the archive_commit step, got ' + JSON.stringify(p));
+      assert.notStrictEqual(p.status, 'sinked', '#901-gitea-d: status must NOT be sinked over an archive the commit does not carry');
+      assert.deepStrictEqual(evidenceRel901(archiveRel).filter(x => !(p.archive_missing_paths || []).includes(x)), [],
+        '#901-gitea-d: archive_missing_paths must name EVERY required path absent from the commit — a count is not a diagnosis, got '
+        + JSON.stringify(p.archive_missing_paths));
+      // The signal `catch (_) {}` used to throw away. It is the only evidence git ever produced.
+      assert.ok(Array.isArray(p.archive_add_errors) && p.archive_add_errors.some(e => /git add/.test(String(e))),
+        '#901-gitea-d: the swallowed git add failure must reach archive_add_errors, got ' + JSON.stringify(p.archive_add_errors));
+
+      // A refusal envelope carries no `receipt` key, so the durable record is the surviving journal —
+      // the refusal returns before the #653 disposal precisely so it survives.
+      const journal = path.join(fx.archiveDir, '.cache', 'sink-receipt.json');
+      assert.ok(fs.existsSync(journal), '#901-gitea-d: the refusal must leave its journal on disk at ' + journal);
+      let persisted = null;
+      try { persisted = JSON.parse(fs.readFileSync(journal, 'utf8')); } catch (_) { persisted = null; }
+      assert.notStrictEqual(persisted && persisted.steps && persisted.steps.archive_commit, 'done',
+        '#901-gitea-d: steps.archive_commit must be left NOT done so a re-run retries it, got ' + JSON.stringify(persisted && persisted.steps));
+      assert.strictEqual(persisted && persisted.archive_commit, 'failed',
+        '#901-gitea-d: the journal must record archive_commit:"failed", got ' + JSON.stringify(persisted && persisted.archive_commit));
+      // #520 stays subtracted even here: that journal is on disk under the archive .cache and IS
+      // covered by the consumer's rule, and must be neither demanded of the commit nor tracked. This
+      // is the leg where that is observable rather than vacuous — a successful sink disposes of its
+      // journal before anything can look.
+      assert.ok(!(p.archive_missing_paths || []).some(x => /sink-(?:receipt|fallback)\.json$/.test(x)),
+        '#901-gitea-d: #520 — a transaction journal must never be demanded of the archive commit, got ' + JSON.stringify(p.archive_missing_paths));
+
+      // The refusal destroys nothing recoverable: it returns BEFORE teardown.
+      assert.strictEqual(G.git(fx.root, ['rev-parse', '--verify', fx.branch], { encoding: 'utf8' }).status, 0,
+        '#901-gitea-d: the feature branch must be RETAINED by the refusal');
+      for (const n of Object.keys(cacheEvidence901)) {
+        assert.ok(fs.existsSync(path.join(fx.archiveDir, '.cache', n)),
+          '#901-gitea-d: the on-disk archive must survive the refusal, ' + n + ' is gone');
+      }
+    } finally {
+      try { fs.chmodSync(blocked, 0o644); } catch (_) {}
+      cleanup901(fx);
+    }
+  }
+
+  // (e) the OTHER archiver posture. (a)–(d) run with receipt.archive_dest unset, where the #700
+  // completeness guard is dormant; here this sink archives the folder itself, the dest IS set and
+  // that guard is live — and the port lost the same files anyway, because a partially committed
+  // archive still yields a `tree` for cat-file. The live evidence is branch-tracked here, so the
+  // pre-fix commit stages the DELETION of the live copies without adding the archive ones.
+  {
+    const project = 'issue-98015';
+    const fx = mkSoleFixture901(project, 98015, '.cache/\n'); fx.issue = 98015;
+    try {
+      const r = runSink901(fx);
+      const p = parseLast901(r.stdout);
+      assert.strictEqual(r.status, 0, '#901-gitea-e: the sink must complete, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      assert.strictEqual(p.status, 'sinked', '#901-gitea-e: status must be sinked, got ' + JSON.stringify(p));
+      const archRel = p.receipt && p.receipt.archive_dest;
+      assert.ok(typeof archRel === 'string' && archRel.length > 0,
+        '#901-gitea-e: precondition — this posture must record an archive_dest, which is what makes the #700 completeness guard live, got ' + JSON.stringify(archRel));
+      const want = evidenceRel901(archRel);
+      const blobs = blobsUnder901(fx.root, 'HEAD', archRel);
+      assert.deepStrictEqual(want.filter(x => !blobs.includes(x)), [],
+        '#901-gitea-e: every .cache evidence file must be a BLOB at HEAD under ' + archRel + ', blobs: ' + JSON.stringify(blobs));
+      const named = (p.receipt && p.receipt.archived_paths) || [];
+      assert.deepStrictEqual(want.filter(x => !named.includes(x)), [],
+        '#901-gitea-e: archived_paths must name the evidence it committed, got ' + JSON.stringify(named));
+      assert.deepStrictEqual(((p.receipt && p.receipt.archive_forced_paths) || []).slice().sort(), want,
+        '#901-gitea-e: archive_forced_paths must name exactly the ignored evidence files, got ' + JSON.stringify(p.receipt && p.receipt.archive_forced_paths));
+      // The archive move RENAMED tracked live paths, so a commit that adds the archive copies without
+      // the matching deletions (or the reverse) leaves main dirty after status:sinked.
+      const st = String(G.git(fx.root, ['status', '--porcelain'], { encoding: 'utf8' }).stdout || '').trim();
+      assert.strictEqual(st, '', '#901-gitea-e: main must be clean after status:sinked, got:\n' + st);
+    } finally { cleanup901(fx); }
+  }
+
+
+  // (f) The repair the guard exists to perform must actually REACH the file it refuses over. `-z` was
+  // chosen so a pathname is never mangled, and then its output was `.trim()`ed — while the required set
+  // is built from readdirSync, which preserves the name exactly. So an archive file named `notes.md `
+  // (one trailing space) could never match the ignored-untracked set, was never force-added, and was
+  // then refused over: three consecutive re-runs produced the identical `sink_incomplete`. A refusal
+  // that says "a re-run retries it" over a deterministic computation is a bricked repository.
+  //
+  // The failure mode was OVER-refusal, so the naive fix weakens the guard until it stops firing. The
+  // non-regression shapes therefore ride in the SAME fixture rather than a separate green run:
+  // non-ASCII, an embedded newline, a nested directory and a 0-byte file all have to land as blobs too.
+  {
+    const project = 'issue-98016';
+    const names = {
+      'plain.md': 'plain evidence\n',
+      'notes.md ': 'trailing space in the NAME, not the content\n',
+      'ünïcödé-日本.md': 'non-ASCII name\n',
+      'a\nb.md': 'embedded newline in the name\n',
+      'deep/x.md': 'nested evidence\n',
+      'zero.md': '',
+    };
+    const fx = mkFixture901(project, 98016, '.cache/\n', names); fx.issue = 98016;
+    const archiveRel = 'kaola-workflow/archive/' + project;
+    const want = Object.keys(names).map(n => archiveRel + '/.cache/' + n).sort();
+    try {
+      // Preconditions — the space really is on disk, and git really does report it raw under `-z`. A
+      // fixture whose filesystem silently normalized the name would make the whole leg vacuous.
+      assert.ok(fs.readdirSync(path.join(fx.archiveDir, '.cache')).includes('notes.md '),
+        '#901-gitea-f: precondition — the space-bearing name must exist on disk verbatim, got '
+        + JSON.stringify(fs.readdirSync(path.join(fx.archiveDir, '.cache'))));
+      const ignoredRaw = String(G.git(fx.root, ['ls-files', '-o', '-i', '--exclude-standard', '-z', '--', archiveRel], { encoding: 'utf8' }).stdout || '');
+      assert.ok(ignoredRaw.split('\0').filter(Boolean).includes(archiveRel + '/.cache/notes.md '),
+        '#901-gitea-f: precondition — git must report the ignored path with its space intact under -z, got '
+        + JSON.stringify(ignoredRaw.split('\0').filter(Boolean)));
+
+      const r = runSink901(fx);
+      const p = parseLast901(r.stdout);
+
+      // CONVERGENCE: the first run must suffice. The defect was not that the sink failed once, it is
+      // that it could never succeed. (A second --sink on an already-sinked fixture exits 1 at
+      // push_upstream for reasons that predate this and are identical for plain names, so re-running
+      // here would measure that instead and is deliberately not asserted.)
+      assert.strictEqual(r.status, 0, '#901-gitea-f: the sink must converge on the FIRST run, got ' + r.status
+        + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      assert.strictEqual(p.status, 'sinked', '#901-gitea-f: status must be sinked, got ' + JSON.stringify(p));
+      assert.strictEqual(p.receipt && p.receipt.archive_missing_paths, undefined,
+        '#901-gitea-f: nothing may be reported missing — the over-refusal is what this pins, got '
+        + JSON.stringify(p.receipt && p.receipt.archive_missing_paths));
+
+      // ...and every name, the space-bearing one included, is a BLOB in the published commit. Read
+      // through ls-tree -z with NUL-split only: an assertion that trimmed its own input could not tell
+      // "the space survived" from "the space was lost".
+      const blobs = blobsUnder901(fx.root, 'HEAD', archiveRel);
+      assert.deepStrictEqual(want.filter(x => !blobs.includes(x)), [],
+        '#901-gitea-f: every archived evidence name must be a BLOB at HEAD, blobs: ' + JSON.stringify(blobs));
+
+      // The force-add must NAME the space-bearing path with its space — that set is what the trim
+      // mismatch emptied, and it is the direct measurement that the repair reached the file.
+      const forced = (p.receipt && p.receipt.archive_forced_paths) || [];
+      assert.ok(forced.includes(archiveRel + '/.cache/notes.md '),
+        '#901-gitea-f: archive_forced_paths must name the space-bearing path verbatim, got ' + JSON.stringify(forced));
+      assert.deepStrictEqual(forced.slice().sort(), want,
+        '#901-gitea-f: archive_forced_paths must name exactly the ignored evidence set, got ' + JSON.stringify(forced));
+      assert.ok(!forced.some(x => /\/sink-(?:receipt|fallback)\.json$/.test(x)),
+        '#901-gitea-f: #520 — no journal may be force-added, got ' + JSON.stringify(forced));
+    } finally { cleanup901(fx); }
+  }
+
+  // (g) A symlink in the archive. The exclusion that produced this rested on an in-comment claim that
+  // neither a symlink nor its target becomes a blob under the archive path — and that claim is false:
+  // `git add -f` stages a symlink as a mode-120000 blob whose content is the target string. So a
+  // gitignored symlink was dropped from the required set, nothing forced it in, nothing missed it, and
+  // the run reported steps.archive_commit:"done" at exit 0 over an entry a fresh clone did not carry.
+  //
+  // `steps.archive_commit === 'done'` is therefore USELESS as the pin here — the bug already satisfied
+  // it — and so is anything that reads the run's own working tree, where the symlink was present the
+  // whole time. What separates the two is the published commit and a clone made from it.
+  {
+    const project = 'issue-98017';
+    const fx = mkFixture901(project, 98017, '.cache/\n', { 'plain.md': 'plain evidence\n' }, { 'link.md': 'plain.md' });
+    fx.issue = 98017;
+    const archiveRel = 'kaola-workflow/archive/' + project;
+    const linkRel = archiveRel + '/.cache/link.md';
+    try {
+      assert.ok(fs.lstatSync(path.join(fx.archiveDir, '.cache', 'link.md')).isSymbolicLink(),
+        '#901-gitea-g: precondition — the fixture entry must be a symlink');
+      assert.strictEqual(G.git(fx.root, ['check-ignore', '-q', '--', linkRel], { encoding: 'utf8' }).status, 0,
+        '#901-gitea-g: precondition — the consumer rule must cover the symlink, else nothing needs forcing');
+
+      const r = runSink901(fx);
+      const p = parseLast901(r.stdout);
+      assert.strictEqual(r.status, 0, '#901-gitea-g: the sink must complete, got ' + r.status
+        + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      assert.strictEqual(p.status, 'sinked', '#901-gitea-g: status must be sinked, got ' + JSON.stringify(p));
+
+      // THE pin, half one: the symlink is an entry in the published commit, at mode 120000. Asserting
+      // mere path presence would not distinguish a symlink from a regular file, and the mode is the
+      // measured fact the false comment denied.
+      const entries = treeEntriesUnder901(fx.root, 'HEAD', archiveRel);
+      const linkEntry = entries.find(e => e.path === linkRel) || null;
+      assert.ok(linkEntry, '#901-gitea-g: the symlink must be an entry in the commit at HEAD, entries: '
+        + JSON.stringify(entries.map(e => e.mode + ' ' + e.path)));
+      // Read defensively throughout: when the symlink is absent from the commit — the defect's own
+      // shape — every later clause must still report as an assertion rather than abort before the
+      // fresh-clone clause, which is the one that matters most, gets to run.
+      assert.strictEqual(linkEntry && linkEntry.mode, '120000',
+        '#901-gitea-g: the symlink must be recorded as a 120000 blob, got ' + JSON.stringify(linkEntry));
+      assert.ok(((p.receipt && p.receipt.archive_forced_paths) || []).includes(linkRel),
+        '#901-gitea-g: archive_forced_paths must name the force-added symlink, got '
+        + JSON.stringify(p.receipt && p.receipt.archive_forced_paths));
+
+      // THE pin, half two: a FRESH CLONE of the pushed remote holds it — as a symlink, pointing where
+      // it pointed. This is the clause the defect failed while reporting success, and no probe of the
+      // run's own tree can stand in for it.
+      const cloneDir = fx.root + '-clone';
+      try {
+        G.clone(fx.remote, cloneDir, ['-q'], { encoding: 'utf8' });
+        const clonedLink = path.join(cloneDir, linkRel);
+        const clonedBlobs = blobsUnder901(cloneDir, 'HEAD', archiveRel);
+        let isLink = false;
+        let target = null;
+        try { isLink = fs.lstatSync(clonedLink).isSymbolicLink(); } catch (_) { isLink = false; }
+        try { target = fs.readlinkSync(clonedLink); } catch (_) { target = null; }
+        assert.ok(isLink, '#901-gitea-g: the fresh clone must materialize it as a SYMLINK — this is the'
+          + ' clause the defect failed while reporting archive_commit:"done" at exit 0; the clone holds '
+          + JSON.stringify(clonedBlobs));
+        assert.strictEqual(target, 'plain.md',
+          '#901-gitea-g: the cloned symlink must point where it pointed, got ' + JSON.stringify(target));
+        assert.ok(clonedBlobs.includes(linkRel),
+          "#901-gitea-g: the clone's own HEAD must carry the symlink as a blob, got " + JSON.stringify(clonedBlobs));
+      } finally { try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch (_) {} }
+    } finally { cleanup901(fx); }
+  }
+
+  // (h) The cheapest guard against the exact regression, at the source level: this edition's `-z`
+  // readers must stay NUL-split ONLY. A `.trim()` here is invisible to every behavioural test whose
+  // fixtures use tidy filenames, which is precisely how it shipped — so the guard reads the bytes.
+  // Scoped to THIS edition's own copies; there is no cross-edition coverage comparison here.
+  {
+    const readers901 = [
+      ['kaola-gitea-workflow-sink-merge.js', 'ignoredUntrackedUnder'],
+      ['kaola-gitea-workflow-sink-merge.js', 'blobPathsUnder'],
+      ['kaola-gitea-workflow-claim.js', 'ignoredArchiveEvidence'],
+    ];
+    for (const [rel, fnName] of readers901) {
+      const src = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+      const at = src.indexOf('function ' + fnName + '(');
+      assert.ok(at >= 0, '#901-gitea-h: ' + rel + ' must still define ' + fnName
+        + ' — if it was renamed or removed this pin is stale and belongs deleted with its mechanism, not repaired');
+      // Whole-line comments dropped: these readers CARRY a comment explaining why a `.trim()` must
+      // never come back, and a guard that matched its own rationale would fail on correct code.
+      const next = src.indexOf('\nfunction ', at + 1);
+      const code = src.slice(at, next < 0 ? src.length : next)
+        .split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+      // Stated as the required FORM rather than a blocklist: NUL-split, then drop empty records, with
+      // nothing in between. Dropping empties is the only normalization the stream needs.
+      assert.ok(/\.split\('\\0'\)\s*\.filter\(Boolean\)/.test(code),
+        '#901-gitea-h: ' + fnName + ' in ' + rel + " must read its -z output as .split('\\0').filter(Boolean)"
+        + ' with nothing between the two. Code:\n' + code);
+      assert.ok(!/\.trim\(\)/.test(code),
+        '#901-gitea-h: ' + fnName + ' in ' + rel + ' must NOT trim a -z record — trimming destroys the'
+        + ' leading/trailing whitespace -z exists to preserve, and made a run permanently unsinkable. Code:\n' + code);
+    }
+  }
+
+  console.log('Gitea #901 basename .cache/ rule must not clip archive evidence: PASSED');
+}
+
 console.log('Gitea sink tests passed');
