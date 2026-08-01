@@ -415,6 +415,12 @@ and **stops without merging** — stopping leaves every option open, and merging
 changed is that it hands you a named finding and a route instead of a verdict, not that it publishes
 content it could not vouch for.
 
+**What it tells you is not everything worth knowing.** In particular the sink does not check that the
+branch carries implementation: on `--sink` nothing reports a branch whose entire diff is workflow
+bookkeeping, and it will merge, push and close the issue. Silence there is not a clearance. You know
+whether your run produced work, so confirm that before you sink — afterwards the mainline is published
+and the issue is closed, which is recoverable only in public.
+
 It also stops the way any operation stops — a push that did not land, an archive move that would
 lose a file, a tree it does not own, a record it would have to misreport. It stops rather than
 destroy or lie. That is an operation failing, not a judgement of your work.

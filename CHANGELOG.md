@@ -4,6 +4,28 @@
 
 ### Changed
 
+- **The finalize prose now says that `--sink` does not check whether the branch carries implementation
+  (#899).** `assertBranchHasNonWorkflowChanges` reports `no_implementation_changes` when a branch's
+  entire diff versus the mainline is `kaola-workflow/**` bookkeeping, and it lives in the legacy
+  precondition block, which `--sink` returns before ever reaching. That was known from a call-site
+  sweep; what was not known is whether anything downstream substituted for it. It does not.
+  Constructed and measured on a scratch clone with its own remote: the same implementation-free fixture
+  stops the legacy path with the typed report, nothing merged and nothing pushed, and goes through
+  `--sink` to a merged mainline, a pushed remote and a closed issue. The predicate evaluated against
+  the very tree `--sink` published does return the finding, so the guard is never consulted on that
+  path rather than being satisfied by it. Reproduced on two branch shapes, with a specificity control
+  (one real file in the diff correctly produces no finding) and a positive control, because the first
+  three rounds of the experiment had a vacuous control and were discarded.
+  **No guard was added, deliberately.** The orchestrator already owns whether the branch ends up right
+  and knows whether its own run produced work; a gate here would be machinery for something judgement
+  covers. What the observed surprise demanded was wording, so the `sink reports, you own the outcome`
+  section of the finalize routing skeleton now states that silence there is not a clearance and that
+  the confirmation belongs before the sink, since afterwards the mainline is published and the issue
+  closed. It renders to all eighteen generated surfaces and reaches all four runtimes. `docs/api.md`
+  additionally stops treating the two legacy-only guards as equivalent — one absence is correct by
+  design, the other is a real behavioural difference — and records that the offline skip applies to
+  this guard too, so on the legacy path the report only ever occurs online.
+
 - **A sink whose archive failed no longer reports success and publishes the run's live state (found
   while measuring #896).** In `runSinkTransaction`'s `finalize` step, `archiveProjectDir` was wrapped in
   a try whose catch deliberately rethrew `TypeError` and `ReferenceError` — the #555 export-drift class —

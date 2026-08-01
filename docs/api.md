@@ -506,10 +506,23 @@ Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not
 **Pre-merge guards** (all three editions). **Which path runs them is not uniform, and the difference
 is load-bearing**: `--sink` routes to `runSinkTransaction` and returns before the legacy precondition
 block is ever reached, so of the four below **only `worktree_dirty` runs on `--sink`** — it lives in
-`sinkPreflight`, which the transaction owns. The other three are legacy-path only. That is not a gap:
-`SINK_STEPS` carries its own `finalize` step calling `archiveProjectDir`, so on `--sink` the sink *is*
-the finalizer, and a live run folder on the branch is the expected sole-archiver posture rather than
-an error.
+`sinkPreflight`, which the transaction owns. The other three are legacy-path only, and **they do not
+all mean the same thing by their absence** — the difference has been measured, so do not infer it:
+
+- `assertNoLiveWorkflowFolder`'s absence is **not a gap**. `SINK_STEPS` carries its own `finalize` step
+  calling `archiveProjectDir`, so on `--sink` the sink *is* the finalizer, and a live run folder on the
+  branch is the expected sole-archiver posture rather than an error.
+- `assertBranchHasNonWorkflowChanges`'s absence **is** a real difference in behaviour, and nothing
+  downstream substitutes for it. Constructed and measured on both paths with the same fixture: the
+  legacy path emits `no_implementation_changes` and stops with nothing merged or pushed, while `--sink`
+  merges, pushes the mainline and closes the issue. The predicate itself, evaluated against the very
+  tree `--sink` published, does return the finding — it is never consulted on that path rather than
+  being satisfied by it. This is deliberate and carries no guard: the orchestrator owns whether the
+  branch ends up right and knows whether its own run produced implementation. It is documented here so
+  that the silence is not read as a clearance.
+- `assertBranchPushedToUpstream` is legacy-path only and additionally skipped when
+  `KAOLA_WORKFLOW_OFFLINE=1`. Note the same offline skip applies to
+  `assertBranchHasNonWorkflowChanges`, so on the legacy path that report only ever occurs online.
 
 Two kinds stop the legacy path, and the difference is what the operator is owed, not whether it stops.
 The **KEEP** guards (`assertCleanWorktree`, `assertBranchPushedToUpstream`, `assertWorktreeClean`)
