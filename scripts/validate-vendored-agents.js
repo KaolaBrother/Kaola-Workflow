@@ -103,9 +103,18 @@ for (const agentName of localAgents) {
 // Generated reviewer profiles are versioned artifacts, not provenance-exempt free-form files.
 // The generator owns all twelve outputs; this wall binds the Claude source files to the same
 // behavior identity and complete-byte self-hash later consumed by both installers.
+// #889: the embedded-pin sweep runs FIRST and reports every stale site at once. This validator is
+// step 4 of the claude chain and also runs in the gitlab and gitea chains, so a half-finished
+// contract bump surfaces its whole remainder here rather than one site per chain run.
+const contractPinErrors = reviewerGenerator.checkContractVersionPins(root);
+assert(contractPinErrors.length === 0,
+  'reviewer behavior contract version pins must all match '
+  + `generate-reviewer-profiles.js (${reviewerGenerator.REVIEWER_BEHAVIOR_CONTRACT_VERSION}): `
+  + contractPinErrors.join('; '));
 const generatedReviewerErrors = reviewerGenerator.checkGeneratedProfiles(root);
 assert(generatedReviewerErrors.length === 0,
   'generated reviewer profiles must be current: ' + generatedReviewerErrors.join('; '));
+const contractVersion = reviewerGenerator.REVIEWER_BEHAVIOR_CONTRACT_VERSION;
 for (const relativePath of [
   'agents/code-reviewer.md',
   'agents/adversarial-verifier.md',
@@ -116,12 +125,12 @@ for (const relativePath of [
   const identity = reviewerGenerator.behaviorIdentityFromCore(content);
   const topVersion = /^behavior_contract_version:\s*(\d+)$/m.exec(content);
   const topHash = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(content);
-  assert(topVersion && Number(topVersion[1]) === 3,
-    relativePath + ' must carry behavior_contract_version 3');
+  assert(topVersion && Number(topVersion[1]) === contractVersion,
+    relativePath + ' must carry behavior_contract_version ' + contractVersion);
   assert(topHash && topHash[1] === identity.behavior_contract_hash,
     relativePath + ' top-level behavior hash must bind its normalized behavior core');
-  assert(identity.behavior_contract_version === 3,
-    relativePath + ' behavior core must carry contract version 3');
+  assert(identity.behavior_contract_version === contractVersion,
+    relativePath + ' behavior core must carry contract version ' + contractVersion);
 }
 
 assertIncludes('docs/agents-source.md', pinnedCommit);

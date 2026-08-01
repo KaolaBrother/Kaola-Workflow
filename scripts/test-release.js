@@ -102,10 +102,9 @@ for (const args of [['--cut'], ['--cut', '--version', '5.1.0'], ['--cut', '--ver
 
 // Tag refusal matrix. Each fixture has a committed prepared candidate unless its
 // setup intentionally damages the release receipt.
-// The two `chains_stale` rows below pin the two arms that SURVIVE the #881 carry-over: a receipt
-// bound to a commit that is not an ancestor of the candidate ('deadbeef' resolves to nothing), and
-// a receipt stamped over a dirty worktree. Neither is a blanket "headSha !== HEAD" pin — that
-// blanket rule is gone, and the carry-over section further down owns what replaced it.
+// The two `chains_stale` rows below pin the two arms the gate distinguishes: a receipt whose
+// headSha is not the candidate ('deadbeef' resolves to nothing), and a receipt stamped over a
+// dirty worktree.
 const cases = [
   ['dirty_worktree', d => fs.appendFileSync(path.join(d, 'unrelated.txt'), 'dirty\n')],
   ['release_receipt_missing', d => fs.rmSync(path.join(d, '.cache/release-receipt.jsonl'))],
@@ -135,98 +134,6 @@ for (const [want, setup, version] of cases) { const d = fixture(); prepare(d); c
 {
   const d = fixture(); prepare(d); const candidate = commitCandidate(d); chain(d); git(d, 'tag', 'kaola-workflow--v5.1.0', 'kaola-workflow--v5.0.0');
   reason(d, ['--tag', '--version', '5.1.0'], 'tag_conflict'); assert(git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}') !== candidate, 'conflicting tag remains untouched'); fs.rmSync(d, { recursive: true, force: true });
-}
-
-// #881 — the RELEASE-PREP CARRY-OVER reaches `--tag`. ONE binding rule, ONE implementation, two
-// entry points that cannot drift apart.
-//
-// The owner ruling of 2026-07-31 relaxed WHERE a green receipt binds, never WHAT it must contain: a
-// receipt stamped at an ANCESTOR of the tag candidate still proves that candidate when every path
-// in the gap is release-prep surface. `run-chains.js --release-check` adopted that; `--tag` kept
-// strict headSha equality, so the documented sequence (`--prepare` -> release-only commit ->
-// `--release-check` -> `--tag`) passed the gate and dead-ended at the tag on chains_stale.
-//
-// Two properties make this section falsifiable rather than decorative:
-//   • every fixture stamps the receipt with a sha READ OUT OF GIT at stamp time, never a literal —
-//     a fixture cannot claim a binding the repository does not actually have; and
-//   • every case asserts headSha !== candidate FIRST. Without it an implementation that kept strict
-//     equality would satisfy the pass case through the exact-binding route and the whole section
-//     would be green against the behaviour it exists to replace.
-const RUN_CHAINS = path.join(__dirname, 'kaola-workflow-run-chains.js');
-// The OTHER entry point on the same binding rule. It has to be a real process: the property under
-// test is that two separate CLIs reach the same verdict on one input, which only exists at the
-// process boundary — in-process it would be one call to one function, proving nothing about drift.
-// spawn-class: cli-contract
-function releaseCheck(d) { const r = spawnSync(process.execPath, [RUN_CHAINS, '--release-check', '--json'], { cwd: d, encoding: 'utf8', env: ENV }); let json = null; try { json = JSON.parse(r.stdout); } catch (_) {} return { status: r.status, stdout: r.stdout, stderr: r.stderr, json }; }
-// The documented sequence, built in order: four-chain receipt at the finishing run's commit ->
-// [optional non-prep gap commit] -> --prepare -> the release-only commit. `receipt` is a function of
-// the fixture so a case can name a sha that only exists at stamp time (the orphan below).
-function carryOverFixture(o) {
-  const d = fixture(), opts = o || {};
-  chain(d, opts.receipt ? opts.receipt(d) : null);
-  // A non-prep gap commit lands BEFORE --prepare deliberately: the extra path must sit in the
-  // receipt->candidate gap but OUTSIDE the prepare-baseline->candidate diff, which runTag checks
-  // first. Committed alongside the release files instead, the refusal would be
-  // candidate_surface_mismatch and the chain binding would never be reached at all.
-  if (opts.gapCommit) opts.gapCommit(d);
-  prepare(d);
-  const candidate = commitCandidate(d);
-  return { d, stamped: JSON.parse(fs.readFileSync(path.join(d, '.cache/chain-receipt.json'), 'utf8')).headSha, candidate };
-}
-const fourChains = ['claude', 'codex', 'gitlab', 'gitea'];
-const carryOverCases = [
-  ['prep-only gap', {}, null],
-  // The carry-over relaxes WHERE the receipt binds, never WHAT it contains: each of these is a
-  // green-receipt shape the four-chain demand rejects, presented over a PURE release-prep gap so
-  // the only thing that could let it through is the carry-over becoming a hole.
-  ['waived chain over a prep-only gap', { receipt: () => ({ chains: fourChains.map((name, i) => ({ name, exitCode: i ? 0 : 1, accepted_red: i === 0 })) }) }, 'chains_waived'],
-  ['red chain over a prep-only gap', { receipt: () => ({ chains: fourChains.map((name, i) => ({ name, exitCode: i ? 0 : 1, accepted_red: false })) }) }, 'chains_red'],
-  ['subset receipt over a prep-only gap', { receipt: () => ({ chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] }) }, 'chains_incomplete'],
-  ['empty receipt over a prep-only gap', { receipt: () => ({ chains: [] }) }, 'chains_empty'],
-  ['dirty-stamped receipt over a prep-only gap', { receipt: () => ({ workTreeHash: 'dirty' }) }, 'chains_stale'],
-  // A non-prep path anywhere in the gap: the chains never validated that tree.
-  ['non-prep path in the gap', { gapCommit: d => { fs.mkdirSync(path.join(d, 'scripts'), { recursive: true }); fs.writeFileSync(path.join(d, 'scripts/sneak.js'), 'module.exports = 881;\n'); git(d, 'add', 'scripts/sneak.js'); git(d, 'commit', '-qm', 'feat: code landed after the receipt'); } }, 'chains_stale'],
-  // Ancestry itself, isolated: the orphan carries the candidate's own baseline TREE, so the gap
-  // diff is release-prep-only and NOTHING but the ancestry condition can refuse it.
-  ['non-ancestor receipt with a prep-only diff', { receipt: d => ({ headSha: git(d, 'commit-tree', git(d, 'rev-parse', 'HEAD^{tree}'), '-m', 'orphan') }) }, 'chains_stale'],
-];
-for (const [label, opts, want] of carryOverCases) {
-  const { d, stamped, candidate } = carryOverFixture(opts);
-  assert(stamped !== candidate, '#881 ' + label + ': the receipt is not stamped at the candidate, so the binding route — not strict equality — decides this case');
-  const gate = releaseCheck(d), refs = git(d, 'show-ref'), t = run(d, ['--tag', '--version', '5.1.0', '--json']);
-  const gateReason = gate.status === 0 ? null : (gate.json && gate.json.reason), tagReason = t.status === 0 ? null : (t.json && t.json.reason);
-  assert(gateReason === want, '#881 ' + label + ': --release-check verdict is ' + want + '; got ' + JSON.stringify(gate.json));
-  assert(tagReason === want, '#881 ' + label + ': --tag verdict is ' + want + '; got ' + JSON.stringify(t.json));
-  assert((gate.status === 0) === (t.status === 0) && gateReason === tagReason, '#881 ' + label + ': the two entry points read ONE binding rule — gate said ' + JSON.stringify(gateReason) + ', tag said ' + JSON.stringify(tagReason));
-  if (want) assert(git(d, 'show-ref') === refs && git(d, 'tag', '-l', 'kaola-workflow--v5.1.0') === '', '#881 ' + label + ': a refused carry-over creates no tag and moves no ref');
-  fs.rmSync(d, { recursive: true, force: true });
-}
-// The full documented sequence end to end, with NO chain re-run anywhere between the receipt and
-// the tag — the whole point of the ruling.
-{
-  const { d, stamped, candidate } = carryOverFixture({});
-  const rp = path.join(d, '.cache/chain-receipt.json'), before = fs.readFileSync(rp, 'utf8');
-  assert(git(d, 'rev-list', '--count', stamped + '..' + candidate) === '1' && JSON.stringify(git(d, 'diff', '--name-only', stamped, candidate).split('\n').filter(Boolean).sort()) === JSON.stringify(surface.slice().sort()),
-    '#881 sequence: the gap is exactly one commit touching exactly the release surface');
-  const gate = releaseCheck(d);
-  assert(gate.status === 0 && gate.json && gate.json.binding === 'release_prep_carry_over' && gate.json.carryOver && gate.json.carryOver.receiptSha === stamped,
-    '#881 sequence: --release-check binds the pre-cut receipt by carry-over; got ' + JSON.stringify(gate.json));
-  const t = run(d, ['--tag', '--version', '5.1.0', '--json']);
-  assert(t.status === 0 && t.json && t.json.result === 'ok' && t.json.tag_tree_verified === true && t.json.candidate_sha === candidate,
-    '#881 sequence: --tag completes on the carried-over receipt with no re-run; got ' + JSON.stringify(t.json));
-  // Read the tag defensively: when the carry-over is NOT honoured no tag exists, and a throw here
-  // would abort the process instead of reporting the failure and running the rest of the file.
-  let tagged = null; try { tagged = git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}'); } catch (_) {}
-  assert(tagged === candidate, '#881 sequence: the tag names the release-prep commit; got ' + tagged);
-  for (const rel of surface) { let bytes = null; try { bytes = G.exec(d, ['show', 'kaola-workflow--v5.1.0:' + rel], { env: ENV }); } catch (_) {} assert(bytes !== null && bytes.equals(fs.readFileSync(path.join(d, rel))), '#881 sequence: carried-over tag tree equals prepared ' + rel); }
-  assert(fs.readFileSync(rp, 'utf8') === before && JSON.parse(before).headSha === stamped && stamped !== candidate,
-    '#881 sequence: no chain re-run — the receipt the tag consumed is byte-identical to the one stamped before the cut, and it was never stamped at the candidate');
-  const pub = fs.readFileSync(path.join(d, '.cache/release-receipt.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(x => x.step === 'tag_authorized' || x.step === 'tag_complete');
-  assert(pub.length === 2 && pub.every(x => x.chainHeadSha === stamped),
-    '#881 sequence: the publication receipt records the CARRIED-OVER receipt sha — no receipt was ever stamped at the candidate; got ' + JSON.stringify(pub.map(x => [x.step, x.chainHeadSha])));
-  const idem = run(d, ['--tag', '--version', '5.1.0', '--json']);
-  assert(idem.status === 0 && idem.json && idem.json.idempotent === true, '#881 sequence: re-running --tag over a carried-over receipt stays idempotent; got ' + JSON.stringify(idem.json));
-  fs.rmSync(d, { recursive: true, force: true });
 }
 
 // Verify and push stay compatible; source stays forge-token-neutral.

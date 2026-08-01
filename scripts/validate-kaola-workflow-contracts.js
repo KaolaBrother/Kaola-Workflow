@@ -301,7 +301,7 @@ for (const file of initFiles) {
 // plugin.json (Codex + forge Claude, all editions) and pin a positive anchor so blanked copy cannot
 // pass the ban vacuously.
 //
-// #882: ADR 0017 (docs/decisions/0017-the-mission-list.md, docs/mission-list.md) retired the frozen
+// #882: ADR 0017 (docs/decisions/0017-the-mission-list.md) retired the frozen
 // task-shaped DAG of role nodes, its workflow-plan.md record, and the running-set scheduler that
 // executed it node-by-node, replacing all of it with the mission list: one file per run, four fields
 // per item, written and read by the orchestrator directly — no script owns it, nothing freezes. The
@@ -598,6 +598,14 @@ assert(!blockMatch[1].includes('docs-lookup'),
 // lifecycle APIs must agree before any installed-scope compliance claim can be made.
 {
   const generator = require('./generate-reviewer-profiles.js');
+  // #889: this validator is step 3 of the codex chain, the only chain that does not run
+  // validate-vendored-agents.js. The sweep runs here too so no chain can go green over a
+  // half-finished contract bump, and so the whole remainder is reported in one message.
+  const contractPinErrors = generator.checkContractVersionPins(root);
+  assert(contractPinErrors.length === 0,
+    'reviewer behavior contract version pins must all match '
+    + `generate-reviewer-profiles.js (${generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION}): `
+    + contractPinErrors.join('; '));
   const generatedErrors = generator.checkGeneratedProfiles(root);
   assert(generatedErrors.length === 0,
     'generated reviewer profiles must be current: ' + generatedErrors.join('; '));
@@ -619,8 +627,9 @@ assert(!blockMatch[1].includes('docs-lookup'),
       const entry = sourceCheck.entries.find(candidate => candidate.role === role);
       assert(entry && entry.profileContract,
         edition + ' must expose generated reviewer identity for ' + role);
-      assert(entry.profileContract.behavior_contract_version === 3,
-        edition + ' must bind behavior contract version 2 for ' + role);
+      assert(entry.profileContract.behavior_contract_version === generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION,
+        edition + ' must bind behavior contract version '
+        + generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION + ' for ' + role);
       assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
         && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
       edition + ' must bind behavior and resolved profile hashes for ' + role);

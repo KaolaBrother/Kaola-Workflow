@@ -240,9 +240,12 @@ for (const file of nextSurfaces) {
   assertIncludes(file, '--target-issues');
 
   // THE MISSION LIST. It is the run's only coordination record, so the surface must name the file,
-  // point at the canonical format rather than paraphrasing it, and carry the three write moments.
+  // carry the format itself rather than pointing at it, and carry the three write moments. The
+  // reader of an installed surface is in a consumer repo, where no path into this repository's
+  // docs resolves — so the order/absence facts have to travel with the surface.
   assertIncludes(file, 'kaola-workflow/{project}/mission-list.md');
-  assertIncludes(file, 'docs/mission-list.md');
+  assertIncludes(file, 'nothing depends on a stable ID');
+  assertIncludes(file, 'absent fields are simply absent');
   assertIncludes(file, 'status: todo');
   assertIncludes(file, 'dispatched: self');
   // ORDER IS THE WHOLE POINT: `dispatched` is written BEFORE the work goes out. Written after, the

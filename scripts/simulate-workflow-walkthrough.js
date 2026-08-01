@@ -843,9 +843,17 @@ function testRoadmapInProcessRegenerateGuard(tmp) {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #64 classifier behavior — folder-based overlap, closed-issue residue,
-// status:released exclusion. Each scenario uses its own mkdtempSync to keep
-// state isolated from the other tests in this file.
+// Shared classifier fixtures — `classifierScript` and `plantActiveFolder` below
+// are used by scenarios throughout this file, followed here by the adaptive
+// on/off startup and claim scenarios. Each scenario uses its own mkdtempSync to
+// keep state isolated from the other tests in this file.
+//
+// The classifier's file-set-overlap axis is gone: #891 removed folder-based
+// overlap and the status:released exclusion scenarios along with the mechanism
+// they asserted through. What survives of that behaviour is covered directly
+// instead of through a classifier verdict — the closed-issue exclusion by
+// testActiveFoldersExcludesClosedIssue895 in this file, and the released-status
+// exclusion by the twin-rule row in scripts/test-bundle-claim.js.
 // ---------------------------------------------------------------------------
 
 const classifierScript = path.join(repoRoot, 'scripts', 'kaola-workflow-classifier.js');
@@ -1024,16 +1032,15 @@ function testAdaptiveResumeAfterFlipOff() {
 //   chains_unverified > chains_stale > chains_empty > repo_kind_undetermined > chains_incomplete
 //   > chains_red > chains_waived.
 //
-// OWNER RULING 2026-07-31 (corrected same day; the transient diff-scoped reading was retracted):
-// the FOUR-CHAIN demand stays — full coverage of every declared chain, unwaived, all green, no
-// dirty stamp. What falls is the forced RE-RUN at release cut: beside strict headSha equality the
-// gate gains ONE acceptance, the RELEASE-PREP CARRY-OVER — the receipt also binds when its bound
-// commit is an ANCESTOR of the candidate AND the diff between them touches only the release-prep
-// surface (release.js's RELEASE_FILES: CHANGELOG.md, README.md, package.json, the codex/claude
-// manifests), with package.json and each manifest changed in their version field alone
-// (JSON-deep-equal after removing `version`). Any other path in that diff, a non-version JSON
-// change, a non-ancestor receipt, a dirty stamp, a waiver or a red anywhere: refuse, exactly as
-// before. Cases (14)-(18) pin the route; (1)-(13) are the unchanged contract.
+// The FOUR-CHAIN demand stays — full coverage of every declared chain, unwaived, all green, no
+// dirty stamp — and the receipt binds to the candidate by STRICT headSha equality and nothing
+// else. There is no second acceptance route. A release-prep carry-over briefly existed here (it
+// let a receipt bound to an ANCESTOR bind when the intervening diff stayed inside RELEASE_FILES),
+// and it was deleted: its precondition is unreachable through the only release sequence the
+// workflow has, because the sink's `chore: archive <project>` commit — whose entire content is
+// kaola-workflow/archive/<project>/** — always interposes between the finishing receipt and the
+// release candidate, putting off-surface paths in the diff by construction. The run at the
+// release commit is mandatory. Cases (1)-(13) are the whole contract.
 //
 // mkReleaseRepo / writeRootReceipt / greenChains651 are re-derived here rather than deleted: the
 // originals were function-locals shared with the dying attribution cases.
@@ -1056,8 +1063,7 @@ function testReleaseCheckPreTagGate() {
   // repo_kind_undetermined (unresolvable chain set) > chains_incomplete > chains_red >
   // chains_waived. Fixtures mirror the real repo: root /.cache/ is gitignored, so the untracked
   // receipt itself never pollutes the culprit hints; package.json declares all four edition chains.
-  // Delta (2) has exactly ONE carve-out since the 2026-07-31 ruling: the release-prep carry-over
-  // route pinned by cases (14)-(18) below.
+  // Delta (2) has no carve-out: strict headSha equality is the entire binding rule.
   const mkReleaseRepo = () => {
     const grepo = adaptiveTmp('release651-git');
     initGitRepo(grepo);
@@ -1237,94 +1243,6 @@ function testReleaseCheckPreTagGate() {
         '#651 (13): an unresolvable chain set (no package.json) must refuse repo_kind_undetermined, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
-  // Fixture pieces for the RELEASE-PREP CARRY-OVER route (owner ruling 2026-07-31, corrected
-  // form). The fixture package.json mirrors mkReleaseRepo's, so a "version-only" edit is a
-  // byte-real re-write with only `version` differing.
-  const fixturePkg651 = version => JSON.stringify(Object.assign(version ? { version } : {}, { scripts: {
-    'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
-    'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } })) + '\n';
-  const commitPrepOnly651 = (grepo, version) => {
-    fs.writeFileSync(path.join(grepo, 'CHANGELOG.md'), '# Changelog\n\n## [' + version + ']\n- prep\n');
-    fs.writeFileSync(path.join(grepo, 'README.md'), '# fixture ' + version + '\n');
-    fs.writeFileSync(path.join(grepo, 'package.json'), fixturePkg651(version));
-    G.git(grepo, ['add', 'CHANGELOG.md', 'README.md', 'package.json'], { encoding: 'utf8' });
-    G.git(grepo, ['commit', '-m', 'chore(release): prepare ' + version], { encoding: 'utf8' });
-  };
-
-  // --- #877 (14) THE CARRY-OVER PASS: a green, unwaived, clean, FULL four-chain receipt at
-  //     commit C, then one release-prep-only commit (CHANGELOG + README + a version-only
-  //     package.json change) → the receipt binds to the candidate WITHOUT a re-run, and the
-  //     envelope names the route so a reader can tell it from strict equality.
-  { const grepo = mkReleaseRepo();
-    try {
-      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
-      commitPrepOnly651(grepo, '9.9.9');
-      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
-      const out = JSON.parse(r.stdout);
-      assert(r.status === 0 && out.result === 'pass' && out.mode === 'release-check'
-        && out.candidate === headOf(grepo),
-        '#877 (14): a four-chain green receipt at C must carry over a release-prep-only commit and PASS, got status ' + r.status + ' ' + r.stdout);
-      assert(out.binding === 'release_prep_carry_over',
-        '#877 (14): the pass envelope must NAME the carry-over binding route, got ' + r.stdout);
-    } finally { cleanup(grepo); } }
-
-  // --- #877 (15) a scripts/ path in the post-receipt diff BREAKS the carry-over: code moved, so
-  //     the receipt proves the wrong tree → chains_stale NAMING the culprit.
-  { const grepo = mkReleaseRepo();
-    try {
-      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
-      fs.mkdirSync(path.join(grepo, 'scripts'), { recursive: true });
-      fs.writeFileSync(path.join(grepo, 'scripts', 'sneak.js'), 'module.exports = 877;\n');
-      fs.writeFileSync(path.join(grepo, 'CHANGELOG.md'), '# Changelog\n- prep\n');
-      G.git(grepo, ['add', 'scripts/sneak.js', 'CHANGELOG.md'], { encoding: 'utf8' });
-      G.git(grepo, ['commit', '-m', 'prep plus a smuggled script'], { encoding: 'utf8' });
-      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
-      const out = JSON.parse(r.stdout);
-      assert(r.status === 1 && out.reason === 'chains_stale'
-        && Array.isArray(out.stale_paths) && out.stale_paths.includes('scripts/sneak.js'),
-        '#877 (15): a scripts/ path in the post-receipt diff must refuse chains_stale naming the culprit, got status ' + r.status + ' ' + r.stdout);
-    } finally { cleanup(grepo); } }
-
-  // --- #877 (16) package.json changed BEYOND its version field in an otherwise prep-only diff →
-  //     refuse: a chain-script edit re-defines what the receipt measured, and only a version-only
-  //     change (JSON-deep-equal after removing `version`) is carry-over-legal.
-  { const grepo = mkReleaseRepo();
-    try {
-      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
-      fs.writeFileSync(path.join(grepo, 'CHANGELOG.md'), '# Changelog\n- prep\n');
-      fs.writeFileSync(path.join(grepo, 'package.json'), JSON.stringify({ version: '9.9.9', scripts: {
-        'test:kaola-workflow:claude': 'false', 'test:kaola-workflow:codex': 'true',
-        'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } }) + '\n');
-      G.git(grepo, ['add', 'CHANGELOG.md', 'package.json'], { encoding: 'utf8' });
-      G.git(grepo, ['commit', '-m', 'prep plus a chain-script edit'], { encoding: 'utf8' });
-      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
-      const out = JSON.parse(r.stdout);
-      assert(r.status === 1 && out.reason === 'chains_stale' && /package\.json/.test(r.stdout),
-        '#877 (16): a non-version package.json change must break the carry-over and name package.json, got status ' + r.status + ' ' + r.stdout);
-    } finally { cleanup(grepo); } }
-
-  // --- #877 (17) NON-ANCESTOR receipt → chains_stale. The orphan commit shares the candidate's
-  //     TREE (the carry-over diff is empty), so this pins the ANCESTRY condition itself, not a
-  //     side effect of the diff scan.
-  { const grepo = mkReleaseRepo();
-    try {
-      const orphan = G.git(grepo, ['commit-tree', 'HEAD^{tree}', '-m', 'orphan'], { encoding: 'utf8' }).stdout.trim();
-      writeRootReceipt(grepo, { headSha: orphan, workTreeHash: 'clean', chains: greenChains651() });
-      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
-      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
-        '#877 (17): a receipt bound to a non-ancestor commit must refuse chains_stale even over an identical tree, got status ' + r.status + ' ' + r.stdout);
-    } finally { cleanup(grepo); } }
-
-  // --- #877 (18) a DIRTY stamp refuses even on a prep-only diff: the carry-over relaxes the
-  //     binding commit, never the clean-tree demand.
-  { const grepo = mkReleaseRepo();
-    try {
-      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'b'.repeat(64), chains: greenChains651() });
-      commitPrepOnly651(grepo, '9.9.10');
-      const r = runNode(runChainsScript, ['--release-check', '--json'], grepo);
-      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
-        '#877 (18): a dirty-stamped receipt must refuse chains_stale even when the post-receipt diff is prep-only, got status ' + r.status + ' ' + r.stdout);
-    } finally { cleanup(grepo); } }
   console.log('testReleaseCheckPreTagGate: PASSED');
 }
 
@@ -1459,6 +1377,114 @@ function testProbeIssueStateGhThrows() {
     const result = callProbeIssueState('99', { KAOLA_WORKFLOW_OFFLINE: '0' }, binDir);
     assert(result.state === 'unavailable', 'gh exit 1 must return state unavailable, got: ' + result.state);
     assert(result.reason === 'gh issue fetch failed', 'gh exit 1 must return reason "gh issue fetch failed", got: ' + result.reason);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #895 — readActiveFolders drops a CLOSED issue's folder on its DEFAULT options path.
+//
+// That exclusion is what stops a stale folder from making a re-claimable issue look owned:
+// cmdClassify reads readActiveFolders(root) with no options, and a hit there exits 2 (`owned`)
+// with no stdout — so a folder left behind for a since-closed issue would make that issue
+// permanently unclaimable. Every other canonical caller in the suites passes the flag OFF, which
+// measures the unfiltered path only.
+//
+// Driven through a subprocess: OFFLINE freezes at module load, and this process is already
+// resolved, so an in-process call would short-circuit issueIsClosed and read green whatever the
+// filter did.
+// ---------------------------------------------------------------------------
+
+function callReadActiveFolders(root, binDir) {
+  const driver = [
+    'const m = require(' + JSON.stringify(activeFoldersScript) + ');',
+    'const root = ' + JSON.stringify(root) + ';',
+    // The CONTROL runs first and makes no probe (excludeClosedIssues:false skips prefetch and
+    // issueIsClosed entirely), so it cannot seed the memo the default call is measured on. It is
+    // here for non-vacuity: without it a fixture that planted one folder would satisfy the
+    // filtered assertion below while proving nothing.
+    'const control = m.readActiveFolders(root, { excludeClosedIssues: false });',
+    'const filtered = m.readActiveFolders(root);',
+    'process.stdout.write(JSON.stringify({',
+    '  control: control.map(f => f.project),',
+    '  projects: filtered.map(f => f.project),',
+    '  issue_numbers: filtered.map(f => f.issue_number)',
+    '}));'
+  ].join('\n');
+  // Scrub inherited KAOLA_* — the mock wiring and the offline flag are supplied here, and an
+  // inherited KAOLA_ISSUE_STATE_SNAPSHOT would pre-seed the very memo under test.
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_'))
+  );
+  // The module reads its OFFLINE flag once at load and routes gh through a mock named by env, so
+  // the wiring under test only exists in a process this one does not already own.
+  // spawn-class: environment
+  const r = spawnSync(process.execPath, ['-e', driver], {
+    encoding: 'utf8',
+    timeout: 30000,
+    env: Object.assign({}, baseEnv, ghMockEnv(binDir), {
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+    })
+  });
+  assert(r.status === 0, 'readActiveFolders driver failed (exit ' + r.status + '): ' + r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+function testActiveFoldersExcludesClosedIssue895() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-closed-895-'));
+  try {
+    // The folder names carry no state, and the two sub-cases INVERT which issue is closed: 11 is
+    // closed in A, 10 is closed in B. So no fixed property of a folder — its number's parity or
+    // magnitude, its name, its sort position — predicts the survivor in BOTH sub-cases, and a
+    // filter keyed on one of those passes one sub-case and reds the other. Measured, not assumed:
+    // with both sub-cases sharing 10-open/11-closed, replacing the exclusion with
+    // `state.issue_number % 2 === 1` left the scenario green.
+    plantActiveFolder(tmp, 'alpha-project', 10);
+    plantActiveFolder(tmp, 'beta-project', 11);
+
+    // Sub-case A — the BATCHED path answers, 11 closed. `gh issue list` carries both states and
+    // every per-issue `gh issue view` fails, so a prefetch that stopped memoizing would fall
+    // through to a throwing probe, issueIsClosed would return false, and the closed folder would
+    // survive.
+    const binA = path.join(tmp, 'bin-batch');
+    fs.mkdirSync(binA, { recursive: true });
+    writeShimFiles(path.join(binA, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue list')) { process.stdout.write('[{\"number\":10,\"state\":\"OPEN\"},{\"number\":11,\"state\":\"CLOSED\"}]\\n'); }",
+      "else if (a.includes('issue view')) { process.exit(1); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const batched = callReadActiveFolders(tmp, binA);
+    assert(batched.control.length === 2,
+      '#895 fixture (batched): both folders must be visible with the filter OFF, got ' + JSON.stringify(batched.control));
+    assert(batched.projects.length === 1 && batched.projects[0] === 'alpha-project',
+      '#895 (batched): default options must keep ONLY the open issue\'s folder, got ' + JSON.stringify(batched.projects));
+    assert(batched.issue_numbers[0] === 10,
+      '#895 (batched): the surviving folder must be issue 10, got ' + JSON.stringify(batched.issue_numbers));
+
+    // Sub-case B — the PER-ISSUE fallback answers, and the roles are INVERTED: 10 closed, 11 open.
+    // `gh issue list` returns nothing to memoize, so the exclusion has to come from issueIsClosed's
+    // own `gh issue view` probe.
+    const binB = path.join(tmp, 'bin-probe');
+    fs.mkdirSync(binB, { recursive: true });
+    writeShimFiles(path.join(binB, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else if (a.includes('issue view 10')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('issue view 11')) { process.stdout.write('{\"state\":\"OPEN\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const probed = callReadActiveFolders(tmp, binB);
+    assert(probed.control.length === 2,
+      '#895 fixture (per-issue): both folders must be visible with the filter OFF, got ' + JSON.stringify(probed.control));
+    assert(probed.projects.length === 1 && probed.projects[0] === 'beta-project',
+      '#895 (per-issue): default options must keep ONLY the open issue\'s folder, got ' + JSON.stringify(probed.projects));
+    assert(probed.issue_numbers[0] === 11,
+      '#895 (per-issue): the surviving folder must be issue 11, got ' + JSON.stringify(probed.issue_numbers));
+
+    console.log('testActiveFoldersExcludesClosedIssue895: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -9918,6 +9944,7 @@ function buildRegistry() {
   add('testProbeIssueStateNullIssue',                     testProbeIssueStateNullIssue);
   add('testProbeIssueStateEmptyGhResponse',               testProbeIssueStateEmptyGhResponse);
   add('testProbeIssueStateGhThrows',                      testProbeIssueStateGhThrows);
+  add('testActiveFoldersExcludesClosedIssue895',          testActiveFoldersExcludesClosedIssue895);
   add('testStartupJsonAndHiddenLocalWorktrees',           testStartupJsonAndHiddenLocalWorktrees);
   add('testWorktreeNativeDefaultOff',                     testWorktreeNativeDefaultOff);
   add('testWorktreeNativeInPlaceIdempotentReclaim',        testWorktreeNativeInPlaceIdempotentReclaim);

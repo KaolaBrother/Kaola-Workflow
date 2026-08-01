@@ -7,9 +7,9 @@ which the orchestrator claims work, writes a **mission list**, and runs it: read
 dispatching subagents when it judges that useful, and closing items as their results land. The core
 scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
 
-The design of record is [ADR 0017 — The mission list](docs/decisions/0017-the-mission-list.md), and
-the file format is [`docs/mission-list.md`](docs/mission-list.md). Read the format before proposing
-anything that writes to the run record.
+The design of record is [ADR 0017 — The mission list](docs/decisions/0017-the-mission-list.md) — the
+derivation, not the format; the format is the table below. Read the ADR before proposing anything
+that writes to the run record.
 
 ## The mission list
 
@@ -176,7 +176,7 @@ architecture docs if structure changed · inline comments where public interface
 - **Chain selection belongs to the producer.** `kaola-workflow-run-chains.js` diff-scopes it at finalize:
   a non-edition-touching diff runs the `claude` chain alone; an edition-touching diff, or an unresolved
   diff base, fails closed to all four. A release tag always requires the full, unwaived four-chain
-  receipt — bound at the tagged commit, or carried over release-prep-only commits.
+  receipt, bound to the tagged commit by exact `headSha` equality.
 - **Prose changes propagate to generated surfaces.** Command and SKILL surfaces render from skeletons in
   `templates/routing/` — edit the skeleton and regenerate, never a rendered surface.
   `node scripts/generate-routing-surfaces.js --check` prints the surface count and runs in every chain.
@@ -188,9 +188,9 @@ architecture docs if structure changed · inline comments where public interface
 ## Documentation Map
 
 - `README.md` — overview and install. · `CHANGELOG.md` — user-visible changes.
-- `docs/mission-list.md` — **the run record's format.** · `docs/README.md` — index. ·
-  `docs/architecture.md` · `docs/api.md` · `docs/conventions.md` · `docs/workflow-state-contract.md`
-  · `docs/decisions/` — ADRs. · `kaola-workflow/ROADMAP.md` — roadmap mirror.
+- `docs/README.md` — index. · `docs/architecture.md` · `docs/api.md` · `docs/conventions.md` ·
+  `docs/workflow-state-contract.md` · `docs/decisions/` — ADRs. · `kaola-workflow/ROADMAP.md` —
+  roadmap mirror.
 
 ## Maintenance
 

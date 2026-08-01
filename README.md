@@ -908,7 +908,7 @@ successor needs. It is written immediately after the claim, before any work goes
 
 - item: <the mission>
   status: done
-  dispatched: <what went out and to whom>
+  dispatched: <what went out and to whom, and where its output was to land>
   result: <where the outcome landed — a path, or a few lines inline>
 ````
 
@@ -916,11 +916,11 @@ successor needs. It is written immediately after the claim, before any work goes
 |---|---|---|
 | `item` | the mission — one line of prose, hints and facts | at creation |
 | `status` | `todo` \| `in-flight` \| `done` | on change |
-| `dispatched` | what went out and to whom, enough to decide re-dispatch vs. wait | at dispatch |
+| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |
 | `result` | where the outcome landed — a path, or a few lines inline | at close |
 
 Items are identified by their order in the file; nothing depends on a stable ID, and items may be
-added at any time. Full convention: [docs/mission-list.md](docs/mission-list.md).
+added at any time.
 
 ### 4. Run it
 

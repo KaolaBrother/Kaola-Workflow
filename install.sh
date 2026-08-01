@@ -245,9 +245,13 @@ const installedIdentity = generator.behaviorIdentityFromCore(installed);
 if (sourceIdentity.role !== role || installedIdentity.role !== role) {
   throw new Error(`reviewer_role_mismatch: expected ${role}`);
 }
-if (sourceIdentity.behavior_contract_version !== 3
-    || installedIdentity.behavior_contract_version !== 3) {
-  throw new Error(`reviewer_contract_version_mismatch: expected 3 for ${role}`);
+// #889: this heredoc cannot `require` a relative path, but it already holds the generator module —
+// argv[2] is scripts/generate-reviewer-profiles.js — so the contract version is read from the one
+// source rather than embedded here. install.sh is no longer part of the bump surface.
+const contractVersion = generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION;
+if (sourceIdentity.behavior_contract_version !== contractVersion
+    || installedIdentity.behavior_contract_version !== contractVersion) {
+  throw new Error(`reviewer_contract_version_mismatch: expected ${contractVersion} for ${role}`);
 }
 if (sourceIdentity.behavior_contract_hash !== installedIdentity.behavior_contract_hash
     || sourceIdentity.core !== installedIdentity.core) {

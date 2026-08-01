@@ -8,7 +8,7 @@
 // Exercises the pure functions (countComplete, compareLedgers) AND the real CLI exit codes
 // (0 safe / 3 unsafe / 1 usage) — the same contract the retired ## Node Ledger suite pinned.
 //
-// What it counts now is `status: done` lines of docs/mission-list.md's format, at any indent,
+// What it counts now is `status: done` lines of the mission-list format, at any indent,
 // including the hand-edited variants the fence's own tiny parse deliberately accepts. The parse is
 // LINE-ANCHORED, not field-aware — see the "known coarseness" case below, pinned as-is on purpose.
 
@@ -26,8 +26,9 @@ function assert(cond, msg) {
   passed++;
 }
 
-// A mission list in the DOCUMENTED format (docs/mission-list.md): H1 goal, `- item:` bullets,
-// two-space-indented fields, `dispatched` on in-flight/done items, `result` on done items.
+// A mission list in the DOCUMENTED format (docs/decisions/0017-the-mission-list.md): H1 goal,
+// `- item:` bullets, two-space-indented fields, `dispatched` on in-flight/done items, `result` on
+// done items.
 function record(statuses) {
   const lines = ['# fence fixture — one goal line', ''];
   statuses.forEach((s, i) => {

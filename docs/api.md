@@ -4,7 +4,8 @@ CLI surfaces, JSON envelopes, schemas, and integration contracts for the scripts
 
 Structure: this document covers the surviving script surface. The run itself — how work is
 decomposed, dispatched and recorded — is the mission list, which has no CLI at all: see
-`mission-list.md` for the file format and `architecture.md` for how it fits together.
+`decisions/0017-the-mission-list.md` for the design record and `architecture.md` for how it fits
+together.
 
 ## Command surface
 
@@ -388,13 +389,12 @@ Deltas from the finalize measurement, each load-bearing:
 
 - no project folder — at release time the run is archived, so the receipt default is the git
   top-level's `.cache/chain-receipt.json` (override with `--receipt`);
-- **strict `headSha` equality** against the candidate (default `HEAD`) — or the one deliberate
-  alternative, the **release-prep carry-over**: a receipt whose `headSha` is an ancestor of the
-  candidate binds when every path in the post-receipt diff lies inside the release-prep surface
-  (`RELEASE_FILES`) and `package.json` plus each plugin manifest differ by the version field
-  alone; anything else refuses `chains_stale` naming the culprit paths, and the pass envelope
-  names which route bound. The `codeTreeHash` content-address relaxation still does not apply —
-  a tag names an exact commit or a release-prep-only descendant of one;
+- **strict `headSha` equality** against the candidate (default `HEAD`), and no alternative binding:
+  anything else refuses `chains_stale`. The `codeTreeHash` content-address relaxation does not
+  apply, and neither does an ancestor relaxation — #881 shipped one and #888 measured that the
+  sink's archive commit always puts off-surface paths between the finishing run's receipt and the
+  release commit, so it never fired. A tag names an exact commit, and the four-chain run at that
+  commit is mandatory;
 - a missing or `unknown` `headSha` refuses, never passes;
 - a **dirty-stamped** receipt (`workTreeHash !== 'clean'`) refuses — the chains validated the commit
   plus uncommitted edits, not the tree the tag would name;
@@ -478,6 +478,17 @@ Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not
   zero mutation, auto-stashes the claim-time `.roadmap/issue-N.md`) → push branch → rebase onto the
   mainline → run the validation chains → fast-forward merge (with a bounded race retry,
   `MAX_AUTOMERGE_RETRIES=3`) → push mainline → close the issue idempotently → archive → clean up.
+- Preflight does **not** count finalize's own archive mirror as foreign dirt (issue #893): untracked
+  paths under `kaola-workflow/archive/<project>/` — the tree `cmdFinalize --keep-worktree` writes into
+  the main checkout and leaves for this sink's archive step to commit. Existence and content are two
+  separate probes (`git cat-file -e`, then the content read), giving four outcomes: **not carried** by
+  the branch → exempt; **carried and byte-equal** → exempt; **carried and divergent** → foreign dirt,
+  because two archives disagreeing refuses rather than letting one side win; **carried but unreadable
+  or truncated** → unverifiable, which is not the same fact as absent, so foreign dirt too (a copy
+  merely larger than `GIT_MAX_BUFFER` overflows the content read on an otherwise healthy repo). The
+  exemption is scoped to this project on a segment boundary (a sibling project's tree, and a
+  project-name prefix look-alike, both still refuse) and is classification-only — no exempted path is
+  ever removed.
 - `.cache/sink-receipt.json` tracks each step so a re-run resumes from the last incomplete one
   without double-applying.
 
@@ -532,6 +543,25 @@ attempted — a sink with nothing to close is never false-flagged.
 `closed_issues` (sorted ascending) is written to the sink receipt whenever the closure step closes
 at least one issue, on **both** the success and failure paths, so a resumed `--sink` can read what
 already closed rather than treat a `"done"` step as proof nothing is left.
+
+`receipt.archived_paths` (issue #893) is an array of repo-relative paths naming everything the
+archive step committed under this project's own `kaola-workflow/archive/<project>/` pathspec. It is
+**present and empty** when that step committed nothing there, never absent — a consumer telling
+"committed nothing" from "this sink does not report" cannot route on a field that is sometimes
+missing. The set is read from the **index** (`git diff --cached --name-only`, with the same excludes
+as the add) between staging and the commit, not from any list of what the sink intended to plant, so
+it neither under-claims a file that rode in unnoticed nor over-claims one this sink never touched;
+another project's archive residue is correctly absent. The same paths are appended to the committed
+`finalization-summary.md` under `## Sink Findings` as an `archived_paths:` list, so the record
+survives after the envelope scrolls away and the journals are disposed; the writer never creates that
+file and is idempotent across a crash-resumed re-entry.
+
+This is a **report, not a guard**. The preflight exemption above is a directory prefix, so a stray
+file under the run's own archive directory is committed along with finalize's mirror, and the sink
+does not attempt to tell one from the other: the archive copies a folder that is untracked in main
+and committed nowhere, so git holds no record of what belongs, and a basename allowlist cannot work
+when archives carry arbitrarily-named orchestrator artifacts. The listing is uniform by design — it
+makes the commit visible, it does not prevent it, and the orchestrator adjudicates.
 
 The close loop runs whenever a primary issue (`--issue`) **or** at least one bundle member
 (`--issue-numbers`) is present, so a bundle sink invoked with only `--issue-numbers` closes every
@@ -1004,7 +1034,7 @@ usage: kaola-workflow-release.js --verify | --prepare --version X.Y.Z [--codex-v
 ```
 --prepare --version X.Y.Z
 commit only the release files
-run the offline full chain receipt (skip if a green receipt already carries over)
+run the offline full chain receipt at the release commit
 pass kaola-workflow-run-chains.js --release-check
 --tag --version X.Y.Z
 ```

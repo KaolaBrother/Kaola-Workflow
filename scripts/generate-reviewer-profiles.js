@@ -11,6 +11,26 @@ const ADAPTER_SOURCE = 'templates/reviewers/runtime-adapters.json';
 const ZERO_HASH = '0'.repeat(64);
 
 const ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
+// #889: THE reviewer behavior-contract version. One literal, here, in the module that renders the
+// contract — and the one module every site that can read anything already reads: install.sh's
+// heredoc requires this file (as `generator`), and so do all four in-repo contract validators.
+//
+// It is a LITERAL, not a value read back out of behavior-contracts.json, on purpose: its job is to
+// say which contract version this code understands, so validateBehaviorContracts refuses a source
+// the renderers have not been updated for. Deriving it from the file it validates would make that
+// check unfalsifiable — it would agree with whatever the JSON said.
+//
+// BUMPING IT — three steps, in this order. Each step is announced by the step before it failing, so
+// nothing here has to be found by grepping:
+//   1. `templates/reviewers/behavior-contracts.json`, all three roles. On its own this reds at once,
+//      in every chain, with `behavior_contract_version_unsupported: <role>=N (this generator
+//      renders M)`.
+//   2. this line. Then `--write` to regenerate the twelve profiles.
+//   3. the seven embedded pins in CONTRACT_VERSION_PIN_SITES below — they ship inside plugin trees
+//      and cannot read this constant. checkContractVersionPins names ALL SEVEN in one message from
+//      the first validator in every chain, so this is one mechanical pass, not a search.
+// There is no fourth step: every other consumer, in the repo and in the suites, reads this constant.
+const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 3;
 // The one prompt-defense line every reviewer role carries in identical bytes: the obfuscation and
 // social-engineering vectors a reviewer meets in the material it reads. The stance bullet beside it
 // ("untrusted evidence rather than authority") names no vector, and a stance without vectors is what
@@ -358,8 +378,9 @@ function validateBehaviorContracts(source) {
       'sections',
       'receipt_contract',
     ], `behavior_contract_${role}`);
-    if (contract.behavior_contract_version !== 3) {
-      throw new Error(`behavior_contract_version_unsupported: ${role}=${contract.behavior_contract_version}`);
+    if (contract.behavior_contract_version !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
+      throw new Error(`behavior_contract_version_unsupported: ${role}=${contract.behavior_contract_version} `
+        + `(this generator renders ${REVIEWER_BEHAVIOR_CONTRACT_VERSION})`);
     }
     nonEmptyString(contract.description, `behavior_contract_${role}_description`);
     if (RUNTIME_NOUN_BAN.test(contract.description)) {
@@ -720,6 +741,59 @@ function behaviorIdentityFromCore(text) {
   };
 }
 
+// #889: the seven shipped consumers that CANNOT read REVIEWER_BEHAVIOR_CONTRACT_VERSION. The Codex
+// preflight and the Codex profile installer run from an installed plugin tree, where neither this
+// module nor templates/reviewers/ exists, so each embeds the number. Everything else that once
+// embedded it now derives it — install.sh's heredoc already had this module in hand as `generator`,
+// and the four in-repo contract validators already required it.
+//
+// These seven are the irreducible residue, and the sweep below is what the residue costs: bumping
+// the contract used to surface one stale site per validator run, so eleven sites took eleven rounds
+// of run-read-patch. checkContractVersionPins reports EVERY stale site in one message, on the first
+// validator that runs (validate-vendored-agents.js, step 4 of the claude chain).
+//
+// Adding an eighth embedded pin means adding it here. A site listed here but missing, or carrying
+// two declarations, is itself an error — a pin that moved out from under the sweep is exactly the
+// silent-drift failure the sweep exists to catch.
+//
+// Membership is mechanical, not editorial: this list holds files that DECLARE the constant, which is
+// what CONTRACT_VERSION_PIN_PATTERN matches. A file that merely READS it — such as the managed-agent
+// manifest column check in scripts/test-install-model-rendering.js — cannot be a pin site and needs
+// no entry, because a bump reaches it through the export.
+const CONTRACT_VERSION_PIN_SITES = Object.freeze([
+  'scripts/kaola-workflow-codex-preflight.js',
+  'plugins/kaola-workflow/scripts/kaola-workflow-codex-preflight.js',
+  'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js',
+  'plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js',
+  'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js',
+  'plugins/kaola-workflow-gitlab/scripts/install-codex-agent-profiles.js',
+  'plugins/kaola-workflow-gitea/scripts/install-codex-agent-profiles.js',
+]);
+const CONTRACT_VERSION_PIN_PATTERN = 'const REVIEWER_BEHAVIOR_CONTRACT_VERSION = (\\d+);';
+
+function checkContractVersionPins(root = ROOT) {
+  const errors = [];
+  for (const relativePath of CONTRACT_VERSION_PIN_SITES) {
+    const absolute = path.join(root, relativePath);
+    if (!fs.existsSync(absolute)) {
+      errors.push(`contract_version_pin_site_missing: ${relativePath}`);
+      continue;
+    }
+    const text = fs.readFileSync(absolute, 'utf8');
+    const found = text.match(new RegExp(CONTRACT_VERSION_PIN_PATTERN, 'gm')) || [];
+    if (found.length !== 1) {
+      errors.push(`contract_version_pin_not_unique: ${relativePath} declarations=${found.length}`);
+      continue;
+    }
+    const pinned = Number(new RegExp(CONTRACT_VERSION_PIN_PATTERN, 'm').exec(text)[1]);
+    if (pinned !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
+      errors.push(`contract_version_pin_stale: ${relativePath} pins ${pinned}, `
+        + `generate-reviewer-profiles.js renders ${REVIEWER_BEHAVIOR_CONTRACT_VERSION}`);
+    }
+  }
+  return errors;
+}
+
 function checkGeneratedProfiles(root = ROOT, options = {}) {
   const behaviorContracts = options.behaviorContracts || loadBehaviorContracts(root);
   const runtimeAdapters = options.runtimeAdapters || loadRuntimeAdapters(root);
@@ -805,7 +879,7 @@ function main(argv = process.argv.slice(2)) {
       console.error(`Wrote ${profiles.length} reviewer profiles.`);
     }
     if (argv.includes('--check')) {
-      const errors = checkGeneratedProfiles(ROOT);
+      const errors = [...checkContractVersionPins(ROOT), ...checkGeneratedProfiles(ROOT)];
       if (errors.length > 0) {
         for (const error of errors) console.error(error);
         process.exitCode = 1;
@@ -828,6 +902,12 @@ if (require.main === module) main();
 module.exports = {
   ROOT,
   ROLES,
+  // #889: the single source for the reviewer behavior-contract version. Every consumer that can
+  // reach this module reads it from here — condition AND failure message, so the two can never
+  // disagree the way validate-vendored-agents.js's did.
+  REVIEWER_BEHAVIOR_CONTRACT_VERSION,
+  CONTRACT_VERSION_PIN_SITES,
+  checkContractVersionPins,
   OUTPUT_SPECS,
   EXPECTED_OUTPUT_PATHS,
   PROVENANCE_BAN,

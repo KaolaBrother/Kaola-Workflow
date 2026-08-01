@@ -2,6 +2,69 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Bumping the reviewer behavior contract version is now three steps, and an incomplete bump fails on the
+  first validator in every chain, naming every site still outstanding (#889).** Replayed against the
+  previous HEAD, a partial bump took nine rounds of run-read-patch and was still not finished — and after
+  six of them every reviewer validator reported green while the four Codex preflight copies and
+  `install.sh` were all still stale. Only one suite caught those, and it runs in the claude chain alone,
+  so three of the four chains could pass over a half-done bump.
+  `scripts/generate-reviewer-profiles.js` now exports `REVIEWER_BEHAVIOR_CONTRACT_VERSION`, and every
+  site that can read it does. **`install.sh` is off the bump surface entirely**, which is the part worth
+  stating plainly, because the premise was that it could not be: its `<<'NODE'` heredoc cannot expand
+  shell variables, so the version looked stuck there. The heredoc was never a `require`-less island — it
+  already did `require(process.argv[2])`, the generator module, on the line the wrapper passes in. Only
+  the version was not being read from it. No workaround was needed; three literals simply left.
+  Seven copies genuinely cannot read the constant: the four Codex preflight scripts and the three Codex
+  profile installers run from an installed plugin tree where neither the generator nor
+  `templates/reviewers/` exists, so each must embed the number. Those seven are swept instead —
+  `checkContractVersionPins` reads the pin out of each and reports **every** disagreement in one message,
+  called from `validate-vendored-agents.js` and `validate-kaola-workflow-contracts.js`, two call sites
+  that between them run in all four chains. So the whole bump is: the three roles in
+  `templates/reviewers/behavior-contracts.json`, this constant, and the seven embedded pins the sweep
+  names at once — **and no test file at all**. The managed-agent manifest column in
+  `scripts/test-install-model-rendering.js`, the last hand-edit site outside that path, now reads the
+  exported constant too; it still pins what the *installer* recorded about the bytes it wrote rather than
+  restating the source profile, so a writer reporting a version it did not verify still reds, and it is
+  mutation-proven in both directions. Membership of the sweep list is mechanical, not editorial: it holds
+  files that *declare* the constant, and a file that merely reads it needs no entry. The four contract
+  validators' failure messages now interpolate the same constant their conditions read; three of them
+  were announcing "version 2" while asserting `=== 3`. Separately, the two reviewer fixtures in that
+  suite that pinned the version as a literal went silently vacuous the moment it moved: the regexes
+  matched nothing, handed back the input unchanged, and went on asserting against a pristine profile.
+  They now match the version as a digit run through a helper that fails loudly, naming itself, if a
+  substitution matches other than exactly once or changes nothing.
+
+- **The mission-list format has one wording, and the surfaces carry it rather than pointing at a file
+  only this repository has (#892).** `/workflow-next` told the reader that the four fields, the three
+  write moments and the resume rule live in `docs/mission-list.md`, and to read them there rather than
+  reconstruct them from memory — a path that resolves in this repository and nowhere else, so on a
+  consumer repo the instruction dead-ended. The format now lives in the `next` routing skeleton and
+  renders onto the surfaces themselves: the fenced example, the four-field table, and the two facts that
+  would otherwise have died with the doc — items are identified by their order in the file and nothing
+  depends on a stable ID, and fields appear in that order with absent fields simply absent.
+  `docs/mission-list.md` is deleted, and the prose that pointed at it now points at the design record,
+  `docs/decisions/0017-the-mission-list.md`. The dead pointer reached twelve installed `next` surfaces
+  across four runtimes. The same pass changes two lines of the consumer `CLAUDE.md` scaffold: the
+  three-write-moments bullet now names **where the output was to land** as part of `dispatched`, and the
+  Documentation Map no longer lists `docs/workflow-state-contract.md` — another file a consumer
+  repository does not have. Six literals became load-bearing and are pinned in the routing block
+  manifest, the workflow contract validator and the routing suites, with a new `in-mission-list` block
+  for the init surfaces; three are mutation-proven armed.
+
+- **The canonical suite covers `readActiveFolders`' closed-issue exclusion again (#895).** When #891
+  deleted the classifier's file-set-overlap axis, the closed-issue and `status: released` scenarios went
+  with it, because both were asserted *through* a classifier verdict rather than against the exclusion
+  itself — leaving the behaviour covered in the Gitea and GitLab suites and nowhere in the canonical
+  walkthrough. `testActiveFoldersExcludesClosedIssue895` drives it directly and separately on each arm:
+  one sub-case can only answer through the batched prefetch memo (every per-issue probe exits non-zero),
+  the other only through the per-issue probe (the batch returns nothing to memoize), and each first makes
+  a control call with the filter off, so a single survivor is the filter's doing and not a fixture that
+  planted one folder. Four mutations arm every assertion. This is coverage, not behaviour — nothing about
+  the exclusion changed. The `released` half was measured too and is **not** a second gap: the twin-rule
+  row in `test-bundle-claim.js` still reaches it, proven by mutating `isInactiveStatus`.
+
 ### Removed
 
 - **BREAKING — the workflow no longer decides, or lets you configure, whether work runs in parallel (#891).**
@@ -40,6 +103,112 @@
   The contract validators drop the needle pins for the deleted exports (`PROTECTED_BASENAMES`, `areaForPath`,
   `SHARED_INFRA`, `isSharedInfra`, `isProtected`, and the `fast-summary.md` `## Scope` reader) across all five
   validator copies.
+
+- **The release-prep carry-over is deleted; the four-chain run at the release commit is mandatory (#888).**
+  The previous release let a chain receipt stamped at an *ancestor* of the release candidate bind, provided
+  every path in the intervening diff stayed inside the release-prep surface. Cutting v9.0.0 measured that it
+  cannot fire: the sink writes `chore: archive <project>`, whose entire content is
+  `kaola-workflow/archive/<project>/**`, and that commit always interposes in the only release sequence the
+  workflow has — so the route refused `off_surface` every time. It was an unreachable branch reading as a
+  live feature, and it is deleted rather than widened. Gone with it: `evaluateReleasePrepCarryOver`,
+  `firstJsonDifference` and `RELEASE_VERSIONED_JSON_FILES` from the cross-edition kernel, `receiptBindsTo`
+  from the release tooling, and the `binding` and `carryOver` keys from the `--release-check --json` pass
+  envelope. That last is a JSON contract key removal and is flagged as one, though `docs/api.md` has
+  documented that envelope without them the whole time, so this is the code catching up to the documented
+  shape. `--release-check` binds by exact `headSha` equality and nothing else; the four-chain, unwaived,
+  clean-stamp demand is unchanged, and the documented working sequence now names the offline full-chain run
+  at the release commit as a required step rather than one of two routes. **Nothing gets faster** — the
+  re-run the carry-over promised to skip was never actually skipped. The tests went with the mechanism and
+  none was repaired ahead of it: the carry-over section of `test-release.js` (−54 assertions), `T5j`–`T5n`
+  in `test-finalize-door.js` (−12), and five pre-tag-gate cases in the walkthrough, whose `stale_paths` and
+  dirty-stamp coverage is independently pinned by surviving cases in the same files.
+
+- **Two support layers left orphaned by #891 are removed (#894).** The Codex profile installer carried a
+  compare-and-swap half — `captureAtomicTargetVersion`, `readAtomicTargetVersion`, the `else` arm of
+  `atomicWriteSameDirectory`, and the `expectedVersion` block inside `assertAtomicTarget` — whose only
+  surviving caller passed two arguments, so the compare-and-swap parameter was always `undefined` and its
+  arm unreachable; neither function is exported, so nothing outside the file could reach it either.
+  Seventy-one lines leave each of the three copies. The live guard stays, and is proven still armed rather
+  than assumed: a probe that swaps the destination's inode between the initial `lstat` and the pre-rename
+  check still throws `atomic_stage_unsafe` with the live target preserved and no stage left behind, giving
+  byte-identical verdicts from the edited file and from the pristine one. `atomic_stage_conflict` is kept —
+  it still throws from the hook-backup reservation path. Separately, the curated-root path vocabulary
+  (`CURATED_ROOT_PATHS`, `CURATED_ROOT_LC`, `extractCuratedRootPaths`) leaves the cross-edition kernel in
+  all four editions; #891 removed its last caller along with the curated-root-file `yellow`, and it was
+  left standing then only because the kernel is a four-copy change.
+
+### Fixed
+
+- **The sink no longer refuses finalize's own archive mirror, so the documented worktree finishing sequence
+  stops blocking itself (#893).** On a linked run, finalizing with `--keep-worktree` writes the archive tree
+  into the main checkout and leaves it untracked there — finalize cannot stage a path outside its own
+  worktree, so the commit is deferred to the sink's own archive step. The sink's preflight then read that
+  mirror as foreign dirt and refused `sink_blocked` on its predecessor's output: the one exemption it had
+  under the archive band covered a single file, `.cache/sink-receipt.json`, and the state-file list it
+  checks against is live-path-only and never matched an archive path at all. `sinkPreflight` now exempts
+  untracked paths under `kaola-workflow/archive/<project>/` after consulting the branch, and it asks
+  **existence and content as two separate questions**, because a failed read is not evidence of absence.
+  Four outcomes: not carried by the branch — the observed shape, where main holds the run's only copy —
+  exempt; carried and byte-equal — exempt; carried and **divergent** — no exemption, it stays foreign dirt
+  and the sink refuses loudly rather than letting one of two disagreeing archives silently win; carried but
+  **unreadable or truncated** — unverifiable, which is a different fact from absent, so it stays foreign
+  dirt too. The scope is this project alone, on a segment boundary, so a sibling project's archive tree and
+  a project-name prefix look-alike both keep refusing; and the rule is classification-only — it never routes
+  a path to the removal bucket, because the main checkout holds the run's only `mission-list.md` and
+  `finalization-summary.md`, and a refusal that contains exempted paths still mutates nothing. All three
+  editions. Two mutations show the scoping is load-bearing rather than decorative: dropping the trailing
+  segment boundary reds the prefix look-alike case, and widening to the whole archive band reds both the new
+  sibling cases and the pre-existing over-exemption guard.
+
+  **The fourth outcome is a repair to this fix, found by adversarial verification before it merged.** The
+  first implementation swallowed the content read and treated its `null` as "the branch does not carry this
+  path", conflating **absent** with **unreadable** — so a divergent branch copy was exempted whenever the
+  read failed for any reason at all. Two triggers were executed, not argued: a branch object that cannot be
+  inflated, and — with nothing corrupt or tampered with anywhere — a divergent copy merely larger than the
+  sink's own git read buffer, which overflows the read with `ENOBUFS` on a perfectly healthy repository.
+  Left swallowed it was worse than a misclassification: the divergence resurfaced past preflight as an
+  unhandled `git checkout` fault, and the sink exited carrying no typed envelope at all. Existence is now
+  probed with `git cat-file -e`, which interrogates the tree, emits no bytes of its own to overflow, and
+  still answers when the blob behind the path cannot be read — it cannot express the divergence test, which
+  is why the content read follows it rather than replacing it. It never shipped in this state, so this is
+  recorded as part of the fix rather than as a separate one.
+
+  **New: `receipt.archived_paths` names every own-archive path the sink's archive step committed.** It is
+  an array on the emitted envelope's `receipt`, **present and empty** when nothing was committed rather than
+  absent, so a consumer can always route on it; the same paths are written into the committed
+  `finalization-summary.md` under `## Sink Findings` as an `archived_paths:` list, because the envelope is
+  stdout and the crash-resume journal is disposed on success — a reader months later has only the archived
+  summary. The set is read from git's **index** (`git diff --cached --name-only` against the archive
+  pathspec, with the same excludes as the add) in the moment between staging and the commit, rather than
+  from any list of what the sink believed it planted, so it can neither under-claim a file that rode in
+  unnoticed nor over-claim one this sink never touched — a sibling project's archive residue is correctly
+  absent. It exists because the exemption above is a **directory prefix**: a stray file under the run's own
+  archive directory is committed along with the mirror. The sink deliberately does **not** try to tell a
+  stray from the mirror, because measured, no sound discriminator exists — the archive copies a project
+  folder that is untracked in main and committed nowhere, so git holds no record of what belongs, and a
+  basename allowlist is impossible when archives carry arbitrarily-named orchestrator artifacts. The report
+  is therefore uniform by design: **it makes the commit visible, it does not prevent it**, which is the ADR
+  0017 division where the sink reports and the orchestrator owns the outcome. The summary writer never
+  creates the file it appends to, and is idempotent across a crash-resumed re-entry.
+
+  `test-sink-merge.js` now passes 257 assertions with none failing, up from the 192-passing/16-failing
+  baseline this fix started from.
+
+### Documentation
+
+- **A changelog reference to another project's forge is written without a `#` (#890).** `--verify` and
+  `--prepare` both read the `[Unreleased]` section by extracting every `#`-prefixed number, and neither can
+  tell this repository's issue numbers from some other project's. Cutting v9.0.0 measured the cost: two
+  upstream references written in the `#` form — `openai/codex` PR 19792 and issue 33447 — had to be passed
+  to `--issues-closed` to get past `--prepare`, which put a false statement into the release receipt,
+  recording as closed by that release two numbers that name nothing in this repository. The convention now
+  lives in `docs/conventions.md` § Release: an upstream reference is written as `openai/codex PR 19792`,
+  and a bare `#N` continues to mean an issue here. Nothing changed mechanically, and the extractor is
+  **deliberately not** taught to recognise `owner/repo` slugs — a writer who reintroduces the `#` form
+  finds out at `--prepare`, which is a loud, non-destructive, zero-mutation refusal, and that is a cheaper
+  answer than new machinery for a failure whose whole cost so far is one inaccurate receipt field. The
+  already-released `[9.0.0]` lines keep the form they shipped with; released history is not edited
+  casually.
 
 ## [9.0.0] - 2026-08-01
 

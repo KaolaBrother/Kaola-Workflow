@@ -147,6 +147,51 @@ function persistSinkFindingsToSummary(destDir, postRebaseTests) {
   } catch (_) { return null; }
 }
 
+// The repo-relative paths currently STAGED under one pathspec. Read from the INDEX rather than from
+// the working tree or from the caller's own list of what it believed it planted: that is what makes
+// the #893 report unable to under-claim a file that rode in unnoticed, or over-claim one this sink
+// never touched. Same excludes the add/commit use, so a journal kept out of the commit is kept out
+// of the report too.
+function stagedPathsUnder(mainRoot, pathspec, excludes) {
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '--', pathspec, ...(excludes || [])],
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// #893's durable half. The sink commits its whole own-archive pathspec, and it cannot tell a file
+// finalize mirrored from one nobody wrote — the archive is a copy of a folder that lives untracked
+// in main and is committed nowhere, so git holds no record of what belongs, and no list of names
+// could stand in for one when archives carry whatever artifacts a run happened to need. So the harm
+// closed here is SILENCE, not the commit: every own-archive path that lands is NAMED, uniformly,
+// and the orchestrator adjudicates.
+//
+// This is the half that outlives the process. The envelope is stdout and the crash-resume journal is
+// disposed on success, so a reader months from now has only the archived summary. It shares
+// persistSinkFindingsToSummary's `## Sink Findings` section, adding that header only when the
+// findings writer did not already emit one. It NEVER creates the summary: a report that invented a
+// file inside the archive would add exactly the kind of unaccounted path it exists to disclose —
+// and, because it only ever appends to a file the add already swept, it cannot change the path set
+// it just reported. Same presence-guarded / swallow-on-error discipline as every other measurement
+// writer here: this must never be able to fail the operation it reports on. Returns true iff written.
+function persistArchivedPathsToSummary(destDir, archivedPaths) {
+  if (!destDir || !archivedPaths || !archivedPaths.length) return false;
+  try {
+    const p = path.join(destDir, 'finalization-summary.md');
+    let s = '';
+    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { return false; } // absent → never fabricate one
+    if (/^archived_paths:$/m.test(s)) return false; // idempotent across a crash-resumed re-entry
+    const lines = [];
+    if (!/^## Sink Findings$/m.test(s)) lines.push('## Sink Findings', '');
+    lines.push('archived_paths:');
+    for (const rel of archivedPaths) lines.push('- ' + rel);
+    const block = lines.join('\n').trimEnd() + '\n';
+    adaptiveSchema.writeFileAtomicReplace(p, s.trimEnd() + '\n\n' + block);
+    return true;
+  } catch (_) { return false; }
+}
+
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
     !name.includes('/') && !name.includes('\\') &&
@@ -1187,6 +1232,11 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
       updated_at: new Date().toISOString(),
       stash_ref: null,
       removed_duplicates: [],
+      // #893: present-and-EMPTY from the start, exactly as removed_duplicates is. A consumer that
+      // must tell "committed nothing under the archive" from "this sink does not report" cannot rely
+      // on a field that is sometimes absent — the difference between an empty list and a missing one
+      // is the silence the report exists to close.
+      archived_paths: [],
       steps
     }, extra || {});
   };
@@ -1383,6 +1433,61 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     // NOT exempted.
     const SINK_RECEIPT_EXEMPT = /^kaola-workflow\/(?:archive\/)?[^/]+\/\.cache\/sink-receipt\.json$/;
     if (SINK_RECEIPT_EXEMPT.test(filePath)) continue;
+
+    // #893: THIS sink's OWN archive mirror. On a linked run `cmdFinalize --keep-worktree` writes the
+    // archive tree into the MAIN root and leaves it UNTRACKED there — cmdFinalize cannot stage a path
+    // outside its own worktree, so archiveProjectDir (claim.js) defers the commit to this sink's own
+    // archive_commit step. Bucket 2's list is live-path-only and never matched those paths, so the
+    // documented finishing sequence (finalize --keep-worktree, then --sink) blocked itself on its own
+    // output. Exempt it — but only after consulting the branch, and only for THIS project. EXISTENCE
+    // and CONTENT are two separate questions and are asked separately, because a failed read is not
+    // evidence of absence:
+    //   NOT CARRIED by the branch → the observed shape (main holds the run's ONLY copy) → exempt
+    //   carried and byte-equal → a duplicate of what the branch already carries → exempt
+    //   carried and DIVERGENT → two archives disagree; fall through to bucket 3 and refuse loudly
+    //     rather than let one side silently win
+    //   carried but UNREADABLE → unverifiable, which is not the same fact as absent: fall through
+    //     too. Reading every read fault as "absent" hands back exactly the divergent copies the arm
+    //     above exists to catch, and it does so on a HEALTHY repo — a branch copy merely larger than
+    //     GIT_MAX_BUFFER overflows the content read (ENOBUFS) with nothing corrupt anywhere. Left
+    //     swallowed it is worse than a mis-classification: the divergence resurfaces past preflight
+    //     as an unhandled `git checkout` error, a non-zero exit carrying no typed envelope at all.
+    // The existence probe is bucket 2's `cat-file -e`: it interrogates the tree, emits no bytes of
+    // its own to overflow, and still answers when the blob behind the path cannot be inflated. It
+    // cannot express the divergence test — which is why the content read FOLLOWS it rather than
+    // replacing it, and why neither probe alone is enough.
+    // CLASSIFICATION-ONLY — `continue`, never projDuplicates. Bucket 2's action is fs.unlinkSync, and
+    // main holds the run's only finalization-summary.md and mission-list.md; routing the mirror
+    // through that removal would destroy the run record archive_commit is about to land. Every byte
+    // stays on disk, and on a refusal this exemption mutates nothing at all.
+    // Scoped on a SEGMENT BOUNDARY (the trailing '/'): a SIBLING project's archive tree stays
+    // bucket-3, and so does a project-name prefix look-alike (kaola-workflow/archive/<project>-x/…)
+    // that a boundary-less prefix test would silently swallow — the never-touches-another-project
+    // invariant is unchanged. Untracked (??) only, as bucket 2 is: a tracked modification or deletion
+    // under the archive path is a local edit to committed content, not finalize's mirror.
+    const ownArchivePrefix = 'kaola-workflow/archive/' + project + '/';
+    if (xy === '??' && filePath.startsWith(ownArchivePrefix)) {
+      // #711: for a branchless run the commit is on defBranch (HEAD at sink time), as bucket 2 does.
+      const archiveKey = branchless ? 'HEAD' : branch;
+      let branchHasPath = false;
+      try {
+        execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', archiveKey + ':' + filePath],
+          { stdio: ['ignore', 'ignore', 'ignore'] });
+        branchHasPath = true;
+      } catch (_) {}
+      if (!branchHasPath) continue;
+      let branchBytes = null;
+      try {
+        branchBytes = execFileSync('git', ['-C', mainRoot, 'show', archiveKey + ':' + filePath],
+          { maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+      } catch (_) {}
+      let workBytes = null;
+      try { workBytes = fs.readFileSync(path.join(mainRoot, filePath)); } catch (_) {}
+      // Byte-equality is the ONLY thing that exempts a path the branch carries. A read that failed
+      // leaves branchBytes null and can never satisfy this, so unverifiable falls through with
+      // divergent — no continue: both stay foreign dirt below.
+      if (branchBytes !== null && workBytes !== null && branchBytes.equals(workBytes)) continue;
+    }
 
     // Exclude registered linked worktrees — they appear as untracked dirs in git status -uall
     // but are managed by git and not owned by any issue. Their presence is expected during a
@@ -1960,6 +2065,21 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         try {
           execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' });
         } catch (_) {}
+        // #893: name what this commit carries under THIS project's own archive path. Taken from the
+        // index AFTER the add and BEFORE the commit — the one moment the answer is knowable and
+        // still changeable. Scoped to projectPathspec, so a SIBLING's archive residue (#715-exempt
+        // at preflight, and never in commitPaths) is correctly absent: reporting a path this sink
+        // never touched would be a different lie from staying silent about one it did.
+        receipt.archived_paths = stagedPathsUnder(mainRoot, projectPathspec, excludes);
+        // The durable copy has to be written before the commit that captures it, then re-staged so
+        // the appended text rides that same commit instead of being left dirty behind it. The path
+        // set cannot shift underneath the report: the writer only ever appends to a summary the add
+        // already swept, and never creates one.
+        if (persistArchivedPathsToSummary(archiveDir, receipt.archived_paths)) {
+          try {
+            execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' });
+          } catch (_) {}
+        }
         let hasStaged = false;
         try {
           execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ...commitPaths, ...excludes], { stdio: 'ignore' });

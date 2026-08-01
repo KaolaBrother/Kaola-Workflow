@@ -613,6 +613,115 @@ if (reviewerGenerator) {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
+// The embedded contract-version pin sweep. Seven shipped consumers run from an installed plugin
+// tree where the generator does not exist, so each embeds REVIEWER_BEHAVIOR_CONTRACT_VERSION as a
+// literal. checkContractVersionPins is what makes an incomplete bump fail on the FIRST validator
+// that runs, naming every stale site in one message, rather than surfacing one site per round.
+//
+// Nothing exercised it. Replacing its body with `return []`, or replacing any of its call sites
+// with `[]`, left every guard in this repo green — so the mechanism that keeps eight copies of one
+// number honest was itself unheld, and a careless refactor could disarm it silently.
+//
+// Fixtures only: the sweep takes a root, so every case below is a tree in a temp dir. The real pin
+// sites are read by nothing here and mutated by nothing here.
+if (reviewerGenerator) {
+  const pinSites = reviewerGenerator.CONTRACT_VERSION_PIN_SITES;
+  const pinVersion = reviewerGenerator.REVIEWER_BEHAVIOR_CONTRACT_VERSION;
+  // Non-vacuity: every case below is a difference against these two. An empty site list would make
+  // all of them pass over an empty loop, and a non-numeric version makes the stale case unstateable.
+  assert(Array.isArray(pinSites) && pinSites.length > 0,
+    'CONTRACT_VERSION_PIN_SITES must name the shipped files that embed the contract version — an empty list makes the sweep a no-op that reads green');
+  assert(Number.isInteger(pinVersion) && pinVersion > 0,
+    'REVIEWER_BEHAVIOR_CONTRACT_VERSION must be a positive integer for the sweep to compare against');
+
+  const pinRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-contract-version-pins-'));
+  const declaration = value => `const REVIEWER_BEHAVIOR_CONTRACT_VERSION = ${value};`;
+  const siteBody = value =>
+    `'use strict';\n// fixture consumer that cannot reach the generator\n${declaration(value)}\n`
+    + 'module.exports = { REVIEWER_BEHAVIOR_CONTRACT_VERSION };\n';
+  // Rebuild the whole fixture tree per case, then sweep it. `overrides` replaces one site's bytes;
+  // a null override omits that file entirely (the renamed-or-deleted case).
+  const sweepFixtureTree = (overrides = {}) => {
+    fs.rmSync(pinRoot, { recursive: true, force: true });
+    for (const site of pinSites) {
+      const bytes = Object.prototype.hasOwnProperty.call(overrides, site)
+        ? overrides[site] : siteBody(pinVersion);
+      if (bytes === null) continue;
+      const target = path.join(pinRoot, site);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes, 'utf8');
+    }
+    return reviewerGenerator.checkContractVersionPins(pinRoot);
+  };
+
+  const cleanErrors = sweepFixtureTree();
+  assert(cleanErrors.length === 0,
+    `a fixture tree pinning ${pinVersion} at every site must sweep clean, got ${JSON.stringify(cleanErrors)}`);
+
+  const victim = pinSites[0];
+
+  // A stale pin names the file AND both versions: the message is the diagnosis, so whoever bumps
+  // the contract reads what to change and to what without opening anything.
+  const staleErrors = sweepFixtureTree({ [victim]: siteBody(pinVersion + 1) });
+  assert(staleErrors.length === 1 && staleErrors[0].startsWith(`contract_version_pin_stale: ${victim} `),
+    `a site pinning ${pinVersion + 1} must be reported as contract_version_pin_stale naming ${victim}, got ${JSON.stringify(staleErrors)}`);
+  assert(staleErrors.length === 1
+      && staleErrors[0].includes(String(pinVersion + 1)) && staleErrors[0].includes(String(pinVersion)),
+  `the stale report must carry BOTH the version the site pins and the version the generator renders, got ${JSON.stringify(staleErrors)}`);
+
+  // A site that moved out from under the list is itself the failure — a pin nobody sweeps is how
+  // the number goes stale in silence. Asserted for EVERY site, not one: a sweep that reached only
+  // the first entry would leave the rest unswept and every case above would still pass.
+  for (const site of pinSites) {
+    const missingErrors = sweepFixtureTree({ [site]: null });
+    assert(missingErrors.length === 1 && missingErrors[0] === `contract_version_pin_site_missing: ${site}`,
+      `a renamed or deleted ${site} must be reported as contract_version_pin_site_missing, got ${JSON.stringify(missingErrors)}`);
+  }
+
+  // Uniqueness, both directions. Two declarations mean the sweep reads one while the consumer may
+  // read the other; zero means the declaration was reshaped out of the swept pattern's sight (a
+  // `let`, a respaced `=`), which is the same silent drift with no stale value left to find.
+  const duplicateErrors = sweepFixtureTree({ [victim]: `${siteBody(pinVersion)}${declaration(pinVersion)}\n` });
+  assert(duplicateErrors.length === 1
+      && duplicateErrors[0] === `contract_version_pin_not_unique: ${victim} declarations=2`,
+  `a duplicated declaration in ${victim} must be reported as contract_version_pin_not_unique with its count, got ${JSON.stringify(duplicateErrors)}`);
+  const reshapedErrors = sweepFixtureTree({ [victim]: siteBody(pinVersion).replace('const REVIEWER', 'let REVIEWER') });
+  assert(reshapedErrors.length === 1
+      && reshapedErrors[0] === `contract_version_pin_not_unique: ${victim} declarations=0`,
+  `a declaration reshaped out of the swept pattern in ${victim} must be reported, got ${JSON.stringify(reshapedErrors)}`);
+
+  // The sweep's whole reason to exist: every stale site in ONE message, so a bump costs one round
+  // of run-read-patch instead of one round per site.
+  const allStaleErrors = sweepFixtureTree(
+    Object.fromEntries(pinSites.map(site => [site, siteBody(pinVersion + 1)])));
+  assert(allStaleErrors.length === pinSites.length,
+    `a tree stale at all ${pinSites.length} sites must report all of them in one pass, got ${allStaleErrors.length}: ${JSON.stringify(allStaleErrors)}`);
+  fs.rmSync(pinRoot, { recursive: true, force: true });
+
+  // The WIRING. The sweep defends nothing where it is not CALLED, and each call is a plain
+  // expression spread into an error list: replacing it with `[]` disarms the sweep with no syntax
+  // error and no other guard noticing. This is a source-text pin and its bound is exactly that —
+  // it sees the call, not whether the caller acts on what the call returns.
+  const SWEEP_CALL = /checkContractVersionPins\(\s*(?:ROOT|root)\s*\)/;
+  const SWEEP_CALL_SITES = [
+    'scripts/generate-reviewer-profiles.js',         // --check
+    'scripts/validate-vendored-agents.js',           // claude, gitlab and gitea chains
+    'scripts/validate-kaola-workflow-contracts.js',  // codex chain — the one chain without the above
+  ];
+  for (const site of SWEEP_CALL_SITES) {
+    const text = read(site);
+    assert(text !== null, `contract-version pin sweep call site ${site} must exist`);
+    if (text === null) continue;
+    assert(SWEEP_CALL.test(text),
+      `${site} must still CALL checkContractVersionPins — with the call gone the sweep is dead code and a half-finished contract bump reaches a chain that reads green`);
+    // Armed in memory: strike the call out of a copy and the pin must move. This also proves the
+    // pin reads the CALL and not the function's own `checkContractVersionPins(root = ROOT)`
+    // signature, which survives the strike in the generator's copy.
+    assert(!SWEEP_CALL.test(text.replace(new RegExp(SWEEP_CALL.source, 'g'), '[]')),
+      `the ${site} wiring pin must go RED when the sweep call is replaced by [] — a pin its own disarm cannot move is not a pin`);
+  }
+}
+
 
 
 

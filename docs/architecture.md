@@ -24,7 +24,7 @@ Everything between the claim and finalization is the orchestrator's. It decides 
 what to dispatch, at what width, and in what order, with the frontier in front of it — and nothing
 inspects that decision. There is no plan grammar, no freeze, no gate, no disjointness proof, no
 fan-out cap, and no refusal in the run design. See `decisions/0017-the-mission-list.md` for the
-derivation and `mission-list.md` for the file format.
+derivation.
 
 ## The mission list
 
@@ -35,7 +35,7 @@ entry per mission with four fields:
 |---|---|---|
 | `item` | the mission — one line of prose, hints and facts | at creation |
 | `status` | `todo` \| `in-flight` \| `done` | on change |
-| `dispatched` | what went out and to whom, enough to decide re-dispatch vs. wait | at dispatch |
+| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |
 | `result` | where the outcome landed — a path, or a few lines inline | at close |
 
 No script writes it; the orchestrator does, at three moments. Work the orchestrator does itself is
@@ -341,5 +341,5 @@ See `conventions.md` § Two validation tiers.
 Chain selection at finalize belongs to the producer: `run-chains.js` diff-scopes it from
 `--project` / `--plan`. A non-edition-touching diff runs the `claude` chain alone; an
 edition-touching diff — or an unresolved diff base — fails closed to all four. A release tag always
-requires the full, unwaived four-chain receipt regardless of scope — bound at the tagged commit, or
-carried over release-prep-only commits, the same route `--tag` and `--release-check` now share.
+requires the full, unwaived four-chain receipt regardless of scope, bound at the tagged commit by
+strict `headSha` equality and nothing else — the same one route `--tag` and `--release-check` share.

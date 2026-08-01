@@ -95,6 +95,10 @@ const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
 const CODEX_REASONING_EFFORT = 'xhigh';
 const MANIFEST_SCHEMA_VERSION = 1;
 const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
+// #889: an embedded copy of the reviewer behavior-contract version. This file ships inside a
+// plugin tree, where scripts/generate-reviewer-profiles.js does not exist, so it cannot read the
+// number from its source. It is swept instead: that module's CONTRACT_VERSION_PIN_SITES lists
+// this path and checkContractVersionPins fails every chain when the two disagree.
 const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 3;
 const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
 const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
@@ -1035,63 +1039,7 @@ function sameFileVersion(left, right) {
     && left.ctimeMs === right.ctimeMs;
 }
 
-function readAtomicTargetVersion(target, expectedStat) {
-  let descriptor = null;
-  try {
-    const noFollow = fs.constants.O_NOFOLLOW || 0;
-    try {
-      descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollow);
-    } catch (error) {
-      if (error && error.code === 'ENOENT') {
-        throw atomicStageFailure('atomic_stage_conflict',
-          `atomic replacement target disappeared while reading: ${target}`);
-      }
-      if (error && error.code === 'ELOOP') {
-        throw atomicStageFailure('atomic_stage_unsafe',
-          `atomic replacement target became a symlink while reading: ${target}`);
-      }
-      throw error;
-    }
-
-    const before = fs.fstatSync(descriptor);
-    if (!before.isFile()) {
-      throw atomicStageFailure('atomic_stage_unsafe',
-        `atomic replacement target is not a regular file: ${target}`);
-    }
-    if (!sameFileVersion(before, expectedStat)) {
-      throw atomicStageFailure('atomic_stage_conflict',
-        `atomic replacement target changed before reading: ${target}`);
-    }
-    const bytes = fs.readFileSync(descriptor);
-    const after = fs.fstatSync(descriptor);
-    const pathAfter = lstatIfPresent(target);
-    if (!pathAfter || pathAfter.isSymbolicLink() || !pathAfter.isFile()) {
-      throw atomicStageFailure(pathAfter ? 'atomic_stage_unsafe' : 'atomic_stage_conflict',
-        `atomic replacement target changed while reading: ${target}`);
-    }
-    if (!sameFileVersion(before, after) || !sameFileVersion(after, pathAfter)) {
-      throw atomicStageFailure('atomic_stage_conflict',
-        `atomic replacement target changed while reading: ${target}`);
-    }
-    return { stat: pathAfter, bytes };
-  } finally {
-    if (descriptor !== null) {
-      try { fs.closeSync(descriptor); } catch (_closeError) { /* preserve the primary result */ }
-    }
-  }
-}
-
-function captureAtomicTargetVersion(target) {
-  const current = lstatIfPresent(target);
-  if (!current) return { stat: null, bytes: null };
-  if (current.isSymbolicLink() || !current.isFile()) {
-    throw atomicStageFailure('atomic_stage_unsafe',
-      `atomic replacement target is not a regular non-symlink file: ${target}`);
-  }
-  return readAtomicTargetVersion(target, current);
-}
-
-function assertAtomicTarget(target, expectedStat, expectedVersion) {
+function assertAtomicTarget(target, expectedStat) {
   const current = lstatIfPresent(target);
   if (current && (current.isSymbolicLink() || !current.isFile())) {
     throw atomicStageFailure('atomic_stage_unsafe',
@@ -1099,17 +1047,8 @@ function assertAtomicTarget(target, expectedStat, expectedVersion) {
   }
   if (Boolean(current) !== Boolean(expectedStat)
       || (current && !sameFileIdentity(current, expectedStat))) {
-    throw atomicStageFailure(expectedVersion === undefined
-      ? 'atomic_stage_unsafe'
-      : 'atomic_stage_conflict',
+    throw atomicStageFailure('atomic_stage_unsafe',
       `atomic replacement target changed while staging: ${target}`);
-  }
-  if (expectedVersion !== undefined && current) {
-    const actualVersion = readAtomicTargetVersion(target, expectedStat);
-    if (!actualVersion.bytes.equals(expectedVersion.bytes)) {
-      throw atomicStageFailure('atomic_stage_conflict',
-        `atomic replacement target content changed while staging: ${target}`);
-    }
   }
 }
 
@@ -1130,7 +1069,7 @@ function cleanupOwnedAtomicStage(stage, ownedStat) {
 // Create a fresh same-directory stage with O_EXCL semantics, validate that its
 // parent/target/path identities did not change, then atomically rename it into
 // place. Existing candidate names are unowned collisions: retry them untouched.
-function atomicWriteSameDirectory(target, bytes, expectedVersion) {
+function atomicWriteSameDirectory(target, bytes) {
   const destination = path.resolve(target);
   const parent = path.dirname(destination);
   if (path.join(parent, path.basename(destination)) !== destination) {
@@ -1144,16 +1083,10 @@ function atomicWriteSameDirectory(target, bytes, expectedVersion) {
       `staging parent must be an existing non-symlink directory: ${parent}`);
   }
   const parentRealPath = fs.realpathSync(parent);
-  let targetStat;
-  if (expectedVersion === undefined) {
-    targetStat = lstatIfPresent(destination);
-    if (targetStat && (targetStat.isSymbolicLink() || !targetStat.isFile())) {
-      throw atomicStageFailure('atomic_stage_unsafe',
-        `atomic replacement target is not a regular non-symlink file: ${destination}`);
-    }
-  } else {
-    targetStat = expectedVersion.stat;
-    assertAtomicTarget(destination, targetStat, expectedVersion);
+  const targetStat = lstatIfPresent(destination);
+  if (targetStat && (targetStat.isSymbolicLink() || !targetStat.isFile())) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `atomic replacement target is not a regular non-symlink file: ${destination}`);
   }
 
   for (let attempt = 0; attempt < ATOMIC_STAGE_ATTEMPTS; attempt += 1) {
@@ -1197,7 +1130,7 @@ function atomicWriteSameDirectory(target, bytes, expectedVersion) {
         throw atomicStageFailure('atomic_stage_unsafe',
           `exclusive stage escaped its destination directory: ${stage}`);
       }
-      assertAtomicTarget(destination, targetStat, expectedVersion);
+      assertAtomicTarget(destination, targetStat);
 
       fs.renameSync(stage, destination);
       renamed = true;

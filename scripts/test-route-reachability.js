@@ -153,8 +153,8 @@ for (const ed of codexEditions) {
   const n = norm(fs.readFileSync(path.join(REPO, next), 'utf8'));
   assert(f.includes('issue_numbers') && f.includes('--issue-numbers'),
     `T4[${ed.name}]: finalize SKILL wires the multi-issue member-set flag (--issue-numbers)`);
-  assert(n.includes('kaola-workflow/{project}/mission-list.md') && n.includes(norm('docs/mission-list.md')),
-    `T4[${ed.name}]: next SKILL names the run's mission list AND points at the canonical format`);
+  assert(n.includes('kaola-workflow/{project}/mission-list.md') && n.includes(norm('nothing depends on a stable ID')),
+    `T4[${ed.name}]: next SKILL names the run's mission list AND carries the format itself`);
   assert(n.includes(norm('kaola-workflow-finalize')),
     `T4[${ed.name}]: next SKILL routes onward to finalization`);
 }
@@ -802,8 +802,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       && block.content_tokens.slice(1).every(t => !marker.includes(norm(t))),
       `consent: the ${topic} consent block needs >=1 token that is not a substring of its marker`);
   }
-  assert(exists('docs/mission-list.md'),
-    'the canonical mission-list format the next surfaces point at must exist');
   assert(exists('templates/axioms.md'),
     'the canonical First Principles source must exist');
 }
@@ -839,7 +837,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: '<!-- PIN: sink-reports-orchestrator-owns -->', surfaces: FN_ALL },
     // next × 6
     { token: 'mission-list.md', surfaces: NX_ALL },
-    { token: 'docs/mission-list.md', surfaces: NX_ALL },
     { token: 'dispatched: self', surfaces: NX_ALL },
     { token: 'Look for the work, not for the worker.', surfaces: NX_ALL },
     { token: '--target-issue', surfaces: NX_ALL },

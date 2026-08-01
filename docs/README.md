@@ -1,12 +1,11 @@
 # Documentation Index
 
-**Start here: [The mission list](mission-list.md)** — the file convention that *is* the workflow. One
-file per run, four fields per item, three write moments. Its design record is
-[ADR 0017](decisions/0017-the-mission-list.md).
+**Start here: [The mission list](decisions/0017-the-mission-list.md)** — the design record for the
+convention that *is* the workflow, and why it is one file per run, four fields per item, three write
+moments.
 
 ## Core
 
-- [The mission list](mission-list.md) — the run record: `item` / `status` / `dispatched` / `result`.
 - [Architecture](architecture.md) — system structure and data flow.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.

@@ -154,10 +154,11 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// Profile and shared-config replacement stages must never reuse the predictable
-// historical `.tmp-<pid>` path, follow a planted symlink, or clobber a colliding
-// randomized stage. A collision is retried with a fresh exclusive candidate;
-// exhausting the retry budget preserves both the live target and the collision.
+// Profile replacement staging must never reuse the predictable historical
+// `.tmp-<pid>` path, follow a planted symlink, or clobber a colliding randomized
+// stage. A collision is retried with a fresh exclusive candidate; exhausting the
+// retry budget preserves both the live target and the collision, and a failed
+// rename removes only the stage this writer created.
 {
   const failures = [];
 
@@ -2639,15 +2640,36 @@ function enableMultiAgentV2(homeRoot) {
 {
   const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
   const reviewer = fs.readFileSync(path.join(pluginRoot, 'agents', 'code-reviewer.toml'), 'utf8');
+
+  // A fixture regex that names the live contract version goes vacuous the moment the version
+  // moves: the replacement matches nothing, hands back the input unchanged, and its mutation case
+  // still runs and is still counted while asserting nothing. The version is matched as a digit run
+  // rather than a literal, and every substitution proves it landed on exactly one site and changed
+  // the text — so a pattern that stops matching fails here, naming itself, instead of surfacing as
+  // a puzzling downstream code mismatch.
+  function replaceOnce(source, pattern, replacement) {
+    const flags = pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g';
+    const matches = [...source.matchAll(new RegExp(pattern.source, flags))];
+    assert.strictEqual(matches.length, 1,
+      `reviewer fixture ${pattern} must match exactly one site; matched ${matches.length}`);
+    const mutated = source.replace(pattern, replacement);
+    assert.notStrictEqual(mutated, source,
+      `reviewer fixture ${pattern} substituted nothing and would test nothing`);
+    return mutated;
+  }
+
   const cases = [
     {
       label: 'missing behavior contract version',
-      text: reviewer.replace(/^behavior_contract_version: 3\n/m, ''),
+      text: replaceOnce(reviewer, /^behavior_contract_version: \d+\n/m, ''),
       code: 'reviewer_behavior_core_version_missing',
     },
     {
       label: 'unsupported behavior contract version',
-      text: reviewer.replace(/^behavior_contract_version: 3$/m, 'behavior_contract_version: 1'),
+      // `1` is a deliberately wrong version, not the live one: the guard accepts exactly the
+      // current contract version, and replaceOnce reds if a bump ever made these two coincide.
+      text: replaceOnce(reviewer, /^behavior_contract_version: \d+$/m,
+        'behavior_contract_version: 1'),
       code: 'reviewer_contract_version_unsupported',
     },
     {
@@ -2968,9 +2990,16 @@ try {
     const row = claudeManifestLines.find(line => line.startsWith(role + '.md\t'));
     assert(row, 'Claude managed-agent manifest must carry ' + role);
     const columns = row.split('\t');
-    assert(columns.length === 5 && columns[2] === '3'
+    assert(columns.length === 5
       && /^[0-9a-f]{64}$/.test(columns[3]) && /^[0-9a-f]{64}$/.test(columns[4]),
     'Claude managed-agent manifest must record installed sha, behavior version/hash, and resolved profile hash for ' + role);
+    // The version column is read from the generator, not pinned, so a contract bump carries it
+    // instead of leaving a hand-edit site here. It is not a restatement of the source profile:
+    // this column is what the INSTALLER recorded about the bytes it wrote, so a writer that
+    // reports a version it did not verify still reds.
+    assert.strictEqual(columns[2], String(reviewerGenerator.REVIEWER_BEHAVIOR_CONTRACT_VERSION),
+      'Claude managed-agent manifest must record the behavior contract version this code renders for '
+      + role);
   }
   assert(installOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
     'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');

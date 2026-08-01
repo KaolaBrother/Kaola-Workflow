@@ -131,10 +131,10 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 
 - Start and resume all workflow work through the workflow router entrypoint your runtime installs.
 - A run claims one issue — or one explicitly selected same-scope set — and records what it owns in `kaola-workflow/{project}/workflow-state.md`: which issue, which branch, which worktree.
-- The run's coordination record is `kaola-workflow/{project}/mission-list.md`: an H1 carrying the goal, then one item per mission with `item`, `status` (`todo`/`in-flight`/`done`), `dispatched`, and `result`. The agent writes it; no script owns it.
-- Three write moments, and they are the whole discipline: write the item at creation; write `dispatched` and flip to `in-flight` BEFORE the work goes out; write `result` and flip to `done` at close. Writing `dispatched` afterwards is the failure the file exists to prevent.
-- An item is a mission, not a specification — one line of prose carrying what to achieve plus the facts already known, never a role, a file list, a dependency edge, a model, or a shape. Decide how to run it when you reach it.
-- The frontier is not computed: it is the list minus done minus in-flight, visible by reading. How much of it to open, and whether to dispatch or work inline, is the agent's call and nothing inspects it.
+- `kaola-workflow/{project}/mission-list.md` is the run's coordination record and the one file a successor needs. No script owns this file; you write it. An H1 carrying the goal in one line, then one item per mission.
+- An item is a **mission, not a specification**. One line of prose: what to achieve, plus the hints and facts you already know. It carries no role, no file list, no dependency edge, no model, no cardinality and no shape, because you decide all of that when you reach it.
+- The frontier is not computed — it is the list minus done minus in-flight, visible by reading. When you reach an item, decide whether to dispatch subagents or do the work yourself, and at what width.
+- **Three write moments.** These are the whole discipline. **Created** — write `item` and `status: todo`. **Dispatched** — write `dispatched` and flip `status` to `in-flight`, **before the work goes out**. Writing it afterwards is precisely the failure this file exists to prevent. Name **where the output was to land** — that locator is what makes recovery possible at all. **Closed** — write `result` and flip `status` to `done`.
 - Delegate work to the vendored subagents by default; the main session owns orchestration, review, validation, integration, and final decisions. Subagents and worktrees are tools — offered, and declinable.
 - Name roles by function and reasoning tier, never by a vendor model name — write `planner (reasoning tier)`, not `planner (<model>)`. Keep this section runtime-neutral so it reads correctly on every runtime that reads this repo.
 - For read/research work, spawn `code-explorer` for codebase research and `knowledge-lookup` when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed.
@@ -175,7 +175,6 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - `docs/architecture.md` — system structure and data flow.
 - `docs/api.md` — APIs, schemas, events, and external contracts.
 - `docs/conventions.md` — coding, testing, Git, and review rules.
-- `docs/workflow-state-contract.md` — detailed durable state and generated mirror contract.
 - `docs/decisions/` — architecture decision records.
 - `kaola-workflow/ROADMAP.md` — active implementation roadmap.
 

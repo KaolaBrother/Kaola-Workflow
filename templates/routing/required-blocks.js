@@ -57,6 +57,34 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    // The consumer's CLAUDE.md is the one artifact loaded in EVERY session of
+    // the repo the workflow was installed into; the next surface loads only
+    // when the command is invoked, and its text is not addressable from a
+    // consumer repo at all — it lives in the installed command/skill tree, not
+    // in the repo. So the format is RESTATED here rather than pointed at.
+    //
+    // The restatement is a strict SUBSET of the next skeleton's wording: the
+    // four format bullets of the KW-CLAUDE-TEMPLATE region are built only from
+    // whole sentences of `next.skeleton.md`, in that skeleton's own order,
+    // shortened by omission and never rephrased. Nothing checks that
+    // mechanically — it is the rule for editing this pair. Reword the next
+    // skeleton and re-excerpt from it; writing a second wording here is how the
+    // two silently drift apart, and a pointer of any kind is the defect this
+    // block exists to prevent.
+    block_id: 'in-mission-list',
+    topic: 'init',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'kaola-workflow/{project}/mission-list.md',
+      'Three write moments',
+      '**before the work goes out**',
+      'where the output was to land',
+      'the list minus done minus in-flight',
+      'mission, not a specification',
+    ],
+  },
+  {
     block_id: 'fn-consent-in-conversation',
     topic: 'finalize',
     runtime_tag: 'both',
@@ -74,19 +102,46 @@ const REQUIRED_BLOCKS = [
     // write moments are the only discipline that keeps it true. `dispatched`
     // written AFTER the work goes out is the exact failure the file exists to
     // prevent, so that ordering is pinned as text rather than left to survive
-    // by habit.
+    // by habit. The FORMAT ITSELF is carried on these surfaces rather than
+    // pointed at: a reader of an installed command is in a consumer repo, where
+    // no path into this repository's docs resolves. The two order/absence facts
+    // are pinned individually because they live nowhere else on a shipped
+    // surface, and an unpinned fact is one edit from gone.
+    //
+    // THE FIELD TABLE IS PINNED BY THE ROW, not by its words. The table is the
+    // format's normative definition — it is the only place on a shipped surface
+    // that binds each field NAME to its content AND to the write moment it is
+    // written at, so the whole table could have been deleted with every token
+    // above still present. Each row is one field's complete definition, so the
+    // row is the unit.
+    //
+    // WHY THE ROW AND NOT THE CLAUSE: `**where the output was to land**` also
+    // appears in write moment 2 further down the surface. A bare-clause token
+    // would therefore stay green while the locator was stripped from the
+    // `dispatched` ROW — green for a reason unrelated to the property it names.
+    // The row token is what makes the locator undeletable where it is bound to
+    // the field.
+    //
+    // NOT PINNED: the header and delimiter rows. Losing them breaks the table's
+    // rendering, which a reader sees immediately, and costs no rule — the rows
+    // below carry the format.
     block_id: 'nx-mission-list',
     topic: 'next',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
       'mission-list.md',
-      'docs/mission-list.md',
       'status: todo',
       'in-flight',
+      'nothing depends on a stable ID',
+      'absent fields are simply absent',
       'before the work goes',
       'dispatched: self',
       'mission, not a specification',
+      '| `item` | the mission — one line of prose, hints and facts | at creation |',
+      '| `status` | `todo` \\| `in-flight` \\| `done` | on change |',
+      '| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |',
+      '| `result` | where the outcome landed — a path, or a few lines inline | at close |',
     ],
   },
   {

@@ -2,9 +2,9 @@
 
 Document coding style, testing rules, Git practices, naming, and review expectations.
 
-**The workflow itself is `docs/mission-list.md`** (design record:
-`docs/decisions/0017-the-mission-list.md`). Nothing here restates it. These are the rules for
-building, testing, and releasing *this repository* and the surfaces it ships.
+**The workflow itself is the mission list; `docs/decisions/0017-the-mission-list.md` is its design
+record.** Nothing here restates it. These are the rules for building, testing, and releasing *this
+repository* and the surfaces it ships.
 
 ## Orchestration seam
 
@@ -523,18 +523,15 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   (git-toplevel default, overridable via `--receipt`), local git, and `package.json` (to resolve
   the expected `test:kaola-workflow:*` chain set) — no CI/CD or forge calls — and refuses with a
   typed `reason` unless the receipt is a clean-stamped, all-green, UNWAIVED receipt COVERING
-  every declared chain, whose `headSha` either STRICTLY equals the release-candidate commit
-  (default `HEAD`; `--candidate` for an explicit commit) or binds through the one deliberate
-  alternative, the **release-prep carry-over**: the receipt's `headSha` is an ancestor of the
-  candidate, every path in the post-receipt diff lies inside the release-prep surface
-  (`RELEASE_FILES`), and `package.json` plus each plugin manifest differ by the version field
-  alone — anything else refuses `chains_stale` naming the culprit paths, and the pass envelope
-  names which route bound. The #547 `codeTreeHash` freshness relaxation used at finalize still
-  does NOT apply. **This is one of the two places that still refuses**, and deliberately so: it is release
+  every declared chain, whose `headSha` STRICTLY equals the release-candidate commit
+  (default `HEAD`; `--candidate` for an explicit commit). That equality is the ONLY binding: the
+  #547 `codeTreeHash` freshness relaxation used at finalize does NOT apply, and neither does any
+  ancestor relaxation — see the working sequence below.
+  **This is one of the two places that still refuses**, and deliberately so: it is release
   tooling a human invokes before tagging, not a workflow judging a run. A red, missing, stale,
   incomplete, waived, or unresolvable-chain-set receipt is a
   typed refusal, never a judgment call: `chains_unverified` (no/unparseable receipt) >
-  `chains_stale` (`headSha` unbound, or bound by neither route, or the receipt stamped over a dirty
+  `chains_stale` (`headSha` unbound, not equal to the candidate, or the receipt stamped over a dirty
   worktree — with hint-only `stale_paths`/`stale_kind` culprit diagnostics on a sha mismatch) >
   `chains_empty` (zero chains recorded) > `repo_kind_undetermined` (the expected chain set
   cannot be resolved from `package.json` — fails CLOSED, never treated as a vacuous pass) >
@@ -545,14 +542,16 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   tag). Only a typed `pass` envelope
   (`{result:'pass', mode:'release-check', candidate, chains:[...]}`) clears the gate. See
   `docs/api.md` for the full envelope shapes and `docs/decisions/D-651-01.md` for the design.
-- **Working sequence:** `--prepare` → one release-only commit →
-  `--release-check` passes → `--tag` → online post-tag validation → push the named tag → publish.
-  A four-chain receipt recorded at the pre-prep commit carries over the release-only commit — the
-  same route `--tag` and `--release-check` now share — so no chain re-run at the bump commit is
-  required; re-running there
-  (`KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js` — OFFLINE skips the
-  tag-existence check that would otherwise fail before the tag exists) also binds, via strict
-  equality.
+- **Working sequence:** `--prepare` → one release-only commit → **a full four-chain run at that
+  commit** (`KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js` — OFFLINE skips the
+  tag-existence check that would otherwise fail before the tag exists) → `--release-check` passes →
+  `--tag` → online post-tag validation → push the named tag → publish. **That re-run is mandatory,
+  not an alternative** (issue #888). #881 shipped a release-prep carry-over meant to skip it, and
+  cutting v9.0.0 measured that it cannot fire: the sink's `chore: archive <project>` commit
+  interposes `kaola-workflow/archive/<project>/**` between the finishing run's receipt and the
+  release commit, and those paths are outside the release-prep surface by construction. Since the
+  workflow has no release path that avoids the sink, the carry-over was an unreachable branch
+  reading as a live feature, and it was deleted rather than widened.
 - Push only the named tag before creating the forge release. The release tooling emits neutral
   guidance; no external pipeline or forge service participates in the release gate.
 - **Release-commit hygiene (issue #651).** A release/tag commit is version bump + release docs
@@ -563,6 +562,20 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   the receipt's `headSha` then names a different tree than the tag covers. Anything beyond
   version bump + release docs re-runs the whole sequence above — regenerate the receipt at the
   new candidate, re-pass `--release-check`, re-tag.
+- **Changelog references to another forge carry no `#` (issue #890).** `--verify` and `--prepare`
+  both read the `[Unreleased]` section by extracting every `#\d+`, and neither can tell this repo's
+  issue numbers from some other project's. So a reference to an upstream forge is written **without
+  the hash** — `openai/codex PR 19792`, `openai/codex issue 33447` — and a bare `#886` continues to
+  mean an issue in *this* repo, which is what `--issues-closed` asserts it closed. Writing
+  `openai/codex PR #19792` instead forces that number into `--issues-closed` to get past `--prepare`,
+  which puts a false statement in the release receipt: measured cutting v9.0.0, where `#19792` and
+  `#33447` — an openai/codex PR and issue — were recorded as issues the release closed. They are not.
+  The repo already writes the same PR correctly in the `[7.0.0]` entry (*"confirmed against
+  rust-v0.145.0 source and upstream Codex PR 19792"*); the `[9.0.0]` lines are the deviation, and
+  they stay as they are because released history is not edited casually. **The extractor is
+  deliberately not taught to recognise `owner/repo` slugs** — a writer who reintroduces the `#` form
+  finds out at `--prepare`, which is a loud, non-destructive, zero-mutation refusal, and that is a
+  cheaper answer than machinery for a failure whose whole cost so far is one metadata inaccuracy.
 
 ### Release cutting (kaola-workflow-release.js)
 
@@ -595,8 +608,8 @@ receipt alone authorizes a ref mutation.
 - **`--tag --version X.Y.Z`** — requires a clean tracked worktree, coherent prepare receipt,
   exact candidate provenance and bytes, and a nonempty receipt covering every declared edition chain.
   The chain receipt must be clean-stamped, unwaived, all green, and bind to candidate HEAD via the
-  same route `--release-check` accepts — exact `headSha` equality, or the release-prep carry-over
-  from an ancestor commit. Authorization and completion rows bind version, independent Codex version,
+  same route `--release-check` accepts — exact `headSha` equality, and nothing
+  else. Authorization and completion rows bind version, independent Codex version,
   ordered prepared surface, candidate SHA, chain HEAD, and tag name. Tag creation is an atomic
   zero-old ref update at candidate HEAD. The command then resolves the tag and reads every prepared
   file from the tag tree as raw bytes; a newly-created tag is compare-deleted if verification fails.
@@ -609,9 +622,8 @@ receipt alone authorizes a ref mutation.
 **Relationship to `--release-check`.** `--tag` no longer performs its own separate check — it binds
 to candidate HEAD via the same route `--tag` and `--release-check` now share, so the two cannot
 disagree. `run-chains.js --release-check` remains a separate mandatory step and a stable external
-contract: run it before `--tag`, whether the receipt it reads is a fresh offline run or one
-carried over from an earlier release-prep-only commit, and do not infer its pass from `--prepare`
-or from `--tag`'s own checks. It calls no external pipeline.
+contract: run it before `--tag`, over a receipt stamped at the release commit itself, and do not
+infer its pass from `--prepare` or from `--tag`'s own checks. It calls no external pipeline.
 
 **Registration surface:** `kaola-workflow-release.js` is registered in `COMMON_SCRIPTS` (so the canonical-to-codex byte-mirror is enforced by `validate-script-sync.js`) and in the rename-normalized forge-ports family, but **NOT** in the install-manifest `SUPPORT_SCRIPT_NAMES` block. It is a maintainer/dev tool on the same operational profile as `release-surface-drift.js` (D-442-01 §6). If a chain goes red demanding manifest registration, stop and surface it rather than silently widening SUPPORT_SCRIPTS.
 

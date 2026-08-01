@@ -105,6 +105,43 @@ const FF_RACE_PUSH_DIR = process.env.KAOLA_WORKFLOW_FF_RACE_PUSH_DIR || ''; // #
 // maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
+// The repo-relative paths currently STAGED under one pathspec. Read from the INDEX, not the working
+// tree and not the caller's own list of what it believed it planted — that is what stops the #893
+// report under-claiming a file that rode in unnoticed, or over-claiming one this sink never touched.
+function stagedPathsUnder(mainRoot, pathspec, excludes) {
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '--', pathspec, ...(excludes || [])], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// #893's durable half. The sink commits its whole own-archive pathspec and cannot tell a file
+// finalize mirrored from one nobody wrote — the archive copies a folder that lives untracked in main
+// and is committed nowhere, so git holds no record of what belongs, and no list of names could stand
+// in for one when archives carry whatever artifacts a run happened to need. The harm closed is
+// SILENCE, not the commit: every own-archive path that lands is NAMED, uniformly, and the
+// orchestrator adjudicates. This is the half that outlives the process (the envelope is stdout, the
+// journal is disposed on success). Shares `## Sink Findings`, adding that header only when the
+// findings writer did not. NEVER creates the summary — a report that invented a file inside the
+// archive would add the very kind of unaccounted path it exists to disclose, and appending to a file
+// the add already swept cannot shift the set it just reported. Swallow-on-error like every
+// measurement writer here: it must not be able to fail the operation it reports on. True iff written.
+function persistArchivedPathsToSummary(destDir, archivedPaths) {
+  if (!destDir || !archivedPaths || !archivedPaths.length) return false;
+  try {
+    const p = path.join(destDir, 'finalization-summary.md');
+    let s = '';
+    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { return false; } // absent → never fabricate one
+    if (/^archived_paths:$/m.test(s)) return false; // idempotent across a crash-resumed re-entry
+    const lines = [];
+    if (!/^## Sink Findings$/m.test(s)) lines.push('## Sink Findings', '');
+    lines.push('archived_paths:');
+    for (const rel of archivedPaths) lines.push('- ' + rel);
+    adaptiveSchema.writeFileAtomicReplace(p, s.trimEnd() + '\n\n' + lines.join('\n').trimEnd() + '\n');
+    return true;
+  } catch (_) { return false; }
+}
+
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
     !name.includes('/') && !name.includes('\\') &&
@@ -1236,7 +1273,10 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
       keep_open_requested: !!keepIssueOpen,
       claim_ts: currentClaimTs || null,
       started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      stash_ref: null, removed_duplicates: [],
+      // #893: archived_paths ships present-and-EMPTY from the start, as removed_duplicates does — a
+      // consumer that must tell "committed nothing under the archive" from "this sink does not
+      // report" cannot rely on a field that is sometimes absent.
+      stash_ref: null, removed_duplicates: [], archived_paths: [],
       steps
     }, extra || {});
   };
@@ -1369,6 +1409,35 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     // NOT exempted.
     const SINK_RECEIPT_EXEMPT = /^kaola-workflow\/(?:archive\/)?[^/]+\/\.cache\/sink-receipt\.json$/;
     if (SINK_RECEIPT_EXEMPT.test(filePath)) continue;
+    // #893: THIS sink's OWN archive mirror. `cmdFinalize --keep-worktree` writes the archive tree into
+    // the MAIN root and leaves it UNTRACKED there (it cannot stage a path outside its own worktree, so
+    // it defers the commit to this sink's archive_commit step); bucket 2's list is live-path-only, so
+    // the documented finishing sequence blocked itself on its own output. EXISTENCE and CONTENT are two
+    // questions and are asked separately, because a failed read is not evidence of absence: NOT CARRIED
+    // by the branch → exempt (main holds the run's ONLY copy); carried and byte-equal → exempt; carried
+    // and DIVERGENT → fall through to bucket 3 and refuse loudly rather than let one side silently win;
+    // carried but UNREADABLE → unverifiable, which is not absent, so it falls through too. Swallowing a
+    // read fault as absence hands back the divergent case on a HEALTHY repo (a copy past GIT_MAX_BUFFER
+    // overflows the read) and lets it resurface past preflight as an untyped crash. `cat-file -e` is the
+    // existence probe, as in bucket 2: it reads the tree, emits no bytes of its own to overflow, and
+    // answers when the blob cannot be inflated — it cannot express the divergence test, so the content
+    // read follows it rather than replacing it. CLASSIFICATION-ONLY — `continue`, never projDuplicates,
+    // whose action is fs.unlinkSync and would destroy the finalization summary and mission list. Scoped
+    // to THIS project on a SEGMENT BOUNDARY (the trailing '/'): a sibling's archive tree and a
+    // project-name prefix look-alike stay bucket-3. ?? only.
+    const ownArchivePrefix = 'kaola-workflow/archive/' + project + '/';
+    if (xy === '??' && filePath.startsWith(ownArchivePrefix)) {
+      let branchHasPath = false;
+      try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath], { stdio: 'ignore' }); branchHasPath = true; } catch (_) {}
+      if (!branchHasPath) continue;
+      let branchBytes = null;
+      try { branchBytes = execFileSync('git', ['-C', mainRoot, 'show', branch + ':' + filePath], { maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] }); } catch (_) {}
+      let workBytes = null;
+      try { workBytes = fs.readFileSync(path.join(mainRoot, filePath)); } catch (_) {}
+      // Byte-equality is the ONLY exemption for a path the branch carries; a failed read leaves
+      // branchBytes null and can never satisfy it, so unverifiable falls through with divergent.
+      if (branchBytes !== null && workBytes !== null && branchBytes.equals(workBytes)) continue;
+    }
     const isWorktreePath = worktreePaths.has(filePath) || Array.from(worktreePaths).some(wt => filePath === wt + '/' || filePath.startsWith(wt + '/'));
     if (isWorktreePath) continue;
     foreignDirt.push(filePath);
@@ -1762,6 +1831,18 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       const excludes = [exRcpt, exFb, exLiveRcpt, exLiveFb];
       if (fs.existsSync(archiveDir) && commitPaths.length > 0) {
         try { execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' }); } catch (_) {}
+        // #893: name what this commit carries under THIS project's own archive path. Taken from the
+        // index AFTER the add and BEFORE the commit — the one moment the answer is both knowable and
+        // still changeable. Scoped to `ps`, so a SIBLING's archive residue (#715-exempt at preflight
+        // and never in commitPaths) is correctly absent: reporting a path this sink never touched
+        // would be a different lie from staying silent about one it did. The durable copy goes into
+        // the archived summary and is re-staged, so it rides this same commit instead of being left
+        // dirty behind it; the writer only appends to a summary the add already swept, so the set
+        // cannot shift underneath the report.
+        receipt.archived_paths = stagedPathsUnder(mainRoot, ps, excludes);
+        if (persistArchivedPathsToSummary(archiveDir, receipt.archived_paths)) {
+          try { execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' }); } catch (_) {}
+        }
         let hasStaged = false;
         try { execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ...commitPaths, ...excludes], { stdio: 'ignore' }); }
         catch (e) { if (e && e.status === 1) hasStaged = true; }

@@ -476,7 +476,7 @@ function testKeepOpenArchiveStamp333() {
 // they used to read `in-progress node:` / `pending gates:` / `consent-halt markers:` / `task mirror:`
 // off a frozen plan, a `## Node Ledger` and a derived workflow-tasks.json. Those are gone; the
 // packet now comes from mission-list.md, and the assertions below are derived from the format in
-// docs/mission-list.md rather than from the script.
+// docs/decisions/0017-the-mission-list.md rather than from the script.
 //
 // The load-bearing one is the in-flight line WITH its dispatched locator. ADR 0017 sizes this whole
 // file to one observed failure — an orchestrator losing what was in flight — so a resume packet that
@@ -539,7 +539,7 @@ function testAC2CompactPlainStdout() {
     assert(r.stdout.includes('active project: ' + projectName),
       'AC2: packet must name the active project, got: ' + r.stdout);
 
-    // --- The record-derived half, per docs/mission-list.md. ---
+    // --- The record-derived half, per docs/decisions/0017-the-mission-list.md. ---
     assert(r.stdout.includes('Retire the node executor'),
       'AC2: the H1 is the goal and must reach the packet, got: ' + r.stdout);
     assert(/in-flight:.*re-point compact-resume at the mission list/.test(r.stdout),

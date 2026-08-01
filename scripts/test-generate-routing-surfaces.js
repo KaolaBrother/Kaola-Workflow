@@ -297,7 +297,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
       '<!-- PIN: consent-in-conversation -->',
       'workflow-state.md',
       'mission-list.md',
-      'docs/mission-list.md',
+      'nothing depends on a stable ID',
       'status: todo',
       'in-flight',
       'dispatched: self',

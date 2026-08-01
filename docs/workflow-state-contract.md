@@ -4,7 +4,7 @@ This map is the detailed state inventory for Kaola-Workflow. Keep root memory fi
 `CLAUDE.md` and `AGENTS.md` limited to durable invariants and link here for the full contract.
 
 A run's durable state is **two files plus evidence**: `kaola-workflow/{project}/mission-list.md`
-(the coordination record — see `mission-list.md` for its format) and
+(the coordination record — see `decisions/0017-the-mission-list.md` for its derivation) and
 `kaola-workflow/{project}/workflow-state.md` (the claim record, written by the claim scripts).
 Everything else under the project folder is evidence, telemetry, or a journal.
 
@@ -106,7 +106,7 @@ file but is only as complete as its own source walk.
 - `kaola-workflow/{project}/mission-list.md` is the run's coordination record: the goal in its H1
   and one entry per mission with `item` / `status` / `dispatched` / `result`. No script writes it —
   the orchestrator does, at three moments (created, dispatched, closed). It is the one file a
-  zero-context successor needs; see `mission-list.md`.
+  zero-context successor needs; see `decisions/0017-the-mission-list.md` for the derivation.
 - `kaola-workflow/{project}/workflow-state.md` is the claim record and resume pointer. It records
   status, phase, step, next command or skill, issue number, sink mode, branch, worktree path when
   known, and the claim-time session fields. See Workflow State Fields below.

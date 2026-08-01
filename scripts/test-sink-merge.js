@@ -38,6 +38,23 @@
 //       (sink-receipt.json.tmp, a nested x/.cache/sink-receipt.json, a sink-receipt.json
 //       DIRECTORY) stay bucket-3 foreign dirt and refuse sink_blocked with ZERO mutation.
 //   (m) #715/#518 — regression lock: THIS sink's own live + archive receipts remain exempt.
+//   (w1)–(w10) #893 — the archive mirror `cmdFinalize --project P --keep-worktree` leaves UNTRACKED
+//       in the MAIN checkout is this sink's own artifact, awaiting its own archive_commit step. It
+//       must not be classified as bucket-3 foreign dirt (the documented worktree finishing sequence
+//       blocked itself), it must not be silently removed (main holds the run's ONLY copy of the
+//       finalization summary + mission list), and the widening must stay bounded: a SIBLING
+//       project's archive tree, a project-name PREFIX look-alike, and a copy the branch carries at
+//       CONFLICTING bytes all stay bucket-3. (w5)–(w7) hold the bound when the branch copy cannot be
+//       READ — unreadable (w5) and larger than the read buffer (w6) are both "we could not verify",
+//       which is NOT "the branch does not carry it", and (w7) pins that such a run still ends in a
+//       typed envelope rather than crashing past preflight into an unhandled git error.
+//       (w8)–(w10) close the other half: the exemption covers a DIRECTORY and archive_commit stages
+//       that whole pathspec, so a file no finalize ever wrote is committed and pushed with the rest.
+//       The sink does not refuse it and cannot tell it apart (the archive is untracked in main, so
+//       git holds no record of what finalize produced, and no name list could stand in for one) —
+//       so it REPORTS instead: every own-archive path it commits is named on receipt.archived_paths
+//       and in the durable archived ## Sink Findings, scoped to this project, present-and-empty when
+//       it commits nothing.
 //   (o) #746 — a live folder that recorded nothing (journal residue only, no workflow-state.md)
 //       must not be classified as an archive refusal: the sink skips it and still reaches
 //       status:sinked.
@@ -970,6 +987,582 @@ function buildBranchlessFixture(project, issue) {
   }
 })();
 
+// --------------------------------------------------------------------------- (w1)–(w10) #893
+
+// The archive tree `cmdFinalize --project P --keep-worktree` leaves in the MAIN checkout. The file
+// set is the one observed on issue-891 verbatim (the four paths the refusal listed).
+function archiveMirrorFiles(project, issue) {
+  return {
+    '.cache/origin/selection-record.json': JSON.stringify({ project, selected: [issue] }, null, 2) + '\n',
+    'finalization-summary.md': '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n',
+    'mission-list.md': '# ' + project + ' — close the issue\n\n### item: pin the exemption\nstatus: done\nresult: inline\n',
+    'workflow-state.md': liveState(project, issue, new Date().toISOString()),
+  };
+}
+// Re-key a { <rel>: <content> } archive map onto repo-relative paths under one project's archive dir.
+function mirrorPlant(project, mirror) {
+  const out = {};
+  for (const rel of Object.keys(mirror)) out['kaola-workflow/archive/' + project + '/' + rel] = mirror[rel];
+  return out;
+}
+
+// The shape a `--keep-worktree` finish ACTUALLY leaves for the sink, per archiveProjectDir
+// (kaola-workflow-claim.js): on a LINKED run the archive always lands under MAIN's root and stays
+// UNTRACKED there, and the feature branch never carries the archive path at all — cmdFinalize
+// cannot stage a path outside its own worktree, so it defers the commit to the sink's own
+// archive_commit step. So the branch here carries the deliverable and NO live folder, and main
+// carries the archive as untracked residue. That asymmetry is the whole scenario: an exemption
+// keyed on "the branch already carries this file" can never fire on it.
+//   opts.branchArchive — { <rel>: <content> } committed on the BRANCH under this project's archive
+//     path (the conflicting-copy shape). Omit for the observed shape.
+//   opts.plant — { <repo-rel>: <content> } written UNTRACKED into main once the fixture is built.
+function buildKeepWorktreeArchiveMirrorFixture(project, issue, opts) {
+  opts = opts || {};
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  // main: roadmap source + mirror. No pre-existing archive dir — this run is the first to archive
+  // this project, so no collision suffix muddies which path the assertions are about.
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  // feature branch: the deliverable. The live folder lived in the linked worktree and was never
+  // main-tracked; the keep-worktree finalize commit already took it off the branch.
+  git(tmpRoot, ['checkout', '-b', branch]);
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+  for (const rel of Object.keys(opts.branchArchive || {})) {
+    const abs = path.join(tmpRoot, 'kaola-workflow', 'archive', project, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, opts.branchArchive[rel]);
+  }
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: deliverable']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  // main working tree: finalize's untracked residue, plus whatever else the scenario plants.
+  for (const rel of Object.keys(opts.plant || {})) {
+    const abs = path.join(tmpRoot, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, opts.plant[rel]);
+  }
+
+  return { tmpRoot, remotePath, binDir, logFile, branch };
+}
+
+// (w1) NEW BEHAVIOUR. The headline claim, end to end on the observed shape: the mirror is the only
+// dirt, and the documented finishing sequence must complete rather than block itself.
+(function testKeepWorktreeArchiveMirrorDoesNotBlockOwnSink() {
+  console.log('Test (#893 w1): the untracked archive mirror a --keep-worktree finalize leaves in MAIN must NOT block this sink — the documented worktree finishing sequence completes, and the mirror lands at HEAD byte-for-byte');
+  const project = 'issue-89301';
+  const issue = 89301;
+  const mirror = archiveMirrorFiles(project, issue);
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant: mirrorPlant(project, mirror) });
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(!(out && out.reason === 'sink_blocked'),
+      '#893 w1: the sink must NOT refuse sink_blocked on its OWN archive mirror; foreign_dirt=' + JSON.stringify(out && out.foreign_dirt)
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(result.status === 0, '#893 w1: sink must exit 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#893 w1: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // NO DATA LOSS. Main holds the run's ONLY copy of these files — the branch never carried them —
+    // so archive_commit must land every one of them. An exemption that REMOVES the mirror the way
+    // bucket 2 removes its duplicates would destroy the finalization summary and the mission list,
+    // which is the failure mode the manual recipe warns about. finalization-summary.md is checked
+    // as a PREFIX, not for equality: the sink appends its own `## Sink Findings` section to that
+    // one file before staging the archive, and that append is the sink's, not a loss.
+    for (const rel of Object.keys(mirror)) {
+      const headRel = 'kaola-workflow/archive/' + project + '/' + rel;
+      const atHead = showAtHead(fx.tmpRoot, headRel);
+      const ok = rel === 'finalization-summary.md'
+        ? (atHead !== null && atHead.startsWith(mirror[rel]))
+        : atHead === mirror[rel];
+      assert(ok, '#893 w1: ' + headRel + ' must be committed at HEAD carrying the mirrored content after the sink; got ' + JSON.stringify(atHead));
+    }
+    const status = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
+    assert(status === '', '#893 w1: main checkout must be clean after status:sinked; got:\n' + status);
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w2) The same classification claim isolated from the rest of the transaction: a genuinely foreign
+// file forces the refusal, so the mirror's absence from the listing is directly observable (the
+// #715 (m) idiom). The "foreign file is listed" and "zero mutation" clauses are FENCES; the "mirror
+// paths are absent" clauses are NEW BEHAVIOUR.
+(function testKeepWorktreeArchiveMirrorNotListedAsForeignDirt() {
+  console.log('Test (#893 w2): with a genuinely foreign file forcing the refusal, this project\'s own untracked archive mirror must NOT appear in foreign_dirt and must be left byte-untouched');
+  const project = 'issue-89302';
+  const issue = 89302;
+  const mirror = archiveMirrorFiles(project, issue);
+  const foreignRel = 'kaola-workflow/foreign-89392/workflow-state.md';
+  const plant = Object.assign(mirrorPlant(project, mirror), { [foreignRel]: 'status: active\n' });
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant });
+  fx.projectName = project;
+  try {
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '#893 w2: sink must refuse on the planted foreign file; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#893 w2: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
+      '#893 w2: foreign_dirt must still list the genuinely foreign file; got ' + JSON.stringify(out && out.foreign_dirt));
+    for (const rel of Object.keys(mirror)) {
+      const dirtRel = 'kaola-workflow/archive/' + project + '/' + rel;
+      assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(dirtRel),
+        '#893 w2: ' + dirtRel + ' is this sink\'s own archive mirror and must NOT be listed as foreign dirt; got ' + JSON.stringify(out && out.foreign_dirt));
+      const abs = path.join(fx.tmpRoot, dirtRel);
+      assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror[rel],
+        '#893 w2: ' + dirtRel + ' must be byte-untouched after a refusal (the exemption is classification-only)');
+    }
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w2: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w3) The bound the widening must not cross. "This sink never touches another project's files" is
+// the invariant, so a SIBLING project's archive tree stays bucket-3 — and so does a project-name
+// PREFIX look-alike (kaola-workflow/archive/<project>-sibling/…), which a path test written without
+// a segment boundary would silently swallow. The "sibling/look-alike is listed" and "zero mutation"
+// clauses are FENCES (green today, and the reason they exist is that nothing else would notice the
+// widening going unbounded); the "own mirror is absent" clauses are NEW BEHAVIOUR.
+(function testSiblingArchiveTreeStaysForeignDirt() {
+  console.log('Test (#893 w3): over-exemption guard — a SIBLING project\'s archive tree and a project-name PREFIX look-alike stay bucket-3 foreign dirt while this project\'s own mirror is exempt');
+  const project = 'issue-89303';
+  const issue = 89303;
+  const sibling = 'issue-89393';
+  const mirror = archiveMirrorFiles(project, issue);
+  const siblingRels = [
+    'kaola-workflow/archive/' + sibling + '/mission-list.md',
+    'kaola-workflow/archive/' + sibling + '/.cache/origin/selection-record.json',
+    // Prefix look-alike: shares this project's archive prefix but is a DIFFERENT path segment.
+    'kaola-workflow/archive/' + project + '-sibling/mission-list.md',
+  ];
+  const plant = mirrorPlant(project, mirror);
+  for (const rel of siblingRels) plant[rel] = 'sibling in-progress artifact\n';
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant });
+  fx.projectName = project;
+  try {
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '#893 w3: sink must refuse on a sibling project\'s archive tree; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#893 w3: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    for (const rel of siblingRels) {
+      assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(rel),
+        '#893 w3: foreign_dirt must list ' + rel + ' — the widening is keyed on THIS project only; got ' + JSON.stringify(out && out.foreign_dirt));
+      const abs = path.join(fx.tmpRoot, rel);
+      assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === 'sibling in-progress artifact\n',
+        '#893 w3: ' + rel + ' must be byte-untouched (this sink never touches another project\'s files)');
+    }
+    for (const rel of Object.keys(mirror)) {
+      const ownRel = 'kaola-workflow/archive/' + project + '/' + rel;
+      assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(ownRel),
+        '#893 w3: ' + ownRel + ' is this sink\'s own mirror and must NOT be listed; got ' + JSON.stringify(out && out.foreign_dirt));
+    }
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w3: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w4) The exemption is superset-verified against the branch, not a blanket path allowance. Read
+// together with (w1) — where the branch carries NOTHING under the archive path and the mirror is
+// still exempt — the only rule that satisfies both is "exempt unless the branch carries a
+// CONFLICTING version": absent on the branch is the observed shape and safe; present at different
+// bytes is two divergent archives, which must refuse loudly with zero mutation rather than let one
+// silently win. FENCE today (current code refuses everything under the path).
+(function testConflictingBranchCopyStaysForeignDirt() {
+  console.log('Test (#893 w4): the exemption is superset-verified, not a blanket path allowance — a mirrored file the BRANCH carries at conflicting bytes must still refuse, with the main copy left untouched');
+  const project = 'issue-89304';
+  const issue = 89304;
+  const mirror = archiveMirrorFiles(project, issue);
+  const conflictRel = 'kaola-workflow/archive/' + project + '/mission-list.md';
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, {
+    // The branch carries a DIFFERENT mission list at the same path than the one main holds.
+    branchArchive: { 'mission-list.md': '# ' + project + ' — a DIVERGENT run record\n\n### item: not the same bytes\nstatus: todo\n' },
+    plant: mirrorPlant(project, mirror),
+  });
+  fx.projectName = project;
+  try {
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '#893 w4: sink must refuse when the branch carries a conflicting copy; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#893 w4: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(conflictRel),
+      '#893 w4: foreign_dirt must list ' + conflictRel + ' — the branch carries different bytes at that path, so it is not this mirror\'s duplicate; got ' + JSON.stringify(out && out.foreign_dirt));
+    const abs = path.join(fx.tmpRoot, conflictRel);
+    assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror['mission-list.md'],
+      '#893 w4: the conflicting main copy must be left byte-untouched — an exemption that removed it would resolve the divergence by deleting one side');
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w4: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w5)–(w7) #893 — the READ-FAULT arm of the same three-way rule. (w4) proves a divergent branch
+// copy refuses when the copy can be READ. These cover what happens when it cannot be. "git show
+// failed" is not evidence that the branch does not carry the path, so resolving every read fault
+// toward "exempt" gives away precisely the case (w4) exists to catch — and it gives it away on a
+// healthy repo, not only a broken one. The distinguishing probe has to be an EXISTENCE question
+// (`git cat-file -e <key>:<path>`), which answers under both faults below and emits no output of its
+// own to overflow: a failed content read on a path the branch demonstrably CARRIES is
+// UNVERIFIABLE, and unverifiable is foreign dirt, not a duplicate. Absence — the observed shape
+// (w1) is about — is untouched by all three.
+
+// The on-disk loose object a ref names. Making it unreadable leaves the branch TREE naming the blob
+// exactly as it was, so the fault is a failure to READ and not an absence — which is the entire
+// distinction the exemption has to draw.
+function looseObjectOf(tmpRoot, ref) {
+  const sha = git(tmpRoot, ['rev-parse', ref]).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) return { sha, abs: null };
+  return { sha, abs: path.join(tmpRoot, '.git', 'objects', sha.slice(0, 2), sha.slice(2)) };
+}
+
+// The sink's own git buffer ceiling, read out of the shipped source rather than restated here: an
+// oversize fixture proves nothing unless it exceeds the limit the running code actually compiles
+// with. Returns null if the declaration cannot be found, which the scenario asserts on rather than
+// silently substituting a number of its own.
+function sinkGitMaxBuffer() {
+  const m = fs.readFileSync(sinkMergeScript, 'utf8').match(/const GIT_MAX_BUFFER\s*=\s*([\d\s*]+);/);
+  if (!m) return null;
+  return m[1].split('*').reduce((acc, t) => acc * Number(t.trim()), 1);
+}
+
+// (w5) NEW BEHAVIOUR. Classification isolated (the (w2)/(w4) idiom): the branch carries a DIVERGENT
+// copy at THIS project's own archive path, and the object backing it cannot be read. A genuinely
+// foreign file forces the refusal, so the divergent copy's classification is directly observable.
+(function testUnreadableBranchCopyStaysForeignDirt() {
+  console.log('Test (#893 w5): the branch carries a DIVERGENT archive copy whose object cannot be READ — unreadable is unverifiable, not absent, so it must stay bucket-3 foreign dirt');
+  const project = 'issue-89305';
+  const issue = 89305;
+  const mirror = archiveMirrorFiles(project, issue);
+  const conflictRel = 'kaola-workflow/archive/' + project + '/mission-list.md';
+  const foreignRel = 'kaola-workflow/foreign-89395/workflow-state.md';
+  const plant = Object.assign(mirrorPlant(project, mirror), { [foreignRel]: 'status: active\n' });
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, {
+    branchArchive: { 'mission-list.md': '# ' + project + ' — a DIVERGENT run record\n\n### item: not the same bytes\nstatus: todo\n' },
+    plant,
+  });
+  fx.projectName = project;
+  let objAbs = null;
+  try {
+    // PRECONDITIONS. Without them the scenario is unfalsifiable: if the object stayed READABLE the
+    // path would be listed by (w4)'s own rule, and every assertion below would pass for a reason
+    // that has nothing to do with read faults.
+    const obj = looseObjectOf(fx.tmpRoot, fx.branch + ':' + conflictRel);
+    assert(obj.abs !== null && fs.existsSync(obj.abs),
+      '#893 w5 precondition: the branch copy must be a LOOSE object for the fixture to make it unreadable; sha=' + JSON.stringify(obj.sha));
+    objAbs = obj.abs;
+    try { fs.chmodSync(objAbs, 0o000); } catch (_) {}
+    assert(git(fx.tmpRoot, ['show', fx.branch + ':' + conflictRel]).status !== 0,
+      '#893 w5 precondition: git show must now FAIL — if it still succeeds the fixture is not exercising a read fault at all');
+    assert(git(fx.tmpRoot, ['ls-tree', fx.branch, '--', conflictRel]).stdout.includes(obj.sha),
+      '#893 w5 precondition: the branch TREE must still name the blob — the branch DOES carry this path, so this is a read fault and not an absence');
+
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(out && out.reason === 'sink_blocked',
+      '#893 w5: reason must be sink_blocked (the planted foreign file forces the refusal); got ' + JSON.stringify(out && (out.reason || out.status))
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(conflictRel),
+      '#893 w5: foreign_dirt must list ' + conflictRel + ' — the branch carries DIVERGENT bytes there and the copy could not be read, which is unverifiable, not exempt; got ' + JSON.stringify(out && out.foreign_dirt));
+    const abs = path.join(fx.tmpRoot, conflictRel);
+    assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror['mission-list.md'],
+      '#893 w5: the main copy must be left byte-untouched — an unresolvable divergence is not resolved by deleting one side');
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w5: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    try { if (objAbs) fs.chmodSync(objAbs, 0o444); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// (w6) NEW BEHAVIOUR. The same loss with NOTHING tampered with anywhere: the branch's divergent copy
+// is simply larger than the buffer the content read allocates, so the read overflows on a repo where
+// every object is intact and readable. This is the trigger that arrives by accident.
+(function testOversizeBranchCopyStaysForeignDirt() {
+  console.log('Test (#893 w6): the branch carries a DIVERGENT archive copy larger than the sink\'s own git buffer — a read that OVERFLOWS is unverifiable too, and nothing about the repo is broken');
+  const project = 'issue-89306';
+  const issue = 89306;
+  const ceiling = sinkGitMaxBuffer();
+  assert(ceiling !== null && ceiling > 0,
+    '#893 w6: GIT_MAX_BUFFER must be readable out of scripts/kaola-workflow-sink-merge.js — the fixture is sized against the ceiling the SHIPPED code uses, not one restated here; got ' + JSON.stringify(ceiling));
+  const cap = ceiling || 64 * 1024 * 1024;
+  const mirror = archiveMirrorFiles(project, issue);
+  const conflictRel = 'kaola-workflow/archive/' + project + '/mission-list.md';
+  const foreignRel = 'kaola-workflow/foreign-89396/workflow-state.md';
+  const plant = Object.assign(mirrorPlant(project, mirror), { [foreignRel]: 'status: active\n' });
+  // Deliberately incompressible-free filler: one MiB past the ceiling inflates well beyond the
+  // buffer while the loose object zlib's down to a few hundred KiB, so the whole fixture (write,
+  // hash, commit, push) costs a fraction of a second rather than paying for 65 MiB of real I/O.
+  const big = '# ' + project + ' — a DIVERGENT run record\n' + 'x'.repeat(cap + 1024 * 1024) + '\n';
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { branchArchive: { 'mission-list.md': big }, plant });
+  fx.projectName = project;
+  try {
+    // PRECONDITIONS: the blob really is over the ceiling, and a read at that ceiling really does
+    // overflow. The second one is what ties the fixture to the fault — a merely large file the
+    // buffer could still hold would make every assertion below meaningless.
+    const sz = Number(git(fx.tmpRoot, ['cat-file', '-s', fx.branch + ':' + conflictRel]).stdout.trim());
+    assert(sz > cap, '#893 w6 precondition: the branch blob must exceed the ' + cap + '-byte ceiling; got ' + sz);
+    // The measured property is a failure mode of INVOKING git as a child process: ENOBUFS is what
+    // the parent's child-process buffer reports when the child's stdout outruns it, so the property
+    // lives entirely at the process boundary and has no in-process form — no function call can
+    // overflow a spawn buffer. Asserting the blob size instead would only restate the fixture; this
+    // is what proves the read the sink performs actually fails on it.
+    // spawn-class: cli-contract
+    const overflow = spawnSync('git', ['-C', fx.tmpRoot, 'show', fx.branch + ':' + conflictRel], { maxBuffer: cap });
+    assert(overflow.error && overflow.error.code === 'ENOBUFS',
+      '#893 w6 precondition: a content read at that ceiling must overflow (ENOBUFS) — that IS the fault under test; got ' + JSON.stringify(overflow.error && overflow.error.code));
+    // And the probe that CAN answer here answers cleanly, which is why the repair is possible at all.
+    assert(git(fx.tmpRoot, ['cat-file', '-e', fx.branch + ':' + conflictRel]).status === 0,
+      '#893 w6 precondition: an existence probe must still answer 0 — the branch demonstrably carries this path');
+
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(out && out.reason === 'sink_blocked',
+      '#893 w6: reason must be sink_blocked (the planted foreign file forces the refusal); got ' + JSON.stringify(out && (out.reason || out.status))
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(conflictRel),
+      '#893 w6: foreign_dirt must list ' + conflictRel + ' — a branch copy too large for the read buffer is unverifiable, not absent; got ' + JSON.stringify(out && out.foreign_dirt));
+    const abs = path.join(fx.tmpRoot, conflictRel);
+    assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror['mission-list.md'],
+      '#893 w6: the main copy must be left byte-untouched');
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w6: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w7) NEW BEHAVIOUR. The end-to-end consequence, and the reason this arm is not merely a
+// mis-classification. (w5)'s shape with NO foreign file, so nothing else forces a refusal: whatever
+// the sink concludes, the contract is that it concludes it in a TYPED envelope. An exemption that
+// swallows the read fault instead lets the run past preflight into the merge steps, where the very
+// divergence it swallowed resurfaces as an unhandled git error — a non-zero exit carrying no
+// envelope at all, which leaves the orchestrator nothing to route on. (w4) emits a clean
+// sink_blocked on this shape when the object is readable; the read fault must not change that.
+(function testUnverifiableBranchCopyEmitsTypedRefusal() {
+  console.log('Test (#893 w7): with the divergence unverifiable and nothing else dirty, the sink must still emit a well-formed TYPED envelope and refuse — never crash past preflight with an unparseable failure');
+  const project = 'issue-89307';
+  const issue = 89307;
+  const mirror = archiveMirrorFiles(project, issue);
+  const conflictRel = 'kaola-workflow/archive/' + project + '/mission-list.md';
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, {
+    branchArchive: { 'mission-list.md': '# ' + project + ' — a DIVERGENT run record\n\n### item: not the same bytes\nstatus: todo\n' },
+    plant: mirrorPlant(project, mirror),
+  });
+  fx.projectName = project;
+  let objAbs = null;
+  try {
+    const obj = looseObjectOf(fx.tmpRoot, fx.branch + ':' + conflictRel);
+    assert(obj.abs !== null && fs.existsSync(obj.abs),
+      '#893 w7 precondition: the branch copy must be a LOOSE object for the fixture to make it unreadable; sha=' + JSON.stringify(obj.sha));
+    objAbs = obj.abs;
+    try { fs.chmodSync(objAbs, 0o000); } catch (_) {}
+    assert(git(fx.tmpRoot, ['show', fx.branch + ':' + conflictRel]).status !== 0,
+      '#893 w7 precondition: git show must now FAIL — if it still succeeds the fixture is not exercising a read fault at all');
+
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const mainBefore = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // The envelope FIRST, on its own: "emitted nothing parseable" and "emitted the wrong verdict"
+    // are different failures and must read differently. This is the clause an untyped crash trips.
+    assert(out !== null,
+      '#893 w7: the sink must emit a well-formed JSON envelope — an unhandled error past preflight gives the orchestrator nothing to route on; exit=' + result.status
+      + '\nstdout: ' + JSON.stringify(result.stdout) + '\nstderr: ' + JSON.stringify((result.stderr || '').slice(0, 800)));
+    assert(out && out.result === 'refuse', '#893 w7: the envelope must be a typed refusal; got ' + JSON.stringify(out));
+    assert(out && out.reason === 'sink_blocked', '#893 w7: reason must be sink_blocked; got ' + JSON.stringify(out && (out.reason || out.status)));
+    assert(result.status !== 0, '#893 w7: sink must exit non-zero on the refusal; got ' + result.status);
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(conflictRel),
+      '#893 w7: foreign_dirt must name the unverifiable divergent path so the refusal says WHICH file to resolve; got ' + JSON.stringify(out && out.foreign_dirt));
+
+    // ZERO MUTATION: a preflight refusal happens before anything is merged, pushed or closed.
+    assertNothingPublished(fx, '#893 w7', { mainBefore, remoteBefore });
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w7: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    try { if (objAbs) fs.chmodSync(objAbs, 0o444); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// (w8)–(w10) #893 — the REPORT. The exemption covers a DIRECTORY, and archive_commit stages that
+// whole `kaola-workflow/archive/<project>` pathspec, so every file sitting there when the sink runs
+// is committed to the default branch and pushed — including one no finalize ever wrote.
+//
+// The sink does NOT refuse it, and does not try to tell a stray from the mirror. It cannot: the
+// archive is a copy of the run's project folder, which lives UNTRACKED in the main checkout and is
+// committed nowhere, so git holds no record of what finalize legitimately produced; and no list of
+// names could stand in for one, because the archive carries whatever artifacts a given run needed —
+// routing briefs, demolition manifests, gap audits, summaries — under names nobody can enumerate in
+// advance. A discriminator that does not exist cannot be tested into existence.
+//
+// So the harm being closed is SILENCE, not the commit. The sink reports what it found and the
+// orchestrator gets the branch right: every own-archive path this sink commits must be NAMED, so a
+// stray is visible in the record instead of arriving unannounced on the default branch.
+//
+// WHERE the report lives — two homes, chosen from what the sink already does rather than invented:
+//   receipt.archived_paths — an array of repo-relative paths on the emitted envelope's receipt,
+//     modelled on `removed_duplicates` (paths bucket 2 removed) and `closed_issues` (issues the sink
+//     closed): same snake_case, same plural, same "things this sink acted on", and `removed_duplicates`
+//     already ships PRESENT-AND-EMPTY on a run that removed nothing, which is the property (w10)
+//     pins. This is what the orchestrator routes on.
+//   the archived `## Sink Findings` — the sink's own durable section in finalization-summary.md,
+//     which the code calls "what outlives this" because the journal is disposed and the envelope is
+//     stdout. A report that vanishes when the process exits only half-closes a silence.
+// Both, because they serve different readers at different times: the envelope answers "what is
+// happening now", the committed summary answers "what did we publish, and when did it get there".
+// The list is UNIFORM — it names the stray exactly as it names the mirror — because the whole ruling
+// rests on the two being indistinguishable to the sink.
+
+// (w8) NEW BEHAVIOUR. The headline: a stray rides the exemption into the commit, and must not do it
+// quietly. `.env.local` because the stakes are legible — this is the shape where the sink publishes
+// a credential file to the default branch and pushes it.
+(function testArchivedPathsReportNamesEveryCommittedOwnArchivePath() {
+  console.log('Test (#893 w8): a stray under this project\'s own archive dir is COMMITTED by archive_commit — the accepted behaviour — but the sink must NAME every own-archive path it commits, on the envelope and in the durable summary, so nothing lands silently');
+  const project = 'issue-89308';
+  const issue = 89308;
+  const mirror = archiveMirrorFiles(project, issue);
+  const strayRel = 'kaola-workflow/archive/' + project + '/.env.local';
+  const plant = Object.assign(mirrorPlant(project, mirror), { [strayRel]: 'AWS_SECRET_ACCESS_KEY=planted\n' });
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant });
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // The ruling, pinned as a fence: no refusal. A future implementer reaching for a discriminator
+    // has to fail this first, which is the point — the sink is not entitled to guess.
+    assert(result.status === 0, '#893 w8: the sink must NOT refuse on a stray under its own archive dir — it reports, it does not adjudicate; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#893 w8: status must be sinked; got ' + JSON.stringify(out && (out.status || out.reason)));
+    assert(showAtHead(fx.tmpRoot, strayRel) === 'AWS_SECRET_ACCESS_KEY=planted\n',
+      '#893 w8: the stray IS committed at HEAD — that is the accepted behaviour this scenario exists to make VISIBLE, not to prevent; got ' + JSON.stringify(showAtHead(fx.tmpRoot, strayRel)));
+
+    const reported = out && out.receipt && out.receipt.archived_paths;
+    assert(Array.isArray(reported),
+      '#893 w8: receipt.archived_paths must be an array naming what archive_commit committed — a consumer cannot route on undefined; got ' + JSON.stringify(reported));
+    for (const rel of Object.keys(mirror)) {
+      const ownRel = 'kaola-workflow/archive/' + project + '/' + rel;
+      assert(Array.isArray(reported) && reported.includes(ownRel),
+        '#893 w8: receipt.archived_paths must name ' + ownRel + '; got ' + JSON.stringify(reported));
+    }
+    // THE ASSERTION THAT CONVERTS A SILENT COMMIT INTO A VISIBLE ONE.
+    assert(Array.isArray(reported) && reported.includes(strayRel),
+      '#893 w8: receipt.archived_paths must name ' + strayRel + ' — it was committed to the default branch and pushed, and the report is uniform precisely because the sink cannot tell it from the mirror; got ' + JSON.stringify(reported));
+
+    // DURABLE. The envelope is stdout and the journal is disposed; the archived summary is what a
+    // reader has months later when asking what this sink published.
+    const summaryAtHead = showAtHead(fx.tmpRoot, 'kaola-workflow/archive/' + project + '/finalization-summary.md');
+    assert(summaryAtHead !== null && summaryAtHead.includes(strayRel),
+      '#893 w8: the committed finalization-summary.md must name ' + strayRel + ' in its ## Sink Findings — a report that exists only on stdout leaves the record silent; got ' + JSON.stringify(summaryAtHead));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w9) NEW BEHAVIOUR. The report's bound. A sibling's interrupted-sink receipt is the one sibling
+// archive path that does NOT block this sink (#715 exempts it by exact path), so it is the only way
+// to observe the report's scope on a run that actually reaches archive_commit: the sink must neither
+// commit it nor name it. Reporting a path this sink never touched would be a different lie from
+// staying silent about one it did, and equally worth catching.
+(function testArchivedPathsReportIsScopedToThisProject() {
+  console.log('Test (#893 w9): the committed-paths report covers THIS project only — a sibling\'s archive receipt is neither committed nor named, and is left byte-untouched');
+  const project = 'issue-89309';
+  const issue = 89309;
+  const sibling = 'issue-89399';
+  const mirror = archiveMirrorFiles(project, issue);
+  const siblingReceiptRel = 'kaola-workflow/archive/' + sibling + '/.cache/sink-receipt.json';
+  const siblingBytes = JSON.stringify({ project: sibling, steps: { merge: 'done' } }, null, 2) + '\n';
+  const plant = Object.assign(mirrorPlant(project, mirror), { [siblingReceiptRel]: siblingBytes });
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant });
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#893 w9: the sibling receipt is #715-exempt, so the sink must still complete; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#893 w9: status must be sinked; got ' + JSON.stringify(out && (out.status || out.reason)));
+
+    const reported = out && out.receipt && out.receipt.archived_paths;
+    assert(Array.isArray(reported), '#893 w9: receipt.archived_paths must be an array; got ' + JSON.stringify(reported));
+    assert(Array.isArray(reported) && reported.includes('kaola-workflow/archive/' + project + '/mission-list.md'),
+      '#893 w9: the report must still name this project\'s own committed paths; got ' + JSON.stringify(reported));
+    assert(Array.isArray(reported) && !reported.includes(siblingReceiptRel),
+      '#893 w9: receipt.archived_paths must NOT name ' + siblingReceiptRel + ' — this sink never touched another project\'s file, and must not claim to have committed one; got ' + JSON.stringify(reported));
+    assert(showAtHead(fx.tmpRoot, siblingReceiptRel) === null,
+      '#893 w9: the sibling receipt must NOT be committed at HEAD; got ' + JSON.stringify(showAtHead(fx.tmpRoot, siblingReceiptRel)));
+    const siblingAbs = path.join(fx.tmpRoot, siblingReceiptRel);
+    assert(fs.existsSync(siblingAbs) && fs.readFileSync(siblingAbs, 'utf8') === siblingBytes,
+      '#893 w9: the sibling receipt must be left byte-untouched on disk');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w10) NEW BEHAVIOUR. The shape where the sink commits nothing under the archive path at all. The
+// report must be PRESENT and EMPTY, never absent: a consumer that has to distinguish "committed
+// nothing" from "this sink does not report" cannot rely on the field, and the difference between an
+// empty list and a missing one is exactly the silence the report exists to close.
+//
+// The fixture is (#832 q)'s — a consumer whose .gitignore covers the archive band, so git REFUSES
+// the archive pathspec and `archive_commit` records `skipped_gitignored`. That is the real shape in
+// which this sink commits nothing under the archive; an empty plant is NOT, because the sink writes
+// its own finalization-summary.md there and commits that. Asserting against a shape production never
+// produces is how a suite ends up pinning fiction, so the emptiness here is a measured emptiness.
+(function testArchivedPathsReportIsEmptyNotAbsentWhenNothingIsCommitted() {
+  console.log('Test (#893 w10): when git refuses the ignored archive band and the sink commits nothing there, receipt.archived_paths must be present and EMPTY, never undefined — absent and empty are different answers and only one is a report');
+  const project = 'issue-89310';
+  const issue = 89310;
+  const fx = buildGitignoredArchiveSinkFixture(project, issue);
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#893 w10: the sink must still complete on an archive-ignoring consumer; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#893 w10: status must be sinked; got ' + JSON.stringify(out && (out.status || out.reason)));
+    // Precondition — the emptiness is real: git genuinely committed nothing under the archive band.
+    const tree = git(fx.tmpRoot, ['ls-tree', '-r', '--name-only', 'HEAD']).stdout || '';
+    assert(!/kaola-workflow\/archive\//.test(tree),
+      '#893 w10 precondition: nothing under kaola-workflow/archive/ may have reached HEAD, or the empty report would be a lie about a non-empty commit; got:\n' + tree);
+
+    const reported = out && out.receipt && out.receipt.archived_paths;
+    assert(Array.isArray(reported),
+      '#893 w10: receipt.archived_paths must be PRESENT even when nothing was committed — absent and empty are different answers, and only one of them is a report; got ' + JSON.stringify(reported));
+    assert(Array.isArray(reported) && reported.length === 0,
+      '#893 w10: receipt.archived_paths must be EMPTY when archive_commit committed nothing; got ' + JSON.stringify(reported));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
 // --------------------------------------------------------------------------- (o) #746
 //
 // DELETED: #746 (n) — "a swallowed epoch-authority refusal fails loud". Its fixture built a
@@ -1733,9 +2326,9 @@ function runSinkWithGate(fx, extraArgs) {
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832/#893) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832/#893) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

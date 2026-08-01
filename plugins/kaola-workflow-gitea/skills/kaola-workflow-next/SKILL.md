@@ -207,11 +207,37 @@ straight to Step 6.
 ## Step 4 — Write the mission list
 
 `kaola-workflow/{project}/mission-list.md` is the run's coordination record and the one file a
-successor needs. Write it immediately after the claim, before any work goes out.
+successor needs. Write it immediately after the claim, before any work goes out. No script owns this
+file; you write it.
 
-An H1 carrying the goal in one line, then one item per mission. The format — the four fields, the
-three write moments, and how to resume from it — is `docs/mission-list.md`; read it there rather
-than reconstructing it from memory.
+An H1 carrying the goal in one line, then one item per mission:
+
+```markdown
+# <the goal, one line>
+
+- item: <the mission, one line of prose>
+  status: todo
+
+- item: <the mission>
+  status: in-flight
+  dispatched: <what went out and to whom, and where its output was to land>
+
+- item: <the mission>
+  status: done
+  dispatched: <what went out and to whom, and where its output was to land>
+  result: <where the outcome landed — a path, or a few lines inline>
+```
+
+| field | content | written |
+|---|---|---|
+| `item` | the mission — one line of prose, hints and facts | at creation |
+| `status` | `todo` \| `in-flight` \| `done` | on change |
+| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |
+| `result` | where the outcome landed — a path, or a few lines inline | at close |
+
+Items are identified by their order in the file; nothing depends on a stable ID. Fields appear in
+the order above and absent fields are simply absent — a `todo` item has no `dispatched`, an
+`in-flight` item has no `result`.
 
 An item is a **mission, not a specification**. One line of prose: what to achieve, plus the hints
 and facts you already know. It carries no role, no file list, no dependency edge, no model, no
@@ -236,7 +262,7 @@ Subagents and worktrees are tools, offered and declinable. Delegating production
 a handoff costs once, while everything you keep inline taxes every later decision — but a tool you
 cannot decline and still finish would be a gate wearing a tool's name, and there are none here.
 
-**The three write moments.** These are the whole discipline:
+**Three write moments.** These are the whole discipline:
 
 1. **Created** — write `item` and `status: todo`.
 2. **Dispatched** — write `dispatched` and flip `status` to `in-flight`, **before the work goes
