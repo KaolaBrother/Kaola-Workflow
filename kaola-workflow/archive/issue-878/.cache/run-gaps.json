@@ -1,0 +1,15 @@
+{
+  "project": "issue-878",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:overstated-concern-retracted",
+      "sample": "I warned that closing this issue would discard the watch-list register, then found the issue body itself says the table lives in the committed ADR. The concern was overstated and was retracted before any work was done on it.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:diff-scope-prediction-wrong",
+      "sample": "I predicted a docs-only diff would demand the claude chain alone; the scoper chose all-four under edition_coupling because docs/conventions.md and docs/decisions/ count as edition-coupled paths.",
+      "count": 1
+    }
+  ]
+}
