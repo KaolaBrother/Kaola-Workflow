@@ -103,12 +103,6 @@ const nextSkill210 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
 assertNotIncludes(nextSkill210, 'Ask the user once at startup');
 assertNotIncludes(nextSkill210, 'How should delegation be handled');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$PICK_NEXT_PROJECT" --reason git-freshness-block');
-// issue #207: fast-overlap parity (Codex) — trap-2 tolerant keep. The fast/full SKILLs are retired,
-// but the Codex classifier port RETAINS its defensive fast-summary.md `## Scope` reader (readers
-// ignore the now-legacy artifact; only the write side was removed). Pin the retained reader.
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'fast-summary.md');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'sectionBody(');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, "'Scope'");
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
@@ -172,10 +166,9 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "'workflow_path:
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'removeLegacyStateBlocks');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readActiveFolders');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'kw:claim\\s+(project|sess)=');
-// #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
-// policy field, PROTECTED set) in the Codex plugin tree.
+// Token-pin the synthesizer reasoning floor in the Codex plugin tree. The write-overlap policy field
+// and the PROTECTED file set left with the machinery they governed.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, 'REASONING_FLOOR_ROLES');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'PROTECTED_BASENAMES');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-sink-merge.js`, 'readActiveFolders');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-sink-pr.js`, 'patchLockFile');
 

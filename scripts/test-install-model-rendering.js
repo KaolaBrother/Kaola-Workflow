@@ -213,32 +213,6 @@ function enableMultiAgentV2(homeRoot) {
     }
   });
 
-  runStageRegression('shared-config predictable-stage symlink', () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-stage-home-'));
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-stage-outside-'));
-    const configFile = path.join(homeDir, '.config', 'kaola-workflow', 'config.json');
-    const sentinel = path.join(outsideDir, 'sentinel.txt');
-    const plantedStage = `${configFile}.tmp-${process.pid}`;
-    try {
-      fs.mkdirSync(path.dirname(configFile), { recursive: true });
-      fs.writeFileSync(sentinel, 'unchanged\n');
-      fs.symlinkSync(sentinel, plantedStage);
-
-      codexProfileInstaller.seedKaolaConfig(homeDir);
-
-      const seeded = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      assert.strictEqual(seeded.parallel_mode, 'auto');
-      assert.ok(!('installed_paths' in seeded), 'shared-config seed must not write installed_paths (retired)');
-      assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n',
-        'shared-config staging must not write through the historical predictable symlink');
-      assert(fs.lstatSync(plantedStage).isSymbolicLink(),
-        'shared-config staging must leave an unowned predictable-path collision untouched');
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-      fs.rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
   runStageRegression('randomized-stage collision retry', () => {
     const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-collision-source-'));
     const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-collision-target-'));
@@ -268,108 +242,6 @@ function enableMultiAgentV2(homeRoot) {
       fs.rmSync(outsideDir, { recursive: true, force: true });
     }
   });
-
-  runStageRegression('shared-config randomized-stage collision retry', () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-collision-home-'));
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-collision-outside-'));
-    const configFile = path.join(homeDir, '.config', 'kaola-workflow', 'config.json');
-    const sentinel = path.join(outsideDir, 'sentinel.txt');
-    const collisionHex = '33'.repeat(16);
-    const collision = `${configFile}.kaola-stage-${collisionHex}`;
-    try {
-      fs.mkdirSync(path.dirname(configFile), { recursive: true });
-      fs.writeFileSync(configFile, '{"parallel_mode":"manual","installed_paths":["fast"]}\n');
-      fs.writeFileSync(sentinel, 'unchanged\n');
-      fs.symlinkSync(sentinel, collision);
-
-      const random = withRandomStageHexes([collisionHex, '44'.repeat(16)], () => {
-        codexProfileInstaller.seedKaolaConfig(homeDir);
-      });
-
-      assert.strictEqual(random.calls, 2,
-        'shared-config staging must retry the colliding exclusive candidate with fresh randomness');
-      const installed = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      assert.strictEqual(installed.parallel_mode, 'manual');
-      assert.ok(!('installed_paths' in installed), 'shared-config seed must strip a stale installed_paths (retired)');
-      assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n');
-      assert(fs.lstatSync(collision).isSymbolicLink(),
-        'exclusive shared-config staging must preserve a colliding symlink owned by another process');
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-      fs.rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  for (const mutation of ['replacement inode', 'same-inode content']) {
-    runStageRegression(`shared-config compare-and-swap retry (${mutation})`, () => {
-      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-config-cas-home-'));
-      const configFile = path.join(homeDir, '.config', 'kaola-workflow', 'config.json');
-      const concurrentStage = `${configFile}.fixture-concurrent`;
-      const originalReadFileSync = fs.readFileSync;
-      const initial = {
-        parallel_mode: 'initial',
-        installed_paths: ['fast'],
-        initial_owner: 'superseded',
-      };
-      const concurrent = {
-        parallel_mode: 'manual',
-        installed_paths: ['full'],
-        concurrent_owner: 'preserve-me',
-      };
-      let initialIdentity = null;
-      let injected = false;
-      try {
-        fs.mkdirSync(path.dirname(configFile), { recursive: true });
-        fs.writeFileSync(configFile, JSON.stringify(initial, null, 2) + '\n');
-        initialIdentity = fs.lstatSync(configFile);
-        fs.readFileSync = (file, ...args) => {
-          const bytes = originalReadFileSync(file, ...args);
-          let readsInitialConfig = false;
-          if (typeof file === 'number') {
-            const descriptorStat = fs.fstatSync(file);
-            readsInitialConfig = descriptorStat.dev === initialIdentity.dev
-              && descriptorStat.ino === initialIdentity.ino;
-          } else {
-            readsInitialConfig = path.resolve(String(file)) === path.resolve(configFile);
-          }
-          if (!injected && readsInitialConfig) {
-            const concurrentBytes = JSON.stringify(concurrent, null, 2) + '\n';
-            if (mutation === 'replacement inode') {
-              fs.writeFileSync(concurrentStage, concurrentBytes);
-              fs.renameSync(concurrentStage, configFile);
-            } else {
-              fs.writeFileSync(configFile, concurrentBytes);
-              const mutatedIdentity = fs.lstatSync(configFile);
-              assert.strictEqual(mutatedIdentity.dev, initialIdentity.dev,
-                'same-inode fixture must retain the target device');
-              assert.strictEqual(mutatedIdentity.ino, initialIdentity.ino,
-                'same-inode fixture must retain the target inode');
-            }
-            injected = true;
-          }
-          return bytes;
-        };
-
-        const result = codexProfileInstaller.seedKaolaConfig(homeDir);
-
-        assert.strictEqual(injected, true,
-          'fixture must mutate config after the seed read and before its compare-and-swap');
-        assert.strictEqual(result.status, 'updated');
-        const installed = JSON.parse(originalReadFileSync(configFile, 'utf8'));
-        assert.strictEqual(installed.concurrent_owner, 'preserve-me',
-          'a concurrent owner field must survive a read/merge/write interleaving');
-        assert.strictEqual(installed.initial_owner, undefined,
-          'retry must merge from the concurrent replacement, not the superseded snapshot');
-        assert.strictEqual(installed.parallel_mode, 'manual',
-          'retry must preserve the concurrent writer parallel_mode');
-        assert.ok(!('installed_paths' in installed),
-          'retry must strip a stale installed_paths from the concurrent writer (retired)');
-      } finally {
-        fs.readFileSync = originalReadFileSync;
-        fs.rmSync(homeDir, { recursive: true, force: true });
-      }
-    });
-  }
 
   runStageRegression('randomized-stage collision exhaustion', () => {
     const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-exhaust-source-'));
@@ -3691,16 +3563,12 @@ try {
         fs.rmSync(postureHome, { recursive: true, force: true });
       }
 
-      // cross-edition: a default codex installer run must seed the shared
-      // ~/.config/kaola-workflow/config.json with parallel_mode:auto and NEVER an installed_paths field
-      // (fast/full retired). This is the behavioral-identity assertion that the codex triplet writer
-      // (node port) and the Claude install.sh writer produce the same config shape.
+      // cross-edition: the shared ~/.config/kaola-workflow/config.json is user-owned. Neither the
+      // codex triplet installer nor install.sh writes it — the workflow has no install-time
+      // configuration to seed, so the behavioral-identity assertion is that both create nothing.
       const sharedConfigPath = path.join(chome, '.config', 'kaola-workflow', 'config.json');
-      assert(fs.existsSync(sharedConfigPath), 'default install must seed ~/.config/kaola-workflow/config.json');
-      const sharedConfig = JSON.parse(fs.readFileSync(sharedConfigPath, 'utf8'));
-      assert(!('installed_paths' in sharedConfig),
-        'default install must NOT write installed_paths (retired), got: ' + JSON.stringify(sharedConfig));
-      assert(sharedConfig.parallel_mode === 'auto', 'default install parallel_mode setdefault "auto"');
+      assert(!fs.existsSync(sharedConfigPath),
+        'default install must not create ~/.config/kaola-workflow/config.json, found ' + sharedConfigPath);
     } finally {
       fs.rmSync(cproj, { recursive: true, force: true });
       fs.rmSync(chome, { recursive: true, force: true });

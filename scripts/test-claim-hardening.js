@@ -18,17 +18,10 @@ const path = require('path');
 process.env.KAOLA_GH_REMOTE_TIMEOUT_MS = '500';   // tiny cap for the hang test (set before require)
 delete process.env.KAOLA_WORKFLOW_OFFLINE;        // ensure ghExec actually shells the mock
 
-// #531: hermetic HOME — the classifier (spawned by the #519 transient-fault tests) reads parallel_mode
-// from ~/.config/kaola-workflow/config.json (os.homedir()) and bypasses to verdict:'green' whenever it
-// is not 'auto', with NO env override — short-circuiting the indeterminate/escalate path under test.
-// Pin a sandbox HOME seeded with parallel_mode:'auto' so a dev-local non-'auto' config can't turn these
-// assertions into spurious "got green" failures (issue #531). Inherited by the classifier subprocess.
+// Hermetic HOME — the shared ~/.config/kaola-workflow/config.json (os.homedir()) is user-owned; point
+// HOME/USERPROFILE at a throwaway sandbox so no spawned subprocess reads or writes the developer's
+// real one. Nothing is seeded: an absent config is the shape a fresh machine has.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
-fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
-fs.writeFileSync(
-  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto' }, null, 2) + '\n'
-);
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
@@ -1016,9 +1009,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 // separate, still-live unknown-flag surface (unaffected by #770 — they were never a runtime path
 // selector).
 //
-// The hermetic HOME (seeded parallel_mode:'auto' at the top of this file) only feeds the
-// classifier. KAOLA_ENABLE_ADAPTIVE is retired — no env lever survives. Distinct target-issue
-// numbers avoid the `owned` early-return false-green.
+// KAOLA_ENABLE_ADAPTIVE is retired — no env lever survives. Distinct target-issue numbers avoid
+// the  early-return false-green.
 {
   const { spawnSync: spawnS538 } = require('child_process');
   const CLAIM538 = path.join(__dirname, 'kaola-workflow-claim.js');
@@ -1899,78 +1891,6 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         '#816(T9): no raw stack trace may escape, got stderr=' + String(r.stderr || '').slice(0, 400));
     } finally { cleanup816(fx); }
   }
-}
-
-// --- #536: classifier decoupled from global parallel_mode (KAOLA_FORCE_CLASSIFY override) --------
-// The classifier BYPASSES to verdict:'green' whenever ~/.config/kaola-workflow/config.json sets
-// parallel_mode !== 'auto' — a contributor's GLOBAL setting the test cannot own. #531's hermetic
-// HOME sandbox masks this for the parent process and HOME-inheriting children, but the coupling
-// itself is fragile: the spawned classifier's verdict still depends on a config file the test does
-// not control, surviving only as long as HOME-inheritance holds. #536 adds an explicit TEST-OWNED
-// env override (KAOLA_FORCE_CLASSIFY=1) the classifier honors, so the suite can FORCE classification
-// regardless of any contributor config. Production semantics are preserved — real users never set
-// this env, so the bypass still fires for them exactly as before.
-{
-  const { execFileSync } = require('child_process');
-  const CLASSIFIER = path.join(__dirname, 'kaola-workflow-classifier.js');
-
-  // A HOSTILE config home (parallel_mode:'on') — deliberately NOT the #531 sandbox, so the override
-  // (not HOME-inheritance) is provably the thing doing the decoupling work.
-  const hostileHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-536-hostile-'));
-  fs.mkdirSync(path.join(hostileHome, '.config', 'kaola-workflow'), { recursive: true });
-  fs.writeFileSync(
-    path.join(hostileHome, '.config', 'kaola-workflow', 'config.json'),
-    JSON.stringify({ parallel_mode: 'on', enable_adaptive: false }, null, 2) + '\n'
-  );
-
-  function runUnderHostile(extraEnv) {
-    const e = Object.assign({}, process.env, {
-      HOME: hostileHome,                       // hostile global config — NOT the #531 sandbox
-      USERPROFILE: hostileHome,
-      KAOLA_WORKFLOW_OFFLINE: '1',             // reach the determinate target_unverified arm w/o network
-      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
-      KAOLA_CLASSIFIER_BACKOFF_MS: '0',
-    }, extraEnv || {});
-    const tmpCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-536-cwd-')));
-    try {
-      // The shared envelope vehicle for the classifier CLI in this scenario: everything this site itself
-      // asserts is the envelope — the exit code, and the last parseable JSON line on the stream. The
-      // domain checks live in the callers.
-      // spawn-class: cli-contract
-      const out = execFileSync('node', [CLASSIFIER, 'classify', '--issue', '536999'], {
-        cwd: tmpCwd, encoding: 'utf8', env: e
-      });
-      const lines = out.trim().split('\n').filter(l => l.trim());
-      return lines.length ? JSON.parse(lines[lines.length - 1]) : null;
-    } catch (err) {
-      const out = String(err.stdout || '');
-      const lines = out.trim().split('\n').filter(l => l.trim());
-      for (let i = lines.length - 1; i >= 0; i--) { try { return JSON.parse(lines[i]); } catch (_) {} }
-      return null;
-    } finally {
-      try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch (_) {}
-    }
-  }
-
-  // (a) WITHOUT the override the bypass fires — documents the exact coupling #536 targets.
-  {
-    const r = runUnderHostile({});
-    assert(r && r.verdict === 'green' && /parallel_mode=on; bypassing classifier/.test(r.reasoning || ''),
-      '#536(a): hostile parallel_mode:on + NO override → bypass green (documents the coupling), got ' + JSON.stringify(r));
-  }
-
-  // (b) WITH KAOLA_FORCE_CLASSIFY=1 the classifier classifies normally DESPITE the hostile config.
-  // OFFLINE + empty temp cwd (no roadmap/active folder) → verdict:target_unverified, proving the
-  // classification body ran instead of short-circuiting to the bypass green.
-  {
-    const r = runUnderHostile({ KAOLA_FORCE_CLASSIFY: '1' });
-    assert(r && r.verdict !== 'green',
-      '#536(b): hostile parallel_mode:on + KAOLA_FORCE_CLASSIFY=1 → classifier runs (NOT bypass green); OFFLINE no-roadmap → target_unverified, got ' + JSON.stringify(r));
-    assert(r && /parallel_mode=on; bypassing/.test(r.reasoning || '') === false,
-      '#536(b): force-classify must NOT carry the bypass reasoning, got ' + JSON.stringify(r));
-  }
-
-  fs.rmSync(hostileHome, { recursive: true, force: true });
 }
 
 // --- #579: classifyLane four-bucket + precedence ladder (classifier.js) --------

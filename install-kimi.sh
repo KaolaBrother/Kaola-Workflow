@@ -78,8 +78,8 @@ UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved s
 (project DEST_ROOT via --target/$PWD, or --global ${KIMI_CODE_HOME:-$HOME/.kimi-code}):
 the deployed skills (by source-tree directory name — never a blind rm of a dir), the
 support scripts + hook scripts under the kimi home, and the managed hooks block in config.toml
-(the rest of the file is preserved). The SHARED ~/.config/kaola-workflow/config.json
-(parallel_mode + the file) is kept for any co-installed Claude/Codex/opencode edition. A
+(the rest of the file is preserved). The SHARED ~/.config/kaola-workflow/config.json is
+kept for any co-installed Claude/Codex/opencode edition. A
 subsequent bare install then deploys the workflow edition.
 EOF
 }
@@ -327,8 +327,8 @@ strip_hooks_config() {
 
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree directory name
 # (never a blind rm of a dir the user may share). Strips the managed hooks block from
-# config.toml (preserving the rest). The SHARED ~/.config/kaola-workflow/config.json
-# (parallel_mode + the file) is kept for any co-installed Claude/Codex/opencode edition.
+# config.toml (preserving the rest). The SHARED ~/.config/kaola-workflow/config.json is
+# kept for any co-installed Claude/Codex/opencode edition.
 uninstall_edition() {
   local home skills_dest
   home="$(kimi_home)"
@@ -391,37 +391,6 @@ uninstall_edition() {
   echo "Uninstall complete. A fresh ./install-kimi.sh now deploys the workflow edition."
 }
 
-# Seed ~/.config/kaola-workflow/config.json so a kimi install reaches install-time parity
-# (parallel_mode:'auto' default-ON) with what install.sh writes. This config is the SHARED
-# global file the classifiers + claim read (edition-agnostic, never clobbered); it is SEPARATE
-# from the kimi config.toml. Implemented in NODE (already a hard dependency above). Fail-closed
-# on a corrupt/non-object config: leave it untouched and warn.
-seed_kaola_config() {
-  local kaola_config_dir="$HOME/.config/kaola-workflow"
-  local kaola_config_file="$kaola_config_dir/config.json"
-  mkdir -p "$kaola_config_dir"
-  if ! KAOLA_SEED_FILE="$kaola_config_file" node -e '
-    const fs = require("fs");
-    const file = process.env.KAOLA_SEED_FILE;
-    let config = {};
-    if (fs.existsSync(file)) {
-      let raw;
-      try { raw = fs.readFileSync(file, "utf8"); }
-      catch (e) { console.error("warning: cannot read " + file + " (" + e.message + "); leaving it untouched."); process.exit(2); }
-      try { config = JSON.parse(raw); }
-      catch (e) { console.error("warning: " + file + " is not valid JSON (" + e.message + "); leaving it untouched."); process.exit(2); }
-      if (config === null || typeof config !== "object" || Array.isArray(config)) {
-        console.error("warning: " + file + " is not a JSON object; leaving it untouched."); process.exit(2);
-      }
-    }
-    if (config.parallel_mode === undefined) config.parallel_mode = "auto";
-    fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-    console.log("Seeded parallel_mode in: " + file);
-  '; then
-    echo "warning: failed to seed $kaola_config_file." >&2
-  fi
-}
-
 # Interactive confirmation. --yes skips it; non-interactive stdin proceeds without prompting
 # (mirrors install-opencode.sh, which accepts --yes and never blocks on a pipe).
 confirm_install() {
@@ -459,7 +428,6 @@ fi
 
 confirm_install
 copy_skills "$SKILLS_DEST"
-seed_kaola_config
 install_support_scripts
 merge_hooks_config
 

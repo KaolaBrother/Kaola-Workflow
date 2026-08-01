@@ -2121,73 +2121,6 @@ function postVerify(templateEntries) {
   return problems;
 }
 
-// seedKaolaConfig — pure-JS seed writer for ~/.config/kaola-workflow/config.json (node-native; no
-// python3 dependency — node is guaranteed present for a node installer). The shared config path is
-// edition-agnostic (a Claude/opencode install reads the same file). Adaptive is the sole workflow
-// path: fast/full are retired, so this NEVER writes installed_paths — it seeds parallel_mode
-// (setdefault 'auto', never overwriting a user value) and strips any stale installed_paths /
-// enable_adaptive on a touched config (tolerated on read, never re-written). WARN-first: a
-// corrupt/non-object existing config warns and is left UNTOUCHED (never throws, never aborts the
-// success path). Write-temp-then-rename for crash-safety parity with copyAgentProfiles. Pure +
-// exported for unit tests.
-const SHARED_CONFIG_CAS_ATTEMPTS = 4;
-
-function seedKaolaConfig(homeDir) {
-  const configDir = path.join(homeDir, '.config', 'kaola-workflow');
-  const configFile = path.join(configDir, 'config.json');
-  const preflightProblem = installTargetPathProblem(homeDir, configDir, 'directory')
-    || installTargetPathProblem(homeDir, configFile, 'file');
-  if (preflightProblem) {
-    throw atomicStageFailure('atomic_stage_unsafe', preflightProblem);
-  }
-
-  for (let attempt = 0; attempt < SHARED_CONFIG_CAS_ATTEMPTS; attempt += 1) {
-    try {
-      const expectedVersion = captureAtomicTargetVersion(configFile);
-      let config = {};
-      if (expectedVersion.stat) {
-        let parsed;
-        try { parsed = JSON.parse(expectedVersion.bytes.toString('utf8')); }
-        catch (e) {
-          console.warn(`Kaola-Workflow Codex installer: ${configFile} is not valid JSON (${e.message}); leaving it untouched.`);
-          return { status: 'skipped_corrupt' };
-        }
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          console.warn(`Kaola-Workflow Codex installer: ${configFile} is not a JSON object; leaving it untouched.`);
-          return { status: 'skipped_non_object' };
-        }
-        config = parsed;
-      }
-      if (config.parallel_mode === undefined) config.parallel_mode = 'auto'; // setdefault, preserve user value
-      delete config.installed_paths;                                       // retired: never written; strip stale
-      delete config.enable_adaptive;                                       // migrate retired field
-
-      fs.mkdirSync(configDir, { recursive: true });
-      const postMkdirProblem = installTargetPathProblem(homeDir, configDir, 'directory')
-        || installTargetPathProblem(homeDir, configFile, 'file');
-      if (postMkdirProblem) {
-        throw atomicStageFailure('atomic_stage_unsafe', postMkdirProblem);
-      }
-      atomicWriteSameDirectory(
-        configFile,
-        JSON.stringify(config, null, 2) + '\n',
-        expectedVersion,
-      );
-      console.log(`Kaola-Workflow Codex installer: seeded parallel_mode (adaptive is the only workflow path) in ${configFile}`);
-      return { status: 'updated' };
-    } catch (error) {
-      if (error && error.code === 'atomic_stage_conflict'
-          && attempt + 1 < SHARED_CONFIG_CAS_ATTEMPTS) {
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw atomicStageFailure('atomic_stage_conflict',
-    `shared config changed during all ${SHARED_CONFIG_CAS_ATTEMPTS} merge attempts: ${configFile}`);
-}
-
 // ---------------------------------------------------------------------------
 // #598: effort-gated MultiAgentMode dispatch-POSTURE derivation (report-only; NEVER
 // gates the install). AC1: after a successful install, derive and REPORT the
@@ -2929,14 +2862,6 @@ function main() {
   const configStatus = updateConfig();
   const { status: hooksStatus, stableCopy } = updateHooks();
 
-  // Seed the shared ~/.config/kaola-workflow/config.json parallel_mode default. Runs AFTER
-  // updateHooks and BEFORE pruneStaleProfiles (mirrors install-opencode.sh seed_kaola_config
-  // ordering, which follows seed_config). WARN-first guarantees it cannot break the success path — a
-  // hooks/profile/postVerify failure short-circuits before reaching it, and a corrupt config is left
-  // untouched rather than aborting. os.homedir() honors process.env.HOME (POSIX), matching the
-  // hermetic-HOME test pattern.
-  seedKaolaConfig(os.homedir());
-
   // 7-8. Prune stale/retired profiles, then record the ownership manifest.
   const { removed, extraUnmanaged } = pruneStaleProfiles(targetAgentsDir, copied, prevManifest);
   writeManifest(targetAgentsDir, { pluginRoot, copiedFiles: copied, removed });
@@ -3037,7 +2962,6 @@ module.exports = {
   hookReferencedRelPaths,
   copyHookScripts,
   copyAgentProfiles,
-  seedKaolaConfig,
   validateProfileText,
   reviewerProfileContract,
   classifyProfilePinPosture,

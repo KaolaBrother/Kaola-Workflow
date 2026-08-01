@@ -378,14 +378,6 @@ assertConcept(pluginRoot + '/scripts/test-gitlab-workflow-scripts.js', 'GitLab s
   'dry_run'
 ]);
 
-// issue #207: fast-overlap parity (GitLab) — trap-2 tolerant keep. The fast/full command + SKILL
-// surfaces are retired, but the GitLab classifier port RETAINS its defensive fast-summary.md
-// `## Scope` reader (readers ignore the now-legacy artifact; only the write side was removed).
-const classifier207 = pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js';
-assertIncludes(classifier207, 'fast-summary.md');
-assertIncludes(classifier207, 'sectionBody(');
-assertIncludes(classifier207, "'Scope'");
-
 // issue #203: Select-Project active-folder definition still lists fast-summary.md (the classifier's
 // tolerant read survives retirement, so the router recognizes a legacy fast-summary.md marker).
 const nextCmd203 = pluginRoot + '/commands/workflow-next.md';
@@ -395,15 +387,9 @@ assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'path_
 // nothing left to select, so its vocabulary is pinned ABSENT from the router surface too.
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'KAOLA_PATH');
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'path_not_installed');
-// #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
-// policy field, PROTECTED set) in the GitLab edition tree.
+// Token-pin the synthesizer reasoning floor in the GitLab edition tree. The write-overlap policy
+// field and the PROTECTED file set left with the machinery they governed.
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'PROTECTED_BASENAMES');
-// #492: pin the shared write-set classification anchors so a forge classifier port (a forge-specific
-// SUPERSET, not a rename-normalized copy) cannot silently DROP a shared function. Body parity of the
-// shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'areaForPath');
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'SHARED_INFRA');
 // #816: the finalize seam records no attestation — pinned as an ABSENCE so a revival reds the chain.
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'finalize_contractor_attested');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'attestContractorSpawn');
@@ -619,8 +605,6 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'closeIss
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'buildBranchName');
 // checkDispatchAttestations left the shared set with the planner-attestation retirement; it is
 // now swept as an ABSENCE with the rest of that chain, above.
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'isSharedInfra');
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'isProtected');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-roadmap.js', 'readRoadmapIssues');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-roadmap.js', 'roadmapDir');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'deriveMemberSet');

@@ -1114,17 +1114,12 @@ if (exists(pluginRel)) {
   }
   const cmdDir = dest => path.join(dest, '.opencode', 'command');
   const hasCmd = (dest, name) => existsSync(path.join(cmdDir(dest), name + '.md'));
-  const readConfig = p => {
-    if (!existsSync(p)) return null;
-    try { return JSON.parse(readFileSync(p, 'utf8')); } catch (_) { return null; }
-  };
   const clean = r => {
     try { rmSync(r.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     try { rmSync(r.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   };
 
-  // P1 — install deploys adaptive-core, exactly, and seeds parallel_mode only
-  // (no installed_paths field written).
+  // P1 — install deploys adaptive-core, exactly, and never touches the user-owned shared config.
   {
     const r = runInstaller([]);
     assert(r.ok,
@@ -1151,13 +1146,8 @@ if (exists(pluginRel)) {
       assert(existsSync(path.join(r.dest, '.opencode', 'hooks', h)),
         'P1 (#F9): project install deploys hook ' + h + ' under .opencode/hooks/');
     }
-    const cfg = readConfig(r.configPath);
-    assert(cfg !== null,
-      'P1: default install seeds ~/.config/kaola-workflow/config.json');
-    assert(cfg && !('installed_paths' in cfg),
-      'P1: default install does NOT write installed_paths — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    assert(cfg && cfg.parallel_mode !== undefined,
-      'P1: default install seeds parallel_mode (the only partition field written)');
+    assert(!existsSync(r.configPath),
+      'P1: default install must not create ~/.config/kaola-workflow/config.json (user-owned; the\n      workflow has no install-time configuration)');
     clean(r);
   }
 
@@ -1291,9 +1281,8 @@ if (exists(pluginRel)) {
       'U1: hooks plugin removed by --uninstall');
     assert(existsSync(path.join(r1.dest, 'opencode.json')),
       'U1 (#F4): opencode.json PRESERVED by --uninstall (user-owned model config)');
-    const cfg = readConfig(r1.configPath);
-    assert(cfg && !('installed_paths' in cfg),
-      'U1 (#F4): --uninstall leaves no installed_paths in the shared config — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    assert(!existsSync(r1.configPath),
+      'U1 (#F4): install + --uninstall must leave the user-owned shared config uncreated');
     // Round-trip: a fresh install returns the adaptive-only default.
     const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
     assert(r2.ok, 'U1: reinstall after uninstall exits 0');
@@ -1326,7 +1315,6 @@ if (exists(pluginRel)) {
     const r1 = runInstaller([]);
     assert(r1.ok, 'I1: first default install exits 0');
     const snap1 = snapshot(r1.dest);
-    const cfg1 = readFileSync(r1.configPath, 'utf8');
     const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
     assert(r2.ok, 'I1: second (idempotent) install exits 0');
     const snap2 = snapshot(r1.dest);
@@ -1335,7 +1323,7 @@ if (exists(pluginRel)) {
     let drift = [];
     for (const k of Object.keys(snap1)) if (snap1[k] !== snap2[k]) drift.push(k);
     assert(drift.length === 0, 'I1 (#F9): reinstall leaves every deployed file byte-identical — drifted: ' + drift.slice(0, 5).join(', '));
-    assert(readFileSync(r1.configPath, 'utf8') === cfg1, 'I1: shared config unchanged across idempotent reinstall');
+    assert(!existsSync(r1.configPath), 'I1: no install pass creates the user-owned shared config');
     clean(r1);
   }
 

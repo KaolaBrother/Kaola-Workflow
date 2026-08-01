@@ -137,13 +137,10 @@ function equal(actual, expected, message) {
   assertThat(actual === expected, message + '\n  expected: ' + JSON.stringify(expected) + '\n  actual:   ' + JSON.stringify(actual));
 }
 
-// A hermetic HOME seeded with the DEFAULT-install shape: the classifier reads parallel_mode from
-// ~/.config/kaola-workflow/config.json, so a dev-local config could otherwise change a verdict
-// and make these assertions spurious.
+// A hermetic HOME: the shared ~/.config/kaola-workflow/config.json (os.homedir()) is user-owned, so
+// point HOME at a throwaway sandbox rather than let a spawned subprocess reach the developer's real
+// one. Nothing is seeded — an absent config is the shape a fresh machine has.
 const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fbl-home-'));
-fs.mkdirSync(path.join(SANDBOX_HOME, '.config', 'kaola-workflow'), { recursive: true });
-fs.writeFileSync(path.join(SANDBOX_HOME, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto' }, null, 2) + '\n');
 
 // The hostile forge shim. Reached only if something shells the forge CLI while offline; it exits
 // non-zero and leaves a marker file, so hermeticity is PROVEN rather than assumed.

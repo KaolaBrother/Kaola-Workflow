@@ -280,14 +280,6 @@ assertNotIncludes('templates/routing/next.skeleton.md', 'What You May Read');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_note');
 assertIncludes('scripts/kaola-workflow-claim.js', 'selection_record_digest');
 
-// issue #207: fast-overlap parity — trap-2 tolerant keep. The fast/full command surfaces are
-// retired, but the classifier RETAINS its defensive fast-summary.md `## Scope` reader (readers
-// ignore the now-legacy artifact; only the write side was removed). Pin the retained reader so the
-// intentional keep cannot silently drift away.
-assertIncludes('scripts/kaola-workflow-classifier.js', 'fast-summary.md');
-assertIncludes('scripts/kaola-workflow-classifier.js', 'sectionBody(');
-assertIncludes('scripts/kaola-workflow-classifier.js', "'Scope'");
-
 assert(exists('scripts/kaola-workflow-active-folders.js'), 'active folder reader is missing');
 assert(exists('scripts/kaola-workflow-claim.js'), 'claim script is missing');
 assert(exists('scripts/kaola-workflow-classifier.js'), 'classifier script is missing');
@@ -329,15 +321,9 @@ assertIncludes('hooks/hooks.json', 'compact-context');
 assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
-// Token-pin the reasoning floor and the PROTECTED set. The third anchor of this trio was the
-// write-overlap policy field, and it is gone with the declared write sets it governed.
+// Token-pin the reasoning floor. The other two anchors of this trio were the write-overlap policy
+// field and the PROTECTED file set, both gone with the machinery they governed.
 assertIncludes('scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
-assertIncludes('scripts/kaola-workflow-classifier.js', 'PROTECTED_BASENAMES');
-// #492: pin the shared write-set classification anchors so a forge classifier port (a forge-specific
-// SUPERSET, not a rename-normalized copy) cannot silently DROP a shared function. Body parity of the
-// shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
-assertIncludes('scripts/kaola-workflow-classifier.js', 'areaForPath');
-assertIncludes('scripts/kaola-workflow-classifier.js', 'SHARED_INFRA');
 assertManifestScript('kaola-workflow-active-folders.js');     // #407: was install.sh literal
 assertManifestScript('kaola-workflow-resolve-agent-model.js'); // #407: was install.sh literal
 assertIncludes('uninstall.sh', 'subagentStatusLine');

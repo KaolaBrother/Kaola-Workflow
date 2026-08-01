@@ -379,8 +379,9 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 ./install-opencode.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-The install deploys the workflow command set — finalize, workflow-init, workflow-next —
-and seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode`.
+The install deploys the workflow command set — finalize, workflow-init, workflow-next.
+It writes no configuration: the shared `~/.config/kaola-workflow/config.json` is user-owned
+and no installer creates or edits it.
 
 ### Deploy layout — project vs global (scope-dependent)
 
@@ -413,8 +414,8 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 source-tree filename (never a blind `rm` of a dir you may share): the deployed
 agents/commands/plugin/hooks and the opencode-native support scripts under
 `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/`. The shared
-`~/.config/kaola-workflow/config.json` (`parallel_mode` and the file itself) is kept, so a
-co-installed Claude/Codex edition is unaffected. Your own `opencode.json` (model/permission
+`~/.config/kaola-workflow/config.json` is user-owned and untouched, so a co-installed
+Claude/Codex edition is unaffected. Your own `opencode.json` (model/permission
 config) is **preserved**. A subsequent bare install then deploys the workflow edition — the
 uninstall→reinstall round-trip is verified by `test-opencode-edition.js` **U1**.
 

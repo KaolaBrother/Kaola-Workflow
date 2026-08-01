@@ -43,7 +43,6 @@ FORGE=github
 MERGE_SETTINGS=1
 # There is no install-time model axis: the agent tree ships one model assignment per role
 # and the frozen plan's per-node tier column governs every workflow dispatch.
-# The install seeds ~/.config/kaola-workflow/config.json with parallel_mode.
 
 usage() {
   echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
@@ -822,38 +821,6 @@ PY
     echo "warning: python3 not found; skipping ~/.claude/settings.json auto-merge." >&2
     SETTINGS_MERGE_RESULT=no_python
   fi
-fi
-
-# Seed ~/.config/kaola-workflow/config.json with the default parallel_mode. The install writes
-# parallel_mode only. Any stale path-selection or adaptive-toggle field left by an older install
-# is stripped here on any touched config (read-modify-write preserves user fields).
-KAOLA_CONFIG_DIR="$HOME/.config/kaola-workflow"
-KAOLA_CONFIG_FILE="$KAOLA_CONFIG_DIR/config.json"
-if command -v python3 >/dev/null 2>&1; then
-  mkdir -p "$KAOLA_CONFIG_DIR"
-  if python3 - "$KAOLA_CONFIG_FILE" <<'PY'; then
-import json, os, sys
-path = sys.argv[1]
-config = {}
-if os.path.exists(path):
-    try:
-        with open(path) as f: config = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"warning: {path} is not valid JSON ({e}); leaving it untouched.", file=sys.stderr); sys.exit(2)
-    if not isinstance(config, dict):
-        print(f"warning: {path} is not a JSON object; leaving it untouched.", file=sys.stderr); sys.exit(2)
-config.setdefault("parallel_mode", "auto")
-config.pop("installed_paths", None)   # install never writes it; strip any stale value
-config.pop("enable_adaptive", None)   # strip this field on any touched config
-with open(path, "w") as f: json.dump(config, f, indent=2); f.write("\n")
-print(f"Seeded {path} (parallel_mode={config['parallel_mode']})")
-PY
-    :
-  else
-    echo "warning: failed to write $KAOLA_CONFIG_FILE; add {\"parallel_mode\":\"auto\"} by hand." >&2
-  fi
-else
-  echo "warning: python3 not found; cannot write $KAOLA_CONFIG_FILE. Add {\"parallel_mode\":\"auto\"} by hand." >&2
 fi
 
 verify_installed_file() {

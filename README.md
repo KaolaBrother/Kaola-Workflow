@@ -249,7 +249,7 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 Being additive is about *edition machinery*, not about forge support: both runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`).
 
-**The same workflow runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only; there is no workflow path to select. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
+**The same workflow runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -1072,24 +1072,24 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `repair-labels` | `node scripts/kaola-workflow-claim.js repair-labels [--execute]` | Finds and removes `workflow:in-progress` labels from closed issues. Dry-run by default; `--execute` performs actual removal |
 | `worktree-status` / `worktree-finalize` | see `--help` usage errors | Lists workflow worktrees and mirrors final artifacts into the linked worktree |
 
-### Classifier configuration
+### What the classifier decides
 
-The `kaola-workflow-classifier.js` script uses `~/.config/kaola-workflow/config.json` for parallel-work settings:
+`kaola-workflow-classifier.js` reports facts about a candidate issue's **state**, and nothing else. It has no
+configuration — there is no file to write and no flag to pass.
 
-```json
-{
-  "parallel_mode": "auto"
-}
-```
+| verdict | meaning |
+|---|---|
+| `green` | claimable |
+| `blocked` | an open `depends-on:#N` prerequisite, or a live remote claim on the issue |
+| `owned` | an active local folder already holds this issue (or its bundle) |
+| `red` | the issue is already closed |
+| `target_unavailable` / `target_unverified` | the issue could not be fetched, or offline with no local evidence |
+| `indeterminate` | a transient forge fault after bounded retry — escalate, do not refuse |
 
-Valid `parallel_mode` values:
-
-- `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, exact file-path overlaps, file-area overlaps, and active folders.
-- Other values: Bypass classification; treat all issues as green for fast claiming.
-
-Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`.
-
-When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
+**It does not decide whether two pieces of work may run at the same time.** Whether work runs in parallel is
+the runtime agent's call: where the runtime supports concurrency it is on, and the workflow neither enforces
+nor configures it. Offline classification reads `kaola-workflow/.roadmap/issue-{N}.md` for the `depends-on`
+prerequisite.
 
 ### Priority label configuration
 

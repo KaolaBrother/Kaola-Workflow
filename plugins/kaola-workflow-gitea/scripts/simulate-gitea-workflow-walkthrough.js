@@ -19,18 +19,13 @@ const assert = require('assert');
 const root = path.resolve(__dirname, '..', '..', '..');
 
 // #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
-// Adaptive is the only workflow path (the fast/full opt-ins were retired); a stale installed_paths
-// field is tolerated on read but never written. Set a hermetic HOME so every subprocess inheriting
-// process.env sees the canonical config regardless of the dev machine.
+// Hermetic HOME — the shared ~/.config/kaola-workflow/config.json (os.homedir()) is user-owned;
+// point HOME at a throwaway sandbox so no subprocess reads or writes the developer's real one.
+// Nothing is seeded there: an absent config is the shape a fresh machine has.
 // Also seed a .gitconfig with init.defaultBranch=main so git init creates 'main' (matching the
 // finalize gate's `git diff main...HEAD` attribution sweep), independently of the dev machine's
 // global gitconfig (which is no longer inherited once we override HOME).
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-sandbox-home-'));
-fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
-fs.writeFileSync(
-  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
-);
 fs.writeFileSync(
   path.join(kwSandboxHome, '.gitconfig'),
   '[init]\n\tdefaultBranch = main\n[user]\n\temail = test@example.com\n\tname = Test User\n'
@@ -802,19 +797,6 @@ function testGiteaBundleSingleIssueStateHasNoBundleFields() {
   console.log('testGiteaBundleSingleIssueStateHasNoBundleFields: PASSED');
 }
 
-// issue #237: the leading-dot FILE_PATH_REGEX widening must hold on the FORK classifier too —
-// a dot-leading CI/supply-chain path is captured (so cross-project claim-overlap can see it on
-// both the candidate and claimed sides) while bare-word prose still does not over-match.
-function testGitea237DotPathExtraction() {
-  const classifier = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-classifier.js'));
-  const got = classifier.extractFilePaths('this issue rewrites .github/workflows/deploy.yml for CI');
-  assert.ok(got.has('.github/workflows/deploy.yml'),
-    'gitea #237: dot-leading CI path must be extracted, got: ' + JSON.stringify([...got]));
-  const prose = classifier.extractFilePaths('use Node.js version 3.19.1 with package.json and config.json');
-  assert.strictEqual(prose.size, 0,
-    'gitea #237: bare-word prose must NOT over-match into paths, got: ' + JSON.stringify([...prose]));
-  console.log('testGitea237DotPathExtraction: PASSED');
-}
 // M1 (#277): dispatch-log hook must be installed in the gitea plugin hooks directory.
 function testGiteaDispatchHookExists() {
   const hooksDir = path.join(root, 'plugins/kaola-workflow-gitea/hooks');
@@ -831,7 +813,6 @@ function testGiteaDispatchHookExists() {
   console.log('testGiteaDispatchHookExists: PASSED');
 }
 
-testGitea237DotPathExtraction();
 testGiteaDispatchHookExists();
 
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).

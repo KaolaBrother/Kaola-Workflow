@@ -2,10 +2,9 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { execFileSync } = require('child_process');
 const { readActiveFolders } = require('./kaola-workflow-active-folders');
-const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // #238: curated root-path vocabulary (byte-identical anchor)
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // LANE_STALENESS_MS (byte-identical anchor)
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 
@@ -14,12 +13,6 @@ const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 // ---------------------------------------------------------------------------
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
-
-function isSafeName(name) {
-  return typeof name === 'string' && name.length > 0 &&
-    !name.includes('/') && !name.includes('\\') &&
-    !name.includes('\0') && name !== '.' && name !== '..';
-}
 
 function field(content, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -163,143 +156,6 @@ function getRoot() {
 }
 
 // ---------------------------------------------------------------------------
-// Config utilities
-// ---------------------------------------------------------------------------
-
-const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');
-
-function readOrCreateConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  } catch (_) {
-    const defaults = { parallel_mode: 'auto', installed_paths: [] };
-    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2) + '\n');
-    return defaults;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// File-path extraction
-// ---------------------------------------------------------------------------
-
-// issue #237: the FIRST path segment admits an optional leading dot (`\.?`) so dot-leading
-// CI/CD + supply-chain paths (`.github/workflows/*`, `.circleci/config.yml`, `.gitlab-ci.yml`
-// when slash-bearing) are captured on BOTH sides of the cross-project claim-overlap check
-// (candidate issue.body prose AND the claimed-side combined blob, which already stringifies
-// the plan/fast write sets). A slash is STILL required, so a BARE word never matches (`Node.js`,
-// `package.json`, `config.json` stay empty — the preceding-char guard `[^A-Za-z0-9_./-]` rejects
-// a `.` before the token, so `..`/`x.` cannot start a match and `\.?` admits at most one leading
-// dot). NOTE (v3.20.1): a dot-leading SLASH-BEARING prose token (e.g. `.NET/Core`, `.config/x`)
-// CAN still over-match — accepted as the safe OVER-block direction (it conservatively blocks a
-// claim the user resolves by editing the issue body, identical in kind to the pre-existing
-// `word/word` prose over-match like `read/write`). Closes the audit A2′ blind spot.
-const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])(\.?[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
-const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-9_./-])/g;
-
-function normalizeRepoPath(raw) {
-  return String(raw || '')
-    .replace(/^touches:/, '')
-    .replace(/^[`'"]+/, '')
-    .replace(/[`'",.;:)\]}]+$/, '')
-    .trim()
-    // Canonicalize so the SAME physical file compares equal everywhere: strip leading `./`
-    // segments, collapse repeated slashes, and collapse inner `/./` segments. Without this a
-    // mentioned `./lib/foo.js`, `lib//foo.js` and `lib/./foo.js` are three distinct strings, so a
-    // set of extracted paths double-counts one file and areaForPath reads the area as `.` instead
-    // of `lib`. `../` is left untouched on purpose (resolving it changes meaning and is out of
-    // scope), and the trailing-`/` directory shape is preserved — callers distinguish a directory
-    // mention from a file one by that slash. NOT exported: a pure canonicalization, no refusal.
-    .replace(/^(?:\.\/)+/, '')
-    .replace(/\/{2,}/g, '/')
-    .replace(/\/\.\//g, '/')
-    .replace(/\/\.$/, '/');
-}
-
-function areaForPath(filePath) {
-  if (filePath.startsWith('plugins/kaola-workflow/')) {
-    const parts = filePath.split('/');
-    if (parts.length >= 3) return parts.slice(0, 3).join('/');
-    return 'plugins/kaola-workflow';
-  }
-  return filePath.split('/')[0];
-}
-
-function extractFilePaths(text) {
-  const paths = new Set();
-  const source = String(text || '');
-  let match;
-  FILE_PATH_REGEX.lastIndex = 0;
-  while ((match = FILE_PATH_REGEX.exec(source)) !== null) {
-    const filePath = normalizeRepoPath(match[1]);
-    if (filePath.includes('/')) paths.add(filePath);
-  }
-  return paths;
-}
-
-function extractCoarseAreas(text) {
-  const areas = new Set();
-  for (const filePath of extractFilePaths(text)) {
-    areas.add(areaForPath(filePath));
-  }
-  const source = String(text || '');
-  let match;
-  AREA_PATH_REGEX.lastIndex = 0;
-  while ((match = AREA_PATH_REGEX.exec(source)) !== null) {
-    const area = normalizeRepoPath(match[1]);
-    if (area) areas.add(area);
-  }
-  return areas;
-}
-
-// Return the body of a `## {heading}` markdown section, up to the next h2
-// heading (or EOF). Used to read only a fast-summary.md's `## Scope` block,
-// excluding later evidence/review sections that carry incidental path tokens.
-// issue #213: h2-only so a `#`-prefixed line inside a fenced code block in the
-// section body does not truncate the slice.
-function markdownFenceTransition(state, line) {
-  const marker = String(line || '').match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-  if (!marker) return state;
-  const run = marker[1];
-  if (!state.family) return { family: run[0], length: run.length };
-  if (run[0] === state.family && run.length >= state.length && /^\s*$/.test(marker[2])) {
-    return { family: '', length: 0 };
-  }
-  return state;
-}
-
-function sectionBodyState(content, heading) {
-  const lines = String(content || '').split('\n');
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
-  let fence = { family: '', length: 0 };
-  let found = 0, collecting = false, done = false;
-  const out = [];
-  for (const line of lines) {
-    fence = markdownFenceTransition(fence, line);
-    if (!fence.family && headRe.test(line)) {
-      found++;
-      if (found > 1) return { status: 'ambiguous', body: '' };
-      collecting = true;
-      continue;
-    }
-    if (collecting && !fence.family && /^##\s/.test(line)) {
-      collecting = false;
-      done = true;
-    }
-    if (collecting) out.push(line);
-  }
-  if (fence.family) return { status: 'ambiguous', body: '' };
-  if (found !== 1) return { status: 'absent', body: '' };
-  return { status: (done || collecting) ? 'present' : 'absent', body: out.join('\n') };
-}
-
-function sectionBody(content, heading) {
-  const section = sectionBodyState(content, heading);
-  return section.status === 'present' ? section.body : '';
-}
-
-// ---------------------------------------------------------------------------
 // Label parsers
 // ---------------------------------------------------------------------------
 
@@ -311,19 +167,6 @@ function parseDependsOn(labels) {
     if (m) return parseInt(m[1], 10);
   }
   return null;
-}
-
-function parseAreaLabels(labels) {
-  const areas = new Set();
-  for (const lbl of labels) {
-    const name = String(lbl.name || lbl);
-    if (name.startsWith('area:')) areas.add(name.slice(5).trim());
-  }
-  return areas;
-}
-
-function parseAreaLabelsFromText(text) {
-  return parseAreaLabels((String(text || '').match(/area:[A-Za-z0-9_-]+/g) || []).map(s => ({ name: s })));
 }
 
 function labelName(label) {
@@ -395,136 +238,6 @@ function parseArgs(argv) {
 // Core classify function
 // ---------------------------------------------------------------------------
 
-const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow/scripts']);
-
-function isSharedInfra(area) {
-  return SHARED_INFRA.has(area);
-}
-
-// #463 (D-419 write-overlap): PROTECTED concrete files — these STAY BLOCKING at EVERY write_overlap_policy
-// tier even when their coarse area relaxes. PROTECTED is a CONCRETE-FILE concept (a specific path / a
-// basename pattern), DISTINCT from the SHARED_INFRA *area* set: a file under a relaxable area is still
-// refused if it is PROTECTED. The set: dependency lockfiles, the generated roadmap mirror, the changelog,
-// install manifests, finalization/archive artifacts, and the byte-identical-×4 anchor
-// kaola-workflow-adaptive-schema.js (relaxing it would let two legs diverge the cross-edition anchor).
-const PROTECTED_BASENAMES = new Set([
-  'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml',
-  'Cargo.lock', 'poetry.lock', 'Gemfile.lock', 'composer.lock', 'go.sum',
-  // #702: README.md joins CHANGELOG.md/ROADMAP.md as a SHARED AGGREGATION index — the repo-root readme
-  // is a single narrative surface, never a per-leg lane. PROTECTED makes "stays single-leg" a STRUCTURAL
-  // guarantee (NET-2): the file-granular docs co-open relaxation refuses any leg group carrying it.
-  'CHANGELOG.md', 'ROADMAP.md', 'README.md',
-  'kaola-workflow-install-manifest.js', 'kaola-workflow-adaptive-schema.js',
-]);
-// Path SUBSTRINGS that mark a file PROTECTED regardless of basename (generated mirror + archive trees +
-// the closure/finalization receipts that finalization owns and a parallel leg must never co-write).
-const PROTECTED_PATH_MARKERS = [
-  'kaola-workflow/ROADMAP.md',
-  'kaola-workflow/.roadmap/',
-  'kaola-workflow/archive/',
-  '.archived-',
-];
-
-// isProtected(filePath) — true iff a CONCRETE file is PROTECTED (blocking at every tier). Pure string
-// logic (basename match OR a path-marker substring); no fs. Forge-neutral (the markers carry no forge
-// vocabulary, so the rename-normalized forge classifier ports are body-identical here).
-function isProtected(filePath) {
-  const p = String(filePath || '').trim();
-  if (!p) return false;
-  const base = p.split('/').pop();
-  if (PROTECTED_BASENAMES.has(base)) return true;
-  for (const marker of PROTECTED_PATH_MARKERS) { if (p.indexOf(marker) !== -1) return true; }
-  return false;
-}
-
-function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root) {
-  let hasExactOverlap = false;
-  let exactOverlapPath = '';
-  let hasDirectOverlap = false;
-  let directOverlapArea = '';
-  let hasSharedInfraOverlap = false;
-  let sharedOverlapArea = '';
-  let hasAreaLabelOverlap = false;
-  let hasCuratedRootOverlap = false;
-  let curatedRootOverlapName = '';
-  let anyClaimedAtPhaseLeTwo = false;
-  // #667: a claimed fast project whose ## Scope is structurally AMBIGUOUS (unclosed fence or
-  // duplicate heading) has an unreadable write set — see the sectionBodyState branch below.
-  let hasAmbiguousScope = false;
-  let ambiguousScopeProject = '';
-
-  for (const folder of activeFolders) {
-    if (!isSafeName(folder.project)) continue;
-    const projectDir = path.join(root, 'kaola-workflow', folder.project);
-    if (!fs.existsSync(projectDir)) continue;
-
-    let phase3Content = '';
-    let phase1Content = '';
-    let fastScope = '';
-    try { phase3Content = fs.readFileSync(path.join(projectDir, 'phase3-plan.md'), 'utf8'); } catch (_) {}
-    try { phase1Content = fs.readFileSync(path.join(projectDir, 'phase1-research.md'), 'utf8'); } catch (_) {}
-    // issue #207: a fast project produces no phase files; its only file-set-bearing
-    // artifact is fast-summary.md. Read its declared write set from the `## Scope`
-    // section only, so its in-flight files are visible to overlap detection (parity
-    // with full projects). Scope-only avoids false overlaps from command/test-output
-    // path tokens in the Implementation Evidence / Review sections.
-    // #667: read via sectionBodyState (not sectionBody) so an AMBIGUOUS Scope (unclosed
-    // fence / duplicate heading) is distinguishable from a genuinely ABSENT one. sectionBody
-    // collapses both to '' ("no write set"), which fails OPEN: a claimed project's write set
-    // becomes invisible to overlap detection instead of INDETERMINATE. Fail closed here —
-    // ambiguous flags this folder as hasAmbiguousScope (forcing red below); absent is
-    // UNCHANGED (fastScope stays '', no overlap manufactured from nothing).
-    try {
-      const fastState = sectionBodyState(fs.readFileSync(path.join(projectDir, 'fast-summary.md'), 'utf8'), 'Scope');
-      if (fastState.status === 'ambiguous') {
-        if (!hasAmbiguousScope) { hasAmbiguousScope = true; ambiguousScopeProject = folder.project; }
-      } else if (fastState.status === 'present') {
-        fastScope = fastState.body;
-      }
-    } catch (_) {}
-    const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope;
-    const claimedPaths = extractFilePaths(combined);
-    const claimedAreas = extractCoarseAreas(combined);
-    const claimedAreaLabels = parseAreaLabelsFromText(combined);
-    // #238: curated root (slashless) files on the claimed side, via the prose matcher.
-    const claimedCuratedRoot = adaptiveSchema.extractCuratedRootPaths(combined);
-
-    if (!fs.existsSync(path.join(projectDir, 'phase3-plan.md'))) anyClaimedAtPhaseLeTwo = true;
-
-    for (const filePath of candidatePaths) {
-      if (claimedPaths.has(filePath)) {
-        if (!hasExactOverlap) exactOverlapPath = filePath;
-        hasExactOverlap = true;
-      }
-    }
-
-    for (const area of candidateAreas) {
-      if (claimedAreas.has(area)) {
-        if (!SHARED_INFRA.has(area)) {
-          if (!hasDirectOverlap) directOverlapArea = area;
-          hasDirectOverlap = true;
-        } else {
-          if (!hasSharedInfraOverlap) sharedOverlapArea = area;
-          hasSharedInfraOverlap = true;
-        }
-      }
-    }
-
-    for (const label of candidateAreaLabels) {
-      if (claimedAreaLabels.has(label)) { hasAreaLabelOverlap = true; break; }
-    }
-
-    // #238: candidate (issue-body prose) curated root file ∩ claimed curated root file. Routed to
-    // ASK (yellow), never RED — both sides can name a curated file in prose, so over-ask is the safe
-    // direction (vs the prose-allowlist over-block that #237 deliberately avoided).
-    for (const p of candidateCuratedRoot) {
-      if (claimedCuratedRoot.has(p)) { if (!hasCuratedRootOverlap) curatedRootOverlapName = p; hasCuratedRootOverlap = true; }
-    }
-  }
-
-  return { hasExactOverlap, exactOverlapPath, hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo, hasAmbiguousScope, ambiguousScopeProject };
-}
-
 function checkDependsOn(depN) {
   if (OFFLINE) {
     return { verdict: 'blocked', reasoning: 'OFFLINE and depends-on:#' + depN + ' label present; conservative block' };
@@ -540,65 +253,17 @@ function checkDependsOn(depN) {
   return null;
 }
 
-function classify(issue, activeFolders, root) {
+// The classifier reports facts about a candidate issue's STATE — is a prerequisite still open, is
+// the issue already claimed, does it exist. It does not decide whether two pieces of work may run at
+// the same time: the runtime agent owns that, and where the runtime supports concurrency it is on.
+function classify(issue) {
   const depN = parseDependsOn(issue.labels || []);
   if (depN !== null) {
     const blocked = checkDependsOn(depN);
     if (blocked) return blocked;
   }
 
-  const candidatePaths = extractFilePaths(issue.body || '');
-  const candidateAreas = extractCoarseAreas(issue.body || '');
-  const candidateAreaLabels = parseAreaLabels(issue.labels || []);
-  for (const area of parseAreaLabelsFromText(issue.body || '')) candidateAreaLabels.add(area);
-  // #238: curated root (slashless) filenames named in the issue-body prose (Dockerfile, .env, …).
-  const candidateCuratedRoot = adaptiveSchema.extractCuratedRootPaths(issue.body || '');
-
-  const {
-    hasExactOverlap, exactOverlapPath,
-    hasDirectOverlap, directOverlapArea,
-    hasSharedInfraOverlap, sharedOverlapArea,
-    hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo,
-    hasAmbiguousScope, ambiguousScopeProject,
-  } = scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root);
-
-  // #667: a claimed fast project's fast-summary.md ## Scope that is structurally ambiguous
-  // (unclosed fence / duplicate heading) makes its write set INDETERMINATE — fail closed
-  // before any of the (necessarily incomplete) overlap checks below, rather than silently
-  // treating the unreadable section as "no write set" (the #660 fail-open regression).
-  if (hasAmbiguousScope) {
-    return { verdict: 'red', reasoning: 'claimed project "' + ambiguousScopeProject + '" fast-summary.md has a structurally ambiguous/unparseable ## Scope section (unclosed fence or duplicate heading); write set indeterminate; conservative red' };
-  }
-
-  if (hasExactOverlap) {
-    return { verdict: 'red', reasoning: 'exact file path overlap at "' + exactOverlapPath + '" with a claimed project' };
-  }
-
-  if (hasDirectOverlap) {
-    return { verdict: 'red', reasoning: 'file-set overlap at coarse area "' + directOverlapArea + '" with a claimed project' };
-  }
-
-  // #238: a named curated root file IS footprint info — don't treat a curated-only candidate as
-  // "no path info" and conservatively red it.
-  const noPathInfo = candidateAreas.size === 0 && candidateAreaLabels.size === 0 && candidateCuratedRoot.size === 0;
-  if (noPathInfo && activeFolders.length > 0 && anyClaimedAtPhaseLeTwo) {
-    return { verdict: 'red', reasoning: 'no extractable file paths or area labels; claimed project in phase <= 2; conservative red' };
-  }
-
-  if (hasSharedInfraOverlap) {
-    return { verdict: 'yellow', reasoning: 'shared-infra area "' + sharedOverlapArea + '" overlap; proceed with caution' };
-  }
-
-  // #238: curated root-file overlap → ASK (never RED): both sides can name a curated file in prose.
-  if (hasCuratedRootOverlap) {
-    return { verdict: 'yellow', reasoning: 'curated root file "' + curatedRootOverlapName + '" overlap (CI/secrets/lockfile/manifest) with a claimed project; proceed with caution' };
-  }
-
-  if (hasAreaLabelOverlap) {
-    return { verdict: 'yellow', reasoning: 'area:* label overlap with a claimed project; proceed with caution' };
-  }
-
-  return { verdict: 'green', reasoning: 'no file-set overlap, no dependency block; file sets are disjoint' };
+  return { verdict: 'green', reasoning: 'no dependency block' };
 }
 
 // ---------------------------------------------------------------------------
@@ -608,18 +273,6 @@ function classify(issue, activeFolders, root) {
 function cmdClassify(argv) {
   const args = parseArgs(argv || process.argv.slice(3));
   assert(Number.isFinite(args.issue) && args.issue > 0, '--issue <N> required for classify');
-
-  const config = readOrCreateConfig();
-  // #536: KAOLA_FORCE_CLASSIFY lets the test suite force classification regardless of a contributor's
-  // global parallel_mode config. The bypass reads ~/.config/kaola-workflow/config.json (os.homedir()),
-  // which the test cannot own — #531's hermetic HOME masks it only as long as HOME-inheritance holds,
-  // leaving the verdict coupled to a file outside the test's control. This env override is the
-  // test-owned decoupling seam. Real users never set it, so production bypass semantics are preserved
-  // exactly; only tests (or an operator who explicitly wants to force classification) set it.
-  if (config.parallel_mode !== 'auto' && process.env.KAOLA_FORCE_CLASSIFY !== '1') {
-    process.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'parallel_mode=' + config.parallel_mode + '; bypassing classifier' }) + '\n');
-    return;
-  }
 
   const root = getRoot();
   const activeFolders = readActiveFolders(root);
@@ -654,10 +307,9 @@ function cmdClassify(argv) {
         const m = nextStep.match(/#(\d+)/);
         if (m) labels = [{ name: 'depends-on:#' + m[1] }];
       }
-      for (const area of parseAreaLabelsFromText(content)) labels.push({ name: 'area:' + area });
       body = content;
     }
-    const result = classify({ number: args.issue, labels, body }, activeFolders, root);
+    const result = classify({ number: args.issue, labels, body });
     process.stdout.write(JSON.stringify(result) + '\n');
     return;
   }
@@ -741,7 +393,7 @@ function cmdClassify(argv) {
     return;
   }
 
-  const result = classify(issue, activeFolders, root);
+  const result = classify(issue);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
@@ -840,18 +492,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  extractFilePaths,
-  extractCoarseAreas,
-  markdownFenceTransition,
-  sectionBodyState,
-  sectionBody,
-  areaForPath,
-  SHARED_INFRA,
-  isSharedInfra,
-  // #463 (D-419 write-overlap): PROTECTED concrete-file guard (blocking at every tier).
-  PROTECTED_BASENAMES,
-  PROTECTED_PATH_MARKERS,
-  isProtected,
   // #519: stderr-error-class axis — transient-infra signature detection + the combined verdict.
   classifyFetchError,
   isTransientFetchStderr,

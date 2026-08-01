@@ -756,10 +756,6 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
   const skillsDir = r => path.join(r.dest, '.kimi-code', 'skills');
   const deployedSkills = r => existsSync(skillsDir(r)) ? readdirSync(skillsDir(r)).sort() : [];
-  const readConfig = p => {
-    if (!existsSync(p)) return null;
-    try { return JSON.parse(readFileSync(p, 'utf8')); } catch (_) { return null; }
-  };
   const managedBlockCount = p => existsSync(p)
     ? readFileSync(p, 'utf8').split('\n').filter(l => l.trim() === '# >>> kaola-workflow kimi hooks').length
     : 0;
@@ -778,7 +774,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 
   // P1 — install deploys adaptive-core commands + all role skills, lands support
   // scripts + hook scripts under the kimi home, merges EXACTLY ONE managed hooks
-  // block into config.toml, and seeds parallel_mode only (no installed_paths).
+  // block into config.toml, and never touches the user-owned shared config.
   {
     const r = runInstaller([]);
     assert(r.ok,
@@ -812,11 +808,8 @@ for (const script of sync.HOOK_SCRIPTS) {
       'P1: config.toml carries EXACTLY ONE kaola managed hooks block');
     assert(readFileSync(r.kimiConfig, 'utf8').includes('[[hooks]]'),
       'P1: merged config.toml carries the [[hooks]] rules');
-    const cfg = readConfig(r.configPath);
-    assert(cfg && !('installed_paths' in cfg),
-      'P1: default install does NOT write installed_paths — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    assert(cfg && cfg.parallel_mode !== undefined,
-      'P1: default install seeds parallel_mode (the only partition field written)');
+    assert(!existsSync(r.configPath),
+      'P1: default install must not create ~/.config/kaola-workflow/config.json (user-owned; the\n      workflow has no install-time configuration)');
     clean(r);
   }
 
@@ -850,8 +843,8 @@ for (const script of sync.HOOK_SCRIPTS) {
   // skills (commands + roles), the support scripts + hook scripts under the
   // kimi home, and the managed hooks block in config.toml (the file itself is
   // preserved when it holds user content; here it held only the block so it is
-  // removed) — and strips any stale installed_paths from the shared kaola config
-  // while preserving parallel_mode.
+  // removed). The shared kaola config is user-owned: neither install nor uninstall
+  // creates or edits it.
   {
     const r1 = runInstaller([]);
     assert(r1.ok, 'U1: seed install exits 0');
@@ -873,11 +866,8 @@ for (const script of sync.HOOK_SCRIPTS) {
       'U1: support scripts + hook scripts under the kimi home are fully removed (no residue)');
     assert(managedBlockCount(r1.kimiConfig) === 0,
       'U1: ZERO kaola managed hooks blocks remain in config.toml after --uninstall');
-    const cfg = readConfig(r1.configPath);
-    assert(cfg && !('installed_paths' in cfg),
-      'U1: --uninstall leaves no installed_paths in the shared config — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    assert(cfg && cfg.parallel_mode !== undefined,
-      'U1: --uninstall preserves parallel_mode in the shared config');
+    assert(!existsSync(r1.configPath),
+      'U1: install + --uninstall must leave the user-owned shared config uncreated');
     clean(r1);
   }
 

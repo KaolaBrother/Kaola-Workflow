@@ -98,11 +98,11 @@ token cannot be added to one half only.
 |------|----------|------|-----------|
 | `target_set_invalid_token` | `answer` | 0 | a token that is not a positive integer; the offender is echoed |
 | `target_set_empty` | `answer` | 0 | the resolved list is empty after sort+dedup |
-| `target_set_red` | `answer` | 0 | one or more targets are red per the overlap classifier |
+| `target_set_red` | `answer` | 0 | one or more targets are already closed on the forge (the classifier's `red`) |
 | `target_set_unavailable` | `answer` | 0 | remote validation failed, **or** provisioning failed and was cleanly rolled back |
 | `target_set_unverified` | `answer` | 0 | offline with no local evidence for one or more targets |
 | `target_set_indeterminate` | `escalate` | 0 | classifier faulted transiently on one or more targets through all 3 attempts; pause and ask |
-| `target_set_conflicts_active_work` | `refuse` | 1 | a target overlaps an already-claimed active folder, **or** the derived bundle folder already exists |
+| `target_set_conflicts_active_work` | `refuse` | 1 | a target is already held by an active folder, **or** the derived bundle folder already exists |
 | `target_set_has_closed_issue` | `refuse` | 1 | one or more targets are already closed on the forge |
 | `target_set_label_rollback_failed` | `refuse` | 1 | the claim succeeded but in-progress-label rollback on a partial failure itself failed. The **only** code on this surface where a forge mutation survives the answer — `partial` carries the applied-step record (`dir`, `worktree`, `worktreePath`, `labeled`, `inPlaceBranch`, `baseBranch`) a human needs for cleanup |
 
@@ -151,22 +151,6 @@ the project name the claim resolves to (`issue-<N>`, or `bundle-<a>-<b>[-<c>]`).
 exists at claim time its whole subtree is moved into `kaola-workflow/<project>/.cache/origin/`
 preserving relative layout and bytes, and the staging directory is removed. Absent staging is a
 clean no-op, and the fold never blocks the claim.
-
-### Cross-project claim-overlap verdicts (`scanClaimedOverlap`)
-
-A candidate issue's footprint is compared against every already-claimed active project:
-
-- **red** — an exact-file or coarse-area overlap with a claimed project. Selecting this target would
-  collide.
-- **yellow** — a **curated root-file** overlap: both sides name the same root-level CI /
-  supply-chain / manifest / secrets file (`Dockerfile`, `.env`, `package.json`,
-  `requirements.txt`, `pom.xml`, …; the frozen list lives in
-  `kaola-workflow-adaptive-schema.js` as `CURATED_ROOT_PATHS`). Detected two-sided, from the
-  candidate issue body and from the claimed side's prose. Slashless root files have no other
-  detector, so the matcher canonicalizes sentence punctuation (a leading `./`, a trailing `.`,
-  collapsed `//`) before exact membership, and over-asks rather than over-blocks. Yellow is proceed
-  with caution, not a block.
-- **green** — no overlap on the available evidence.
 
 ### Worktree provisioning
 
@@ -1046,10 +1030,12 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 `~/.config/kaola-workflow/config.json` (optional):
 
 ```json
-{ "parallel_mode": "auto", "pr_auto_merge": false, "mr_auto_merge": false }
+{ "pr_auto_merge": false, "mr_auto_merge": false }
 ```
 
-- `parallel_mode` — parallel-work classification strategy.
+User-owned: no installer creates or edits this file. A key left behind by an older install (e.g. the
+retired `parallel_mode`) is ignored, never rewritten.
+
 - `pr_auto_merge` — auto-merge after PR creation (GitHub + Gitea; squash merge with source branch
   deletion; non-fatal if the merge fails).
 - `mr_auto_merge` — the GitLab equivalent (`glab mr merge --auto-merge`).

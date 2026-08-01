@@ -15,20 +15,10 @@ const path = require('path');
 const { createHash } = require('crypto');
 const { spawnSync } = require('child_process');
 
-// #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
-// The module-top KAOLA_ENABLE_ADAPTIVE pin is removed.
-
-// #531 / #538: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from
-// ~/.config/kaola-workflow/config.json and bypasses to verdict:'green' when not 'auto'.
-// Adaptive is the only workflow path (the fast/full opt-ins were retired); a stale installed_paths
-// field is tolerated on read but never written. Pin a process-wide sandbox HOME seeded with
-// parallel_mode:'auto' so a dev-local config can't affect these tests. os.homedir() honors HOME.
+// Hermetic HOME — the shared ~/.config/kaola-workflow/config.json (os.homedir()) is user-owned;
+// point HOME/USERPROFILE at a throwaway sandbox so no subprocess reads or writes the developer's
+// real one. Nothing is seeded: an absent config is the shape a fresh machine has.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
-fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
-fs.writeFileSync(
-  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
-);
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 

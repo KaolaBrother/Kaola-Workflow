@@ -93,9 +93,8 @@ UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved s
 (project DEST_ROOT via --target/$PWD, or --global ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}):
 the deployed agents/commands/plugin/hooks (agents by deploy manifest + source-tree filename,
 the rest by source-tree filename — never a blind rm of a dir; the manifest is what lets an
-agent RETIRED since the last install still be removed) and the opencode-native support scripts
-(parallel_mode + the SHARED
-~/.config/kaola-workflow/config.json are kept for any co-installed Claude/Codex edition).
+agent RETIRED since the last install still be removed) and the opencode-native support scripts.
+The SHARED ~/.config/kaola-workflow/config.json is kept for any co-installed Claude/Codex edition.
 Your own opencode.json (model/permission config) is PRESERVED. A subsequent bare install
 then deploys the workflow edition.
 EOF
@@ -315,7 +314,7 @@ copy_tree() {
 
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree filename (never a blind
 # rm of a dir the user may share). Preserves the user-owned opencode.json and the SHARED
-# ~/.config/kaola-workflow/config.json (parallel_mode + the file for any co-installed Claude/Codex edition).
+# ~/.config/kaola-workflow/config.json (kept for any co-installed Claude/Codex edition).
 uninstall_edition() {
   local dest_root layout_root
   if [[ "$GLOBAL" -eq 1 ]]; then
@@ -437,37 +436,6 @@ seed_config() {
   echo "  KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL env."
 }
 
-# Seed ~/.config/kaola-workflow/config.json so an opencode install reaches install-time parity
-# (parallel_mode:'auto' default-ON) with what install.sh writes. This config is the SHARED global
-# file the classifiers + claim read (edition-agnostic, never clobbered); it is SEPARATE from
-# opencode.json. Implemented in NODE (already a hard dependency above). Fail-closed on a
-# corrupt/non-object config: leave it untouched and warn.
-seed_kaola_config() {
-  local kaola_config_dir="$HOME/.config/kaola-workflow"
-  local kaola_config_file="$kaola_config_dir/config.json"
-  mkdir -p "$kaola_config_dir"
-  if ! KAOLA_SEED_FILE="$kaola_config_file" node -e '
-    const fs = require("fs");
-    const file = process.env.KAOLA_SEED_FILE;
-    let config = {};
-    if (fs.existsSync(file)) {
-      let raw;
-      try { raw = fs.readFileSync(file, "utf8"); }
-      catch (e) { console.error("warning: cannot read " + file + " (" + e.message + "); leaving it untouched."); process.exit(2); }
-      try { config = JSON.parse(raw); }
-      catch (e) { console.error("warning: " + file + " is not valid JSON (" + e.message + "); leaving it untouched."); process.exit(2); }
-      if (config === null || typeof config !== "object" || Array.isArray(config)) {
-        console.error("warning: " + file + " is not a JSON object; leaving it untouched."); process.exit(2);
-      }
-    }
-    if (config.parallel_mode === undefined) config.parallel_mode = "auto";
-    fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-    console.log("Seeded parallel_mode in: " + file);
-  '; then
-    echo "warning: failed to seed $kaola_config_file." >&2
-  fi
-}
-
 # --uninstall short-circuits the install entirely (functions are defined above).
 if [[ "$UNINSTALL" -eq 1 ]]; then
   uninstall_edition
@@ -481,7 +449,6 @@ if [[ "$GLOBAL" -eq 1 ]]; then
   # NOT a nested .opencode/). layout_root = the config root itself.
   copy_tree "$DEST_ROOT" "$DEST_ROOT"
   seed_config "$DEST_ROOT"
-  seed_kaola_config
   install_support_scripts
 else
   DEST_ROOT="${TARGET:-$PWD}"
@@ -489,7 +456,6 @@ else
   # PROJECT: opencode scans <project>/.opencode/. layout_root = $DEST_ROOT/.opencode (copy_tree default).
   copy_tree "$DEST_ROOT" "$DEST_ROOT/.opencode"
   seed_config "$DEST_ROOT"
-  seed_kaola_config
   install_support_scripts
 fi
 

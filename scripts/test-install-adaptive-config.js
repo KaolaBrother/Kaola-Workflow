@@ -9,10 +9,10 @@
 // still has to declare itself.
 
 
-// issue #725: fast/full retirement. Adaptive is the unconditional and sole workflow path.
-// install.sh seeds ~/.config/kaola-workflow/config.json with parallel_mode only (never
-// installed_paths); the retired --with-fast / --with-full flags are now unknown-flag errors and the
-// install ships no fast/full command artifacts. Uninstall clears the shared config.
+// issue #725: fast/full retirement. Adaptive is the unconditional and sole workflow path; the
+// retired --with-fast / --with-full flags are unknown-flag errors and the install ships no fast/full
+// command artifacts. No installer writes ~/.config/kaola-workflow/config.json: that file is
+// user-owned, and the workflow has no install-time configuration to seed into it.
 
 const assert = require('assert');
 const { execFileSync, spawnSync } = require('child_process');
@@ -38,8 +38,8 @@ function runUninstall(home, extraArgs) {
     cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
-// #2: the opencode installer seeds the SAME shared ~/.config/kaola-workflow/config.json the
-// github install writes (parallel_mode default-ON parity). Deploy into a throwaway target dir
+// The opencode installer shares the github install's relationship with the user-owned
+// ~/.config/kaola-workflow/config.json: it never touches it. Deploy into a throwaway target dir
 // (--no-scripts skips the manifest-driven support-script copy that needs node round-trips).
 function runOpencodeInstall(home, target) {
   // spawn-class: environment
@@ -48,7 +48,6 @@ function runOpencodeInstall(home, target) {
   });
 }
 function configPath(home) { return path.join(home, '.config', 'kaola-workflow', 'config.json'); }
-function readConfig(home) { return JSON.parse(fs.readFileSync(configPath(home), 'utf8')); }
 function commandsDir(home) { return path.join(home, '.claude', 'commands'); }
 function commandExists(home, name) { return fs.existsSync(path.join(commandsDir(home), name)); }
 
@@ -56,17 +55,14 @@ const homes = [];
 function cleanup() { for (const h of homes) try { fs.rmSync(h, { recursive: true, force: true }); } catch (_) {} }
 
 try {
-  // AC1 (retirement regression): a bare install seeds parallel_mode:auto, NEVER writes installed_paths
-  // (fast/full retired), migrates away enable_adaptive, installs NO fast/full command artifacts, and
-  // installs the adaptive command surface.
+  // AC1 (retirement regression): a bare install writes NO shared config at all (the workflow has no
+  // install-time configuration), installs NO fast/full command artifacts, and installs the adaptive
+  // command surface.
   {
     const home = freshHome('ac1-default'); homes.push(home);
     runInstall(home, []);
-    const cfg = readConfig(home);
-    assert(cfg.parallel_mode === 'auto', 'AC1: bare install must seed parallel_mode:auto, got ' + JSON.stringify(cfg));
-    assert(!('installed_paths' in cfg),
-      'AC1: bare install must NOT write installed_paths (retired), got ' + JSON.stringify(cfg));
-    assert(!('enable_adaptive' in cfg), 'AC1: bare install must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
+    assert(!fs.existsSync(configPath(home)),
+      'AC1: bare install must not create the user-owned shared config, found ' + configPath(home));
     assert(!commandExists(home, 'kaola-workflow-fast.md'),
       'AC1: bare install must NOT install kaola-workflow-fast.md');
     for (let i = 1; i <= 5; i++) {
@@ -95,43 +91,34 @@ try {
       `AC2: a refused ${flag} install must not have the retired fast command`);
   }
 
-  // AC3 (reset lifecycle): a bare install writes the shared config; uninstall removes it; a bare
-  // reinstall comes back up with parallel_mode:auto and still no installed_paths / fast artifacts.
+  // AC3 (reset lifecycle): install, uninstall, bare reinstall — none of them creates the shared
+  // config, and the reinstall still ships no fast artifacts.
   {
     const home = freshHome('ac3-reset'); homes.push(home);
     runInstall(home, []);
-    assert(fs.existsSync(configPath(home)), 'AC3: config must exist after install');
     runUninstall(home, []);
-    assert(!fs.existsSync(configPath(home)), 'AC3: config must be removed after uninstall');
     runInstall(home, []); // bare reinstall
-    const cfg = readConfig(home);
-    assert(cfg.parallel_mode === 'auto',
-      'AC3: reinstall after uninstall must seed parallel_mode:auto, got ' + JSON.stringify(cfg));
-    assert(!('installed_paths' in cfg),
-      'AC3: reinstall after uninstall must NOT write installed_paths, got ' + JSON.stringify(cfg));
+    assert(!fs.existsSync(configPath(home)),
+      'AC3: no step of install/uninstall/reinstall may create the shared config, found ' + configPath(home));
     assert(!commandExists(home, 'kaola-workflow-fast.md'),
       'AC3: reinstall after uninstall must NOT have the retired fast command');
   }
 
-  // AC4 (stale installed_paths tolerated on read, stripped on write): a pre-existing config carrying a
-  // stale installed_paths from an old install is tolerated and stripped on the next install (never
-  // re-written), while a user parallel_mode and unrelated user fields are preserved.
+  // AC4 (a user's config is untouched): a pre-existing config — including a stale parallel_mode from
+  // a pre-#891 install — is left EXACTLY as the user left it. Ignoring a retired key is the whole
+  // migration; the install never rewrites the file to strip it.
   {
-    const home = freshHome('ac4-strip-stale'); homes.push(home);
+    const home = freshHome('ac4-user-owned'); homes.push(home);
     fs.mkdirSync(path.dirname(configPath(home)), { recursive: true });
-    fs.writeFileSync(configPath(home),
-      JSON.stringify({ parallel_mode: 'manual', installed_paths: ['fast', 'full'], user_field: 'keep' }, null, 2) + '\n');
+    const before = JSON.stringify({ parallel_mode: 'manual', installed_paths: ['fast', 'full'], user_field: 'keep' }, null, 2) + '\n';
+    fs.writeFileSync(configPath(home), before);
     runInstall(home, []);
-    const cfg = readConfig(home);
-    assert(!('installed_paths' in cfg),
-      'AC4: install must strip a stale installed_paths (never re-writes it), got ' + JSON.stringify(cfg));
-    assert(cfg.parallel_mode === 'manual', 'AC4: install must preserve a user parallel_mode, got ' + JSON.stringify(cfg));
-    assert(cfg.user_field === 'keep', 'AC4: install must preserve unrelated user config fields, got ' + JSON.stringify(cfg));
+    assert(fs.readFileSync(configPath(home), 'utf8') === before,
+      'AC4: install must leave a user-owned config byte-identical, got ' + fs.readFileSync(configPath(home), 'utf8'));
   }
 
-  // AC5: --enable-adaptive warns-and-ignores (exit 0, no enable_adaptive field written, a
-  // present-tense no-op note on stderr); the seeded config carries parallel_mode:auto and no
-  // installed_paths. The flag is a no-op (adaptive is always installed) but is accepted rather
+  // AC5: --enable-adaptive warns-and-ignores (exit 0, a present-tense no-op note on stderr, and no
+  // shared config written). The flag is a no-op (adaptive is always installed) but is accepted rather
   // than rejected so callers passing it are not broken.
   {
     const home = freshHome('ac5-deprecated'); homes.push(home);
@@ -142,13 +129,8 @@ try {
     assert(result.status === 0,
       'AC5: --enable-adaptive=yes must exit 0 (warn-and-ignore), got status=' + result.status +
       '\nstderr: ' + result.stderr + '\nstdout: ' + result.stdout);
-    const cfg = readConfig(home);
-    assert(!('enable_adaptive' in cfg),
-      'AC5: --enable-adaptive=yes must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
-    assert(cfg.parallel_mode === 'auto',
-      'AC5: config must seed parallel_mode:auto after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
-    assert(!('installed_paths' in cfg),
-      'AC5: config must NOT carry installed_paths after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
+    assert(!fs.existsSync(configPath(home)),
+      'AC5: --enable-adaptive=yes must not create the shared config, found ' + configPath(home));
     const hasWarning = (result.stderr || '').includes('--enable-adaptive') && (result.stderr || '').includes('Ignoring');
     assert(hasWarning,
       'AC5: --enable-adaptive must emit a warn-and-ignore note on stderr naming the flag, got stderr: ' + result.stderr);
@@ -229,21 +211,15 @@ try {
       '#816: uninstall.sh must remove a previously-installed contractor.md (RETIRED_AGENTS)');
   }
 
-  // #2: opencode install-time parity — install-opencode.sh seeds the shared
-  // ~/.config/kaola-workflow/config.json with parallel_mode:'auto' (default-ON parallelism),
-  // mirroring the github AC1 assertion. The installer writes parallel_mode only and never an
-  // installed_paths field. This locks the opencode seed against drift from the github install.
+  // opencode install-time parity — install-opencode.sh treats the shared
+  // ~/.config/kaola-workflow/config.json exactly as install.sh does: it never creates it. This locks
+  // the opencode edition against reintroducing a seed the github install no longer has.
   {
     const home = freshHome('opencode-parallel'); homes.push(home);
     const target = freshHome('opencode-target'); homes.push(target);
     runOpencodeInstall(home, target);
-    const cfg = readConfig(home);
-    assert(cfg.parallel_mode === 'auto',
-      'OPENCODE: install-opencode.sh must write parallel_mode:auto, got ' + JSON.stringify(cfg));
-    assert(!('installed_paths' in cfg),
-      'OPENCODE: install-opencode.sh must NOT write installed_paths, got ' + JSON.stringify(cfg));
-    assert(!('enable_adaptive' in cfg),
-      'OPENCODE: install-opencode.sh must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
+    assert(!fs.existsSync(configPath(home)),
+      'OPENCODE: install-opencode.sh must not create the shared config, found ' + configPath(home));
   }
 
   console.log('Install adaptive-config tests passed');

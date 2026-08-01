@@ -284,8 +284,7 @@ every project): `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hoo
 source-tree filename (never a blind `rm` of a dir you may share): the deployed skills, the
 support/hook scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/`, and the
 managed hooks block in `config.toml`. The shared `~/.config/kaola-workflow/config.json`
-(`parallel_mode` and the file itself) is kept, so a co-installed Claude/Codex/opencode
-edition is unaffected. Your own Kimi `config.toml` content outside the managed block is
+is user-owned and untouched, so a co-installed Claude/Codex/opencode edition is unaffected. Your own Kimi `config.toml` content outside the managed block is
 **preserved**. A subsequent bare install then deploys the workflow edition — the
 uninstall→reinstall round-trip is verified by `test-kimi-edition.js` **U1**.
 

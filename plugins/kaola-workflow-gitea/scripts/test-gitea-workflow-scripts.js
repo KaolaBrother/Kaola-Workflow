@@ -23,23 +23,10 @@ delete process.env.KAOLA_WORKFLOW_OFFLINE;
 // #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
 // The module-top KAOLA_ENABLE_ADAPTIVE pin is removed.
 
-// #531 / #538: hermetic HOME — classifyIssue (called IN-PROCESS) reads parallel_mode from
-// ~/.config/kaola-workflow/config.json (os.homedir()), bypassing classifier when not 'auto'.
-// #725: the classifier still tolerantly reads installed_paths from this file (defaulting to []);
-// only the write side was retired. Pin a process-wide sandbox HOME seeded with parallel_mode:'auto'
-// + installed_paths:[] (adaptive-only) so a dev-local config can't affect these tests. os.homedir()
-// honors process.env.HOME.
-// Also seed .gitconfig with init.defaultBranch=main so git init creates 'main'.
+// Hermetic HOME — the shared ~/.config/kaola-workflow/config.json (os.homedir()) is user-owned;
+// point HOME/USERPROFILE at a throwaway sandbox so nothing in this suite reads or writes the
+// developer's real one. Nothing is seeded: an absent config is the shape a fresh machine has.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
-fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
-fs.writeFileSync(
-  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
-);
-fs.writeFileSync(
-  path.join(kwSandboxHome, '.gitconfig'),
-  '[init]\n\tdefaultBranch = main\n[user]\n\temail = test@example.com\n\tname = Test User\n'
-);
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
@@ -692,19 +679,6 @@ withForge({
   assert.strictEqual(folders[0].issue_iid, 10);
 });
 
-{
-  const real = '- Write Set: plugins/kaola-workflow-gitea/scripts/real.js';
-  const cases = [['```md', '```', false], ['~~~~markdown', '~~~~', false], ['`````md', '`````', true]];
-  for (const [open, close, hasShorterDelimiter] of cases) {
-    const inner = hasShorterDelimiter ? (open[0] === '`' ? '```' : '~~~') : 'fenced content';
-    const body = classifier.sectionBody(['# Summary', open, '## Scope', '- Write Set: fake.js', inner, close, '## Scope', '~~~text', '## Review', '~~~', real, '## Review'].join('\n'), 'Scope');
-    assert(body.includes(real), 'Gitea fence-aware section identity must select the real Scope for ' + open);
-    assert(!body.includes('fake.js'), 'Gitea fence-aware section identity must skip fenced decoy for ' + open);
-  }
-  assert.strictEqual(classifier.sectionBody('# Summary\n## Scope\na\n## Scope\nb', 'Scope'), '');
-  assert.strictEqual(classifier.sectionBody('# Summary\n```md\n## Scope\na', 'Scope'), '');
-}
-
 // probeIssueState: null issueNumber -> { state: 'open', reason: 'offline-or-null' }
 {
   const result = active.probeIssueState(null);
@@ -773,159 +747,6 @@ withForge({
   const root = tempRoot('kw-gt-classify-');
   const result = classifier.classifyIssue(20, root);
   assert.strictEqual(result.verdict, 'blocked');
-});
-
-// classify red (overlap): stub viewIssue to return a touches path that overlaps an active claimed folder
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-overlap-');
-  const dir = writeState(root, 'claimed-project', 21);
-  fs.writeFileSync(path.join(dir, 'phase3-plan.md'), 'Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n');
-  const result = classifier.classifyIssue(22, root);
-  assert.strictEqual(result.verdict, 'red');
-});
-
-// issue #207: a fast project's declared write set (fast-summary.md ## Scope) must
-// participate in overlap detection at parity with phase files.
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-fast-overlap-');
-  const dir = writeState(root, 'fast-claimed-project', 24);
-  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
-    '# Fast Summary: fast-claimed-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
-  const result = classifier.classifyIssue(25, root);
-  assert.strictEqual(result.verdict, 'red');
-});
-
-// issue #207: a path only in the Implementation Evidence section (not ## Scope)
-// must NOT manufacture an overlap (guards the Scope-only read against over-RED).
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-fast-iso-');
-  const dir = writeState(root, 'fast-iso-project', 26);
-  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
-    '# Fast Summary: fast-iso-project\n\n## Status\nPASSED\n\n## Scope\n- Write Set: docs/api.md\n- Acceptance: node x\n\n## Implementation Evidence\nran plugins/kaola-workflow-gitea/scripts/claimed.js\n');
-  const result = classifier.classifyIssue(27, root);
-  assert.strictEqual(result.verdict, 'green');
-});
-
-// issue #213: a `#`-prefixed line inside a fenced code block within ## Scope must
-// NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
-// fenced `# comment` must still be counted; a candidate overlapping it must RED.
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-fast-fence-');
-  const dir = writeState(root, 'fast-fence-project', 28);
-  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
-    '# Fast Summary: fast-fence-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n```sh\n# set up before writing\n```\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
-  const result = classifier.classifyIssue(29, root);
-  assert.strictEqual(result.verdict, 'red');
-});
-
-// issue #215: a `##`-prefixed line inside a fenced code block within ## Scope must
-// NOT truncate the slice (boundary is h2-only, fence interior is not a heading).
-// A `- Write Set:` path BELOW the fenced `## Some Heading` must still be counted;
-// a candidate overlapping it must RED.
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-fast-fence-heading-');
-  const dir = writeState(root, 'fast-fence-heading-project', 30);
-  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
-    '# Fast Summary: fast-fence-heading-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n```sh\n## Some Heading\n```\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
-  const result = classifier.classifyIssue(31, root);
-  assert.strictEqual(result.verdict, 'red');
-});
-
-// issue #215: a mixed-marker fence (`~~~` nested inside a backtick fence) within
-// ## Scope must NOT terminate the backtick fence early. A `- Write Set:` path
-// BELOW the fence content must still be counted; a candidate overlapping it must RED.
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-fast-fence-mixed-');
-  const dir = writeState(root, 'fast-fence-mixed-project', 32);
-  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
-    '# Fast Summary: fast-fence-mixed-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n```sh\n~~~\n## Heading\n```\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
-  const result = classifier.classifyIssue(33, root);
-  assert.strictEqual(result.verdict, 'red');
-});
-
-// issue #215 / #667: an unterminated fence in a section BEFORE ## Scope leaves the claimed
-// fast project's ## Scope structurally ambiguous (sectionBodyState status 'ambiguous'). The
-// #660 fail-open fix collapsed that into sectionBody's bare '' at the scanClaimedOverlap
-// consumer, so an overlapping candidate silently classified green. #667 restores fail-closed
-// at the consumer: an ambiguous claimed Scope is INDETERMINATE, so the candidate classifies
-// red. FAILING-FIRST against the pre-#667 fail-open consumer this asserted green.
-withForge({
-  viewIssue(issueIid) {
-    return {
-      issue_iid: issueIid,
-      number: issueIid,
-      state: 'open',
-      labels: [],
-      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
-    };
-  }
-}, () => {
-  const root = tempRoot('kw-gt-fast-fence-pre-');
-  const dir = writeState(root, 'fast-fence-pre-project', 34);
-  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
-    '# Fast Summary: fast-fence-pre-project\n\n## Status\n```sh\nIN_PROGRESS\n## Scope\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
-  const result = classifier.classifyIssue(35, root);
-  assert.strictEqual(result.verdict, 'red');
 });
 
 withForge({
@@ -1162,53 +983,6 @@ withForge({
   }
 });
 
-// --- Task A: Gap 1 — readOrCreateConfig creates defaults ---
-{
-  const tempHome = tempRoot('kw-gt-config-home-');
-  try {
-    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '55'], {
-      cwd: __dirname,
-      encoding: 'utf8',
-      env: Object.assign({}, process.env, {
-        KAOLA_WORKFLOW_OFFLINE: '1',
-        HOME: tempHome,
-        USERPROFILE: tempHome
-      })
-    });
-    const configPath = path.join(tempHome, '.config', 'kaola-workflow', 'config.json');
-    assert(fs.existsSync(configPath), 'readOrCreateConfig should create config.json on first run');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    assert.strictEqual(config.parallel_mode, 'auto', 'readOrCreateConfig should write parallel_mode: auto as default');
-  } finally {
-    fs.rmSync(tempHome, { recursive: true, force: true });
-  }
-}
-
-// --- Task A: Gap 1 — parallel_mode bypass ---
-{
-  const tempHome = tempRoot('kw-gt-config-bypass-');
-  try {
-    const configDir = path.join(tempHome, '.config', 'kaola-workflow');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ parallel_mode: 'off' }) + '\n');
-    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '56'], {
-      cwd: __dirname,
-      encoding: 'utf8',
-      env: Object.assign({}, process.env, {
-        KAOLA_WORKFLOW_OFFLINE: '1',
-        HOME: tempHome,
-        USERPROFILE: tempHome
-      })
-    });
-    assert.strictEqual(result.status, 0);
-    const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.verdict, 'green');
-    assert(/parallel_mode=off/.test(out.reasoning));
-  } finally {
-    fs.rmSync(tempHome, { recursive: true, force: true });
-  }
-}
-
 // --- Task A: Gap 2/3 — issueHasWorkflowInProgressLabel and issueHasRemoteClaimNotes ---
 // issueHasWorkflowInProgressLabel is a pure function — always testable
 assert(classifier.issueHasWorkflowInProgressLabel([forge.CLAIM_LABEL]));
@@ -1380,34 +1154,8 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
-// Fix 2a: classifyIssue parallel_mode bypass
-{
-  const tempHome = tempRoot('kw-gt-ciy-bypass-');
-  try {
-    const configDir = path.join(tempHome, '.config', 'kaola-workflow');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ parallel_mode: 'manual' }) + '\n');
-    // Run via subprocess so HOME override is effective
-    const root = tempRoot('kw-gt-ciy-bypass-root-');
-    try {
-      const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '91'], {
-        cwd: root, encoding: 'utf8',
-        env: Object.assign({}, process.env, { HOME: tempHome, USERPROFILE: tempHome })
-      });
-      assert.strictEqual(result.status, 0);
-      const out = JSON.parse(result.stdout.trim());
-      assert.strictEqual(out.verdict, 'green');
-      assert(/parallel_mode=manual/.test(out.reasoning));
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  } finally {
-    fs.rmSync(tempHome, { recursive: true, force: true });
-  }
-}
-
 // Fix 2b: classifyIssue remote-claim guard via label
-// classifyIssue with a reachable open issue (no roadmap entry, no overlap) → green (no block).
+// classifyIssue with a reachable, unclaimed open issue and no roadmap entry → green (no block).
 {
   const root = tempRoot('kw-gt-ciy-label-');
   try {
@@ -2931,7 +2679,7 @@ function testGiteaClassifyIssueResidualEmptyExit0() {
   const prevMock = process.env.KAOLA_TEA_MOCK_SCRIPT;
   const prevHome = process.env.HOME;
   const prevUserProfile = process.env.USERPROFILE;
-  // Fresh temp HOME so readOrCreateConfig writes 'auto' default and does not bypass classifier.
+  // Fresh temp HOME so nothing in this scenario reaches the developer's real config.
   const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-classify-empty-home-')));
   process.env.KAOLA_TEA_MOCK_SCRIPT = path.join(binDir, 'tea.js');
   process.env.HOME = tempHome;

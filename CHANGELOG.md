@@ -1,5 +1,46 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- **BREAKING — the workflow no longer decides, or lets you configure, whether work runs in parallel (#891).**
+  Two public surfaces disappear: the `parallel_mode` key in `~/.config/kaola-workflow/config.json`, and the
+  `KAOLA_FORCE_CLASSIFY=1` environment override that existed only to defeat it. With them goes the whole
+  file-set-overlap axis in all four classifier copies — the exact-path and coarse-area `red`s, the
+  shared-infra / curated-root-file / `area:*`-label `yellow`s, and the two conservative-red fallbacks that
+  fired when a claimed project's `## Scope` was unparseable or a candidate named no paths at all. Whether two
+  pieces of work may run at the same time belongs to the runtime agent: where the runtime supports
+  concurrency it is on, and there is no option. ADR 0017 had already abolished this machinery on the
+  item-dispatch axis — *no disjointness check, no antichain sweep, no fan-out cap, you decide, uninspected* —
+  and retired `KAOLA_FANOUT_CAP`, `KAOLA_PARALLEL_WRITES` and `write_overlap_policy` with it. The
+  issue-selection axis kept its copy; this closes that gap.
+
+  **What the classifier still reports** are facts about a candidate issue's *state*, none of which is a
+  judgement about concurrency: `blocked` (an open `depends-on:#N`, or a live remote claim), `owned` (an
+  active local folder already holds the issue or its bundle), `red` (the issue is already closed),
+  `target_unavailable` / `target_unverified`, and `indeterminate` for a transient forge fault. `red` was
+  overloaded across two unrelated producers and is now the closed-issue fact alone — `claimExplicitTarget`
+  and the bundle target-set path still map it to `user_target_red` / `target_set_red` exactly as before.
+
+  **No installer writes the shared config any more.** `install.sh`, `install-opencode.sh`, `install-kimi.sh`
+  and the three `install-codex-agent-profiles.js` copies each carried a seeder whose only remaining field was
+  `parallel_mode`; all six are gone rather than left writing `{}`. `~/.config/kaola-workflow/config.json` is
+  user-owned and still read for `pr_auto_merge` / `mr_auto_merge` — an install that finds one leaves it
+  byte-identical, and a `parallel_mode` left behind by an older install is ignored, never rewritten. Ignoring
+  a retired key is the whole migration.
+
+  **Tests were deleted with the mechanism, never repaired ahead of it.** Seventeen overlap scenarios leave
+  `simulate-workflow-walkthrough.js`, with their forge twins, the `readOrCreateConfig` / bypass pairs in the
+  gitlab and gitea suites, and the four `seedKaolaConfig` staging scenarios in `test-install-model-rendering.js`.
+  None was rewritten to assert green. Two sites changed rather than went: the install suites now assert the
+  shared config is *not created* (mutation-proven — reinstating a one-line seeder in `install.sh` reds AC1),
+  and `testStartupExplicitTargetRedAnswers` keeps its subject and repoints its fixture at a closed issue,
+  since `red`'s only producer moved (mutation-proven — removing the `red` → `user_target_red` mapping reds it).
+  The contract validators drop the needle pins for the deleted exports (`PROTECTED_BASENAMES`, `areaForPath`,
+  `SHARED_INFRA`, `isSharedInfra`, `isProtected`, and the `fast-summary.md` `## Scope` reader) across all five
+  validator copies.
+
 ## [9.0.0] - 2026-08-01
 
 ### Changed

@@ -44,19 +44,10 @@ const { spawnSync } = require('child_process');
 // decision for the repo instead of one per line. See scripts/test-git-fixture.js.
 const G = require('./test-git-fixture');
 
-// #531/#770: hermetic HOME. The classifier reads parallel_mode from
-// ~/.config/kaola-workflow/config.json (os.homedir()). Pin a sandbox HOME seeded with the
-// DEFAULT-install shape (parallel_mode:'auto') so a dev-local config can't change verdict and turn
-// these assertions spurious. Adaptive is the ONLY workflow path — the bundle lane always runs it
-// unconditionally, and the retired path SELECTOR (KAOLA_PATH/--workflow-path) no longer gates or
-// refuses anything (a stale request is silently ignored). A stale installed_paths field is
-// tolerated on read but is no longer written.
+// Hermetic HOME — the shared ~/.config/kaola-workflow/config.json (os.homedir()) is user-owned; point
+// HOME/USERPROFILE at a throwaway sandbox so no spawned subprocess reads or writes the developer's
+// real one. Nothing is seeded: an absent config is the shape a fresh machine has.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
-fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
-fs.writeFileSync(
-  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto' }, null, 2) + '\n'
-);
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
