@@ -74,3 +74,7 @@ rotating 1/12 shard and a sampled green is not a verified suite:
   returns `{"verdict":"green"}` and the run creates no config file. The kept refusals still fire —
   already-claimed → exit 2, open `depends-on:#55` → `blocked`, closed issue → `red`.
 - Both changed test sites are mutation-proven, with byte-identical restores verified after each.
+
+## Sink Findings
+
+post_rebase_tests: skipped
