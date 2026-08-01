@@ -78,10 +78,12 @@
 //       (receipt + a durable post_rebase_tests line at HEAD) instead of scrolling past unrecorded,
 //       and RED stops the sink at the publication door with a chains_red finding on the envelope,
 //       the measurement on the surviving journal, and the merge step left NOT done.
-//   (x1) the archive that did not happen: an archiveProjectDir throw the finalize step SWALLOWS
-//       leaves the run reporting status:sinked over an archive that never occurred — publishing the
-//       live run record to the remote and closing the issue. A failed archive must stop the sink,
-//       name itself, and stay retryable.
+//   (x1)/(x4) the archive that did not happen, through BOTH its doors: a throw the finalize step
+//       swallows (x1), and a return that reports it archived nothing (x4). Either one left the run
+//       reporting status:sinked over an archive that never occurred — publishing the live run record
+//       to the remote and closing the issue. A failed archive must stop the sink, name itself, and
+//       stay retryable, and the two doors are held to one assertion set
+//       (assertArchiveFailureStopsTheSink) so neither can end up guarded more weakly than the other.
 //   (x2)/(x3) the two fences that keep the (x1) fix from being a blanket one: a run with NOTHING to
 //       archive leaves the dest unset exactly as a swallowed throw does and must still complete, and
 //       the export-drift class must keep failing on its own terms (driven through a scratch mirror
@@ -2377,7 +2379,88 @@ function findSinkJournal(tmpRoot, project) {
   return null;
 }
 
-// (x1) NEW BEHAVIOUR. The unwritable-archive shape is the whole fixture: an in-place archive is an
+// "An archive that did not happen must stop the sink", as ONE assertion set, because it is one
+// contract reached through two independent doors: archiveProjectDir can THROW (x1), or it can RETURN
+// while reporting it archived nothing (x4). Holding the two doors to the same six clauses is the
+// whole point of factoring this out — the half that gets a bespoke, slightly weaker assertion set is
+// the half whose guard quietly stops being falsifiable, which is exactly how the return arm shipped
+// pinned by nothing.
+//
+// Every clause is checked because they fail independently: a sink can stop without saying why, say
+// why while still exiting 0, or stop cleanly having already pushed. Callers pass the label so a
+// failure names which door it came through.
+function assertArchiveFailureStopsTheSink(fx, label, opts) {
+  const o = opts || {};
+  const result = o.result;
+  const out = o.out;
+  const project = fx.projectName;
+
+  // Clause 1 — a well-formed envelope, asserted FIRST and on its own. "Emitted nothing parseable"
+  // and "emitted the wrong verdict" are different failures and must read differently; a bare rethrow
+  // out of the transaction would trip exactly this one.
+  assert(out !== null,
+    label + ': the sink must emit a well-formed JSON envelope — an unhandled throw past finalize leaves the orchestrator nothing to route on; exit=' + result.status
+    + '\nstdout: ' + JSON.stringify(result.stdout) + '\nstderr: ' + JSON.stringify((result.stderr || '').slice(-1200)));
+
+  // Clause 2 — THE CLAIM. status:sinked over an archive that did not happen asserts that a thing
+  // happened which did not, and it is the assertion every downstream reader trusts.
+  assert(!(out && out.status === 'sinked'),
+    label + ': a sink whose archive did not happen must not report status:sinked; got ' + JSON.stringify(out && out.status)
+    + '\nreceipt: ' + JSON.stringify(out && out.receipt));
+
+  // Clause 3 — an output-blind caller (a shell `if`, a wrapper reading only the exit code) must stop
+  // too. Transport, not a verdict.
+  assert(result.status !== 0, label + ': a failed archive must exit non-success; got ' + result.status
+    + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
+
+  // Clause 4 — NAMED, not merely non-zero. Asserted over the routable fields rather than against one
+  // exact schema, so the report may take the shipped refusal shape (`reason` + `detail`) or the
+  // findings[] shape without a false red — but a stop that never says the ARCHIVE is what failed
+  // sends the operator looking in the wrong place, and a stop with no machine-readable token at all
+  // is not something an orchestrator can route on.
+  const routable = !!(out && ((typeof out.reason === 'string' && out.reason.trim().length > 0)
+    || (Array.isArray(out.findings) && out.findings.some(f => f && f.classification))));
+  const named = [out && out.reason, out && out.step, out && out.archive_refusal, out && out.detail]
+    .concat((out && Array.isArray(out.findings) ? out.findings : []).map(f => JSON.stringify(f)))
+    .filter(Boolean).join(' ');
+  assert(routable && /archiv/i.test(named),
+    label + ': the envelope must carry a routable token AND name the ARCHIVE as what failed; got reason='
+    + JSON.stringify(out && out.reason) + ' findings=' + JSON.stringify(out && out.findings)
+    + ' detail=' + JSON.stringify(out && out.detail));
+
+  // Clause 5 — the observed harm, as git facts rather than as a sentence in a message. push_main and
+  // closure are steps AFTER finalize, so a sink that stops at the archive leaves the remote and the
+  // forge exactly where it found them. Checked per FILE as well as by ref, because the loss of
+  // containment is specifically that the live run record — the folder the archive exists to take off
+  // the mainline — is what gets published.
+  assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === o.remoteBefore,
+    label + ': origin/main must NOT advance over an archive that failed; ' + o.remoteBefore + ' -> '
+    + git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim());
+  for (const rel of ['workflow-state.md', 'mission-list.md']) {
+    assert(catFileType(fx.tmpRoot, 'origin/main:kaola-workflow/' + project + '/' + rel) === null,
+      label + ': the live ' + rel + ' must NEVER reach the remote as part of a sink whose archive failed');
+  }
+  const calls = readLog(fx.logFile);
+  assert(!calls.some(c => c.startsWith('close:')),
+    label + ': no issue may be closed over an archive that did not happen; calls=' + JSON.stringify(calls));
+
+  // Clause 6 — RETRYABLE. The archive failure is transient (the directory becomes writable again, the
+  // seam is switched off), so the record of it must be resumable: a disposed journal, or a journal
+  // whose finalize step reads `done`, is how a re-run walks straight past the step that failed and
+  // lands in exactly the same false success. Same idiom as (v).
+  const journalPath = findSinkJournal(fx.tmpRoot, project);
+  assert(journalPath,
+    label + ': the sink journal must survive the stop so a re-run resumes at the archive; nothing at the live, plain-archive or suffixed-archive path');
+  if (journalPath) {
+    let saved = null;
+    try { saved = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch (_) { saved = null; }
+    assert(saved && saved.steps && saved.steps.finalize !== 'done',
+      label + ': the finalize step must be left NOT done — a `done` archive step is a second claim that the archive happened, and it makes the re-run skip it; got '
+      + JSON.stringify(saved && saved.steps));
+  }
+}
+
+// (x1) THE THROW DOOR. The unwritable-archive shape is the whole fixture: an in-place archive is an
 // fs.renameSync INTO kaola-workflow/archive/, so a directory the process cannot write to makes it
 // throw EACCES with nothing else about the repo broken, no test-only env var, and no tampering with
 // git objects. The mode is restored in the finally — an archive directory left at 0555 cannot be
@@ -2412,71 +2495,71 @@ function findSinkJournal(tmpRoot, project) {
     const result = runSink(fx, ['--issue', String(issue)]);
     const out = lastJson(result);
 
-    // Clause 1 — a well-formed envelope, asserted FIRST and on its own. "Emitted nothing parseable"
-    // and "emitted the wrong verdict" are different failures and must read differently; a bare
-    // rethrow out of the transaction would trip exactly this one.
-    assert(out !== null,
-      '(x1): the sink must emit a well-formed JSON envelope — an unhandled throw past finalize leaves the orchestrator nothing to route on; exit=' + result.status
-      + '\nstdout: ' + JSON.stringify(result.stdout) + '\nstderr: ' + JSON.stringify((result.stderr || '').slice(-1200)));
+    assertArchiveFailureStopsTheSink(fx, '(x1) throw door', { result, out, remoteBefore });
 
-    // Clause 2 — THE CLAIM. status:sinked over an archive that threw asserts that a thing happened
-    // which did not, and it is the assertion every downstream reader trusts.
-    assert(!(out && out.status === 'sinked'),
-      '(x1): a sink whose archive THREW must not report status:sinked; got ' + JSON.stringify(out && out.status)
-      + '\nreceipt: ' + JSON.stringify(out && out.receipt));
-
-    // Clause 3 — an output-blind caller (a shell `if`, a wrapper reading only the exit code) must
-    // stop too. Transport, not a verdict.
-    assert(result.status !== 0, '(x1): a failed archive must exit non-success; got ' + result.status
-      + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
-
-    // Clause 4 — NAMED, not merely non-zero. Asserted over the routable fields rather than against
-    // one exact schema, so the report may take the shipped refusal shape (`reason` + `detail`) or the
-    // findings[] shape without a false red — but a stop that never says the ARCHIVE is what failed
-    // sends the operator looking in the wrong place, and a stop with no machine-readable token at all
-    // is not something an orchestrator can route on.
-    const routable = !!(out && ((typeof out.reason === 'string' && out.reason.trim().length > 0)
-      || (Array.isArray(out.findings) && out.findings.some(f => f && f.classification))));
-    const named = [out && out.reason, out && out.step, out && out.archive_refusal, out && out.detail]
-      .concat((out && Array.isArray(out.findings) ? out.findings : []).map(f => JSON.stringify(f)))
-      .filter(Boolean).join(' ');
-    assert(routable && /archiv/i.test(named),
-      '(x1): the envelope must carry a routable token AND name the ARCHIVE as what failed; got reason='
-      + JSON.stringify(out && out.reason) + ' findings=' + JSON.stringify(out && out.findings)
-      + ' detail=' + JSON.stringify(out && out.detail));
-
-    // Clause 5 — the observed harm, as git facts rather than as a sentence in a message. push_main
-    // and closure are steps AFTER finalize, so a sink that stops at the archive leaves the remote and
-    // the forge exactly where it found them. Checked per FILE as well as by ref, because the loss of
-    // containment is specifically that the live run record — the folder the archive exists to take
-    // off the mainline — is what gets published.
-    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === remoteBefore,
-      '(x1): origin/main must NOT advance over an archive that failed; ' + remoteBefore + ' -> '
-      + git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim());
-    for (const rel of ['workflow-state.md', 'mission-list.md']) {
-      assert(catFileType(fx.tmpRoot, 'origin/main:kaola-workflow/' + project + '/' + rel) === null,
-        '(x1): the live ' + rel + ' must NEVER reach the remote as part of a sink whose archive failed');
-    }
-    const calls = readLog(fx.logFile);
-    assert(!calls.some(c => c.startsWith('close:')),
-      '(x1): no issue may be closed over an archive that did not happen; calls=' + JSON.stringify(calls));
-
-    // Clause 6 — RETRYABLE. The archive is a transient failure (the directory becomes writable again)
-    // so the record of it must be resumable: a disposed journal, or a journal whose finalize step
-    // reads `done`, is how a re-run walks straight past the step that failed and lands in exactly the
-    // same false success. Same idiom as (v).
-    const journalPath = findSinkJournal(fx.tmpRoot, project);
-    assert(journalPath,
-      '(x1): the sink journal must survive the stop so a re-run resumes at the archive; nothing at the live, plain-archive or suffixed-archive path');
-    if (journalPath) {
-      let saved = null;
-      try { saved = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch (_) { saved = null; }
-      assert(saved && saved.steps && saved.steps.finalize !== 'done',
-        '(x1): the finalize step must be left NOT done — a `done` archive step is a second claim that the archive happened, and it makes the re-run skip it; got '
-        + JSON.stringify(saved && saved.steps));
-    }
+    // …and it really was the THROW door. The catch arm records its own reason, so a run that reached
+    // the stop any other way would be pinning (x4)'s door twice and this one not at all.
+    assert(out && out.archive_refusal === 'archive_exception',
+      '(x1): the stop must have come through the CATCH arm (an EACCES thrown out of archiveProjectDir); got archive_refusal='
+      + JSON.stringify(out && out.archive_refusal));
   } finally {
     try { fs.chmodSync(archiveBase, 0o755); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// (x4) THE RETURN DOOR — the other half of the same contract, and the half nothing reached. (x1)
+// arrives at the stop by making archiveProjectDir THROW, so it exercises the catch arm and only the
+// catch arm. archiveProjectDir can also return NORMALLY while reporting that it archived nothing —
+// `{archived: false, reason: …}` — and that return walks straight past a catch. With only (x1), the
+// return-side check could be deleted outright and the suite would stay green: found by mutation, not
+// by reading, which is the only way a hole of this shape ever is found.
+//
+// The lever is KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1 (kaola-workflow-claim.js), the deterministic
+// refusal seam that returns `{archived: false, reason: 'archive_forced_refusal'}` before any
+// mutation. It needs no chmod and it is the shape the closure contract's archiveSucceeded() exists to
+// reject, so this drives the boundary the rest of the workflow already archives by rather than a
+// bespoke one.
+//
+// Same fixture as (x1) and the same six clauses, deliberately: the two scenarios differ in the DOOR
+// and in nothing else, so a difference in outcome can only be the door.
+(function testReturnedArchiveRefusalMustNotReportSuccess() {
+  console.log('Test (x4): an archive that RETURNED without archiving must stop the sink exactly as a thrown one does — the catch arm is not the only door, and a fix written at the catch alone leaves this one open');
+  const project = 'issue-89905';
+  const issue = 89905;
+  const missionList = '# ' + project + ' — close the issue\n\n### item: pin the returned refusal\nstatus: done\nresult: inline\n';
+  const fx = buildSoleArchiverFixture(project, issue, { extraLiveFiles: { 'mission-list.md': missionList } });
+  fx.projectName = project;
+  try {
+    // PRECONDITION — the run record really is on the branch, so "must not reach the remote" is a
+    // claim about something that exists to be published.
+    for (const rel of ['workflow-state.md', 'mission-list.md']) {
+      assert(catFileType(fx.tmpRoot, fx.branch + ':kaola-workflow/' + project + '/' + rel) === 'blob',
+        '(x4) precondition: the branch must carry the live ' + rel + ' — that is what a failed archive leaves behind for the push to publish');
+    }
+
+    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    const result = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL: '1' });
+    const out = lastJson(result);
+
+    assertArchiveFailureStopsTheSink(fx, '(x4) return door', { result, out, remoteBefore });
+
+    // THE DOOR ITSELF, and the assertion without which this scenario is (x1) wearing a different
+    // fixture. The catch arm records `archive_exception`; a stop carrying that token would mean
+    // something THREW and the return path is still untested. What is pinned is the negative — that
+    // nothing threw — rather than the exact returned token, so the seam's reason may be renamed
+    // without a false red while a silent relapse to "only the catch arm stops the sink" still fails.
+    assert(out && out.archive_refusal && out.archive_refusal !== 'archive_exception',
+      '(x4): the stop must have come through the RETURN arm — an archive_exception here means something threw and the returned-refusal door is still unpinned; got archive_refusal='
+      + JSON.stringify(out && out.archive_refusal));
+
+    // Nothing was destroyed on the way to the stop. The seam returns before archiveProjectDir stamps
+    // or moves anything, so the live folder the sink declined to archive must still be there for the
+    // re-run clause 6 promises.
+    assert(fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project, 'workflow-state.md')),
+      '(x4): the live project folder must survive a refused archive — the stop exists to keep the run record, not to trade it for a clean tree');
+  } finally {
     cleanup(fx);
   }
 })();

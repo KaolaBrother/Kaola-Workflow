@@ -205,22 +205,33 @@ to destroy data, which is the one hard stop left in this phase.
 
 ### Merge sink (default)
 
+The steps are `SINK_STEPS`, in this order. **The archive happens at `finalize`, before the mainline is
+pushed and before the issue is closed** — that ordering is load-bearing, not incidental: an archive
+that did not happen stops the transaction while the run record is still unpublished and the issue
+still open, which is only possible because nothing has been pushed or closed yet.
+
 ```text
 Final commit on feature branch
-    ↓  preflight (pure read; names any foreign dirt, auto-stashes the claim-time .roadmap source)
-Push branch to origin
     ↓
-Fetch and rebase onto origin/<default>
+preflight        pure read; names any foreign dirt, auto-stashes the claim-time .roadmap source
     ↓
-Run the validation chains
+push_upstream    push the feature branch to origin
     ↓
-Fast-forward merge, with a bounded race retry
+merge            fetch, rebase onto origin/<default>, run the validation chains over the rebased
+                 tree, then fast-forward merge with a bounded race retry
     ↓
-Push the default branch
+finalize         archive the project folder — CONFIRMED, not assumed. An archive that was required
+                 and did not happen stops here with sink_incomplete, before anything is published
     ↓
-Close the issue (idempotently, verified live)
+stash_restore    restore the auto-stashed .roadmap source
     ↓
-Archive the folder, clean up branch and worktree, dispose the journals
+archive_commit   stage and commit the archive at its actual destination
+    ↓
+push_main        push the default branch
+    ↓
+closure          close the issue idempotently, verified live
+    ↓
+clean up branch and worktree, dispose the journals
 ```
 
 `.cache/sink-receipt.json` tracks each step so a re-run resumes from the last incomplete one without

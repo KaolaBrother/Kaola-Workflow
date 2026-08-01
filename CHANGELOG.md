@@ -26,7 +26,25 @@
   completes as `skipped_gitignored`, and the #555 rethrow is unchanged and independently fenced.
   `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` reached the same false success by a *return* rather than a
   throw; because the fix keys on the return, that door is closed too. Ported by meaning to all four
-  editions — the gitlab and gitea ports each had a one-line inline catch that became a block.
+  editions — the gitlab and gitea ports each had a one-line inline catch that became a block. The
+  success test itself is the shared `archiveSucceeded` predicate from the closure contract rather than
+  a local copy: the docs already named that predicate the mandatory archive boundary and `claim.js`
+  calls it at four sites, but no sink had ever required it.
+  Two documentation corrections fall out of this. `docs/api.md`'s `sink_incomplete` table said its
+  shapes were "discriminated by `step`", which stopped being true the moment a second cause emitted the
+  same `step: 'finalize'`; the shapes are now keyed on `archive_refusal`, and `mismatched` — which rode
+  the envelope but appeared nowhere in the API docs — is documented. `docs/architecture.md`'s merge-sink
+  diagram ordered push-main → close → archive, but the real `SINK_STEPS` archives at `finalize`, well
+  before either. That ordering was already the truth; this change makes it load-bearing, because
+  stopping at a failed archive is only safe while nothing has been published and no issue closed.
+  The fix has **two** doors and both are pinned, which took a second pass to get right. An archive can
+  fail by throwing or by returning a non-success shape, and the first round of tests covered only the
+  throw — neutering the return check left the whole suite green, so half the fix was an unfalsifiable
+  guard. Both doors now run one shared assertion set rather than two copies, because the door carrying
+  its own slightly weaker copy is precisely the one whose guard stops being falsifiable; each also
+  carries a mirror-image assertion so neither can silently start testing the other's door. The gap was
+  found by mutating the change rather than by reading it or by trusting four green chains, none of
+  which noticed.
 
 - **Exact `headSha` equality is now pinned as the only route by which a release receipt may bind (#898).**
   `evaluateReleaseReceipt` has twelve branches and exactly one `ok: true`, and the project states the

@@ -551,12 +551,14 @@ close and the bundle-member loop. An exit-0-but-still-open close is bucketed
 refusal rather than reporting a completed sink. The refusal fires only when a close was genuinely
 attempted — a sink with nothing to close is never false-flagged.
 
-**`sink_incomplete` refusal shapes**, discriminated by `step`:
+**`sink_incomplete` refusal shapes**, discriminated by `step` — and, within `finalize`, by
+`archive_refusal`, since two different archive faults share that step:
 
 | `step` | Meaning | Recovery |
 |---|---|---|
 | `push_upstream` | `git push -u origin <branch>` did not verifiably reach parity with its upstream; the branch may not be backed up | the step is left NOT done, so a re-run retries it |
-| `finalize` | archiving the project folder would lose files the source held; `missing` names them. Fires **before** any archive mutation, so the live folder is not deleted | restore the evidence and re-run |
+| `finalize`, `archive_refusal: "archive_incomplete"` | the archive would not be a faithful copy: `missing` names files the source held that the destination lacks, `mismatched` names files that arrived with different bytes. Fires **before** any archive mutation, so the live folder is not deleted | restore the evidence and re-run |
+| `finalize`, `archive_refusal: "archive_exception"` \| `"archive_forced_refusal"` \| `"archive_not_performed"` | the archive did not happen at all — a throw other than the `TypeError`/`ReferenceError` export-drift class (`archive_exception`), the `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` test seam (`archive_forced_refusal`), or a return reporting neither `archived: true` nor `skipped: "source-missing"` (`archive_not_performed`). Nothing was pushed to the mainline and no issue was closed | resolve the fault (for example a non-writable `kaola-workflow/archive/`) and re-run; the step is left NOT done |
 | `push_main` | the fast-forward landed locally but pushing the mainline threw | branch preserved; resolve the push fault and re-run |
 | `closure` | at least one issue could not be closed, or an exit-0 close could not be verified | the step is left NOT done, so a re-run retries it |
 

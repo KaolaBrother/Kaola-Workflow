@@ -1764,10 +1764,12 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         // happened; `skipped: 'source-missing'` the only report that none was required. Anything else
         // — a bare `archived: false` with a reason (the forced-refusal seam reaches success by RETURN,
         // not by throw, so a fix at the catch alone would leave that door open), a null from a port
-        // that returned nothing — archived nothing while a live folder was there to archive.
-        const archiveHappened = !!(archiveResult && archiveResult.archived === true);
-        const nothingToArchive = !!(archiveResult && archiveResult.skipped === 'source-missing');
-        if (!archiveHappened && !nothingToArchive) {
+        // that returned nothing — archived nothing while a live folder was there to archive. That
+        // test is the closure contract's archive boundary, which every other destructive caller
+        // already crosses through — take it from there rather than restating it, so this port
+        // cannot drift away from the wording the rest of the workflow archives by.
+        const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
+        if (!archiveSucceeded(archiveResult)) {
           archiveFailure = {
             reason: (archiveResult && archiveResult.reason) || 'archive_not_performed',
             detail: (archiveResult && archiveResult.detail)

@@ -1,0 +1,30 @@
+{
+  "project": "bundle-896-897-898",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:legacy-only-guard",
+      "sample": "assertBranchHasNonWorkflowChanges is wired into the legacy sink path only, exactly as assertNoLiveWorkflowFolder is. Unlike #896's, this premise may survive, because no finalize step repairs an implementation-free branch. CALL-SITE SWEEP ONLY, never constructed.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:production-redundancy",
+      "sample": "removing the KAOLA_WORKFLOW_OFFLINE guard from issueIsClosed alone, or from prefetchIssueStates alone, is behaviourally inert because ghExec's own guard masks each; no readActiveFolders assertion can distinguish either from correct behaviour.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:guard-not-in-npm-surface",
+      "sample": "sync-opencode-edition.js/sync-kimi-edition.js --check now runs, but rides test:kaola-workflow:editions rather than a named package.json step, so grep -c '--check' in package.json reads 0 while the check genuinely runs.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:check-coverage-limit",
+      "sample": "CONSUMER_DOCS_PATH does not catch a docs/ path that is both unbackticked and extension-less, being indistinguishable from prose; a false negative was chosen over a false positive.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:unexplained-environment",
+      "sample": "a subagent scratch mirror under the session scratchpad was wiped mid-run, producing 5 spurious reds in one investigation. Did not reproduce across ~12 later full runs; every rmSync in the suites targets mkdtemp/os.tmpdir.",
+      "count": 1
+    }
+  ]
+}
