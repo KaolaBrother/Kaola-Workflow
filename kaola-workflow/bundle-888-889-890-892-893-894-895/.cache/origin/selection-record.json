@@ -1,8 +1,0 @@
-{
-  "selection_mode": "explicit-target",
-  "selection_bundle": "#888, #889, #890, #892, #893, #894, #895",
-  "selection_priority_basis": "none recorded (explicit-target); the caller named #888, #889, #890, #892, #893, #894, #895, and no backlog ranking was persisted",
-  "selection_rejected": "none recorded (explicit-target); no alternatives were persisted",
-  "selection_disjointness": "none recorded (explicit-target); the claim itself is the disjointness check",
-  "clarifications": "none"
-}
