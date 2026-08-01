@@ -28,9 +28,9 @@
 
 - **A sink whose archive failed no longer reports success and publishes the run's live state (found
   while measuring #896).** In `runSinkTransaction`'s `finalize` step, `archiveProjectDir` was wrapped in
-  a try whose catch deliberately rethrew `TypeError` and `ReferenceError` — the #555 export-drift class —
+  a try whose catch deliberately rethrew `TypeError` and `ReferenceError` — the issue-555 export-drift class —
   and silently swallowed everything else. A swallowed throw left `receipt.archive_dest` unset, and the
-  #700 guard that would otherwise catch an uncommitted archive is scoped to a *set* dest, so it could not
+  issue-700 guard that would otherwise catch an uncommitted archive is scoped to a *set* dest, so it could not
   fire. The result was reproducible with nothing more exotic than `chmod 555 kaola-workflow/archive`: the
   sink exited **0**, reported `status: sinked`, pushed the live `workflow-state.md` and `mission-list.md`
   to `origin/main`, closed the issue, and left the main checkout dirty. This is the floor the project
@@ -44,8 +44,8 @@
   happened" and `skipped === 'source-missing'` the only "none was needed"; anything else is a recorded
   failure. The dest block is additionally gated so closure metadata can never be stamped into a failed
   archive. The stop emits `sink_incomplete` at exit 1 *before* the finalize step is marked done, so the
-  sink stays resumable and a re-run retries the archive. The `.gitignore`-covered archive (#832) still
-  completes as `skipped_gitignored`, and the #555 rethrow is unchanged and independently fenced.
+  sink stays resumable and a re-run retries the archive. The `.gitignore`-covered archive (issue 832) still
+  completes as `skipped_gitignored`, and the issue-555 rethrow is unchanged and independently fenced.
   `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` reached the same false success by a *return* rather than a
   throw; because the fix keys on the return, that door is closed too. Ported by meaning to all four
   editions — the gitlab and gitea ports each had a one-line inline catch that became a block. The
@@ -146,7 +146,7 @@
   legacy precondition block is reached, so exactly one of them — `worktree_dirty`, which lives in
   `sinkPreflight` — runs on that path. It also said `assertNoLiveWorkflowFolder` "refuses", although it is
   a CONVERTED guard that emits a typed `run_not_finalized` report and stops without merging, and it
-  described the probe as `git cat-file -e HEAD:{path}` when #346 rescoped it to the branch tip so it could
+  described the probe as `git cat-file -e HEAD:{path}` when issue 346 rescoped it to the branch tip so it could
   run *before* the destructive worktree removal. The section now states which path runs what, distinguishes
   the KEEP guards (which throw, protecting work that proceeding would destroy) from the CONVERTED ones
   (which report, because the orchestrator may legitimately overrule them), and records that the single
