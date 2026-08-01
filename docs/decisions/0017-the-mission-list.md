@@ -124,13 +124,20 @@ Earlier subtractive passes derived mechanisms for failure classes that **have ne
 this methodology**. They are recorded here rather than built, so that if one is ever seen the design
 is a lookup rather than a campaign.
 
+**This table is the register of record, and the only one.** A backlog issue once mirrored it so the
+analysis was discoverable from the issue list rather than only from a doc nobody opens; that pointer
+is closed, because a permanently-open issue that is explicitly not work is a standing invitation to
+schedule it. Every row therefore carries its own recovery information inline — a row whose mechanism
+was built and later removed names the symbols and the commit to recover them from, so consulting the
+table never requires reading a closed issue or a deleted roadmap entry.
+
 | failure class | observation that would arm it | mechanism already sized |
 |---|---|---|
 | stale / replayed / cross-copied evidence | a result that does not correspond to the work claimed | provenance stamps: open, baseline ref, author, time |
-| two honest live writers on one file | a successor resuming beside a crashed-but-alive predecessor | CAS with the conflict returned as data; lease with liveness probe |
+| two honest live writers on one file | a successor resuming beside a crashed-but-alive predecessor | CAS with the conflict returned as data; lease with liveness probe — built once as `acquireProjectLock` / `probeLockLiveness`, removed in `c4caa8d3`, recoverable from git history at `b3bc7acf` |
 | co-open items sharing a working tree | per-item results that cannot be told apart | label the blend as a blend — a joint result, honestly named |
 | an unrecoverable merge | a sink outcome the orchestrator could not repair after the fact | a rescue ref per merge, recording pre-merge state |
-| a value call taken by the agent | an irreversible choice a human should have made | the consent valve |
+| a value call taken by the agent | an irreversible choice a human should have made | the consent valve — built once as the halt marker, its two journals and `consentScopeDigest`, removed in `c4caa8d3`, recoverable from git history at `b3bc7acf` |
 | a typed envelope code documented asymmetrically across runtimes | any typed `reason:` code appearing on a runtime surface **at all** — the enforcement domain becoming non-zero. Today it is 0 of 62 | `scripts/test-runtime-lexicon-parity.js`, deleted 2026-08-01, recoverable from git history at `b3bc7acf` |
 | retired vocabulary entering an additive edition through its own transform | a retired token on an `.opencode/` or `.kimi/` surface that is **not** present in the canonical source it renders from — i.e. one introduced by the sync transform itself | the scan already applied to the other two render families: import `RETIRED_VOCABULARY_BAN` and run it over the rendered edition tree, as `test-generate-routing-surfaces.js` does |
 

@@ -576,6 +576,16 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   deliberately not taught to recognise `owner/repo` slugs** — a writer who reintroduces the `#` form
   finds out at `--prepare`, which is a loud, non-destructive, zero-mutation refusal, and that is a
   cheaper answer than machinery for a failure whose whole cost so far is one metadata inaccuracy.
+- **The same rule binds this repository's own OLD issues, and that is the case people trip on.** The
+  extractor's known set is not "issues that exist here" — it is `--issues-closed` plus every `#\d+`
+  found in commit messages **since the last tag**. So citing a past issue as background for a
+  mechanism being described (*"the #555 export-drift class"*, *"the #700 guard"*) refuses with
+  `changelog_unknown_reference` even though the issue is real, closed, and this repo's own. Measured
+  cutting v9.1.0, where 555, 700, 832 and 346 all refused. Write background citations without the
+  hash — *"the issue-555 export-drift class"*, *"issue 832"* — and reserve `#N` in the `[Unreleased]`
+  section for issues the release actually **delivers**, which is exactly what `--issues-closed`
+  asserts. The refusal is the feature: it is the only thing standing between a background citation
+  and a release receipt claiming to have closed an issue it never touched.
 
 ### Release cutting (kaola-workflow-release.js)
 

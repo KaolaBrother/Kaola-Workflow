@@ -54,7 +54,9 @@ serializer taxonomy, no evidence line, no caps. Disjointness is the agent's call
 ### Watch-list discipline
 
 Mechanisms derived for failure classes **never observed** in this methodology are recorded, not
-built — see #878. Each row names the observation that would arm it. **Do not build one speculatively.**
+built — see `docs/decisions/0017-the-mission-list.md` § *The watch list*. Each row names the
+observation that would arm it, and a row whose mechanism was built and later removed names the commit
+to recover it from. **Do not build one speculatively.**
 
 ### Working rules that survive
 

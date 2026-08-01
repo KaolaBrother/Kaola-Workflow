@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The ADR 0017 watch list is now self-sufficient, and its backlog mirror is closed (#878).** The
+  table of mechanisms derived for failure classes never observed — each row naming the observation that
+  would arm it — has always lived in `docs/decisions/0017-the-mission-list.md`. An issue mirrored it so
+  the analysis was discoverable from the backlog rather than only from a doc nobody opens. That pointer
+  is closed, because a permanently-open issue which is explicitly *not work* is a standing invitation
+  to schedule it, and the row it was protecting was already committed.
+  What was genuinely at risk was smaller and is now fixed. Two rows named a mechanism without saying
+  where it went: the live-writers row said only "CAS with the conflict returned as data; lease with
+  liveness probe", and the consent-valve row only "the consent valve" — while the symbols and the
+  commit to recover them from lived solely in the generated roadmap's `Next Step`, whose source file
+  closure deletes. Both rows now name their symbols (`acquireProjectLock` / `probeLockLiveness`; the
+  halt marker, its two journals and `consentScopeDigest`) and record that they were removed in
+  `c4caa8d3` and are recoverable at `b3bc7acf` — the same anchor the lexicon row already cited, and
+  measured rather than recalled. The section now states outright that it is the register of record and
+  the only one, so consulting it never requires reading a closed issue or a deleted roadmap entry.
+  The roadmap's project rules point at the doc instead of the issue.
+
+- **The changelog citation rule now covers this repository's own past issues, which is the case people
+  actually trip on.** `docs/conventions.md` already required a reference to *another* forge to carry no
+  `#`. It did not say that the same refusal catches a real, closed, local issue cited as background,
+  because the release verifier's known set is `--issues-closed` plus every `#\d+` in commit messages
+  since the last tag — not "issues that exist here". Measured cutting v9.1.0, where citing the
+  export-drift class, an archive guard and a probe-scoping change refused `changelog_unknown_reference`
+  on four counts. Background citations are written without the hash; `#N` in `[Unreleased]` is reserved
+  for issues the release actually delivers, which is what `--issues-closed` asserts. The refusal is the
+  feature: it is the only thing standing between a background citation and a release receipt claiming
+  to have closed an issue it never touched.
+
 ## [9.1.0] - 2026-08-01
 
 ### Changed
