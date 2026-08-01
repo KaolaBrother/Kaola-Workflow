@@ -424,10 +424,6 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the rename that completes it — this is the atomic obligation being met for chain-receipt.json, not a bypass of it',
   },
   {
-    file: 'kaola-workflow-classifier.js', api: 'writeFileSync', klass: 'outside-project-space',
-    why: 'the repo-level adaptive config default, which is not project state',
-  },
-  {
     file: 'kaola-workflow-release.js', api: 'writeFileSync', klass: 'outside-project-space',
     why: 'CHANGELOG.md, package.json, README.md and the plugin manifests at the repository root',
   },
