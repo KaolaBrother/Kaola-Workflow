@@ -78,6 +78,14 @@
 //       (receipt + a durable post_rebase_tests line at HEAD) instead of scrolling past unrecorded,
 //       and RED stops the sink at the publication door with a chains_red finding on the envelope,
 //       the measurement on the surviving journal, and the merge step left NOT done.
+//   (x1) the archive that did not happen: an archiveProjectDir throw the finalize step SWALLOWS
+//       leaves the run reporting status:sinked over an archive that never occurred — publishing the
+//       live run record to the remote and closing the issue. A failed archive must stop the sink,
+//       name itself, and stay retryable.
+//   (x2)/(x3) the two fences that keep the (x1) fix from being a blanket one: a run with NOTHING to
+//       archive leaves the dest unset exactly as a swallowed throw does and must still complete, and
+//       the export-drift class must keep failing on its own terms (driven through a scratch mirror
+//       of scripts/, with an undoctored control run proving the mirror itself is sound).
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -195,6 +203,9 @@ function roadmapMirror(issues) {
 // Build a sole-archiver fixture: main carries the roadmap source + mirror + a PRE-EXISTING
 // archive/<project>/ dir (forces the collision suffix); the feature branch carries the live folder
 // + a deliverable. Returns { tmpRoot, remotePath, binDir, logFile, branch }.
+//   opts.extraLiveFiles — { <name>: <content> } committed into the live folder on the BRANCH
+//     alongside workflow-state.md, for a scenario that needs to name a second run-record file by
+//     path. Omit for the plain shape.
 function buildSoleArchiverFixture(project, issue, opts) {
   opts = opts || {};
   const tmpRoot = makeTmpRoot();
@@ -220,6 +231,9 @@ function buildSoleArchiverFixture(project, issue, opts) {
   fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
   fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState(project, issue, opts.claimTs || new Date().toISOString(), opts.issueAction));
   fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  for (const name of Object.keys(opts.extraLiveFiles || {})) {
+    fs.writeFileSync(path.join(liveDir, name), opts.extraLiveFiles[name]);
+  }
   fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
   git(tmpRoot, ['add', '-A']);
   git(tmpRoot, ['commit', '-m', 'feat: deliverable + live state']);
@@ -229,8 +243,11 @@ function buildSoleArchiverFixture(project, issue, opts) {
   return { tmpRoot, remotePath, binDir, logFile, branch };
 }
 
-function runSink(fx, extraArgs, extraEnv) {
-  const args = [sinkMergeScript, '--branch', fx.branch, '--project', fx.projectName, '--sink', '--json'].concat(extraArgs || []);
+// Drive the --sink transaction from an EXPLICIT script path. Every scenario but (x3) runs the
+// shipped one; (x3) needs a byte-identical copy sitting next to a doctored dependency, and the
+// script path is the only thing that differs between the two.
+function runSinkAt(script, fx, extraArgs, extraEnv) {
+  const args = [script, '--branch', fx.branch, '--project', fx.projectName, '--sink', '--json'].concat(extraArgs || []);
   return spawnSync(process.execPath, args, {
     cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,
     env: Object.assign({}, process.env, {
@@ -239,6 +256,10 @@ function runSink(fx, extraArgs, extraEnv) {
       KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js'),
     }, extraEnv || {}),
   });
+}
+
+function runSink(fx, extraArgs, extraEnv) {
+  return runSinkAt(sinkMergeScript, fx, extraArgs, extraEnv);
 }
 
 // The LEGACY (non---sink) entry point. It is where the two branch-shape preconditions live, so it
@@ -2320,6 +2341,256 @@ function runSinkWithGate(fx, extraArgs) {
     }
   } finally {
     cleanupGateFixture(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (x1)–(x3) the archive that did not happen
+//
+// The finalize step calls archiveProjectDir inside a try whose catch rethrows ONLY TypeError and
+// ReferenceError — deliberately, for the export-drift class — and swallows everything else. A
+// swallowed throw leaves receipt.archive_dest UNSET, and the never-committed guard in archive_commit
+// is scoped to a SET dest, so it cannot fire on that shape. The transaction then walks the rest of
+// its steps: it pushes the merged default branch — which still carries the live run folder the
+// archive was supposed to take off it — closes the issue, and reports status:sinked. A wholly failed
+// archive reports success, and the run record it failed to archive is what gets published.
+//
+// This is not a verdict about the WORK, and converting it is not what "nothing refuses" asks for:
+// the same rule carves out the operation that would DESTROY something, and reports it loudly. What
+// (x1) pins is narrower still — a sink may not CLAIM an archive it did not perform.
+//
+// (x2) and (x3) are the fences. The fix cannot key on the missing dest, because a legitimate run
+// with nothing to archive leaves it unset too (x2); and it cannot widen into a blanket catch-all,
+// because the one class the catch deliberately rethrows must keep failing on its own terms (x3).
+
+// Where a stopped sink's journal can legitimately be. resolveSinkReceiptPath writes to the live
+// folder, the plain archive, or a collision-suffixed archive depending on what exists when it runs,
+// so a scenario that asserts the journal SURVIVED has to look in all three — pinning one location
+// would turn a correct stop that wrote elsewhere into a false red.
+function findSinkJournal(tmpRoot, project) {
+  const candidates = [
+    path.join(tmpRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json'),
+    path.join(tmpRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'),
+  ];
+  const suffixed = suffixedArchiveRel(tmpRoot, project);
+  if (suffixed) candidates.push(path.join(tmpRoot, suffixed, '.cache', 'sink-receipt.json'));
+  for (const p of candidates) { if (fs.existsSync(p)) return p; }
+  return null;
+}
+
+// (x1) NEW BEHAVIOUR. The unwritable-archive shape is the whole fixture: an in-place archive is an
+// fs.renameSync INTO kaola-workflow/archive/, so a directory the process cannot write to makes it
+// throw EACCES with nothing else about the repo broken, no test-only env var, and no tampering with
+// git objects. The mode is restored in the finally — an archive directory left at 0555 cannot be
+// torn down, and the fixture would outlive the suite.
+(function testSwallowedArchiveThrowMustNotReportSuccess() {
+  console.log('Test (x1): an archive that THREW must not be reported as a sink that happened — no status:sinked, the failure NAMED, the live run record kept off the remote, the issue not closed, and the finalize step left retryable');
+  const project = 'issue-89901';
+  const issue = 89901;
+  const missionList = '# ' + project + ' — close the issue\n\n### item: pin the archive failure\nstatus: done\nresult: inline\n';
+  const fx = buildSoleArchiverFixture(project, issue, { extraLiveFiles: { 'mission-list.md': missionList } });
+  fx.projectName = project;
+  const archiveBase = path.join(fx.tmpRoot, 'kaola-workflow', 'archive');
+  try {
+    // PRECONDITION 1 — the run record really is on the branch. Without it, "the live run record must
+    // not reach the remote" would hold for every sink and prove nothing.
+    for (const rel of ['workflow-state.md', 'mission-list.md']) {
+      assert(catFileType(fx.tmpRoot, fx.branch + ':kaola-workflow/' + project + '/' + rel) === 'blob',
+        '(x1) precondition: the branch must carry the live ' + rel + ' — that is what a failed archive leaves behind for the push to publish');
+    }
+    // PRECONDITION 2 — the archive directory really is unwritable. If a directory can still be
+    // created there (a privileged runner, an ACL) the archive never throws and every assertion below
+    // would pass for a reason that has nothing to do with the defect.
+    fs.chmodSync(archiveBase, 0o555);
+    const probeDir = path.join(archiveBase, 'writability-probe');
+    let wrote = false;
+    try { fs.mkdirSync(probeDir); wrote = true; } catch (_) { wrote = false; }
+    if (wrote) { try { fs.rmdirSync(probeDir); } catch (_) {} }
+    assert(!wrote, '(x1) precondition: kaola-workflow/archive must be UNWRITABLE for the archive to fail — a directory was still created there, so this scenario is not exercising a failed archive at all');
+
+    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    // Clause 1 — a well-formed envelope, asserted FIRST and on its own. "Emitted nothing parseable"
+    // and "emitted the wrong verdict" are different failures and must read differently; a bare
+    // rethrow out of the transaction would trip exactly this one.
+    assert(out !== null,
+      '(x1): the sink must emit a well-formed JSON envelope — an unhandled throw past finalize leaves the orchestrator nothing to route on; exit=' + result.status
+      + '\nstdout: ' + JSON.stringify(result.stdout) + '\nstderr: ' + JSON.stringify((result.stderr || '').slice(-1200)));
+
+    // Clause 2 — THE CLAIM. status:sinked over an archive that threw asserts that a thing happened
+    // which did not, and it is the assertion every downstream reader trusts.
+    assert(!(out && out.status === 'sinked'),
+      '(x1): a sink whose archive THREW must not report status:sinked; got ' + JSON.stringify(out && out.status)
+      + '\nreceipt: ' + JSON.stringify(out && out.receipt));
+
+    // Clause 3 — an output-blind caller (a shell `if`, a wrapper reading only the exit code) must
+    // stop too. Transport, not a verdict.
+    assert(result.status !== 0, '(x1): a failed archive must exit non-success; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
+
+    // Clause 4 — NAMED, not merely non-zero. Asserted over the routable fields rather than against
+    // one exact schema, so the report may take the shipped refusal shape (`reason` + `detail`) or the
+    // findings[] shape without a false red — but a stop that never says the ARCHIVE is what failed
+    // sends the operator looking in the wrong place, and a stop with no machine-readable token at all
+    // is not something an orchestrator can route on.
+    const routable = !!(out && ((typeof out.reason === 'string' && out.reason.trim().length > 0)
+      || (Array.isArray(out.findings) && out.findings.some(f => f && f.classification))));
+    const named = [out && out.reason, out && out.step, out && out.archive_refusal, out && out.detail]
+      .concat((out && Array.isArray(out.findings) ? out.findings : []).map(f => JSON.stringify(f)))
+      .filter(Boolean).join(' ');
+    assert(routable && /archiv/i.test(named),
+      '(x1): the envelope must carry a routable token AND name the ARCHIVE as what failed; got reason='
+      + JSON.stringify(out && out.reason) + ' findings=' + JSON.stringify(out && out.findings)
+      + ' detail=' + JSON.stringify(out && out.detail));
+
+    // Clause 5 — the observed harm, as git facts rather than as a sentence in a message. push_main
+    // and closure are steps AFTER finalize, so a sink that stops at the archive leaves the remote and
+    // the forge exactly where it found them. Checked per FILE as well as by ref, because the loss of
+    // containment is specifically that the live run record — the folder the archive exists to take
+    // off the mainline — is what gets published.
+    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === remoteBefore,
+      '(x1): origin/main must NOT advance over an archive that failed; ' + remoteBefore + ' -> '
+      + git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim());
+    for (const rel of ['workflow-state.md', 'mission-list.md']) {
+      assert(catFileType(fx.tmpRoot, 'origin/main:kaola-workflow/' + project + '/' + rel) === null,
+        '(x1): the live ' + rel + ' must NEVER reach the remote as part of a sink whose archive failed');
+    }
+    const calls = readLog(fx.logFile);
+    assert(!calls.some(c => c.startsWith('close:')),
+      '(x1): no issue may be closed over an archive that did not happen; calls=' + JSON.stringify(calls));
+
+    // Clause 6 — RETRYABLE. The archive is a transient failure (the directory becomes writable again)
+    // so the record of it must be resumable: a disposed journal, or a journal whose finalize step
+    // reads `done`, is how a re-run walks straight past the step that failed and lands in exactly the
+    // same false success. Same idiom as (v).
+    const journalPath = findSinkJournal(fx.tmpRoot, project);
+    assert(journalPath,
+      '(x1): the sink journal must survive the stop so a re-run resumes at the archive; nothing at the live, plain-archive or suffixed-archive path');
+    if (journalPath) {
+      let saved = null;
+      try { saved = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch (_) { saved = null; }
+      assert(saved && saved.steps && saved.steps.finalize !== 'done',
+        '(x1): the finalize step must be left NOT done — a `done` archive step is a second claim that the archive happened, and it makes the re-run skip it; got '
+        + JSON.stringify(saved && saved.steps));
+    }
+  } finally {
+    try { fs.chmodSync(archiveBase, 0o755); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// (x2) FENCE, green today and the reason the (x1) fix cannot be written the easy way. An unset
+// archive_dest is NOT evidence that an archive failed: archiveProjectDir returns source-missing for
+// a run with no live folder to archive, which is an ordinary, legitimate no-op, and it leaves the
+// receipt looking exactly like the swallowed throw in (x1) does. The discriminator has to be the
+// FAILURE, never the absent dest.
+//
+// buildKeepWorktreeArchiveMirrorFixture with an EMPTY plant is precisely this shape — main carries
+// the roadmap and no archive at all, the branch carries the deliverable and no live folder — so it is
+// reused rather than duplicated.
+(function testNothingToArchiveStillCompletes() {
+  console.log('Test (x2): a run with NOTHING to archive — no live folder, no archive on main — must still complete; an unset archive_dest is not evidence that an archive failed');
+  const project = 'issue-89902';
+  const issue = 89902;
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    // Precondition — there really is nothing to archive, so the run below is the legitimate no-op
+    // this fence is about and not a sink that quietly archived something.
+    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project)),
+      '(x2) precondition: main must hold no live project folder');
+    assert(catFileType(fx.tmpRoot, fx.branch + ':kaola-workflow/' + project) === null,
+      '(x2) precondition: the branch must carry no live project folder either');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '(x2): a run with nothing to archive must exit 0; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
+    assert(out && out.status === 'sinked', '(x2): status must be sinked; got ' + JSON.stringify(out && (out.status || out.reason)));
+    // …and the observable it shares with the defect: this run archived NOTHING, so no dest was
+    // recorded. That is what makes the fence bite — a fix keyed on the missing dest turns this run
+    // into a refusal.
+    assert(out && out.receipt && out.receipt.archive_dest === undefined,
+      '(x2): precondition + the point — a source-missing archive records NO dest, the same observable a swallowed throw leaves; got '
+      + JSON.stringify(out && out.receipt && out.receipt.archive_dest));
+    assert(!(out && out.receipt && out.receipt.archive_refusal),
+      '(x2): nothing to archive is not an archive refusal; got ' + JSON.stringify(out && out.receipt && out.receipt.archive_refusal));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (x3) FENCE, green today. The catch has ONE deliberate rethrow arm: a missing or renamed
+// archiveProjectDir export is a programmer error, and it is singled out because a forge port can drop
+// an export and every consumer would otherwise sink over a silently skipped archive. The (x1) fix
+// must WIDEN what is not swallowed; it must not narrow this by folding the programmer-error class
+// into whatever it does with the operational one.
+//
+// Driven through a scratch MIRROR of scripts/: the sink resolves ./kaola-workflow-claim.js relative
+// to its own file, so the only way to present it with a drifted export is to run a byte-identical
+// copy of the shipped script beside a doctored copy of its dependency. The subject under test is
+// still the shipped sink; what is isolated is its environment.
+//
+// The CONTROL run is what makes this falsifiable. A mirror broken for any unrelated reason would
+// exit non-zero for reasons that have nothing to do with export drift, and the fence would then pass
+// forever without measuring anything — so the undoctored mirror must first sink cleanly.
+(function testExportDriftStillFailsLoud() {
+  console.log('Test (x3): a DRIFTED archiveProjectDir export must still fail loudly and name itself — the deliberate rethrow arm survives, with an undoctored mirror control proving the fixture is not failing for its own reasons');
+  const mirrorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mirror-'));
+  const mirrorScripts = path.join(mirrorRoot, 'scripts');
+  const controlFx = buildSoleArchiverFixture('issue-89903', 89903, {});
+  controlFx.projectName = 'issue-89903';
+  const driftFx = buildSoleArchiverFixture('issue-89904', 89904, {});
+  driftFx.projectName = 'issue-89904';
+  try {
+    fs.cpSync(path.join(repoRoot, 'scripts'), mirrorScripts, { recursive: true });
+    const mirrorSink = path.join(mirrorScripts, 'kaola-workflow-sink-merge.js');
+    const mirrorClaim = path.join(mirrorScripts, 'kaola-workflow-claim.js');
+    assert(fs.existsSync(mirrorSink) && fs.existsSync(mirrorClaim),
+      '(x3) precondition: the scratch mirror must carry both the sink and its claim.js dependency');
+
+    // CONTROL — the undoctored mirror behaves exactly like the shipped tree.
+    const control = runSinkAt(mirrorSink, controlFx, ['--issue', '89903']);
+    const controlOut = lastJson(control);
+    assert(control.status === 0 && controlOut && controlOut.status === 'sinked',
+      '(x3) control: the UNDOCTORED scratch mirror must sink normally — otherwise the drift run below fails for a reason that has nothing to do with the export, and this fence measures nothing; got '
+      + control.status + ' / ' + JSON.stringify(controlOut && (controlOut.status || controlOut.reason))
+      + '\nstderr: ' + (control.stderr || '').slice(-1200));
+
+    // DRIFT — remove the export the finalize step destructures, and nothing else.
+    fs.appendFileSync(mirrorClaim,
+      '\n// scratch mirror only: simulate the cross-edition export-drift class.\ndelete module.exports.archiveProjectDir;\n');
+    // The mirrored module must be loaded in a FRESH process to observe the appended deletion: this
+    // suite's own require cache already holds the shipped copy, so an in-process require would
+    // answer about the wrong file.
+    // spawn-class: cli-contract
+    const exportProbe = spawnSync(process.execPath,
+      ['-e', 'process.stdout.write(String(typeof require(process.argv[1]).archiveProjectDir))', mirrorClaim],
+      { encoding: 'utf8' });
+    assert(exportProbe.stdout === 'undefined',
+      '(x3) precondition: the mirrored claim.js must no longer export archiveProjectDir — otherwise no drift is being exercised; got '
+      + JSON.stringify(exportProbe.stdout) + ' stderr: ' + (exportProbe.stderr || '').slice(-400));
+
+    const result = runSinkAt(mirrorSink, driftFx, ['--issue', '89904']);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '(x3): export drift must exit non-success; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
+    assert(!(out && out.status === 'sinked'),
+      '(x3): a vanished archiveProjectDir export must NEVER reach status:sinked — that is the silent skip the rethrow arm exists to prevent; got '
+      + JSON.stringify(out && out.status));
+    assert(/archiveProjectDir is not a function|TypeError|ReferenceError/.test((result.stderr || '') + ' ' + JSON.stringify(out || {})),
+      '(x3): the drifted export must NAME itself — a stop that does not say which symbol vanished sends a forge port hunting; stderr:\n'
+      + (result.stderr || '').slice(-1200));
+    assert(!readLog(driftFx.logFile).some(c => c.startsWith('close:')),
+      '(x3): no issue may be closed over a run whose archive step could not even be called');
+  } finally {
+    try { fs.rmSync(mirrorRoot, { recursive: true, force: true }); } catch (_) {}
+    cleanup(controlFx);
+    cleanup(driftFx);
   }
 })();
 

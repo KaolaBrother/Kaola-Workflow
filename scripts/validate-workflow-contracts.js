@@ -1025,4 +1025,100 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
   }
 }
 
+// CONSUMER_DOCS_PATH — a routing surface may only name a `docs/…` path that resolves in the READER's
+// repository. The reader of an installed command or SKILL pack is in a consumer repo, which has no
+// copy of this repository's `docs/` tree, so a surface that says "read `docs/<x>.md`" dead-ends
+// there. That happened: a deleted doc left twelve installed surfaces across four runtimes pointing at
+// a file only this repository ever had, and it was found by a person reading prose — nothing here
+// compared a cited path against what the reader would actually have.
+//
+// TWO READER CONTEXTS, and the whole check is the line between them. (i) The routing surfaces SHIP,
+// so their `docs/…` paths must resolve in the consumer's tree. (ii) This repository's own docs,
+// scripts and CLAUDE.md are read HERE, where `docs/` exists — they are out of scope, and no path in
+// them is a defect for existing only here. Only (i) is scanned.
+//
+// The resolving set is not a taste call and is not hand-typed: it is exactly the doc tree
+// `/workflow-init` creates in the reader's repo, PARSED from the scaffold tree in the init skeleton.
+// So allowed == created, mechanically. Add a scaffold doc and the allowance follows it; cite anything
+// else and the check reds. That is the same distinction the deleted-doc pass drew by hand when it
+// dropped `docs/workflow-state-contract.md` from the consumer scaffold's Documentation Map while
+// keeping the five generic entries.
+//
+// SCOPE, stated: the 18 generated surfaces plus the three skeletons they render from — the ship set
+// with an existing registry, swept at the source as well as in the output so a bad pointer is red
+// before a regenerate. `agents/*.md` is deliberately NOT scanned: its `docs/…` mentions are
+// conditional conventions about the reader's own tree ("if it exists, regenerate it"), not
+// instructions to go read a file, and folding them in would mean four exemptions for four
+// non-defects. The `.opencode`/`.kimi` trees are absent by construction (gitignored build products,
+// zero tracked files); they render FROM these same registry rows, so the source is what is guarded.
+{
+  // A path REFERENCE, not every slash after the word "docs" — prose like "which docs/roadmap files
+  // were created" names no file. Two independent signals, EITHER of which makes it a reference,
+  // because each alone leaves a hole a mutation walked straight through. An extension or a trailing
+  // `/` is the shape a path has, but `docs/finalize-contract` has neither and is still a pointer;
+  // inline code is the other signal, since prose does not backtick a phrase, so a backticked
+  // `docs/x` is being NAMED as a file whether or not the author typed the suffix. Requiring both
+  // would miss the extension-less form; requiring the backtick alone would miss an unbackticked one.
+  // What still slips is a reference that is BOTH unbackticked and extension-less — indistinguishable
+  // from prose by any rule that keeps `docs/roadmap` green.
+  const DOCS_PATH = /docs\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\/?/g;
+  const looksLikeFile = (m) => m.endsWith('/') || /\.[A-Za-z0-9]+$/.test(m);
+  const isInlineCode = (line, at) => line[at - 1] === '`';
+
+  // The scaffold tree, verbatim from the init skeleton:
+  //     docs/
+  //       README.md
+  //       architecture.md
+  //       ...
+  // A `docs/` line at column 0, then its indented children until the indent ends. The skeleton
+  // carries the tree twice (once per surface_type region); both are read and unioned.
+  const INIT_SKELETON = 'templates/routing/init.skeleton.md';
+  const scaffoldDocs = new Set();
+  {
+    const lines = read(INIT_SKELETON).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] !== 'docs/') continue;
+      for (let j = i + 1; j < lines.length; j++) {
+        const child = lines[j].match(/^\s+([A-Za-z0-9._-]+\/?)\s*$/);
+        if (!child) break;
+        scaffoldDocs.add('docs/' + child[1]);
+      }
+    }
+  }
+  // A parse that found nothing would red every legitimate site with a misleading message. Say what
+  // actually broke instead.
+  assert(scaffoldDocs.size >= 3,
+    'CONSUMER_DOCS_PATH — the scaffold doc tree could not be read from ' + INIT_SKELETON +
+    ' (found ' + scaffoldDocs.size + ' entr(ies)). The check derives what a consumer repo will have ' +
+    'from that tree; if the tree moved or reflowed, re-point this parse at it.');
+
+  const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
+  const shipped = [
+    ...GENERATED_SURFACES.map(row => row.path),
+    ...[...new Set(GENERATED_SURFACES.map(row => 'templates/routing/' + row.skeleton))],
+  ];
+
+  // Every offending site in ONE message. A first-failure abort turns a twelve-surface propagation
+  // into twelve run-read-patch rounds, and the count is what tells you it propagated at all.
+  const dead = [];
+  for (const rel of shipped) {
+    assert(exists(rel), 'CONSUMER_DOCS_PATH — routing surface "' + rel + '" is missing; the check ' +
+      'cannot scan it');
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      for (const m of lines[i].matchAll(DOCS_PATH)) {
+        if (!looksLikeFile(m[0]) && !isInlineCode(lines[i], m.index)) continue;
+        if (scaffoldDocs.has(m[0])) continue;
+        dead.push(rel + ':' + (i + 1) + ': ' + m[0]);
+      }
+    }
+  }
+  assert(dead.length === 0,
+    'CONSUMER_DOCS_PATH — ' + dead.length + ' site(s) name a `docs/…` path that will not resolve ' +
+    'for the reader of an installed surface. A consumer repo has only the doc tree /workflow-init ' +
+    'creates there (' + [...scaffoldDocs].sort().join(', ') + '); anything else exists in this ' +
+    'repository alone. Carry the content on the surface, or point at something the reader has:\n  ' +
+    dead.join('\n  '));
+}
+
 console.log('Workflow contract validation passed');

@@ -4,6 +4,120 @@
 
 ### Changed
 
+- **A sink whose archive failed no longer reports success and publishes the run's live state (found
+  while measuring #896).** In `runSinkTransaction`'s `finalize` step, `archiveProjectDir` was wrapped in
+  a try whose catch deliberately rethrew `TypeError` and `ReferenceError` — the #555 export-drift class —
+  and silently swallowed everything else. A swallowed throw left `receipt.archive_dest` unset, and the
+  #700 guard that would otherwise catch an uncommitted archive is scoped to a *set* dest, so it could not
+  fire. The result was reproducible with nothing more exotic than `chmod 555 kaola-workflow/archive`: the
+  sink exited **0**, reported `status: sinked`, pushed the live `workflow-state.md` and `mission-list.md`
+  to `origin/main`, closed the issue, and left the main checkout dirty. This is the floor the project
+  draws explicitly — an operation that would destroy something fails loudly — being breached by an
+  operation that destroyed nothing but *claimed* to have preserved it.
+  The fix keys on what `archiveProjectDir` reported doing, never on the dest, and that distinction is the
+  whole difficulty: two legitimate outcomes leave `archive_dest` unset in exactly the way the defect does
+  — the keep-worktree flow, where the branch already archived and committed so there is no dest by
+  design, and the case where there was genuinely nothing to archive. All three are indistinguishable in
+  the receipt and fully distinguishable in the return, so `archived === true` is now the only "it
+  happened" and `skipped === 'source-missing'` the only "none was needed"; anything else is a recorded
+  failure. The dest block is additionally gated so closure metadata can never be stamped into a failed
+  archive. The stop emits `sink_incomplete` at exit 1 *before* the finalize step is marked done, so the
+  sink stays resumable and a re-run retries the archive. The `.gitignore`-covered archive (#832) still
+  completes as `skipped_gitignored`, and the #555 rethrow is unchanged and independently fenced.
+  `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` reached the same false success by a *return* rather than a
+  throw; because the fix keys on the return, that door is closed too. Ported by meaning to all four
+  editions — the gitlab and gitea ports each had a one-line inline catch that became a block.
+
+- **Exact `headSha` equality is now pinned as the only route by which a release receipt may bind (#898).**
+  `evaluateReleaseReceipt` has twelve branches and exactly one `ok: true`, and the project states the
+  rule outright — a release tag requires the full, unwaived four-chain receipt bound to the tagged commit
+  by exact `headSha` equality — but nothing asserted it. #888 had deleted a release-prep carry-over that
+  bound a receipt whenever its commit was an ancestor of the candidate and the intervening diff stayed
+  inside `RELEASE_FILES`, and re-adding that narrow route left **every** authored suite green, including
+  a full-scope walkthrough. `T5j` in `test-finalize-door.js` now asserts behaviourally that a green,
+  unwaived, four-chain, clean receipt stamped at a direct ancestor — whose entire intervening diff is a
+  version-only `package.json` bump and a `CHANGELOG.md` rewrite, both `RELEASE_FILES` — still refuses
+  `chains_stale`. Proven across four legs (pristine, narrow, broad, pristine again) with the carry-over
+  hunks reverse-applied from the commit that removed them; under the narrow re-add `test-finalize-door.js`
+  reds **alone**, while the unsharded walkthrough, `test-kernel-conformance.js`, `test-release.js`,
+  `test-run-chains.js`, `test-oracle-kernel.js` and the contract validator all stay green. Detection of
+  the narrow route goes from 0.0 to 1.0.
+  Two corrections to the record the investigation produced along the way. A *broad* relaxation was
+  believed to be caught by a single walkthrough scenario sampled at a rotating 1/12 shard; in fact
+  `test-kernel-conformance.js` spawns the walkthrough **unsharded**, so broad reds the fast gate with
+  probability 1.0 — the exposure was always confined to the narrow route. And the fence originally
+  proposed — asserting that the pass envelope carries no binding route other than exact equality — cannot
+  be built at all: the envelope is rebuilt key-by-key before emission, so its keys are identical under
+  pristine, narrow and broad alike, and an envelope-shape assertion can never go red. If a carry-over is
+  ever deliberately reintroduced, `T5j` is deleted with it rather than repaired.
+
+- **The canonical suite now catches three `issueIsClosed` regressions that survived #895's restored
+  scenario (#897).** `testActiveFoldersExcludesClosedIssue895` was mutation-proven against the exclusion
+  itself, but stayed green when a probe that *could not answer* had its failure read as "closed", when an
+  *empty* answer was read as "closed", and — the notable one — when the `KAOLA_WORKFLOW_OFFLINE`
+  short-circuit was deleted outright. That last gap was the sharpest, because `OFFLINE` is the entire
+  reason the scenario pays for a subprocess driver at all: `const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1'`
+  is frozen at module load in `kaola-workflow-active-folders.js`, so an in-process call would
+  short-circuit `issueIsClosed` and read green whatever the filter did. The scenario paid that cost and
+  then asserted nothing about the path it bought. Three sub-cases now drive it — a failed probe, an empty
+  answer with the open/closed roles **inverted** against the previous sub-case so a parity-keyed
+  regression cannot slip through, and one fixture run twice through the same shim, online and offline.
+  Each is mutation-proven armed against both the old and the new scenario, so the gap itself is
+  demonstrated and not merely asserted; the offline sub-case additionally has attribution proof, since
+  `testProbeIssueStateOffline` stays green under that mutation. The behaviour under test was already
+  correct and is unchanged — this is coverage only. Recorded and deliberately **not** chased with a test:
+  removing the `OFFLINE` guard from `issueIsClosed` alone, or from `prefetchIssueStates` alone, is
+  behaviourally inert because `ghExec`'s own guard masks each, so no `readActiveFolders` assertion can
+  distinguish them from correct behaviour. That is production redundancy, not a coverage hole.
+
+- **A routing surface can no longer point a consumer at a `docs/…` path that only this repository has.**
+  #892 had to delete `docs/mission-list.md` and repoint twelve installed surfaces across four runtimes,
+  and it was found by a person reading prose — nothing would have caught the recurrence. `CONSUMER_DOCS_PATH`
+  in `validate-workflow-contracts.js` now scans every `docs/` token across 21 surfaces (the 18
+  `GENERATED_SURFACES` rows plus the three routing skeletons) and reports **every** offending site in one
+  message rather than failing on the first. The allowance is *derived, not enumerated*: it is parsed from
+  the `docs/` scaffold tree in `init.skeleton.md`, so what is permitted equals what `/workflow-init`
+  actually creates in the reader's repository — add a scaffold doc and the allowance follows it. Membership
+  is exact-string, which matters more than it sounds: `docs/decisions/` is an allowed directory, yet
+  restoring #892's real repoint `docs/decisions/0017-the-mission-list.md` still reds, where a prefix rule
+  would have waved the actual historical defect through. Neither failure mode degrades to a silent pass —
+  an unreadable scaffold and a missing surface each fail loudly. One limit is deliberate and recorded in
+  the code: a path that is both unbackticked and extension-less is not caught, being indistinguishable
+  from ordinary prose, so a false negative was chosen over a false positive.
+
+- **The opencode and kimi edition suites no longer repair the drift they are supposed to measure.**
+  `sync-opencode-edition.js --check` and `sync-kimi-edition.js --check` were armed and correct, but no
+  npm script invoked either, and both edition suites ran `--write` in their preamble *before* asserting —
+  so a genuinely drifted tree was silently healed and then observed as clean. Measured, not supposed: the
+  previous suites were run against an identical dirty tree and both exited 0 (490 and 505 assertions
+  passing) having healed the file back. `--check` now runs per forge **before** the `--write`, and a
+  drifted tree exits the suite at that point. The early exit is the load-bearing part rather than an
+  implementation detail: counting drift as an ordinary failure would let control reach `--write`, repair
+  the tree, and leave the next run green — a red that deletes its own cause. The absent-tree case, which
+  is every fresh clone since these trees are gitignored build products, is a visible skip and never a
+  false red: the run prints `[drift-check: NO tree verified; N ABSENT, not checked]` where a verified run
+  prints `[drift-check: N tree(s) in parity]`, so absent and verified never read the same. `package.json`
+  is deliberately untouched — `test:kaola-workflow:editions` already runs both suites and is the
+  owner-ruled surface for additive runtime editions, and a bare `--check` step would false-red every
+  fresh clone.
+
+- **`docs/api.md`'s pre-merge guard table described a sink that no longer exists.** It listed four guards
+  as though all four applied uniformly, but `--sink` routes to `runSinkTransaction` and returns before the
+  legacy precondition block is reached, so exactly one of them — `worktree_dirty`, which lives in
+  `sinkPreflight` — runs on that path. It also said `assertNoLiveWorkflowFolder` "refuses", although it is
+  a CONVERTED guard that emits a typed `run_not_finalized` report and stops without merging, and it
+  described the probe as `git cat-file -e HEAD:{path}` when #346 rescoped it to the branch tip so it could
+  run *before* the destructive worktree removal. The section now states which path runs what, distinguishes
+  the KEEP guards (which throw, protecting work that proceeding would destroy) from the CONVERTED ones
+  (which report, because the orchestrator may legitimately overrule them), and records that the single
+  guard on `--sink` is not a gap: `SINK_STEPS` carries its own `finalize` step, so on that path the sink
+  *is* the finalizer and a live run folder on the branch is the expected sole-archiver posture.
+
+- **The `kaola-workflow/dp/` folder is removed.** It held one tracked file, a `run-progress.json` carrying
+  a `node_ledger` — state belonging to the DAG executor that ADR 0017 deleted. With no `workflow-state.md`
+  it was not a resumable run, but it sat in the active-folder inventory a successor reads first. Nothing
+  referenced it.
+
 - **Bumping the reviewer behavior contract version is now three steps, and an incomplete bump fails on the
   first validator in every chain, naming every site still outstanding (#889).** Replayed against the
   previous HEAD, a partial bump took nine rounds of run-read-patch and was still not finished — and after

@@ -491,19 +491,48 @@ Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not
   ever removed.
 - `.cache/sink-receipt.json` tracks each step so a re-run resumes from the last incomplete one
   without double-applying.
+- **The `finalize` step's archive is confirmed, not assumed.** `archiveProjectDir` is judged by what it
+  reports doing: `archived === true` is the only outcome that counts as archived, and
+  `skipped === 'source-missing'` the only one that counts as no archive being needed (the keep-worktree
+  flow, where the branch already archived and committed). Anything else — a thrown error other than the
+  `TypeError`/`ReferenceError` export-drift class, or a return that claims neither — records an archive
+  failure, and the transaction stops with `{result: 'refuse', reason: 'sink_incomplete', step:
+  'finalize', archive_refusal}` at exit `1`. The stop happens **before** the step is marked done, so the
+  sink remains resumable and a re-run retries the archive. Nothing is merged, pushed or closed on that
+  path. This is deliberately not keyed on `receipt.archive_dest` being unset: both legitimate no-archive
+  outcomes leave it unset exactly as a failure does, so the receipt cannot distinguish them and only the
+  return can.
 
-**Pre-merge guards** (all three editions):
+**Pre-merge guards** (all three editions). **Which path runs them is not uniform, and the difference
+is load-bearing**: `--sink` routes to `runSinkTransaction` and returns before the legacy precondition
+block is ever reached, so of the four below **only `worktree_dirty` runs on `--sink`** — it lives in
+`sinkPreflight`, which the transaction owns. The other three are legacy-path only. That is not a gap:
+`SINK_STEPS` carries its own `finalize` step calling `archiveProjectDir`, so on `--sink` the sink *is*
+the finalizer, and a live run folder on the branch is the expected sole-archiver posture rather than
+an error.
 
-- **Live workflow-state guard** (`assertNoLiveWorkflowFolder`) — refuses to merge a branch whose
-  HEAD still contains `kaola-workflow/{project}/workflow-state.md`, inspected with
-  `git cat-file -e HEAD:{path}` (committed tree state, not just the filesystem).
-- **Unpushed-commits guard** (`assertBranchPushedToUpstream`) — blocks when the feature branch has
-  commits ahead of its upstream, or has no upstream tracking ref. Skipped when
-  `KAOLA_WORKFLOW_OFFLINE=1`.
-- **Workflow-artifacts-only guard** (`assertBranchHasNonWorkflowChanges`) — refuses a branch whose
-  entire diff versus the mainline is `kaola-workflow/**` artifacts, turning silent implementation
-  loss into a loud, recoverable failure. Skipped when the mainline is unresolvable — it cannot
-  judge, so it does not block.
+Two kinds stop the legacy path, and the difference is what the operator is owed, not whether it stops.
+The **KEEP** guards (`assertCleanWorktree`, `assertBranchPushedToUpstream`, `assertWorktreeClean`)
+protect work that proceeding would destroy, so they throw and offer no sanctioned way past. The
+**CONVERTED** ones judge the state of the work, so they emit a typed envelope carrying a named finding
+and a route forward. A converted guard still stops the sink — nothing is merged and nothing is pushed
+— it just reports rather than refusing, because the orchestrator may legitimately overrule it.
+
+- **Live workflow-state guard** (`assertNoLiveWorkflowFolder`) — CONVERTED, legacy path only. Emits a
+  typed `run_not_finalized` report (`result: 'report'`, `status: 'not_merged'`, exit `1`) when the
+  branch still carries `kaola-workflow/{project}/workflow-state.md`. The probe is scoped to the
+  **branch tip** — `git cat-file -e {branch}:{path}`, not `HEAD:` — so it can run *before* the
+  destructive worktree removal and checkout (#346); after checkout the two forms coincide. Committed
+  tree state, not the filesystem. The finding carries both remediations (finalize then recommit, or
+  `git rm -r` the folder on the branch).
+- **Unpushed-commits guard** (`assertBranchPushedToUpstream`) — KEEP, legacy path only. Blocks when
+  the feature branch has commits ahead of its upstream, or has no upstream tracking ref. Skipped
+  when `KAOLA_WORKFLOW_OFFLINE=1`.
+- **Workflow-artifacts-only guard** (`assertBranchHasNonWorkflowChanges`) — CONVERTED, legacy path
+  only, and additionally skipped entirely when `KAOLA_WORKFLOW_OFFLINE=1`. Emits a typed
+  `no_implementation_changes` report when a branch's entire diff versus the mainline is
+  `kaola-workflow/**` artifacts, turning silent implementation loss into a loud, recoverable
+  failure. Skipped when the mainline is unresolvable — it cannot judge, so it does not block.
 - **`worktree_dirty`** — `sinkPreflight` runs `assertWorktreeClean` before the merge step
   force-removes the linked worktree, so uncommitted work is never silently destroyed. Fail-closed:
   a dirty **or** unprobeable worktree refuses, with zero mutation and the worktree intact.

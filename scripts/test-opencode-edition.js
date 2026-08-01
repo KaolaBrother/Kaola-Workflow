@@ -36,6 +36,78 @@ function assert(cond, msg) {
 }
 
 // ---------------------------------------------------------------------------
+// D0 — DRIFT IS OBSERVED BEFORE IT IS REPAIRED.
+//
+// The self-provision below runs `sync --write`, which REPAIRS the generated tree. Run first, it
+// destroys the only evidence that the tree on this disk had drifted from canonical: measured, this
+// suite passed 490/505 against a tree whose commands still pointed at a file that had been deleted,
+// because the preamble had just rewritten that pointer itself before the first assertion read it.
+// Nothing else reported the drift either — the two installers call `--check || --write`, a REPAIR
+// position, so a developer's tree is silently corrected and the drift is never named anywhere.
+//
+// So the check runs HERE, ahead of the write, and reports what it found on disk.
+//
+// WHY THIS EXITS RATHER THAN COUNTING A FAILURE. Continuing means reaching the `--write` two blocks
+// down, which repairs the tree; the next run would then be green and the finding would have erased
+// itself — a red that deletes its own cause is barely better than no red. Exiting before the write
+// leaves the drift on disk, so the failure is durable until someone regenerates deliberately. The
+// full mismatch list is printed first: that, not the remaining assertions, is what this is for.
+//
+// ABSENT IS A SKIP, AND THE SKIP IS LOUD. These trees are gitignored — absent from a fresh clone
+// and from every worktree. A `--check` there reports every file "missing" and would be a permanent
+// false red, so absence cannot be a failure; but it cannot be a silent pass either, which is the
+// defect one level down from the one this block removes. Absent trees are NAMED on their own line
+// and again in the suite's last line, so "verified in parity" and "nothing was on disk to check"
+// can never print the same thing. Only the GENERATED tree is skippable: the tracked `opencode.json`
+// is compared to its renderer by A7 below, unconditionally and independent of any tree's presence.
+//
+// Each forge tree is probed on its own, because presence is per tree — `--write` materializes only
+// the default forge, so a `.opencode-gitlab/` an installer left behind is checked when it is there
+// and skipped when it is not.
+// ---------------------------------------------------------------------------
+let driftVerdict = '';
+// The ONE expression that decides present-vs-absent. D0 skips on it and D1 below asserts on it, so
+// there is no second path for the two to disagree about: a probe that resolves somewhere no tree is
+// ever written would make D0 skip every forge in silence, and D1 is what stops that being green.
+const treeRootFor = forge => path.join(REPO, sync.treeLabel(forge));
+{
+  const { spawnSync } = require('child_process');
+  const verified = [];
+  const absent = [];
+  assert(sync.FORGES.length > 0,
+    'D0: the forge axis must be non-empty — an empty axis probes nothing and would skip in silence');
+  for (const forge of sync.FORGES) {
+    const label = sync.treeLabel(forge);
+    if (!fs.existsSync(treeRootFor(forge))) { absent.push(label); continue; }
+    // spawn-class: cli-contract
+    const r = spawnSync(process.execPath,
+      [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--forge=' + forge, '--check'],
+      { encoding: 'utf8' });
+    if (r.status !== 0) {
+      process.stderr.write(r.stdout || '');
+      process.stderr.write(r.stderr || '');
+      console.error('\nopencode-edition test FAILED: D0[' + forge + ']: ' + label + ' is present on '
+        + 'disk and has DRIFTED from canonical (sync --check exit ' + r.status + ').'
+        + '\nRegenerate it deliberately: node scripts/sync-opencode-edition.js --forge=' + forge + ' --write'
+        + '\nThe suite stops here rather than continue into its own sync --write, which would repair '
+        + 'this tree and erase the finding.');
+      process.exit(1);
+    }
+    verified.push(label);
+  }
+  for (const label of verified) console.log('D0: ' + label + ' is present and in parity with canonical.');
+  for (const label of absent) {
+    console.log('D0: SKIPPED — ' + label + ' is absent from disk, so nothing was compared '
+      + '(gitignored generated tree; a fresh clone has none).');
+  }
+  driftVerdict = ' [drift-check: '
+    + (verified.length ? verified.length + ' tree(s) in parity (' + verified.join(', ') + ')'
+                       : 'NO tree verified')
+    + (absent.length ? '; ' + absent.length + ' ABSENT, not checked (' + absent.join(', ') + ')' : '')
+    + ']';
+}
+
+// ---------------------------------------------------------------------------
 // Self-provision: regenerate .opencode/ from tracked canonical sources before
 // any assertion that reads it. In a clean worktree .opencode/ is fully absent
 // (it is gitignored); sync --write populates agents, commands, hooks, AND the
@@ -54,6 +126,17 @@ function assert(cond, msg) {
     process.exit(1);
   }
 }
+
+// D1 — D0's presence probe must be able to SEE a materialized tree. A probe resolving a path no
+// tree is ever written to returns false for every forge, so every forge takes the ABSENT branch and
+// D0 checks nothing while printing three reassuring skip lines — a guard that cannot fail, wearing
+// a skip's name. The `--write` above has just materialized the default forge, so the probe must now
+// find it. This calls treeRootFor, the same expression D0 skips on and NOT a restatement of it: an
+// independently-written copy here would pass while the probe it is supposed to defend was broken,
+// which is measured, not theorised — the first version of D1 did exactly that.
+assert(fs.existsSync(treeRootFor(sync.DEFAULT_FORGE)),
+  'D1: after sync --write, D0\'s presence probe must resolve a tree that exists — it resolved '
+  + treeRootFor(sync.DEFAULT_FORGE) + ', which does not, so D0 skipped every forge and checked nothing');
 
 // --- JSONC comment stripper (string-aware) so opencode.json parses despite its
 // // guidance comments AND the "https://" URL inside $schema. ---
@@ -1753,7 +1836,8 @@ if (exists(pluginRel)) {
 }
 
 if (failed) {
-  console.error('\nopencode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.');
+  console.error('\nopencode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
+    + driftVerdict);
   process.exit(1);
 }
-console.log('opencode-edition test passed (' + passed + ' assertions).');
+console.log('opencode-edition test passed (' + passed + ' assertions).' + driftVerdict);

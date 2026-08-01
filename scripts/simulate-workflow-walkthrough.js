@@ -1393,10 +1393,15 @@ function testProbeIssueStateGhThrows() {
 //
 // Driven through a subprocess: OFFLINE freezes at module load, and this process is already
 // resolved, so an in-process call would short-circuit issueIsClosed and read green whatever the
-// filter did.
+// filter did. Sub-case E spends that same driver on the OFFLINE path itself — the flag the driver
+// exists for is the one thing an in-process call could never measure.
+//
+// Three sub-cases beyond the exclusion: the filter must not read a FAILED probe, an EMPTY answer,
+// or an OFFLINE run as "closed". Each of those evicts a folder for a still-open issue, and the
+// exclusion assertion alone cannot tell that apart from a correct exclusion.
 // ---------------------------------------------------------------------------
 
-function callReadActiveFolders(root, binDir) {
+function callReadActiveFolders(root, binDir, offlineFlag) {
   const driver = [
     'const m = require(' + JSON.stringify(activeFoldersScript) + ');',
     'const root = ' + JSON.stringify(root) + ';',
@@ -1424,7 +1429,7 @@ function callReadActiveFolders(root, binDir) {
     encoding: 'utf8',
     timeout: 30000,
     env: Object.assign({}, baseEnv, ghMockEnv(binDir), {
-      KAOLA_WORKFLOW_OFFLINE: '0',
+      KAOLA_WORKFLOW_OFFLINE: offlineFlag || '0',
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     })
   });
@@ -1483,6 +1488,76 @@ function testActiveFoldersExcludesClosedIssue895() {
       '#895 (per-issue): default options must keep ONLY the open issue\'s folder, got ' + JSON.stringify(probed.projects));
     assert(probed.issue_numbers[0] === 11,
       '#895 (per-issue): the surviving folder must be issue 11, got ' + JSON.stringify(probed.issue_numbers));
+
+    // Sub-case C — an UNREACHABLE issue is not a closed one. `gh issue list` memoizes nothing, 10's
+    // `gh issue view` fails outright, and 11 answers CLOSED. 10 must SURVIVE: a probe that cannot
+    // answer says nothing about the issue, and a catch that swallowed the error and reported
+    // "closed" would evict a folder whose issue is still open. 11's exclusion is the non-vacuity
+    // control — it proves the shim is wired and the filter is live on this run.
+    const binC = path.join(tmp, 'bin-unreachable');
+    fs.mkdirSync(binC, { recursive: true });
+    writeShimFiles(path.join(binC, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else if (a.includes('issue view 10')) { process.stderr.write('could not resolve host: api.github.com\\n'); process.exit(1); }",
+      "else if (a.includes('issue view 11')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const unreachable = callReadActiveFolders(tmp, binC);
+    assert(unreachable.control.length === 2,
+      '#895 fixture (unreachable): both folders must be visible with the filter OFF, got ' + JSON.stringify(unreachable.control));
+    assert(unreachable.projects.length === 1 && unreachable.projects[0] === 'alpha-project',
+      '#895 (unreachable): a FAILED probe must not be read as closed — issue 10\'s folder must survive and issue 11\'s (genuinely CLOSED) must not, got ' + JSON.stringify(unreachable.projects));
+    assert(unreachable.issue_numbers[0] === 10,
+      '#895 (unreachable): the surviving folder must be issue 10, got ' + JSON.stringify(unreachable.issue_numbers));
+
+    // Sub-case D — an EMPTY answer is not a closed one, roles INVERTED against C: 10 answers
+    // CLOSED, 11 answers nothing at all (exit 0, no stdout). 11 must SURVIVE. Inverted because a
+    // filter keyed on the number rather than the answer would otherwise pass C and D together.
+    const binD = path.join(tmp, 'bin-empty');
+    fs.mkdirSync(binD, { recursive: true });
+    writeShimFiles(path.join(binD, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else if (a.includes('issue view 10')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('issue view 11')) { /* exit 0, no stdout */ }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const emptyAnswer = callReadActiveFolders(tmp, binD);
+    assert(emptyAnswer.control.length === 2,
+      '#895 fixture (empty answer): both folders must be visible with the filter OFF, got ' + JSON.stringify(emptyAnswer.control));
+    assert(emptyAnswer.projects.length === 1 && emptyAnswer.projects[0] === 'beta-project',
+      '#895 (empty answer): an EMPTY gh response must not be read as closed — issue 11\'s folder must survive and issue 10\'s (genuinely CLOSED) must not, got ' + JSON.stringify(emptyAnswer.projects));
+    assert(emptyAnswer.issue_numbers[0] === 11,
+      '#895 (empty answer): the surviving folder must be issue 11, got ' + JSON.stringify(emptyAnswer.issue_numbers));
+
+    // Sub-case E — OFFLINE excludes NOTHING. One fixture and ONE shim, run twice, differing only in
+    // KAOLA_WORKFLOW_OFFLINE. The online run is the control: it proves this shim really does report
+    // 10 as closed and the filter really does act on it. The offline run must then keep BOTH
+    // folders — offline means no probe was made, and no probe means no folder can be judged closed.
+    // This is the assertion the subprocess driver was bought for: OFFLINE freezes at module load,
+    // so nothing in this process can measure it.
+    const binE = path.join(tmp, 'bin-offline');
+    fs.mkdirSync(binE, { recursive: true });
+    writeShimFiles(path.join(binE, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue list')) { process.stdout.write('[{\"number\":10,\"state\":\"CLOSED\"},{\"number\":11,\"state\":\"OPEN\"}]\\n'); }",
+      "else if (a.includes('issue view 10')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('issue view 11')) { process.stdout.write('{\"state\":\"OPEN\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const online = callReadActiveFolders(tmp, binE, '0');
+    assert(online.projects.length === 1 && online.projects[0] === 'beta-project',
+      '#895 fixture (offline control): with OFFLINE=0 this shim must exclude issue 10\'s folder, got ' + JSON.stringify(online.projects));
+    const offline = callReadActiveFolders(tmp, binE, '1');
+    assert(offline.control.length === 2,
+      '#895 fixture (offline): both folders must be visible with the filter OFF, got ' + JSON.stringify(offline.control));
+    assert(offline.projects.length === 2 &&
+           offline.projects[0] === 'alpha-project' && offline.projects[1] === 'beta-project',
+      '#895 (offline): KAOLA_WORKFLOW_OFFLINE=1 must short-circuit the closed-issue probe entirely — BOTH folders must survive the same shim that excluded issue 10 online, got ' + JSON.stringify(offline.projects));
+    assert(offline.issue_numbers.length === 2 &&
+           offline.issue_numbers.includes(10) && offline.issue_numbers.includes(11),
+      '#895 (offline): both issue numbers must survive, got ' + JSON.stringify(offline.issue_numbers));
 
     console.log('testActiveFoldersExcludesClosedIssue895: PASSED');
   } finally {

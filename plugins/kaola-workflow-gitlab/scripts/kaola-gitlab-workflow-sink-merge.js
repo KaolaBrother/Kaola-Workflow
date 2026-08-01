@@ -1715,6 +1715,12 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       stepDone('merge'); continue;
     }
     if (step === 'finalize') {
+      // #899: the archive is CONFIRMED, never inferred. Set when an archive was required and did not
+      // happen — an operational throw the catch used to swallow, or a return that archived nothing.
+      // The missing dest cannot be the discriminator: a source-missing return (keep-worktree, or no
+      // live folder at all) leaves the same observable, so keying on it would refuse two legitimate
+      // no-ops. What separates them is what archiveProjectDir SAID it did.
+      let archiveFailure = null;
       try {
         const { archiveProjectDir } = require('./kaola-gitlab-workflow-claim');
         // #705: sole archiver — if keep-open is in force, retain the kept-open member roadmap source(s)
@@ -1761,17 +1767,61 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           }, 1);
           return;
         }
+        // #899: the positive confirmation. `archived: true` is the ONLY report that an archive
+        // happened; `skipped: 'source-missing'` the only report that none was required. Anything else
+        // — a bare `archived: false` with a reason (the forced-refusal seam reaches success by RETURN,
+        // not by throw, so a fix at the catch alone would leave that door open), a null from a port
+        // that returned nothing — archived nothing while a live folder was there to archive.
+        const archiveHappened = !!(archiveResult && archiveResult.archived === true);
+        const nothingToArchive = !!(archiveResult && archiveResult.skipped === 'source-missing');
+        if (!archiveHappened && !nothingToArchive) {
+          archiveFailure = {
+            reason: (archiveResult && archiveResult.reason) || 'archive_not_performed',
+            detail: (archiveResult && archiveResult.detail)
+              || ('archiveProjectDir returned without archiving: ' + JSON.stringify(archiveResult)),
+          };
+        }
         // #700: carry the ACTUAL archive dest (possibly collision-suffixed) through the receipt so
         // archive_commit stages/commits the exact dir; and — as the SOLE archiver — persist the same
         // ## Closure + ## Attestation blocks cmdFinalize writes (no-op when the dest already has them).
-        if (archiveResult && archiveResult.dest) {
+        if (!archiveFailure && archiveResult && archiveResult.dest) {
           receipt.archive_dest = path.relative(mainRoot, archiveResult.dest).split(path.sep).join('/');
           persistSinkClosureMetadata(mainRoot, args, receipt, archiveResult);
           // The rename just moved the live receipt into the dest — follow it, so stepDone('finalize')
           // and every later step write the archived copy instead of resurrecting the live path.
           receiptPath = path.join(archiveResult.dest, '.cache', 'sink-receipt.json');
         }
-      } catch (e) { if (e instanceof TypeError || e instanceof ReferenceError) throw e; /* #555: re-throw a missing-export programmer error (the #550 drift class); swallow only archive-already-exists idempotency */ }
+      } catch (e) {
+        // #555: re-throw a missing-export programmer error (the #550 drift class) — that arm is
+        // unchanged and keeps naming the vanished symbol. #899: everything else used to be swallowed
+        // whole, leaving the archive undone, the receipt without a dest, and the transaction free to
+        // push the live run record and close the issue over an archive that never happened.
+        if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+        archiveFailure = { reason: 'archive_exception', detail: e && e.message ? e.message : String(e) };
+      }
+      // #899: an archive required and not performed stops the sink HERE, before push_main and closure.
+      // Not a verdict about the WORK — the destroy-class carve-out: the run record is still live on the
+      // mainline and the sink may not CLAIM an archive it did not perform. Nothing was deleted, the
+      // finalize step is left NOT done, and the journal survives, so a re-run resumes exactly here.
+      if (archiveFailure) {
+        receipt.archive_refusal = archiveFailure.reason;
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        sinkEmit({
+          result: 'refuse',
+          reason: 'sink_incomplete',
+          step: 'finalize',
+          archive_refusal: archiveFailure.reason,
+          branch: args.branch,
+          default_branch: defBranch,
+          detail: 'archiving kaola-workflow/' + args.project + '/ did not happen ('
+            + archiveFailure.reason + '): ' + archiveFailure.detail
+            + ' Refusing to report status:sinked over an archive the sink did not perform. Nothing was '
+            + 'pushed to ' + defBranch + ' and no issue was closed; the live project folder was not '
+            + 'deleted and the finalize step is left NOT done so a re-run retries the archive.',
+        }, 1);
+        return;
+      }
       // The durable half, written HERE and nowhere later: the last point before archive_commit
       // stages the archive, so `## Sink Findings` rides the sink's own commit and survives a fresh
       // clone. Every converted finding is taken at or before the merge step, so the record is

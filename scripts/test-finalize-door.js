@@ -717,6 +717,23 @@ function assertNoPlanAnywhere(repo, label) {
     x = releaseCheck();
     refusedWith(x.r, x.out, 'chains_unverified', 'T5i (no receipt)');
 
+    // --- T5j: NO SECOND BINDING ROUTE. An ANCESTOR receipt whose entire intervening diff lies
+    // inside the release-prep surface (RELEASE_FILES, version-only JSON) still refuses. That is the
+    // exact shape #881's carry-over accepted and #888 deleted. It is pinned BEHAVIOURALLY rather
+    // than by envelope shape because run-chains.js rebuilds the pass envelope key by key, so a
+    // re-added route's `binding`/`carryOver` keys never reach stdout and a key-set assertion here
+    // could never go red. ---
+    writeRootReceipt(base_);                       // green receipt still stamped at `head`
+    const pkgPath = path.join(repo, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    pkg.version = '0.0.1';                         // version-only bump: the release-prep shape
+    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+    fs.writeFileSync(path.join(repo, 'CHANGELOG.md'), '# Changelog\n\n## [0.0.1] - 2026-01-01\n');
+    G.commitPaths(repo, ['package.json', 'CHANGELOG.md'], 'release prep');
+    assert(G.head(repo) !== head, 'T5j: the release-prep commit advanced HEAD (the fixture is real)');
+    x = releaseCheck();
+    refusedWith(x.r, x.out, 'chains_stale', 'T5j (ancestor receipt, release-prep-only diff)');
+
   } finally { rm(base); }
 })();
 
